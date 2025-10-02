@@ -1,0 +1,33 @@
+// Reglas de Firebase Storage para historias
+// Ve a Firebase Console → Storage → Rules y reemplaza las reglas existentes
+
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Reglas para historias - permitir que usuarios autenticados suban sus propias historias
+    match /stories/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+                  && request.auth.uid != null
+                  && fileName.matches('story_' + request.auth.uid + '_.*');
+    }
+
+    // Reglas para perfiles de usuario (si las necesitas)
+    match /profile_images/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Regla general para otros archivos (ajusta según tus necesidades)
+    match /{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+  }
+}
+
+// ALTERNATIVA MÁS SIMPLE PARA DESARROLLO (menos segura):
+// match /{allPaths=**} {
+//   allow read, write: if request.auth != null;
+// }

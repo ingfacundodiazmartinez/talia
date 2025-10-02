@@ -1,0 +1,98 @@
+// REGLAS DE FIRESTORE CORREGIDAS - PERMITEN LOGIN
+// Versión que soluciona problemas de autenticación
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===== USUARIOS =====
+    // Permitir crear usuarios durante el registro y leer para login
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && userId == request.auth.uid;
+      allow update: if request.auth != null &&
+                       (userId == request.auth.uid || isParentOf(userId));
+      allow delete: if false;
+    }
+
+    // ===== HISTORIAS =====
+    match /stories/{storyId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null &&
+                       request.resource.data.userId == request.auth.uid;
+      allow update: if request.auth != null &&
+                       (resource.data.userId == request.auth.uid ||
+                        isParentOf(resource.data.userId));
+      allow delete: if request.auth != null &&
+                       (resource.data.userId == request.auth.uid ||
+                        isParentOf(resource.data.userId));
+    }
+
+    // ===== SOLICITUDES DE APROBACIÓN DE HISTORIAS =====
+    match /story_approval_requests/{requestId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update: if request.auth != null;
+      allow delete: if request.auth != null;
+    }
+
+    // ===== CHATS =====
+    match /chats/{chatId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update: if request.auth != null;
+      allow delete: if false;
+    }
+
+    // ===== MENSAJES =====
+    match /chats/{chatId}/messages/{messageId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update: if request.auth != null;
+      allow delete: if request.auth != null;
+    }
+
+    // ===== WHITELIST =====
+    match /whitelist/{whitelistId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update: if request.auth != null;
+      allow delete: if request.auth != null;
+    }
+
+    // ===== SOLICITUDES DE CONTACTO =====
+    match /contact_requests/{requestId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update: if request.auth != null;
+      allow delete: if request.auth != null;
+    }
+
+    // ===== NOTIFICACIONES =====
+    match /notifications/{notificationId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update: if request.auth != null;
+      allow delete: if request.auth != null;
+    }
+
+    // ===== REPORTES =====
+    match /reports/{reportId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update: if request.auth != null;
+      allow delete: if request.auth != null;
+    }
+
+    // ===== FUNCIÓN AUXILIAR =====
+    function isParentOf(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId)) &&
+             get(/databases/$(database)/documents/users/$(userId)).data.parentId == request.auth.uid;
+    }
+
+    // ===== PERMITIR OTRAS COLECCIONES NECESARIAS =====
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}

@@ -1,0 +1,119 @@
+// REGLAS DE FIREBASE STORAGE PARA PRODUCCIÓN
+// Sistema de chat infantil con control parental
+
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // ===== HISTORIAS =====
+    // Los usuarios solo pueden subir sus propias historias
+    // Patrón: stories/story_{userId}_{timestamp}
+    match /stories/{fileName} {
+      allow read: if request.auth != null
+                 && isValidUser();
+
+      allow write: if request.auth != null
+                  && isValidUser()
+                  && fileName.matches('story_' + request.auth.uid + '_[0-9]+')
+                  && isValidStoryFile();
+
+      allow delete: if request.auth != null
+                   && isValidUser()
+                   && fileName.matches('story_' + request.auth.uid + '_[0-9]+');
+    }
+
+    // ===== FOTOS DE PERFIL =====
+    // Los usuarios solo pueden gestionar su propia foto de perfil
+    match /profile_images/{userId} {
+      allow read: if request.auth != null
+                 && isValidUser();
+
+      allow write: if request.auth != null
+                  && isValidUser()
+                  && request.auth.uid == userId
+                  && isValidProfileImage();
+
+      allow delete: if request.auth != null
+                   && isValidUser()
+                   && request.auth.uid == userId;
+    }
+
+    // ===== ARCHIVOS DE CHAT =====
+    // Solo para imágenes/archivos compartidos en chats
+    match /chat_media/{userId}/{fileName} {
+      allow read: if request.auth != null
+                 && isValidUser()
+                 && (request.auth.uid == userId || canAccessUserContent(userId));
+
+      allow write: if request.auth != null
+                  && isValidUser()
+                  && request.auth.uid == userId
+                  && isValidChatMedia();
+
+      allow delete: if request.auth != null
+                   && isValidUser()
+                   && request.auth.uid == userId;
+    }
+
+    // ===== FUNCIONES DE SEGURIDAD =====
+
+    // Verificar que el usuario esté autenticado y sea válido
+    function isValidUser() {
+      return request.auth != null
+             && request.auth.uid != null
+             && request.auth.uid.size() > 0;
+    }
+
+    // Validar archivos de historias
+    function isValidStoryFile() {
+      return request.resource != null
+             && request.resource.size <= 10 * 1024 * 1024  // Max 10MB
+             && request.resource.contentType != null
+             && (request.resource.contentType.matches('image/.*') ||
+                 request.resource.contentType.matches('video/.*'))
+             && !request.resource.contentType.matches('image/svg.*'); // Bloquear SVG por seguridad
+    }
+
+    // Validar fotos de perfil
+    function isValidProfileImage() {
+      return request.resource != null
+             && request.resource.size <= 2 * 1024 * 1024   // Max 2MB
+             && request.resource.contentType != null
+             && request.resource.contentType.matches('image/.*')
+             && !request.resource.contentType.matches('image/svg.*')
+             && !request.resource.contentType.matches('image/gif.*'); // Opcional: bloquear GIFs
+    }
+
+    // Validar archivos de chat
+    function isValidChatMedia() {
+      return request.resource != null
+             && request.resource.size <= 5 * 1024 * 1024   // Max 5MB
+             && request.resource.contentType != null
+             && (request.resource.contentType.matches('image/.*') ||
+                 request.resource.contentType.matches('video/.*') ||
+                 request.resource.contentType.matches('audio/.*'))
+             && !request.resource.contentType.matches('image/svg.*');
+    }
+
+    // Verificar si el usuario puede acceder al contenido de otro usuario
+    // (para padres que pueden ver contenido de sus hijos)
+    function canAccessUserContent(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId)) &&
+             get(/databases/$(database)/documents/users/$(userId)).data.parentId == request.auth.uid;
+    }
+
+    // ===== RECHAZAR TODO LO DEMÁS =====
+    // Cualquier otra ruta está bloqueada
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
+
+// NOTAS DE SEGURIDAD:
+// 1. Los archivos SVG están bloqueados por riesgo de XSS
+// 2. Límites de tamaño: Historias 10MB, Perfiles 2MB, Chat 5MB
+// 3. Solo usuarios autenticados pueden acceder
+// 4. Los usuarios solo pueden gestionar sus propios archivos
+// 5. Los padres pueden ver archivos de sus hijos (función canAccessUserContent)
+// 6. Nombres de archivo validados con regex para prevenir ataques

@@ -1,0 +1,54 @@
+// Reglas de Firestore para el sistema de historias
+// Agrega estas reglas a tu archivo de reglas de Firestore
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Reglas existentes para users, chats, etc...
+    // (mantén las reglas que ya tienes)
+
+    // NUEVAS REGLAS PARA HISTORIAS
+
+    // Permitir a los usuarios autenticados crear y leer sus propias historias
+    match /stories/{storyId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+                   && request.auth.uid == resource.data.userId;
+      allow update: if request.auth != null
+                   && (request.auth.uid == resource.data.userId ||
+                       isParentOfStoryOwner(resource.data.userId));
+      allow delete: if request.auth != null
+                   && request.auth.uid == resource.data.userId;
+    }
+
+    // Permitir solicitudes de aprobación de historias
+    match /story_approval_requests/{requestId} {
+      allow read: if request.auth != null
+                 && (request.auth.uid == resource.data.parentId ||
+                     request.auth.uid == resource.data.childId);
+      allow create: if request.auth != null;
+      allow update: if request.auth != null
+                   && request.auth.uid == resource.data.parentId;
+      allow delete: if request.auth != null
+                   && request.auth.uid == resource.data.parentId;
+    }
+
+    // Permitir notificaciones (si no tienes reglas ya)
+    match /notifications/{notificationId} {
+      allow read: if request.auth != null
+                 && request.auth.uid == resource.data.recipientId;
+      allow create: if request.auth != null;
+      allow update: if request.auth != null
+                   && request.auth.uid == resource.data.recipientId;
+      allow delete: if request.auth != null
+                   && request.auth.uid == resource.data.recipientId;
+    }
+
+    // Función auxiliar para verificar si el usuario es padre del dueño de la historia
+    function isParentOfStoryOwner(storyOwnerId) {
+      return exists(/databases/$(database)/documents/users/$(storyOwnerId)) &&
+             get(/databases/$(database)/documents/users/$(storyOwnerId)).data.parentId == request.auth.uid;
+    }
+  }
+}

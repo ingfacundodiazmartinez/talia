@@ -1,0 +1,40 @@
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "functions": {
+    "source": "functions"
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "talia-chat-app",
+          "appId": "1:880854934139:android:13b0e492cefdeec40fb8de",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "ios": {
+        "default": {
+          "projectId": "talia-chat-app",
+          "appId": "1:880854934139:ios:6d175832a52490280fb8de",
+          "uploadDebugSymbols": false,
+          "fileOutput": "ios/Runner/GoogleService-Info.plist"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "talia-chat-app",
+          "configurations": {
+            "android": "1:880854934139:android:13b0e492cefdeec40fb8de",
+            "ios": "1:880854934139:ios:6d175832a52490280fb8de"
+          }
+        }
+      }
+    }
+  }
+}
