@@ -4,6 +4,7 @@ import '../models/story.dart';
 import '../services/story_service.dart';
 import '../screens/story_camera_screen.dart';
 import '../screens/story_viewer_screen.dart';
+import '../theme_service.dart';
 
 class StoriesSection extends StatelessWidget {
   const StoriesSection({super.key});
@@ -20,7 +21,15 @@ class StoriesSection extends StatelessWidget {
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return Center(
-              child: CircularProgressIndicator(color: Color(0xFF9D7FE8)),
+              child: CircularProgressIndicator(
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            );
+          }
+
+          if (snapshot.hasError) {
+            return Center(
+              child: Text('Error: ${snapshot.error}'),
             );
           }
 
@@ -72,9 +81,15 @@ class StoriesSection extends StatelessWidget {
                 gradient: LinearGradient(
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
-                  colors: [Color(0xFF9D7FE8), Color(0xFFB39DDB)],
+                  colors: [
+                    context.customColors.gradientStart,
+                    context.customColors.gradientEnd,
+                  ],
                 ),
-                border: Border.all(color: Colors.white, width: 3),
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  width: 3,
+                ),
               ),
               child: Icon(Icons.add, color: Colors.white, size: 28),
             ),
@@ -84,7 +99,7 @@ class StoriesSection extends StatelessWidget {
               style: TextStyle(
                 fontSize: 11,
                 fontWeight: FontWeight.w500,
-                color: Color(0xFF2D3142),
+                color: Theme.of(context).colorScheme.onSurface,
               ),
               textAlign: TextAlign.center,
               maxLines: 1,
@@ -310,28 +325,18 @@ class StoriesHeader extends StatelessWidget {
       padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
         children: [
-          Icon(Icons.auto_awesome, color: Color(0xFF9D7FE8), size: 20),
+          Icon(
+            Icons.auto_awesome,
+            color: Theme.of(context).colorScheme.primary,
+            size: 20,
+          ),
           SizedBox(width: 8),
           Text(
             'Historias',
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w600,
-              color: Color(0xFF2D3142),
-            ),
-          ),
-          Spacer(),
-          TextButton(
-            onPressed: () {
-              // TODO: Navegar a vista completa de historias
-            },
-            child: Text(
-              'Ver todas',
-              style: TextStyle(
-                fontSize: 14,
-                color: Color(0xFF9D7FE8),
-                fontWeight: FontWeight.w500,
-              ),
+              color: Theme.of(context).colorScheme.onSurface,
             ),
           ),
         ],

@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'services/group_chat_service.dart';
 
 class FirebaseService {
@@ -46,15 +47,27 @@ class FirebaseService {
   // ==================== HIJOS ====================
 
   // Agregar hijo (para padres)
+  // 🔒 SEGURIDAD: Ahora usa Cloud Function para validación server-side
   Future<void> addChild({
     required String parentId,
     required String childId,
   }) async {
-    await _firestore.collection('parent_children').add({
-      'parentId': parentId,
-      'childId': childId,
-      'addedAt': FieldValue.serverTimestamp(),
-    });
+    try {
+      final functions = FirebaseFunctions.instance;
+      final result = await functions.httpsCallable('createParentChildLink').call({
+        'parentId': parentId,
+        'childId': childId,
+      });
+
+      if (result.data['success'] != true) {
+        throw Exception(result.data['message'] ?? 'Error creating parent-child link');
+      }
+
+      print('✅ Parent-child link created: ${result.data['linkId']}');
+    } catch (e) {
+      print('❌ Error calling createParentChildLink: $e');
+      rethrow;
+    }
   }
 
   // Obtener hijos de un padre
@@ -68,11 +81,49 @@ class FirebaseService {
   // ==================== LISTA BLANCA ====================
 
   // Solicitar aprobación de contacto
+  // DEPRECATED: Usar Cloud Function createContactRequest en su lugar
   Future<void> requestContact({
     required String childId,
     required String contactPhone,
     required String contactName,
   }) async {
+    // Verificar si ya existe una solicitud pendiente con este teléfono
+    final existingRequests = await _firestore
+        .collection('contact_requests')
+        .where('childId', isEqualTo: childId)
+        .where('contactPhone', isEqualTo: contactPhone)
+        .where('status', isEqualTo: 'pending')
+        .get();
+
+    if (existingRequests.docs.isNotEmpty) {
+      throw Exception('Ya existe una solicitud pendiente con este contacto');
+    }
+
+    // Verificar si el teléfono corresponde a un usuario registrado
+    final userQuery = await _firestore
+        .collection('users')
+        .where('phone', isEqualTo: contactPhone)
+        .limit(1)
+        .get();
+
+    if (userQuery.docs.isNotEmpty) {
+      final contactUserId = userQuery.docs.first.id;
+      final participants = [childId, contactUserId]..sort();
+
+      // Verificar si ya existe un contacto aprobado
+      final existingContact = await _firestore
+          .collection('contacts')
+          .where('users', isEqualTo: participants)
+          .get();
+
+      if (existingContact.docs.isNotEmpty) {
+        final contactStatus = existingContact.docs.first.data()['status'];
+        if (contactStatus == 'approved') {
+          throw Exception('Ya existe un contacto aprobado con este usuario');
+        }
+      }
+    }
+
     // Obtener todos los padres vinculados
     final parentLinks = await _firestore
         .collection('parent_child_links')
@@ -115,11 +166,12 @@ class FirebaseService {
       'approvedAt': FieldValue.serverTimestamp(),
     });
 
-    // Agregar a la lista blanca
-    await _firestore.collection('whitelist').add({
-      'childId': childId,
-      'contactId': contactId,
-      'addedAt': FieldValue.serverTimestamp(),
+    // Agregar a contactos (sistema bidireccional)
+    await _firestore.collection('contacts').add({
+      'users': [childId, contactId],
+      'status': 'approved',
+      'createdAt': FieldValue.serverTimestamp(),
+      'type': 'contact',
     });
 
     // Procesar invitaciones de grupo pendientes
@@ -141,20 +193,30 @@ class FirebaseService {
   // Obtener contactos aprobados de un niño
   Stream<QuerySnapshot> getApprovedContacts(String childId) {
     return _firestore
-        .collection('whitelist')
-        .where('childId', isEqualTo: childId)
+        .collection('contacts')
+        .where('users', arrayContains: childId)
+        .where('status', isEqualTo: 'approved')
         .snapshots();
   }
 
   // Verificar si un contacto está aprobado
   Future<bool> isContactApproved(String childId, String contactId) async {
     final query = await _firestore
-        .collection('whitelist')
-        .where('childId', isEqualTo: childId)
-        .where('contactId', isEqualTo: contactId)
+        .collection('contacts')
+        .where('users', arrayContains: childId)
+        .where('status', isEqualTo: 'approved')
         .get();
 
-    return query.docs.isNotEmpty;
+    // Verificar que contactId esté en la lista de usuarios
+    for (var doc in query.docs) {
+      final data = doc.data() as Map<String, dynamic>;
+      final users = List<String>.from(data['users'] ?? []);
+      if (users.contains(contactId)) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   // ==================== MENSAJES ====================
@@ -165,6 +227,10 @@ class FirebaseService {
     required String senderId,
     required String receiverId,
     required String text,
+    String type = 'text', // text, image, video, audio, file
+    String? mediaUrl,
+    String? fileName,
+    int? duration, // Para audio/video en segundos
   }) async {
     // Verificar si es un niño y si el contacto está aprobado
     final senderDoc = await _firestore.collection('users').doc(senderId).get();
@@ -177,23 +243,49 @@ class FirebaseService {
       }
     }
 
+    // Preparar datos del mensaje
+    final Map<String, dynamic> messageData = {
+      'senderId': senderId,
+      'receiverId': receiverId,
+      'text': text,
+      'type': type,
+      'timestamp': FieldValue.serverTimestamp(),
+      'isRead': false,
+    };
+
+    // Agregar campos opcionales si existen
+    if (mediaUrl != null) messageData['mediaUrl'] = mediaUrl;
+    if (fileName != null) messageData['fileName'] = fileName;
+    if (duration != null) messageData['duration'] = duration;
+
     // Enviar el mensaje
     await _firestore
         .collection('chats')
         .doc(chatId)
         .collection('messages')
-        .add({
-          'senderId': senderId,
-          'receiverId': receiverId,
-          'text': text,
-          'timestamp': FieldValue.serverTimestamp(),
-          'isRead': false,
-        });
+        .add(messageData);
+
+    // Preparar texto del último mensaje según tipo
+    String lastMessageText = text;
+    switch (type) {
+      case 'image':
+        lastMessageText = '📷 Imagen';
+        break;
+      case 'video':
+        lastMessageText = '🎥 Video';
+        break;
+      case 'audio':
+        lastMessageText = '🎤 Audio';
+        break;
+      case 'file':
+        lastMessageText = '📄 ${fileName ?? 'Archivo'}';
+        break;
+    }
 
     // Actualizar último mensaje del chat
     await _firestore.collection('chats').doc(chatId).set({
       'participants': [senderId, receiverId],
-      'lastMessage': text,
+      'lastMessage': lastMessageText,
       'lastMessageTime': FieldValue.serverTimestamp(),
       'lastMessageSender': senderId,
     }, SetOptions(merge: true));

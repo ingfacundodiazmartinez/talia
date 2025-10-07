@@ -104,13 +104,24 @@ class UserRoleService {
   /// Obtiene todos los hijos vinculados a un padre
   Future<List<String>> getLinkedChildren(String parentId) async {
     try {
+      print('🔍 Consultando hijos vinculados para padre: $parentId');
+
       final links = await _firestore
           .collection('parent_child_links')
           .where('parentId', isEqualTo: parentId)
           .where('status', isEqualTo: 'approved')
           .get();
 
-      return links.docs.map((doc) => doc.data()['childId'] as String).toList();
+      print('📊 Encontrados ${links.docs.length} documentos en parent_child_links');
+
+      for (var doc in links.docs) {
+        print('   - Doc ID: ${doc.id}, childId: ${doc.data()['childId']}');
+      }
+
+      final childrenIds = links.docs.map((doc) => doc.data()['childId'] as String).toList();
+      print('✅ Retornando ${childrenIds.length} hijos: $childrenIds');
+
+      return childrenIds;
     } catch (e) {
       print('❌ Error obteniendo hijos vinculados para $parentId: $e');
       return [];

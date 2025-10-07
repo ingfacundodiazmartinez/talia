@@ -114,11 +114,12 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
     return Scaffold(
       appBar: AppBar(
         title: Text('Mi Código'),
-        backgroundColor: Color(0xFF9D7FE8),
-        foregroundColor: Colors.white,
         actions: [
           if (_userCode != null)
             PopupMenuButton<String>(
@@ -162,9 +163,9 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
                   value: 'regenerate',
                   child: Row(
                     children: [
-                      Icon(Icons.refresh, size: 20, color: Colors.orange),
+                      Icon(Icons.refresh, size: 20, color: Colors.orange[700]),
                       SizedBox(width: 8),
-                      Text('Regenerar', style: TextStyle(color: Colors.orange)),
+                      Text('Regenerar', style: TextStyle(color: Colors.orange[700])),
                     ],
                   ),
                 ),
@@ -181,27 +182,29 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
   }
 
   Widget _buildErrorState() {
+    final colorScheme = Theme.of(context).colorScheme;
+
     return Center(
       child: Padding(
         padding: EdgeInsets.all(24),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.error_outline, size: 64, color: Colors.red),
+            Icon(Icons.error_outline, size: 64, color: colorScheme.error),
             SizedBox(height: 16),
             Text(
               'Error',
               style: TextStyle(
                 fontSize: 20,
                 fontWeight: FontWeight.bold,
-                color: Colors.red,
+                color: colorScheme.error,
               ),
             ),
             SizedBox(height: 8),
             Text(
               _errorMessage!,
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey[600]),
+              style: TextStyle(color: colorScheme.onSurfaceVariant),
             ),
             SizedBox(height: 24),
             ElevatedButton(onPressed: _loadUserCode, child: Text('Reintentar')),
@@ -212,6 +215,9 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
   }
 
   Widget _buildCodeDisplay() {
+    final colorScheme = Theme.of(context).colorScheme;
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
     return SingleChildScrollView(
       padding: EdgeInsets.all(24),
       child: Column(
@@ -220,18 +226,18 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
           Container(
             padding: EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: Color(0xFF9D7FE8).withOpacity(0.1),
+              color: colorScheme.primaryContainer,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Color(0xFF9D7FE8).withOpacity(0.3)),
+              border: Border.all(color: colorScheme.primary.withValues(alpha: 0.3)),
             ),
             child: Row(
               children: [
-                Icon(Icons.info_outline, color: Color(0xFF9D7FE8), size: 24),
+                Icon(Icons.info_outline, color: colorScheme.primary, size: 24),
                 SizedBox(width: 12),
                 Expanded(
                   child: Text(
                     'Comparte este código con tus amigos para que puedan agregarte como contacto',
-                    style: TextStyle(color: Color(0xFF9D7FE8), fontSize: 14),
+                    style: TextStyle(color: colorScheme.onPrimaryContainer, fontSize: 14),
                   ),
                 ),
               ],
@@ -244,11 +250,11 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
           Container(
             padding: EdgeInsets.all(24),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: colorScheme.surface,
               borderRadius: BorderRadius.circular(20),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.1),
+                  color: Colors.black.withValues(alpha: 0.1),
                   blurRadius: 15,
                   offset: Offset(0, 5),
                 ),
@@ -261,7 +267,7 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
                   style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
-                    color: Color(0xFF2D3142),
+                    color: colorScheme.onSurface,
                   ),
                 ),
                 SizedBox(height: 16),
@@ -270,7 +276,7 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.grey[300]!),
+                    border: Border.all(color: colorScheme.outline),
                   ),
                   child: QrImageView(
                     data: _userCode!,
@@ -283,7 +289,7 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
                 SizedBox(height: 16),
                 Text(
                   'Pide a tu amigo que escanee este código',
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  style: TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant),
                 ),
               ],
             ),
@@ -295,11 +301,11 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
           Container(
             padding: EdgeInsets.all(24),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: colorScheme.surface,
               borderRadius: BorderRadius.circular(20),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.1),
+                  color: Colors.black.withValues(alpha: 0.1),
                   blurRadius: 15,
                   offset: Offset(0, 5),
                 ),
@@ -312,17 +318,17 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
                   style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
-                    color: Color(0xFF2D3142),
+                    color: colorScheme.onSurface,
                   ),
                 ),
                 SizedBox(height: 16),
                 Container(
                   padding: EdgeInsets.all(20),
                   decoration: BoxDecoration(
-                    color: Color(0xFF9D7FE8).withOpacity(0.1),
+                    color: colorScheme.primaryContainer,
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
-                      color: Color(0xFF9D7FE8).withOpacity(0.3),
+                      color: colorScheme.primary.withValues(alpha: 0.3),
                     ),
                   ),
                   child: Row(
@@ -334,7 +340,7 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
                           fontSize: 24,
                           fontWeight: FontWeight.bold,
                           fontFamily: 'Courier',
-                          color: Color(0xFF9D7FE8),
+                          color: colorScheme.primary,
                           letterSpacing: 2,
                         ),
                       ),
@@ -344,7 +350,7 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
                 SizedBox(height: 16),
                 Text(
                   'O compártelo escribiéndolo manualmente',
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  style: TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant),
                 ),
               ],
             ),
@@ -361,8 +367,8 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
                   icon: Icon(Icons.copy),
                   label: Text('Copiar'),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: Color(0xFF9D7FE8),
-                    side: BorderSide(color: Color(0xFF9D7FE8)),
+                    foregroundColor: colorScheme.primary,
+                    side: BorderSide(color: colorScheme.primary),
                     padding: EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
@@ -377,8 +383,8 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
                   icon: Icon(Icons.share),
                   label: Text('Compartir'),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Color(0xFF9D7FE8),
-                    foregroundColor: Colors.white,
+                    backgroundColor: colorScheme.primary,
+                    foregroundColor: colorScheme.onPrimary,
                     padding: EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
@@ -395,15 +401,15 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
           Container(
             padding: EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: Colors.orange.withOpacity(0.1),
+              color: Colors.orange.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.orange.withOpacity(0.3)),
+              border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
             ),
             child: Column(
               children: [
                 Row(
                   children: [
-                    Icon(Icons.security, color: Colors.orange, size: 20),
+                    Icon(Icons.security, color: Colors.orange[700], size: 20),
                     SizedBox(width: 8),
                     Text(
                       'Información de Seguridad',

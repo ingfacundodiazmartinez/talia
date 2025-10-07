@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import '../services/emergency_service.dart';
+import '../screens/video_call_screen.dart';
 
 class EmergencyButton extends StatefulWidget {
   final VoidCallback? onEmergencyActivated;
@@ -98,11 +100,11 @@ class _EmergencyButtonState extends State<EmergencyButton>
 
     if (confirmed) {
       // Activar emergencia
-      final success = await _emergencyService.activateEmergency(
+      final result = await _emergencyService.activateEmergency(
         context: context,
       );
 
-      if (success) {
+      if (result != null && result['success'] == true) {
         widget.onEmergencyActivated?.call();
 
         // Actualizar estado de cooldown
@@ -116,6 +118,14 @@ class _EmergencyButtonState extends State<EmergencyButton>
             _checkCooldownStatus();
           }
         });
+
+        // Navegar a la pantalla de videollamada
+        if (mounted) {
+          await _joinEmergencyCall(
+            emergencyId: result['emergencyId'],
+            channelName: result['channelName'],
+          );
+        }
       }
     }
 
@@ -127,6 +137,54 @@ class _EmergencyButtonState extends State<EmergencyButton>
         _isPressed = false;
         _isActivating = false;
       });
+    }
+  }
+
+  Future<void> _joinEmergencyCall({
+    required String emergencyId,
+    required String channelName,
+  }) async {
+    try {
+      print('📞 Uniéndose a llamada de emergencia...');
+
+      // Generar token de Agora
+      final functions = FirebaseFunctions.instance;
+      final result = await functions.httpsCallable('generateAgoraToken').call({
+        'channelName': channelName,
+        'uid': 0,
+      });
+
+      final token = result.data['token'] as String;
+      final uid = result.data['uid'] as int;
+
+      print('✅ Token generado para hijo (caller): $token');
+
+      // Navegar a la pantalla de videollamada
+      if (mounted) {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => VideoCallScreen(
+              callId: emergencyId,
+              channelName: channelName,
+              token: token,
+              uid: uid,
+              isCaller: true,
+              remoteName: 'Padres',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      print('❌ Error uniéndose a llamada de emergencia: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al iniciar videollamada de emergencia'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 

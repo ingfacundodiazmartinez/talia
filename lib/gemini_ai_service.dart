@@ -4,12 +4,22 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'notification_service.dart';
 import 'services/user_role_service.dart';
 
+// ⚠️ ADVERTENCIA DE SEGURIDAD ⚠️
+// Este servicio está DESHABILITADO por razones de seguridad.
+// NO usar directamente desde el cliente - la API key estaría expuesta.
+//
+// USAR EN SU LUGAR: Cloud Function 'generateChildReport' (functions/index.js)
+// La Cloud Function maneja el análisis de IA de forma segura server-side.
+//
+// Si necesitas análisis de IA, llama a la Cloud Function desde el cliente,
+// NO uses este servicio directamente.
+
 class GeminiAIService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  // IMPORTANTE: Reemplaza con tu API Key de Google AI Studio
-  // Obtén una gratis en: https://makersuite.google.com/app/apikey
-  static const String _apiKey = 'AIzaSyDy7zxxQ4SubSKMm2cjQcl3jrUXOuUroCM';
+  // ❌ CREDENTIAL REMOVIDA POR SEGURIDAD
+  // API Key debe estar SOLO en Cloud Functions, NO en el cliente
+  // static const String _apiKey = 'REMOVED_FOR_SECURITY';
   static const String _baseUrl =
       'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent';
 
@@ -158,7 +168,12 @@ IMPORTANTE:
 - Sé preciso y profesional en tu análisis considerando el peso emocional real de cada evento
 ''';
 
-      // 3. Llamar a Gemini API
+      // 3. Llamar a Gemini API (DESHABILITADO - usar Cloud Function en su lugar)
+      throw Exception(
+        '🚫 SEGURIDAD: No usar Gemini desde cliente. Usar Cloud Function "generateChildReport"',
+      );
+
+      /* CÓDIGO DESHABILITADO POR SEGURIDAD
       final response = await http.post(
         Uri.parse('$_baseUrl?key=$_apiKey'),
         headers: {'Content-Type': 'application/json'},
@@ -230,6 +245,7 @@ IMPORTANTE:
         'periodStart': sevenDaysAgo,
         'periodEnd': now,
       };
+      */ // FIN CÓDIGO DESHABILITADO
     } catch (e) {
       print('❌ Error en análisis por lotes: $e');
       return {'status': 'error', 'message': 'Error: $e'};
@@ -578,8 +594,12 @@ IMPORTANTE:
     }
   }
 
-  // Test de conexión con Gemini
+  // Test de conexión con Gemini (DESHABILITADO - usar Cloud Function)
   Future<bool> testAPIConnection() async {
+    print('🚫 SEGURIDAD: No usar Gemini desde cliente. Usar Cloud Function "generateChildReport"');
+    return false;
+
+    /* CÓDIGO DESHABILITADO POR SEGURIDAD
     try {
       final response = await http.post(
         Uri.parse('$_baseUrl?key=$_apiKey'),
@@ -606,5 +626,6 @@ IMPORTANTE:
       print('❌ Error de conexión: $e');
       return false;
     }
+    */
   }
 }

@@ -124,20 +124,26 @@ class ChatBlockService {
         }
       }
 
-      // También verificar en la colección de chats
-      final chatDoc = await _firestore.collection('chats').doc(chatId).get();
-      if (chatDoc.exists) {
-        final chatData = chatDoc.data()!;
-        final isBlocked = chatData['isBlocked'] ?? false;
+      // También verificar en la colección de chats (con manejo de permisos)
+      try {
+        final chatDoc = await _firestore.collection('chats').doc(chatId).get();
+        if (chatDoc.exists) {
+          final chatData = chatDoc.data()!;
+          final isBlocked = chatData['isBlocked'] ?? false;
 
-        if (isBlocked) {
-          return ChatBlockStatus(
-            isBlocked: true,
-            blockedAt: chatData['blockedAt'] as Timestamp?,
-            reason: 'Chat bloqueado',
-            blockedBy: chatData['blockedBy'],
-          );
+          if (isBlocked) {
+            return ChatBlockStatus(
+              isBlocked: true,
+              blockedAt: chatData['blockedAt'] as Timestamp?,
+              reason: 'Chat bloqueado',
+              blockedBy: chatData['blockedBy'],
+            );
+          }
         }
+      } catch (chatError) {
+        // Ignorar errores de permisos al verificar chat
+        // (el chat puede no existir aún o no tener permisos)
+        print('⚠️ No se pudo verificar estado en chats: $chatError');
       }
 
       return ChatBlockStatus(isBlocked: false);

@@ -5,6 +5,7 @@ import 'package:camera/camera.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:image/image.dart' as img;
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/story_service.dart';
 import '../services/deepar_service.dart';
 import '../widgets/permission_dialog.dart';
@@ -108,45 +109,71 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   Future<void> _initializeCamera() async {
     try {
-      // CRÍTICO: Solicitar permisos de cámara ANTES de inicializar DeepAR
-      print('📱 Verificando permisos de cámara...');
-      var cameraStatus = await Permission.camera.status;
+      print('📱 Inicializando cámara para historias...');
 
-      if (!cameraStatus.isGranted) {
-        print('📱 Solicitando permiso de cámara...');
-        cameraStatus = await Permission.camera.request();
+      // NUEVO ENFOQUE: Intentar obtener cámaras directamente
+      // En iOS, availableCameras() maneja permisos automáticamente
+      try {
+        _cameras = await availableCameras();
 
-        if (!cameraStatus.isGranted) {
-          print('❌ Permiso de cámara denegado');
-          setState(() {
-            _hasInitializationFailed = true;
-          });
-          _showPermissionDialog();
-          return;
+        if (_cameras!.isEmpty) {
+          throw Exception('No se encontraron cámaras');
         }
+
+        // Si llegamos aquí, tenemos acceso a las cámaras
+        print('✅ Cámaras disponibles: ${_cameras!.length}');
+
+        setState(() {
+          _hasCameraPermissions = true;
+        });
+
+        print('🎭 Modo DeepAR por defecto - cámara lista');
+        return;
+      } catch (cameraError) {
+        print('❌ Error obteniendo cámaras: $cameraError');
+
+        // Si falla, verificar permisos explícitamente
+        print('🔍 Verificando permisos de cámara explícitamente...');
+        var cameraStatus = await Permission.camera.status;
+        print('📋 Estado actual de permiso: $cameraStatus');
+
+        // Si el permiso no está concedido, solicitarlo
+        if (!cameraStatus.isGranted) {
+          print('📱 Solicitando permiso de cámara...');
+          cameraStatus = await Permission.camera.request();
+          print('📋 Resultado de solicitud: $cameraStatus');
+
+          if (!cameraStatus.isGranted) {
+            print('❌ Permiso de cámara denegado');
+            setState(() {
+              _hasInitializationFailed = true;
+            });
+            _showPermissionDialog();
+            return;
+          }
+        }
+
+        // Permiso concedido, reintentar obtener cámaras
+        print('🔄 Permiso concedido, reintentando obtener cámaras...');
+        _cameras = await availableCameras();
+
+        if (_cameras!.isEmpty) {
+          throw Exception('No se encontraron cámaras');
+        }
+
+        setState(() {
+          _hasCameraPermissions = true;
+        });
+
+        print('✅ Cámaras disponibles después de solicitar permisos: ${_cameras!.length}');
       }
-
-      // CRÍTICO: Establecer flag de permisos para construir DeepARCameraView
-      setState(() {
-        _hasCameraPermissions = true;
-      });
-      print('✅ Permiso de cámara concedido');
-      print('📱 Obteniendo cámaras disponibles...');
-
-      // Obtener cámaras disponibles directamente (como ImagePicker)
-      _cameras = await availableCameras();
-      if (_cameras!.isEmpty) {
-        throw Exception('No se encontraron cámaras');
-      }
-
-      // Siempre en modo DeepAR
-      print('🎭 Modo DeepAR por defecto - no se requiere cámara Flutter');
     } catch (e) {
-      print('❌ Error inicializando cámara: $e');
+      print('❌ Error fatal inicializando cámara: $e');
 
       // Si el error es de permisos, mostrar diálogo apropiado
       if (e.toString().toLowerCase().contains('permission') ||
-          e.toString().toLowerCase().contains('camera')) {
+          e.toString().toLowerCase().contains('camera') ||
+          e.toString().toLowerCase().contains('access')) {
         setState(() {
           _hasInitializationFailed = true;
         });
@@ -1122,7 +1149,7 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
     });
 
     try {
-      await _storyService.createStory(
+      final storyId = await _storyService.createStory(
         mediaPath: widget.imagePath,
         mediaType: 'image',
         caption: _captionController.text.trim().isEmpty
@@ -1133,27 +1160,56 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
             : null,
       );
 
+      // Verificar el status de la historia creada
+      final storyDoc = await FirebaseFirestore.instance
+          .collection('stories')
+          .doc(storyId)
+          .get();
+      final storyStatus = storyDoc.data()?['status'] ?? 'approved';
+
       Navigator.pop(context); // Cerrar preview
       Navigator.pop(context); // Cerrar cámara
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              Icon(Icons.access_time, color: Colors.white, size: 20),
-              SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  '📸 Historia creada! Esperando aprobación del padre',
-                  style: TextStyle(fontSize: 14),
+      // Mostrar mensaje apropiado según el status
+      if (storyStatus == 'pending') {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.access_time, color: Colors.white, size: 20),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '📸 Historia creada! Esperando aprobación del padre',
+                    style: TextStyle(fontSize: 14),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
+            backgroundColor: Colors.orange[700],
+            duration: Duration(seconds: 4),
           ),
-          backgroundColor: Colors.orange[700],
-          duration: Duration(seconds: 4),
-        ),
-      );
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.check_circle, color: Colors.white, size: 20),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '📸 Historia publicada exitosamente!',
+                    style: TextStyle(fontSize: 14),
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: Colors.green[700],
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(

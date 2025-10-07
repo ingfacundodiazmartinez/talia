@@ -2,17 +2,19 @@ import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'app_config_service.dart';
 
 class VideoCallService {
   static final VideoCallService _instance = VideoCallService._internal();
   factory VideoCallService() => _instance;
   VideoCallService._internal();
 
-  // TODO: Reemplazar con tu APP_ID de Agora Console (https://console.agora.io/)
-  static const String APP_ID = 'f4537746b6fc4e65aca1bd969c42c988';
-
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
+  final AppConfigService _appConfig = AppConfigService();
+
+  // Obtener APP_ID de forma segura desde Remote Config
+  String get _appId => _appConfig.agoraAppId;
 
   RtcEngine? _engine;
   bool _isInitialized = false;
@@ -39,7 +41,7 @@ class VideoCallService {
       // Inicializar engine
       await _engine!.initialize(
         RtcEngineContext(
-          appId: APP_ID,
+          appId: _appId,
           channelProfile: ChannelProfileType.channelProfileCommunication,
         ),
       );
@@ -105,7 +107,7 @@ class VideoCallService {
       // Inicializar engine
       await _engine!.initialize(
         RtcEngineContext(
-          appId: APP_ID,
+          appId: _appId,
           channelProfile: ChannelProfileType.channelProfileCommunication,
         ),
       );
@@ -313,24 +315,21 @@ class VideoCallService {
     try {
       print('📞 Iniciando videollamada de $callerName a $receiverName');
 
-      // Crear documento de llamada en Firestore primero para obtener el ID
-      final callDoc = await _firestore.collection('video_calls').add({
+      // Generar un ID único para usar como channelName
+      final docRef = _firestore.collection('video_calls').doc();
+      final channelName = docRef.id;
+
+      // Crear documento con TODOS los campos de una vez (incluyendo channelName)
+      await docRef.set({
         'callerId': callerId,
         'callerName': callerName,
         'receiverId': receiverId,
         'receiverName': receiverName,
+        'channelName': channelName, // ← INCLUIR DESDE EL INICIO
         'status': 'ringing', // ringing, accepted, rejected, ended
         'createdAt': FieldValue.serverTimestamp(),
         'token': '', // En producción, generar token desde servidor
         'callType': 'video', // Tipo de llamada
-      });
-
-      // Usar el ID del documento como nombre del canal (corto y único, ~20 caracteres)
-      String channelName = callDoc.id;
-
-      // Actualizar el documento con el nombre del canal
-      await callDoc.update({
-        'channelName': channelName,
       });
 
       // Crear notificación para disparar push notification al receptor
@@ -341,18 +340,19 @@ class VideoCallService {
         'body': '$callerName te está llamando',
         'priority': 'high',
         'data': {
-          'callId': callDoc.id,
+          'callId': channelName, // Usar el ID del documento
           'callerId': callerId,
           'callerName': callerName,
           'channelName': channelName,
+          'callType': 'video', // Importante: tipo de llamada
         },
         'createdAt': FieldValue.serverTimestamp(),
         'read': false,
       });
 
-      print('✅ Videollamada creada: ${callDoc.id}, Canal: $channelName');
+      print('✅ Videollamada creada: $channelName, Canal: $channelName');
       print('✅ Notificación de videollamada enviada a $receiverName');
-      return callDoc.id;
+      return channelName;
     } catch (e) {
       print('❌ Error iniciando videollamada: $e');
       rethrow;
@@ -369,24 +369,21 @@ class VideoCallService {
     try {
       print('📞 Iniciando llamada de audio de $callerName a $receiverName');
 
-      // Crear documento de llamada en Firestore
-      final callDoc = await _firestore.collection('video_calls').add({
+      // Generar un ID único para usar como channelName
+      final docRef = _firestore.collection('video_calls').doc();
+      final channelName = docRef.id;
+
+      // Crear documento con TODOS los campos de una vez (incluyendo channelName)
+      await docRef.set({
         'callerId': callerId,
         'callerName': callerName,
         'receiverId': receiverId,
         'receiverName': receiverName,
+        'channelName': channelName, // ← INCLUIR DESDE EL INICIO
         'status': 'ringing',
         'createdAt': FieldValue.serverTimestamp(),
         'token': '',
         'callType': 'audio', // Tipo de llamada: audio
-      });
-
-      // Usar el ID del documento como nombre del canal
-      String channelName = callDoc.id;
-
-      // Actualizar el documento con el nombre del canal
-      await callDoc.update({
-        'channelName': channelName,
       });
 
       // Crear notificación para disparar push notification al receptor
@@ -397,18 +394,19 @@ class VideoCallService {
         'body': '$callerName te está llamando',
         'priority': 'high',
         'data': {
-          'callId': callDoc.id,
+          'callId': channelName, // Usar el ID del documento
           'callerId': callerId,
           'callerName': callerName,
           'channelName': channelName,
+          'callType': 'audio', // Importante: tipo de llamada
         },
         'createdAt': FieldValue.serverTimestamp(),
         'read': false,
       });
 
-      print('✅ Llamada de audio creada: ${callDoc.id}, Canal: $channelName');
+      print('✅ Llamada de audio creada: $channelName, Canal: $channelName');
       print('✅ Notificación de llamada enviada a $receiverName');
-      return callDoc.id;
+      return channelName;
     } catch (e) {
       print('❌ Error iniciando llamada de audio: $e');
       rethrow;

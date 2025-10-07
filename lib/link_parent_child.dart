@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'dart:math';
 import 'services/user_role_service.dart';
 
@@ -458,26 +459,116 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
 
       print('🔗 Vinculando hijo $childId con padre $parentId');
 
-      // Crear relación padre-hijo en AMBAS colecciones para compatibilidad
-      await _firestore.collection('parent_children').add({
-        'parentId': parentId,
-        'childId': childId,
-        'status': 'approved',
-        'linkedAt': FieldValue.serverTimestamp(),
-      });
-      print('✅ 1/2: Registro creado en parent_children');
+      // 🔒 SEGURIDAD: Usar Cloud Function para crear vínculo
+      // Las Firestore rules ahora bloquean la escritura directa
+      try {
+        final functions = FirebaseFunctions.instance;
+        final result = await functions.httpsCallable('createParentChildLink').call({
+          'parentId': parentId,
+          'childId': childId,
+          'code': code,
+        });
 
-      await _firestore.collection('parent_child_links').add({
-        'parentId': parentId,
-        'childId': childId,
-        'status': 'approved',
-        'linkedAt': FieldValue.serverTimestamp(),
-      });
-      print('✅ 2/2: Registro creado en parent_child_links');
+        if (result.data['success'] == true) {
+          print('✅ Vínculo creado por Cloud Function');
+          print('   Padre: ${result.data['parentName']}');
+          print('   Hijo: ${result.data['childName']}');
+        } else {
+          throw Exception('Error en Cloud Function: ${result.data['message'] ?? 'Unknown error'}');
+        }
+      } catch (e) {
+        print('❌ Error al llamar Cloud Function: $e');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Error al crear vínculo: $e'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 4),
+          ),
+        );
+        return;
+      }
+
+      // NOTA: Código de migración de whitelist deshabilitado (colección eliminada)
+      // El sistema ahora usa 'contacts' y 'parent_child_links'
+      /*
+      print('🔄 Migrando contactos existentes del niño al padre...');
+      final existingContacts = await _firestore
+          .collection('whitelist')
+          .where('childId', isEqualTo: childId)
+          .get();
+
+      int migratedCount = 0;
+      for (var contactDoc in existingContacts.docs) {
+        final contactData = contactDoc.data();
+        final contactId = contactData['contactId'];
+
+        if (contactId == parentId) continue;
+
+        final existingApproval = await _firestore
+            .collection('whitelist')
+            .where('childId', isEqualTo: childId)
+            .where('contactId', isEqualTo: contactId)
+            .where('approvedBy', isEqualTo: parentId)
+            .limit(1)
+            .get();
+
+        if (existingApproval.docs.isEmpty) {
+          await contactDoc.reference.update({
+            'approvedBy': parentId,
+            'migratedAt': FieldValue.serverTimestamp(),
+            'previouslyAutoApproved': contactData['autoApproved'] ?? false,
+          });
+          migratedCount++;
+          print('  ✓ Contacto $contactId migrado al padre');
+        }
+      }
+      */
+
+      int migratedCount = 0;
+      if (false && migratedCount > 0) {
+        // Notificar al padre sobre los contactos migrados
+        await _firestore.collection('notifications').add({
+          'userId': parentId,
+          'title': 'Contactos Existentes',
+          'body': 'Tu hijo ya tenía $migratedCount contacto${migratedCount > 1 ? 's' : ''} agregado${migratedCount > 1 ? 's' : ''}. Puedes revisarlos en Control Parental.',
+          'type': 'contacts_migrated',
+          'priority': 'normal',
+          'read': false,
+          'createdAt': FieldValue.serverTimestamp(),
+          'data': {
+            'childId': childId,
+            'contactCount': migratedCount,
+          },
+        });
+        print('✅ Notificación enviada al padre sobre $migratedCount contactos migrados');
+      }
 
       // Actualizar rol del hijo (ahora es child porque tiene padre)
       final userDoc = await _firestore.collection('users').doc(childId).get();
-      final age = userDoc.data()?['age'] ?? 0;
+      final userData = userDoc.data();
+
+      // Calcular edad desde birthDate
+      int age = 0;
+      if (userData?['birthDate'] != null) {
+        DateTime? birthDate;
+        if (userData!['birthDate'] is Timestamp) {
+          birthDate = (userData['birthDate'] as Timestamp).toDate();
+        } else if (userData['birthDate'] is String) {
+          birthDate = DateTime.tryParse(userData['birthDate']);
+        }
+        if (birthDate != null) {
+          final today = DateTime.now();
+          age = today.year - birthDate.year;
+          if (today.month < birthDate.month ||
+              (today.month == birthDate.month && today.day < birthDate.day)) {
+            age--;
+          }
+        }
+      } else if (userData?['age'] != null) {
+        // Fallback a age si no hay birthDate (compatibilidad con datos antiguos)
+        age = userData!['age'] ?? 0;
+      }
+
       final newRole = await userRoleService.determineUserRole(childId, age);
       await _firestore.collection('users').doc(childId).update({
         'role': newRole,
@@ -578,18 +669,26 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
     return Scaffold(
       appBar: AppBar(
         title: Text('Vincular con Padre/Madre'),
-        backgroundColor: Color(0xFF9D7FE8),
-        foregroundColor: Colors.white,
+        backgroundColor: isDarkMode ? colorScheme.surface : colorScheme.primary,
+        foregroundColor: isDarkMode ? colorScheme.onSurface : colorScheme.onPrimary,
       ),
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [Color(0xFF9D7FE8).withOpacity(0.1), Colors.white],
+            colors: isDarkMode
+                ? [
+                    colorScheme.primary.withValues(alpha: 0.3),
+                    colorScheme.surface,
+                  ]
+                : [Color(0xFF9D7FE8).withOpacity(0.1), Colors.white],
           ),
         ),
         child: Center(
@@ -601,13 +700,13 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
                 Container(
                   padding: EdgeInsets.all(20),
                   decoration: BoxDecoration(
-                    color: Color(0xFF9D7FE8).withOpacity(0.1),
+                    color: colorScheme.primaryContainer,
                     shape: BoxShape.circle,
                   ),
                   child: Icon(
                     Icons.family_restroom,
                     size: 80,
-                    color: Color(0xFF9D7FE8),
+                    color: colorScheme.primary,
                   ),
                 ),
 
@@ -618,7 +717,7 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
                   style: TextStyle(
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
-                    color: Color(0xFF2D3142),
+                    color: colorScheme.onSurface,
                   ),
                 ),
 
@@ -627,7 +726,10 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
                 Text(
                   'Pídele a tu padre o madre el código de vinculación de 6 dígitos',
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 16, color: Colors.grey[600]),
+                  style: TextStyle(
+                    fontSize: 16,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
                 ),
 
                 SizedBox(height: 40),
@@ -635,15 +737,25 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
                 Container(
                   padding: EdgeInsets.all(24),
                   decoration: BoxDecoration(
-                    color: Colors.white,
+                    color: isDarkMode
+                        ? colorScheme.surfaceContainerHighest
+                        : colorScheme.surface,
                     borderRadius: BorderRadius.circular(20),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.1),
-                        blurRadius: 20,
-                        offset: Offset(0, 10),
-                      ),
-                    ],
+                    border: isDarkMode
+                        ? Border.all(
+                            color: colorScheme.outline.withValues(alpha: 0.3),
+                            width: 1,
+                          )
+                        : null,
+                    boxShadow: isDarkMode
+                        ? null
+                        : [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.1),
+                              blurRadius: 20,
+                              offset: Offset(0, 10),
+                            ),
+                          ],
                   ),
                   child: TextField(
                     controller: _codeController,
@@ -652,7 +764,7 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
                       fontSize: 32,
                       fontWeight: FontWeight.bold,
                       letterSpacing: 12,
-                      color: Color(0xFF9D7FE8),
+                      color: colorScheme.primary,
                     ),
                     keyboardType: TextInputType.number,
                     maxLength: 6,
@@ -661,7 +773,7 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
                       counterText: '',
                       border: InputBorder.none,
                       hintStyle: TextStyle(
-                        color: Colors.grey[300],
+                        color: colorScheme.onSurfaceVariant.withValues(alpha: 0.3),
                         letterSpacing: 12,
                       ),
                     ),
@@ -677,7 +789,7 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
                   child: ElevatedButton(
                     onPressed: _isVerifying ? null : _verifyAndLink,
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Color(0xFF9D7FE8),
+                      backgroundColor: colorScheme.primary,
                       foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(16),
@@ -694,7 +806,7 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
                 Container(
                   padding: EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: Colors.green.withOpacity(0.1),
+                    color: Colors.green.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Row(
@@ -706,7 +818,9 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
                           'Tu padre/madre podrá proteger tu cuenta y aprobar tus contactos',
                           style: TextStyle(
                             fontSize: 14,
-                            color: Colors.green[800],
+                            color: isDarkMode
+                                ? Colors.green.shade200
+                                : Colors.green.shade800,
                           ),
                         ),
                       ),

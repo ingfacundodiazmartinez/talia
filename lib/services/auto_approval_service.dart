@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../notification_service.dart';
 import 'user_role_service.dart';
@@ -145,55 +146,33 @@ class AutoApprovalService {
         '🤖 Aprobando automáticamente contacto: $contactName para hijo: $childId',
       );
 
-      // Buscar el usuario contacto (debe existir en el sistema)
-      String? contactId;
-      final existingUser = await _firestore
-          .collection('users')
-          .where('email', isEqualTo: contactPhone)
-          .limit(1)
-          .get();
-
-      if (existingUser.docs.isNotEmpty) {
-        contactId = existingUser.docs.first.id;
-        print('👤 Usuario contacto existente encontrado: $contactId');
-      } else {
-        print('⚠️ Usuario contacto no existe en el sistema, no se puede aprobar automáticamente');
-        // Marcar la solicitud para revisión manual
-        await _firestore.collection('contact_requests').doc(requestId).update({
-          'requiresManualApproval': true,
-          'autoApprovalSkipped': true,
-          'autoApprovalSkipReason': 'Usuario no registrado en el sistema',
-        });
-        return;
-      }
-
-      // Actualizar solicitud a aprobada
-      await _firestore.collection('contact_requests').doc(requestId).update({
+      // Usar Cloud Function para aprobar
+      print('📞 Llamando a Cloud Function updateContactRequestStatus (auto-approval)...');
+      final callable = FirebaseFunctions.instance.httpsCallable('updateContactRequestStatus');
+      await callable.call({
+        'requestId': requestId,
         'status': 'approved',
-        'approvedAt': FieldValue.serverTimestamp(),
-        'contactId': contactId,
-        'approvedBy': parentId,
-        'autoApproved': true, // Marcar como aprobación automática
       });
 
-      // Agregar a la lista blanca
-      await _firestore.collection('whitelist').add({
-        'childId': childId,
-        'contactId': contactId,
-        'addedAt': FieldValue.serverTimestamp(),
-        'approvedBy': parentId,
-        'autoApproved': true,
-      });
+      print('✅ Cloud Function ejecutada exitosamente (auto-approval)');
 
-      print('✅ Contacto aprobado automáticamente y agregado a whitelist');
+      // Obtener datos de la solicitud para procesar invitaciones de grupo
+      final requestDoc = await _firestore.collection('contact_requests').doc(requestId).get();
+      final requestData = requestDoc.data();
 
-      // Procesar invitaciones de grupo pendientes
-      final groupChatService = GroupChatService();
-      await groupChatService.processGroupInvitationsAfterContactApproval(
-        childId,
-        contactId,
-      );
-      print('🔄 Procesando invitaciones de grupo pendientes...');
+      if (requestData != null) {
+        final contactId = requestData['contactId'];
+
+        // Procesar invitaciones de grupo pendientes
+        if (contactId != null) {
+          final groupChatService = GroupChatService();
+          await groupChatService.processGroupInvitationsAfterContactApproval(
+            childId,
+            contactId,
+          );
+          print('🔄 Procesando invitaciones de grupo pendientes...');
+        }
+      }
 
       // Enviar notificación al hijo de que su contacto fue aprobado
       await _notificationService.sendContactApprovedNotification(
@@ -201,7 +180,7 @@ class AutoApprovalService {
         contactName: contactName,
       );
 
-      // Opcionalmente, enviar notificación al padre informando de la aprobación automática
+      // Enviar notificación al padre informando de la aprobación automática
       await _notificationService.sendAutoApprovalNotification(
         parentId: parentId,
         childId: childId,
@@ -209,12 +188,6 @@ class AutoApprovalService {
       );
     } catch (e) {
       print('❌ Error en aprobación automática de contacto: $e');
-
-      // En caso de error, marcar la solicitud con error para revisión manual
-      await _firestore.collection('contact_requests').doc(requestId).update({
-        'autoApprovalError': e.toString(),
-        'autoApprovalFailedAt': FieldValue.serverTimestamp(),
-      });
     }
   }
 
@@ -260,15 +233,54 @@ class AutoApprovalService {
         return;
       }
 
-      // Agregar a la lista blanca
-      await _firestore.collection('whitelist').add({
-        'childId': childId,
-        'contactId': contactId,
-        'addedAt': FieldValue.serverTimestamp(),
-        'approvedBy': parentId,
-        'autoApproved': true,
-        'approvedForGroup': true,
-      });
+      // Crear o actualizar entrada en contacts
+      final participants = [childId, contactId]..sort();
+
+      // Verificar si ya existe el contacto
+      final existingContacts = await _firestore
+          .collection('contacts')
+          .where('users', arrayContains: childId)
+          .get();
+
+      bool contactExists = false;
+      String? contactDocId;
+
+      for (final doc in existingContacts.docs) {
+        final data = doc.data();
+        final users = List<String>.from(data['users'] ?? []);
+        if (users.contains(contactId)) {
+          contactExists = true;
+          contactDocId = doc.id;
+          break;
+        }
+      }
+
+      if (!contactExists) {
+        // Crear nuevo contacto
+        final newContact = await _firestore.collection('contacts').add({
+          'users': participants,
+          'user1Name': '',
+          'user2Name': '',
+          'user1Email': '',
+          'user2Email': '',
+          'status': 'approved',
+          'autoApproved': true,
+          'addedAt': FieldValue.serverTimestamp(),
+          'addedBy': parentId,
+          'addedVia': 'group_approval',
+          'approvedForGroup': true,
+        });
+        contactDocId = newContact.id;
+        print('✅ Nuevo contacto creado para grupo: $contactDocId');
+      } else {
+        // Actualizar existente a approved
+        await _firestore.collection('contacts').doc(contactDocId).update({
+          'status': 'approved',
+          'approvedForGroup': true,
+          'autoApproved': true,
+        });
+        print('✅ Contacto existente actualizado: $contactDocId');
+      }
 
       // Actualizar solicitud a aprobada
       await _firestore.collection('permission_requests').doc(requestId).update({
@@ -288,7 +300,7 @@ class AutoApprovalService {
 
       print('🔄 Procesando invitaciones de grupo pendientes...');
 
-      // Opcionalmente, enviar notificación al padre informando de la auto-aprobación
+      // Enviar notificación al padre informando de la auto-aprobación
       await _notificationService.sendAutoApprovalNotification(
         parentId: parentId,
         childId: childId,

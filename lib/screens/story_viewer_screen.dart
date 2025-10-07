@@ -167,6 +167,74 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     _storyService.markStoryAsViewed(currentStory.id);
   }
 
+  Future<void> _deleteCurrentStory() async {
+    // Pausar el timer mientras se muestra el diálogo
+    _pauseStoryTimer();
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Eliminar historia'),
+        content: Text('¿Estás seguro de que deseas eliminar esta historia?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text('Cancelar'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) {
+      _resumeStoryTimer();
+      return;
+    }
+
+    try {
+      final currentUserStories = widget.allUserStories[_currentUserIndex];
+      final stories = _getStoriesForUser(currentUserStories);
+      final currentStory = stories[_currentStoryIndex];
+
+      // Eliminar la historia
+      await _storyService.deleteStory(currentStory.id);
+
+      // Mostrar mensaje de éxito
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Historia eliminada'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+
+        // Si era la única historia, cerrar el visor
+        if (stories.length == 1) {
+          Navigator.pop(context);
+        } else {
+          // Si hay más historias, ir a la siguiente
+          _nextStory();
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al eliminar la historia: $e'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 3),
+          ),
+        );
+        _resumeStoryTimer();
+      }
+    }
+  }
+
   @override
   void dispose() {
     _storyTimer?.cancel();
@@ -395,6 +463,33 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
                             ],
                           ),
                         ),
+                        // Menú de opciones si es la historia del usuario actual
+                        if (widget.allUserStories[_currentUserIndex].userId ==
+                            FirebaseAuth.instance.currentUser?.uid)
+                          PopupMenuButton<String>(
+                            icon: Icon(Icons.more_vert, color: Colors.white),
+                            color: Colors.black87,
+                            onSelected: (value) async {
+                              if (value == 'delete') {
+                                _deleteCurrentStory();
+                              }
+                            },
+                            itemBuilder: (context) => [
+                              PopupMenuItem(
+                                value: 'delete',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.delete, color: Colors.red),
+                                    SizedBox(width: 8),
+                                    Text(
+                                      'Eliminar historia',
+                                      style: TextStyle(color: Colors.white),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
                         IconButton(
                           onPressed: () => Navigator.pop(context),
                           icon: Icon(Icons.close, color: Colors.white),

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 
 class ParentApprovalRequestsScreen extends StatefulWidget {
   const ParentApprovalRequestsScreen({super.key});
@@ -29,28 +30,63 @@ class _ParentApprovalRequestsScreenState
       if (approved) {
         print('✅ Aprobando solicitud de vinculación...');
 
-        // Actualizar el documento del código de vinculación
-        await _firestore.collection('link_codes').doc(linkCodeDocId).update({
-          'used': true,
-          'usedBy': childId,
-          'usedAt': FieldValue.serverTimestamp(),
-          'isActive': false,
-        });
+        // 🔒 SEGURIDAD: Usar Cloud Function para crear vínculo validado
+        try {
+          // Obtener el código del link_codes doc para pasarlo a la función
+          final linkCodeDoc = await _firestore.collection('link_codes').doc(linkCodeDocId).get();
+          final linkCodeData = linkCodeDoc.data();
+          final code = linkCodeData?['code'] as String?;
 
-        // Crear relación padre-hijo en AMBAS colecciones
-        await _firestore.collection('parent_children').add({
-          'parentId': newParentId,
-          'childId': childId,
-          'status': 'approved',
-          'linkedAt': FieldValue.serverTimestamp(),
-        });
+          final functions = FirebaseFunctions.instance;
+          final result = await functions.httpsCallable('createParentChildLink').call({
+            'parentId': newParentId,
+            'childId': childId,
+            'code': code, // La Cloud Function marcará el código como usado
+          });
 
-        await _firestore.collection('parent_child_links').add({
-          'parentId': newParentId,
-          'childId': childId,
-          'status': 'approved',
-          'linkedAt': FieldValue.serverTimestamp(),
-        });
+          if (result.data['success'] != true) {
+            throw Exception(result.data['message'] ?? 'Error creating parent-child link');
+          }
+
+          print('✅ Vínculo aprobado y creado: ${result.data['linkId']}');
+        } catch (e) {
+          print('❌ Error al crear vínculo aprobado: $e');
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('❌ Error al aprobar vinculación: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+          return;
+        }
+
+        // Verificar contactos existentes del niño
+        print('🔄 Verificando contactos existentes del niño...');
+        final existingContacts = await _firestore
+            .collection('contacts')
+            .where('users', arrayContains: childId)
+            .where('status', isEqualTo: 'approved')
+            .get();
+
+        final contactCount = existingContacts.docs.length;
+
+        if (contactCount > 0) {
+          // Notificar al nuevo padre sobre los contactos existentes
+          await _firestore.collection('notifications').add({
+            'userId': newParentId,
+            'title': 'Contactos Existentes',
+            'body': 'El niño ya tiene $contactCount contacto${contactCount > 1 ? 's' : ''} aprobado${contactCount > 1 ? 's' : ''}. Puedes revisarlos en Control Parental.',
+            'type': 'contacts_migrated',
+            'priority': 'normal',
+            'read': false,
+            'createdAt': FieldValue.serverTimestamp(),
+            'data': {
+              'childId': childId,
+              'contactCount': contactCount,
+            },
+          });
+          print('✅ Notificación enviada al nuevo padre sobre $contactCount contactos existentes');
+        }
 
         // Actualizar usuario hijo para agregar el segundo padre
         // Nota: Mantiene el parentId original, solo agrega relación
@@ -121,14 +157,13 @@ class _ParentApprovalRequestsScreenState
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
     final currentUserId = _auth.currentUser?.uid;
 
     if (currentUserId == null) {
       return Scaffold(
         appBar: AppBar(
           title: Text('Solicitudes Pendientes'),
-          backgroundColor: Color(0xFF9D7FE8),
-          foregroundColor: Colors.white,
         ),
         body: Center(child: Text('Usuario no autenticado')),
       );
@@ -137,8 +172,6 @@ class _ParentApprovalRequestsScreenState
     return Scaffold(
       appBar: AppBar(
         title: Text('Solicitudes Pendientes'),
-        backgroundColor: Color(0xFF9D7FE8),
-        foregroundColor: Colors.white,
       ),
       body: StreamBuilder<QuerySnapshot>(
         stream: _firestore
@@ -161,14 +194,14 @@ class _ParentApprovalRequestsScreenState
                   Icon(
                     Icons.info_outline,
                     size: 80,
-                    color: Colors.grey[400],
+                    color: colorScheme.outlineVariant,
                   ),
                   SizedBox(height: 16),
                   Text(
                     'No se pueden cargar las solicitudes',
                     style: TextStyle(
                       fontSize: 18,
-                      color: Colors.grey[600],
+                      color: colorScheme.onSurfaceVariant,
                     ),
                   ),
                   SizedBox(height: 8),
@@ -176,7 +209,7 @@ class _ParentApprovalRequestsScreenState
                     'Es posible que no tengas permisos',
                     style: TextStyle(
                       fontSize: 14,
-                      color: Colors.grey[500],
+                      color: colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
                     ),
                   ),
                 ],
@@ -192,14 +225,14 @@ class _ParentApprovalRequestsScreenState
                   Icon(
                     Icons.check_circle_outline,
                     size: 80,
-                    color: Colors.grey[400],
+                    color: colorScheme.outlineVariant,
                   ),
                   SizedBox(height: 16),
                   Text(
                     'No hay solicitudes pendientes',
                     style: TextStyle(
                       fontSize: 18,
-                      color: Colors.grey[600],
+                      color: colorScheme.onSurfaceVariant,
                     ),
                   ),
                 ],
@@ -254,7 +287,7 @@ class _ParentApprovalRequestsScreenState
                                   style: TextStyle(
                                     fontSize: 16,
                                     fontWeight: FontWeight.bold,
-                                    color: Color(0xFF2D3142),
+                                    color: colorScheme.onSurface,
                                   ),
                                 ),
                                 SizedBox(height: 4),
@@ -263,7 +296,7 @@ class _ParentApprovalRequestsScreenState
                                     _formatDate(createdAt.toDate()),
                                     style: TextStyle(
                                       fontSize: 12,
-                                      color: Colors.grey[600],
+                                      color: colorScheme.onSurfaceVariant,
                                     ),
                                   ),
                               ],
@@ -278,7 +311,7 @@ class _ParentApprovalRequestsScreenState
                         text: TextSpan(
                           style: TextStyle(
                             fontSize: 15,
-                            color: Color(0xFF2D3142),
+                            color: colorScheme.onSurface,
                             height: 1.5,
                           ),
                           children: [

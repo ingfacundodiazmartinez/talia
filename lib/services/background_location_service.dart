@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -27,6 +28,12 @@ class BackgroundLocationService {
   // Inicializar el servicio de background
   Future<void> initialize() async {
     if (_isInitialized) return;
+
+    // Solo inicializar en Android
+    if (!Platform.isAndroid) {
+      print('ℹ️ Background Location Service solo disponible en Android');
+      return;
+    }
 
     print('🚀 Inicializando Background Location Service...');
 
@@ -67,6 +74,12 @@ class BackgroundLocationService {
 
   // Iniciar tracking en background
   Future<void> startBackgroundTracking() async {
+    // Solo funciona en Android
+    if (!Platform.isAndroid) {
+      print('ℹ️ Background tracking solo disponible en Android');
+      return;
+    }
+
     if (!_isInitialized) {
       await initialize();
     }

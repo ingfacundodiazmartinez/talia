@@ -9,11 +9,16 @@ class ThemeService extends ChangeNotifier {
   bool _isDarkMode = false;
   bool get isDarkMode => _isDarkMode;
 
-  // Colores principales de la aplicación
+  // Colores principales de la aplicación - Light Mode
   static const Color primaryColor = Color(0xFF9D7FE8);
   static const Color primaryDarkColor = Color(0xFF7B5FC7);
   static const Color secondaryColor = Color(0xFFB39DDB);
   static const Color accentColor = Color(0xFFCE93D8);
+
+  // Colores para Dark Mode
+  static const Color primaryColorDark = Color.fromARGB(255, 115, 85, 195); // #7355C3 - Más claro para mejor contraste
+  static const Color secondaryColorDark = Color.fromARGB(255, 149, 117, 205); // #9575CD
+  static const Color accentColorDark = Color.fromARGB(255, 179, 157, 219); // #B39DDB
 
   // Inicializar tema desde SharedPreferences con fallback
   Future<void> initialize() async {
@@ -46,14 +51,22 @@ class ThemeService extends ChangeNotifier {
 
   // Tema claro
   static ThemeData get lightTheme {
+    final colorScheme = ColorScheme.fromSeed(
+      seedColor: primaryColor,
+      brightness: Brightness.light,
+      primary: primaryColor,
+      secondary: secondaryColor,
+      surface: Colors.white,
+      surfaceContainerHighest: Colors.grey[100]!,
+      onSurface: Color(0xFF2D3142),
+      onSurfaceVariant: Colors.grey[600]!,
+    );
+
     return ThemeData(
       useMaterial3: true,
       fontFamily: 'Poppins',
       brightness: Brightness.light,
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: primaryColor,
-        brightness: Brightness.light,
-      ),
+      colorScheme: colorScheme,
       scaffoldBackgroundColor: Colors.white,
       appBarTheme: AppBarTheme(
         backgroundColor: primaryColor,
@@ -71,6 +84,7 @@ class ThemeService extends ChangeNotifier {
         elevation: 4,
         shadowColor: Colors.black.withOpacity(0.1),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        color: Colors.white,
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
@@ -117,22 +131,39 @@ class ThemeService extends ChangeNotifier {
         elevation: 8,
         type: BottomNavigationBarType.fixed,
       ),
+      extensions: [
+        CustomColors(
+          gradientStart: Color(0xFF9D7FE8),
+          gradientEnd: Color(0xFFB39DDB),
+          containerBackground: Color(0xFF1E1E1E),
+          searchBarBackground: Colors.grey[100]!,
+        ),
+      ],
     );
   }
 
   // Tema oscuro
   static ThemeData get darkTheme {
+    final colorScheme = ColorScheme.fromSeed(
+      seedColor: primaryColorDark,
+      brightness: Brightness.dark,
+      primary: primaryColorDark,
+      secondary: secondaryColorDark,
+      surface: Color(0xFF1A1A2E), // Fondo oscuro con tinte morado
+      surfaceContainerHighest: Color(0xFF252540), // Fondo más claro con tinte morado
+      onSurface: Colors.white,
+      onSurfaceVariant: Colors.grey[400]!,
+    );
+
     return ThemeData(
       useMaterial3: true,
       fontFamily: 'Poppins',
       brightness: Brightness.dark,
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: primaryColor,
-        brightness: Brightness.dark,
-      ),
-      scaffoldBackgroundColor: Color(0xFF121212),
+      primaryColor: primaryColorDark,
+      colorScheme: colorScheme,
+      scaffoldBackgroundColor: Color(0xFF0F0F1E), // Fondo muy oscuro con tinte morado
       appBarTheme: AppBarTheme(
-        backgroundColor: Color(0xFF1E1E1E),
+        backgroundColor: Color(0xFF1A1A2E),
         foregroundColor: Colors.white,
         elevation: 0,
         centerTitle: true,
@@ -146,12 +177,12 @@ class ThemeService extends ChangeNotifier {
       cardTheme: CardThemeData(
         elevation: 4,
         shadowColor: Colors.black.withOpacity(0.3),
-        color: Color(0xFF1E1E1E),
+        color: Color(0xFF1A1A2E),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
-          backgroundColor: primaryColor,
+          backgroundColor: primaryColorDark,
           foregroundColor: Colors.white,
           elevation: 2,
           padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
@@ -167,33 +198,41 @@ class ThemeService extends ChangeNotifier {
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: Color(0xFF2A2A2A),
+        fillColor: Color(0xFF252540),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: Colors.grey[700]!),
+          borderSide: BorderSide(color: Color(0xFF3A3A5A)),
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: Colors.grey[700]!),
+          borderSide: BorderSide(color: Color(0xFF3A3A5A)),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: primaryColor, width: 2),
+          borderSide: BorderSide(color: primaryColorDark, width: 2),
         ),
         contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 16),
       ),
       floatingActionButtonTheme: FloatingActionButtonThemeData(
-        backgroundColor: primaryColor,
+        backgroundColor: primaryColorDark,
         foregroundColor: Colors.white,
         elevation: 4,
       ),
       bottomNavigationBarTheme: BottomNavigationBarThemeData(
-        backgroundColor: Color(0xFF1E1E1E),
-        selectedItemColor: primaryColor,
+        backgroundColor: Color(0xFF1A1A2E),
+        selectedItemColor: primaryColorDark,
         unselectedItemColor: Colors.grey[600],
         elevation: 8,
         type: BottomNavigationBarType.fixed,
       ),
+      extensions: [
+        CustomColors(
+          gradientStart: primaryColorDark, // #442F84
+          gradientEnd: secondaryColorDark, // #6C4FBF
+          containerBackground: Color(0xFF1A1A2E),
+          searchBarBackground: Color(0xFF252540),
+        ),
+      ],
     );
   }
 
@@ -253,17 +292,48 @@ class _ThemeToggleButtonState extends State<ThemeToggleButton> {
   }
 }
 
-// Extensiones para colores adaptativos
-extension ThemeExtensions on BuildContext {
-  bool get isDarkMode => Theme.of(this).brightness == Brightness.dark;
+// Clase para colores personalizados usando ThemeExtension
+class CustomColors extends ThemeExtension<CustomColors> {
+  final Color gradientStart;
+  final Color gradientEnd;
+  final Color containerBackground;
+  final Color searchBarBackground;
 
-  Color get surfaceColor => isDarkMode ? Color(0xFF1E1E1E) : Colors.white;
-  Color get backgroundSecondary =>
-      isDarkMode ? Color(0xFF2A2A2A) : Colors.grey[50]!;
-  Color get textPrimary => isDarkMode ? Colors.white : Colors.black87;
-  Color get textSecondary => isDarkMode ? Colors.grey[300]! : Colors.grey[600]!;
-  Color get borderColor => isDarkMode ? Colors.grey[700]! : Colors.grey[300]!;
-  Color get shadowColor => isDarkMode
-      ? Colors.black.withOpacity(0.3)
-      : Colors.black.withOpacity(0.1);
+  CustomColors({
+    required this.gradientStart,
+    required this.gradientEnd,
+    required this.containerBackground,
+    required this.searchBarBackground,
+  });
+
+  @override
+  CustomColors copyWith({
+    Color? gradientStart,
+    Color? gradientEnd,
+    Color? containerBackground,
+    Color? searchBarBackground,
+  }) {
+    return CustomColors(
+      gradientStart: gradientStart ?? this.gradientStart,
+      gradientEnd: gradientEnd ?? this.gradientEnd,
+      containerBackground: containerBackground ?? this.containerBackground,
+      searchBarBackground: searchBarBackground ?? this.searchBarBackground,
+    );
+  }
+
+  @override
+  CustomColors lerp(ThemeExtension<CustomColors>? other, double t) {
+    if (other is! CustomColors) return this;
+    return CustomColors(
+      gradientStart: Color.lerp(gradientStart, other.gradientStart, t)!,
+      gradientEnd: Color.lerp(gradientEnd, other.gradientEnd, t)!,
+      containerBackground: Color.lerp(containerBackground, other.containerBackground, t)!,
+      searchBarBackground: Color.lerp(searchBarBackground, other.searchBarBackground, t)!,
+    );
+  }
+}
+
+// Extensiones para acceder fácilmente a los colores del tema
+extension ThemeExtensions on BuildContext {
+  CustomColors get customColors => Theme.of(this).extension<CustomColors>()!;
 }

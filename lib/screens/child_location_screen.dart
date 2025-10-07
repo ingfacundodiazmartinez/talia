@@ -66,17 +66,35 @@ class _ChildLocationScreenState extends State<ChildLocationScreen> {
               // Mover la cámara a la nueva ubicación
               _moveToLocation(_childLocation!);
             } else if (mounted) {
+              // El documento no existe aún - el niño no ha iniciado la app
               setState(() {
                 _isLoading = false;
-                _errorMessage = 'No se encontró la ubicación del niño';
+                _errorMessage =
+                  '${widget.childName} aún no ha compartido su ubicación.\n\n'
+                  'Pídele que:\n\n'
+                  '1. Abra la app Talia en su dispositivo\n'
+                  '2. Acepte los permisos de ubicación\n\n'
+                  'La ubicación aparecerá aquí automáticamente.';
               });
             }
           },
           onError: (error) {
             if (mounted) {
+              String friendlyMessage = 'No se pudo cargar la ubicación';
+
+              if (error.toString().contains('permission-denied') ||
+                  error.toString().contains('PERMISSION_DENIED')) {
+                friendlyMessage =
+                  '${widget.childName} necesita:\n\n'
+                  '1. Abrir la app Talia en su dispositivo\n'
+                  '2. Aceptar los permisos de ubicación\n'
+                  '3. Mantener la app abierta unos segundos\n\n'
+                  'Luego podrás ver su ubicación aquí.';
+              }
+
               setState(() {
                 _isLoading = false;
-                _errorMessage = 'Error cargando ubicación: $error';
+                _errorMessage = friendlyMessage;
               });
             }
           },

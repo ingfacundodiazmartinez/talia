@@ -1,0 +1,541 @@
+const {onDocumentCreated} = require("firebase-functions/v2/firestore");
+const {onCall} = require("firebase-functions/v2/https");
+const {initializeApp} = require("firebase-admin/app");
+const {getFirestore} = require("firebase-admin/firestore");
+const {getMessaging} = require("firebase-admin/messaging");
+const {RtcTokenBuilder, RtcRole} = require("agora-token");
+
+initializeApp();
+
+// Configuración de Agora
+const AGORA_APP_ID = "f4537746b6fc4e65aca1bd969c42c988";
+const AGORA_APP_CERTIFICATE = "da2c8de863334deaa4973d84aebbe990";
+
+// Función que escucha cuando se crea una notificación en Firestore
+// y envía una notificación push al dispositivo del usuario
+exports.sendNotificationOnCreate = onDocumentCreated(
+    "notifications/{notificationId}",
+    async (event) => {
+      console.log("🔔 FUNCIÓN EJECUTADA - Inicio");
+
+      const snapshot = event.data;
+      if (!snapshot) {
+        console.log("❌ No data associated with the event");
+        return;
+      }
+
+      console.log("✅ Snapshot recibido");
+      const notification = snapshot.data();
+      console.log("📦 Datos de notificación:", JSON.stringify(notification));
+
+      const userId = notification.userId;
+      console.log(`📩 Nueva notificación para usuario: ${userId}`);
+
+      try {
+        // Obtener el FCM token del usuario
+        const db = getFirestore();
+        console.log(`🔍 Buscando usuario con ID: ${userId}`);
+        const userDoc = await db.collection("users").doc(userId).get();
+
+        if (!userDoc.exists) {
+          console.log(`❌ Usuario ${userId} no encontrado en Firestore`);
+          console.log(`📋 Verifica que este usuario exista en la colección 'users'`);
+          return;
+        }
+
+        console.log(`✅ Usuario ${userId} encontrado`);
+        const userData = userDoc.data();
+        console.log(`📊 Datos del usuario:`, JSON.stringify({
+          name: userData.name,
+          email: userData.email,
+          hasFcmToken: !!userData.fcmToken
+        }));
+        const fcmToken = userData.fcmToken;
+
+        if (!fcmToken) {
+          console.log(`❌ Usuario ${userId} no tiene FCM token`);
+          console.log(`📋 El usuario debe abrir la app para registrar su token`);
+          return;
+        }
+
+        console.log(`✅ FCM Token encontrado: ${fcmToken.substring(0, 20)}...`);
+
+        // Preparar el mensaje de notificación
+        // IMPORTANTE: El campo 'data' solo puede contener strings
+        // Convertir todos los valores a strings
+        const dataPayload = {};
+        if (notification.data) {
+          Object.keys(notification.data).forEach((key) => {
+            const value = notification.data[key];
+            // Convertir objetos y arrays a JSON strings
+            if (typeof value === "object" && value !== null) {
+              dataPayload[key] = JSON.stringify(value);
+            } else if (value !== null && value !== undefined) {
+              dataPayload[key] = String(value);
+            }
+          });
+        }
+        dataPayload.notificationId = event.params.notificationId;
+        dataPayload.type = notification.type || "general";
+
+        const message = {
+          token: fcmToken,
+          notification: {
+            title: notification.title || "Talia",
+            body: notification.body || "Tienes una nueva notificación",
+          },
+          data: dataPayload,
+          android: {
+            priority: notification.priority === "high" ? "high" : "normal",
+            notification: {
+              channelId: "high_importance_channel",
+              sound: "default",
+              priority: notification.priority === "high" ? "high" : "default",
+            },
+          },
+          apns: {
+            payload: {
+              aps: {
+                sound: "default",
+                badge: 1,
+                contentAvailable: true,
+              },
+            },
+          },
+        };
+
+        // Enviar la notificación push
+        const messaging = getMessaging();
+        const response = await messaging.send(message);
+
+        console.log(`✅ Notificación enviada exitosamente: ${response}`);
+
+        // Actualizar la notificación en Firestore para marcarla como enviada
+        await snapshot.ref.update({
+          sentAt: new Date().toISOString(),
+          sent: true,
+        });
+      } catch (error) {
+        console.error(`❌ Error enviando notificación:`, error);
+
+        // Actualizar la notificación con el error
+        await snapshot.ref.update({
+          error: error.message,
+          sent: false,
+        });
+      }
+    }
+);
+
+// Función para generar tokens de Agora para videollamadas
+exports.generateAgoraToken = onCall(
+    {cors: true}, // Permitir CORS para llamadas desde Flutter
+    async (request) => {
+      console.log("🎥 Generando token de Agora");
+
+      // Verificar que el usuario esté autenticado
+      if (!request.auth) {
+        console.log("❌ Usuario no autenticado");
+        throw new Error("Usuario no autenticado");
+      }
+
+      const userId = request.auth.uid;
+      console.log(`✅ Usuario autenticado: ${userId}`);
+
+      // Obtener parámetros de la llamada
+      const {channelName, uid} = request.data;
+
+      if (!channelName || uid === undefined) {
+        console.log("❌ Faltan parámetros: channelName o uid");
+        throw new Error("Faltan parámetros obligatorios: channelName y uid");
+      }
+
+      console.log(`📺 Generando token para canal: ${channelName}, UID: ${uid}`);
+
+      try {
+        // Tiempo de expiración del token: 24 horas
+        const expirationTimeInSeconds = 86400; // 24 horas
+        const currentTimestamp = Math.floor(Date.now() / 1000);
+        const privilegeExpiredTs = currentTimestamp + expirationTimeInSeconds;
+
+        // Generar token con privilegios de publicador
+        const token = RtcTokenBuilder.buildTokenWithUid(
+            AGORA_APP_ID,
+            AGORA_APP_CERTIFICATE,
+            channelName,
+            uid,
+            RtcRole.PUBLISHER, // Rol de publicador (puede enviar y recibir)
+            privilegeExpiredTs
+        );
+
+        console.log(`✅ Token generado exitosamente`);
+        console.log(`⏰ Expira en ${expirationTimeInSeconds} segundos`);
+
+        return {
+          token: token,
+          appId: AGORA_APP_ID,
+          uid: uid,
+          channelName: channelName,
+          expiresAt: privilegeExpiredTs,
+        };
+      } catch (error) {
+        console.error(`❌ Error generando token de Agora:`, error);
+        throw new Error(`Error generando token: ${error.message}`);
+      }
+    }
+);
+
+// Función para generar reporte de análisis de mensajes del hijo
+// Solo padres pueden llamar esta función para analizar conversaciones de sus hijos
+exports.generateChildReport = onCall(
+    {cors: true},
+    async (request) => {
+      console.log("📊 Generando reporte de análisis");
+
+      // Verificar que el usuario esté autenticado
+      if (!request.auth) {
+        console.log("❌ Usuario no autenticado");
+        throw new Error("Usuario no autenticado");
+      }
+
+      const parentId = request.auth.uid;
+      console.log(`✅ Usuario autenticado: ${parentId}`);
+
+      // Obtener parámetros
+      const {childId, daysBack} = request.data;
+
+      if (!childId) {
+        console.log("❌ Falta parámetro: childId");
+        throw new Error("Falta parámetro obligatorio: childId");
+      }
+
+      const days = daysBack || 7; // Por defecto 7 días
+      console.log(`📅 Analizando últimos ${days} días para hijo: ${childId}`);
+
+      try {
+        const db = getFirestore();
+
+        // 1. Verificar que el usuario que llama es padre del niño
+        const linkSnapshot = await db
+            .collection("parent_children")
+            .where("parentId", "==", parentId)
+            .where("childId", "==", childId)
+            .limit(1)
+            .get();
+
+        if (linkSnapshot.empty) {
+          console.log(`❌ ${parentId} no es padre de ${childId}`);
+          throw new Error("No tienes permiso para ver reportes de este niño");
+        }
+
+        console.log(`✅ Relación padre-hijo verificada`);
+
+        // 2. Obtener chats donde participa el hijo
+        const chatsSnapshot = await db
+            .collection("chats")
+            .where("participants", "array-contains", childId)
+            .get();
+
+        console.log(`💬 Chats encontrados: ${chatsSnapshot.docs.length}`);
+
+        // 3. Analizar mensajes de todos los participantes en esos chats
+        const weekAgo = new Date();
+        weekAgo.setDate(weekAgo.getDate() - days);
+
+        let totalMessages = 0;
+        let sentimentScores = {positive: 0, negative: 0, neutral: 0};
+        let bullyingIncidents = [];
+        const messagesAnalyzed = [];
+
+        for (const chatDoc of chatsSnapshot.docs) {
+          const chatId = chatDoc.id;
+          const chatData = chatDoc.data();
+
+          // Obtener todos los mensajes de este chat (última semana)
+          const messagesSnapshot = await db
+              .collection("chats")
+              .doc(chatId)
+              .collection("messages")
+              .where("timestamp", ">=", weekAgo)
+              .orderBy("timestamp", "asc")
+              .get();
+
+          console.log(
+              `📨 Chat ${chatId}: ${messagesSnapshot.docs.length} mensajes`
+          );
+
+          // Analizar cada mensaje
+          for (const msgDoc of messagesSnapshot.docs) {
+            const msgData = msgDoc.data();
+            const text = msgData.text || "";
+            const senderId = msgData.senderId || "";
+
+            if (!text || !senderId) continue;
+
+            totalMessages++;
+
+            // Análisis de sentimiento (usando lógica simple de keywords)
+            const sentimentResult = analyzeSentiment(text);
+            sentimentScores[sentimentResult.sentiment]++;
+
+            // Detección de bullying
+            const bullyingResult = detectBullying(text);
+
+            if (bullyingResult.hasBullying) {
+              bullyingIncidents.push({
+                chatId: chatId,
+                messageId: msgDoc.id,
+                timestamp: msgData.timestamp.toDate().toISOString(),
+                severity: bullyingResult.severity,
+                // NO incluir el texto exacto ni nombres para privacidad
+              });
+            }
+
+            messagesAnalyzed.push({
+              chatId: chatId,
+              messageId: msgDoc.id,
+              senderId: senderId,
+              sentiment: sentimentResult.sentiment,
+              sentimentScore: sentimentResult.score,
+              hasBullying: bullyingResult.hasBullying,
+              timestamp: msgData.timestamp,
+            });
+          }
+        }
+
+        // 4. Generar reporte agregado
+        console.log(`✅ Análisis completado: ${totalMessages} mensajes`);
+
+        const report = {
+          childId: childId,
+          parentId: parentId,
+          periodDays: days,
+          totalMessages: totalMessages,
+          totalChats: chatsSnapshot.docs.length,
+          sentiment: {
+            positive: sentimentScores.positive,
+            negative: sentimentScores.negative,
+            neutral: sentimentScores.neutral,
+            positivePercentage:
+              totalMessages > 0 ?
+                ((sentimentScores.positive / totalMessages) * 100).toFixed(1) :
+                0,
+            negativePercentage:
+              totalMessages > 0 ?
+                ((sentimentScores.negative / totalMessages) * 100).toFixed(1) :
+                0,
+          },
+          bullying: {
+            incidents: bullyingIncidents.length,
+            hasHighSeverity: bullyingIncidents.some(
+                (i) => i.severity === "high"
+            ),
+            details: bullyingIncidents, // Solo metadata, sin texto
+          },
+          generatedAt: new Date().toISOString(),
+        };
+
+        // 5. Guardar reporte en Firestore (opcional)
+        const reportRef = await db.collection("weekly_reports").add({
+          ...report,
+          createdAt: new Date(),
+        });
+
+        console.log(`✅ Reporte guardado: ${reportRef.id}`);
+
+        // 6. Guardar análisis individuales en message_analysis
+        const batch = db.batch();
+        for (const msgAnalysis of messagesAnalyzed) {
+          const analysisRef = db
+              .collection("message_analysis")
+              .doc(`${msgAnalysis.chatId}_${msgAnalysis.messageId}`);
+
+          batch.set(analysisRef, {
+            messageId: msgAnalysis.messageId,
+            chatId: msgAnalysis.chatId,
+            senderId: msgAnalysis.senderId,
+            sentiment: msgAnalysis.sentiment,
+            sentimentScore: msgAnalysis.sentimentScore,
+            hasBullying: msgAnalysis.hasBullying,
+            analyzedAt: new Date(),
+            analyzedBy: "cloud_function",
+          });
+        }
+
+        await batch.commit();
+        console.log(
+            `✅ Guardados ${messagesAnalyzed.length} análisis individuales`
+        );
+
+        return {
+          success: true,
+          reportId: reportRef.id,
+          report: report,
+        };
+      } catch (error) {
+        console.error(`❌ Error generando reporte:`, error);
+        throw new Error(`Error generando reporte: ${error.message}`);
+      }
+    }
+);
+
+// Funciones auxiliares para análisis (replicadas desde Dart)
+function analyzeSentiment(message) {
+  if (!message) return {sentiment: "neutral", score: 0.0};
+
+  const messageLower = message.toLowerCase();
+
+  const sentimentKeywords = {
+    // Positivas
+    feliz: 0.8,
+    bien: 0.6,
+    genial: 0.9,
+    excelente: 0.9,
+    bueno: 0.7,
+    alegre: 0.8,
+    contento: 0.8,
+    divertido: 0.7,
+    amo: 0.9,
+    "me gusta": 0.7,
+    increíble: 0.9,
+    perfecto: 0.8,
+    hermoso: 0.8,
+    maravilloso: 0.9,
+    fantástico: 0.9,
+    gracias: 0.6,
+    jaja: 0.7,
+    jeje: 0.7,
+    lol: 0.7,
+    "😊": 0.8,
+    "😄": 0.8,
+    "😃": 0.8,
+    "❤️": 0.9,
+    "😍": 0.9,
+    "👍": 0.7,
+    "✨": 0.6,
+    "🎉": 0.8,
+    "😁": 0.8,
+    // Negativas
+    triste: -0.8,
+    mal: -0.6,
+    horrible: -0.9,
+    terrible: -0.9,
+    odio: -0.9,
+    feo: -0.7,
+    aburrido: -0.5,
+    molesto: -0.7,
+    enojado: -0.8,
+    furioso: -0.9,
+    llorar: -0.7,
+    deprimido: -0.9,
+    asqueroso: -0.8,
+    malo: -0.7,
+    pésimo: -0.9,
+    "no me gusta": -0.7,
+    detesto: -0.9,
+    "😢": -0.8,
+    "😭": -0.9,
+    "😡": -0.9,
+    "😞": -0.7,
+    "😔": -0.7,
+    "👎": -0.7,
+    "💔": -0.9,
+    "😠": -0.8,
+  };
+
+  let totalScore = 0.0;
+  let matchCount = 0;
+
+  Object.keys(sentimentKeywords).forEach((keyword) => {
+    if (messageLower.includes(keyword)) {
+      totalScore += sentimentKeywords[keyword];
+      matchCount++;
+    }
+  });
+
+  const avgScore = matchCount > 0 ? totalScore / matchCount : 0.0;
+
+  let sentiment;
+  if (avgScore > 0.3) {
+    sentiment = "positive";
+  } else if (avgScore < -0.3) {
+    sentiment = "negative";
+  } else {
+    sentiment = "neutral";
+  }
+
+  return {sentiment: sentiment, score: avgScore};
+}
+
+function detectBullying(message) {
+  if (!message) return {hasBullying: false, severity: "none"};
+
+  const messageLower = message.toLowerCase();
+
+  const bullyingKeywords = [
+    "tonto",
+    "idiota",
+    "estúpido",
+    "burro",
+    "inútil",
+    "gordo",
+    "feo",
+    "perdedor",
+    "nadie",
+    "basura",
+    "patético",
+    "fracasado",
+    "ridículo",
+    "asco",
+    "muérete",
+    "mátate",
+    "no sirves",
+    "eres un",
+    "callate",
+    "cállate",
+    "inservible",
+    "débil",
+    "te odio",
+    "todos te odian",
+    "nadie te quiere",
+  ];
+
+  const highSeverityKeywords = [
+    "muérete",
+    "mátate",
+    "suicídate",
+    "te odio",
+    "todos te odian",
+  ];
+
+  let matchCount = 0;
+  let hasHighSeverity = false;
+
+  bullyingKeywords.forEach((keyword) => {
+    if (messageLower.includes(keyword)) {
+      matchCount++;
+      if (highSeverityKeywords.includes(keyword)) {
+        hasHighSeverity = true;
+      }
+    }
+  });
+
+  const hasBullying = matchCount > 0;
+  let severity = "none";
+
+  if (hasBullying) {
+    if (hasHighSeverity || matchCount >= 3) {
+      severity = "high";
+    } else if (matchCount >= 2) {
+      severity = "medium";
+    } else {
+      severity = "low";
+    }
+  }
+
+  return {
+    hasBullying: hasBullying,
+    severity: severity,
+    keywordCount: matchCount,
+  };
+}

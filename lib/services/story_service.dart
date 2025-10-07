@@ -5,12 +5,14 @@ import 'package:firebase_storage/firebase_storage.dart';
 import '../models/story.dart';
 import '../notification_service.dart';
 import 'user_role_service.dart';
+import 'contact_alias_service.dart';
 
 class StoryService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseStorage _storage = FirebaseStorage.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final NotificationService _notificationService = NotificationService();
+  final ContactAliasService _aliasService = ContactAliasService();
 
   // Crear una nueva historia
   Future<String> createStory({
@@ -32,8 +34,29 @@ class StoryService {
       // 2. Obtener datos del usuario
       final userDoc = await _firestore.collection('users').doc(user.uid).get();
       final userData = userDoc.data();
+      final userRole = userData?['role'] ?? 'child';
 
-      // 3. Crear historia en Firestore
+      // 3. Determinar si la historia requiere aprobación
+      String status = 'approved'; // Por defecto aprobada
+      bool requiresApproval = false;
+
+      if (userRole == 'child') {
+        // Solo los niños necesitan aprobación si tienen padres vinculados
+        final userRoleService = UserRoleService();
+        final linkedParents = await userRoleService.getLinkedParents(user.uid);
+
+        if (linkedParents.isNotEmpty) {
+          status = 'pending';
+          requiresApproval = true;
+          print('👶 Usuario es niño con padres vinculados - requiere aprobación');
+        } else {
+          print('👶 Usuario es niño sin padres vinculados - auto-aprobada');
+        }
+      } else {
+        print('👔 Usuario es $userRole - historia auto-aprobada');
+      }
+
+      // 4. Crear historia en Firestore
       final now = DateTime.now();
       final expiresAt = now.add(Duration(hours: 24));
 
@@ -48,9 +71,9 @@ class StoryService {
         'expiresAt': Timestamp.fromDate(expiresAt),
         'viewedBy': <String>[],
         'filter': filter,
-        'status': 'pending', // Las historias inician como pendientes
-        'approvedBy': null,
-        'approvedAt': null,
+        'status': status,
+        'approvedBy': requiresApproval ? null : user.uid, // Auto-aprobada si no requiere aprobación
+        'approvedAt': requiresApproval ? null : Timestamp.fromDate(now),
         'rejectionReason': null,
       };
 
@@ -58,9 +81,11 @@ class StoryService {
       final docRef = await _firestore.collection('stories').add(storyData);
       print('✅ Historia guardada con ID: ${docRef.id}');
 
-      // Notificar al padre sobre la nueva historia pendiente
-      print('📬 Enviando notificación al padre...');
-      await _notifyParentOfPendingStory(user.uid, docRef.id);
+      // Solo notificar al padre si requiere aprobación
+      if (requiresApproval) {
+        print('📬 Enviando notificación al padre...');
+        await _notifyParentOfPendingStory(user.uid, docRef.id);
+      }
 
       return docRef.id;
     } catch (e) {
@@ -118,9 +143,9 @@ class StoryService {
     try {
       print('📤 Subiendo archivo: $filePath para usuario: $userId');
       final file = File(filePath);
-      final fileName = 'story_${userId}_${DateTime.now().millisecondsSinceEpoch}';
+      final fileName = 'story_${DateTime.now().millisecondsSinceEpoch}';
       print('📂 Nombre del archivo: $fileName');
-      final storageRef = _storage.ref('stories/$fileName');
+      final storageRef = _storage.ref('stories/$userId/$fileName');
       print('🔗 Referencia de Storage: ${storageRef.fullPath}');
 
       print('⬆️ Iniciando subida...');
@@ -144,12 +169,64 @@ class StoryService {
     final user = _auth.currentUser;
     if (user == null) return Stream.value([]);
 
+    // Escuchar cambios en historias (incluye updates a viewedBy)
     return _firestore
-        .collection('whitelist')
-        .where('childId', isEqualTo: user.uid)
+        .collection('stories')
+        .where('status', whereIn: ['approved', 'pending'])
         .snapshots()
-        .asyncMap((whitelistSnapshot) async {
+        .asyncMap((storiesSnapshot) async {
+
       final List<UserStories> userStoriesList = [];
+      final contactIds = <String>{};
+
+      // 1. Obtener contactos desde la colección 'contacts' (bidireccional)
+      final contactsSnapshot = await _firestore
+          .collection('contacts')
+          .where('users', arrayContains: user.uid)
+          .where('status', isEqualTo: 'approved')
+          .get();
+
+      // Extraer los IDs de los contactos
+      for (final contactDoc in contactsSnapshot.docs) {
+        final data = contactDoc.data();
+        final users = List<String>.from(data['users'] ?? []);
+        // Agregar el otro usuario (no el actual)
+        for (final userId in users) {
+          if (userId != user.uid) {
+            contactIds.add(userId);
+          }
+        }
+      }
+
+      // 2. Si es padre: obtener hijos vinculados desde parent_child_links
+      final parentLinksSnapshot = await _firestore
+          .collection('parent_child_links')
+          .where('parentId', isEqualTo: user.uid)
+          .where('status', isEqualTo: 'approved')
+          .get();
+
+      for (final linkDoc in parentLinksSnapshot.docs) {
+        final childId = linkDoc.data()['childId'] as String?;
+        if (childId != null) {
+          contactIds.add(childId);
+        }
+      }
+
+      // 3. Si es hijo: obtener padres vinculados desde parent_child_links
+      final childLinksSnapshot = await _firestore
+          .collection('parent_child_links')
+          .where('childId', isEqualTo: user.uid)
+          .where('status', isEqualTo: 'approved')
+          .get();
+
+      for (final linkDoc in childLinksSnapshot.docs) {
+        final parentId = linkDoc.data()['parentId'] as String?;
+        if (parentId != null) {
+          contactIds.add(parentId);
+        }
+      }
+
+      print('📋 Total de contactos válidos: ${contactIds.length}');
 
       // Incluir historias del usuario actual (todas, sin filtro de aprobación)
       final currentUserStories = await getCurrentUserStories();
@@ -157,9 +234,8 @@ class StoryService {
         userStoriesList.add(currentUserStories);
       }
 
-      // Obtener historias de contactos en whitelist
-      for (final whitelistDoc in whitelistSnapshot.docs) {
-        final contactId = whitelistDoc.data()['contactId'] as String;
+      // Obtener historias de contactos
+      for (final contactId in contactIds) {
         final contactStories = await _getUserStories(contactId);
         if (contactStories != null) {
           userStoriesList.add(contactStories);
@@ -188,26 +264,51 @@ class StoryService {
   // Obtener historias de un usuario específico
   Future<UserStories?> _getUserStories(String userId) async {
     try {
-      // Obtener datos del usuario
-      final userDoc = await _firestore.collection('users').doc(userId).get();
-      if (!userDoc.exists) return null;
+      print('📖 Obteniendo historias de usuario: $userId');
+      // Obtener datos del usuario desde cache primero, luego servidor si es necesario
+      final userDoc = await _firestore
+          .collection('users')
+          .doc(userId)
+          .get(const GetOptions(source: Source.cache))
+          .catchError((_) => _firestore.collection('users').doc(userId).get());
+      if (!userDoc.exists) {
+        print('❌ Usuario no existe: $userId');
+        return null;
+      }
 
       final userData = userDoc.data()!;
+      final realName = userData['name'] ?? 'Usuario';
+      final displayName = await _aliasService.getDisplayName(userId, realName);
 
       // Obtener historias no expiradas y aprobadas del usuario
       final now = DateTime.now();
+      print('🕒 Buscando historias no expiradas después de: $now');
+
+      // Simplificado para evitar índices compuestos complejos
       final storiesQuery = await _firestore
           .collection('stories')
           .where('userId', isEqualTo: userId)
-          .where('expiresAt', isGreaterThan: Timestamp.fromDate(now))
           .where('status', isEqualTo: 'approved')
-          .orderBy('expiresAt')
           .orderBy('createdAt', descending: true)
-          .get();
+          .get(const GetOptions(source: Source.server));
 
-      if (storiesQuery.docs.isEmpty) return null;
+      print('📚 Historias encontradas (todas) para $displayName ($userId): ${storiesQuery.docs.length}');
 
-      final stories = storiesQuery.docs.map((doc) => Story.fromFirestore(doc)).toList();
+      // Filtrar manualmente las expiradas
+      final validDocs = storiesQuery.docs.where((doc) {
+        final data = doc.data() as Map<String, dynamic>;
+        final expiresAt = (data['expiresAt'] as Timestamp?)?.toDate();
+        return expiresAt != null && expiresAt.isAfter(now);
+      }).toList();
+
+      print('📚 Historias no expiradas para $displayName ($userId): ${validDocs.length}');
+
+      if (validDocs.isEmpty) {
+        print('⚠️ No hay historias aprobadas y no expiradas para $displayName');
+        return null;
+      }
+
+      final stories = validDocs.map((doc) => Story.fromFirestore(doc)).toList();
 
       // Verificar si hay historias no vistas por el usuario actual
       final currentUserId = _auth.currentUser?.uid;
@@ -216,7 +317,7 @@ class StoryService {
 
       return UserStories(
         userId: userId,
-        userName: userData['name'] ?? 'Usuario',
+        userName: displayName,
         userPhotoURL: userData['photoURL'],
         stories: stories,
         hasUnviewed: hasUnviewed,
@@ -259,16 +360,35 @@ class StoryService {
       }
 
       // Eliminar archivo de Storage
-      try {
-        final mediaUrl = storyData['mediaUrl'] as String;
-        final storageRef = _storage.refFromURL(mediaUrl);
-        await storageRef.delete();
-      } catch (e) {
-        print('Error eliminando archivo de Storage: $e');
+      final mediaUrl = storyData['mediaUrl'] as String?;
+      if (mediaUrl != null && mediaUrl.isNotEmpty) {
+        try {
+          final storageRef = _storage.refFromURL(mediaUrl);
+          await storageRef.delete();
+          print('🗑️ Archivo eliminado de Storage');
+        } catch (e) {
+          print('⚠️ Error eliminando archivo de Storage: $e');
+        }
+      }
+
+      // Eliminar solicitudes de aprobación asociadas
+      final requestsQuery = await _firestore
+          .collection('story_approval_requests')
+          .where('storyId', isEqualTo: storyId)
+          .get();
+
+      for (final doc in requestsQuery.docs) {
+        await doc.reference.delete();
+      }
+
+      if (requestsQuery.docs.isNotEmpty) {
+        print('🗑️ Eliminadas ${requestsQuery.docs.length} solicitud(es) de aprobación');
       }
 
       // Eliminar documento de Firestore
       await storyDoc.reference.delete();
+
+      print('✅ Historia $storyId eliminada exitosamente');
     } catch (e) {
       throw Exception('Error eliminando historia: $e');
     }
@@ -525,10 +645,12 @@ class StoryService {
 
         if (storiesQuery.docs.isNotEmpty) {
           final stories = storiesQuery.docs.map((doc) => Story.fromFirestore(doc)).toList();
+          final realName = childData['name'] ?? 'Hijo';
+          final displayName = await _aliasService.getDisplayName(childId, realName);
 
           childrenStories.add(UserStories(
             userId: childId,
-            userName: childData['name'] ?? 'Hijo',
+            userName: displayName,
             userPhotoURL: childData['photoURL'],
             stories: stories,
             hasUnviewed: false, // Para padres no aplica el concepto de "no vistas"

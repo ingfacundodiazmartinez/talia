@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'ai_analysis_service.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key});
@@ -17,16 +18,17 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
     return Scaffold(
       appBar: AppBar(
         title: Text('Reportes y Alertas'),
-        backgroundColor: Color(0xFF9D7FE8),
-        foregroundColor: Colors.white,
       ),
       body: StreamBuilder<QuerySnapshot>(
         stream: _firestore
-            .collection('parent_children')
+            .collection('parent_child_links')
             .where('parentId', isEqualTo: _auth.currentUser?.uid)
+            .where('status', isEqualTo: 'approved')
             .snapshots(),
         builder: (context, snapshot) {
           if (snapshot.hasError) {
@@ -42,11 +44,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.assignment, size: 80, color: Colors.grey[300]),
+                  Icon(Icons.assignment, size: 80, color: colorScheme.outlineVariant),
                   SizedBox(height: 16),
                   Text(
                     'No tienes hijos vinculados',
-                    style: TextStyle(fontSize: 18, color: Colors.grey[600]),
+                    style: TextStyle(fontSize: 18, color: colorScheme.onSurfaceVariant),
                   ),
                 ],
               ),
@@ -182,91 +184,106 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   Widget _buildChildReportCard(String childId, String childName) {
-    return Container(
-      margin: EdgeInsets.only(bottom: 16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.08),
-            blurRadius: 15,
-            offset: Offset(0, 5),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          Container(
-            padding: EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [Color(0xFF9D7FE8), Color(0xFFB39DDB)],
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return FutureBuilder<DocumentSnapshot>(
+      future: _firestore.collection('users').doc(childId).get(),
+      builder: (context, userSnapshot) {
+        String? photoUrl;
+        if (userSnapshot.hasData && userSnapshot.data != null) {
+          final userData = userSnapshot.data!.data() as Map<String, dynamic>?;
+          photoUrl = userData?['photoUrl'];
+        }
+
+        return Container(
+          margin: EdgeInsets.only(bottom: 16),
+          decoration: BoxDecoration(
+            color: colorScheme.surface,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.08),
+                blurRadius: 10,
+                offset: Offset(0, 2),
               ),
-              borderRadius: BorderRadius.only(
-                topLeft: Radius.circular(20),
-                topRight: Radius.circular(20),
-              ),
-            ),
-            child: Row(
-              children: [
-                CircleAvatar(
-                  radius: 30,
-                  backgroundColor: Colors.white.withOpacity(0.3),
-                  child: Text(
-                    childName.isNotEmpty ? childName[0].toUpperCase() : 'H',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                    ),
-                  ),
-                ),
-                SizedBox(width: 16),
-                Expanded(
-                  child: Text(
-                    childName,
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                    ),
-                  ),
-                ),
-                Icon(Icons.analytics, color: Colors.white),
-              ],
-            ),
+            ],
           ),
-          StreamBuilder<QuerySnapshot>(
+          child: StreamBuilder<QuerySnapshot>(
             stream: FirebaseFirestore.instance
                 .collection('weekly_reports')
                 .where('childId', isEqualTo: childId)
+                .where('parentId', isEqualTo: _auth.currentUser!.uid)
+                .orderBy('generatedAt', descending: true)
                 .limit(1)
                 .snapshots(),
             builder: (context, snapshot) {
+
               if (snapshot.connectionState == ConnectionState.waiting) {
                 return Padding(
                   padding: EdgeInsets.all(20),
-                  child: CircularProgressIndicator(),
+                  child: Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 28,
+                        backgroundImage: photoUrl != null ? NetworkImage(photoUrl) : null,
+                        child: photoUrl == null
+                            ? Text(
+                                childName.isNotEmpty ? childName[0].toUpperCase() : 'H',
+                                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                              )
+                            : null,
+                      ),
+                      SizedBox(width: 16),
+                      Expanded(
+                        child: Text(
+                          childName,
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      CircularProgressIndicator(),
+                    ],
+                  ),
                 );
               }
 
               if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
                 return Padding(
                   padding: EdgeInsets.all(20),
-                  child: Column(
+                  child: Row(
                     children: [
-                      Text(
-                        'No hay reportes disponibles',
-                        style: TextStyle(color: Colors.grey[600]),
+                      CircleAvatar(
+                        radius: 28,
+                        backgroundImage: photoUrl != null ? NetworkImage(photoUrl) : null,
+                        child: photoUrl == null
+                            ? Text(
+                                childName.isNotEmpty ? childName[0].toUpperCase() : 'H',
+                                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                              )
+                            : null,
                       ),
-                      SizedBox(height: 16),
-                      ElevatedButton.icon(
+                      SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              childName,
+                              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              'No hay reportes disponibles',
+                              style: TextStyle(color: colorScheme.onSurfaceVariant, fontSize: 14),
+                            ),
+                          ],
+                        ),
+                      ),
+                      TextButton.icon(
                         onPressed: () => _generateReport(childId, childName),
-                        icon: Icon(Icons.refresh),
-                        label: Text('Generar Reporte'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Color(0xFF9D7FE8),
+                        icon: Icon(Icons.add, size: 18),
+                        label: Text('Generar'),
+                        style: TextButton.styleFrom(
+                          foregroundColor: colorScheme.primary,
                         ),
                       ),
                     ],
@@ -276,11 +293,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
               final report =
                   snapshot.data!.docs.first.data() as Map<String, dynamic>;
-              return _buildReportContent(childId, childName, report);
+              return _buildReportContent(childId, childName, report, photoUrl);
             },
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -288,150 +305,131 @@ class _ReportsScreenState extends State<ReportsScreen> {
     String childId,
     String childName,
     Map<String, dynamic> report,
+    String? photoUrl,
   ) {
+    final colorScheme = Theme.of(context).colorScheme;
     final moodIcon = report['moodIcon'] ?? '😐';
-    final moodStatus = report['moodStatus'] ?? 'neutral';
-    final percentageChange = report['percentageChange'] ?? 0;
+    final avgSentiment = (report['avgSentiment'] ?? 0.5) as num;
     final bullyingIncidents = report['bullyingIncidents'] ?? 0;
-    final totalMessages = report['totalMessages'] ?? 0;
-    final positiveCount = report['positiveCount'] ?? 0;
-    final negativeCount = report['negativeCount'] ?? 0;
+    final generatedAt = report['generatedAt'] as dynamic;
 
-    return Padding(
-      padding: EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Estado de ánimo principal
-          Center(
-            child: Column(
-              children: [
-                Text(moodIcon, style: TextStyle(fontSize: 64)),
-                SizedBox(height: 8),
-                Text(
-                  'Estado de ánimo: $moodStatus',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF2D3142),
-                  ),
-                ),
-                if (percentageChange != 0) ...[
-                  SizedBox(height: 8),
-                  Container(
-                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: percentageChange > 0
-                          ? Colors.green.withOpacity(0.1)
-                          : Colors.orange.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(20),
+    // Generar título corto basado en sentimiento
+    String shortTitle;
+    if (bullyingIncidents > 0) {
+      shortTitle = 'Alerta detectada';
+    } else if (avgSentiment >= 0.7) {
+      shortTitle = 'Período excelente';
+    } else if (avgSentiment >= 0.5) {
+      shortTitle = 'Período positivo';
+    } else if (avgSentiment >= 0.3) {
+      shortTitle = 'Período neutral';
+    } else {
+      shortTitle = 'Período preocupante';
+    }
+
+    String dateText = 'Fecha desconocida';
+    if (generatedAt != null) {
+      try {
+        DateTime date;
+        if (generatedAt is String) {
+          date = DateTime.parse(generatedAt);
+        } else {
+          date = (generatedAt as Timestamp).toDate();
+        }
+        final now = DateTime.now();
+        final diff = now.difference(date);
+        if (diff.inDays == 0) {
+          dateText = 'Hoy';
+        } else if (diff.inDays == 1) {
+          dateText = 'Ayer';
+        } else if (diff.inDays < 7) {
+          dateText = 'Hace ${diff.inDays} días';
+        } else {
+          dateText = '${date.day}/${date.month}/${date.year}';
+        }
+      } catch (e) {
+        dateText = 'Fecha desconocida';
+      }
+    }
+
+    return InkWell(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => DetailedReportScreen(
+              childId: childId,
+              childName: childName,
+              report: report,
+            ),
+          ),
+        );
+      },
+      child: Padding(
+        padding: EdgeInsets.all(16),
+        child: Row(
+          children: [
+            // Foto del niño
+            CircleAvatar(
+              radius: 28,
+              backgroundImage: photoUrl != null ? NetworkImage(photoUrl) : null,
+              child: photoUrl == null
+                  ? Text(
+                      childName.isNotEmpty ? childName[0].toUpperCase() : 'H',
+                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                    )
+                  : null,
+            ),
+            SizedBox(width: 12),
+            // Info del reporte
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    childName,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: colorScheme.onSurface,
                     ),
-                    child: Text(
-                      '${percentageChange > 0 ? '+' : ''}$percentageChange% vs semana anterior',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: percentageChange > 0
-                            ? Colors.green
-                            : Colors.orange,
-                        fontWeight: FontWeight.w600,
+                  ),
+                  SizedBox(height: 2),
+                  Row(
+                    children: [
+                      Text(moodIcon, style: TextStyle(fontSize: 16)),
+                      SizedBox(width: 6),
+                      Text(
+                        shortTitle,
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: colorScheme.onSurfaceVariant,
+                        ),
                       ),
+                    ],
+                  ),
+                  SizedBox(height: 2),
+                  Text(
+                    dateText,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
                     ),
                   ),
                 ],
-              ],
+              ),
             ),
-          ),
-
-          SizedBox(height: 24),
-
-          // Estadísticas
-          Row(
-            children: [
-              Expanded(
-                child: _buildStatBox(
-                  icon: Icons.message,
-                  label: 'Mensajes',
-                  value: '$totalMessages',
-                  color: Colors.blue,
-                ),
-              ),
-              SizedBox(width: 12),
-              Expanded(
-                child: _buildStatBox(
-                  icon: Icons.sentiment_satisfied,
-                  label: 'Positivos',
-                  value: '$positiveCount',
-                  color: Colors.green,
-                ),
-              ),
-            ],
-          ),
-
-          SizedBox(height: 12),
-
-          Row(
-            children: [
-              Expanded(
-                child: _buildStatBox(
-                  icon: Icons.sentiment_dissatisfied,
-                  label: 'Negativos',
-                  value: '$negativeCount',
-                  color: Colors.orange,
-                ),
-              ),
-              SizedBox(width: 12),
-              Expanded(
-                child: _buildStatBox(
-                  icon: Icons.warning,
-                  label: 'Bullying',
-                  value: '$bullyingIncidents',
-                  color: bullyingIncidents > 0 ? Colors.red : Colors.green,
-                ),
-              ),
-            ],
-          ),
-
-          SizedBox(height: 20),
-
-          // Botones de acción
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () => _generateReport(childId, childName),
-                  icon: Icon(Icons.refresh),
-                  label: Text('Actualizar'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Color(0xFF9D7FE8),
-                    side: BorderSide(color: Color(0xFF9D7FE8)),
-                  ),
-                ),
-              ),
-              SizedBox(width: 12),
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => DetailedReportScreen(
-                          childId: childId,
-                          childName: childName,
-                          report: report,
-                        ),
-                      ),
-                    );
-                  },
-                  icon: Icon(Icons.visibility),
-                  label: Text('Ver detalles'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Color(0xFF9D7FE8),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
+            // Botón actualizar
+            IconButton(
+              onPressed: () => _generateReport(childId, childName),
+              icon: Icon(Icons.refresh),
+              color: colorScheme.primary,
+              tooltip: 'Actualizar reporte',
+            ),
+            // Flecha para ver más
+            Icon(Icons.chevron_right, color: colorScheme.outlineVariant),
+          ],
+        ),
       ),
     );
   }
@@ -461,7 +459,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
             ),
           ),
           SizedBox(height: 4),
-          Text(label, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+          Text(label, style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
         ],
       ),
     );
@@ -471,75 +469,58 @@ class _ReportsScreenState extends State<ReportsScreen> {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => Center(child: CircularProgressIndicator()),
+      builder: (context) => AlertDialog(
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 16),
+            Text('Generando reporte con IA...'),
+            Text('Esto puede tardar 30-60 segundos', style: TextStyle(fontSize: 12, color: Colors.grey)),
+          ],
+        ),
+      ),
     );
 
     try {
-      // Verificar que hay mensajes analizados
-      final analysisQuery = await FirebaseFirestore.instance
-          .collection('message_analysis')
-          .where('senderId', isEqualTo: childId)
-          .get();
+      print('📊 Llamando a Cloud Function generateChildReport');
+      
+      // Llamar a la Cloud Function
+      final callable = FirebaseFunctions.instance.httpsCallable('generateChildReport');
+      final result = await callable.call({
+        'childId': childId,
+        'daysBack': 7,
+      });
 
-      print('📊 Mensajes encontrados: ${analysisQuery.docs.length}');
+      Navigator.pop(context); // Cerrar diálogo de loading
 
-      if (analysisQuery.docs.isEmpty) {
-        Navigator.pop(context);
+      if (result.data['success'] == true) {
+        print('✅ Reporte generado exitosamente');
+        
+        // Mostrar mensaje de éxito
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-              '❌ No hay mensajes analizados. Envía algunos mensajes primero.',
-            ),
-            backgroundColor: Colors.orange,
-            duration: Duration(seconds: 5),
+            content: Text('✅ Reporte generado exitosamente'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
           ),
         );
-        return;
+
+        // Esperar un momento y recargar datos
+        await Future.delayed(Duration(seconds: 1));
+        setState(() {}); // Recargar la pantalla
+      } else {
+        throw Exception(result.data['message'] ?? 'Error desconocido');
       }
-
-      // Generar reporte
-      final report = await _aiService.generateWeeklyReport(childId);
-
-      Navigator.pop(context);
-
-      print('✅ Reporte generado: $report');
-
-      if (report['status'] == 'no_data') {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(report['message'] ?? 'No hay suficientes datos'),
-            backgroundColor: Colors.orange,
-          ),
-        );
-        return;
-      }
-
-      if (report['status'] == 'error') {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(report['message'] ?? 'Error al generar reporte'),
-            backgroundColor: Colors.red,
-          ),
-        );
-        return;
-      }
-
-      setState(() {});
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('✅ Reporte generado para $childName'),
-          backgroundColor: Colors.green,
-        ),
-      );
     } catch (e) {
-      Navigator.pop(context);
-      print('❌ Error completo: $e');
+      print('❌ Error generando reporte: $e');
+      Navigator.pop(context); // Cerrar diálogo si está abierto
+      
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('❌ Error: $e'),
+          content: Text('Error generando reporte: ${e.toString()}'),
           backgroundColor: Colors.red,
-          duration: Duration(seconds: 5),
+          duration: Duration(seconds: 4),
         ),
       );
     }
@@ -640,6 +621,7 @@ class DetailedReportScreen extends StatelessWidget {
     final negativeCount = report['negativeCount'] ?? 0;
     final neutralCount = report['neutralCount'] ?? 0;
     final bullyingIncidents = report['bullyingIncidents'] ?? 0;
+    final percentageChange = report['percentageChange'] ?? 0;
 
     return Scaffold(
       appBar: AppBar(
@@ -661,7 +643,9 @@ class DetailedReportScreen extends StatelessWidget {
           ),
           SizedBox(height: 8),
           Text(
-            report['period'] ?? 'Última semana',
+            report['period'] != null
+                ? 'Últimos ${report['period']} días'
+                : 'Última semana',
             style: TextStyle(fontSize: 16, color: Colors.grey[600]),
           ),
 
@@ -694,8 +678,8 @@ class DetailedReportScreen extends StatelessWidget {
                 Text(
                   report['moodStatus'] ?? 'neutral',
                   style: TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.bold,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w600,
                     color: Colors.white,
                   ),
                 ),
@@ -801,21 +785,21 @@ class DetailedReportScreen extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Icon(
-                  report['percentageChange'] > 0
+                  percentageChange > 0
                       ? Icons.trending_up
                       : Icons.trending_down,
-                  color: report['percentageChange'] > 0
+                  color: percentageChange > 0
                       ? Colors.green
                       : Colors.orange,
                   size: 32,
                 ),
                 SizedBox(width: 12),
                 Text(
-                  '${report['percentageChange'] > 0 ? '+' : ''}${report['percentageChange']}%',
+                  '${percentageChange > 0 ? '+' : ''}$percentageChange%',
                   style: TextStyle(
                     fontSize: 32,
                     fontWeight: FontWeight.bold,
-                    color: report['percentageChange'] > 0
+                    color: percentageChange > 0
                         ? Colors.green
                         : Colors.orange,
                   ),

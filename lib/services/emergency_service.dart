@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../notification_service.dart';
 import 'location_service.dart';
+import 'video_call_service.dart';
 
 class EmergencyService {
   static final EmergencyService _instance = EmergencyService._internal();
@@ -18,9 +19,17 @@ class EmergencyService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final LocationService _locationService = LocationService();
   final NotificationService _notificationService = NotificationService();
+  final VideoCallService _videoCallService = VideoCallService();
 
   // Tiempo de cooldown entre emergencias (en minutos)
   static const int _cooldownMinutes = 2;
+
+  // Tiempo máximo de tracking de emergencia (1 hora)
+  static const int _maxTrackingMinutes = 60;
+
+  // Timer para tracking continuo de ubicación
+  Timer? _locationTrackingTimer;
+  String? _currentEmergencyId;
 
   // Verificar si el botón de emergencia está en cooldown
   Future<bool> isInCooldown() async {
@@ -42,7 +51,7 @@ class EmergencyService {
   }
 
   // Activar emergencia completa
-  Future<bool> activateEmergency({
+  Future<Map<String, dynamic>?> activateEmergency({
     String? customMessage,
     BuildContext? context,
   }) async {
@@ -55,13 +64,13 @@ class EmergencyService {
         if (context != null) {
           _showCooldownMessage(context);
         }
-        return false;
+        return null;
       }
 
       final user = _auth.currentUser;
       if (user == null) {
         print('❌ Usuario no autenticado');
-        return false;
+        return null;
       }
 
       // Vibración de emergencia
@@ -74,7 +83,7 @@ class EmergencyService {
       final childData = await _getChildData(user.uid);
       if (childData == null) {
         print('❌ No se pudo obtener datos del niño');
-        return false;
+        return null;
       }
 
       // Crear registro de emergencia
@@ -87,7 +96,7 @@ class EmergencyService {
 
       if (emergencyId == null) {
         print('❌ Error creando registro de emergencia');
-        return false;
+        return null;
       }
 
       // Obtener padres/tutores
@@ -102,8 +111,11 @@ class EmergencyService {
         customMessage: customMessage,
       );
 
-      // Llamar al primer padre disponible
-      await _makeEmergencyCall(parents);
+      // Iniciar llamada de emergencia con Agora al primer padre
+      await _makeEmergencyVideoCall(parents, emergencyId);
+
+      // Iniciar tracking continuo de ubicación
+      await _startLocationTracking(emergencyId);
 
       // Guardar timestamp del último uso
       await _saveLastEmergencyTime();
@@ -114,13 +126,18 @@ class EmergencyService {
         _showEmergencyConfirmation(context);
       }
 
-      return true;
+      // Retornar información de la emergencia para que el hijo pueda unirse a la llamada
+      return {
+        'emergencyId': emergencyId,
+        'channelName': 'emergency_$emergencyId',
+        'success': true,
+      };
     } catch (e) {
       print('❌ Error activando emergencia: $e');
       if (context != null) {
         _showErrorMessage(context, e.toString());
       }
-      return false;
+      return null;
     }
   }
 
@@ -248,6 +265,9 @@ class EmergencyService {
     String? customMessage,
   }) async {
     try {
+      final user = _auth.currentUser;
+      if (user == null) return;
+
       for (var parent in parents) {
         final parentId = parent['id'];
         final parentName = parent['name'] ?? 'Padre';
@@ -255,12 +275,14 @@ class EmergencyService {
         // Crear notificación en Firebase
         await _firestore.collection('notifications').add({
           'userId': parentId,
+          'senderId': user.uid, // ⚠️ IMPORTANTE: Para validación de seguridad
           'type': 'emergency',
           'title': '🆘 EMERGENCIA - $childName',
           'body': customMessage ?? '$childName ha activado el botón de emergencia',
           'data': {
             'emergencyId': emergencyId,
             'childName': childName,
+            'senderId': user.uid,
             'location': position != null ? {
               'latitude': position.latitude,
               'longitude': position.longitude,
@@ -278,45 +300,115 @@ class EmergencyService {
     }
   }
 
-  // Realizar llamada de emergencia
-  Future<void> _makeEmergencyCall(List<Map<String, dynamic>> parents) async {
+  // Realizar llamada de emergencia con Agora
+  Future<void> _makeEmergencyVideoCall(List<Map<String, dynamic>> parents, String emergencyId) async {
     try {
       if (parents.isEmpty) {
         print('❌ No hay padres para llamar');
         return;
       }
 
-      // Intentar llamar al primer padre que tenga teléfono
-      for (var parent in parents) {
-        final phoneNumber = parent['phone'];
-        if (phoneNumber != null && phoneNumber.toString().isNotEmpty) {
-          await _launchPhoneCall(phoneNumber.toString());
-          print('✅ Llamada de emergencia iniciada a ${parent['name']}');
-          return;
-        }
-      }
+      final user = _auth.currentUser;
+      if (user == null) return;
 
-      print('⚠️ Ningún padre tiene número de teléfono configurado');
+      // Usar emergencyId como channel name para la llamada
+      final channelName = 'emergency_$emergencyId';
+
+      // Crear registro de llamada en Firestore
+      for (var parent in parents) {
+        final parentId = parent['id'];
+        final parentName = parent['name'] ?? 'Padre';
+
+        await _firestore.collection('video_calls').add({
+          'callId': emergencyId,
+          'callerId': user.uid,
+          'callerName': await _getUserName(user.uid),
+          'receiverId': parentId,
+          'receiverName': parentName,
+          'channelName': channelName,
+          'status': 'ringing',
+          'timestamp': FieldValue.serverTimestamp(),
+          'isEmergency': true,
+          'type': 'video_call', // Videollamada para que el padre pueda ver al niño
+        });
+
+        print('✅ Llamada de emergencia creada para $parentName');
+      }
     } catch (e) {
-      print('❌ Error realizando llamada de emergencia: $e');
+      print('❌ Error creando llamada de emergencia: $e');
     }
   }
 
-  // Lanzar llamada telefónica
-  Future<void> _launchPhoneCall(String phoneNumber) async {
+  // Obtener nombre de usuario
+  Future<String> _getUserName(String userId) async {
     try {
-      // Limpiar número de teléfono
-      final cleanPhone = phoneNumber.replaceAll(RegExp(r'[^\d+]'), '');
-      final uri = Uri.parse('tel:$cleanPhone');
-
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri);
-      } else {
-        print('❌ No se puede realizar la llamada a $cleanPhone');
-      }
+      final doc = await _firestore.collection('users').doc(userId).get();
+      return doc.data()?['name'] ?? 'Usuario';
     } catch (e) {
-      print('❌ Error lanzando llamada: $e');
+      return 'Usuario';
     }
+  }
+
+  // Iniciar tracking continuo de ubicación
+  Future<void> _startLocationTracking(String emergencyId) async {
+    try {
+      print('📍 Iniciando tracking de ubicación de emergencia...');
+
+      _currentEmergencyId = emergencyId;
+
+      // Actualizar ubicación cada 30 segundos
+      _locationTrackingTimer?.cancel();
+      _locationTrackingTimer = Timer.periodic(Duration(seconds: 30), (timer) async {
+        final position = await _getCurrentLocation();
+        if (position != null && _currentEmergencyId != null) {
+          await _saveLocationPoint(_currentEmergencyId!, position);
+        }
+      });
+
+      // Auto-detener después de 1 hora
+      Future.delayed(Duration(minutes: _maxTrackingMinutes), () {
+        if (_locationTrackingTimer?.isActive ?? false) {
+          print('⏰ Deteniendo tracking automáticamente después de 1 hora');
+          stopLocationTracking();
+        }
+      });
+
+      print('✅ Tracking de ubicación iniciado');
+    } catch (e) {
+      print('❌ Error iniciando tracking de ubicación: $e');
+    }
+  }
+
+  // Guardar punto de ubicación en subcollection
+  Future<void> _saveLocationPoint(String emergencyId, Position position) async {
+    try {
+      await _firestore
+          .collection('emergencies')
+          .doc(emergencyId)
+          .collection('location_tracking')
+          .add({
+        'latitude': position.latitude,
+        'longitude': position.longitude,
+        'accuracy': position.accuracy,
+        'altitude': position.altitude,
+        'heading': position.heading,
+        'speed': position.speed,
+        'timestamp': FieldValue.serverTimestamp(),
+        'dateTime': DateTime.now().toIso8601String(),
+      });
+
+      print('📍 Ubicación guardada: ${position.latitude}, ${position.longitude}');
+    } catch (e) {
+      print('❌ Error guardando punto de ubicación: $e');
+    }
+  }
+
+  // Detener tracking de ubicación
+  void stopLocationTracking() {
+    _locationTrackingTimer?.cancel();
+    _locationTrackingTimer = null;
+    _currentEmergencyId = null;
+    print('⏹️ Tracking de ubicación detenido');
   }
 
   // Vibración de emergencia
@@ -351,6 +443,7 @@ class EmergencyService {
       final user = _auth.currentUser;
       if (user == null) return false;
 
+      // Actualizar emergencia como resuelta
       await _firestore.collection('emergencies').doc(emergencyId).update({
         'resolved': true,
         'resolvedAt': FieldValue.serverTimestamp(),
@@ -358,11 +451,69 @@ class EmergencyService {
         'status': 'resolved',
       });
 
-      print('✅ Emergencia resuelta: $emergencyId');
+      // Detener tracking de ubicación si es la emergencia actual
+      if (_currentEmergencyId == emergencyId) {
+        stopLocationTracking();
+      }
+
+      // Eliminar el historial de ubicaciones de la emergencia
+      print('🗑️ Eliminando historial de ubicaciones de emergencia...');
+      final trackingDocs = await _firestore
+          .collection('emergencies')
+          .doc(emergencyId)
+          .collection('location_tracking')
+          .get();
+
+      // Eliminar todos los documentos del historial en lote
+      final batch = _firestore.batch();
+      for (var doc in trackingDocs.docs) {
+        batch.delete(doc.reference);
+      }
+      await batch.commit();
+
+      print('✅ Emergencia resuelta y historial eliminado: $emergencyId (${trackingDocs.docs.length} ubicaciones)');
       return true;
     } catch (e) {
       print('❌ Error resolviendo emergencia: $e');
       return false;
+    }
+  }
+
+  // Obtener emergencias activas para TODOS los hijos de un padre
+  Stream<QuerySnapshot> getActiveEmergenciesForParent(String parentId) async* {
+    try {
+      // Obtener IDs de todos los hijos del padre
+      final linksSnapshot = await _firestore
+          .collection('parent_child_links')
+          .where('parentId', isEqualTo: parentId)
+          .where('status', isEqualTo: 'approved')
+          .get();
+
+      final childrenIds = linksSnapshot.docs
+          .map((doc) => doc.data()['childId'] as String)
+          .toList();
+
+      if (childrenIds.isEmpty) {
+        // Si no tiene hijos, emitir stream vacío
+        yield* Stream.value(
+          await _firestore.collection('emergencies').where('childId', isEqualTo: 'no_children').get(),
+        );
+        return;
+      }
+
+      // Escuchar emergencias activas de todos los hijos
+      yield* _firestore
+          .collection('emergencies')
+          .where('childId', whereIn: childrenIds)
+          .where('resolved', isEqualTo: false)
+          .orderBy('timestamp', descending: true)
+          .snapshots();
+    } catch (e) {
+      print('❌ Error obteniendo emergencias del padre: $e');
+      // Emitir stream vacío en caso de error
+      yield* Stream.value(
+        await _firestore.collection('emergencies').where('childId', isEqualTo: 'error').get(),
+      );
     }
   }
 

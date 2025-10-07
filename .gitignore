@@ -1,51 +1,63 @@
-# Miscellaneous
-*.class
-*.log
-*.pyc
-*.swp
-.DS_Store
-.atom/
-.build/
-.buildlog/
-.history
-.svn/
-.swiftpm/
-migrate_working_dir/
+# Environment variables
+functions/.env
 
-# IntelliJ related
-*.iml
-*.ipr
-*.iws
-.idea/
+# Node modules
+node_modules/
+functions/node_modules/
 
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-#.vscode/
-
-# Flutter/Dart/Pub related
-**/doc/api/
-**/ios/Flutter/.last_build_id
+# Build outputs
+build/
 .dart_tool/
-.flutter-plugins-dependencies
-.pub-cache/
-.pub/
-/build/
-/coverage/
+ios/build/
+android/build/
 
-# Symbolication related
-app.*.symbols
+# IDE
+.idea/
+.vscode/
+*.iml
+.claude/settings.local.json
 
-# Obfuscation related
-app.*.map.json
+# OS
+.DS_Store
 
-# Android Studio will place build artifacts here
-/android/app/debug
-/android/app/profile
-/android/app/release
-
-# Keystore files - NEVER commit these!
+# Android signing
+android/key.properties
+android/*.jks
+android/*.keystore
 *.jks
 *.keystore
-/android/key.properties
-/android/*.jks
+
+# Firebase configuration files (contienen project IDs y API keys)
+# Nota: Estas API keys están diseñadas para estar en el cliente, pero es mejor
+# práctica mantener estos archivos fuera de git para evitar exposición innecesaria
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist
+macos/Runner/GoogleService-Info.plist
+lib/firebase_options.dart
+
+# Si necesitas estos archivos en git para CI/CD, considera cifrarlos
+# o usar secrets de GitHub Actions
+
+# Documentation and reports (keep only README.md)
+*.md
+!README.md
+
+# Scripts
+*.sh
+
+# Firestore rules backups
+firestore.rules.backup-*
+firestore.rules.SECURE
+
+# Build artifacts
+*.aab
+*.apk
+*.ipa
+
+# Android reports
+android/build/reports/
+
+# Other temporary files
+*.log
+*.tmp
+*.bak

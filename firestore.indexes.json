@@ -13,6 +13,280 @@
           "order": "DESCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "message_analysis",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "senderId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "analyzedAt",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "alerts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "parentId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "isRead",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "alerts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "childId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "parentId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "isRead",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "contacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "users",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "weekly_reports",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "childId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "generatedAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "weekly_reports",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "childId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "parentId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "generatedAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "emergencies",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "childId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "resolved",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "timestamp",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "stories",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "userId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "expiresAt",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "stories",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "userId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "groups",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "members",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "isActive",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "lastActivity",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "notifications",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "userId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "senderId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "type",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "read",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "contact_requests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "childId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "contact_requests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "contactId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "contact_requests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "parentId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "parent_child_links",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "parentId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "parent_child_links",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "childId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "messages",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "senderId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "timestamp",
+          "order": "ASCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": []

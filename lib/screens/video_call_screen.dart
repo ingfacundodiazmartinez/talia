@@ -32,6 +32,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   bool _isMuted = false;
   bool _isCameraOff = false;
   int? _remoteUid;
+  int? _localUid; // UID local real asignado por Agora
   bool _isConnecting = true;
   bool _isEnding = false;
 
@@ -53,8 +54,10 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
         RtcEngineEventHandler(
           onJoinChannelSuccess: (RtcConnection connection, int elapsed) {
             print('✅ Unido al canal: ${connection.channelId}');
+            print('✅ UID local asignado: ${connection.localUid}');
             setState(() {
               _isJoined = true;
+              _localUid = connection.localUid; // Guardar UID real
               _isConnecting = false;
             });
           },
@@ -318,7 +321,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
         child: AgoraVideoView(
           controller: VideoViewController(
             rtcEngine: _videoCallService.engine!,
-            canvas: const VideoCanvas(uid: 0),
+            canvas: const VideoCanvas(uid: 0), // UID 0 = stream local
           ),
         ),
       ),

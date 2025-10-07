@@ -4,6 +4,7 @@ import Foundation
 import DeepAR
 import GLKit
 import OpenGLES
+import AVFoundation
 
 /**
  * Plugin iOS para DeepAR
@@ -378,16 +379,36 @@ import OpenGLES
             return
         }
 
-        print("🔄 Cambiando cámara")
+        guard let controller = cameraController else {
+            print("❌ CameraController no disponible")
+            result(FlutterError(code: "CAMERA_ERROR",
+                               message: "CameraController no disponible",
+                               details: nil))
+            return
+        }
 
-        // Por ahora, simulamos cambio de cámara exitoso
-        // TODO: Implementar cambio real de cámara con DeepAR SDK
+        print("🔄 Cambiando cámara - Posición actual: \(controller.position == .front ? "frontal" : "trasera")")
+
+        // Alternar posición de la cámara
+        let newPosition: AVCaptureDevice.Position = controller.position == .front ? .back : .front
+        print("🔄 Nueva posición: \(newPosition == .front ? "frontal" : "trasera")")
+
+        // Cambiar posición
+        controller.position = newPosition
+
+        // Reiniciar cámara con nueva posición
+        controller.stopCamera()
+        controller.startCamera()
+
+        print("✅ Cámara cambiada a: \(newPosition == .front ? "frontal" : "trasera")")
 
         // Enviar evento de cambio de cámara
-        sendEvent(type: "cameraSwitch", data: ["success": true])
+        sendEvent(type: "cameraSwitch", data: [
+            "success": true,
+            "position": newPosition == .front ? "front" : "back"
+        ])
 
         result(true)
-        print("✅ Cámara cambiada (simulado)")
     }
 
     private func handleGetAvailableFilters(_ call: FlutterMethodCall, result: @escaping FlutterResult) {

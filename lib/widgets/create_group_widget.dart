@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:image_picker/image_picker.dart';
+import 'dart:io';
+import 'package:firebase_storage/firebase_storage.dart';
 import '../services/group_chat_service.dart';
 import '../services/chat_permission_service.dart';
+import '../services/contact_alias_service.dart';
 
 class CreateGroupWidget extends StatefulWidget {
   final VoidCallback? onGroupCreated;
@@ -19,6 +23,7 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
   final ChatPermissionService _permissionService = ChatPermissionService();
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
+  final ContactAliasService _aliasService = ContactAliasService();
 
   // Controllers
   final TextEditingController _groupNameController = TextEditingController();
@@ -41,6 +46,8 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
   List<ContactInfo> _availableContacts = [];
   final List<ContactInfo> _selectedContacts = [];
   String? _groupAvatar;
+  File? _groupImageFile;
+  final ImagePicker _imagePicker = ImagePicker();
 
   // Resultado de creación
   GroupCreationResult? _creationResult;
@@ -104,10 +111,13 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
         final userData = userDoc.data();
 
         if (userData != null) {
+          final realName = userData['name'] ?? 'Usuario';
+          final displayName = await _aliasService.getDisplayName(contactId, realName);
+
           contacts.add(
             ContactInfo(
               id: contactId,
-              name: userData['name'] ?? 'Usuario',
+              name: displayName,
               email: userData['email'] ?? '',
               avatar: userData['photoURL'],
               isOnline: userData['isOnline'] ?? false,
@@ -125,6 +135,49 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
       });
     } catch (e) {
       print('❌ Error cargando contactos: $e');
+    }
+  }
+
+  Future<void> _pickGroupImage() async {
+    try {
+      final XFile? image = await _imagePicker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1024,
+        maxHeight: 1024,
+        imageQuality: 85,
+      );
+
+      if (image != null) {
+        setState(() {
+          _groupImageFile = File(image.path);
+        });
+      }
+    } catch (e) {
+      print('❌ Error seleccionando imagen: $e');
+      _setError('Error al seleccionar la imagen');
+    }
+  }
+
+  Future<String?> _uploadGroupImage() async {
+    if (_groupImageFile == null) return null;
+
+    try {
+      final user = _auth.currentUser;
+      if (user == null) return null;
+
+      final fileName = 'group_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final storageRef = FirebaseStorage.instance
+          .ref()
+          .child('group_images')
+          .child(fileName);
+
+      final uploadTask = await storageRef.putFile(_groupImageFile!);
+      final downloadUrl = await uploadTask.ref.getDownloadURL();
+
+      return downloadUrl;
+    } catch (e) {
+      print('❌ Error subiendo imagen del grupo: $e');
+      return null;
     }
   }
 
@@ -171,12 +224,18 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
     _clearError();
 
     try {
+      // Subir imagen del grupo si existe
+      String? imageUrl = _groupAvatar;
+      if (_groupImageFile != null) {
+        imageUrl = await _uploadGroupImage();
+      }
+
       final selectedUserIds = _selectedContacts.map((c) => c.id).toList();
 
       final result = await _groupService.createGroup(
         name: _groupNameController.text.trim(),
         description: _groupDescriptionController.text.trim(),
-        avatar: _groupAvatar,
+        avatar: imageUrl,
         initialMembers: selectedUserIds,
       );
 
@@ -224,10 +283,12 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
     return Container(
       height: MediaQuery.of(context).size.height * 0.85,
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: colorScheme.surface,
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       child: Column(
@@ -252,6 +313,9 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
   }
 
   Widget _buildHeader() {
+    final colorScheme = Theme.of(context).colorScheme;
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
     final titles = ['Crear Grupo', 'Agregar Miembros', 'Grupo Creado'];
     final subtitles = [
       'Configura tu grupo de chat',
@@ -263,7 +327,12 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
       padding: EdgeInsets.all(20),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [Color(0xFF9D7FE8), Color(0xFFB39DDB)],
+          colors: isDarkMode
+              ? [
+                  colorScheme.primary.withValues(alpha: 0.6),
+                  colorScheme.primary.withValues(alpha: 0.4),
+                ]
+              : [Color(0xFF9D7FE8), Color(0xFFB39DDB)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
@@ -276,7 +345,7 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
             width: 40,
             height: 4,
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.3),
+              color: Colors.white.withValues(alpha: 0.3),
               borderRadius: BorderRadius.circular(2),
             ),
           ),
@@ -286,7 +355,7 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
               Container(
                 padding: EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.2),
+                  color: Colors.white.withValues(alpha: 0.2),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(Icons.group_add, color: Colors.white, size: 24),
@@ -309,7 +378,7 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
                       subtitles[_currentStep],
                       style: TextStyle(
                         fontSize: 14,
-                        color: Colors.white.withOpacity(0.9),
+                        color: Colors.white.withValues(alpha: 0.9),
                       ),
                     ),
                   ],
@@ -338,6 +407,7 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
   }
 
   Widget _buildStepIndicator(int step, String label) {
+    final colorScheme = Theme.of(context).colorScheme;
     final isActive = _currentStep >= step;
     final isCompleted = _currentStep > step;
 
@@ -348,7 +418,7 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
           width: 32,
           height: 32,
           decoration: BoxDecoration(
-            color: isActive ? Color(0xFF9D7FE8) : Colors.grey[300],
+            color: isActive ? colorScheme.primary : colorScheme.outlineVariant,
             shape: BoxShape.circle,
           ),
           child: Icon(
@@ -362,7 +432,7 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
           label,
           style: TextStyle(
             fontSize: 12,
-            color: isActive ? Color(0xFF9D7FE8) : Colors.grey[600],
+            color: isActive ? colorScheme.primary : colorScheme.onSurfaceVariant,
             fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
           ),
         ),
@@ -371,19 +441,22 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
   }
 
   Widget _buildStepLine(int step) {
+    final colorScheme = Theme.of(context).colorScheme;
     final isCompleted = _currentStep > step;
 
     return Container(
       height: 2,
       margin: EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
-        color: isCompleted ? Color(0xFF9D7FE8) : Colors.grey[300],
+        color: isCompleted ? colorScheme.primary : colorScheme.outlineVariant,
         borderRadius: BorderRadius.circular(1),
       ),
     );
   }
 
   Widget _buildGroupInfoStep() {
+    final colorScheme = Theme.of(context).colorScheme;
+
     return Padding(
       padding: EdgeInsets.all(20),
       child: Column(
@@ -394,7 +467,7 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.bold,
-              color: Color(0xFF2D3142),
+              color: colorScheme.onSurface,
             ),
           ),
           SizedBox(height: 20),
@@ -402,37 +475,39 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
           // Avatar del grupo
           Center(
             child: GestureDetector(
-              onTap: () {
-                // TODO: Implementar selección de avatar
-              },
+              onTap: _pickGroupImage,
               child: Container(
                 width: 80,
                 height: 80,
                 decoration: BoxDecoration(
-                  color: Color(0xFF9D7FE8).withOpacity(0.1),
+                  color: colorScheme.primaryContainer,
                   shape: BoxShape.circle,
                   border: Border.all(
-                    color: Color(0xFF9D7FE8).withOpacity(0.3),
+                    color: colorScheme.primary.withValues(alpha: 0.3),
                     width: 2,
                   ),
                 ),
-                child: _groupAvatar != null
+                child: _groupImageFile != null
                     ? ClipOval(
-                        child: Image.network(_groupAvatar!, fit: BoxFit.cover),
+                        child: Image.file(_groupImageFile!, fit: BoxFit.cover),
                       )
-                    : Icon(Icons.group, size: 32, color: Color(0xFF9D7FE8)),
+                    : _groupAvatar != null
+                        ? ClipOval(
+                            child: Image.network(_groupAvatar!, fit: BoxFit.cover),
+                          )
+                        : Icon(Icons.group, size: 32, color: colorScheme.primary),
               ),
             ),
           ),
           SizedBox(height: 8),
           Center(
             child: TextButton(
-              onPressed: () {
-                // TODO: Implementar selección de foto
-              },
+              onPressed: _pickGroupImage,
               child: Text(
-                'Agregar foto del grupo',
-                style: TextStyle(color: Color(0xFF9D7FE8)),
+                _groupImageFile != null
+                    ? 'Cambiar foto del grupo'
+                    : 'Agregar foto del grupo',
+                style: TextStyle(color: colorScheme.primary),
               ),
             ),
           ),
@@ -441,16 +516,17 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
           // Nombre del grupo
           TextField(
             controller: _groupNameController,
+            style: TextStyle(color: colorScheme.onSurface),
             decoration: InputDecoration(
               labelText: 'Nombre del grupo *',
               hintText: 'Ej: Grupo de estudio',
-              prefixIcon: Icon(Icons.group, color: Color(0xFF9D7FE8)),
+              prefixIcon: Icon(Icons.group, color: colorScheme.primary),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: Color(0xFF9D7FE8)),
+                borderSide: BorderSide(color: colorScheme.primary),
               ),
             ),
             onChanged: (value) => _clearError(),
@@ -461,16 +537,17 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
           TextField(
             controller: _groupDescriptionController,
             maxLines: 3,
+            style: TextStyle(color: colorScheme.onSurface),
             decoration: InputDecoration(
               labelText: 'Descripción (opcional)',
               hintText: 'Describe de qué se trata el grupo...',
-              prefixIcon: Icon(Icons.description, color: Color(0xFF9D7FE8)),
+              prefixIcon: Icon(Icons.description, color: colorScheme.primary),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: Color(0xFF9D7FE8)),
+                borderSide: BorderSide(color: colorScheme.primary),
               ),
             ),
             onChanged: (value) => _clearError(),
@@ -486,6 +563,8 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
   }
 
   Widget _buildMembersStep() {
+    final colorScheme = Theme.of(context).colorScheme;
+
     return Padding(
       padding: EdgeInsets.all(20),
       child: Column(
@@ -496,25 +575,34 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.bold,
-              color: Color(0xFF2D3142),
+              color: colorScheme.onSurface,
             ),
           ),
           SizedBox(height: 8),
           Container(
             padding: EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: Colors.blue.withOpacity(0.1),
+              color: colorScheme.primaryContainer.withValues(alpha: 0.5),
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.blue.withOpacity(0.3)),
+              border: Border.all(
+                color: colorScheme.primary.withValues(alpha: 0.3),
+              ),
             ),
             child: Row(
               children: [
-                Icon(Icons.info_outline, color: Colors.blue, size: 20),
+                Icon(
+                  Icons.info_outline,
+                  color: colorScheme.primary,
+                  size: 20,
+                ),
                 SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     'Solo puedes agregar contactos con aprobación bidireccional (ambos padres aprobaron el contacto). Si faltan permisos, se enviarán solicitudes automáticamente.',
-                    style: TextStyle(color: Colors.blue[700], fontSize: 12),
+                    style: TextStyle(
+                      color: colorScheme.onPrimaryContainer,
+                      fontSize: 12,
+                    ),
                   ),
                 ),
               ],
@@ -527,17 +615,17 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
             Container(
               padding: EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: Color(0xFF9D7FE8).withOpacity(0.1),
+                color: colorScheme.primaryContainer,
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Row(
                 children: [
-                  Icon(Icons.people, color: Color(0xFF9D7FE8), size: 20),
+                  Icon(Icons.people, color: colorScheme.primary, size: 20),
                   SizedBox(width: 8),
                   Text(
                     '${_selectedContacts.length} ${_selectedContacts.length == 1 ? 'miembro seleccionado' : 'miembros seleccionados'}',
                     style: TextStyle(
-                      color: Color(0xFF9D7FE8),
+                      color: colorScheme.primary,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -572,13 +660,22 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
   }
 
   Widget _buildContactItem(ContactInfo contact, bool isSelected) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
     return Container(
       margin: EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
-        color: isSelected ? Color(0xFF9D7FE8).withOpacity(0.1) : Colors.white,
+        color: isSelected
+            ? colorScheme.primaryContainer
+            : (isDarkMode
+                ? colorScheme.surfaceContainerHighest
+                : colorScheme.surface),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: isSelected ? Color(0xFF9D7FE8) : Colors.grey[300]!,
+          color: isSelected
+              ? colorScheme.primary
+              : colorScheme.outlineVariant,
           width: isSelected ? 2 : 1,
         ),
       ),
@@ -587,7 +684,7 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
           children: [
             CircleAvatar(
               radius: 24,
-              backgroundColor: Color(0xFF9D7FE8).withOpacity(0.2),
+              backgroundColor: colorScheme.primaryContainer,
               backgroundImage:
                   contact.avatar != null && contact.avatar!.isNotEmpty
                   ? NetworkImage(contact.avatar!)
@@ -600,7 +697,7 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
-                        color: Color(0xFF9D7FE8),
+                        color: colorScheme.primary,
                       ),
                     )
                   : null,
@@ -615,7 +712,10 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
                   decoration: BoxDecoration(
                     color: Colors.green,
                     shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white, width: 2),
+                    border: Border.all(
+                      color: colorScheme.surface,
+                      width: 2,
+                    ),
                   ),
                 ),
               ),
@@ -626,18 +726,21 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
           style: TextStyle(
             fontSize: 16,
             fontWeight: FontWeight.w600,
-            color: Color(0xFF2D3142),
+            color: colorScheme.onSurface,
           ),
         ),
         subtitle: Text(
           contact.email,
-          style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+          style: TextStyle(
+            fontSize: 14,
+            color: colorScheme.onSurfaceVariant,
+          ),
         ),
         trailing: AnimatedContainer(
           duration: Duration(milliseconds: 200),
           child: Icon(
             isSelected ? Icons.check_circle : Icons.radio_button_unchecked,
-            color: isSelected ? Color(0xFF9D7FE8) : Colors.grey[400],
+            color: isSelected ? colorScheme.primary : colorScheme.outlineVariant,
             size: 24,
           ),
         ),
@@ -656,17 +759,23 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
   }
 
   Widget _buildEmptyContactsState() {
+    final colorScheme = Theme.of(context).colorScheme;
+
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.people_outline, size: 64, color: Colors.grey[300]),
+          Icon(
+            Icons.people_outline,
+            size: 64,
+            color: colorScheme.outlineVariant,
+          ),
           SizedBox(height: 16),
           Text(
             'No tienes contactos con aprobación bidireccional',
             style: TextStyle(
               fontSize: 16,
-              color: Colors.grey[600],
+              color: colorScheme.onSurfaceVariant,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -674,7 +783,10 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
           Text(
             'Para crear grupos necesitas contactos donde ambos padres se han aprobado mutuamente',
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 14, color: Colors.grey[500]),
+            style: TextStyle(
+              fontSize: 14,
+              color: colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
+            ),
           ),
         ],
       ),
@@ -683,6 +795,8 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
 
   Widget _buildResultStep() {
     if (_creationResult == null) return SizedBox();
+
+    final colorScheme = Theme.of(context).colorScheme;
 
     return Padding(
       padding: EdgeInsets.all(20),
@@ -695,8 +809,8 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
             padding: EdgeInsets.all(20),
             decoration: BoxDecoration(
               color: _creationResult!.isSuccess
-                  ? Colors.green.withOpacity(0.1)
-                  : Colors.orange.withOpacity(0.1),
+                  ? Colors.green.withValues(alpha: 0.15)
+                  : Colors.orange.withValues(alpha: 0.15),
               shape: BoxShape.circle,
             ),
             child: Icon(
@@ -716,7 +830,7 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
             style: TextStyle(
               fontSize: 24,
               fontWeight: FontWeight.bold,
-              color: Color(0xFF2D3142),
+              color: colorScheme.onSurface,
             ),
             textAlign: TextAlign.center,
           ),
@@ -728,7 +842,10 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
             _creationResult!.isSuccess
                 ? 'Tu grupo "${_groupNameController.text}" está listo y todos los miembros pueden chatear.'
                 : 'Tu grupo "${_groupNameController.text}" se creó, pero algunos miembros están pendientes de aprobación.',
-            style: TextStyle(fontSize: 16, color: Colors.grey[600]),
+            style: TextStyle(
+              fontSize: 16,
+              color: colorScheme.onSurfaceVariant,
+            ),
             textAlign: TextAlign.center,
           ),
 
@@ -749,7 +866,7 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
                 widget.onGroupCreated?.call();
               },
               style: ElevatedButton.styleFrom(
-                backgroundColor: Color(0xFF9D7FE8),
+                backgroundColor: colorScheme.primary,
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
@@ -767,12 +884,16 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
   }
 
   Widget _buildPartialSuccessDetails() {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
     return Container(
       padding: EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.orange.withOpacity(0.1),
+        color: Colors.orange.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.orange.withOpacity(0.3)),
+        border: Border.all(
+          color: Colors.orange.withValues(alpha: 0.3),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -786,7 +907,7 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
-                  color: Colors.orange[800],
+                  color: isDarkMode ? Colors.orange.shade200 : Colors.orange.shade800,
                 ),
               ),
             ],
@@ -794,12 +915,17 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
           SizedBox(height: 12),
           Text(
             '${_creationResult!.pendingCount} ${_creationResult!.pendingCount == 1 ? 'miembro está' : 'miembros están'} pendientes porque faltan permisos de chat.',
-            style: TextStyle(color: Colors.orange[700]),
+            style: TextStyle(
+              color: isDarkMode ? Colors.orange.shade200 : Colors.orange.shade700,
+            ),
           ),
           SizedBox(height: 8),
           Text(
             'Se enviaron notificaciones automáticas a los padres. Los miembros se agregarán automáticamente cuando se aprueben todos los permisos.',
-            style: TextStyle(color: Colors.orange[700], fontSize: 14),
+            style: TextStyle(
+              color: isDarkMode ? Colors.orange.shade200 : Colors.orange.shade700,
+              fontSize: 14,
+            ),
           ),
         ],
       ),
@@ -807,12 +933,14 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
   }
 
   Widget _buildErrorMessage() {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
     return Container(
       padding: EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.red.withOpacity(0.1),
+        color: Colors.red.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.red.withOpacity(0.3)),
+        border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
       ),
       child: Row(
         children: [
@@ -821,7 +949,10 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
           Expanded(
             child: Text(
               _errorMessage!,
-              style: TextStyle(color: Colors.red[700], fontSize: 14),
+              style: TextStyle(
+                color: isDarkMode ? Colors.red.shade300 : Colors.red.shade700,
+                fontSize: 14,
+              ),
             ),
           ),
         ],
@@ -832,13 +963,16 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
   Widget _buildActionButtons() {
     if (_currentStep == 2) return SizedBox(); // No mostrar botones en resultado
 
+    final colorScheme = Theme.of(context).colorScheme;
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
     return Container(
       padding: EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: isDarkMode ? colorScheme.surface : Colors.white,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 10,
             offset: Offset(0, -5),
           ),
@@ -851,7 +985,7 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
               child: OutlinedButton(
                 onPressed: _isLoading ? null : _previousStep,
                 style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: Color(0xFF9D7FE8)),
+                  side: BorderSide(color: colorScheme.primary),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
@@ -859,7 +993,7 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
                 ),
                 child: Text(
                   'Anterior',
-                  style: TextStyle(color: Color(0xFF9D7FE8)),
+                  style: TextStyle(color: colorScheme.primary),
                 ),
               ),
             ),
@@ -873,7 +1007,7 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
                   ? null
                   : (_currentStep == 1 ? _createGroup : _nextStep),
               style: ElevatedButton.styleFrom(
-                backgroundColor: Color(0xFF9D7FE8),
+                backgroundColor: colorScheme.primary,
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),

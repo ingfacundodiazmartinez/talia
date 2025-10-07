@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import 'dart:async';
+import 'package:firebase_app_check/firebase_app_check.dart';
 import '../services/phone_verification_service.dart';
 
 class PhoneVerificationWidget extends StatefulWidget {
@@ -326,33 +328,48 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
   }
 
   Widget _buildHeader() {
-    return Column(
+    return Stack(
       children: [
-        Container(
-          padding: EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Color(0xFF9D7FE8).withOpacity(0.1),
-            shape: BoxShape.circle,
+        Column(
+          children: [
+            Container(
+              padding: EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Color(0xFF9D7FE8).withOpacity(0.1),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(Icons.phone_android, size: 32, color: Color(0xFF9D7FE8)),
+            ),
+            SizedBox(height: 16),
+            Text(
+              _currentStep == 0 ? 'Verificar Teléfono' : 'Código de Verificación',
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF2D3142),
+              ),
+            ),
+            SizedBox(height: 8),
+            Text(
+              _currentStep == 0
+                  ? 'Ingresa tu número de teléfono para recibir un código de verificación'
+                  : 'Ingresa el código de 6 dígitos que enviamos a $_selectedCountryCode ${_phoneController.text}',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+            ),
+          ],
+        ),
+        // Mostrar icono de ayuda solo en modo no-producción
+        if (!kReleaseMode)
+          Positioned(
+            top: 0,
+            right: 0,
+            child: IconButton(
+              icon: Icon(Icons.help_outline, size: 20, color: Colors.grey[600]),
+              onPressed: _showDebugTokenDialog,
+              tooltip: 'Ver Debug Token',
+            ),
           ),
-          child: Icon(Icons.phone_android, size: 32, color: Color(0xFF9D7FE8)),
-        ),
-        SizedBox(height: 16),
-        Text(
-          _currentStep == 0 ? 'Verificar Teléfono' : 'Código de Verificación',
-          style: TextStyle(
-            fontSize: 24,
-            fontWeight: FontWeight.bold,
-            color: Color(0xFF2D3142),
-          ),
-        ),
-        SizedBox(height: 8),
-        Text(
-          _currentStep == 0
-              ? 'Ingresa tu número de teléfono para recibir un código de verificación'
-              : 'Ingresa el código de 6 dígitos que enviamos a $_selectedCountryCode ${_phoneController.text}',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-        ),
       ],
     );
   }
@@ -619,6 +636,128 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
           ),
         ),
       ],
+    );
+  }
+
+  Future<void> _showDebugTokenDialog() async {
+    try {
+      // Mostrar diálogo de carga
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+
+      // Obtener el token de App Check
+      final token = await FirebaseAppCheck.instance.getToken();
+
+      // Cerrar diálogo de carga
+      Navigator.of(context).pop();
+
+      // Mostrar el token
+      if (token != null) {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Row(
+              children: [
+                Icon(Icons.info_outline, color: Color(0xFF9D7FE8)),
+                SizedBox(width: 8),
+                Text('Debug Token'),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Token de App Check para desarrollo:',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey[700],
+                  ),
+                ),
+                SizedBox(height: 12),
+                Container(
+                  padding: EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[100],
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.grey[300]!),
+                  ),
+                  child: SelectableText(
+                    token,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                      color: Colors.black87,
+                    ),
+                  ),
+                ),
+                SizedBox(height: 12),
+                Text(
+                  'Registra este token en Firebase Console:',
+                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  'App Check > Apps > com.talia.chat > Manage debug tokens',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.grey[500],
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: token));
+                  Navigator.of(context).pop();
+                  _showSuccessMessage('Token copiado al portapapeles');
+                },
+                child: Text('Copiar'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text('Cerrar'),
+              ),
+            ],
+          ),
+        );
+      } else {
+        _showErrorDialog('No se pudo obtener el token de App Check');
+      }
+    } catch (e) {
+      // Cerrar diálogo de carga si está abierto
+      Navigator.of(context).pop();
+      _showErrorDialog('Error obteniendo token: $e');
+    }
+  }
+
+  void _showErrorDialog(String message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.error_outline, color: Colors.red),
+            SizedBox(width: 8),
+            Text('Error'),
+          ],
+        ),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text('Cerrar'),
+          ),
+        ],
+      ),
     );
   }
 

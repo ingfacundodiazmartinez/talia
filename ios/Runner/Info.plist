@@ -37,7 +37,15 @@
 			<string>Editor</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>app-1-880854934139-ios-6d175832a52490280fb8de</string>
+				<string>app-1-858375352661-ios-cfdb7fe8506f903361bfdc</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.858375352661-0morutqllasdk8bu6ij06t7n3q412gbq</string>
 			</array>
 		</dict>
 	</array>

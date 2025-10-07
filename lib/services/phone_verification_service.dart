@@ -78,10 +78,10 @@ class PhoneVerificationService {
 
       // Configurar Firebase Auth para dispositivos reales
       print('🔧 Configurando Firebase Auth para dispositivos físicos');
-      // Siempre deshabilitar verificación de app durante desarrollo para evitar reCAPTCHA
-      _auth.setSettings(appVerificationDisabledForTesting: true);
+      // NOTA: appVerificationDisabledForTesting NO funciona en dispositivos físicos reales
+      // Debes configurar Play Integrity en Firebase Console o deshabilitar enforcement
       print(
-        '📱 Verificación de app deshabilitada para evitar problemas con reCAPTCHA',
+        '📱 Para dispositivos reales: Configura Play Integrity o desactiva enforcement en Firebase Console',
       );
 
       await _auth.verifyPhoneNumber(
@@ -105,6 +105,16 @@ class PhoneVerificationService {
         },
         verificationFailed: (FirebaseAuthException e) {
           print('❌ Error en verificación: ${e.code} - ${e.message}');
+          print('❌ Error details: ${e.toString()}');
+          print('❌ Error stackTrace: ${e.stackTrace}');
+          if (e.code == 'internal-error') {
+            print('❌ INTERNAL ERROR - Detalles completos:');
+            print('   - code: ${e.code}');
+            print('   - message: ${e.message}');
+            print('   - plugin: ${e.plugin}');
+            print('   - email: ${e.email}');
+            print('   - credential: ${e.credential}');
+          }
           onError?.call(_getErrorMessage(e));
 
           if (!completer.isCompleted) {

@@ -166,14 +166,15 @@ class ChatPermissionService {
     required String contactId,
   }) async {
     try {
-      // Buscar en whitelist si el padre del niño (childId) ha aprobado el contacto (contactId)
-      final whitelistQuery = await _firestore
-          .collection('whitelist')
-          .where('childId', isEqualTo: childId)
+      // Buscar contact_request para el usuario (childId) y verificar si está approved
+      final contactRequestQuery = await _firestore
+          .collection('contact_requests')
+          .where('userId', isEqualTo: childId)
           .where('contactId', isEqualTo: contactId)
+          .where('status', isEqualTo: 'approved')
           .get();
 
-      return whitelistQuery.docs.isNotEmpty;
+      return contactRequestQuery.docs.isNotEmpty;
     } catch (e) {
       print('❌ Error verificando aprobación del padre: $e');
       return false;
@@ -300,10 +301,11 @@ class ChatPermissionService {
       final linkedParents = await userRoleService.getLinkedParents(userId);
       validContacts.addAll(linkedParents);
 
-      // 3. Obtener contactos adulto-adulto de la colección contacts
+      // 3. Obtener contactos aprobados de la colección contacts
       final contactsQuery = await _firestore
           .collection('contacts')
           .where('users', arrayContains: userId)
+          .where('status', isEqualTo: 'approved')
           .get();
 
       for (final doc in contactsQuery.docs) {
@@ -318,26 +320,6 @@ class ChatPermissionService {
         }
       }
 
-      // 4. Obtener contactos niño-niño con aprobación bidireccional de whitelist
-      final userApprovedQuery = await _firestore
-          .collection('whitelist')
-          .where('childId', isEqualTo: userId)
-          .get();
-
-      for (final doc in userApprovedQuery.docs) {
-        final contactId = doc.data()['contactId'] as String;
-
-        // Verificar si el contacto también tiene aprobado a este usuario (bidireccional)
-        final reverseApproval = await _hasParentApproval(
-          childId: contactId,
-          contactId: userId,
-        );
-
-        if (reverseApproval) {
-          validContacts.add(contactId);
-        }
-      }
-
       print('✅ Usuario $userId tiene ${validContacts.length} contactos válidos para grupos');
       return validContacts.toList();
     } catch (e) {
@@ -348,28 +330,29 @@ class ChatPermissionService {
 
   /// Stream de contactos aprobados bidireccionales
   Stream<List<String>> watchBidirectionallyApprovedContacts(String userId) {
-    return _firestore
-        .collection('whitelist')
-        .where('childId', isEqualTo: userId)
-        .snapshots()
-        .asyncMap((snapshot) async {
-      final bidirectionalContacts = <String>[];
+    // Combinar cambios de contacts aprobados
+    return Stream.periodic(Duration(seconds: 2)).asyncMap((_) async {
+      final bidirectionalContacts = <String>{};
 
-      for (final doc in snapshot.docs) {
-        final contactId = doc.data()['contactId'] as String;
+      // Obtener todos los contacts aprobados donde el usuario participa
+      final contactsSnapshot = await _firestore
+          .collection('contacts')
+          .where('users', arrayContains: userId)
+          .where('status', isEqualTo: 'approved')
+          .get();
 
-        // Verificar aprobación inversa
-        final reverseApproval = await _hasParentApproval(
-          childId: contactId,
-          contactId: userId,
-        );
-
-        if (reverseApproval) {
-          bidirectionalContacts.add(contactId);
+      for (final doc in contactsSnapshot.docs) {
+        final data = doc.data();
+        final users = List<String>.from(data['users'] ?? []);
+        // Agregar el otro usuario
+        for (final otherUserId in users) {
+          if (otherUserId != userId) {
+            bidirectionalContacts.add(otherUserId);
+          }
         }
       }
 
-      return bidirectionalContacts;
+      return bidirectionalContacts.toList();
     });
   }
 

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'services/phone_verification_service.dart';
 import 'widgets/phone_verification_widget.dart';
-import 'profile_completion_screen.dart';
+import 'screens/common/profile_completion_screen.dart';
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key});
@@ -54,13 +54,26 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
     return Scaffold(
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: [Color(0xFF9D7FE8), Color(0xFFB39DDB), Color(0xFFCE93D8)],
+            colors: isDarkMode
+                ? [
+                    colorScheme.primary.withValues(alpha: 0.3),
+                    colorScheme.primary.withValues(alpha: 0.2),
+                    colorScheme.secondary.withValues(alpha: 0.2),
+                  ]
+                : [
+                    Color(0xFF9D7FE8),
+                    Color(0xFFB39DDB),
+                    Color(0xFFCE93D8),
+                  ],
           ),
         ),
         child: SafeArea(
@@ -72,40 +85,11 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    // Icon
-                    Container(
-                      height: 120,
-                      width: 120,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Colors.white.withOpacity(0.2),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.1),
-                            blurRadius: 20,
-                            offset: Offset(0, 10),
-                          ),
-                        ],
-                      ),
-                      child: Center(
-                        child: Icon(
-                          Icons.chat_bubble_outline,
-                          size: 60,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ),
-
-                    SizedBox(height: 32),
-
-                    // Title
-                    Text(
-                      'SmartConvo',
-                      style: TextStyle(
-                        fontSize: 32,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
+                    // Logo
+                    Image.asset(
+                      'assets/images/logo.png',
+                      height: 80,
+                      fit: BoxFit.contain,
                     ),
 
                     SizedBox(height: 8),
@@ -114,7 +98,9 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
                       'Verificación con SMS',
                       style: TextStyle(
                         fontSize: 16,
-                        color: Colors.white.withOpacity(0.9),
+                        color: isDarkMode
+                            ? colorScheme.onSurface.withValues(alpha: 0.9)
+                            : Colors.white.withValues(alpha: 0.9),
                       ),
                       textAlign: TextAlign.center,
                     ),
@@ -125,11 +111,11 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
                     Container(
                       padding: EdgeInsets.all(24),
                       decoration: BoxDecoration(
-                        color: Colors.white,
+                        color: colorScheme.surface,
                         borderRadius: BorderRadius.circular(24),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withOpacity(0.1),
+                            color: Colors.black.withValues(alpha: 0.1),
                             blurRadius: 30,
                             offset: Offset(0, 10),
                           ),

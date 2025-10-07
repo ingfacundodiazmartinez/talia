@@ -137,6 +137,7 @@ class LocationService {
       final user = _auth.currentUser;
       if (user == null) return;
 
+      // SIEMPRE guardar la última ubicación (se reemplaza automáticamente)
       await _firestore.collection('user_locations').doc(user.uid).set({
         'userId': user.uid,
         'latitude': position.latitude,
@@ -149,17 +150,34 @@ class LocationService {
         'lastUpdate': DateTime.now().toIso8601String(),
       }, SetOptions(merge: true));
 
-      // Guardar en historial
-      await _firestore.collection('location_history').add({
-        'userId': user.uid,
-        'latitude': position.latitude,
-        'longitude': position.longitude,
-        'accuracy': position.accuracy,
-        'timestamp': FieldValue.serverTimestamp(),
-        'date': DateTime.now().toIso8601String(),
-      });
+      print('💾 Última ubicación guardada en Firestore');
 
-      print('💾 Ubicación guardada en Firestore');
+      // Solo guardar historial si hay una emergencia ACTIVA
+      final activeEmergency = await _firestore
+          .collection('emergencies')
+          .where('childId', isEqualTo: user.uid)
+          .where('resolved', isEqualTo: false)
+          .limit(1)
+          .get();
+
+      if (activeEmergency.docs.isNotEmpty) {
+        final emergencyId = activeEmergency.docs.first.id;
+
+        // Guardar en la subcolección de tracking de la emergencia
+        await _firestore
+            .collection('emergencies')
+            .doc(emergencyId)
+            .collection('location_tracking')
+            .add({
+          'latitude': position.latitude,
+          'longitude': position.longitude,
+          'accuracy': position.accuracy,
+          'timestamp': FieldValue.serverTimestamp(),
+          'date': DateTime.now().toIso8601String(),
+        });
+
+        print('🆘 Ubicación de emergencia guardada en tracking');
+      }
     } catch (e) {
       print('❌ Error guardando ubicación: $e');
     }
@@ -170,17 +188,14 @@ class LocationService {
     return _firestore.collection('user_locations').doc(userId).snapshots();
   }
 
-  // Obtener historial de ubicaciones
-  Future<List<Map<String, dynamic>>> getLocationHistory(String userId, {int days = 1}) async {
+  // Obtener historial de ubicaciones de emergencia
+  Future<List<Map<String, dynamic>>> getEmergencyLocationTracking(String emergencyId) async {
     try {
-      final startDate = DateTime.now().subtract(Duration(days: days));
-
       final query = await _firestore
-          .collection('location_history')
-          .where('userId', isEqualTo: userId)
-          .where('timestamp', isGreaterThan: Timestamp.fromDate(startDate))
+          .collection('emergencies')
+          .doc(emergencyId)
+          .collection('location_tracking')
           .orderBy('timestamp', descending: true)
-          .limit(100)
           .get();
 
       return query.docs.map((doc) {
