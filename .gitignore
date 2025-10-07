@@ -61,3 +61,7 @@ android/build/reports/
 *.log
 *.tmp
 *.bak
+
+# Old/backup directories
+v2-files/
+*.old.*
