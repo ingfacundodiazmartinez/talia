@@ -1,0 +1,169 @@
+name: Multi-Device Tests
+
+on:
+  push:
+    branches: [ master, main, develop ]
+  pull_request:
+    branches: [ master, main, develop ]
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  android-emulator-tests:
+    name: Android Tests (API ${{ matrix.api-level }})
+    runs-on: macos-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        api-level: [24, 28, 33] # Android 7.0, 9.0, 13.0
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.0'
+          channel: 'stable'
+          cache: true
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Run Android Emulator Tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          arch: x86_64
+          profile: Pixel 4
+          disable-animations: true
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          script: |
+            flutter test integration_test/responsive_test.dart --verbose
+            flutter test integration_test/ --verbose
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-api${{ matrix.api-level }}-test-results
+          path: |
+            build/test_results/
+            build/screenshots/
+
+  ios-simulator-tests:
+    name: iOS Tests (${{ matrix.device }})
+    runs-on: macos-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        device:
+          - 'iPhone SE (3rd generation)'
+          - 'iPhone 14 Pro'
+          - 'iPhone 14 Pro Max'
+        include:
+          - device: 'iPhone SE (3rd generation)'
+            os: '17.2'
+          - device: 'iPhone 14 Pro'
+            os: '17.2'
+          - device: 'iPhone 14 Pro Max'
+            os: '17.2'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.0'
+          channel: 'stable'
+          cache: true
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: List available simulators
+        run: xcrun simctl list devices available
+
+      - name: Start iOS Simulator
+        run: |
+          DEVICE_ID=$(xcrun simctl list devices available | grep "${{ matrix.device }}" | grep "${{ matrix.os }}" | head -1 | sed 's/.*(\([^)]*\)).*/\1/')
+          echo "Starting simulator: $DEVICE_ID"
+          xcrun simctl boot "$DEVICE_ID"
+          xcrun simctl bootstatus "$DEVICE_ID"
+
+      - name: Run iOS Integration Tests
+        run: |
+          flutter test integration_test/responsive_test.dart -d "iPhone" --verbose
+          flutter test integration_test/ -d "iPhone" --verbose
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-${{ matrix.device }}-test-results
+          path: |
+            build/test_results/
+            build/screenshots/
+
+  responsive-screenshot-tests:
+    name: Visual Regression Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.0'
+          channel: 'stable'
+          cache: true
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Run responsive tests (web)
+        run: |
+          flutter test integration_test/responsive_test.dart -d chrome --web-renderer html
+
+  report:
+    name: Test Report
+    needs: [android-emulator-tests, ios-simulator-tests, responsive-screenshot-tests]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: test-results
+
+      - name: Create test summary
+        run: |
+          echo "# Multi-Device Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "- Android Tests: ${{ needs.android-emulator-tests.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- iOS Tests: ${{ needs.ios-simulator-tests.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Visual Tests: ${{ needs.responsive-screenshot-tests.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.android-emulator-tests.result }}" == "success" ] && \
+             [ "${{ needs.ios-simulator-tests.result }}" == "success" ] && \
+             [ "${{ needs.responsive-screenshot-tests.result }}" == "success" ]; then
+            echo "✅ All tests passed!" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Some tests failed. Check artifacts for details." >> $GITHUB_STEP_SUMMARY
+          fi
