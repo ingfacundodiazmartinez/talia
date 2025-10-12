@@ -381,6 +381,22 @@ const RATE_LIMITS = {
     maxRequests: 10,
     windowMs: 60 * 60 * 1000, // 10 reportes por hora
   },
+  sendMessage: {
+    maxRequests: 100,
+    windowMs: 60 * 1000, // 100 mensajes por minuto
+  },
+  blockContact: {
+    maxRequests: 10,
+    windowMs: 60 * 60 * 1000, // 10 bloqueos por hora
+  },
+  unblockContact: {
+    maxRequests: 10,
+    windowMs: 60 * 60 * 1000, // 10 desbloqueos por hora
+  },
+  createEmergency: {
+    maxRequests: 5,
+    windowMs: 60 * 60 * 1000, // 5 emergencias por hora
+  },
 };
 
 // Función que escucha cuando se crea una notificación en Firestore
@@ -3933,6 +3949,22 @@ exports.blockChat = onCall(async (request) => {
     );
   }
 
+  // ✅ RATE LIMITING: Verificar límite de bloqueos
+  const rateLimitCheck = await checkRateLimit(
+      request.auth.uid,
+      "blockContact",
+      RATE_LIMITS.blockContact
+  );
+  if (!rateLimitCheck.allowed) {
+    console.warn(
+        `🚫 Rate limit excedido para ${request.auth.uid} - Reintentar en ${rateLimitCheck.retryAfter}s`
+    );
+    throw new HttpsError(
+        "resource-exhausted",
+        `Demasiados bloqueos. Intenta nuevamente en ${rateLimitCheck.retryAfter} segundos.`
+    );
+  }
+
   try {
     console.log(`🔒 Bloqueando chat entre ${childId} y ${contactId}`);
 
@@ -4007,6 +4039,22 @@ exports.unblockChat = onCall(async (request) => {
     );
   }
 
+  // ✅ RATE LIMITING: Verificar límite de desbloqueos
+  const rateLimitCheck = await checkRateLimit(
+      request.auth.uid,
+      "unblockContact",
+      RATE_LIMITS.unblockContact
+  );
+  if (!rateLimitCheck.allowed) {
+    console.warn(
+        `🚫 Rate limit excedido para ${request.auth.uid} - Reintentar en ${rateLimitCheck.retryAfter}s`
+    );
+    throw new HttpsError(
+        "resource-exhausted",
+        `Demasiados desbloqueos. Intenta nuevamente en ${rateLimitCheck.retryAfter} segundos.`
+    );
+  }
+
   try {
     console.log(`🔓 Desbloqueando chat entre ${childId} y ${contactId}`);
 
@@ -4075,8 +4123,53 @@ exports.incrementUnreadCount = onDocumentCreated(
       try {
         const messageData = event.data.data();
         const chatId = event.params.chatId;
+        const messageId = event.params.messageId;
 
         console.log(`📨 Nuevo mensaje en chat ${chatId}`);
+
+        const senderId = messageData.senderId;
+
+        // ✅ RATE LIMITING: Verificar límite de mensajes
+        const rateLimitCheck = await checkRateLimit(
+            senderId,
+            "sendMessage",
+            RATE_LIMITS.sendMessage
+        );
+
+        if (!rateLimitCheck.allowed) {
+          console.warn(
+              `🚫 Rate limit excedido para ${senderId} - ${RATE_LIMITS.sendMessage.maxRequests} mensajes por minuto`
+          );
+
+          // Eliminar el mensaje que excede el límite
+          try {
+            await event.data.ref.delete();
+            console.log(`🗑️ Mensaje ${messageId} eliminado por spam`);
+          } catch (deleteError) {
+            console.error(`❌ Error eliminando mensaje de spam:`, deleteError);
+          }
+
+          // Notificar al usuario sobre el límite
+          try {
+            await getFirestore().collection("notifications").add({
+              userId: senderId,
+              type: "rate_limit_exceeded",
+              title: "⚠️ Límite de mensajes excedido",
+              body: `Has enviado demasiados mensajes. Espera ${rateLimitCheck.retryAfter} segundos antes de enviar más.`,
+              priority: "normal",
+              read: false,
+              createdAt: new Date(),
+              data: {
+                retryAfter: rateLimitCheck.retryAfter,
+                limit: RATE_LIMITS.sendMessage.maxRequests,
+              },
+            });
+          } catch (notifError) {
+            console.error(`❌ Error enviando notificación:`, notifError);
+          }
+
+          return null;
+        }
 
         // Obtener información del chat para saber quién es el receptor
         const chatRef = getFirestore().collection("chats").doc(chatId);
@@ -4089,7 +4182,6 @@ exports.incrementUnreadCount = onDocumentCreated(
 
         const chatData = chatDoc.data();
         const participants = chatData.participants || [];
-        const senderId = messageData.senderId;
 
         // El receptor es el participante que NO es el sender
         const receiverId = participants.find((id) => id !== senderId);
@@ -4155,6 +4247,149 @@ exports.markChatAsRead = onCall(
       } catch (error) {
         console.error("❌ Error marcando chat como leído:", error);
         throw new HttpsError("internal", `Error: ${error.message}`);
+      }
+    },
+);
+
+// ═══════════════════════════════════════════════════════════════
+// EMERGENCIAS - Creación segura con rate limiting
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Crear emergencia de forma segura con rate limiting
+ * Reemplaza la creación directa desde el cliente
+ */
+exports.createEmergency = onCall(
+    {region: "us-central1"},
+    async (request) => {
+      const db = getFirestore();
+      const userId = request.auth?.uid;
+
+      // Validar autenticación
+      if (!userId) {
+        throw new HttpsError("unauthenticated", "Usuario no autenticado");
+      }
+
+      const {customMessage, location} = request.data;
+
+      // ✅ RATE LIMITING: Verificar límite de emergencias
+      const rateLimitCheck = await checkRateLimit(
+          userId,
+          "createEmergency",
+          RATE_LIMITS.createEmergency
+      );
+
+      if (!rateLimitCheck.allowed) {
+        console.warn(
+            `🚫 Rate limit excedido para ${userId} - Reintentar en ${rateLimitCheck.retryAfter}s`
+        );
+        throw new HttpsError(
+            "resource-exhausted",
+            `Demasiadas emergencias activadas. Intenta nuevamente en ${rateLimitCheck.retryAfter} segundos.`
+        );
+      }
+
+      try {
+        console.log(`🆘 Creando emergencia para usuario ${userId}`);
+
+        // Validar longitud del mensaje personalizado
+        if (customMessage && customMessage.length > 500) {
+          throw new HttpsError(
+              "invalid-argument",
+              "El mensaje personalizado no puede exceder 500 caracteres"
+          );
+        }
+
+        // Obtener datos del niño
+        const childDoc = await db.collection("users").doc(userId).get();
+        if (!childDoc.exists) {
+          throw new HttpsError("not-found", "Usuario no encontrado");
+        }
+
+        const childData = childDoc.data();
+        const childName = childData.name || "Desconocido";
+
+        // Validar que el usuario sea un niño (tiene padres vinculados)
+        const parentLinks = await db
+            .collection("parent_child_links")
+            .where("childId", "==", userId)
+            .where("status", "==", "accepted")
+            .get();
+
+        if (parentLinks.empty) {
+          throw new HttpsError(
+              "failed-precondition",
+              "No tienes padres vinculados. La función de emergencia requiere padres aprobados."
+          );
+        }
+
+        console.log(`✅ Usuario tiene ${parentLinks.size} padres vinculados`);
+
+        // Crear registro de emergencia
+        const emergencyData = {
+          childId: userId,
+          childName: childName,
+          message: customMessage || `${childName} ha activado el botón de emergencia`,
+          timestamp: FieldValue.serverTimestamp(),
+          resolved: false,
+          createdAt: FieldValue.serverTimestamp(),
+        };
+
+        // Agregar ubicación si existe
+        if (location && location.latitude && location.longitude) {
+          emergencyData.location = {
+            latitude: location.latitude,
+            longitude: location.longitude,
+            accuracy: location.accuracy || null,
+            timestamp: location.timestamp || new Date().toIso8601String(),
+          };
+        }
+
+        const emergencyRef = await db.collection("emergencies").add(emergencyData);
+        console.log(`✅ Emergencia creada: ${emergencyRef.id}`);
+
+        // Notificar a todos los padres
+        const parentIds = parentLinks.docs.map((doc) => doc.data().parentId);
+        let notifiedCount = 0;
+
+        for (const parentId of parentIds) {
+          try {
+            await db.collection("notifications").add({
+              userId: parentId,
+              senderId: userId,
+              type: "emergency",
+              title: `🆘 EMERGENCIA - ${childName}`,
+              body: customMessage || `${childName} ha activado el botón de emergencia`,
+              priority: "high",
+              read: false,
+              createdAt: FieldValue.serverTimestamp(),
+              data: {
+                emergencyId: emergencyRef.id,
+                childId: userId,
+                childName: childName,
+                location: location || null,
+              },
+            });
+            notifiedCount++;
+          } catch (notifError) {
+            console.error(`❌ Error notificando a padre ${parentId}:`, notifError);
+          }
+        }
+
+        console.log(`✅ ${notifiedCount} padres notificados`);
+
+        return {
+          success: true,
+          emergencyId: emergencyRef.id,
+          message: "Emergencia creada y padres notificados",
+          notifiedParents: notifiedCount,
+        };
+      } catch (error) {
+        console.error("❌ Error creando emergencia:", error);
+        if (error instanceof HttpsError) {
+          throw error;
+        }
+        throw new HttpsError("internal", `Error creando emergencia: ${error.message}`);
       }
     },
 );

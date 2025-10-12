@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -14,6 +15,7 @@ class EmergencyService {
 
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FirebaseFunctions _functions = FirebaseFunctions.instance;
   final VideoCallService _videoCallService = VideoCallService();
 
   // Tiempo de cooldown entre emergencias (en minutos)
@@ -177,7 +179,7 @@ class EmergencyService {
     }
   }
 
-  // Crear registro de emergencia en Firebase
+  // Crear registro de emergencia usando Cloud Function segura con rate limiting
   Future<String?> _createEmergencyRecord({
     required String childId,
     required String childName,
@@ -185,35 +187,50 @@ class EmergencyService {
     String? customMessage,
   }) async {
     try {
-      final emergencyData = {
-        'childId': childId,
-        'childName': childName,
-        'timestamp': FieldValue.serverTimestamp(),
-        'dateTime': DateTime.now().toIso8601String(),
-        'status': 'active',
-        'message': customMessage ?? 'Emergencia activada',
-        'resolved': false,
-        'resolvedAt': null,
-        'resolvedBy': null,
-      };
+      print('🔐 Creando emergencia usando Cloud Function segura...');
 
-      // Agregar ubicación si está disponible
+      // Preparar datos de ubicación
+      Map<String, dynamic>? locationData;
       if (position != null) {
-        emergencyData.addAll({
-          'location': {
-            'latitude': position.latitude,
-            'longitude': position.longitude,
-            'accuracy': position.accuracy,
-            'timestamp': DateTime.now().toIso8601String(),
-          }
-        });
+        locationData = {
+          'latitude': position.latitude,
+          'longitude': position.longitude,
+          'accuracy': position.accuracy,
+          'timestamp': DateTime.now().toIso8601String(),
+        };
       }
 
-      final docRef = await _firestore.collection('emergencies').add(emergencyData);
-      print('✅ Registro de emergencia creado: ${docRef.id}');
-      return docRef.id;
+      // Llamar a Cloud Function con rate limiting integrado
+      final callable = _functions.httpsCallable('createEmergency');
+      final result = await callable.call({
+        'customMessage': customMessage,
+        'location': locationData,
+      });
+
+      final data = result.data as Map<String, dynamic>;
+
+      if (data['success'] == true) {
+        final emergencyId = data['emergencyId'] as String;
+        print('✅ Emergencia creada via Cloud Function: $emergencyId');
+        print('📧 ${data['notifiedParents']} padres notificados');
+        return emergencyId;
+      } else {
+        print('❌ Error: Cloud Function no retornó success');
+        return null;
+      }
+    } on FirebaseFunctionsException catch (e) {
+      print('❌ Error de Cloud Function: ${e.code} - ${e.message}');
+
+      // Mostrar mensaje específico según el error
+      if (e.code == 'resource-exhausted') {
+        print('⚠️ Rate limit excedido: ${e.message}');
+      } else if (e.code == 'failed-precondition') {
+        print('⚠️ Sin padres vinculados: ${e.message}');
+      }
+
+      return null;
     } catch (e) {
-      print('❌ Error creando registro de emergencia: $e');
+      print('❌ Error creando emergencia: $e');
       return null;
     }
   }
