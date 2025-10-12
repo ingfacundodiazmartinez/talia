@@ -34,6 +34,7 @@ import 'services/analytics_service.dart';
 import 'services/performance_service.dart';
 import 'services/snackbar_service.dart';
 import 'services/network_status_service.dart';
+import 'services/offline_queue_service.dart';
 import 'widgets/loading_overlay.dart';
 import 'dart:async';
 
@@ -119,6 +120,14 @@ void main() async {
     print('✅ Network Status Service inicializado');
   } catch (e) {
     print('⚠️ Error inicializando Network Status: $e (continuando...)');
+  }
+
+  // Inicializar Offline Queue Service
+  try {
+    await OfflineQueueService().initialize();
+    print('✅ Offline Queue Service inicializado');
+  } catch (e) {
+    print('⚠️ Error inicializando Offline Queue: $e (continuando...)');
   }
 
   // Activar Firebase App Check con Play Integrity para producción
