@@ -75,10 +75,15 @@ class ImageMessageContent extends StatelessWidget {
                           return CachedNetworkImage(
                             imageUrl: imageUrl!,
                             fit: BoxFit.cover,
+                            // Optimización de memoria: limitar tamaño en RAM
                             memCacheWidth: (MediaQuery.of(context).size.width *
                                     0.6 *
                                     MediaQuery.of(context).devicePixelRatio)
                                 .round(),
+                            memCacheHeight: (180 * MediaQuery.of(context).devicePixelRatio).round(),
+                            // Optimización de disco: limitar tamaño de caché
+                            maxWidthDiskCache: 800,
+                            maxHeightDiskCache: 800,
                             placeholder: (context, url) => Container(
                           width: MediaQuery.of(context).size.width * 0.6,
                           height: 180,
