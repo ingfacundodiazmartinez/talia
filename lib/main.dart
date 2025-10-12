@@ -30,6 +30,8 @@ import 'services/message_cache_service.dart';
 import 'services/device_session_service.dart';
 import 'services/online_status_service.dart';
 import 'services/voip_service.dart';
+import 'services/analytics_service.dart';
+import 'services/performance_service.dart';
 import 'dart:async';
 
 // IMPORTANTE: Después de ejecutar 'flutterfire configure',
@@ -91,6 +93,22 @@ void main() async {
   };
 
   print('✅ Crashlytics configurado');
+
+  // Inicializar Firebase Analytics
+  try {
+    await AnalyticsService().initialize();
+    print('✅ Analytics inicializado');
+  } catch (e) {
+    print('⚠️ Error inicializando Analytics: $e (continuando...)');
+  }
+
+  // Inicializar Firebase Performance Monitoring
+  try {
+    await PerformanceService().initialize();
+    print('✅ Performance Monitoring inicializado');
+  } catch (e) {
+    print('⚠️ Error inicializando Performance: $e (continuando...)');
+  }
 
   // Activar Firebase App Check con Play Integrity para producción
   if (kDebugMode) {

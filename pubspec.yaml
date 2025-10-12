@@ -40,7 +40,10 @@ dependencies:
   cloud_functions: ^5.2.2
   firebase_app_check: ^0.3.2+10
   firebase_crashlytics: ^4.1.6
+  firebase_analytics: ^11.4.0
+  firebase_performance: ^0.10.1+1
   firebase_remote_config: ^5.1.4
+  logger: ^2.5.0
   http: ^1.1.0
   flutter_local_notifications: ^19.4.2
   url_launcher: ^6.3.2
