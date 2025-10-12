@@ -368,12 +368,6 @@ class _DoNotDisturbSettingsScreenState
     final contacts = await _getApprovedContacts();
 
     if (contacts.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('No tienes contactos aprobados'),
-          backgroundColor: Colors.orange,
-        ),
-      );
       return;
     }
 
@@ -383,12 +377,6 @@ class _DoNotDisturbSettingsScreenState
         .toList();
 
     if (availableContacts.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Todos tus contactos ya están en excepciones'),
-          backgroundColor: Colors.orange,
-        ),
-      );
       return;
     }
 
@@ -521,14 +509,6 @@ class _DoNotDisturbSettingsScreenState
       _exceptions.add(contactId);
     });
     await _saveSettings();
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Excepción agregada'),
-        backgroundColor: Colors.green,
-        duration: Duration(seconds: 2),
-      ),
-    );
   }
 
   Future<void> _removeException(String contactId) async {
@@ -537,13 +517,7 @@ class _DoNotDisturbSettingsScreenState
     });
     await _saveSettings();
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Excepción eliminada'),
-        backgroundColor: Colors.orange,
-        duration: Duration(seconds: 2),
-      ),
-    );
+    // Excepción eliminada - sin mensaje
   }
 
   Future<void> _saveSettings() async {

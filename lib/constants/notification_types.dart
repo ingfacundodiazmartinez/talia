@@ -23,6 +23,7 @@ class NotificationTypes {
   static const String storyApprovalRequest = 'story_approval_request';
   static const String storyApproved = 'story_approved';
   static const String storyRejected = 'story_rejected';
+  static const String storyReply = 'story_reply';
 
   // Grupos
   static const String groupPermissionRequest = 'group_permission_request';
@@ -58,6 +59,7 @@ class NotificationTypes {
       case storyApprovalRequest:
       case storyApproved:
       case storyRejected:
+      case storyReply:
       case whitelistChange:
         return 'whitelistChangesEnabled';
 

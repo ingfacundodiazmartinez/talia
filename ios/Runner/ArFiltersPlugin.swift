@@ -511,12 +511,22 @@ import AVFoundation
             NSLog("🧹 Deteniendo CameraController...")
             print("🧹 Deteniendo CameraController...")
             controller.stopCamera()
-            // NO destruir el cameraController - mantenerlo para reutilizar
-            NSLog("✅ CameraController detenido (pero NO destruido)")
-            print("✅ CameraController detenido (pero NO destruido)")
+            cameraController = nil
+            NSLog("✅ CameraController detenido y limpiado")
+            print("✅ CameraController detenido y limpiado")
         } else {
             NSLog("ℹ️ No hay CameraController activo para detener")
             print("ℹ️ No hay CameraController activo para detener")
+        }
+
+        // CRÍTICO: Limpiar ARView para evitar frames congelados
+        if let arView = currentARView {
+            NSLog("🧹 Removiendo ARView del contenedor...")
+            print("🧹 Removiendo ARView del contenedor...")
+            arView.removeFromSuperview()
+            currentARView = nil
+            NSLog("✅ ARView limpiado")
+            print("✅ ARView limpiado")
         }
 
         result(nil)
@@ -559,22 +569,49 @@ import AVFoundation
     }
 
     private func cleanup() {
+        NSLog("🧹 Iniciando cleanup completo...")
+        print("🧹 Iniciando cleanup completo...")
+
         isInitialized = false
         isRecording = false
         currentFilter = nil
         eventSink = nil
 
-        // Limpiar recursos reales del SDK de DeepAR
+        // CRÍTICO: Detener y limpiar CameraController
         if let controller = cameraController {
-            // Stop camera capture - método no disponible en CameraController
-            print("🧹 Limpiando CameraController")
-            // TODO: Find correct method to stop camera
+            NSLog("🧹 Deteniendo y limpiando CameraController...")
+            print("🧹 Deteniendo y limpiando CameraController...")
+            controller.stopCamera()
+            cameraController = nil
+            NSLog("✅ CameraController limpiado")
+            print("✅ CameraController limpiado")
         }
-        cameraController = nil
-        deepAR?.shutdown()
-        deepAR = nil
 
-        print("🧹 Cleanup completado")
+        // CRÍTICO: Limpiar ARView
+        if let arView = currentARView {
+            NSLog("🧹 Removiendo y limpiando ARView...")
+            print("🧹 Removiendo y limpiando ARView...")
+            arView.removeFromSuperview()
+            currentARView = nil
+            NSLog("✅ ARView limpiado")
+            print("✅ ARView limpiado")
+        }
+
+        // Limpiar container view reference
+        currentContainerView = nil
+
+        // Shutdown DeepAR
+        if let deepAR = deepAR {
+            NSLog("🧹 Shutdown DeepAR...")
+            print("🧹 Shutdown DeepAR...")
+            deepAR.shutdown()
+            self.deepAR = nil
+            NSLog("✅ DeepAR shutdown completo")
+            print("✅ DeepAR shutdown completo")
+        }
+
+        NSLog("✅ Cleanup completado - todos los recursos liberados")
+        print("✅ Cleanup completado - todos los recursos liberados")
     }
 }
 
@@ -744,58 +781,55 @@ class DeepARPreviewView: NSObject, FlutterPlatformView {
 
     func createNativeView(view: UIView) {
         view.backgroundColor = UIColor.black
-        print("🎯 Configurando DeepAR view con cámara real")
+        NSLog("🎯 [createNativeView] INICIO - Configurando DeepAR view")
+        print("🎯 [createNativeView] INICIO - Configurando DeepAR view")
 
         // Verificar si DeepAR está disponible
+        NSLog("🔍 [createNativeView] Verificando disponibilidad de DeepAR...")
+        print("🔍 [createNativeView] Verificando disponibilidad de DeepAR...")
+
         guard let deepAR = self.plugin.deepAR else {
-            print("❌ DeepAR no está disponible")
-            showErrorView(view, message: "DeepAR no disponible")
+            NSLog("❌ [createNativeView] DeepAR es nil - no disponible")
+            print("❌ [createNativeView] DeepAR es nil - no disponible")
+            showErrorView(view, message: "DeepAR no disponible (nil)")
             return
         }
 
-        // IMPORTANTE: NO limpiar cámara existente - solo reutilizarla
-        NSLog("🔄 Verificando CameraController y ARView existentes...")
-        print("🔄 Verificando CameraController y ARView existentes...")
+        NSLog("✅ [createNativeView] DeepAR existe: \(deepAR)")
+        print("✅ [createNativeView] DeepAR existe")
 
-        // Reutilizar ARView si ya existe, o crear uno nuevo
-        let arView: UIView
-        if let existingARView = self.plugin.currentARView {
-            print("♻️ Reutilizando ARView existente")
-            arView = existingARView
-            // Remover del contenedor anterior
-            arView.removeFromSuperview()
-        } else {
-            print("🎭 Creando ARView nuevo...")
-            if let newARView = deepAR.createARView(withFrame: view.bounds) {
-                arView = newARView
-                self.plugin.currentARView = newARView
-                print("✅ Vista de DeepAR creada")
-            } else {
-                print("❌ No se pudo crear ARView")
-                showErrorView(view, message: "Error creando ARView")
-                return
-            }
+        // Crear ARView nuevo (después de dispose todo debe ser nuevo)
+        NSLog("🎭 [createNativeView] Llamando deepAR.createARView()...")
+        print("🎭 [createNativeView] Llamando deepAR.createARView()...")
+
+        guard let arView = deepAR.createARView(withFrame: view.bounds) else {
+            NSLog("❌ [createNativeView] createARView() retornó nil")
+            print("❌ [createNativeView] createARView() retornó nil")
+            showErrorView(view, message: "createARView() falló - retornó nil")
+            return
         }
 
-        // Actualizar frame y agregar al nuevo contenedor
+        NSLog("✅ [createNativeView] ARView creado exitosamente: \(arView)")
+        print("✅ [createNativeView] ARView creado exitosamente")
+
+        // Configurar y guardar referencia
         arView.frame = view.bounds
         arView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.addSubview(arView)
+        self.plugin.currentARView = arView
         self.plugin.currentContainerView = view
-        print("✅ ARView configurado en nuevo contenedor")
+        NSLog("✅ [createNativeView] ARView agregado al contenedor")
+        print("✅ [createNativeView] ARView agregado al contenedor")
 
-        // CRÍTICO: Solo crear CameraController si no existe
-        if self.plugin.cameraController == nil {
-            print("📷 Creando CameraController nuevo...")
-            self.plugin.setupCameraController(with: deepAR)
-            print("✅ CameraController configurado y cámara iniciada")
-        } else {
-            NSLog("♻️ Reutilizando CameraController existente - reiniciando cámara")
-            print("♻️ Reutilizando CameraController existente - reiniciando cámara")
-            // IMPORTANTE: Reiniciar la cámara cuando se reutiliza el controller
-            self.plugin.cameraController?.startCamera()
-            print("✅ Cámara reiniciada en controller existente")
-        }
+        // Crear CameraController nuevo (después de dispose debe ser nuevo)
+        NSLog("📷 [createNativeView] Creando CameraController...")
+        print("📷 [createNativeView] Creando CameraController...")
+        self.plugin.setupCameraController(with: deepAR)
+        NSLog("✅ [createNativeView] CameraController configurado")
+        print("✅ [createNativeView] CameraController configurado")
+
+        NSLog("🎉 [createNativeView] FIN - Todo configurado correctamente")
+        print("🎉 [createNativeView] FIN - Todo configurado correctamente")
     }
 
     private func showErrorView(_ view: UIView, message: String) {

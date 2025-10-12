@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'group_profile_constants.dart';
+import '../../../widgets/profile_photo_viewer.dart';
 
 class GroupProfileHeader extends StatelessWidget {
   final Map<String, dynamic> groupData;
@@ -40,7 +41,7 @@ class GroupProfileHeader extends StatelessWidget {
           child: Column(
             children: [
               SizedBox(height: 40),
-              _buildGroupImage(),
+              _buildGroupImage(context),
               SizedBox(height: 20),
               _buildGroupName(),
               SizedBox(height: 12),
@@ -53,7 +54,7 @@ class GroupProfileHeader extends StatelessWidget {
     );
   }
 
-  Widget _buildGroupImage() {
+  Widget _buildGroupImage(BuildContext context) {
     return Stack(
       children: [
         Container(
@@ -67,11 +68,23 @@ class GroupProfileHeader extends StatelessWidget {
               ),
             ],
           ),
-          child: CircleAvatar(
-            radius: 60,
-            backgroundColor: Colors.white.withOpacity(0.9),
-            backgroundImage: currentImageUrl != null ? NetworkImage(currentImageUrl!) : null,
-            child: _buildAvatarChild(),
+          child: GestureDetector(
+            onTap: () {
+              // Solo abrir en pantalla completa si hay una foto
+              if (currentImageUrl != null && currentImageUrl!.isNotEmpty) {
+                ProfilePhotoViewer.show(
+                  context,
+                  currentImageUrl!,
+                  groupData['name'] ?? 'Grupo',
+                );
+              }
+            },
+            child: CircleAvatar(
+              radius: 60,
+              backgroundColor: Colors.white.withOpacity(0.9),
+              backgroundImage: currentImageUrl != null ? NetworkImage(currentImageUrl!) : null,
+              child: _buildAvatarChild(),
+            ),
           ),
         ),
         if (isAdmin && !isUploading) _buildCameraButton(),
@@ -141,6 +154,7 @@ class GroupProfileHeader extends StatelessWidget {
       ),
       child: TextField(
         controller: nameController,
+        textCapitalization: TextCapitalization.words,
         style: TextStyle(
           fontSize: 24,
           fontWeight: FontWeight.bold,

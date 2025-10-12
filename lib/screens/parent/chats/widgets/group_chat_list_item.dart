@@ -10,6 +10,7 @@ class GroupChatListItem extends StatelessWidget {
   final int memberCount;
   final int messageCount;
   final String? groupImageUrl;
+  final int unreadCount;
   final VoidCallback? onLeaveGroup;
 
   const GroupChatListItem({
@@ -20,6 +21,7 @@ class GroupChatListItem extends StatelessWidget {
     required this.memberCount,
     required this.messageCount,
     this.groupImageUrl,
+    this.unreadCount = 0,
     this.onLeaveGroup,
   });
 
@@ -44,7 +46,9 @@ class GroupChatListItem extends StatelessWidget {
         margin: EdgeInsets.only(bottom: 8),
         padding: EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: Colors.transparent,
+          color: unreadCount > 0
+              ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.1)
+              : Colors.transparent,
           borderRadius: BorderRadius.circular(16),
         ),
         child: Row(
@@ -82,6 +86,24 @@ class GroupChatListItem extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
+                      if (unreadCount > 0) ...[
+                        Container(
+                          padding: EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme.primary,
+                            shape: BoxShape.circle,
+                          ),
+                          child: Text(
+                            unreadCount.toString(),
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        SizedBox(width: 8),
+                      ],
                       Container(
                         padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                         decoration: BoxDecoration(

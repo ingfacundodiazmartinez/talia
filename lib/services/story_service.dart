@@ -4,15 +4,26 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import '../models/story.dart';
 import '../notification_service.dart';
+import '../firebase_service.dart';
 import 'user_role_service.dart';
 import 'contact_alias_service.dart';
 
 class StoryService {
+  // Singleton pattern
+  static final StoryService _instance = StoryService._internal();
+  factory StoryService() => _instance;
+  StoryService._internal();
+
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseStorage _storage = FirebaseStorage.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final NotificationService _notificationService = NotificationService();
   final ContactAliasService _aliasService = ContactAliasService();
+  final FirebaseService _firebaseService = FirebaseService();
+
+  // Cache en memoria para historias
+  List<UserStories>? _cachedStories;
+  DateTime? _lastCacheUpdate;
 
   // Crear una nueva historia
   Future<String> createStory({
@@ -70,6 +81,7 @@ class StoryService {
         'createdAt': Timestamp.fromDate(now),
         'expiresAt': Timestamp.fromDate(expiresAt),
         'viewedBy': <String>[],
+        'replies': <Map<String, dynamic>>[],
         'filter': filter,
         'status': status,
         'approvedBy': requiresApproval ? null : user.uid, // Auto-aprobada si no requiere aprobación
@@ -165,16 +177,23 @@ class StoryService {
   }
 
   // Obtener historias de usuarios en la lista blanca del usuario actual
-  Stream<List<UserStories>> getStoriesFromWhitelist() {
+  Stream<List<UserStories>> getStoriesFromWhitelist() async* {
     final user = _auth.currentUser;
-    if (user == null) return Stream.value([]);
+    if (user == null) {
+      yield [];
+      return;
+    }
+
+    // Emitir cache inmediatamente si existe
+    if (_cachedStories != null) {
+      yield _cachedStories!;
+    }
 
     // Escuchar cambios en historias (incluye updates a viewedBy)
-    return _firestore
+    await for (final _ in _firestore
         .collection('stories')
         .where('status', whereIn: ['approved', 'pending'])
-        .snapshots()
-        .asyncMap((storiesSnapshot) async {
+        .snapshots()) {
 
       final List<UserStories> userStoriesList = [];
       final contactIds = <String>{};
@@ -257,8 +276,12 @@ class StoryService {
         return bLatest.compareTo(aLatest);
       });
 
-      return userStoriesList;
-    });
+      // Actualizar cache
+      _cachedStories = userStoriesList;
+      _lastCacheUpdate = DateTime.now();
+
+      yield userStoriesList;
+    }
   }
 
   // Obtener historias de un usuario específico
@@ -552,15 +575,22 @@ class StoryService {
         });
       }
 
-      // Enviar notificación al niño
+      // Enviar notificación al niño (no bloquear si falla)
       if (childId != null) {
-        await _notificationService.sendStoryApprovedNotification(
-          childId: childId,
-        );
+        try {
+          await _notificationService.sendStoryApprovedNotification(
+            childId: childId,
+          );
+        } catch (notifError) {
+          print('⚠️ Error enviando notificación de aprobación: $notifError');
+          // No lanzar error, la historia ya fue aprobada correctamente
+        }
       }
 
       print('✅ Historia $storyId aprobada');
     } catch (e) {
+      // Solo lanzar error si falló la actualización de la historia/solicitud
+      print('❌ Error en approveStory: $e');
       throw Exception('Error aprobando historia: $e');
     }
   }
@@ -601,16 +631,23 @@ class StoryService {
         });
       }
 
-      // Enviar notificación al niño
+      // Enviar notificación al niño (no bloquear si falla)
       if (childId != null) {
-        await _notificationService.sendStoryRejectedNotification(
-          childId: childId,
-          reason: reason,
-        );
+        try {
+          await _notificationService.sendStoryRejectedNotification(
+            childId: childId,
+            reason: reason,
+          );
+        } catch (notifError) {
+          print('⚠️ Error enviando notificación de rechazo: $notifError');
+          // No lanzar error, la historia ya fue rechazada correctamente
+        }
       }
 
       print('❌ Historia $storyId rechazada');
     } catch (e) {
+      // Solo lanzar error si falló la actualización de la historia/solicitud
+      print('❌ Error en rejectStory: $e');
       throw Exception('Error rechazando historia: $e');
     }
   }
@@ -662,6 +699,132 @@ class StoryService {
     } catch (e) {
       print('Error obteniendo historias de hijos: $e');
       return [];
+    }
+  }
+
+  // ===== MÉTODOS PARA RESPUESTAS A HISTORIAS =====
+
+  // Responder a una historia
+  Future<void> replyToStory({
+    required String storyId,
+    required String text,
+  }) async {
+    final user = _auth.currentUser;
+    if (user == null) throw Exception('Usuario no autenticado');
+
+    try {
+      print('💬 Respondiendo a historia $storyId...');
+
+      // Obtener datos del usuario
+      final userDoc = await _firestore.collection('users').doc(user.uid).get();
+      final userData = userDoc.data();
+
+      // Crear objeto de respuesta
+      final reply = StoryReply(
+        userId: user.uid,
+        userName: userData?['name'] ?? 'Usuario',
+        userPhotoURL: userData?['photoURL'],
+        text: text,
+        timestamp: DateTime.now(),
+      );
+
+      // Agregar respuesta a la historia
+      await _firestore.collection('stories').doc(storyId).update({
+        'replies': FieldValue.arrayUnion([reply.toMap()]),
+      });
+
+      print('✅ Respuesta agregada a historia $storyId');
+
+      // Obtener información de la historia y su creador
+      final storyDoc = await _firestore.collection('stories').doc(storyId).get();
+      final storyOwnerId = storyDoc.data()?['userId'];
+
+      if (storyOwnerId != null && storyOwnerId != user.uid) {
+        // Enviar mensaje al chat privado con la imagen de la historia
+        try {
+          final chatId = _firebaseService.getChatId(user.uid, storyOwnerId);
+          final storyData = storyDoc.data();
+          final mediaUrl = storyData?['mediaUrl'];
+          final mediaType = storyData?['mediaType'] ?? 'image';
+
+          print('📸 Datos de la historia:');
+          print('  - mediaUrl: $mediaUrl');
+          print('  - mediaType: $mediaType');
+          print('  - text: $text');
+
+          if (mediaUrl != null && mediaUrl.toString().isNotEmpty) {
+            // Copiar la imagen/video a una ubicación permanente en chats
+            // Esto evita que la imagen se rompa cuando la historia se elimine (24 horas)
+            String? permanentMediaUrl;
+
+            try {
+              print('📋 Copiando media de historia a ubicación permanente...');
+
+              // Obtener referencia a la imagen original de la historia
+              final storageRef = _storage.refFromURL(mediaUrl);
+
+              // Descargar los datos
+              final data = await storageRef.getData();
+
+              if (data != null) {
+                // Generar nombre único para la copia permanente
+                final timestamp = DateTime.now().millisecondsSinceEpoch;
+                final extension = mediaType == 'video' ? 'mp4' : 'jpg';
+                final newPath = 'chats/$chatId/${mediaType}s/${timestamp}_story_reply.$extension';
+
+                // Subir a ubicación permanente
+                final newRef = _storage.ref(newPath);
+                await newRef.putData(data);
+                permanentMediaUrl = await newRef.getDownloadURL();
+
+                print('✅ Media copiada a: $newPath');
+                print('✅ Nueva URL permanente: $permanentMediaUrl');
+              }
+            } catch (copyError) {
+              print('❌ Error copiando media: $copyError');
+              // Si falla la copia, usar la URL original (imagen se romperá en 24h)
+              permanentMediaUrl = mediaUrl;
+            }
+
+            await _firebaseService.sendMessage(
+              chatId: chatId,
+              senderId: user.uid,
+              receiverId: storyOwnerId,
+              text: text,
+              type: mediaType,
+              mediaUrl: permanentMediaUrl ?? mediaUrl,
+            );
+            print('💬 Mensaje con historia enviado al chat privado');
+          } else {
+            print('⚠️ mediaUrl es null o vacío, no se puede enviar el mensaje con imagen');
+            // Enviar solo el texto si no hay mediaUrl
+            await _firebaseService.sendMessage(
+              chatId: chatId,
+              senderId: user.uid,
+              receiverId: storyOwnerId,
+              text: '💬 Respondió a tu historia: $text',
+              type: 'text',
+            );
+          }
+        } catch (chatError) {
+          print('⚠️ Error enviando mensaje al chat: $chatError');
+        }
+
+        // Enviar notificación
+        try {
+          await _notificationService.sendStoryReplyNotification(
+            userId: storyOwnerId,
+            replierName: userData?['name'] ?? 'Usuario',
+            replyText: text,
+          );
+          print('📬 Notificación enviada al creador de la historia');
+        } catch (notifError) {
+          print('⚠️ Error enviando notificación de respuesta: $notifError');
+        }
+      }
+    } catch (e) {
+      print('❌ Error respondiendo a historia: $e');
+      throw Exception('Error al responder historia: $e');
     }
   }
 }

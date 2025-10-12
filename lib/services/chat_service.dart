@@ -2,8 +2,17 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 class ChatService {
+  // Singleton pattern
+  static final ChatService _instance = ChatService._internal();
+  factory ChatService() => _instance;
+  ChatService._internal();
+
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
+
+  // Cache en memoria para chats del usuario
+  QuerySnapshot? _cachedUserChats;
+  DateTime? _lastCacheUpdate;
 
   /// Eliminar un chat (soft delete) y crear uno nuevo automáticamente
   /// Retorna el ID del nuevo chat creado
@@ -49,6 +58,33 @@ class ChatService {
     }
   }
 
+  /// Limpiar mensajes del chat para el usuario actual
+  /// Guarda el timestamp de cuándo se limpió para solo mostrar mensajes nuevos
+  Future<void> clearChat(String chatId) async {
+    final user = _auth.currentUser;
+    if (user == null) throw Exception('Usuario no autenticado');
+
+    try {
+      final chatRef = _firestore.collection('chats').doc(chatId);
+      final chatDoc = await chatRef.get();
+
+      if (!chatDoc.exists) {
+        throw Exception('Chat no encontrado');
+      }
+
+      // Guardar timestamp de cuándo se limpió el chat para este usuario
+      await chatRef.set({
+        'clearedAt_${user.uid}': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      print('🧹 Chat limpiado para usuario: ${user.uid}');
+      print('   Los mensajes anteriores a este timestamp no se mostrarán');
+    } catch (e) {
+      print('❌ Error limpiando chat: $e');
+      throw Exception('Error limpiando chat: $e');
+    }
+  }
+
   /// Verificar si un chat está eliminado
   /// Si deletedBy no está vacío, el chat está eliminado sin importar quién lo eliminó
   Future<bool> isChatDeleted(String chatId) async {
@@ -71,15 +107,32 @@ class ChatService {
   }
 
   /// Obtener chats del usuario (excluyendo los eliminados)
-  Stream<QuerySnapshot> getUserChatsStream() {
+  Stream<QuerySnapshot> getUserChatsStream() async* {
     final user = _auth.currentUser;
-    if (user == null) return Stream.value(FirebaseFirestore.instance.collection('chats').limit(0).get() as QuerySnapshot);
+    if (user == null) {
+      yield await FirebaseFirestore.instance.collection('chats').limit(0).get();
+      return;
+    }
 
-    return _firestore
+    // Emitir cache inmediatamente si existe
+    if (_cachedUserChats != null) {
+      print('📦 Emitiendo chats desde cache');
+      yield _cachedUserChats!;
+    }
+
+    // Escuchar cambios en chats (sin orderBy para evitar índice)
+    await for (final snapshot in _firestore
         .collection('chats')
         .where('participants', arrayContains: user.uid)
-        .orderBy('lastMessageTime', descending: true)
-        .snapshots();
+        .snapshots()) {
+
+      // Actualizar cache
+      _cachedUserChats = snapshot;
+      _lastCacheUpdate = DateTime.now();
+
+      print('🔄 Chats actualizados desde Firestore (${snapshot.docs.length} chats)');
+      yield snapshot;
+    }
   }
 
   /// Filtrar chats eliminados de un snapshot

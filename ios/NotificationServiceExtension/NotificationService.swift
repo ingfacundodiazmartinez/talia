@@ -6,6 +6,7 @@
 //
 
 import UserNotifications
+import Intents
 
 class NotificationService: UNNotificationServiceExtension {
 
@@ -21,27 +22,39 @@ class NotificationService: UNNotificationServiceExtension {
             return
         }
 
-        // Intentar obtener la URL de la imagen del payload
-        if let imageUrlString = bestAttemptContent.userInfo["imageUrl"] as? String,
-           let imageUrl = URL(string: imageUrlString) {
+        print("📥 [NotificationService] Recibiendo notificación")
+        print("📦 [NotificationService] UserInfo: \(bestAttemptContent.userInfo)")
 
-            print("📥 [NotificationService] Descargando imagen de: \(imageUrlString)")
+        // Obtener información del sender del payload
+        let senderPhotoUrl = bestAttemptContent.userInfo["senderPhotoUrl"] as? String
+        let senderName = bestAttemptContent.userInfo["senderName"] as? String ?? "Usuario"
+        let senderId = bestAttemptContent.userInfo["senderId"] as? String ?? "unknown"
+
+        // Si hay foto del sender, crear Communication Notification
+        if let photoUrlString = senderPhotoUrl,
+           let photoUrl = URL(string: photoUrlString) {
+
+            print("📥 [NotificationService] Descargando foto del remitente: \(photoUrlString)")
 
             // Descargar la imagen de forma asíncrona
-            downloadImage(from: imageUrl) { [weak self] attachment in
+            downloadImage(from: photoUrl) { [weak self] imageData in
                 guard let self = self else { return }
 
-                if let attachment = attachment {
-                    print("✅ [NotificationService] Imagen descargada y agregada como attachment")
-                    bestAttemptContent.attachments = [attachment]
+                if let imageData = imageData {
+                    print("✅ [NotificationService] Foto descargada, creando Communication Notification")
+                    self.createCommunicationNotification(
+                        content: bestAttemptContent,
+                        senderName: senderName,
+                        senderId: senderId,
+                        avatarData: imageData
+                    )
                 } else {
-                    print("⚠️ [NotificationService] No se pudo descargar la imagen")
+                    print("⚠️ [NotificationService] No se pudo descargar la foto, usando notificación estándar")
+                    contentHandler(bestAttemptContent)
                 }
-
-                contentHandler(bestAttemptContent)
             }
         } else {
-            print("ℹ️ [NotificationService] No hay imageUrl en el payload")
+            print("ℹ️ [NotificationService] No hay senderPhotoUrl, usando notificación estándar")
             contentHandler(bestAttemptContent)
         }
     }
@@ -57,47 +70,78 @@ class NotificationService: UNNotificationServiceExtension {
 
     // MARK: - Helper Methods
 
-    private func downloadImage(from url: URL, completion: @escaping (UNNotificationAttachment?) -> Void) {
-        let task = URLSession.shared.downloadTask(with: url) { localURL, response, error in
+    private func createCommunicationNotification(
+        content: UNMutableNotificationContent,
+        senderName: String,
+        senderId: String,
+        avatarData: Data
+    ) {
+        do {
+            // Crear INPersonHandle con el ID del sender
+            let personHandle = INPersonHandle(value: senderId, type: .unknown)
+
+            // Crear INImage con los datos de la foto del sender
+            let avatar = INImage(imageData: avatarData)
+
+            // Crear INPerson con el nombre, handle y avatar
+            let sender = INPerson(
+                personHandle: personHandle,
+                nameComponents: nil,
+                displayName: senderName,
+                image: avatar,
+                contactIdentifier: nil,
+                customIdentifier: senderId
+            )
+
+            // Crear el intent de mensaje
+            let intent = INSendMessageIntent(
+                recipients: nil,
+                outgoingMessageType: .outgoingMessageText,
+                content: content.body,
+                speakableGroupName: nil,
+                conversationIdentifier: senderId,
+                serviceName: nil,
+                sender: sender,
+                attachments: nil
+            )
+
+            // Configurar la imagen del sender en el intent
+            intent.setImage(avatar, forParameterNamed: \.sender)
+
+            // Crear interaction para donar al sistema
+            let interaction = INInteraction(intent: intent, response: nil)
+            interaction.direction = .incoming
+
+            // Convertir el intent en notification content
+            if let updatedContent = try? content.updating(from: intent) as? UNMutableNotificationContent {
+                print("✅ [NotificationService] Communication Notification creada exitosamente")
+                self.contentHandler?(updatedContent)
+            } else {
+                print("⚠️ [NotificationService] No se pudo actualizar el content con el intent")
+                self.contentHandler?(content)
+            }
+        } catch {
+            print("❌ [NotificationService] Error creando Communication Notification: \(error.localizedDescription)")
+            self.contentHandler?(content)
+        }
+    }
+
+    private func downloadImage(from url: URL, completion: @escaping (Data?) -> Void) {
+        let task = URLSession.shared.dataTask(with: url) { data, response, error in
             if let error = error {
                 print("❌ [NotificationService] Error descargando imagen: \(error.localizedDescription)")
                 completion(nil)
                 return
             }
 
-            guard let localURL = localURL else {
-                print("❌ [NotificationService] URL local no disponible")
+            guard let data = data else {
+                print("❌ [NotificationService] No se recibieron datos de imagen")
                 completion(nil)
                 return
             }
 
-            // Crear directorio temporal para guardar la imagen
-            let tempDirectory = FileManager.default.temporaryDirectory
-            let fileName = url.lastPathComponent.isEmpty ? "sender_photo.jpg" : url.lastPathComponent
-            let tempFileURL = tempDirectory.appendingPathComponent(fileName)
-
-            do {
-                // Remover archivo si ya existe
-                if FileManager.default.fileExists(atPath: tempFileURL.path) {
-                    try FileManager.default.removeItem(at: tempFileURL)
-                }
-
-                // Mover el archivo descargado al directorio temporal
-                try FileManager.default.moveItem(at: localURL, to: tempFileURL)
-
-                // Crear el attachment
-                let attachment = try UNNotificationAttachment(
-                    identifier: "sender-photo",
-                    url: tempFileURL,
-                    options: nil
-                )
-
-                print("✅ [NotificationService] Attachment creado: \(tempFileURL)")
-                completion(attachment)
-            } catch {
-                print("❌ [NotificationService] Error creando attachment: \(error.localizedDescription)")
-                completion(nil)
-            }
+            print("✅ [NotificationService] Imagen descargada: \(data.count) bytes")
+            completion(data)
         }
 
         task.resume()

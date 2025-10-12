@@ -1,5 +1,4 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'user_role_service.dart';
 
 class ChatPermissionService {
@@ -8,7 +7,6 @@ class ChatPermissionService {
   ChatPermissionService._internal();
 
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final FirebaseAuth _auth = FirebaseAuth.instance;
 
   /// Verificar si dos usuarios pueden chatear
   /// Casos especiales:

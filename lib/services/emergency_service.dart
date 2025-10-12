@@ -3,11 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../notification_service.dart';
-import 'location_service.dart';
 import 'video_call_service.dart';
 
 class EmergencyService {
@@ -17,8 +14,6 @@ class EmergencyService {
 
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final LocationService _locationService = LocationService();
-  final NotificationService _notificationService = NotificationService();
   final VideoCallService _videoCallService = VideoCallService();
 
   // Tiempo de cooldown entre emergencias (en minutos)
@@ -226,12 +221,21 @@ class EmergencyService {
   // Obtener lista de padres/tutores
   Future<List<Map<String, dynamic>>> _getParents(String childId) async {
     try {
-      // Buscar relaciones padre-hijo
-      final querySnapshot = await _firestore
+      // Buscar relaciones padre-hijo en parent_child_links (nuevo)
+      var querySnapshot = await _firestore
           .collection('parent_child_links')
           .where('childId', isEqualTo: childId)
           .where('status', isEqualTo: 'approved')
           .get();
+
+      // Si no se encontraron, buscar en parent_children (legacy)
+      if (querySnapshot.docs.isEmpty) {
+        print('🔍 No se encontraron padres en parent_child_links, buscando en parent_children...');
+        querySnapshot = await _firestore
+            .collection('parent_children')
+            .where('childId', isEqualTo: childId)
+            .get();
+      }
 
       List<Map<String, dynamic>> parents = [];
 
@@ -300,7 +304,7 @@ class EmergencyService {
     }
   }
 
-  // Realizar llamada de emergencia con Agora
+  // Realizar llamada de emergencia grupal con Agora
   Future<void> _makeEmergencyVideoCall(List<Map<String, dynamic>> parents, String emergencyId) async {
     try {
       if (parents.isEmpty) {
@@ -311,31 +315,94 @@ class EmergencyService {
       final user = _auth.currentUser;
       if (user == null) return;
 
-      // Usar emergencyId como channel name para la llamada
-      final channelName = 'emergency_$emergencyId';
+      // Obtener nombre del niño
+      final childName = await _getUserName(user.uid);
 
-      // Crear registro de llamada en Firestore
+      // Extraer IDs y nombres de los padres
+      List<String> parentIds = [];
+      Map<String, String> parentNames = {};
+
       for (var parent in parents) {
-        final parentId = parent['id'];
+        final parentId = parent['id'] as String;
         final parentName = parent['name'] ?? 'Padre';
 
-        await _firestore.collection('video_calls').add({
-          'callId': emergencyId,
-          'callerId': user.uid,
-          'callerName': await _getUserName(user.uid),
-          'receiverId': parentId,
-          'receiverName': parentName,
-          'channelName': channelName,
-          'status': 'ringing',
-          'timestamp': FieldValue.serverTimestamp(),
-          'isEmergency': true,
-          'type': 'video_call', // Videollamada para que el padre pueda ver al niño
-        });
-
-        print('✅ Llamada de emergencia creada para $parentName');
+        parentIds.add(parentId);
+        parentNames[parentId] = parentName;
       }
+
+      print('🆘 Creando videollamada de emergencia grupal para ${parentIds.length} padres...');
+
+      // IMPORTANTE: Usar emergencyId como callId para que VoIPService pueda encontrarlo
+      // Crear la llamada grupal usando el nuevo método del VideoCallService
+      // Pero primero crear el documento con el emergencyId específico
+
+      // Construir array de participantes
+      List<Map<String, dynamic>> participants = [];
+
+      // Agregar niño como caller (ya unido)
+      participants.add({
+        'userId': user.uid,
+        'userName': childName,
+        'status': 'joined',
+        'joinedAt': FieldValue.serverTimestamp(),
+        'leftAt': null,
+      });
+
+      // Agregar padres (en estado ringing)
+      for (String parentId in parentIds) {
+        participants.add({
+          'userId': parentId,
+          'userName': parentNames[parentId] ?? 'Padre',
+          'status': 'ringing',
+          'joinedAt': null,
+          'leftAt': null,
+        });
+      }
+
+      // Crear documento de llamada grupal de emergencia con ID específico
+      await _firestore.collection('video_calls').doc(emergencyId).set({
+        'callId': emergencyId,
+        'callerId': user.uid,
+        'callerName': childName,
+        'channelName': 'emergency_$emergencyId',
+        'isGroupCall': true,
+        'isEmergency': true,
+        'groupId': null, // null para emergencias
+        'participants': participants,
+        'status': 'ringing',
+        'createdAt': FieldValue.serverTimestamp(),
+        'endedAt': null,
+        'token': '',
+        'callType': 'video',
+      });
+
+      // Enviar notificaciones a todos los padres
+      for (String parentId in parentIds) {
+        await _firestore.collection('notifications').add({
+          'userId': parentId,
+          'type': 'emergency_call',
+          'title': '🚨 Llamada de emergencia',
+          'body': '$childName necesita ayuda urgente',
+          'priority': 'high',
+          'data': {
+            'callId': emergencyId,
+            'callerId': user.uid,
+            'callerName': childName,
+            'channelName': 'emergency_$emergencyId',
+            'callType': 'video',
+            'isGroupCall': 'true',
+            'isEmergency': 'true',
+            'groupId': '',
+          },
+          'createdAt': FieldValue.serverTimestamp(),
+          'read': false,
+        });
+      }
+
+      print('✅ Videollamada de emergencia grupal creada con ID: $emergencyId');
+      print('✅ Notificaciones enviadas a ${parentIds.length} padres');
     } catch (e) {
-      print('❌ Error creando llamada de emergencia: $e');
+      print('❌ Error creando llamada de emergencia grupal: $e');
     }
   }
 
@@ -482,34 +549,77 @@ class EmergencyService {
   // Obtener emergencias activas para TODOS los hijos de un padre
   Stream<QuerySnapshot> getActiveEmergenciesForParent(String parentId) async* {
     try {
+      print('🚨 [EmergencyService] Buscando emergencias para padre: $parentId');
+
       // Obtener IDs de todos los hijos del padre
-      final linksSnapshot = await _firestore
+      // Intentar primero con parent_child_links (nuevo)
+      var linksSnapshot = await _firestore
           .collection('parent_child_links')
           .where('parentId', isEqualTo: parentId)
           .where('status', isEqualTo: 'approved')
           .get();
 
-      final childrenIds = linksSnapshot.docs
-          .map((doc) => doc.data()['childId'] as String)
+      print('🔍 [EmergencyService] parent_child_links docs: ${linksSnapshot.docs.length}');
+
+      var childrenIds = linksSnapshot.docs
+          .map((doc) {
+            final data = doc.data();
+            print('🔍 [EmergencyService] Link data: $data');
+            return data['childId'] as String;
+          })
           .toList();
 
+      // Si no se encontraron hijos, intentar con parent_children (legacy)
       if (childrenIds.isEmpty) {
-        // Si no tiene hijos, emitir stream vacío
+        print('🔍 [EmergencyService] No se encontraron hijos en parent_child_links, buscando en parent_children...');
+        final legacySnapshot = await _firestore
+            .collection('parent_children')
+            .where('parentId', isEqualTo: parentId)
+            .get();
+
+        print('🔍 [EmergencyService] parent_children docs: ${legacySnapshot.docs.length}');
+
+        childrenIds = legacySnapshot.docs
+            .map((doc) {
+              final data = doc.data();
+              print('🔍 [EmergencyService] Legacy link data: $data');
+              return data['childId'] as String;
+            })
+            .toList();
+
+        print('✅ [EmergencyService] Encontrados ${childrenIds.length} hijos en parent_children');
+      }
+
+      if (childrenIds.isEmpty) {
+        // Si no tiene hijos en ninguna colección, emitir stream vacío
+        print('⚠️ [EmergencyService] No se encontraron hijos para el padre $parentId');
         yield* Stream.value(
           await _firestore.collection('emergencies').where('childId', isEqualTo: 'no_children').get(),
         );
         return;
       }
 
+      print('📡 [EmergencyService] Escuchando emergencias de ${childrenIds.length} hijos: $childrenIds');
+
       // Escuchar emergencias activas de todos los hijos
-      yield* _firestore
+      final stream = _firestore
           .collection('emergencies')
           .where('childId', whereIn: childrenIds)
           .where('resolved', isEqualTo: false)
           .orderBy('timestamp', descending: true)
           .snapshots();
+
+      await for (final snapshot in stream) {
+        print('📡 [EmergencyService] Recibido snapshot con ${snapshot.docs.length} emergencias');
+        for (final doc in snapshot.docs) {
+          final data = doc.data();
+          print('🆘 [EmergencyService] Emergencia: ${doc.id} - resolved: ${data['resolved']} - childId: ${data['childId']}');
+        }
+        yield snapshot;
+      }
     } catch (e) {
-      print('❌ Error obteniendo emergencias del padre: $e');
+      print('❌ [EmergencyService] Error obteniendo emergencias del padre: $e');
+      print('❌ [EmergencyService] Stack trace: ${StackTrace.current}');
       // Emitir stream vacío en caso de error
       yield* Stream.value(
         await _firestore.collection('emergencies').where('childId', isEqualTo: 'error').get(),
@@ -550,16 +660,7 @@ class EmergencyService {
 
   // Mensajes de UI
   void _showCooldownMessage(BuildContext context) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          'Botón de emergencia en espera. Intenta en $_cooldownMinutes minutos.',
-          style: TextStyle(color: Colors.white),
-        ),
-        backgroundColor: Colors.orange,
-        duration: Duration(seconds: 3),
-      ),
-    );
+    // Sin mensaje de cooldown
   }
 
   void _showEmergencyConfirmation(BuildContext context) {

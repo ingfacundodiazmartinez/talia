@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'ai_analysis_service.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 
 class ReportsScreen extends StatefulWidget {
@@ -14,7 +13,28 @@ class ReportsScreen extends StatefulWidget {
 class _ReportsScreenState extends State<ReportsScreen> {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final AIAnalysisService _aiService = AIAnalysisService();
+
+  /// Obtener alertas no leídas para un padre
+  Stream<QuerySnapshot> _getUnreadAlerts(String parentId) {
+    return _firestore
+        .collection('alerts')
+        .where('parentId', isEqualTo: parentId)
+        .where('isRead', isEqualTo: false)
+        .orderBy('createdAt', descending: true)
+        .snapshots();
+  }
+
+  /// Marcar alerta como leída
+  Future<void> _markAlertAsRead(String alertId) async {
+    try {
+      await _firestore.collection('alerts').doc(alertId).update({
+        'isRead': true,
+        'readAt': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      print('Error marking alert as read: $e');
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -84,7 +104,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   Widget _buildAlertsSection() {
     return StreamBuilder<QuerySnapshot>(
-      stream: _aiService.getUnreadAlerts(_auth.currentUser!.uid),
+      stream: _getUnreadAlerts(_auth.currentUser!.uid),
       builder: (context, snapshot) {
         if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
           return SizedBox.shrink();
@@ -116,7 +136,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   Widget _buildAlertCard(String alertId, Map<String, dynamic> data) {
     // final type = data['type'] ?? 'unknown';
     final severity = (data['severity'] ?? 0.0) as double;
-    final keywords = List<String>.from(data['keywords'] ?? []);
+    // NO mostramos keywords para proteger privacidad
 
     return Container(
       margin: EdgeInsets.only(bottom: 12),
@@ -150,20 +170,18 @@ class _ReportsScreenState extends State<ReportsScreen> {
             'Severidad: ${(severity * 100).toInt()}%',
             style: TextStyle(fontSize: 14, color: Colors.grey[700]),
           ),
-          if (keywords.isNotEmpty) ...[
-            SizedBox(height: 8),
-            Text(
-              'Palabras detectadas: ${keywords.take(3).join(", ")}${keywords.length > 3 ? "..." : ""}',
-              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-            ),
-          ],
+          SizedBox(height: 8),
+          Text(
+            'Se detectó lenguaje inapropiado en la conversación',
+            style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+          ),
           SizedBox(height: 12),
           Row(
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
               TextButton(
                 onPressed: () async {
-                  await _aiService.markAlertAsRead(alertId);
+                  await _markAlertAsRead(alertId);
                 },
                 child: Text('Marcar como leída'),
               ),
@@ -419,6 +437,24 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 ],
               ),
             ),
+            // Botón ver historial
+            IconButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => ReportHistoryScreen(
+                      childId: childId,
+                      childName: childName,
+                      photoUrl: photoUrl,
+                    ),
+                  ),
+                );
+              },
+              icon: Icon(Icons.history),
+              color: colorScheme.primary,
+              tooltip: 'Ver historial',
+            ),
             // Botón actualizar
             IconButton(
               onPressed: () => _generateReport(childId, childName),
@@ -430,37 +466,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
             Icon(Icons.chevron_right, color: colorScheme.outlineVariant),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildStatBox({
-    required IconData icon,
-    required String label,
-    required String value,
-    required Color color,
-  }) {
-    return Container(
-      padding: EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        children: [
-          Icon(icon, color: color, size: 28),
-          SizedBox(height: 8),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
-          ),
-          SizedBox(height: 4),
-          Text(label, style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
-        ],
       ),
     );
   }
@@ -497,15 +502,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
       if (result.data['success'] == true) {
         print('✅ Reporte generado exitosamente');
         
-        // Mostrar mensaje de éxito
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('✅ Reporte generado exitosamente'),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 2),
-          ),
-        );
-
         // Esperar un momento y recargar datos
         await Future.delayed(Duration(seconds: 1));
         setState(() {}); // Recargar la pantalla
@@ -527,6 +523,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   void _showAlertDetails(Map<String, dynamic> alertData) {
+    final colorScheme = Theme.of(context).colorScheme;
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -552,13 +549,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
             ),
             SizedBox(height: 12),
             Text(
-              'Palabras detectadas:',
-              style: TextStyle(fontWeight: FontWeight.w600),
-            ),
-            SizedBox(height: 4),
-            ...List<String>.from(alertData['keywords'] ?? []).map(
-              (keyword) =>
-                  Text('• $keyword', style: TextStyle(color: Colors.red)),
+              'El sistema detectó lenguaje inapropiado o potencialmente dañino en las conversaciones.',
+              style: TextStyle(fontSize: 14, color: Colors.grey[700]),
             ),
             SizedBox(height: 16),
             Container(
@@ -589,10 +581,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
           ),
           ElevatedButton(
             onPressed: () async {
-              await _aiService.markAlertAsRead(alertData['messageId'] ?? '');
+              await _markAlertAsRead(alertData['messageId'] ?? '');
               Navigator.pop(context);
             },
-            style: ElevatedButton.styleFrom(backgroundColor: Color(0xFF9D7FE8)),
+            style: ElevatedButton.styleFrom(backgroundColor: colorScheme.primary),
             child: Text('Marcar como leída'),
           ),
         ],
@@ -616,6 +608,8 @@ class DetailedReportScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
     final totalMessages = report['totalMessages'] ?? 0;
     final positiveCount = report['positiveCount'] ?? 0;
     final negativeCount = report['negativeCount'] ?? 0;
@@ -626,8 +620,6 @@ class DetailedReportScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text('Reporte de $childName'),
-        backgroundColor: Color(0xFF9D7FE8),
-        foregroundColor: Colors.white,
       ),
       body: ListView(
         padding: EdgeInsets.all(20),
@@ -638,7 +630,7 @@ class DetailedReportScreen extends StatelessWidget {
             style: TextStyle(
               fontSize: 28,
               fontWeight: FontWeight.bold,
-              color: Color(0xFF2D3142),
+              color: colorScheme.onSurface,
             ),
           ),
           SizedBox(height: 8),
@@ -646,7 +638,7 @@ class DetailedReportScreen extends StatelessWidget {
             report['period'] != null
                 ? 'Últimos ${report['period']} días'
                 : 'Última semana',
-            style: TextStyle(fontSize: 16, color: Colors.grey[600]),
+            style: TextStyle(fontSize: 16, color: colorScheme.onSurfaceVariant),
           ),
 
           SizedBox(height: 32),
@@ -655,9 +647,7 @@ class DetailedReportScreen extends StatelessWidget {
           Container(
             padding: EdgeInsets.all(20),
             decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [Color(0xFF9D7FE8), Color(0xFFB39DDB)],
-              ),
+              color: colorScheme.primaryContainer,
               borderRadius: BorderRadius.circular(16),
             ),
             child: Column(
@@ -671,7 +661,7 @@ class DetailedReportScreen extends StatelessWidget {
                   'Estado de ánimo general',
                   style: TextStyle(
                     fontSize: 16,
-                    color: Colors.white.withOpacity(0.9),
+                    color: colorScheme.onPrimaryContainer,
                   ),
                 ),
                 SizedBox(height: 8),
@@ -680,7 +670,7 @@ class DetailedReportScreen extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 22,
                     fontWeight: FontWeight.w600,
-                    color: Colors.white,
+                    color: colorScheme.onPrimaryContainer,
                   ),
                 ),
               ],
@@ -695,28 +685,31 @@ class DetailedReportScreen extends StatelessWidget {
             style: TextStyle(
               fontSize: 20,
               fontWeight: FontWeight.bold,
-              color: Color(0xFF2D3142),
+              color: colorScheme.onSurface,
             ),
           ),
           SizedBox(height: 16),
 
-          _buildDetailRow('Total de mensajes', '$totalMessages', Icons.message),
+          _buildDetailRow('Total de mensajes', '$totalMessages', Icons.message, colorScheme),
           _buildDetailRow(
             'Mensajes positivos',
             '$positiveCount (${_getPercentage(positiveCount, totalMessages)}%)',
             Icons.sentiment_satisfied,
+            colorScheme,
             Colors.green,
           ),
           _buildDetailRow(
             'Mensajes negativos',
             '$negativeCount (${_getPercentage(negativeCount, totalMessages)}%)',
             Icons.sentiment_dissatisfied,
+            colorScheme,
             Colors.orange,
           ),
           _buildDetailRow(
             'Mensajes neutrales',
             '$neutralCount (${_getPercentage(neutralCount, totalMessages)}%)',
             Icons.sentiment_neutral,
+            colorScheme,
             Colors.grey,
           ),
 
@@ -770,7 +763,7 @@ class DetailedReportScreen extends StatelessWidget {
             style: TextStyle(
               fontSize: 20,
               fontWeight: FontWeight.bold,
-              color: Color(0xFF2D3142),
+              color: colorScheme.onSurface,
             ),
           ),
           SizedBox(height: 16),
@@ -822,12 +815,12 @@ class DetailedReportScreen extends StatelessWidget {
             style: TextStyle(
               fontSize: 20,
               fontWeight: FontWeight.bold,
-              color: Color(0xFF2D3142),
+              color: colorScheme.onSurface,
             ),
           ),
           SizedBox(height: 16),
 
-          _buildRecommendation(report),
+          _buildRecommendation(report, colorScheme),
 
           SizedBox(height: 32),
 
@@ -860,7 +853,8 @@ class DetailedReportScreen extends StatelessWidget {
   Widget _buildDetailRow(
     String label,
     String value,
-    IconData icon, [
+    IconData icon,
+    ColorScheme colorScheme, [
     Color? color,
   ]) {
     return Container(
@@ -872,12 +866,12 @@ class DetailedReportScreen extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(icon, color: color ?? Color(0xFF9D7FE8)),
+          Icon(icon, color: color ?? colorScheme.primary),
           SizedBox(width: 16),
           Expanded(
             child: Text(
               label,
-              style: TextStyle(fontSize: 16, color: Color(0xFF2D3142)),
+              style: TextStyle(fontSize: 16, color: colorScheme.onSurface),
             ),
           ),
           Text(
@@ -885,7 +879,7 @@ class DetailedReportScreen extends StatelessWidget {
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w600,
-              color: color ?? Color(0xFF2D3142),
+              color: color ?? colorScheme.onSurface,
             ),
           ),
         ],
@@ -893,7 +887,7 @@ class DetailedReportScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildRecommendation(Map<String, dynamic> report) {
+  Widget _buildRecommendation(Map<String, dynamic> report, ColorScheme colorScheme) {
     final moodStatus = report['moodStatus'] ?? 'neutral';
     final bullyingIncidents = report['bullyingIncidents'] ?? 0;
     final percentageChange = report['percentageChange'] ?? 0;
@@ -940,7 +934,7 @@ class DetailedReportScreen extends StatelessWidget {
               recommendation,
               style: TextStyle(
                 fontSize: 15,
-                color: Color(0xFF2D3142),
+                color: colorScheme.onSurface,
                 height: 1.5,
               ),
             ),
@@ -953,5 +947,273 @@ class DetailedReportScreen extends StatelessWidget {
   int _getPercentage(int count, int total) {
     if (total == 0) return 0;
     return ((count / total) * 100).round();
+  }
+}
+
+// Pantalla de historial de reportes
+class ReportHistoryScreen extends StatelessWidget {
+  final String childId;
+  final String childName;
+  final String? photoUrl;
+
+  const ReportHistoryScreen({
+    super.key,
+    required this.childId,
+    required this.childName,
+    this.photoUrl,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Historial de $childName'),
+      ),
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection('weekly_reports')
+            .where('childId', isEqualTo: childId)
+            .where('parentId', isEqualTo: FirebaseAuth.instance.currentUser!.uid)
+            .orderBy('generatedAt', descending: true)
+            .snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.error_outline, size: 64, color: colorScheme.error),
+                  SizedBox(height: 16),
+                  Text(
+                    'Error cargando reportes',
+                    style: TextStyle(fontSize: 16, color: colorScheme.error),
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    snapshot.error.toString(),
+                    style: TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            );
+          }
+
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return Center(child: CircularProgressIndicator());
+          }
+
+          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+            return Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.history, size: 80, color: colorScheme.outlineVariant),
+                  SizedBox(height: 16),
+                  Text(
+                    'No hay reportes disponibles',
+                    style: TextStyle(fontSize: 18, color: colorScheme.onSurfaceVariant),
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'Los reportes generados aparecerán aquí',
+                    style: TextStyle(fontSize: 14, color: colorScheme.onSurfaceVariant),
+                  ),
+                ],
+              ),
+            );
+          }
+
+          final reports = snapshot.data!.docs;
+
+          return ListView.builder(
+            padding: EdgeInsets.all(16),
+            itemCount: reports.length,
+            itemBuilder: (context, index) {
+              final reportDoc = reports[index];
+              final report = reportDoc.data() as Map<String, dynamic>;
+
+              return _buildReportCard(context, report, colorScheme);
+            },
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildReportCard(
+    BuildContext context,
+    Map<String, dynamic> report,
+    ColorScheme colorScheme,
+  ) {
+    final moodIcon = report['moodIcon'] ?? '😐';
+    final avgSentiment = (report['avgSentiment'] ?? 0.5) as num;
+    final bullyingIncidents = report['bullyingIncidents'] ?? 0;
+    final totalMessages = report['totalMessages'] ?? 0;
+    final generatedAt = report['generatedAt'] as dynamic;
+
+    // Generar título corto basado en sentimiento
+    String shortTitle;
+    if (bullyingIncidents > 0) {
+      shortTitle = 'Alerta detectada';
+    } else if (avgSentiment >= 0.7) {
+      shortTitle = 'Período excelente';
+    } else if (avgSentiment >= 0.5) {
+      shortTitle = 'Período positivo';
+    } else if (avgSentiment >= 0.3) {
+      shortTitle = 'Período neutral';
+    } else {
+      shortTitle = 'Período preocupante';
+    }
+
+    String dateText = 'Fecha desconocida';
+    if (generatedAt != null) {
+      try {
+        DateTime date;
+        if (generatedAt is String) {
+          date = DateTime.parse(generatedAt);
+        } else {
+          date = (generatedAt as Timestamp).toDate();
+        }
+        final now = DateTime.now();
+        final diff = now.difference(date);
+        if (diff.inDays == 0) {
+          dateText = 'Hoy';
+        } else if (diff.inDays == 1) {
+          dateText = 'Ayer';
+        } else if (diff.inDays < 7) {
+          dateText = 'Hace ${diff.inDays} días';
+        } else if (diff.inDays < 30) {
+          dateText = 'Hace ${(diff.inDays / 7).floor()} semanas';
+        } else {
+          dateText = '${date.day}/${date.month}/${date.year}';
+        }
+      } catch (e) {
+        dateText = 'Fecha desconocida';
+      }
+    }
+
+    // Color del borde según estado
+    Color borderColor;
+    if (bullyingIncidents > 0) {
+      borderColor = Colors.red;
+    } else if (avgSentiment >= 0.7) {
+      borderColor = Colors.green;
+    } else if (avgSentiment >= 0.5) {
+      borderColor = Colors.blue;
+    } else if (avgSentiment >= 0.3) {
+      borderColor = Colors.orange;
+    } else {
+      borderColor = Colors.red.shade300;
+    }
+
+    return Container(
+      margin: EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: colorScheme.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: borderColor.withValues(alpha: 0.3), width: 2),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 8,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
+      child: InkWell(
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => DetailedReportScreen(
+                childId: childId,
+                childName: childName,
+                report: report,
+              ),
+            ),
+          );
+        },
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child: Row(
+            children: [
+              // Icono de estado de ánimo
+              Container(
+                width: 60,
+                height: 60,
+                decoration: BoxDecoration(
+                  color: borderColor.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Center(
+                  child: Text(
+                    moodIcon,
+                    style: TextStyle(fontSize: 32),
+                  ),
+                ),
+              ),
+              SizedBox(width: 16),
+              // Información del reporte
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      shortTitle,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: colorScheme.onSurface,
+                      ),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      dateText,
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Icon(Icons.message, size: 14, color: colorScheme.onSurfaceVariant),
+                        SizedBox(width: 4),
+                        Text(
+                          '$totalMessages mensajes',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                        if (bullyingIncidents > 0) ...[
+                          SizedBox(width: 12),
+                          Icon(Icons.warning, size: 14, color: Colors.red),
+                          SizedBox(width: 4),
+                          Text(
+                            '$bullyingIncidents alertas',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.red,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              // Flecha
+              Icon(Icons.chevron_right, color: colorScheme.outlineVariant),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }

@@ -1,16 +1,97 @@
 const {onDocumentCreated} = require("firebase-functions/v2/firestore");
-const {onCall, HttpsError} = require("firebase-functions/v2/https");
+const {onCall, onRequest, HttpsError} = require("firebase-functions/v2/https");
 const {onSchedule} = require("firebase-functions/v2/scheduler");
 const {initializeApp} = require("firebase-admin/app");
-const {getFirestore} = require("firebase-admin/firestore");
+const {getFirestore, FieldValue} = require("firebase-admin/firestore");
 const {getMessaging} = require("firebase-admin/messaging");
 const {getStorage} = require("firebase-admin/storage");
 const {RtcTokenBuilder, RtcRole} = require("agora-token");
+const apn = require("@parse/node-apn");
+const path = require("path");
 
 // Cargar variables de entorno desde .env
 require("dotenv").config();
 
 initializeApp();
+
+// ═══════════════════════════════════════════════════════════════
+// CONFIGURACIÓN DE VOIP PUSH (APNs)
+// ═══════════════════════════════════════════════════════════════
+
+// Inicializar proveedor de APNs para VoIP
+let apnProvider = null;
+try {
+  const fs = require("fs");
+  const voipCertPath = path.join(__dirname, "voip_cert.pem");
+  const pemData = fs.readFileSync(voipCertPath, "utf8");
+
+  apnProvider = new apn.Provider({
+    cert: pemData,
+    key: pemData,
+    production: false, // ✅ Modo desarrollo - el certificado VoIP funciona en ambos modos
+  });
+  console.log("✅ APNs VoIP provider inicializado");
+} catch (error) {
+  console.warn("⚠️ No se pudo inicializar APNs VoIP provider:", error.message);
+  console.warn("   VoIP push no estará disponible hasta que se configure el certificado");
+}
+
+/**
+ * Enviar VoIP push notification a iOS
+ * @param {string} voipToken - Token VoIP del dispositivo
+ * @param {object} payload - Datos de la notificación
+ * @return {Promise<boolean>} - true si se envió exitosamente
+ */
+async function sendVoIPPush(voipToken, payload) {
+  if (!apnProvider) {
+    console.warn("⚠️ APNs provider no disponible, no se puede enviar VoIP push");
+    return false;
+  }
+
+  try {
+    const notification = new apn.Notification();
+
+    // ✅ Configuración específica para VoIP
+    notification.topic = "com.talia.chat.voip"; // Bundle ID + .voip
+    notification.pushType = "voip";
+    notification.payload = payload;
+    notification.priority = 10;
+    notification.expiry = 0; // VoIP pushes should not be stored
+
+    // ✅ CRÍTICO: Asegurar que NO hay propiedades de notificación visible
+    // VoIP pushes DEBEN ser silenciosas - iOS rechaza VoIP pushes con alert/badge/sound
+    delete notification.alert;
+    delete notification.badge;
+    delete notification.sound;
+    delete notification.contentAvailable;
+
+    console.log(`📱 [VoIP] Enviando push a token: ${voipToken.substring(0, 20)}...`);
+    console.log(`📱 [VoIP] Topic: ${notification.topic}`);
+    console.log(`📱 [VoIP] PushType: ${notification.pushType}`);
+    console.log(`📱 [VoIP] Priority: ${notification.priority}`);
+    console.log(`📱 [VoIP] Expiry: ${notification.expiry}`);
+    console.log(`📱 [VoIP] Payload:`, JSON.stringify(payload, null, 2));
+
+    const result = await apnProvider.send(notification, voipToken);
+
+    console.log(`📱 [VoIP] Result:`, JSON.stringify(result, null, 2));
+
+    if (result.failed && result.failed.length > 0) {
+      console.error(`❌ [VoIP] Error enviando push:`, JSON.stringify(result.failed[0], null, 2));
+      const failure = result.failed[0];
+      console.error(`❌ [VoIP] Status: ${failure.status}`);
+      console.error(`❌ [VoIP] Response: ${JSON.stringify(failure.response)}`);
+      return false;
+    }
+
+    console.log(`✅ [VoIP] Push enviado exitosamente`);
+    return true;
+  } catch (error) {
+    console.error(`❌ [VoIP] Excepción enviando push:`, error);
+    console.error(`❌ [VoIP] Error stack:`, error.stack);
+    return false;
+  }
+}
 
 // ═══════════════════════════════════════════════════════════════
 // CONFIGURACIÓN DE CORS
@@ -326,116 +407,60 @@ exports.sendNotificationOnCreate = onDocumentCreated(
       try {
         const db = getFirestore();
 
-        // 🚦 THROTTLING INTELIGENTE: Solo para notificaciones de chat
-        if (notification.type === "chat_message" && notification.senderId) {
-          const senderId = notification.senderId;
-          const senderName = notification.data?.senderName || "alguien";
+        // ⚡ OPTIMIZACIÓN: Todas las consultas en paralelo
+        const promises = [db.collection("users").doc(userId).get()];
 
-          // Contar notificaciones NO LEÍDAS del mismo remitente al mismo receptor
-          const unreadNotifications = await db.collection("notifications")
-              .where("userId", "==", userId)
-              .where("senderId", "==", senderId)
-              .where("type", "==", "chat_message")
-              .where("read", "==", false)
-              .get();
-
-          const unreadCount = unreadNotifications.size;
-          console.log(`📊 Mensajes no leídos de ${senderId} a ${userId}: ${unreadCount}`);
-
-          // ⚠️ RATE LIMIT DESACTIVADO TEMPORALMENTE PARA TESTING
-          // Descomentar para reactivar:
-          /*
-          if (unreadCount > 50) {
-            // Más de 50 mensajes sin leer: NO enviar más push
-            console.log(`🚫 Rate limit: ${unreadCount} mensajes no leídos. No enviar push.`);
-            await snapshot.ref.update({
-              sent: false,
-              throttled: true,
-              throttledReason: `Más de 50 mensajes no leídos de ${senderId}`,
-            });
-            return;
-          } else if (unreadCount >= 10) {
-            // 10+ mensajes: Enviar notificación agrupada
-            console.log(`📢 Enviando notificación agrupada (${unreadCount} mensajes)`);
-            notification.title = `💬 ${senderName}`;
-            notification.body = `Tienes varios mensajes de ${senderName}`;
-          }
-          */
-          // Enviar notificación normal siempre (rate limit desactivado)
+        if (notification.senderId) {
+          promises.push(db.collection("users").doc(notification.senderId).get());
+          // Alias del contacto
+          const aliasId = `${userId}__${notification.senderId}`;
+          promises.push(db.collection("contact_aliases").doc(aliasId).get());
         }
 
-        // Obtener el FCM token del usuario
-        console.log(`🔍 Buscando usuario con ID: ${userId}`);
-        const userDoc = await db.collection("users").doc(userId).get();
+        const results = await Promise.all(promises);
+        const userDoc = results[0];
+        const senderDoc = results[1] || null;
+        const aliasDoc = results[2] || null;
 
         if (!userDoc.exists) {
-          console.log(`❌ Usuario ${userId} no encontrado en Firestore`);
-          console.log(`📋 Verifica que este usuario exista en la colección 'users'`);
+          console.log(`❌ Usuario ${userId} no encontrado`);
           return;
         }
 
-        console.log(`✅ Usuario ${userId} encontrado`);
         const userData = userDoc.data();
-        console.log(`📊 Datos del usuario:`, JSON.stringify({
-          name: userData.name,
-          email: userData.email,
-          hasFcmToken: !!userData.fcmToken,
-        }));
         const fcmToken = userData.fcmToken;
+        const voipToken = userData.voipToken; // Token VoIP para iOS
 
         if (!fcmToken) {
-          console.log(`❌ Usuario ${userId} no tiene FCM token`);
-          console.log(`📋 El usuario debe abrir la app para registrar su token`);
+          console.log(`❌ Sin FCM token`);
           return;
         }
 
-        console.log(`✅ FCM Token encontrado: ${fcmToken.substring(0, 20)}...`);
-
-        // Obtener datos del sender si existe (para mostrar su foto en la notificación)
+        // Datos del sender
         let senderPhotoURL = null;
         let senderDisplayName = null;
-        if (notification.senderId) {
-          try {
-            const senderDoc = await db.collection("users").doc(notification.senderId).get();
-            if (senderDoc.exists) {
-              const senderData = senderDoc.data();
-              senderPhotoURL = senderData.photoURL || null;
-              senderDisplayName = senderData.name || null;
-              console.log(`📸 Foto del sender obtenida: ${senderPhotoURL ? "Sí" : "No"}`);
-            }
-          } catch (error) {
-            console.log(`⚠️ No se pudo obtener foto del sender: ${error}`);
-          }
+        if (senderDoc && senderDoc.exists) {
+          const senderData = senderDoc.data();
+          senderPhotoURL = senderData.photoURL || null;
+          senderDisplayName = senderData.name || null;
 
-          // Obtener alias del contacto si existe
-          try {
-            const aliasId = `${userId}__${notification.senderId}`;
-            const aliasDoc = await db.collection("contact_aliases").doc(aliasId).get();
-            if (aliasDoc.exists) {
-              const aliasData = aliasDoc.data();
-              const alias = aliasData.alias;
-              if (alias) {
-                senderDisplayName = alias;
-                console.log(`👤 Alias encontrado para ${notification.senderId}: "${alias}"`);
-              }
-            } else {
-              console.log(`ℹ️ No hay alias para ${notification.senderId}`);
+          // Usar alias si existe
+          if (aliasDoc && aliasDoc.exists) {
+            const alias = aliasDoc.data().alias;
+            if (alias) {
+              senderDisplayName = alias;
             }
-          } catch (error) {
-            console.log(`⚠️ Error al obtener alias: ${error}`);
           }
+        }
 
-          // Reemplazar el nombre del sender en el título de la notificación si se encontró
-          if (senderDisplayName && notification.title) {
-            // Reemplazar el nombre del sender en el título
-            // Asumimos que el título puede contener el nombre del sender
-            const originalTitle = notification.title;
-            notification.title = notification.title.replace(
-                notification.data?.senderName || senderDisplayName,
-                senderDisplayName
-            );
-            console.log(`📝 Título actualizado: "${originalTitle}" → "${notification.title}"`);
-          }
+        // Reemplazar el nombre del sender en el título si se encontró
+        if (senderDisplayName && notification.title) {
+          const originalTitle = notification.title;
+          notification.title = notification.title.replace(
+              notification.data?.senderName || senderDisplayName,
+              senderDisplayName
+          );
+          console.log(`📝 Título: "${originalTitle}" → "${notification.title}"`);
         }
 
         // Preparar el mensaje de notificación
@@ -456,14 +481,55 @@ exports.sendNotificationOnCreate = onDocumentCreated(
         dataPayload.notificationId = event.params.notificationId;
         dataPayload.type = notification.type || "general";
 
-        // Agregar URL de imagen del sender si existe
+        // Agregar URL de foto del sender si existe (para largeIcon en Flutter)
         if (senderPhotoURL) {
-          dataPayload.imageUrl = senderPhotoURL;
+          dataPayload.senderPhotoUrl = senderPhotoURL;
         }
 
-        // Configuración especial para llamadas (audio/video)
-        const isCall = notification.type === "audio_call" || notification.type === "video_call";
+        // Configuración especial para llamadas (audio/video/emergency)
+        const isCall = notification.type === "audio_call" || notification.type === "video_call" || notification.type === "emergency";
 
+        // ✅ VOIP PUSH: Si es una llamada y tiene voipToken, enviar VoIP push
+        if (isCall && voipToken) {
+          console.log(`📱 [VoIP] Llamada detectada - enviando VoIP push`);
+
+          // Para emergencias, generar callId y channelName si no existen
+          let callId = dataPayload.callId;
+          let channelName = dataPayload.channelName;
+
+          if (notification.type === "emergency") {
+            callId = callId || dataPayload.emergencyId || `emergency_${Date.now()}`;
+            channelName = channelName || `emergency_${notification.senderId}_${userId}`;
+          }
+
+          const voipPayload = {
+            callId: callId,
+            callerId: notification.senderId || dataPayload.callerId,
+            callerName: senderDisplayName || notification.data?.callerName || notification.data?.childName,
+            channelName: channelName,
+            callType: notification.type === "audio_call" ? "audio" : "video",
+            isEmergency: notification.type === "emergency" ? "true" : (dataPayload.isEmergency || "false"),
+            callerPhotoURL: senderPhotoURL || "",
+          };
+
+          const voipSent = await sendVoIPPush(voipToken, voipPayload);
+
+          if (voipSent) {
+            console.log(`✅ [VoIP] Push enviado - CallKit se mostrará automáticamente`);
+            // Si VoIP push se envió exitosamente, NO enviar notificación FCM normal
+            // para evitar duplicados
+            await snapshot.ref.update({
+              sentAt: new Date().toISOString(),
+              sent: true,
+              sentViaVoIP: true,
+            });
+            return; // Salir - no enviar FCM
+          } else {
+            console.warn(`⚠️ [VoIP] Fallo - enviando FCM como fallback`);
+          }
+        }
+
+        // Para llamadas: incluir notification para que iOS la muestre con app cerrada
         const message = {
           token: fcmToken,
           notification: {
@@ -479,36 +545,52 @@ exports.sendNotificationOnCreate = onDocumentCreated(
               priority: isCall ? "max" : (notification.priority === "high" ? "high" : "default"),
               tag: isCall ? "incoming_call" : undefined,
               sticky: isCall ? true : false,
-              // Agregar foto del sender como largeIcon (circular grande a la izquierda)
-              imageUrl: senderPhotoURL || undefined,
+              // NO agregar imageUrl aquí - se maneja en Flutter como largeIcon
             },
           },
           apns: {
             headers: {
               // Prioridad alta para llamadas
               "apns-priority": isCall ? "10" : "5",
+              // Usar 'alert' para que iOS muestre la notificación incluso con app cerrada
               "apns-push-type": "alert",
             },
             payload: {
               aps: {
-                alert: {
-                  title: notification.title || "Talia",
-                  body: notification.body || "Tienes una nueva notificación",
-                },
-                sound: isCall ? "default" : "default",
-                badge: 1,
-                contentAvailable: true,
-                // mutableContent permite al Notification Service Extension modificar la notificación
-                mutableContent: senderPhotoURL ? true : false,
-                // Para llamadas, interrumpir cualquier cosa
-                interruptionLevel: isCall ? "time-sensitive" : "active",
-                category: isCall ? "INCOMING_CALL" : undefined,
+                // Para llamadas: incluir alert + content-available para despertar la app
+                ...(isCall ? {
+                  alert: {
+                    title: notification.title || "Llamada entrante",
+                    body: notification.body || "Tienes una llamada entrante",
+                  },
+                  "content-available": 1,
+                  sound: "default",
+                  badge: 1,
+                } : {
+                  alert: {
+                    title: notification.title || "Talia",
+                    body: notification.body || "Tienes una nueva notificación",
+                  },
+                  sound: "default",
+                  badge: 1,
+                  // IMPORTANTE: mutable-content activa el Notification Service Extension
+                  ...(senderPhotoURL ? {"mutable-content": 1} : {}),
+                }),
               },
-              // Agregar la URL de la imagen en el payload para que el Service Extension la use
-              imageUrl: senderPhotoURL || undefined,
+              // Datos para Communication Notification
+              ...(senderPhotoURL ? {
+                senderPhotoUrl: senderPhotoURL,
+                senderName: senderDisplayName || "Usuario",
+                senderId: notification.senderId || "unknown",
+              } : {}),
             },
+            // fcm_options con image para que FCM maneje la imagen automáticamente
+            ...(senderPhotoURL ? {fcm_options: {image: senderPhotoURL}} : {}),
           },
         };
+
+        // Log del payload completo para debugging
+        console.log("📤 Mensaje APNs completo:", JSON.stringify(message.apns, null, 2));
 
         // Enviar la notificación push
         const messaging = getMessaging();
@@ -537,21 +619,24 @@ exports.sendNotificationOnCreate = onDocumentCreated(
 exports.generateAgoraToken = onCall(
     {
       cors: true,
-      // App Check se verifica manualmente dentro de la función
+      // ✅ PRODUCCIÓN: Verificar App Check obligatorio
+      enforceAppCheck: true, // Rechaza solicitudes sin token válido de App Check
+      consumeAppCheckToken: true, // Previene reutilización de tokens
     },
     async (request) => {
-      console.log("🎥 Generando token de Agora");
-
-      // ✅ APP CHECK: Verificar token
-      const appCheckValid = await verifyAppCheckToken(request);
-      if (!appCheckValid) {
-        console.error("❌ Token de App Check inválido");
-        throw new HttpsError("unauthenticated", "Solicitud no autorizada - App Check inválido");
-      }
+      console.log("🎥 ===== GENERANDO TOKEN DE AGORA =====");
+      console.log("📱 App Check info - request.app:", request.app);
+      console.log("🔐 Auth info - request.auth:", request.auth);
+      console.log("📦 Raw auth object:", JSON.stringify(request.auth));
+      console.log("📦 Request context:", {
+        instanceIdToken: request.instanceIdToken,
+        rawRequest: !!request.rawRequest,
+      });
 
       // Verificar que el usuario esté autenticado
       if (!request.auth) {
-        console.log("❌ Usuario no autenticado");
+        console.log("❌ Usuario no autenticado - request.auth es null/undefined");
+        console.log("❌ Estructura completa del request:", Object.keys(request));
         throw new HttpsError("unauthenticated", "Usuario no autenticado");
       }
 
@@ -627,6 +712,192 @@ exports.generateAgoraToken = onCall(
       }
     }
 );
+
+/**
+ * Analiza mensajes por lotes con Gemini AI usando sistema de ponderación avanzada
+ * @param {Array} messages - Array de mensajes con {text, timestamp, date}
+ * @param {number} days - Número de días del período
+ * @param {Date} periodStart - Fecha de inicio del período
+ * @param {Date} periodEnd - Fecha de fin del período
+ * @return {Promise<Object>} Análisis completo con ponderación
+ */
+async function analyzeMessagesWithGemini(messages, days, periodStart, periodEnd) {
+  if (!genAI) {
+    console.warn("⚠️ Gemini API no configurado, usando análisis básico");
+    return {
+      sentiment_overall: "neutral",
+      sentiment_score: 0.5,
+      weighted_sentiment_score: 0.5,
+      mood_description: "No se pudo analizar (API no configurada)",
+      mood_icon: "😐",
+      bullying_detected: false,
+      bullying_severity: 0,
+      bullying_indicators: [],
+      positive_aspects: [],
+      concerns: ["API de IA no configurada"],
+      recommendations: ["Configurar Gemini API para análisis avanzado"],
+      event_analysis: {
+        critical_events: {count: 0, details: []},
+        negative_grave_events: {count: 0, details: []},
+        negative_moderate_events: {count: 0, details: []},
+        neutral_events: {count: messages.length},
+        positive_moderate_events: {count: 0, details: []},
+        positive_significant_events: {count: 0, details: []},
+      },
+      weighted_calculation: {
+        critical_weight: 0,
+        negative_grave_weight: 0,
+        negative_moderate_weight: 0,
+        positive_significant_weight: 0,
+        final_weighted_score: 0.5,
+        dominant_factor: "neutral",
+      },
+      message_count_positive: 0,
+      message_count_negative: 0,
+      message_count_neutral: messages.length,
+    };
+  }
+
+  try {
+    const model = genAI.getGenerativeModel({
+      model: "gemini-2.5-flash",
+    });
+
+    const messagesText = messages.map((m) => m.text).join("\n---\n");
+
+    const prompt = `Eres un experto en psicología infantil y análisis de comunicación. Analiza los siguientes mensajes de un niño/adolescente de los ÚLTIMOS ${days} DÍAS usando un sistema de PONDERACIÓN AVANZADA que prioriza eventos emocionales graves.
+
+PERIODO ANALIZADO: Últimos ${days} días (${periodStart.getDate()}/${periodStart.getMonth() + 1} - ${periodEnd.getDate()}/${periodEnd.getMonth() + 1}/${periodEnd.getFullYear()})
+TOTAL DE MENSAJES: ${messages.length}
+
+MENSAJES A ANALIZAR:
+${messagesText}
+
+SISTEMA DE PONDERACIÓN (del más grave al menos grave):
+- CRÍTICOS (peso x5): bullying, autolesión, amenazas, depresión severa, ideas suicidas
+- NEGATIVOS GRAVES (peso x3): conflictos familiares serios, problemas académicos graves, ansiedad severa, aislamiento social
+- NEGATIVOS MODERADOS (peso x2): tristeza persistente, frustración, enojo, problemas menores
+- NEUTROS (peso x1): actividades cotidianas, conversaciones normales
+- POSITIVOS MODERADOS (peso x1): alegría momentánea, actividades divertidas
+- POSITIVOS SIGNIFICATIVOS (peso x2): logros importantes, momentos de felicidad profunda, apoyo social fuerte
+
+REGLAS DE ANÁLISIS:
+1. UN SOLO evento CRÍTICO debe dominar el estado general, incluso con múltiples eventos positivos
+2. Eventos NEGATIVOS GRAVES requieren al menos 3-4 eventos POSITIVOS SIGNIFICATIVOS para equilibrar
+3. El contexto y la frecuencia de eventos negativos es crucial
+4. Considera patrones: ¿los eventos negativos están aumentando o disminuyendo?
+
+EJEMPLOS DE PONDERACIÓN:
+- 5 mensajes positivos + 1 bullying = ESTADO NEGATIVO (bullying domina)
+- 2 conflictos familiares + 3 alegrias menores = ESTADO NEGATIVO (conflictos pesan más)
+- 1 logro importante + 2 alegrias + 1 tristeza menor = ESTADO POSITIVO (equilibrio favorable)
+
+Proporciona tu análisis en el siguiente formato JSON EXACTO (solo JSON, sin texto adicional):
+{
+  "sentiment_overall": "positive|negative|neutral",
+  "sentiment_score": 0.0 a 1.0,
+  "weighted_sentiment_score": 0.0 a 1.0,
+  "mood_description": "descripción breve del estado de ánimo considerando ponderación",
+  "mood_icon": "emoji representativo",
+  "bullying_detected": true|false,
+  "bullying_severity": 0.0 a 1.0,
+  "bullying_indicators": ["tipos generales de indicadores, SIN palabras exactas ni nombres"],
+  "positive_aspects": ["aspectos positivos detectados de forma GENERAL"],
+  "concerns": ["preocupaciones identificadas de forma GENERAL, sin mencionar palabras exactas"],
+  "recommendations": ["recomendaciones para los padres"],
+  "event_analysis": {
+    "critical_events": {"count": número, "details": ["tipos de eventos críticos de forma GENERAL, sin palabras exactas"]},
+    "negative_grave_events": {"count": número, "details": ["tipos de eventos negativos graves de forma GENERAL"]},
+    "negative_moderate_events": {"count": número, "details": ["tipos de eventos negativos moderados de forma GENERAL"]},
+    "neutral_events": {"count": número},
+    "positive_moderate_events": {"count": número, "details": ["tipos de eventos positivos moderados de forma GENERAL"]},
+    "positive_significant_events": {"count": número, "details": ["tipos de eventos positivos significativos de forma GENERAL"]}
+  },
+  "weighted_calculation": {
+    "critical_weight": "valor calculado (críticos * 5)",
+    "negative_grave_weight": "valor calculado (neg_graves * 3)",
+    "negative_moderate_weight": "valor calculado (neg_moderados * 2)",
+    "positive_significant_weight": "valor calculado (pos_significativos * 2)",
+    "final_weighted_score": "score final ponderado",
+    "dominant_factor": "qué tipo de eventos domina el análisis"
+  },
+  "message_count_positive": número,
+  "message_count_negative": número,
+  "message_count_neutral": número
+}
+
+REGLAS DE PRIVACIDAD CRÍTICAS:
+- NO menciones NUNCA palabras exactas de los mensajes
+- NO menciones NUNCA nombres de personas, contactos o usuarios
+- NO incluyas fragmentos literales de conversaciones
+- Describe los eventos de forma GENERAL (ej: "expresiones de tristeza", "lenguaje agresivo", NO "te odio")
+- Respeta la privacidad del niño en todo momento
+
+IMPORTANTE:
+- Responde SOLO con el JSON, sin texto adicional antes o después
+- Aplica ESTRICTAMENTE el sistema de ponderación: eventos graves SIEMPRE dominan
+- weighted_sentiment_score debe reflejar la ponderación real, no solo un promedio
+- Si hay eventos críticos, el sentiment_overall debe ser "negative" independientemente de eventos positivos
+- Sé preciso y profesional en tu análisis considerando el peso emocional real de cada evento`;
+
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text();
+
+    // Limpiar la respuesta (remover markdown si existe)
+    let cleanedResponse = text.trim();
+    if (cleanedResponse.startsWith("```json")) {
+      cleanedResponse = cleanedResponse.substring(7);
+    }
+    if (cleanedResponse.startsWith("```")) {
+      cleanedResponse = cleanedResponse.substring(3);
+    }
+    if (cleanedResponse.endsWith("```")) {
+      cleanedResponse = cleanedResponse.substring(0, cleanedResponse.length - 3);
+    }
+    cleanedResponse = cleanedResponse.trim();
+
+    const analysis = JSON.parse(cleanedResponse);
+    console.log("🤖 Análisis Gemini:", JSON.stringify(analysis, null, 2));
+
+    return analysis;
+  } catch (error) {
+    console.error("❌ Error analizando mensajes con Gemini:", error);
+    // Retornar análisis por defecto en caso de error
+    return {
+      sentiment_overall: "neutral",
+      sentiment_score: 0.5,
+      weighted_sentiment_score: 0.5,
+      mood_description: "No se pudo analizar (error en IA)",
+      mood_icon: "😐",
+      bullying_detected: false,
+      bullying_severity: 0,
+      bullying_indicators: [],
+      positive_aspects: [],
+      concerns: ["Error en análisis de IA: " + error.message],
+      recommendations: ["Revisar mensajes manualmente"],
+      event_analysis: {
+        critical_events: {count: 0, details: []},
+        negative_grave_events: {count: 0, details: []},
+        negative_moderate_events: {count: 0, details: []},
+        neutral_events: {count: messages.length},
+        positive_moderate_events: {count: 0, details: []},
+        positive_significant_events: {count: 0, details: []},
+      },
+      weighted_calculation: {
+        critical_weight: 0,
+        negative_grave_weight: 0,
+        negative_moderate_weight: 0,
+        positive_significant_weight: 0,
+        final_weighted_score: 0.5,
+        dominant_factor: "neutral",
+      },
+      message_count_positive: 0,
+      message_count_negative: 0,
+      message_count_neutral: messages.length,
+    };
+  }
+}
 
 // Función para generar reporte de análisis de mensajes del hijo
 // Solo padres pueden llamar esta función para analizar conversaciones de sus hijos
@@ -710,134 +981,122 @@ exports.generateChildReport = onCall(
 
         console.log(`💬 Chats encontrados: ${chatsSnapshot.docs.length}`);
 
-        // 3. Analizar mensajes de todos los participantes en esos chats
+        // 3. Recopilar TODOS los mensajes del HIJO en el período
         const weekAgo = new Date();
         weekAgo.setDate(weekAgo.getDate() - days);
 
-        let totalMessages = 0;
-        let sentimentScores = {positive: 0, negative: 0, neutral: 0};
-        let bullyingIncidents = [];
-        const messagesAnalyzed = [];
+        const allChildMessages = [];
 
         for (const chatDoc of chatsSnapshot.docs) {
           const chatId = chatDoc.id;
-          const chatData = chatDoc.data();
 
-          // Obtener todos los mensajes de este chat (última semana)
+          // Obtener solo mensajes enviados POR EL HIJO
           const messagesSnapshot = await db
               .collection("chats")
               .doc(chatId)
               .collection("messages")
+              .where("senderId", "==", childId)
               .where("timestamp", ">=", weekAgo)
               .orderBy("timestamp", "asc")
               .get();
 
           console.log(
-              `📨 Chat ${chatId}: ${messagesSnapshot.docs.length} mensajes`
+              `📨 Chat ${chatId}: ${messagesSnapshot.docs.length} mensajes del hijo`
           );
 
-          // Analizar cada mensaje
           for (const msgDoc of messagesSnapshot.docs) {
             const msgData = msgDoc.data();
             const text = msgData.text || "";
-            const senderId = msgData.senderId || "";
 
-            if (!text || !senderId) continue;
-
-            totalMessages++;
-
-            // Análisis de sentimiento (usando lógica simple de keywords)
-            const sentimentResult = analyzeSentiment(text);
-            sentimentScores[sentimentResult.sentiment]++;
-
-            // Detección de bullying
-            const bullyingResult = detectBullying(text);
-
-            if (bullyingResult.hasBullying) {
-              bullyingIncidents.push({
-                chatId: chatId,
-                messageId: msgDoc.id,
-                timestamp: msgData.timestamp.toDate().toISOString(),
-                severity: bullyingResult.severity,
-                // NO incluir el texto exacto ni nombres para privacidad
+            if (text.trim()) {
+              allChildMessages.push({
+                id: msgDoc.id,
+                text: text,
+                timestamp: msgData.timestamp,
+                date: msgData.timestamp.toDate(),
               });
             }
-
-            messagesAnalyzed.push({
-              chatId: chatId,
-              messageId: msgDoc.id,
-              senderId: senderId,
-              sentiment: sentimentResult.sentiment,
-              sentimentScore: sentimentResult.score,
-              hasBullying: bullyingResult.hasBullying,
-              timestamp: msgData.timestamp,
-            });
           }
         }
 
-        // 4. Generar reporte agregado
-        console.log(`✅ Análisis completado: ${totalMessages} mensajes`);
+        console.log(`📊 Total mensajes del hijo: ${allChildMessages.length}`);
 
+        if (allChildMessages.length === 0) {
+          console.log("⚠️ No hay mensajes para analizar");
+          throw new HttpsError("not-found", "No hay mensajes de los últimos " + days + " días para analizar");
+        }
+
+        // Ordenar mensajes por fecha
+        allChildMessages.sort((a, b) => a.date - b.date);
+
+        // 4. Analizar mensajes con Gemini AI (usando el enfoque de ponderación avanzada)
+        console.log(`🤖 Analizando ${allChildMessages.length} mensajes con Gemini AI...`);
+
+        const aiAnalysis = await analyzeMessagesWithGemini(allChildMessages, days, weekAgo, new Date());
+
+        console.log(`✅ Análisis con IA completado`);
+
+        // 5. Construir reporte completo usando los resultados de Gemini
         const report = {
           childId: childId,
           parentId: parentId,
+          period: `Últimos ${days} días`,
           periodDays: days,
-          totalMessages: totalMessages,
-          totalChats: chatsSnapshot.docs.length,
-          sentiment: {
-            positive: sentimentScores.positive,
-            negative: sentimentScores.negative,
-            neutral: sentimentScores.neutral,
-            positivePercentage:
-              totalMessages > 0 ?
-                ((sentimentScores.positive / totalMessages) * 100).toFixed(1) :
-                0,
-            negativePercentage:
-              totalMessages > 0 ?
-                ((sentimentScores.negative / totalMessages) * 100).toFixed(1) :
-                0,
-          },
-          bullying: {
-            incidents: bullyingIncidents.length,
-            hasHighSeverity: bullyingIncidents.some(
-                (i) => i.severity === "high"
-            ),
-            details: bullyingIncidents, // Solo metadata, sin texto
-          },
-          generatedAt: new Date().toISOString(),
+          periodStart: weekAgo,
+          periodEnd: new Date(),
+          totalMessages: allChildMessages.length,
+
+          // Sentimiento general
+          sentiment_overall: aiAnalysis.sentiment_overall,
+          avgSentiment: aiAnalysis.weighted_sentiment_score || aiAnalysis.sentiment_score || 0.5,
+          weightedSentimentScore: aiAnalysis.weighted_sentiment_score,
+          originalSentimentScore: aiAnalysis.sentiment_score,
+
+          // Estado de ánimo
+          moodIcon: aiAnalysis.mood_icon || "😐",
+          moodStatus: aiAnalysis.mood_description || "neutral",
+
+          // Contadores de mensajes
+          positiveCount: aiAnalysis.message_count_positive || 0,
+          negativeCount: aiAnalysis.message_count_negative || 0,
+          neutralCount: aiAnalysis.message_count_neutral || 0,
+
+          // Bullying
+          bullyingDetected: aiAnalysis.bullying_detected || false,
+          bullyingSeverity: aiAnalysis.bullying_severity || 0,
+          bullyingIndicators: aiAnalysis.bullying_indicators || [],
+          bullyingIncidents: aiAnalysis.bullying_detected ? 1 : 0,
+
+          // Aspectos positivos y preocupaciones
+          positiveAspects: aiAnalysis.positive_aspects || [],
+          concerns: aiAnalysis.concerns || [],
+          recommendations: aiAnalysis.recommendations || [],
+
+          // Análisis ponderado completo
+          eventAnalysis: aiAnalysis.event_analysis || {},
+          weightedCalculation: aiAnalysis.weighted_calculation || {},
+
+          // Metadata
+          aiGenerated: true,
+          aiModel: "gemini-pro",
+          generatedAt: new Date(),
+          percentageChange: 0, // TODO: calcular comparando con reporte anterior
         };
 
-        // 5. Guardar reporte en Firestore (opcional)
-        const reportRef = await db.collection("weekly_reports").add({
-          ...report,
-          createdAt: new Date(),
-        });
+        // 6. Guardar reporte en Firestore
+        const reportRef = await db.collection("weekly_reports").add(report);
 
         console.log(`✅ Reporte guardado: ${reportRef.id}`);
 
-        // 6. Guardar análisis individuales en message_analysis
-        const batch = db.batch();
-        for (const msgAnalysis of messagesAnalyzed) {
-          const analysisRef = db
-              .collection("message_analysis")
-              .doc(`${msgAnalysis.chatId}_${msgAnalysis.messageId}`);
+        // 7. Guardar también el análisis en ai_batch_analysis para compatibilidad
+        await db.collection("ai_batch_analysis").add({
+          childId: childId,
+          messagesAnalyzed: allChildMessages.length,
+          analysis: aiAnalysis,
+          analyzedAt: new Date(),
+        });
 
-          batch.set(analysisRef, {
-            messageId: msgAnalysis.messageId,
-            chatId: msgAnalysis.chatId,
-            senderId: msgAnalysis.senderId,
-            sentiment: msgAnalysis.sentiment,
-            sentimentScore: msgAnalysis.sentimentScore,
-            hasBullying: msgAnalysis.hasBullying,
-            analyzedAt: new Date(),
-            analyzedBy: "cloud_function",
-          });
-        }
-
-        await batch.commit();
-        console.log(
-            `✅ Guardados ${messagesAnalyzed.length} análisis individuales`
-        );
+        console.log(`✅ Análisis guardado en ai_batch_analysis`);
 
         return {
           success: true,
@@ -1072,10 +1331,24 @@ exports.createParentChildLink = onCall({
 
     console.log(`📋 Intentando vincular padre: ${parentId} con hijo: ${childId}`);
 
-    // 3. Validar que el caller es el padre o el hijo
+    // 3. Validar que el caller es el padre, el hijo, o un padre existente del hijo
+    let isExistingParent = false;
     if (callerId !== parentId && callerId !== childId) {
-      console.error(`❌ Usuario ${callerId} no autorizado (no es padre ni hijo)`);
-      throw new HttpsError("permission-denied", "No autorizado: debes ser el padre o el hijo para crear el vínculo");
+      // Verificar si el caller es un padre existente del hijo
+      const existingLinks = await db.collection("parent_child_links")
+        .where("childId", "==", childId)
+        .where("parentId", "==", callerId)
+        .where("status", "==", "approved")
+        .limit(1)
+        .get();
+
+      if (!existingLinks.empty) {
+        isExistingParent = true;
+        console.log(`✅ Usuario ${callerId} es padre existente aprobando vinculación adicional`);
+      } else {
+        console.error(`❌ Usuario ${callerId} no autorizado (no es padre, hijo, ni padre existente)`);
+        throw new HttpsError("permission-denied", "No autorizado: debes ser el padre, el hijo, o un padre existente para crear el vínculo");
+      }
     }
 
     // 4. Si se proporciona código, validarlo
@@ -1211,12 +1484,22 @@ exports.createParentChildLink = onCall({
     batch.set(
       childLocationRef,
       {
-        approvedParents: admin.firestore.FieldValue.arrayUnion(parentId),
+        approvedParents: FieldValue.arrayUnion(parentId),
       },
       { merge: true }
     );
 
     console.log(`✅ Preparando actualización de approvedParents en user_locations`);
+
+    // Actualizar rol del padre a 'parent' si no lo es ya
+    if (parentData.role !== 'parent') {
+      const parentRef = db.collection("users").doc(parentId);
+      batch.update(parentRef, {
+        role: 'parent',
+        updatedAt: now,
+      });
+      console.log(`✅ Preparando actualización de rol a 'parent' para ${parentId}`);
+    }
 
     // Si se usó un código, marcarlo como usado
     if (code) {
@@ -1251,7 +1534,7 @@ exports.createParentChildLink = onCall({
         const contactBatch = db.batch();
         childContactsSnapshot.docs.forEach((doc) => {
           contactBatch.update(doc.ref, {
-            approvedParentIds: admin.firestore.FieldValue.arrayUnion(parentId),
+            approvedParentIds: FieldValue.arrayUnion(parentId),
           });
         });
         await contactBatch.commit();
@@ -2159,6 +2442,836 @@ exports.updateGroupPermissionStatus = onCall(
 );
 
 // ═══════════════════════════════════════════════════════════════
+// MODERACIÓN DE CONTENIDO CON IA (GEMINI)
+// ═══════════════════════════════════════════════════════════════
+
+const {GoogleGenerativeAI} = require("@google/generative-ai");
+
+// Configurar Gemini API
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const genAI = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
+
+/**
+ * Analiza un mensaje con Gemini AI para detectar contenido inapropiado
+ * @param {string} messageText - Texto del mensaje a analizar
+ * @param {string} messageType - Tipo de mensaje (text, image, video, audio)
+ * @param {string} conversationContext - Contexto de la conversación (últimos mensajes)
+ * @return {Promise<Object>} Resultado del análisis con isInappropriate, severity, reason
+ */
+async function analyzeMessageWithGemini(messageText, messageType = "text", conversationContext = "", moderationLevel = "high", participantsAges = [], participantsLocations = []) {
+  if (!genAI) {
+    console.warn("⚠️ Gemini API no configurado, aprobando mensaje automáticamente");
+    return {
+      isInappropriate: false,
+      severity: "none",
+      reason: "API no configurada",
+    };
+  }
+
+  try {
+    // Usar gemini-2.5-flash que está disponible y es el modelo estable más reciente
+    const model = genAI.getGenerativeModel({
+      model: "gemini-2.5-flash",
+    });
+
+    const contextSection = conversationContext ?
+      `\nCONTEXTO DE LA CONVERSACIÓN (últimos mensajes):\n${conversationContext}\n` :
+      "";
+
+    // Determinar si AMBOS participantes son adultos
+    const allAdults = participantsAges.length >= 2 && participantsAges.every(age => age >= 18);
+    const hasMinor = participantsAges.some(age => age < 18);
+
+    // Construir sección de contexto de participantes
+    const participantsSection = `
+INFORMACIÓN DE LOS PARTICIPANTES:
+- Edades: ${participantsAges.length > 0 ? participantsAges.join(', ') + ' años' : 'no especificadas'}
+- Ubicaciones: ${participantsLocations.length > 0 ? participantsLocations.join(', ') : 'no especificadas'}
+- Contexto: ${allAdults ? 'AMBOS son adultos (>18 años)' : hasMinor ? 'Hay al menos UN MENOR presente (<18 años)' : 'Edades no especificadas'}
+`;
+
+    // Determinar instrucciones según el nivel de moderación
+    const moderationInstructions = moderationLevel === "high" ? `
+NIVEL DE MODERACIÓN: HIGH (ESTRICTO)
+- Bloquea cualquier contenido potencialmente peligroso
+- Bloquea insultos, vulgaridades, y lenguaje inapropiado si hay un niño involucrado
+- Sé MUY precavido: ante la duda, mejor bloquear
+- Protege a menores de cualquier contenido cuestionable
+` : `
+NIVEL DE MODERACIÓN: LOW (PERMISIVO)
+- Solo bloquea contenido MUY severo o cuando estés 100% seguro
+- Permite lenguaje coloquial y vulgaridades si AMBOS son adultos
+- Solo bloquea: amenazas reales, contenido sexual explícito, grooming, autolesión
+- Da el beneficio de la duda: si no estás completamente seguro, NO bloquees
+`;
+
+    // Instrucciones específicas según edad de participantes
+    const ageInstructions = allAdults ? `
+⚠️ IMPORTANTE - CHAT ENTRE ADULTOS:
+- AMBOS participantes son adultos (>18 años)
+- NO bloquees vulgaridades, palabrotas, o lenguaje coloquial entre adultos
+- NO bloquees bromas adultas o humor irreverente
+- Solo bloquea contenido realmente peligroso: amenazas serias, acoso severo, contenido ilegal
+- Respeta la libertad de expresión entre adultos
+` : hasMinor ? `
+⚠️ IMPORTANTE - HAY UN MENOR PRESENTE:
+- Al menos uno de los participantes es menor de 18 años
+- Aplica protección de menores según el nivel de moderación configurado
+- Si nivel es HIGH: Bloquea insultos, vulgaridades, y contenido inapropiado
+- Si nivel es LOW: Solo bloquea contenido muy severo
+` : "";
+
+    const prompt = `Eres un experto en psicología infantil y protección de menores. Analiza el siguiente mensaje para detectar contenido inapropiado.
+
+${participantsSection}
+${moderationInstructions}
+${ageInstructions}
+${contextSection}
+MENSAJE ACTUAL A ANALIZAR:
+"${messageText}"
+Tipo: ${messageType}
+
+CATEGORÍAS DE CONTENIDO INAPROPIADO (ordenadas por gravedad):
+
+🚨 CRÍTICO (severity: high):
+- Amenazas de violencia física o daño
+- Contenido sexual explícito o solicitudes sexuales
+- Grooming o manipulación emocional de menores
+- Autolesión o ideación suicida
+- Compartir información personal peligrosa (dirección, ubicación en tiempo real)
+- Contenido relacionado con drogas duras o actividades ilegales graves
+
+⚠️ GRAVE (severity: medium):
+- Bullying: insultos directos (estúpido/a, tonto/a, idiota, feo/a, gordo/a, etc.)
+- Acoso persistente (detectar patrones en el contexto)
+- Lenguaje vulgar u obsceno (palabrotas, groserías)
+- Discriminación o discurso de odio (racismo, sexismo, homofobia)
+- Presión para realizar acciones inapropiadas
+- Referencias a alcohol, cigarrillos o contenido para adultos
+- Burlas sobre apariencia física, capacidades o identidad
+
+⚡ MODERADO (severity: low):
+- Lenguaje levemente ofensivo en contexto claramente amistoso
+- Bromas que podrían malinterpretarse
+- Tono ligeramente agresivo o sarcástico
+
+✅ APROPIADO (severity: none):
+- Conversación normal y amistosa
+- Emojis y expresiones comunes
+- Temas apropiados para la edad
+
+CONSIDERACIONES CULTURALES Y GEOGRÁFICAS:
+- Ten en cuenta el LUNFARDO ARGENTINO y variantes regionales del español
+- Expresiones como "boludo", "che", "gil", pueden ser amistosas en Argentina entre adultos
+- NO bloquees expresiones culturales comunes que no sean ofensivas en ese contexto
+- Considera las ubicaciones de los participantes: ${participantsLocations.join(', ')}
+- Adapta el análisis al contexto cultural de las regiones mencionadas
+
+REGLAS DE ANÁLISIS:
+1. REVISA EL NIVEL DE MODERACIÓN: ${moderationLevel === 'high' ? 'Sé ESTRICTO' : 'Sé PERMISIVO, solo bloquea lo muy grave'}
+2. REVISA LA EDAD: ${allAdults ? 'Ambos adultos - permite lenguaje coloquial' : 'Hay menores - protege según nivel'}
+3. CONSIDERA EL CONTEXTO CULTURAL: No bloquees expresiones regionales comunes
+4. El contexto importa: un patrón de mensajes negativos aumenta la severidad
+5. Para nivel LOW: Solo bloquea si estás 100% seguro de que es peligroso
+
+IMPORTANTE: Responde ÚNICAMENTE con un objeto JSON en este formato exacto (sin markdown, sin texto adicional):
+{
+  "isInappropriate": true/false,
+  "severity": "none/low/medium/high",
+  "reason": "categoría general del problema SIN citar el contenido del mensaje"
+}
+
+⚠️ SEGURIDAD: NUNCA incluyas el contenido del mensaje en la razón. Solo indica la CATEGORÍA general del problema.
+
+EJEMPLOS DE RAZONES CORRECTAS (sin citar contenido):
+- "Lenguaje ofensivo o insultos"
+- "Contenido violento o amenazante"
+- "Lenguaje vulgar u obsceno"
+- "Acoso o bullying"
+- "Contenido sexual inapropiado"
+- "Discriminación o discurso de odio"
+- "Contenido relacionado con sustancias"
+- "Información personal sensible"
+
+EJEMPLOS AJUSTADOS POR CONTEXTO:
+- "hola estúpida" entre adultos, nivel LOW → {"isInappropriate": false, "severity": "none", "reason": "Conversación apropiada"}
+- "hola estúpida" con menor presente, nivel HIGH → {"isInappropriate": true, "severity": "medium", "reason": "Lenguaje ofensivo o insultos"}
+- "che boludo qué hacés" entre adultos argentinos → {"isInappropriate": false, "severity": "none", "reason": "Conversación apropiada"}
+- "te voy a pegar" → {"isInappropriate": true, "severity": "high", "reason": "Contenido violento o amenazante"}
+- "hola cómo estás?" → {"isInappropriate": false, "severity": "none", "reason": "Conversación apropiada"}`;
+
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text();
+
+    // Extraer JSON de la respuesta
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      console.error("❌ Respuesta de Gemini no tiene formato JSON válido:", text);
+      return {
+        isInappropriate: false,
+        severity: "none",
+        reason: "Error parsing respuesta",
+      };
+    }
+
+    const analysis = JSON.parse(jsonMatch[0]);
+    console.log(`🤖 Análisis Gemini:`, analysis);
+
+    return analysis;
+  } catch (error) {
+    console.error("❌ Error analizando mensaje con Gemini:", error);
+    // En caso de error, aprobar el mensaje (fail-open para no bloquear conversaciones)
+    return {
+      isInappropriate: false,
+      severity: "none",
+      reason: "Error en análisis",
+    };
+  }
+}
+
+/**
+ * Callable Function: Verifica un mensaje ANTES de enviarlo
+ * Solo analiza si el chat tiene moderación activa
+ * El cliente debe llamar a esta función antes de crear el mensaje
+ *
+ * @param {Object} data - Datos del mensaje
+ * @param {string} data.chatId - ID del chat
+ * @param {string} data.text - Texto del mensaje
+ * @param {string} data.type - Tipo de mensaje (text, image, video, audio)
+ * @returns {Object} { approved: boolean, reason?: string, severity?: string }
+ */
+exports.checkMessageBeforeSending = onCall(
+    {region: "us-central1"},
+    async (request) => {
+      const {chatId, text, type = "text"} = request.data;
+      const userId = request.auth?.uid;
+
+      console.log(`🔍 [Pre-moderación] Verificando mensaje para chat ${chatId}`);
+
+      if (!userId) {
+        throw new HttpsError("unauthenticated", "Usuario no autenticado");
+      }
+
+      if (!chatId) {
+        throw new HttpsError("invalid-argument", "chatId es requerido");
+      }
+
+      const db = getFirestore();
+
+      try {
+        // 1. Verificar si el chat tiene moderación activa
+        const chatDoc = await db.collection("chats").doc(chatId).get();
+
+        if (!chatDoc.exists) {
+          console.log(`⚠️ Chat ${chatId} no existe, aprobando automáticamente`);
+          return {approved: true};
+        }
+
+        // 1. Determinar quién es el RECEPTOR del mensaje
+        // En un chat 1-1, el receptor es el participante que NO es el sender
+        const chatData = chatDoc.data();
+        const participants = chatData.participants || [];
+        const receiverId = participants.find((p) => p !== userId);
+
+        if (!receiverId) {
+          console.log(`⚠️ [Pre-moderación] No se pudo determinar el receptor`);
+          return {approved: true};
+        }
+
+        console.log(`👤 [Pre-moderación] Receptor del mensaje: ${receiverId}`);
+
+        // 2. Verificar si el RECEPTOR tiene moderación habilitada
+        const receiverDoc = await db.collection("users").doc(receiverId).get();
+        if (!receiverDoc.exists) {
+          console.log(`⚠️ [Pre-moderación] Usuario receptor no encontrado`);
+          return {approved: true};
+        }
+
+        const receiverData = receiverDoc.data();
+        const moderationEnabled = receiverData.moderationEnabled || false;
+
+        if (!moderationEnabled) {
+          console.log(`✅ [Pre-moderación] Moderación desactivada para usuario ${receiverId}`);
+          return {approved: true};
+        }
+
+        console.log(`🔒 [Pre-moderación] Moderación activa para usuario ${receiverId}`);
+
+        // 3. Obtener nivel de moderación del RECEPTOR (default: 'high')
+        const moderationLevel = receiverData.moderationLevel || "high";
+        console.log(`📊 [Pre-moderación] Nivel de moderación: ${moderationLevel}`);
+
+        // 4. Obtener información de los participantes (edades y ubicaciones)
+        const participantsAges = [];
+        const participantsLocations = [];
+
+        console.log(`👥 [Pre-moderación] Obteniendo info de ${participants.length} participantes...`);
+        for (const participantId of participants) {
+          try {
+            const userDoc = await db.collection("users").doc(participantId).get();
+            if (userDoc.exists) {
+              const userData = userDoc.data();
+              // Calcular edad si existe birthDate
+              if (userData.birthDate) {
+                const birthDate = userData.birthDate.toDate ? userData.birthDate.toDate() : new Date(userData.birthDate);
+                const age = Math.floor((new Date() - birthDate) / (365.25 * 24 * 60 * 60 * 1000));
+                participantsAges.push(age);
+                console.log(`  - Usuario ${participantId}: ${age} años`);
+              }
+              // Obtener ubicación si existe
+              if (userData.location || userData.country) {
+                const location = userData.location || userData.country;
+                participantsLocations.push(location);
+                console.log(`  - Ubicación: ${location}`);
+              }
+            }
+          } catch (e) {
+            console.error(`Error obteniendo info de participante ${participantId}:`, e);
+          }
+        }
+
+        // 4. Verificar tipo de contenido
+        if (type === "image" && (!text || text.trim().length === 0)) {
+          console.log(`📷 [Pre-moderación] Imagen sin texto, aprobando`);
+          return {approved: true};
+        }
+
+        if (type === "video") {
+          console.log(`🎥 [Pre-moderación] Video, aprobando`);
+          return {approved: true};
+        }
+
+        if (type === "audio") {
+          console.log(`🎤 [Pre-moderación] Audio, aprobando`);
+          return {approved: true};
+        }
+
+        if (!text || text.trim().length === 0) {
+          console.log(`✅ [Pre-moderación] Mensaje sin texto, aprobando`);
+          return {approved: true};
+        }
+
+        // 5. Obtener contexto (últimos 20 mensajes)
+        console.log(`📚 [Pre-moderación] Obteniendo contexto de conversación...`);
+        const contextMessages = await db
+            .collection("chats")
+            .doc(chatId)
+            .collection("messages")
+            .orderBy("timestamp", "desc")
+            .limit(20)
+            .get();
+
+        // Construir contexto en orden cronológico
+        const conversationContext = contextMessages.docs
+            .reverse()
+            .map((doc) => {
+              const data = doc.data();
+              const sender = data.senderId === userId ? "USUARIO" : "OTRO";
+              const content = data.text || "[media]";
+              return `${sender}: ${content}`;
+            })
+            .join("\n");
+
+        console.log(`📝 [Pre-moderación] Contexto: ${contextMessages.size} mensajes`);
+
+        // 5.5. Obtener mensajes reportados por el usuario (para aprendizaje contextual)
+        let reportedMessagesContext = "";
+        try {
+          const reportedMessages = await db
+              .collection("chats")
+              .doc(chatId)
+              .collection("reported_messages")
+              .orderBy("reportedAt", "desc")
+              .limit(10) // Últimos 10 mensajes reportados
+              .get();
+
+          if (!reportedMessages.empty) {
+            const reportedTexts = reportedMessages.docs
+                .map((doc) => `"${doc.data().messageText || "[sin texto]"}"`)
+                .join(", ");
+            reportedMessagesContext = `\n\nMENSAJES PREVIAMENTE REPORTADOS POR EL USUARIO COMO OFENSIVOS:\nEl usuario marcó estos mensajes como inapropiados: ${reportedTexts}\nUsa estos ejemplos para entender mejor las preferencias del usuario sobre qué considera ofensivo.\n`;
+            console.log(`🚩 [Pre-moderación] ${reportedMessages.size} mensajes reportados encontrados`);
+          }
+        } catch (e) {
+          console.error("Error obteniendo mensajes reportados:", e);
+        }
+
+        // 6. Analizar mensaje con Gemini (con nuevos parámetros + mensajes reportados)
+        console.log(`🤖 [Pre-moderación] Analizando con Gemini...`);
+        const analysis = await analyzeMessageWithGemini(
+            text,
+            type,
+            conversationContext + reportedMessagesContext,
+            moderationLevel,
+            participantsAges,
+            participantsLocations
+        );
+
+        // 7. Determinar si se aprueba o bloquea según el nivel de moderación
+        let shouldBlock = false;
+        if (moderationLevel === "high") {
+          // HIGH: Bloquear severity 'low', 'medium', 'high'
+          shouldBlock = analysis.isInappropriate && ["low", "medium", "high"].includes(analysis.severity);
+        } else {
+          // LOW: Solo bloquear severity 'high'
+          shouldBlock = analysis.isInappropriate && analysis.severity === "high";
+        }
+
+        if (!shouldBlock) {
+          console.log(`✅ [Pre-moderación] Mensaje aprobado (severity: ${analysis.severity}, level: ${moderationLevel})`);
+          return {approved: true};
+        }
+
+        // Mensaje bloqueado
+        console.log(`🚫 [Pre-moderación] Mensaje bloqueado: ${analysis.reason} (severity: ${analysis.severity})`);
+
+        // Notificar al receptor
+        if (receiverId) {
+          let senderName = "Usuario";
+          try {
+            const senderDoc = await db.collection("users").doc(userId).get();
+            if (senderDoc.exists) {
+              senderName = senderDoc.data().name || senderName;
+            }
+          } catch (e) {
+            console.error("Error obteniendo sender:", e);
+          }
+
+          // Crear notificación
+          await db.collection("notifications").add({
+            userId: receiverId,
+            type: "message_blocked_pre",
+            title: "🚫 Intento de mensaje bloqueado",
+            body: `${senderName} intentó enviar un mensaje inapropiado (${analysis.severity}): ${analysis.reason}`,
+            priority: analysis.severity === "high" ? "high" : "normal",
+            read: false,
+            createdAt: new Date(),
+            data: {
+              chatId: chatId,
+              senderId: userId,
+              senderName: senderName,
+              severity: analysis.severity,
+              reason: analysis.reason,
+              messageText: text,
+            },
+          });
+
+          console.log(`📧 [Pre-moderación] Notificación enviada al receptor ${receiverId}`);
+        }
+
+        return {
+          approved: false,
+          reason: analysis.reason,
+          severity: analysis.severity,
+        };
+      } catch (error) {
+        console.error(`❌ [Pre-moderación] Error:`, error);
+        // En caso de error, aprobar para no bloquear la comunicación
+        return {approved: true};
+      }
+    }
+);
+
+/**
+ * Trigger que se ejecuta cuando se crea un nuevo mensaje
+ * Analiza el mensaje con IA si la conversación tiene moderación activa
+ * NOTA: Esta función ahora solo se usa para chats SIN moderación,
+ * ya que los chats CON moderación usan checkMessageBeforeSending
+ */
+exports.moderateMessage = onDocumentCreated(
+    {
+      document: "chats/{chatId}/messages/{messageId}",
+      region: "us-central1",
+    },
+    async (event) => {
+      const messageId = event.params.messageId;
+      const chatId = event.params.chatId;
+      const messageData = event.data.data();
+
+      console.log(`🔍 Nuevo mensaje para moderar: ${messageId} en chat ${chatId}`);
+
+      const db = getFirestore();
+
+      try {
+        // 1. Determinar quién es el RECEPTOR del mensaje
+        // En un chat 1-1, el receptor es el participante que NO es el sender
+        const chatDoc = await db.collection("chats").doc(chatId).get();
+
+        if (!chatDoc.exists) {
+          console.log(`⚠️ Chat ${chatId} no existe`);
+          return;
+        }
+
+        const chatData = chatDoc.data();
+        const participants = chatData.participants || [];
+        const senderId = messageData.senderId;
+        const receiverId = participants.find((p) => p !== senderId);
+
+        if (!receiverId) {
+          console.log(`⚠️ [Moderación] No se pudo determinar el receptor`);
+          await event.data.ref.update({
+            moderationStatus: "approved",
+            moderatedAt: new Date(),
+          });
+          return;
+        }
+
+        console.log(`👤 [Moderación] Receptor del mensaje: ${receiverId}`);
+
+        // 2. Verificar si el RECEPTOR tiene moderación habilitada
+        const receiverDoc = await db.collection("users").doc(receiverId).get();
+        if (!receiverDoc.exists) {
+          console.log(`⚠️ [Moderación] Usuario receptor no encontrado`);
+          await event.data.ref.update({
+            moderationStatus: "approved",
+            moderatedAt: new Date(),
+          });
+          return;
+        }
+
+        const receiverData = receiverDoc.data();
+        const moderationEnabled = receiverData.moderationEnabled || false;
+
+        if (!moderationEnabled) {
+          console.log(`✅ Moderación desactivada para usuario ${receiverId}`);
+          // Aprobar automáticamente
+          await event.data.ref.update({
+            moderationStatus: "approved",
+            moderatedAt: new Date(),
+          });
+          return;
+        }
+
+        console.log(`🔒 Moderación activa para usuario ${receiverId}`);
+
+        // 3. Obtener nivel de moderación del RECEPTOR (default: 'high')
+        const moderationLevel = receiverData.moderationLevel || "high";
+        console.log(`📊 [Moderación] Nivel de moderación: ${moderationLevel}`);
+
+        // 4. Obtener información de los participantes (edades y ubicaciones)
+        const participantsAges = [];
+        const participantsLocations = [];
+
+        console.log(`👥 [Moderación] Obteniendo info de ${participants.length} participantes...`);
+        for (const participantId of participants) {
+          try {
+            const userDoc = await db.collection("users").doc(participantId).get();
+            if (userDoc.exists) {
+              const userData = userDoc.data();
+              // Calcular edad si existe birthDate
+              if (userData.birthDate) {
+                const birthDate = userData.birthDate.toDate ? userData.birthDate.toDate() : new Date(userData.birthDate);
+                const age = Math.floor((new Date() - birthDate) / (365.25 * 24 * 60 * 60 * 1000));
+                participantsAges.push(age);
+                console.log(`  - Usuario ${participantId}: ${age} años`);
+              }
+              // Obtener ubicación si existe
+              if (userData.location || userData.country) {
+                const location = userData.location || userData.country;
+                participantsLocations.push(location);
+                console.log(`  - Ubicación: ${location}`);
+              }
+            }
+          } catch (e) {
+            console.error(`Error obteniendo info de participante ${participantId}:`, e);
+          }
+        }
+
+        // 4. Extraer contenido del mensaje
+        const messageText = messageData.text || "";
+        let messageType = "text";
+
+        if (messageData.imageUrl) {
+          messageType = "image";
+          // Para imágenes, analizar si hay caption
+          if (!messageText) {
+            console.log(`📷 Mensaje es imagen sin texto, aprobando (análisis de imágenes requiere Gemini Vision)`);
+            await event.data.ref.update({
+              moderationStatus: "approved",
+              moderatedAt: new Date(),
+              moderationReason: "Imagen sin texto",
+            });
+            return;
+          }
+        } else if (messageData.videoUrl) {
+          messageType = "video";
+          console.log(`🎥 Mensaje es video, aprobando (análisis de videos no implementado)`);
+          await event.data.ref.update({
+            moderationStatus: "approved",
+            moderatedAt: new Date(),
+            moderationReason: "Video",
+          });
+          return;
+        } else if (messageData.audioUrl) {
+          messageType = "audio";
+          console.log(`🎤 Mensaje es audio, aprobando (análisis de audio no implementado)`);
+          await event.data.ref.update({
+            moderationStatus: "approved",
+            moderatedAt: new Date(),
+            moderationReason: "Audio",
+          });
+          return;
+        }
+
+        if (!messageText || messageText.trim().length === 0) {
+          console.log(`✅ Mensaje sin texto, aprobando`);
+          await event.data.ref.update({
+            moderationStatus: "approved",
+            moderatedAt: new Date(),
+          });
+          return;
+        }
+
+        // 3. Obtener contexto (últimos 20 mensajes) para análisis más preciso
+        console.log(`📚 Obteniendo contexto de conversación...`);
+        const contextMessages = await db
+            .collection("chats")
+            .doc(chatId)
+            .collection("messages")
+            .orderBy("timestamp", "desc")
+            .limit(20)
+            .get();
+
+        // Construir contexto en orden cronológico
+        const conversationContext = contextMessages.docs
+            .reverse() // Orden cronológico (más antiguo primero)
+            .map((doc) => {
+              const data = doc.data();
+              const sender = data.senderId === messageData.senderId ? "USUARIO" : "OTRO";
+              const content = data.text || "[media]";
+              return `${sender}: ${content}`;
+            })
+            .join("\n");
+
+        console.log(`📝 Contexto obtenido: ${contextMessages.size} mensajes`);
+
+        // 4.5. Obtener mensajes reportados por el usuario (para aprendizaje contextual)
+        let reportedMessagesContext = "";
+        try {
+          const reportedMessages = await db
+              .collection("chats")
+              .doc(chatId)
+              .collection("reported_messages")
+              .orderBy("reportedAt", "desc")
+              .limit(10) // Últimos 10 mensajes reportados
+              .get();
+
+          if (!reportedMessages.empty) {
+            const reportedTexts = reportedMessages.docs
+                .map((doc) => `"${doc.data().messageText || "[sin texto]"}"`)
+                .join(", ");
+            reportedMessagesContext = `\n\nMENSAJES PREVIAMENTE REPORTADOS POR EL USUARIO COMO OFENSIVOS:\nEl usuario marcó estos mensajes como inapropiados: ${reportedTexts}\nUsa estos ejemplos para entender mejor las preferencias del usuario sobre qué considera ofensivo.\n`;
+            console.log(`🚩 [Moderación] ${reportedMessages.size} mensajes reportados encontrados`);
+          }
+        } catch (e) {
+          console.error("Error obteniendo mensajes reportados:", e);
+        }
+
+        // 5. Analizar mensaje con Gemini (con contexto y nuevos parámetros + mensajes reportados)
+        console.log(`🤖 Analizando mensaje con Gemini (con contexto)...`);
+        const analysis = await analyzeMessageWithGemini(
+            messageText,
+            messageType,
+            conversationContext + reportedMessagesContext,
+            moderationLevel,
+            participantsAges,
+            participantsLocations
+        );
+
+        // 6. Determinar acción basada en análisis y nivel de moderación
+        let moderationStatus;
+        let notificationTitle;
+        let notificationBody;
+        let shouldBlock = false;
+
+        if (moderationLevel === "high") {
+          // HIGH: Bloquear severity 'low', 'medium', 'high'
+          shouldBlock = analysis.isInappropriate && ["low", "medium", "high"].includes(analysis.severity);
+        } else {
+          // LOW: Solo bloquear severity 'high'
+          shouldBlock = analysis.isInappropriate && analysis.severity === "high";
+        }
+
+        if (!shouldBlock) {
+          moderationStatus = "approved";
+          console.log(`✅ Mensaje aprobado (severity: ${analysis.severity}, level: ${moderationLevel})`);
+        } else {
+          // Mensaje bloqueado
+          moderationStatus = "blocked";
+          if (analysis.severity === "low") {
+            notificationTitle = "⚠️ Contenido cuestionable bloqueado";
+            notificationBody = `Contenido inapropiado detectado (severidad baja): ${analysis.reason}`;
+            console.log(`⚠️ Mensaje bloqueado (severidad baja): ${analysis.reason}`);
+          } else if (analysis.severity === "medium") {
+            notificationTitle = "🚫 Mensaje bloqueado";
+            notificationBody = `Contenido inapropiado detectado (severidad media): ${analysis.reason}`;
+            console.log(`🚫 Mensaje bloqueado (severidad media): ${analysis.reason}`);
+          } else {
+            // high severity
+            notificationTitle = "🚨 Alerta de seguridad";
+            notificationBody = `Contenido grave detectado: ${analysis.reason}`;
+            console.log(`🚨 Mensaje bloqueado (severidad alta): ${analysis.reason}`);
+          }
+        }
+
+        // 5. Actualizar mensaje con resultado
+        await event.data.ref.update({
+          moderationStatus: moderationStatus,
+          moderatedAt: new Date(),
+          moderationReason: analysis.reason,
+          moderationSeverity: analysis.severity,
+        });
+
+        // 6. Crear notificación de chat si el mensaje fue APROBADO
+        if (receiverId && moderationStatus === "approved") {
+          // Obtener nombre del remitente
+          const senderId = messageData.senderId;
+          let senderName = "Usuario";
+          try {
+            const senderDoc = await db.collection("users").doc(senderId).get();
+            if (senderDoc.exists) {
+              senderName = senderDoc.data().name || senderName;
+            }
+          } catch (e) {
+            console.error("Error obteniendo sender:", e);
+          }
+
+          // Crear preview del mensaje (truncar si es muy largo)
+          let messagePreview = messageText;
+          if (messageData.imageUrl) {
+            messagePreview = "📷 Foto";
+          } else if (messageData.videoUrl) {
+            messagePreview = "🎥 Video";
+          } else if (messageData.audioUrl) {
+            messagePreview = "🎤 Audio";
+          } else if (messageText.length > 100) {
+            messagePreview = messageText.substring(0, 100) + "...";
+          }
+
+          // Crear notificación de chat
+          await db.collection("notifications").add({
+            userId: receiverId,
+            senderId: senderId,
+            type: "chat_message",
+            title: senderName,
+            body: messagePreview,
+            priority: "normal",
+            read: false,
+            createdAt: new Date(),
+            data: {
+              chatId: chatId,
+              messageId: messageId,
+              senderId: senderId,
+              senderName: senderName,
+              messageType: messageData.imageUrl ? "image" : messageData.videoUrl ? "video" : messageData.audioUrl ? "audio" : "text",
+            },
+          });
+
+          console.log(`✅ Notificación de chat creada para receptor ${receiverId}`);
+        }
+
+        // 7. Notificar al receptor si el mensaje fue BLOQUEADO
+        if (receiverId && notificationTitle) {
+          // Obtener nombre del remitente
+          const senderId = messageData.senderId;
+          let senderName = "Usuario";
+          try {
+            const senderDoc = await db.collection("users").doc(senderId).get();
+            if (senderDoc.exists) {
+              senderName = senderDoc.data().name || senderName;
+            }
+          } catch (e) {
+            console.error("Error obteniendo sender:", e);
+          }
+
+          // Crear notificación
+          await db.collection("notifications").add({
+            userId: receiverId,
+            type: moderationStatus === "blocked" ? "message_blocked" : "message_flagged",
+            title: notificationTitle,
+            body: notificationBody,
+            priority: analysis.severity === "high" ? "high" : "normal",
+            read: false,
+            createdAt: new Date(),
+            data: {
+              chatId: chatId,
+              messageId: messageId,
+              senderId: senderId,
+              senderName: senderName,
+              severity: analysis.severity,
+              reason: analysis.reason,
+            },
+          });
+
+          console.log(`📧 Notificación enviada al receptor ${receiverId}`);
+
+          // 8. Actualizar el chat para quitar el mensaje bloqueado del preview
+          // Buscar el último mensaje APROBADO para actualizar el lastMessage del chat
+          try {
+            const approvedMessages = await db
+                .collection("chats")
+                .doc(chatId)
+                .collection("messages")
+                .where("moderationStatus", "==", "approved")
+                .orderBy("timestamp", "desc")
+                .limit(1)
+                .get();
+
+            if (!approvedMessages.empty) {
+              // Hay un mensaje aprobado previo, usar ese como lastMessage
+              const lastApprovedMsg = approvedMessages.docs[0].data();
+              let lastMessagePreview = lastApprovedMsg.text || "";
+              if (lastApprovedMsg.imageUrl) {
+                lastMessagePreview = "📷 Foto";
+              } else if (lastApprovedMsg.videoUrl) {
+                lastMessagePreview = "🎥 Video";
+              } else if (lastApprovedMsg.audioUrl) {
+                lastMessagePreview = "🎤 Audio";
+              }
+
+              await db.collection("chats").doc(chatId).update({
+                lastMessage: lastMessagePreview,
+                lastMessageTime: lastApprovedMsg.timestamp,
+                lastMessageSender: lastApprovedMsg.senderId,
+              });
+
+              console.log(`✅ Chat actualizado con último mensaje aprobado`);
+            } else {
+              // No hay mensajes aprobados, limpiar el lastMessage
+              await db.collection("chats").doc(chatId).update({
+                lastMessage: "",
+                lastMessageTime: new Date(),
+                lastMessageSender: senderId,
+              });
+
+              console.log(`✅ Chat limpiado (no hay mensajes aprobados)`);
+            }
+          } catch (e) {
+            console.error(`⚠️ Error actualizando chat después de bloqueo: ${e}`);
+          }
+        }
+
+        console.log(`✅ Moderación completada para mensaje ${messageId}`);
+      } catch (error) {
+        console.error(`❌ Error en moderación de mensaje:`, error);
+
+        // En caso de error, aprobar el mensaje para no interrumpir la conversación
+        try {
+          await event.data.ref.update({
+            moderationStatus: "approved",
+            moderatedAt: new Date(),
+            moderationReason: "Error en análisis",
+            moderationError: error.message,
+          });
+        } catch (updateError) {
+          console.error(`❌ Error actualizando mensaje después de fallo:`, updateError);
+        }
+      }
+    }
+);
+
+// ═══════════════════════════════════════════════════════════════
 // EXPORTACIÓN DE DATOS PERSONALES (GDPR/CCPA)
 // ═══════════════════════════════════════════════════════════════
 
@@ -2454,4 +3567,676 @@ exports.processFullDataExport = onDocumentCreated(
         throw error;
       }
     }
+);
+
+// ═══════════════════════════════════════════════════════════════
+// INVITACIONES A GRUPOS CON APROBACIÓN EN CASCADA
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Helper: Enviar notificación push a un usuario
+ */
+async function sendPushNotification(userId, title, body, data = {}) {
+  const db = getFirestore();
+  const messaging = getMessaging();
+
+  try {
+    // Obtener tokens FCM del usuario
+    const devicesSnapshot = await db
+        .collection("users")
+        .doc(userId)
+        .collection("devices")
+        .where("fcmToken", "!=", null)
+        .get();
+
+    if (devicesSnapshot.empty) {
+      console.log(`⚠️ No hay dispositivos con FCM token para usuario ${userId}`);
+      return;
+    }
+
+    const tokens = devicesSnapshot.docs.map((doc) => doc.data().fcmToken);
+
+    const message = {
+      notification: {
+        title: title,
+        body: body,
+      },
+      data: data,
+      tokens: tokens,
+    };
+
+    const response = await messaging.sendEachForMulticast(message);
+    console.log(`✅ Notificación enviada: ${response.successCount} éxitos, ${response.failureCount} fallos`);
+  } catch (error) {
+    console.error(`❌ Error enviando notificación push a ${userId}:`, error);
+  }
+}
+
+/**
+ * Trigger cuando se crea una invitación de grupo
+ * Envía notificaciones y procesa si no requiere aprobaciones
+ */
+exports.processGroupInvitation = onDocumentCreated(
+    {
+      document: "groupInvitations/{invitationId}",
+      region: "us-central1",
+    },
+    async (event) => {
+      const db = getFirestore();
+      const invitationId = event.params.invitationId;
+      const invitation = event.data.data();
+
+      console.log(`📨 Nueva invitación creada: ${invitationId}`);
+
+      try {
+        const requiredApprovals = invitation.requiredApprovals || {};
+        const groupName = invitation.groupName || "un grupo";
+
+        // Obtener nombre del invitado para notificaciones
+        let invitedChildName = "Usuario";
+        try {
+          const invitedDoc = await db.collection("users").doc(invitation.invitedChildId).get();
+          invitedChildName = invitedDoc.data()?.name || "Usuario";
+        } catch (e) {
+          console.error("Error obteniendo nombre del invitado:", e);
+        }
+
+        // 1. Notificar al padre del invitado
+        await sendPushNotification(
+            invitation.invitedParentApproval.parentId,
+            "🎉 Invitación a Grupo",
+            `Tu hijo ha sido invitado al grupo "${groupName}"`,
+            {
+              type: "group_invitation",
+              invitationId: invitationId,
+              groupId: invitation.groupId,
+              groupName: groupName,
+            }
+        );
+
+        // 2. Notificar a padres de miembros que necesitan aprobar
+        for (const [memberId, approval] of Object.entries(requiredApprovals)) {
+          await sendPushNotification(
+              approval.parentId,
+              "👥 Solicitud de Contacto",
+              `${invitedChildName} quiere unirse al grupo "${groupName}" donde está tu hijo`,
+              {
+                type: "group_member_approval",
+                invitationId: invitationId,
+                groupId: invitation.groupId,
+                groupName: groupName,
+                invitedChildId: invitation.invitedChildId,
+                invitedChildName: invitedChildName,
+              }
+          );
+        }
+
+        // 3. Si no hay aprobaciones requeridas, agregar directamente al grupo
+        if (Object.keys(requiredApprovals).length === 0) {
+          console.log("✅ Sin aprobaciones requeridas, agregando al grupo inmediatamente");
+
+          await db.collection("groups").doc(invitation.groupId).update({
+            members: FieldValue.arrayUnion(invitation.invitedChildId),
+            lastActivity: FieldValue.serverTimestamp(),
+          });
+
+          await db.collection("groupInvitations").doc(invitationId).update({
+            status: "approved",
+            completedAt: FieldValue.serverTimestamp(),
+          });
+
+          // Notificar éxito inmediato
+          await sendPushNotification(
+              invitation.invitedParentApproval.parentId,
+              "✅ Unido al Grupo",
+              `Tu hijo se ha unido al grupo "${groupName}"`,
+              {
+                type: "group_joined",
+                groupId: invitation.groupId,
+                groupName: groupName,
+              }
+          );
+
+          console.log("✅ Miembro agregado al grupo sin requerir aprobaciones");
+        }
+      } catch (error) {
+        console.error("❌ Error procesando invitación:", error);
+      }
+    }
+);
+
+/**
+ * Trigger cuando se actualiza el estado de una invitación
+ * Verifica si todos aprobaron y agrega al miembro al grupo
+ */
+exports.onGroupInvitationUpdate = onDocumentCreated(
+    {
+      document: "groupInvitations/{invitationId}",
+      region: "us-central1",
+    },
+    async (event) => {
+      const db = getFirestore();
+      const invitationId = event.params.invitationId;
+      const after = event.data.data();
+
+      // Solo procesar si está en estado pending_approvals
+      if (after.status !== "pending_approvals") {
+        return;
+      }
+
+      try {
+        const groupName = after.groupName || "un grupo";
+
+        // Verificar si el padre del invitado ya aprobó
+        if (after.invitedParentApproval.status !== "approved") {
+          console.log("⏸️ Esperando aprobación del padre del invitado");
+          return;
+        }
+
+        // Verificar si todos los miembros aprobaron o si pasaron 48h
+        const requiredApprovals = after.requiredApprovals || {};
+        const expiresAt = after.expiresAt?.toDate();
+        const now = new Date();
+
+        let allApproved = true;
+        let anyRejected = false;
+
+        for (const [memberId, approval] of Object.entries(requiredApprovals)) {
+          if (approval.status === "rejected") {
+            anyRejected = true;
+            break;
+          }
+
+          if (approval.status !== "approved") {
+            // Verificar si expiró el timeout
+            if (expiresAt && now > expiresAt) {
+              console.log(`⏰ Timeout expirado para ${memberId}, aprobando automáticamente`);
+              // Aprobar automáticamente
+              await db.collection("groupInvitations").doc(invitationId).update({
+                [`requiredApprovals.${memberId}.status`]: "approved",
+                [`requiredApprovals.${memberId}.approvedAt`]: FieldValue.serverTimestamp(),
+                [`requiredApprovals.${memberId}.autoApproved`]: true,
+              });
+            } else {
+              allApproved = false;
+            }
+          }
+        }
+
+        if (anyRejected) {
+          console.log("❌ Invitación rechazada por al menos un padre");
+          await db.collection("groupInvitations").doc(invitationId).update({
+            status: "rejected",
+            completedAt: FieldValue.serverTimestamp(),
+          });
+
+          // Notificar al padre del invitado con push
+          await sendPushNotification(
+              after.invitedParentApproval.parentId,
+              "❌ Invitación Rechazada",
+              `La invitación al grupo "${groupName}" fue rechazada por un padre`,
+              {
+                type: "group_invitation_rejected",
+                groupId: after.groupId,
+                groupName: groupName,
+              }
+          );
+
+          return;
+        }
+
+        if (allApproved) {
+          console.log("✅ Todos los padres aprobaron, agregando al grupo");
+
+          // Agregar al niño al grupo
+          await db.collection("groups").doc(after.groupId).update({
+            members: FieldValue.arrayUnion(after.invitedChildId),
+            lastActivity: FieldValue.serverTimestamp(),
+          });
+
+          // Actualizar estado de invitación
+          await db.collection("groupInvitations").doc(invitationId).update({
+            status: "approved",
+            completedAt: FieldValue.serverTimestamp(),
+          });
+
+          // Notificar al padre del invitado con push
+          await sendPushNotification(
+              after.invitedParentApproval.parentId,
+              "🎉 ¡Unido al Grupo!",
+              `Tu hijo se ha unido al grupo "${groupName}"`,
+              {
+                type: "group_joined",
+                groupId: after.groupId,
+                groupName: groupName,
+              }
+          );
+
+          // Notificar a padres de miembros que aprobaron
+          for (const [memberId, approval] of Object.entries(requiredApprovals)) {
+            await sendPushNotification(
+                approval.parentId,
+                "✅ Contacto Aprobado",
+                `Nuevo miembro se unió al grupo "${groupName}"`,
+                {
+                  type: "group_member_joined",
+                  groupId: after.groupId,
+                  groupName: groupName,
+                }
+            );
+          }
+
+          console.log(`✅ Miembro ${after.invitedChildId} agregado al grupo ${after.groupId}`);
+        } else {
+          console.log("⏸️ Esperando más aprobaciones...");
+        }
+      } catch (error) {
+        console.error("❌ Error procesando actualización de invitación:", error);
+      }
+    }
+);
+
+/**
+ * Función programada para verificar invitaciones expiradas
+ * Se ejecuta cada hora
+ */
+exports.checkExpiredInvitations = onSchedule(
+    {
+      schedule: "every 1 hours",
+      region: "us-central1",
+    },
+    async () => {
+      const db = getFirestore();
+      const now = new Date();
+
+      console.log("🕐 Verificando invitaciones expiradas...");
+
+      try {
+        const expiredInvitations = await db
+            .collection("groupInvitations")
+            .where("status", "==", "pending_approvals")
+            .where("expiresAt", "<", now)
+            .get();
+
+        console.log(`📊 Encontradas ${expiredInvitations.size} invitaciones expiradas`);
+
+        for (const doc of expiredInvitations.docs) {
+          const invitation = doc.data();
+          const groupName = invitation.groupName || "un grupo";
+
+          // Aprobar automáticamente las aprobaciones pendientes
+          const requiredApprovals = invitation.requiredApprovals || {};
+          const updates = {
+            status: "expired_auto_approved",
+            processedAt: FieldValue.serverTimestamp(),
+          };
+
+          for (const [memberId, approval] of Object.entries(requiredApprovals)) {
+            if (approval.status === "pending") {
+              updates[`requiredApprovals.${memberId}.status`] = "approved";
+              updates[`requiredApprovals.${memberId}.approvedAt`] = FieldValue.serverTimestamp();
+              updates[`requiredApprovals.${memberId}.autoApproved`] = true;
+            }
+          }
+
+          await db.collection("groupInvitations").doc(doc.id).update(updates);
+
+          // Agregar al grupo
+          await db.collection("groups").doc(invitation.groupId).update({
+            members: FieldValue.arrayUnion(invitation.invitedChildId),
+            lastActivity: FieldValue.serverTimestamp(),
+          });
+
+          // Notificar al padre del invitado con push
+          await sendPushNotification(
+              invitation.invitedParentApproval.parentId,
+              "✅ Unido al Grupo",
+              `Tu hijo se ha unido al grupo "${groupName}" (aprobación automática tras 48h)`,
+              {
+                type: "group_joined_auto",
+                groupId: invitation.groupId,
+                groupName: groupName,
+              }
+          );
+
+          console.log(`✅ Invitación ${doc.id} procesada automáticamente por timeout`);
+        }
+      } catch (error) {
+        console.error("❌ Error verificando invitaciones expiradas:", error);
+      }
+    }
+);
+
+
+// ═══════════════════════════════════════════════════════════════
+// BLOCKED CHATS
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Bloquear un chat entre dos usuarios
+ * Usado cuando un padre revoca un contacto aprobado
+ */
+exports.blockChat = onCall(async (request) => {
+  const db = getFirestore();
+  const {childId, contactId, reason, blockedBy} = request.data;
+
+  // Validar autenticación
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Usuario no autenticado");
+  }
+
+  // Validar parámetros
+  if (!childId || !contactId) {
+    throw new HttpsError(
+        "invalid-argument",
+        "childId y contactId son requeridos"
+    );
+  }
+
+  try {
+    console.log(`🔒 Bloqueando chat entre ${childId} y ${contactId}`);
+
+    // Generar ID del chat (ordenar alfabéticamente)
+    const chatId = [childId, contactId].sort().join("_");
+    const blockedByUser = blockedBy || request.auth.uid;
+
+    console.log(`📝 Creando documento en blocked_chats/${chatId}`);
+    console.log(`   blockedBy: ${blockedByUser}`);
+    console.log(`   reason: ${reason || "Chat bloqueado"}`);
+
+    // Crear registro de chat bloqueado
+    await db.collection("blocked_chats").doc(chatId).set({
+      chatId: chatId,
+      childId: childId,
+      contactId: contactId,
+      blockedAt: FieldValue.serverTimestamp(),
+      blockedBy: blockedByUser,
+      reason: reason || "Chat bloqueado",
+      isActive: true,
+      participants: [childId, contactId],
+    });
+
+    // Marcar el chat como bloqueado en la colección de chats (si existe)
+    const chatRef = db.collection("chats").doc(chatId);
+    const chatDoc = await chatRef.get();
+
+    if (chatDoc.exists) {
+      await chatRef.update({
+        isBlocked: true,
+        blockedAt: FieldValue.serverTimestamp(),
+        blockedBy: blockedByUser,
+        lastActivity: FieldValue.serverTimestamp(),
+      });
+      console.log(`✅ Chat existente marcado como bloqueado: ${chatId}`);
+    } else {
+      console.log(`ℹ️ Chat no existe aún, pero se creó registro de bloqueo: ${chatId}`);
+    }
+
+    console.log(`✅ Chat bloqueado exitosamente: ${chatId}`);
+
+    return {
+      success: true,
+      chatId: chatId,
+      message: "Chat bloqueado exitosamente",
+    };
+  } catch (error) {
+    console.error("❌ Error bloqueando chat:", error);
+    throw new HttpsError("internal", `Error bloqueando chat: ${error.message}`);
+  }
+});
+
+
+/**
+ * Desbloquear un chat entre dos usuarios
+ * Usado cuando un padre re-aprueba un contacto previamente revocado
+ */
+exports.unblockChat = onCall(async (request) => {
+  const db = getFirestore();
+  const {childId, contactId} = request.data;
+
+  // Validar autenticación
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Usuario no autenticado");
+  }
+
+  // Validar parámetros
+  if (!childId || !contactId) {
+    throw new HttpsError(
+        "invalid-argument",
+        "childId y contactId son requeridos"
+    );
+  }
+
+  try {
+    console.log(`🔓 Desbloqueando chat entre ${childId} y ${contactId}`);
+
+    // Generar ID del chat (ordenar alfabéticamente)
+    const chatId = [childId, contactId].sort().join("_");
+
+    console.log(`📝 Marcando como inactivo el bloqueo en blocked_chats/${chatId}`);
+
+    // Marcar como inactivo el bloqueo
+    const blockedChatRef = db.collection("blocked_chats").doc(chatId);
+    const blockedChatDoc = await blockedChatRef.get();
+
+    if (blockedChatDoc.exists) {
+      await blockedChatRef.update({
+        isActive: false,
+        unblockedAt: FieldValue.serverTimestamp(),
+        unblockedBy: request.auth.uid,
+      });
+      console.log(`✅ Bloqueo marcado como inactivo: ${chatId}`);
+    } else {
+      console.log(`ℹ️ No existe registro de bloqueo para: ${chatId}`);
+    }
+
+    // Desbloquear en la colección de chats
+    const chatRef = db.collection("chats").doc(chatId);
+    const chatDoc = await chatRef.get();
+
+    if (chatDoc.exists) {
+      await chatRef.update({
+        isBlocked: false,
+        unblockedAt: FieldValue.serverTimestamp(),
+        lastActivity: FieldValue.serverTimestamp(),
+      });
+      console.log(`✅ Chat desbloqueado: ${chatId}`);
+    } else {
+      console.log(`ℹ️ Chat no existe aún: ${chatId}`);
+    }
+
+    console.log(`✅ Chat desbloqueado exitosamente: ${chatId}`);
+
+    return {
+      success: true,
+      chatId: chatId,
+      message: "Chat desbloqueado exitosamente",
+    };
+  } catch (error) {
+    console.error("❌ Error desbloqueando chat:", error);
+    throw new HttpsError("internal", `Error desbloqueando chat: ${error.message}`);
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// CONTADOR DE MENSAJES SIN LEER
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Incrementar contador de mensajes sin leer cuando se crea un nuevo mensaje
+ * Trigger: onCreate en chats/{chatId}/messages/{messageId}
+ */
+exports.incrementUnreadCount = onDocumentCreated(
+    {
+      document: "chats/{chatId}/messages/{messageId}",
+      region: "us-central1",
+    },
+    async (event) => {
+      try {
+        const messageData = event.data.data();
+        const chatId = event.params.chatId;
+
+        console.log(`📨 Nuevo mensaje en chat ${chatId}`);
+
+        // Obtener información del chat para saber quién es el receptor
+        const chatRef = getFirestore().collection("chats").doc(chatId);
+        const chatDoc = await chatRef.get();
+
+        if (!chatDoc.exists) {
+          console.log(`⚠️ Chat ${chatId} no existe`);
+          return null;
+        }
+
+        const chatData = chatDoc.data();
+        const participants = chatData.participants || [];
+        const senderId = messageData.senderId;
+
+        // El receptor es el participante que NO es el sender
+        const receiverId = participants.find((id) => id !== senderId);
+
+        if (!receiverId) {
+          console.log(`⚠️ No se pudo identificar receptor en chat ${chatId}`);
+          return null;
+        }
+
+        console.log(`📬 Incrementando unreadCount para ${receiverId}`);
+
+        // Incrementar contador de mensajes sin leer para el receptor
+        const unreadField = `unreadCount_${receiverId}`;
+        await chatRef.update({
+          [unreadField]: FieldValue.increment(1),
+        });
+
+        console.log(`✅ Contador actualizado: ${unreadField} +1`);
+
+        return null;
+      } catch (error) {
+        console.error("❌ Error incrementando unreadCount:", error);
+        return null;
+      }
+    },
+);
+
+/**
+ * Resetear contador de mensajes sin leer
+ * Callable function para marcar mensajes como leídos
+ */
+exports.markChatAsRead = onCall(
+    {region: "us-central1"},
+    async (request) => {
+      // Validar autenticación
+      if (!request.auth) {
+        throw new HttpsError("unauthenticated", "Usuario no autenticado");
+      }
+
+      const {chatId} = request.data;
+      const userId = request.auth.uid;
+
+      if (!chatId) {
+        throw new HttpsError("invalid-argument", "chatId es requerido");
+      }
+
+      try {
+        console.log(`📖 Marcando chat ${chatId} como leído para ${userId}`);
+
+        const chatRef = getFirestore().collection("chats").doc(chatId);
+        const unreadField = `unreadCount_${userId}`;
+
+        await chatRef.update({
+          [unreadField]: 0,
+        });
+
+        console.log(`✅ Contador reseteado: ${unreadField} = 0`);
+
+        return {
+          success: true,
+          message: "Chat marcado como leído",
+        };
+      } catch (error) {
+        console.error("❌ Error marcando chat como leído:", error);
+        throw new HttpsError("internal", `Error: ${error.message}`);
+      }
+    },
+);
+
+// ═══════════════════════════════════════════════════════════════
+// TRIGGER: Enviar notificaciones push automáticamente
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Trigger que se activa cuando se crea un nuevo documento en la colección 'notifications'
+ * Envía automáticamente la notificación push al dispositivo del usuario
+ */
+exports.sendPushNotification = onDocumentCreated(
+    {
+      document: "notifications/{notificationId}",
+      region: "us-central1",
+    },
+    async (event) => {
+      try {
+        const notification = event.data.data();
+        const notificationId = event.params.notificationId;
+
+        console.log(`📬 Nueva notificación creada: ${notificationId}`);
+        console.log(`   Usuario: ${notification.userId}`);
+        console.log(`   Tipo: ${notification.type}`);
+
+        // Obtener FCM token del usuario
+        const userDoc = await getFirestore()
+            .collection("users")
+            .doc(notification.userId)
+            .get();
+
+        if (!userDoc.exists) {
+          console.warn(`⚠️ Usuario no encontrado: ${notification.userId}`);
+          return null;
+        }
+
+        const userData = userDoc.data();
+        const fcmToken = userData.fcmToken;
+
+        if (!fcmToken) {
+          console.warn(`⚠️ Usuario no tiene FCM token: ${notification.userId}`);
+          return null;
+        }
+
+        // Preparar mensaje de notificación
+        const message = {
+          token: fcmToken,
+          notification: {
+            title: notification.title || "Talia",
+            body: notification.body || "",
+          },
+          data: notification.data || {},
+          // Configuración para iOS
+          apns: {
+            payload: {
+              aps: {
+                sound: "default",
+                badge: 1,
+              },
+            },
+          },
+          // Configuración para Android
+          android: {
+            priority: notification.priority === "high" ? "high" : "normal",
+            notification: {
+              channelId: "high_importance_channel",
+              sound: "default",
+            },
+          },
+        };
+
+        // Enviar notificación
+        console.log(`📤 Enviando push notification a ${notification.userId}...`);
+        const response = await getMessaging().send(message);
+        console.log(`✅ Notificación enviada exitosamente: ${response}`);
+
+        return null;
+      } catch (error) {
+        console.error(`❌ Error enviando notificación push:`, error);
+        // No relanzar el error para evitar reintentos infinitos
+        return null;
+      }
+    },
 );

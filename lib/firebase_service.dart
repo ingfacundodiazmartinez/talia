@@ -243,6 +243,46 @@ class FirebaseService {
       }
     }
 
+    // 🔒 PRE-MODERACIÓN: Verificar si el chat tiene moderación activa
+    // Si la tiene, analizar el mensaje ANTES de enviarlo
+    final chatDoc = await _firestore.collection('chats').doc(chatId).get();
+    final moderationEnabled = chatDoc.data()?['moderationEnabled'] ?? false;
+
+    if (moderationEnabled) {
+      print('🔒 Chat tiene moderación activa, verificando mensaje antes de enviar...');
+
+      try {
+        final functions = FirebaseFunctions.instance;
+        final result = await functions.httpsCallable('checkMessageBeforeSending').call({
+          'chatId': chatId,
+          'text': text,
+          'type': type,
+        });
+
+        final approved = result.data['approved'] as bool;
+
+        if (!approved) {
+          final reason = result.data['reason'] as String? ?? 'Contenido inapropiado detectado';
+          final severity = result.data['severity'] as String? ?? 'medium';
+
+          print('🚫 Mensaje bloqueado por moderación: $reason');
+
+          // Lanzar excepción con el motivo del bloqueo
+          throw Exception('Mensaje bloqueado: $reason');
+        }
+
+        print('✅ Mensaje aprobado por moderación, enviando...');
+      } catch (e) {
+        // Si el error es de moderación, propagarlo
+        if (e.toString().contains('Mensaje bloqueado')) {
+          rethrow;
+        }
+
+        // Si es otro error (network, etc), loguearlo pero continuar
+        print('⚠️ Error en pre-moderación (continuando de todos modos): $e');
+      }
+    }
+
     // Preparar datos del mensaje
     final Map<String, dynamic> messageData = {
       'senderId': senderId,
@@ -254,7 +294,18 @@ class FirebaseService {
     };
 
     // Agregar campos opcionales si existen
-    if (mediaUrl != null) messageData['mediaUrl'] = mediaUrl;
+    if (mediaUrl != null) {
+      // Mapear mediaUrl al campo correcto según el tipo
+      if (type == 'image') {
+        messageData['imageUrl'] = mediaUrl;
+      } else if (type == 'video') {
+        messageData['videoUrl'] = mediaUrl;
+      } else if (type == 'audio') {
+        messageData['audioUrl'] = mediaUrl;
+      } else {
+        messageData['mediaUrl'] = mediaUrl; // Para otros tipos
+      }
+    }
     if (fileName != null) messageData['fileName'] = fileName;
     if (duration != null) messageData['duration'] = duration;
 

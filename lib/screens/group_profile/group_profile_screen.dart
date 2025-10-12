@@ -3,12 +3,15 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../services/contact_alias_service.dart';
+import '../../services/video_call_service.dart';
 import 'widgets/group_profile_constants.dart';
 import 'widgets/group_profile_header.dart';
 import 'widgets/group_member_tile.dart';
 import 'widgets/add_members_dialog.dart';
+import '../video_call_screen.dart';
 
 class GroupProfileScreen extends StatefulWidget {
   final String groupId;
@@ -29,6 +32,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
   final FirebaseStorage _storage = FirebaseStorage.instance;
   final ContactAliasService _aliasService = ContactAliasService();
   final ImagePicker _picker = ImagePicker();
+  final VideoCallService _videoCallService = VideoCallService();
 
   // ==================== ESTADO ====================
   final TextEditingController _nameController = TextEditingController();
@@ -68,7 +72,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
 
       setState(() {
         _nameController.text = groupData['name'] ?? '';
-        _currentImageUrl = groupData['imageUrl'];
+        _currentImageUrl = groupData['avatar'];
         _isAdmin = admins.contains(currentUserId);
       });
 
@@ -116,7 +120,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
       final downloadUrl = await storageRef.getDownloadURL();
 
       await _firestore.collection('groups').doc(widget.groupId).update({
-        'imageUrl': downloadUrl,
+        'avatar': downloadUrl,
       });
 
       setState(() {
@@ -208,6 +212,112 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     }
   }
 
+  // ==================== VIDEOLLAMADAS GRUPALES ====================
+
+  Future<void> _startGroupVideoCall(List<String> members) async {
+    try {
+      final currentUserId = _auth.currentUser!.uid;
+
+      // Obtener datos del grupo
+      final groupDoc = await _firestore.collection('groups').doc(widget.groupId).get();
+      final groupData = groupDoc.data();
+
+      if (groupData == null) {
+        _showErrorSnackbar('Error: No se encontró el grupo');
+        return;
+      }
+
+      // Filtrar participantes (excluir usuario actual)
+      final participantIds = members.where((id) => id != currentUserId).toList();
+
+      if (participantIds.isEmpty) {
+        _showWarningSnackbar('No hay otros miembros en el grupo');
+        return;
+      }
+
+      // Mostrar loading
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+
+      // Obtener nombre del usuario actual
+      final currentUserDoc = await _firestore.collection('users').doc(currentUserId).get();
+      final currentUserName = currentUserDoc.data()?['name'] ?? 'Usuario';
+
+      // Construir mapa de nombres de participantes
+      Map<String, String> participantNames = {};
+      for (String participantId in participantIds) {
+        final userDoc = await _firestore.collection('users').doc(participantId).get();
+        participantNames[participantId] = userDoc.data()?['name'] ?? 'Usuario';
+      }
+
+      // Crear videollamada grupal
+      final channelName = await _videoCallService.startGroupCall(
+        callerId: currentUserId,
+        callerName: currentUserName,
+        participantIds: participantIds,
+        participantNames: participantNames,
+        groupId: widget.groupId,
+        isEmergency: false,
+      );
+
+      // Obtener token de Agora directamente de Cloud Function (sin crear otra llamada)
+      print('🎫 Generando token de Agora para llamada grupal...');
+
+      final functions = FirebaseFunctions.instance;
+      final callable = functions.httpsCallable('generateAgoraToken');
+
+      try {
+        final result = await callable.call({
+          'channelName': channelName,
+          'uid': 0, // 0 = Agora asigna automáticamente
+        });
+
+        final token = result.data['token'] as String;
+        final uid = result.data['uid'] as int;
+
+        print('✅ Token de Agora generado para llamada grupal');
+        print('✅ UID asignado: $uid');
+
+        // Cerrar loading
+        if (mounted) Navigator.pop(context);
+
+        // Navegar a pantalla de videollamada
+        if (mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => VideoCallScreen(
+                callId: channelName,
+                channelName: channelName,
+                token: token,
+                uid: uid,
+                isCaller: true,
+                remoteName: groupData['name'] ?? 'Grupo',
+              ),
+            ),
+          );
+        }
+      } catch (cloudFunctionError) {
+        print('❌ Error generando token de Agora: $cloudFunctionError');
+
+        // Cerrar loading
+        if (mounted) Navigator.pop(context);
+
+        _showErrorSnackbar('Error generando token de Agora: $cloudFunctionError');
+      }
+    } catch (e) {
+      // Cerrar loading si está abierto
+      if (mounted) Navigator.pop(context);
+      _showErrorSnackbar('Error al iniciar videollamada: $e');
+      print('❌ Error en _startGroupVideoCall: $e');
+    }
+  }
+
   // ==================== DIÁLOGOS ====================
 
   Future<bool?> _showRemoveMemberDialog(String userName) {
@@ -248,10 +358,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
   }
 
   void _showWarningSnackbar(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), backgroundColor: Colors.orange),
-    );
+    // Sin mensaje de advertencia
   }
 
   // ==================== WIDGETS ====================
@@ -330,11 +437,46 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                 nameController: _nameController,
                 onPickImage: _pickAndUploadImage,
               ),
+              _buildActionButtons(members),
               _buildMembersList(members, admins),
             ],
           ),
         );
       },
+    );
+  }
+
+  Widget _buildActionButtons(List<String> members) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        children: [
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: members.length > 1 ? () => _startGroupVideoCall(members) : null,
+              icon: Icon(Icons.videocam, size: 24),
+              label: Text(
+                'Videollamada Grupal',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: GroupProfileConstants.primaryColor,
+                foregroundColor: Colors.white,
+                disabledBackgroundColor: Colors.grey[300],
+                disabledForegroundColor: Colors.grey[600],
+                padding: EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                elevation: 2,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

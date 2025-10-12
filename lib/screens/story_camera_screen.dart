@@ -5,10 +5,11 @@ import 'package:camera/camera.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:image/image.dart' as img;
-import 'package:cloud_firestore/cloud_firestore.dart';
-import '../services/story_service.dart';
 import '../services/deepar_service.dart';
 import '../widgets/permission_dialog.dart';
+import 'story/story_preview_screen.dart';
+import '../widgets/camera/flutter_camera_view.dart';
+import '../widgets/camera/deepar_camera_view.dart';
 
 class StoryCameraScreen extends StatefulWidget {
   const StoryCameraScreen({super.key});
@@ -22,7 +23,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   CameraController? _controller;
   List<CameraDescription>? _cameras;
   bool _isCameraInitialized = false;
-  bool _isDisposingCamera = false;
   bool _isLoading = false;
   int _selectedCameraIndex = 0;
   String? _selectedFilter;
@@ -32,18 +32,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   bool _isDeepARInitialized = false;
   bool _hasCameraPermissions = false; // CRÍTICO: Flag para saber si tenemos permisos
 
-  final StoryService _storyService = StoryService();
   final DeepARService _deepARService = DeepARService();
-
-  // Filtros de color disponibles
-  final Map<String, String> _colorFilters = {
-    'none': 'Normal',
-    'vintage': 'Vintage',
-    'cool': 'Frío',
-    'warm': 'Cálido',
-    'black_white': 'B&N',
-    'sepia': 'Sepia',
-  };
 
   // Filtros DeepAR disponibles realmente
   final Map<String, Map<String, dynamic>> _deepARFilters = {
@@ -68,6 +57,9 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     DeepARFilters.flowerFace: {'name': 'Flower Face', 'icon': Icons.local_florist, 'emoji': '🌸'},
     DeepARFilters.galaxyBackground: {'name': 'Galaxy Background', 'icon': Icons.stars, 'emoji': '🌌'},
     DeepARFilters.vikingHelmet: {'name': 'Viking Helmet', 'icon': Icons.shield, 'emoji': '⚔️'},
+    DeepARFilters.barbieAd: {'name': 'Barbie', 'icon': Icons.face, 'emoji': '💖'},
+    DeepARFilters.faceSwap: {'name': 'Face Swap', 'icon': Icons.swap_horiz, 'emoji': '🔄'},
+    DeepARFilters.harryPotter: {'name': 'Harry Potter', 'icon': Icons.auto_fix_high, 'emoji': '⚡'},
   };
 
   @override
@@ -75,118 +67,95 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     super.initState();
     print('🔵 StoryCameraScreen: initState llamado');
     WidgetsBinding.instance.addObserver(this);
+
     _initializeCamera();
-
-    // Detectar cuando la pantalla se vuelve visible después de haber sido ocultada
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      print('🔵 StoryCameraScreen: postFrameCallback en initState');
-      _listenToRouteChanges();
-    });
-  }
-
-  void _listenToRouteChanges() {
-    print('🔵 StoryCameraScreen: _listenToRouteChanges llamado');
-    // Cuando esta ruta se vuelve activa (después de haber estado oculta)
-    final route = ModalRoute.of(context);
-    if (route != null) {
-      print('🔵 StoryCameraScreen: Route encontrado, agregando listener');
-      route.animation?.addStatusListener((status) {
-        print('🔵 StoryCameraScreen: AnimationStatus cambió a $status, _isDeepARInitialized=$_isDeepARInitialized');
-        if (status == AnimationStatus.completed && _isDeepARInitialized) {
-          // La ruta está completamente visible
-          print('🔵 StoryCameraScreen: Ruta completada, iniciando cámara...');
-          Future.delayed(Duration(milliseconds: 300), () async {
-            print('🟢 StoryCameraScreen: Llamando a startCamera()');
-            await _deepARService.startCamera();
-            print('✅ Cámara DeepAR reiniciada al volver a la pantalla');
-          });
-        }
-      });
-    } else {
-      print('🔴 StoryCameraScreen: Route es NULL');
-    }
   }
 
   Future<void> _initializeCamera() async {
     try {
       print('📱 Inicializando cámara para historias...');
 
-      // NUEVO ENFOQUE: Intentar obtener cámaras directamente
-      // En iOS, availableCameras() maneja permisos automáticamente
+      // Intentar obtener las cámaras directamente
+      // availableCameras() internamente solicita permisos en iOS
+      print('📷 Obteniendo cámaras disponibles (esto solicitará permisos si es necesario)...');
       try {
         _cameras = await availableCameras();
-
-        if (_cameras!.isEmpty) {
-          throw Exception('No se encontraron cámaras');
-        }
-
-        // Si llegamos aquí, tenemos acceso a las cámaras
         print('✅ Cámaras disponibles: ${_cameras!.length}');
 
         setState(() {
           _hasCameraPermissions = true;
+          _hasInitializationFailed = false;
         });
 
         print('🎭 Modo DeepAR por defecto - cámara lista');
         return;
-      } catch (cameraError) {
-        print('❌ Error obteniendo cámaras: $cameraError');
-
-        // Si falla, verificar permisos explícitamente
-        print('🔍 Verificando permisos de cámara explícitamente...');
-        var cameraStatus = await Permission.camera.status;
-        print('📋 Estado actual de permiso: $cameraStatus');
-
-        // Si el permiso no está concedido, solicitarlo
-        if (!cameraStatus.isGranted) {
-          print('📱 Solicitando permiso de cámara...');
-          cameraStatus = await Permission.camera.request();
-          print('📋 Resultado de solicitud: $cameraStatus');
-
-          if (!cameraStatus.isGranted) {
-            print('❌ Permiso de cámara denegado');
-            setState(() {
-              _hasInitializationFailed = true;
-            });
-            _showPermissionDialog();
-            return;
-          }
-        }
-
-        // Permiso concedido, reintentar obtener cámaras
-        print('🔄 Permiso concedido, reintentando obtener cámaras...');
-        _cameras = await availableCameras();
-
-        if (_cameras!.isEmpty) {
-          throw Exception('No se encontraron cámaras');
-        }
-
-        setState(() {
-          _hasCameraPermissions = true;
-        });
-
-        print('✅ Cámaras disponibles después de solicitar permisos: ${_cameras!.length}');
+      } catch (e) {
+        print('❌ Error obteniendo cámaras: $e');
+        // Si falla, verificar el estado del permiso
       }
+
+      // Si availableCameras() falló, verificar permisos manualmente
+      print('🔍 Verificando estado de permisos de cámara...');
+      final cameraStatus = await Permission.camera.status;
+      print('📋 Estado de permiso: $cameraStatus');
+
+      if (cameraStatus.isPermanentlyDenied) {
+        print('⚠️ Permiso permanentemente denegado');
+        setState(() {
+          _hasInitializationFailed = true;
+          _hasCameraPermissions = false;
+        });
+        _showAppSettingsDialog();
+        return;
+      }
+
+      // Si llegamos aquí, algo salió mal
+      print('❌ No se pudo acceder a la cámara');
+      setState(() {
+        _hasInitializationFailed = true;
+        _hasCameraPermissions = false;
+      });
+
+      if (mounted) {
+        Navigator.pop(context);
+      }
+
+      if (_cameras == null || _cameras!.isEmpty) {
+        throw Exception('No se encontraron cámaras en el dispositivo');
+      }
+
+      // Si llegamos aquí, tenemos acceso a las cámaras
+      print('✅ Cámaras disponibles: ${_cameras!.length}');
+
+      setState(() {
+        _hasCameraPermissions = true;
+        _hasInitializationFailed = false;
+      });
+
+      print('🎭 Modo DeepAR por defecto - cámara lista');
     } catch (e) {
       print('❌ Error fatal inicializando cámara: $e');
 
-      // Si el error es de permisos, mostrar diálogo apropiado
-      if (e.toString().toLowerCase().contains('permission') ||
-          e.toString().toLowerCase().contains('camera') ||
-          e.toString().toLowerCase().contains('access')) {
-        setState(() {
-          _hasInitializationFailed = true;
+      setState(() {
+        _hasInitializationFailed = true;
+        _hasCameraPermissions = false;
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al inicializar cámara: $e'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 3),
+          ),
+        );
+
+        // Cerrar la pantalla después de mostrar el error
+        Future.delayed(Duration(seconds: 3), () {
+          if (mounted) {
+            Navigator.pop(context);
+          }
         });
-        _showPermissionDialog();
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Error al inicializar cámara: $e'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
       }
     }
   }
@@ -209,34 +178,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
   }
 
-  void _showPermissionDialog() async {
-    try {
-      // Solicitar permiso directamente del sistema
-      print('📱 Solicitando permiso de cámara del sistema...');
-      final permissionStatus = await Permission.camera.request();
-      print('📱 Resultado del permiso: $permissionStatus');
-
-      if (permissionStatus == PermissionStatus.granted) {
-        // Permiso concedido, reintentar inicialización
-        print('✅ Permiso concedido, reintentando inicialización...');
-        setState(() {
-          _hasInitializationFailed = false;
-        });
-        _initializeCamera();
-      } else if (permissionStatus == PermissionStatus.permanentlyDenied) {
-        // Permiso permanentemente denegado, mostrar diálogo para ir a configuración
-        _showAppSettingsDialog();
-      } else {
-        // Permiso denegado temporalmente, cerrar pantalla
-        print('❌ Permiso denegado, cerrando pantalla');
-        Navigator.pop(context);
-      }
-    } catch (e) {
-      print('❌ Error solicitando permiso: $e');
-      Navigator.pop(context);
-    }
-  }
-
   void _showAppSettingsDialog() {
     PermissionDialog.showPermissionDeniedDialog(
       context: context,
@@ -248,6 +189,21 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         Navigator.pop(context);
       }
     });
+  }
+
+  Future<void> _closeScreen() async {
+    // IMPORTANTE: Limpiar COMPLETAMENTE DeepAR para evitar estado inconsistente
+    print('🗑️ Cerrando pantalla - limpiando DeepAR completamente...');
+
+    // CRÍTICO: Usar dispose() en lugar de stopCamera() para limpiar el singleton
+    await _deepARService.dispose();
+    _isDeepARInitialized = false;
+
+    print('✅ DeepAR limpiado completamente (singleton reseteado)');
+
+    if (mounted) {
+      Navigator.pop(context);
+    }
   }
 
   Future<void> _switchCamera() async {
@@ -299,7 +255,35 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
   }
 
+  Future<void> _applyDeepARFilter(String filterKey) async {
+    if (!_isDeepARInitialized) {
+      print('⚠️ DeepAR no está inicializado, no se puede aplicar filtro');
+      return;
+    }
+
+    try {
+      print('🎭 Aplicando filtro DeepAR: $filterKey');
+
+      final success = await _deepARService.switchFilter(filterKey);
+
+      if (success) {
+        print(
+          '✅ Filtro DeepAR aplicado: ${DeepARFilters.getDisplayName(filterKey)}',
+        );
+      } else {
+        print('❌ Error aplicando filtro DeepAR');
+      }
+    } catch (e) {
+      print('❌ Excepción aplicando filtro DeepAR: $e');
+    }
+  }
+
   Future<void> _takePicture() async {
+    if (_isLoading) {
+      print('⚠️ Ya hay una captura en proceso, ignorando...');
+      return;
+    }
+
     setState(() {
       _isLoading = true;
     });
@@ -310,55 +294,89 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       // Si estamos en modo DeepAR, usar screenshot de DeepAR
       if (_filterType == 'deepar' && _isDeepARInitialized) {
         print('📸 Tomando foto con DeepAR...');
+
         final Uint8List? screenshot = await _deepARService.takeScreenshot();
 
-        if (screenshot == null) {
-          throw Exception('No se pudo capturar la foto con DeepAR');
+        if (screenshot == null || screenshot.isEmpty) {
+          throw Exception('No se pudo capturar la foto con DeepAR - screenshot vacío');
         }
+
+        print('✅ Screenshot capturado: ${screenshot.length} bytes');
 
         // Guardar screenshot a archivo
         final directory = await getTemporaryDirectory();
         final imagePath =
             '${directory.path}/deepar_${DateTime.now().millisecondsSinceEpoch}.jpg';
         final imageFile = File(imagePath);
+
         await imageFile.writeAsBytes(screenshot);
+
+        // Verificar que el archivo se guardó correctamente
+        if (!await imageFile.exists()) {
+          throw Exception('No se pudo guardar la foto en el sistema de archivos');
+        }
+
+        final fileSize = await imageFile.length();
+        print('✅ Foto DeepAR guardada en: $imagePath (${fileSize} bytes)');
+
         finalImagePath = imagePath;
-        print('✅ Foto DeepAR guardada en: $imagePath');
       } else {
         // Modo Flutter camera normal
         if (_controller == null || !_controller!.value.isInitialized) {
           throw Exception('Cámara no inicializada');
         }
 
+        print('📸 Tomando foto con Flutter Camera...');
         final XFile picture = await _controller!.takePicture();
         finalImagePath = picture.path;
 
+        print('✅ Foto Flutter guardada en: $finalImagePath');
+
         // Aplicar filtro si está seleccionado
         if (_selectedFilter != null && _selectedFilter != 'none') {
+          print('🎨 Aplicando filtro: $_selectedFilter');
           finalImagePath = await _applyFilter(picture.path, _selectedFilter!);
         }
       }
 
+      // Verificar que el archivo final existe antes de navegar
+      final finalFile = File(finalImagePath);
+      if (!await finalFile.exists()) {
+        throw Exception('El archivo de imagen no existe: $finalImagePath');
+      }
+
+      print('✅ Navegando a StoryPreviewScreen con: $finalImagePath');
+
       // Navegar a pantalla de preview
       if (mounted) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => StoryPreviewScreen(
-              imagePath: finalImagePath,
-              filter: _selectedFilter,
-              arFilter: _selectedARFilter,
+        // Esperar un frame antes de navegar para asegurar que el estado se actualizó
+        await Future.delayed(Duration(milliseconds: 100));
+
+        if (mounted) {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => StoryPreviewScreen(
+                imagePath: finalImagePath,
+                filter: _selectedFilter,
+                arFilter: _selectedARFilter,
+              ),
             ),
-          ),
-        );
+          );
+
+          print('✅ Regresó de StoryPreviewScreen');
+        }
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
       print('❌ Error tomando foto: $e');
+      print('Stack trace: $stackTrace');
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error al tomar foto: $e'),
+            content: Text('Error al tomar foto. Por favor intenta de nuevo.'),
             backgroundColor: Colors.red,
+            duration: Duration(seconds: 3),
           ),
         );
       }
@@ -412,119 +430,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       print('Error aplicando filtro: $e');
       return imagePath;
     }
-  }
-
-  Widget _buildFilterTab(String type, String label, IconData icon) {
-    final isSelected = _filterType == type;
-    return GestureDetector(
-      onTap: () async {
-        if (_filterType == type)
-          return; // No hacer nada si ya está seleccionado
-        // Transición simplificada - no hay múltiples vistas
-        if (false)
-          return; // Evitar múltiples transiciones simultáneas
-
-        final oldFilterType = _filterType;
-        print('🔄 Cambiando de $oldFilterType a $type');
-
-        try {
-          // Implementar transición completa con widgets separados
-          await _performCompleteTransition(oldFilterType, type);
-        } catch (e) {
-          print('❌ Error durante transición: $e');
-        } finally {
-          if (mounted) {
-            setState(() {
-              // Transición completada
-            });
-          }
-        }
-      },
-      child: Container(
-        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: BoxDecoration(
-          color: isSelected ? Color(0xFF9D7FE8) : Colors.transparent,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: isSelected
-                ? Color(0xFF9D7FE8)
-                : Colors.white.withOpacity(0.5),
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: Colors.white, size: 18),
-            SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                fontSize: 14,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildColorFilterList() {
-    return ListView.builder(
-      scrollDirection: Axis.horizontal,
-      itemCount: _colorFilters.length,
-      padding: EdgeInsets.symmetric(horizontal: 20),
-      itemBuilder: (context, index) {
-        final filterKey = _colorFilters.keys.elementAt(index);
-        final filterName = _colorFilters[filterKey]!;
-        final isSelected = _selectedFilter == filterKey;
-
-        return GestureDetector(
-          onTap: () {
-            setState(() {
-              _selectedFilter = filterKey;
-            });
-          },
-          child: Container(
-            width: 60,
-            margin: EdgeInsets.only(right: 12),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(30),
-              border: Border.all(
-                color: isSelected ? Color(0xFF9D7FE8) : Colors.white,
-                width: isSelected ? 3 : 1,
-              ),
-            ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: _getFilterPreviewColor(filterKey),
-                  ),
-                ),
-                SizedBox(height: 4),
-                Text(
-                  filterName,
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 10,
-                    fontWeight: isSelected
-                        ? FontWeight.bold
-                        : FontWeight.normal,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
   }
 
   Widget _buildARFilterList() {
@@ -747,8 +652,17 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       });
     }
 
-    // Limpiar CameraController de DeepAR cuando se cierra la pantalla
-    _deepARService.stopCamera();
+    // CRÍTICO: Detener y limpiar DeepAR completamente cuando se cierra la pantalla
+    // Nota: dispose() no puede ser async, pero intentamos detener la cámara de todas formas
+    print('🗑️ [dispose] Deteniendo y limpiando DeepAR...');
+    _deepARService.stopCamera().then((_) {
+      print('✅ [dispose] Cámara DeepAR detenida');
+    }).catchError((error) {
+      print('❌ [dispose] Error deteniendo cámara: $error');
+    });
+
+    // También limpiar el estado de inicialización para la próxima vez
+    _isDeepARInitialized = false;
 
     super.dispose();
   }
@@ -761,8 +675,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       return;
     }
 
-    if (state == AppLifecycleState.inactive) {
-      print('📱 App inactive - disposing camera controller');
+    // Solo hacer dispose cuando la app va al background (paused), no en inactive
+    // Esto evita problemas de titilación durante navegación normal
+    if (state == AppLifecycleState.paused) {
+      print('📱 App paused - disposing camera controller');
       cameraController.dispose();
     } else if (state == AppLifecycleState.resumed) {
       print('📱 App resumed - reinitializing camera');
@@ -779,9 +695,16 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: SafeArea(
+    return PopScope(
+      canPop: false,
+      onPopInvoked: (didPop) async {
+        if (!didPop) {
+          await _closeScreen();
+        }
+      },
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: SafeArea(
         child: Stack(
           children: [
             // Vista simple basada en estado - patrón del repositorio de referencia
@@ -803,7 +726,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                     child: Row(
                       children: [
                         IconButton(
-                          onPressed: () => Navigator.pop(context),
+                          onPressed: _closeScreen,
                           icon: Icon(
                             Icons.close,
                             color: Colors.white,
@@ -893,179 +816,13 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             ),
           ],
         ),
+        ),
       ),
     );
   }
 
-  Color _getFilterPreviewColor(String filterKey) {
-    switch (filterKey) {
-      case 'none':
-        return Colors.white;
-      case 'vintage':
-        return Colors.amber[200]!;
-      case 'cool':
-        return Colors.blue[200]!;
-      case 'warm':
-        return Colors.orange[200]!;
-      case 'black_white':
-        return Colors.grey[400]!;
-      case 'sepia':
-        return Colors.brown[200]!;
-      default:
-        return Colors.white;
-    }
-  }
-
-  // Métodos de DeepAR
-  Future<void> _initializeDeepAR() async {
-    try {
-      print('🎭 Inicializando DeepAR...');
-
-      // License keys específicas por plataforma
-      const iosLicenseKey =
-          '3f847703516a015f55ba3a57a9e52b597b082696c37e1975e11f99cacd99b01ba01b7f900d1e1051';
-      const androidLicenseKey =
-          'e54c25aaa8b14776f4837d0c406f91bebb6f9652716847c37004a458645242ccce15c78ea3f1084b';
-
-      // Detectar plataforma y usar la key correcta
-      String licenseKey;
-      if (Theme.of(context).platform == TargetPlatform.iOS) {
-        licenseKey = iosLicenseKey;
-        print('📱 Usando license key de iOS');
-      } else if (Theme.of(context).platform == TargetPlatform.android) {
-        licenseKey = androidLicenseKey;
-        print('🤖 Usando license key de Android');
-      } else {
-        throw Exception('Plataforma no soportada para DeepAR');
-      }
-
-      final result = await _deepARService.initialize(licenseKey: licenseKey);
-
-      if (result) {
-        setState(() {
-          _isDeepARInitialized = true;
-        });
-        print('✅ DeepAR inicializado exitosamente');
-      } else {
-        print('❌ Error inicializando DeepAR');
-        // Fallback: continuar sin DeepAR
-        _showDeepARError(
-          'No se pudo inicializar DeepAR. Los filtros AR no estarán disponibles.',
-        );
-      }
-    } catch (e) {
-      print('❌ Excepción inicializando DeepAR: $e');
-      // Fallback: continuar sin DeepAR
-      _showDeepARError('Error técnico con DeepAR. Usando filtros básicos.');
-    }
-  }
-
-  Future<void> _applyDeepARFilter(String filterKey) async {
-    if (!_isDeepARInitialized) {
-      print('⚠️ DeepAR no está inicializado, inicializando...');
-      await _initializeDeepAR();
-      if (!_isDeepARInitialized) {
-        return;
-      }
-    }
-
-    try {
-      print('🎭 Aplicando filtro DeepAR: $filterKey');
-
-      final success = await _deepARService.switchFilter(filterKey);
-
-      if (success) {
-        print(
-          '✅ Filtro DeepAR aplicado: ${DeepARFilters.getDisplayName(filterKey)}',
-        );
-      } else {
-        print('❌ Error aplicando filtro DeepAR');
-      }
-    } catch (e) {
-      print('❌ Excepción aplicando filtro DeepAR: $e');
-    }
-  }
-
-  void _showDeepARError(String message) {
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(message),
-          backgroundColor: Colors.orange,
-          duration: Duration(seconds: 3),
-        ),
-      );
-    }
-  }
-
-  /// Realizar transición completa entre modos de filtro
-  Future<void> _performCompleteTransition(
-    String oldType,
-    String newType,
-  ) async {
-    print('🔄 Iniciando transición completa: $oldType -> $newType');
-
-    // Paso 1: Marcar como en transición
-    setState(() {
-      // Iniciando transición
-    });
-
-    // Paso 2: Esperar que UI muestre estado de transición
-    await Future.delayed(Duration(milliseconds: 300));
-
-    // Paso 3: Cambiar el tipo de filtro y limpiar estado
-    setState(() {
-      _filterType = newType;
-      // Widget key estable - no incrementar counter
-
-      // Limpiar selecciones según el nuevo tipo
-      if (newType == 'color') {
-        _selectedARFilter = null;
-      } else {
-        _selectedFilter = null;
-      }
-
-      // Limpiar estado de cámara Flutter
-      _controller = null;
-      _isCameraInitialized = false;
-    });
-
-    // Paso 4: Esperar que los nuevos widgets se creen
-    await Future.delayed(Duration(milliseconds: 500));
-
-    // Paso 5: Finalizar transición
-    if (mounted) {
-      setState(() {
-        // Transición completada
-      });
-    }
-
-    print('✅ Transición completa finalizada: $oldType -> $newType');
-  }
-
   /// Construir vista de cámara basada en estado
   Widget _buildCameraPreview() {
-    // Durante transición, mostrar loading
-    // Verificación de transición simplificada
-    if (false) {
-      return Container(
-        color: Colors.black,
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              CircularProgressIndicator(color: Colors.white),
-              SizedBox(height: 16),
-              Text(
-                'Cambiando modo...',
-                style: TextStyle(color: Colors.white, fontSize: 16),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
     // CRÍTICO: Solo construir DeepARCameraView cuando tengamos permisos
     if (!_hasCameraPermissions) {
       return const Center(
@@ -1105,7 +862,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   }
 
   // GlobalKey para mantener el widget DeepARCameraView vivo entre rebuilds
-  final GlobalKey<_DeepARCameraViewState> _deepARCameraKey = GlobalKey();
+  final GlobalKey _deepARCameraKey = GlobalKey(debugLabel: 'deepar_camera_view');
 
   Widget _buildDeepARCameraView() {
     return DeepARCameraView(
@@ -1121,609 +878,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   }
 }
 
-// Pantalla de preview de la historia
-class StoryPreviewScreen extends StatefulWidget {
-  final String imagePath;
-  final String? filter;
-  final String? arFilter;
+// StoryPreviewScreen ahora está en story/story_preview_screen.dart
 
-  const StoryPreviewScreen({
-    super.key,
-    required this.imagePath,
-    this.filter,
-    this.arFilter,
-  });
+// FlutterCameraView ahora está en widgets/camera/flutter_camera_view.dart
 
-  @override
-  State<StoryPreviewScreen> createState() => _StoryPreviewScreenState();
-}
-
-class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
-  final TextEditingController _captionController = TextEditingController();
-  final StoryService _storyService = StoryService();
-  bool _isUploading = false;
-
-  Future<void> _shareStory() async {
-    setState(() {
-      _isUploading = true;
-    });
-
-    try {
-      final storyId = await _storyService.createStory(
-        mediaPath: widget.imagePath,
-        mediaType: 'image',
-        caption: _captionController.text.trim().isEmpty
-            ? null
-            : _captionController.text.trim(),
-        filter: widget.filter != null || widget.arFilter != null
-            ? {'type': widget.filter, 'arFilter': widget.arFilter}
-            : null,
-      );
-
-      // Verificar el status de la historia creada
-      final storyDoc = await FirebaseFirestore.instance
-          .collection('stories')
-          .doc(storyId)
-          .get();
-      final storyStatus = storyDoc.data()?['status'] ?? 'approved';
-
-      Navigator.pop(context); // Cerrar preview
-      Navigator.pop(context); // Cerrar cámara
-
-      // Mostrar mensaje apropiado según el status
-      if (storyStatus == 'pending') {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                Icon(Icons.access_time, color: Colors.white, size: 20),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    '📸 Historia creada! Esperando aprobación del padre',
-                    style: TextStyle(fontSize: 14),
-                  ),
-                ),
-              ],
-            ),
-            backgroundColor: Colors.orange[700],
-            duration: Duration(seconds: 4),
-          ),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                Icon(Icons.check_circle, color: Colors.white, size: 20),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    '📸 Historia publicada exitosamente!',
-                    style: TextStyle(fontSize: 14),
-                  ),
-                ),
-              ],
-            ),
-            backgroundColor: Colors.green[700],
-            duration: Duration(seconds: 3),
-          ),
-        );
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error al compartir historia: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    } finally {
-      setState(() {
-        _isUploading = false;
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Header
-            Padding(
-              padding: EdgeInsets.all(16),
-              child: Row(
-                children: [
-                  IconButton(
-                    onPressed: () => Navigator.pop(context),
-                    icon: Icon(Icons.arrow_back, color: Colors.white),
-                  ),
-                  Spacer(),
-                  Text(
-                    'Tu Historia',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  Spacer(),
-                  SizedBox(width: 48),
-                ],
-              ),
-            ),
-
-            // Imagen preview
-            Expanded(
-              child: Container(
-                margin: EdgeInsets.symmetric(horizontal: 20),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(16),
-                  child: Image.file(
-                    File(widget.imagePath),
-                    fit: BoxFit.cover,
-                    width: double.infinity,
-                  ),
-                ),
-              ),
-            ),
-
-            // Campo de caption
-            Container(
-              margin: EdgeInsets.all(20),
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(25),
-              ),
-              child: TextField(
-                controller: _captionController,
-                style: TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  hintText: 'Agregar una descripción...',
-                  hintStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
-                  border: InputBorder.none,
-                ),
-                maxLines: null,
-                maxLength: 200,
-              ),
-            ),
-
-            // Botón compartir
-            Container(
-              width: double.infinity,
-              margin: EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-              child: ElevatedButton(
-                onPressed: _isUploading ? null : _shareStory,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Color(0xFF9D7FE8),
-                  foregroundColor: Colors.white,
-                  padding: EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(25),
-                  ),
-                ),
-                child: _isUploading
-                    ? Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(
-                                Colors.white,
-                              ),
-                            ),
-                          ),
-                          SizedBox(width: 12),
-                          Text('Compartiendo...'),
-                        ],
-                      )
-                    : Text(
-                        'Compartir Historia',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Widget separado para manejar cámara Flutter de forma completamente aislada
-class FlutterCameraView extends StatefulWidget {
-  final List<CameraDescription>? cameras;
-  final int selectedCameraIndex;
-  final Function(CameraController?) onCameraInitialized;
-  final VoidCallback onCameraDisposed;
-
-  const FlutterCameraView({
-    Key? key,
-    required this.cameras,
-    required this.selectedCameraIndex,
-    required this.onCameraInitialized,
-    required this.onCameraDisposed,
-  }) : super(key: key);
-
-  @override
-  State<FlutterCameraView> createState() => _FlutterCameraViewState();
-}
-
-class _FlutterCameraViewState extends State<FlutterCameraView> {
-  CameraController? _controller;
-  bool _isInitialized = false;
-  bool _isDisposed = false;
-  bool _isInitializing = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _initializeCamera();
-  }
-
-  @override
-  void didUpdateWidget(FlutterCameraView oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // Solo reinicializar si las cámaras o el índice cambiaron
-    if (oldWidget.cameras != widget.cameras ||
-        oldWidget.selectedCameraIndex != widget.selectedCameraIndex) {
-      _reinitializeCamera();
-    }
-  }
-
-  Future<void> _reinitializeCamera() async {
-    if (_isInitializing || _isDisposed) return;
-
-    await _disposeController();
-    await _initializeCamera();
-  }
-
-  Future<void> _initializeCamera() async {
-    if (widget.cameras == null || widget.cameras!.isEmpty) return;
-    if (_isDisposed || _isInitializing) return;
-
-    setState(() {
-      _isInitializing = true;
-    });
-
-    try {
-      print('📱 FlutterCameraView: Inicializando cámara...');
-
-      _controller = CameraController(
-        widget.cameras![widget.selectedCameraIndex],
-        ResolutionPreset.high,
-        enableAudio: false,
-      );
-
-      await _controller!.initialize();
-
-      if (mounted && !_isDisposed) {
-        setState(() {
-          _isInitialized = true;
-          _isInitializing = false;
-        });
-        widget.onCameraInitialized(_controller);
-        print('✅ FlutterCameraView: Cámara inicializada correctamente');
-      }
-    } catch (e) {
-      print('❌ FlutterCameraView: Error inicializando cámara: $e');
-      if (mounted) {
-        setState(() {
-          _isInitializing = false;
-        });
-        widget.onCameraInitialized(null);
-      }
-    }
-  }
-
-  Future<void> _disposeController() async {
-    if (_controller != null) {
-      print('🗑️ FlutterCameraView: Disposing controller...');
-
-      // Solo hacer setState si el widget sigue montado
-      if (mounted && !_isDisposed) {
-        setState(() {
-          _isInitialized = false;
-        });
-      }
-
-      try {
-        await _controller!.dispose();
-        print('✅ FlutterCameraView: Controller disposed exitosamente');
-      } catch (e) {
-        print('⚠️ FlutterCameraView: Error disposing controller: $e');
-      }
-
-      _controller = null;
-    }
-  }
-
-  @override
-  void dispose() {
-    print('🗑️ FlutterCameraView: Disposing...');
-    _isDisposed = true;
-
-    _disposeController().then((_) {
-      widget.onCameraDisposed();
-    });
-
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_isDisposed) {
-      return Container(
-        color: Colors.black,
-        child: Center(
-          child: Text('Cámara disposed', style: TextStyle(color: Colors.white)),
-        ),
-      );
-    }
-
-    if (_isInitializing || (!_isInitialized || _controller == null)) {
-      return Container(
-        color: Colors.black,
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              CircularProgressIndicator(color: Colors.white),
-              SizedBox(height: 16),
-              Text(
-                _isInitializing
-                    ? 'Inicializando cámara...'
-                    : 'Preparando cámara...',
-                style: TextStyle(color: Colors.white, fontSize: 16),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    try {
-      // Verificaciones múltiples antes de buildPreview
-      if (_controller == null || _isDisposed) {
-        throw Exception('Controller null o disposed');
-      }
-
-      // Verificar que el controller esté inicializado
-      if (!_controller!.value.isInitialized) {
-        throw Exception('Controller no inicializado');
-      }
-
-      // Test de acceso al controller para detectar disposal
-      final value = _controller!.value;
-      if (value.hasError) {
-        throw Exception('Controller tiene error: ${value.errorDescription}');
-      }
-
-      // Solo verificar el estado sin llamar buildPreview
-      if (_controller!.description != value.description) {
-        throw Exception('Controller description mismatch');
-      }
-
-      return Positioned.fill(
-        child: AspectRatio(
-          aspectRatio: value.aspectRatio,
-          child: CameraPreview(_controller!),
-        ),
-      );
-    } catch (e) {
-      print('❌ FlutterCameraView: Error en preview: $e');
-      return Container(
-        color: Colors.black,
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.error, color: Colors.red, size: 48),
-              SizedBox(height: 16),
-              Text(
-                'Error de cámara Flutter',
-                style: TextStyle(color: Colors.red, fontSize: 16),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-  }
-}
-
-/// Widget separado para manejar DeepAR de forma completamente aislada
-class DeepARCameraView extends StatefulWidget {
-  final bool isDeepARInitialized;
-  final DeepARService deepARService;
-  final VoidCallback onInitialized;
-
-  const DeepARCameraView({
-    Key? key,
-    required this.isDeepARInitialized,
-    required this.deepARService,
-    required this.onInitialized,
-  }) : super(key: key);
-
-  @override
-  State<DeepARCameraView> createState() => _DeepARCameraViewState();
-}
-
-class _DeepARCameraViewState extends State<DeepARCameraView> {
-  bool _isInitializing = false;
-  bool _hasInitialized = false;
-
-  // IMPORTANTE: NO usar key - dejar que Flutter/iOS maneje la vista
-  // La vista nativa se mantiene viva y solo cambiamos sus parámetros
-
-  @override
-  void dispose() {
-    print('🗑️ DeepARCameraView: dispose');
-    // NO limpiar aquí porque el widget se recrea en cada setState del parent
-    super.dispose();
-  }
-
-  void _onPlatformViewCreated(int viewId) {
-    print('🎯 DeepARCameraView: Preview creado con viewId: $viewId');
-    // Swift ahora maneja automáticamente el inicio de la cámara
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    // IMPORTANTE: Verificar si el servicio (singleton) ya está inicializado
-    if (widget.deepARService.isInitialized) {
-      print('✅ DeepARCameraView: DeepAR ya estaba inicializado (singleton), solo reiniciando cámara');
-      // Si ya está inicializado, solo reiniciar la cámara después del build
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        widget.deepARService.startCamera();
-        if (!_hasInitialized) {
-          widget.onInitialized();
-          _hasInitialized = true;
-        }
-      });
-      return;
-    }
-
-    // Si no está inicializado, inicializar por primera vez
-    if (!widget.isDeepARInitialized && !_isInitializing && !_hasInitialized) {
-      _initializeDeepAR();
-    }
-  }
-
-  @override
-  void didUpdateWidget(DeepARCameraView oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // IMPORTANTE: Verificar si el servicio (singleton) ya está inicializado
-    if (widget.deepARService.isInitialized) {
-      print('✅ DeepARCameraView (update): DeepAR ya estaba inicializado (singleton), solo reiniciando cámara');
-      // Si ya está inicializado, solo reiniciar la cámara después del build
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        widget.deepARService.startCamera();
-        if (!_hasInitialized) {
-          widget.onInitialized();
-          _hasInitialized = true;
-        }
-      });
-      return;
-    }
-
-    // Si no está inicializado, inicializar por primera vez
-    if (!widget.isDeepARInitialized && !_isInitializing && !_hasInitialized) {
-      _initializeDeepAR();
-    }
-  }
-
-  Future<void> _initializeDeepAR() async {
-    if (_isInitializing || _hasInitialized) return;
-
-    // DOBLE CHECK: Verificar si el servicio ya está inicializado antes de inicializar
-    if (widget.deepARService.isInitialized) {
-      print('✅ DeepARCameraView (_initializeDeepAR): DeepAR ya estaba inicializado, abortando');
-      widget.onInitialized();
-      _hasInitialized = true;
-      return;
-    }
-
-    setState(() {
-      _isInitializing = true;
-      _hasInitialized = true; // Marcar que ya se intentó inicializar
-    });
-
-    try {
-      print('🎭 DeepARCameraView: Inicializando DeepAR...');
-
-      // License keys específicas por plataforma - NECESITAS OBTENER KEYS VÁLIDAS DE https://developer.deepar.ai/
-      // Estas keys son de demostración y pueden haber expirado
-      const iosLicenseKey =
-          'bc5821fe04221f7349429783cced44ddbe6006d0287c4397dc97fc5dd993a843429712eda6fe98c9';
-      const androidLicenseKey =
-          'e54c25aaa8b14776f4837d0c406f91bebb6f9652716847c37004a458645242ccce15c78ea3f1084b';
-
-      // Keys de prueba temporal (pueden no funcionar)
-      const iosLicenseKeyDemo =
-          '3f847703516a015f55ba3a57a9e52b597b082696c37e1975e11f99cacd99b01ba01b7f900d1e1051';
-      const androidLicenseKeyDemo =
-          'e54c25aaa8b14776f4837d0c406f91bebb6f9652716847c37004a458645242ccce15c78ea3f1084b';
-
-      // Detectar plataforma y usar la key correcta
-      String licenseKey;
-      if (Theme.of(context).platform == TargetPlatform.iOS) {
-        // Usar key válida si está disponible, sino usar la de demo
-        licenseKey = iosLicenseKey.contains('YOUR_VALID')
-            ? iosLicenseKeyDemo
-            : iosLicenseKey;
-        print('📱 Usando license key de iOS (puede ser demo)');
-      } else if (Theme.of(context).platform == TargetPlatform.android) {
-        // Usar key válida si está disponible, sino usar la de demo
-        licenseKey = androidLicenseKey.contains('YOUR_VALID')
-            ? androidLicenseKeyDemo
-            : androidLicenseKey;
-        print('🤖 Usando license key de Android (puede ser demo)');
-      } else {
-        throw Exception('Plataforma no soportada para DeepAR');
-      }
-
-      final result = await widget.deepARService.initialize(
-        licenseKey: licenseKey,
-      );
-
-      if (result && mounted) {
-        widget.onInitialized();
-        print('✅ DeepARCameraView: DeepAR inicializado exitosamente');
-      } else {
-        print('❌ DeepARCameraView: Error inicializando DeepAR');
-      }
-    } catch (e) {
-      print('❌ DeepARCameraView: Excepción inicializando DeepAR: $e');
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isInitializing = false;
-        });
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (widget.isDeepARInitialized) {
-      return DeepARPreview(
-        width: MediaQuery.of(context).size.width,
-        height: MediaQuery.of(context).size.height,
-        onPlatformViewCreated: _onPlatformViewCreated,
-      );
-    }
-
-    return Container(
-      color: Colors.black,
-      child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            CircularProgressIndicator(color: Colors.white),
-            SizedBox(height: 16),
-            Text(
-              _isInitializing
-                  ? 'Inicializando DeepAR...'
-                  : 'Preparando DeepAR...',
-              style: TextStyle(color: Colors.white, fontSize: 16),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
+// DeepARCameraView ahora está en widgets/camera/deepar_camera_view.dart

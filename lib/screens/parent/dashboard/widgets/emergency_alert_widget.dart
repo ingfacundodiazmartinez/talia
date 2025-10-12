@@ -24,14 +24,26 @@ class EmergencyAlertWidget extends StatelessWidget {
   Widget build(BuildContext context) {
     final emergencyService = EmergencyService();
 
+    print('🆘 EmergencyAlertWidget - Building for parent: $parentId');
+
     return StreamBuilder<QuerySnapshot>(
       stream: emergencyService.getActiveEmergenciesForParent(parentId),
       builder: (context, snapshot) {
+        print('🆘 EmergencyAlertWidget - hasData: ${snapshot.hasData}');
+        print('🆘 EmergencyAlertWidget - connectionState: ${snapshot.connectionState}');
+        if (snapshot.hasData) {
+          print('🆘 EmergencyAlertWidget - docs count: ${snapshot.data!.docs.length}');
+        }
+        if (snapshot.hasError) {
+          print('❌ EmergencyAlertWidget - error: ${snapshot.error}');
+        }
+
         if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
           return SizedBox.shrink();
         }
 
         final emergencies = snapshot.data!.docs;
+        print('✅ EmergencyAlertWidget - Showing ${emergencies.length} emergencies');
 
         return Container(
           margin: EdgeInsets.only(bottom: 20),
@@ -54,17 +66,31 @@ class EmergencyAlertWidget extends StatelessWidget {
             color: Colors.transparent,
             child: InkWell(
               onTap: () {
+                print('🆘 [EmergencyAlertWidget] onTap - Navegando a detalle');
                 // Si hay múltiples emergencias, navegar a la primera
                 final emergency = emergencies.first;
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => EmergencyDetailScreen(
-                      emergencyId: emergency.id,
-                      emergencyData: emergency.data() as Map<String, dynamic>,
+                final emergencyData = emergency.data() as Map<String, dynamic>;
+                print('🆘 [EmergencyAlertWidget] emergencyId: ${emergency.id}');
+                print('🆘 [EmergencyAlertWidget] emergencyData: $emergencyData');
+
+                try {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) {
+                        print('🆘 [EmergencyAlertWidget] Construyendo EmergencyDetailScreen');
+                        return EmergencyDetailScreen(
+                          emergencyId: emergency.id,
+                          emergencyData: emergencyData,
+                        );
+                      },
                     ),
-                  ),
-                );
+                  );
+                  print('🆘 [EmergencyAlertWidget] Navigator.push ejecutado');
+                } catch (e, stackTrace) {
+                  print('❌ [EmergencyAlertWidget] Error navegando: $e');
+                  print('❌ Stack trace: $stackTrace');
+                }
               },
               borderRadius: BorderRadius.circular(16),
               child: Padding(

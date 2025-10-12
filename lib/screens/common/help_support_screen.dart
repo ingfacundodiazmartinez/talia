@@ -515,6 +515,7 @@ class HelpSupportScreen extends StatelessWidget {
                 SizedBox(height: 8),
                 TextField(
                   controller: titleController,
+                  textCapitalization: TextCapitalization.sentences,
                   decoration: InputDecoration(
                     hintText: 'Resumen breve del problema',
                     border: OutlineInputBorder(
@@ -538,6 +539,7 @@ class HelpSupportScreen extends StatelessWidget {
                 TextField(
                   controller: problemController,
                   maxLines: 4,
+                  textCapitalization: TextCapitalization.sentences,
                   decoration: InputDecoration(
                     hintText:
                         'Describe el problema que encontraste, pasos para reproducirlo, etc.',
@@ -561,14 +563,6 @@ class HelpSupportScreen extends StatelessWidget {
                   : () async {
                       if (titleController.text.trim().isEmpty ||
                           problemController.text.trim().isEmpty) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              'Por favor completa todos los campos',
-                            ),
-                            backgroundColor: Colors.orange,
-                          ),
-                        );
                         return;
                       }
 
@@ -584,14 +578,6 @@ class HelpSupportScreen extends StatelessWidget {
                         );
 
                         Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              'Reporte enviado exitosamente. Gracias por tu feedback.',
-                            ),
-                            backgroundColor: Colors.green,
-                          ),
-                        );
                       } catch (e) {
                         setState(() {
                           isLoading = false;

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../controllers/whitelist_controller.dart';
 import '../../../models/contact_request.dart';
 import '../../../models/permission_request.dart';
@@ -69,48 +70,66 @@ class _WhitelistScreenState extends State<WhitelistScreen>
             children: [
               Padding(
                 padding: const EdgeInsets.all(20.0),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Control Parental 🛡️',
-                            style: TextStyle(
-                              fontSize: 28,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white,
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Control Parental 🛡️',
+                                style: TextStyle(
+                                  fontSize: 28,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              SizedBox(height: 4),
+                              Text(
+                                'Gestiona las solicitudes de tus hijos',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Colors.white.withValues(alpha: 0.9),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (_controller.selectedRequests.isNotEmpty)
+                          Container(
+                            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Text(
+                              '${_controller.selectedRequests.length} seleccionada(s)',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.white,
+                              ),
                             ),
                           ),
-                          SizedBox(height: 4),
-                          Text(
-                            'Gestiona las solicitudes de tus hijos',
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: Colors.white.withValues(alpha: 0.9),
-                            ),
-                          ),
-                        ],
+                      ],
+                    ),
+                    SizedBox(height: 16),
+                    ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.pushNamed(context, '/chat_moderation_management');
+                      },
+                      icon: Icon(Icons.psychology),
+                      label: Text('Moderación con IA'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: Theme.of(context).colorScheme.primary,
+                        padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                       ),
                     ),
-                    if (_controller.selectedRequests.isNotEmpty)
-                      Container(
-                        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.2),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Text(
-                          '${_controller.selectedRequests.length} seleccionada(s)',
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
                   ],
                 ),
               ),
@@ -575,6 +594,53 @@ class _WhitelistScreenState extends State<WhitelistScreen>
     String type,
     Map<String, dynamic> data,
   ) async {
+    List<String>? groupsToRemove;
+
+    // Solo verificar grupos compartidos si es un contacto
+    if (type == 'contact') {
+      // Obtener el contactId del teléfono
+      final contactPhone = data['contactPhone'] as String?;
+      if (contactPhone != null) {
+        try {
+          // Buscar el userId por teléfono
+          final userQuery = await FirebaseFirestore.instance
+              .collection('users')
+              .where('phoneNumber', isEqualTo: contactPhone)
+              .limit(1)
+              .get();
+
+          if (userQuery.docs.isNotEmpty) {
+            final contactId = userQuery.docs.first.id;
+
+            // Verificar si comparten grupos
+            final sharedGroups = await _controller.getSharedGroups(
+              childId: childId,
+              contactId: contactId,
+            );
+
+            if (sharedGroups.isNotEmpty) {
+              // Mostrar alerta de grupos compartidos
+              final shouldRemoveFromGroups = await _showSharedGroupsDialog(
+                childId: childId,
+                contactName: contactName,
+                sharedGroups: sharedGroups,
+              );
+
+              if (shouldRemoveFromGroups == null) {
+                return; // Usuario canceló
+              }
+
+              if (shouldRemoveFromGroups) {
+                groupsToRemove = sharedGroups.map((g) => g['id'] as String).toList();
+              }
+            }
+          }
+        } catch (e) {
+          print('❌ Error verificando grupos compartidos: $e');
+        }
+      }
+    }
+
     final confirmed = await _showConfirmDialog(
       title: 'Revocar Aprobación',
       message: '¿Deseas revocar la aprobación de "$contactName"?\n\nEsto bloqueará el chat entre ellos.',
@@ -589,6 +655,7 @@ class _WhitelistScreenState extends State<WhitelistScreen>
       childId: childId,
       type: type,
       data: data,
+      groupsToRemove: groupsToRemove,
     );
 
     setState(() {});
@@ -640,6 +707,110 @@ class _WhitelistScreenState extends State<WhitelistScreen>
 
   // Helper methods
 
+  Future<bool?> _showSharedGroupsDialog({
+    required String childId,
+    required String contactName,
+    required List<Map<String, dynamic>> sharedGroups,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 48),
+        title: Text(
+          '⚠️ Grupos Compartidos Detectados',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Tu hijo comparte ${sharedGroups.length} ${sharedGroups.length == 1 ? 'grupo' : 'grupos'} con $contactName:',
+                style: TextStyle(fontSize: 14),
+              ),
+              SizedBox(height: 12),
+              ...sharedGroups.map((group) => Padding(
+                padding: EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    Icon(Icons.group, size: 16, color: colorScheme.primary),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '${group['name']} (${group['memberCount']} miembros)',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              )),
+              SizedBox(height: 16),
+              Container(
+                padding: EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.info_outline, size: 16, color: Colors.orange),
+                        SizedBox(width: 8),
+                        Text(
+                          '¿Qué deseas hacer?',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                            color: Colors.orange.shade800,
+                          ),
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: 8),
+                    Text(
+                      'Aunque revoques el contacto, tu hijo podrá seguir comunicándose con $contactName a través de estos grupos.',
+                      style: TextStyle(fontSize: 12, height: 1.4),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, null),
+            child: Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(
+              'Mantener en grupos',
+              style: TextStyle(color: Colors.orange),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: colorScheme.primary,
+            ),
+            child: Text('Sacar de grupos (Recomendado)'),
+          ),
+        ],
+        actionsPadding: EdgeInsets.all(16),
+      ),
+    );
+  }
+
   Future<bool?> _showConfirmDialog({
     required String title,
     required String message,
@@ -665,12 +836,7 @@ class _WhitelistScreenState extends State<WhitelistScreen>
   }
 
   void _showSuccessSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('✅ $message'),
-        backgroundColor: Colors.green,
-      ),
-    );
+    // Success feedback removed - user sees visual confirmation in the UI
   }
 
   void _showErrorSnackBar(String message) {

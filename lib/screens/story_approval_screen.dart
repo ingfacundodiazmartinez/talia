@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/story.dart';
 import '../services/story_service.dart';
 
@@ -324,21 +325,31 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen> {
   Future<void> _approveStory(Story story) async {
     try {
       await _storyService.approveStory(story.id);
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Historia de ${story.userName} aprobada'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
     } catch (e) {
+      print('❌ Error aprobando historia: $e');
+      // Solo mostrar error si realmente falló la aprobación
+      // Verificar si la historia fue aprobada a pesar del error
+      try {
+        final storyDoc = await FirebaseFirestore.instance
+            .collection('stories')
+            .doc(story.id)
+            .get();
+
+        if (storyDoc.exists && storyDoc.data()?['status'] == 'approved') {
+          // La historia fue aprobada exitosamente, no mostrar error
+          return;
+        }
+      } catch (_) {
+        // Si no podemos verificar, asumir que hubo un error real
+      }
+
+      // Solo si realmente falló, mostrar el error
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Error al aprobar historia: $e'),
             backgroundColor: Colors.red,
+            duration: Duration(seconds: 3),
           ),
         );
       }
@@ -376,6 +387,7 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen> {
             TextField(
               controller: reasonController,
               maxLines: 3,
+              textCapitalization: TextCapitalization.sentences,
               decoration: InputDecoration(
                 hintText: 'Explica por qué rechazas esta historia...',
                 border: OutlineInputBorder(
@@ -414,14 +426,7 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen> {
         reason: reason.isEmpty ? null : reason,
       );
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Historia de ${story.userName} rechazada'),
-            backgroundColor: Colors.orange,
-          ),
-        );
-      }
+      // Historia rechazada - sin mensaje
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

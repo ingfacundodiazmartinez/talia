@@ -1,14 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import '../../../controllers/child_home_controller.dart';
+import '../../../controllers/child_chats_controller.dart';
 import '../../../widgets/stories_section.dart';
 import '../../../widgets/emergency_button.dart';
 import '../../../widgets/create_group_widget.dart';
 import '../../../services/chat_service.dart';
-import '../../../services/group_chat_service.dart';
-import '../../../services/user_role_service.dart';
-import '../../../services/contact_alias_service.dart';
+import '../../../services/block_service.dart';
 import '../../../screens/group_chat_screen.dart';
 import '../../chat_detail_screen.dart';
 
@@ -34,14 +32,47 @@ class ChildChatsScreen extends StatefulWidget {
   State<ChildChatsScreen> createState() => _ChildChatsScreenState();
 }
 
-class _ChildChatsScreenState extends State<ChildChatsScreen> {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepAliveClientMixin {
+  late ChildChatsController _chatsController;
   final ChatService _chatService = ChatService();
-  final ContactAliasService _aliasService = ContactAliasService();
+  final BlockService _blockService = BlockService();
+
+  // Cache local para evitar rebuilds y mostrar datos inmediatamente
+  List<Widget>? _cachedChatList;
+  String? _lastSnapshotHash;
+
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  void initState() {
+    super.initState();
+    _chatsController = ChildChatsController(childId: widget.childId);
+    _chatsController.addListener(_onControllerChanged);
+    _chatsController.initialize();
+  }
+
+  void _onControllerChanged() {
+    if (mounted) {
+      setState(() {
+        // Limpiar cache cuando hay cambios
+        _cachedChatList = null;
+        _lastSnapshotHash = null;
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _chatsController.removeListener(_onControllerChanged);
+    _chatsController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    super.build(context); // Required for AutomaticKeepAliveClientMixin
+
     final colorScheme = Theme.of(context).colorScheme;
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
@@ -162,71 +193,85 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> {
   }
 
   Widget _buildChatList(ColorScheme colorScheme) {
-    return StreamBuilder<QuerySnapshot>(
-      stream: _firestore
-          .collection('chats')
-          .where('participants', arrayContains: widget.childId)
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (snapshot.hasError) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.error_outline, size: 48, color: colorScheme.error),
-                SizedBox(height: 16),
-                Text('Error: ${snapshot.error}', style: TextStyle(color: colorScheme.onSurface)),
-              ],
-            ),
+    // Si no está inicializado, mostrar loading
+    if (!_chatsController.isInitialized) {
+      return Center(child: CircularProgressIndicator());
+    }
+
+    // Si tenemos cache de la lista, mostrarla
+    if (_cachedChatList != null) {
+      return ListView(
+        padding: EdgeInsets.all(16),
+        children: _cachedChatList!,
+      );
+    }
+
+    // Si no tenemos snapshot, mostrar loading
+    if (_chatsController.cachedChatsSnapshot == null) {
+      return Center(child: CircularProgressIndicator());
+    }
+
+    if (_chatsController.cachedChatsSnapshot!.docs.isEmpty) {
+      return _buildEmptyState(colorScheme);
+    }
+
+    final filteredChats = _chatService.filterDeletedChats(_chatsController.cachedChatsSnapshot!);
+
+    // Crear hash del snapshot para detectar cambios
+    final snapshotHash = _chatsController.cachedChatsSnapshot!.docs.map((d) => d.id).join(',');
+
+    // Solo reconstruir si los datos cambiaron
+    final shouldRebuild = _lastSnapshotHash != snapshotHash;
+
+    // Si no necesitamos reconstruir, mostrar loading mientras tanto
+    if (!shouldRebuild && _cachedChatList != null) {
+      return ListView(
+        padding: EdgeInsets.all(16),
+        children: _cachedChatList!,
+      );
+    }
+
+    return FutureBuilder<List<Widget>>(
+      future: _buildCategorizedChatList(filteredChats, colorScheme),
+      builder: (context, chatListSnapshot) {
+        // Si completó, actualizar cache
+        if (chatListSnapshot.connectionState == ConnectionState.done &&
+            chatListSnapshot.hasData) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              setState(() {
+                _cachedChatList = chatListSnapshot.data;
+                _lastSnapshotHash = snapshotHash;
+              });
+            }
+          });
+        }
+
+        // Si tenemos cache previo, mostrarlo mientras carga
+        if (_cachedChatList != null) {
+          return ListView(
+            padding: EdgeInsets.all(16),
+            children: _cachedChatList!,
           );
         }
 
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return Center(child: CircularProgressIndicator());
+        // Si está cargando y tenemos datos del snapshot, usarlos
+        if (chatListSnapshot.hasData) {
+          return ListView(
+            padding: EdgeInsets.all(16),
+            children: chatListSnapshot.data!,
+          );
         }
 
-        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-          return _buildEmptyState(colorScheme);
-        }
-
-        final filteredChats = _chatService.filterDeletedChats(snapshot.data!);
-
-        return FutureBuilder<List<Widget>>(
-          future: _buildCategorizedChatList(filteredChats, colorScheme),
-          builder: (context, chatListSnapshot) {
-            if (chatListSnapshot.connectionState == ConnectionState.waiting) {
-              return Center(child: CircularProgressIndicator());
-            }
-
-            if (!chatListSnapshot.hasData || chatListSnapshot.data!.isEmpty) {
-              return Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.chat_bubble_outline, size: 64, color: colorScheme.outlineVariant),
-                    SizedBox(height: 16),
-                    Text(
-                      'No tienes conversaciones aún',
-                      style: TextStyle(fontSize: 16, color: colorScheme.onSurfaceVariant),
-                    ),
-                  ],
-                ),
-              );
-            }
-
-            return ListView(
-              padding: EdgeInsets.all(16),
-              children: chatListSnapshot.data!,
-            );
-          },
-        );
+        // Fallback: spinner
+        return Center(child: CircularProgressIndicator());
       },
     );
   }
 
   Widget _buildEmptyState(ColorScheme colorScheme) {
     return FutureBuilder<String?>(
-      future: widget.controller.getLinkedParentId(),
+      future: _chatsController.getLinkedParentId(),
       builder: (context, parentSnapshot) {
         return ListView(
           padding: EdgeInsets.all(16),
@@ -235,43 +280,41 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> {
             StoriesSection(),
             SizedBox(height: 24),
             if (parentSnapshot.hasData && parentSnapshot.data != null)
-              FutureBuilder<DocumentSnapshot>(
-                future: _firestore.collection('users').doc(parentSnapshot.data!).get(),
+              FutureBuilder<Map<String, dynamic>?>(
+                future: _chatsController.getUserData(parentSnapshot.data!),
                 builder: (context, userSnapshot) {
-                  if (userSnapshot.hasData && userSnapshot.data!.exists) {
-                    final parentData = userSnapshot.data!.data() as Map<String, dynamic>?;
-                    if (parentData != null) {
-                      final parentId = parentSnapshot.data!;
-                      final realName = parentData['name'] ?? 'Padre/Madre';
+                  if (userSnapshot.hasData && userSnapshot.data != null) {
+                    final parentData = userSnapshot.data!;
+                    final parentId = parentSnapshot.data!;
+                    final realName = parentData['name'] ?? 'Padre/Madre';
 
-                      return StreamBuilder<String>(
-                        stream: _aliasService.watchDisplayName(parentId, realName),
-                        initialData: realName,
-                        builder: (context, aliasSnapshot) {
-                          final displayName = aliasSnapshot.data ?? realName;
+                    return StreamBuilder<String>(
+                      stream: _chatsController.watchDisplayName(parentId, realName),
+                      initialData: realName,
+                      builder: (context, aliasSnapshot) {
+                        final displayName = aliasSnapshot.data ?? realName;
 
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              _buildParentChatHeader(colorScheme),
-                              _buildChatItem(
-                                chatId: _getChatId(widget.childId, parentId),
-                                userId: parentId,
-                                name: displayName,
-                                lastMessage: 'Inicia una conversación',
-                                time: '',
-                                unreadCount: 0,
-                                isOnline: parentData['isOnline'] ?? false,
-                                photoURL: parentData['photoURL'],
-                                isParent: true,
-                                isEmpty: true,
-                                colorScheme: colorScheme,
-                              ),
-                            ],
-                          );
-                        },
-                      );
-                    }
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _buildParentChatHeader(colorScheme),
+                            _buildChatItem(
+                              chatId: _chatsController.getChatId(widget.childId, parentId),
+                              userId: parentId,
+                              name: displayName,
+                              lastMessage: 'Inicia una conversación',
+                              time: '',
+                              unreadCount: 0,
+                              isOnline: parentData['isOnline'] ?? false,
+                              photoURL: parentData['photoURL'],
+                              isParent: true,
+                              isEmpty: true,
+                              colorScheme: colorScheme,
+                            ),
+                          ],
+                        );
+                      },
+                    );
                   }
                   return SizedBox.shrink();
                 },
@@ -309,16 +352,11 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> {
     widgets.add(StoriesSection());
     widgets.add(SizedBox(height: 16));
 
-    // Obtener y agregar grupos
+    // Obtener y agregar grupos (con cache)
     try {
-      final groupsSnapshot = await _firestore
-          .collection('groups')
-          .where('members', arrayContains: widget.childId)
-          .where('isActive', isEqualTo: true)
-          .orderBy('lastActivity', descending: true)
-          .get();
+      final groups = await _chatsController.getGroups();
 
-      if (groupsSnapshot.docs.isNotEmpty) {
+      if (groups.isNotEmpty) {
         widgets.add(
           Padding(
             padding: EdgeInsets.only(left: 4, bottom: 12),
@@ -333,14 +371,13 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> {
           ),
         );
 
-        for (final groupDoc in groupsSnapshot.docs) {
-          final groupData = groupDoc.data();
+        for (final group in groups) {
           widgets.add(_buildGroupChatItem(
-            groupId: groupDoc.id,
-            groupName: groupData['name'] ?? 'Grupo',
-            memberCount: (groupData['members'] as List?)?.length ?? 0,
-            lastMessage: 'Toca para abrir',
-            messageCount: groupData['messageCount'] ?? 0,
+            groupId: group.groupId,
+            groupName: group.groupName,
+            memberCount: group.memberCount,
+            lastMessage: group.lastMessage,
+            messageCount: group.messageCount,
             colorScheme: colorScheme,
           ));
         }
@@ -352,9 +389,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> {
     }
 
     // Obtener padres vinculados
-    final userRoleService = UserRoleService();
-    final linkedParents = await userRoleService.getLinkedParents(widget.childId);
-    final parentId = linkedParents.isNotEmpty ? linkedParents.first : null;
+    final parentId = await _chatsController.getLinkedParentId();
 
     // Separar chats de padres y otros
     for (final chatDoc in chatDocs) {
@@ -368,8 +403,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> {
       if (otherUserId.isEmpty) continue;
 
       try {
-        final userDoc = await _firestore.collection('users').doc(otherUserId).get();
-        final userData = userDoc.data();
+        final userData = await _chatsController.getUserData(otherUserId);
 
         final chatInfo = {
           'chatDoc': chatDoc,
@@ -396,8 +430,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> {
 
       if (!existingParentChat) {
         try {
-          final parentDoc = await _firestore.collection('users').doc(parentId).get();
-          final parentData = parentDoc.data();
+          final parentData = await _chatsController.getUserData(parentId);
 
           if (parentData != null) {
             final realName = parentData['name'] ?? 'Padre/Madre';
@@ -405,13 +438,13 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> {
             widgets.add(_buildParentChatHeader(colorScheme));
             widgets.add(
               StreamBuilder<String>(
-                stream: _aliasService.watchDisplayName(parentId, realName),
+                stream: _chatsController.watchDisplayName(parentId, realName),
                 initialData: realName,
                 builder: (context, aliasSnapshot) {
                   final displayName = aliasSnapshot.data ?? realName;
 
                   return _buildChatItem(
-                    chatId: _getChatId(widget.childId, parentId),
+                    chatId: _chatsController.getChatId(widget.childId, parentId),
                     userId: parentId,
                     name: displayName,
                     lastMessage: 'Inicia una conversación',
@@ -456,7 +489,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> {
         final unreadCount = chatData['unreadCount_${widget.childId}'] ?? 0;
         widgets.add(
           StreamBuilder<String>(
-            stream: _aliasService.watchDisplayName(otherUserId, realName),
+            stream: _chatsController.watchDisplayName(otherUserId, realName),
             initialData: realName,
             builder: (context, aliasSnapshot) {
               final displayName = aliasSnapshot.data ?? realName;
@@ -466,7 +499,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> {
                 userId: otherUserId,
                 name: displayName,
                 lastMessage: chatData['lastMessage'] ?? '',
-                time: _formatTime(chatData['lastMessageTime']),
+                time: _chatsController.formatTime(chatData['lastMessageTime']),
                 unreadCount: unreadCount is int ? unreadCount : 0,
                 isOnline: userData?['isOnline'] ?? false,
                 photoURL: userData?['photoURL'],
@@ -508,24 +541,53 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> {
         final realName = userData?['name'] ?? 'Usuario';
 
         final unreadCount = chatData['unreadCount_${widget.childId}'] ?? 0;
-        widgets.add(
-          StreamBuilder<String>(
-            stream: _aliasService.watchDisplayName(otherUserId, realName),
-            initialData: realName,
-            builder: (context, aliasSnapshot) {
-              final displayName = aliasSnapshot.data ?? realName;
+        final chatId = chatDoc.id;
 
-              return _buildChatItem(
-                chatId: chatDoc.id,
-                userId: otherUserId,
-                name: displayName,
-                lastMessage: chatData['lastMessage'] ?? '',
-                time: _formatTime(chatData['lastMessageTime']),
-                unreadCount: unreadCount is int ? unreadCount : 0,
-                isOnline: userData?['isOnline'] ?? false,
-                photoURL: userData?['photoURL'],
-                isParent: false,
-                colorScheme: colorScheme,
+        widgets.add(
+          StreamBuilder<bool>(
+            stream: _chatsController.watchChatBlocked(chatId),
+            builder: (context, blockSnapshot) {
+              bool isRevoked = false;
+
+              // Ignorar errores de permisos
+              if (blockSnapshot.hasError) {
+                // El chat no está bloqueado si hay error
+                isRevoked = false;
+              } else if (blockSnapshot.hasData) {
+                isRevoked = blockSnapshot.data ?? false;
+              }
+
+              return StreamBuilder<bool>(
+                stream: _blockService.isBlockedStream(otherUserId),
+                initialData: false,
+                builder: (context, blockedSnapshot) {
+                  final isBlocked = blockedSnapshot.data ?? false;
+
+                  return StreamBuilder<String>(
+                    stream: _chatsController.watchDisplayName(otherUserId, realName),
+                    initialData: realName,
+                    builder: (context, aliasSnapshot) {
+                      final displayName = aliasSnapshot.data ?? realName;
+
+                      return _buildChatItem(
+                        chatId: chatId,
+                        userId: otherUserId,
+                        name: displayName,
+                        lastMessage: isBlocked
+                            ? '🔒 Contacto bloqueado'
+                            : (chatData['lastMessage'] ?? ''),
+                        time: _chatsController.formatTime(chatData['lastMessageTime']),
+                        unreadCount: isBlocked ? 0 : (unreadCount is int ? unreadCount : 0),
+                        isOnline: userData?['isOnline'] ?? false,
+                        photoURL: userData?['photoURL'],
+                        isParent: false,
+                        isRevoked: isRevoked,
+                        isBlocked: isBlocked,
+                        colorScheme: colorScheme,
+                      );
+                    },
+                  );
+                },
               );
             },
           ),
@@ -677,10 +739,12 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> {
     String? photoURL,
     bool isParent = false,
     bool isEmpty = false,
+    bool isRevoked = false,
+    bool isBlocked = false,
     required ColorScheme colorScheme,
   }) {
     return GestureDetector(
-      onTap: () {
+      onTap: isRevoked ? null : () {
         print('Navegando al chat: $chatId con usuario: $userId');
         Navigator.push(
           context,
@@ -693,14 +757,18 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> {
           ),
         );
       },
-      child: Container(
-        margin: EdgeInsets.only(bottom: 8),
-        padding: EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: unreadCount > 0 ? colorScheme.primaryContainer.withValues(alpha: 0.3) : Colors.transparent,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Row(
+      child: Opacity(
+        opacity: (isRevoked || isBlocked) ? 0.5 : 1.0,
+        child: Container(
+          margin: EdgeInsets.only(bottom: 8),
+          padding: EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: (isRevoked || isBlocked)
+                ? colorScheme.surfaceContainerHighest.withValues(alpha: 0.5)
+                : (unreadCount > 0 ? colorScheme.primaryContainer.withValues(alpha: 0.3) : Colors.transparent),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
           children: [
             Stack(
               children: [
@@ -715,7 +783,22 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> {
                         )
                       : null,
                 ),
-                if (isOnline)
+                if (isBlocked)
+                  Positioned(
+                    right: 0,
+                    bottom: 0,
+                    child: Container(
+                      width: 18,
+                      height: 18,
+                      decoration: BoxDecoration(
+                        color: Colors.red,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: colorScheme.surface, width: 2),
+                      ),
+                      child: Icon(Icons.block, color: Colors.white, size: 10),
+                    ),
+                  )
+                else if (isOnline)
                   Positioned(
                     right: 0,
                     bottom: 0,
@@ -764,18 +847,24 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> {
                     children: [
                       Expanded(
                         child: Text(
-                          lastMessage,
+                          isBlocked
+                              ? '🔒 Contacto bloqueado'
+                              : (isRevoked
+                                  ? '🔒 Contacto no habilitado por tus padres'
+                                  : lastMessage),
                           style: TextStyle(
                             fontSize: 13,
-                            color: isEmpty
-                                ? colorScheme.onSurfaceVariant.withValues(alpha: 0.7)
-                                : colorScheme.onSurfaceVariant,
-                            fontStyle: isEmpty ? FontStyle.italic : FontStyle.normal,
+                            color: (isRevoked || isBlocked)
+                                ? colorScheme.error.withValues(alpha: 0.7)
+                                : (isEmpty
+                                    ? colorScheme.onSurfaceVariant.withValues(alpha: 0.7)
+                                    : colorScheme.onSurfaceVariant),
+                            fontStyle: (isEmpty || isRevoked || isBlocked) ? FontStyle.italic : FontStyle.normal,
                           ),
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                      if (unreadCount > 0)
+                      if (unreadCount > 0 && !isRevoked && !isBlocked)
                         Container(
                           padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                           decoration: BoxDecoration(
@@ -798,31 +887,9 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> {
             ),
           ],
         ),
+        ),
       ),
     );
   }
 
-  String _getChatId(String user1, String user2) {
-    final users = [user1, user2]..sort();
-    return '${users[0]}_${users[1]}';
-  }
-
-  String _formatTime(dynamic timestamp) {
-    if (timestamp == null) return '';
-
-    final DateTime dateTime = (timestamp as Timestamp).toDate();
-    final now = DateTime.now();
-    final difference = now.difference(dateTime);
-
-    if (difference.inDays > 0) {
-      if (difference.inDays == 1) return 'Ayer';
-      return '${difference.inDays}d';
-    } else if (difference.inHours > 0) {
-      return '${difference.inHours}h';
-    } else if (difference.inMinutes > 0) {
-      return '${difference.inMinutes}m';
-    } else {
-      return 'Ahora';
-    }
-  }
 }

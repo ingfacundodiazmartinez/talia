@@ -16,6 +16,9 @@ class _ParentApprovalRequestsScreenState
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
+  // Mapa para rastrear qué solicitudes están siendo procesadas
+  final Map<String, bool> _processingRequests = {};
+
   Future<void> _handleApproval({
     required String requestId,
     required String childId,
@@ -23,6 +26,15 @@ class _ParentApprovalRequestsScreenState
     required String linkCodeDocId,
     required bool approved,
   }) async {
+    // Evitar múltiples clics
+    if (_processingRequests[requestId] == true) {
+      return;
+    }
+
+    setState(() {
+      _processingRequests[requestId] = true;
+    });
+
     try {
       final requestDoc =
           _firestore.collection('parent_approval_requests').doc(requestId);
@@ -32,16 +44,11 @@ class _ParentApprovalRequestsScreenState
 
         // 🔒 SEGURIDAD: Usar Cloud Function para crear vínculo validado
         try {
-          // Obtener el código del link_codes doc para pasarlo a la función
-          final linkCodeDoc = await _firestore.collection('link_codes').doc(linkCodeDocId).get();
-          final linkCodeData = linkCodeDoc.data();
-          final code = linkCodeData?['code'] as String?;
-
           final functions = FirebaseFunctions.instance;
           final result = await functions.httpsCallable('createParentChildLink').call({
             'parentId': newParentId,
             'childId': childId,
-            'code': code, // La Cloud Function marcará el código como usado
+            // No pasamos código - la función validará que el caller es el padre existente aprobando
           });
 
           if (result.data['success'] != true) {
@@ -111,12 +118,6 @@ class _ParentApprovalRequestsScreenState
           'createdAt': FieldValue.serverTimestamp(),
         });
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('✅ Solicitud aprobada exitosamente'),
-            backgroundColor: Colors.green,
-          ),
-        );
       } else {
         print('❌ Rechazando solicitud de vinculación...');
 
@@ -152,6 +153,13 @@ class _ParentApprovalRequestsScreenState
           backgroundColor: Colors.red,
         ),
       );
+    } finally {
+      // Siempre limpiar el estado de carga
+      if (mounted) {
+        setState(() {
+          _processingRequests.remove(requestId);
+        });
+      }
     }
   }
 
@@ -251,6 +259,7 @@ class _ParentApprovalRequestsScreenState
               final childName = data['childName'] ?? 'Usuario';
               final newParentName = data['newParentName'] ?? 'Usuario';
               final createdAt = data['createdAt'] as Timestamp?;
+              final isProcessing = _processingRequests[request.id] == true;
 
               return Card(
                 margin: EdgeInsets.only(bottom: 16),
@@ -337,14 +346,28 @@ class _ParentApprovalRequestsScreenState
                         children: [
                           Expanded(
                             child: OutlinedButton.icon(
-                              onPressed: () => _handleApproval(
-                                requestId: request.id,
-                                childId: data['childId'],
-                                newParentId: data['newParentId'],
-                                linkCodeDocId: data['linkCodeDocId'],
-                                approved: false,
-                              ),
-                              icon: Icon(Icons.close),
+                              onPressed: isProcessing
+                                  ? null
+                                  : () => _handleApproval(
+                                        requestId: request.id,
+                                        childId: data['childId'],
+                                        newParentId: data['newParentId'],
+                                        linkCodeDocId: data['linkCodeDocId'],
+                                        approved: false,
+                                      ),
+                              icon: isProcessing
+                                  ? SizedBox(
+                                      height: 16,
+                                      width: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        valueColor:
+                                            AlwaysStoppedAnimation<Color>(
+                                          Colors.red,
+                                        ),
+                                      ),
+                                    )
+                                  : Icon(Icons.close),
                               label: Text('Rechazar'),
                               style: OutlinedButton.styleFrom(
                                 foregroundColor: Colors.red,
@@ -359,14 +382,28 @@ class _ParentApprovalRequestsScreenState
                           SizedBox(width: 12),
                           Expanded(
                             child: ElevatedButton.icon(
-                              onPressed: () => _handleApproval(
-                                requestId: request.id,
-                                childId: data['childId'],
-                                newParentId: data['newParentId'],
-                                linkCodeDocId: data['linkCodeDocId'],
-                                approved: true,
-                              ),
-                              icon: Icon(Icons.check),
+                              onPressed: isProcessing
+                                  ? null
+                                  : () => _handleApproval(
+                                        requestId: request.id,
+                                        childId: data['childId'],
+                                        newParentId: data['newParentId'],
+                                        linkCodeDocId: data['linkCodeDocId'],
+                                        approved: true,
+                                      ),
+                              icon: isProcessing
+                                  ? SizedBox(
+                                      height: 16,
+                                      width: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        valueColor:
+                                            AlwaysStoppedAnimation<Color>(
+                                          Colors.white,
+                                        ),
+                                      ),
+                                    )
+                                  : Icon(Icons.check),
                               label: Text('Aprobar'),
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: Colors.green,

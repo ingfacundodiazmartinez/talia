@@ -29,8 +29,8 @@ class _EmergencyButtonState extends State<EmergencyButton>
   late Animation<double> _pulseAnimation;
   late Animation<double> _scaleAnimation;
 
-  bool _isPressed = false;
   bool _isActivating = false;
+  bool _isPressed = false;
   bool _isInCooldown = false;
 
   @override

@@ -34,7 +34,7 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
 
       final doc = await _firestore
           .collection('link_codes')
-          .where('parentId', isEqualTo: parentId)
+          .where('createdBy', isEqualTo: parentId)
           .where('isActive', isEqualTo: true)
           .limit(1)
           .get();
@@ -65,7 +65,7 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
       // Desactivar códigos anteriores
       final oldCodes = await _firestore
           .collection('link_codes')
-          .where('parentId', isEqualTo: parentId)
+          .where('createdBy', isEqualTo: parentId)
           .where('isActive', isEqualTo: true)
           .get();
 
@@ -81,6 +81,7 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
       await _firestore.collection('link_codes').add({
         'code': code,
         'parentId': parentId,
+        'createdBy': parentId, // Requerido por reglas de seguridad
         'isActive': true,
         'createdAt': FieldValue.serverTimestamp(),
         'expiresAt': Timestamp.fromDate(expiresAt),
@@ -91,13 +92,6 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
         _linkCode = code;
         _expiryTime = expiresAt;
       });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('✅ Código generado exitosamente'),
-          backgroundColor: Colors.green,
-        ),
-      );
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('❌ Error: $e'), backgroundColor: Colors.red),
@@ -358,12 +352,6 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
     final code = _codeController.text.trim().replaceAll(' ', '');
 
     if (code.length != 6) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('⚠️ El código debe tener 6 dígitos'),
-          backgroundColor: Colors.orange,
-        ),
-      );
       return;
     }
 
@@ -419,13 +407,6 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
 
       if (existingLink.docs.isNotEmpty) {
         print('⚠️ Ya existe un vínculo activo entre este padre e hijo');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('⚠️ Ya estás vinculado con este padre/madre'),
-            backgroundColor: Colors.orange,
-            duration: Duration(seconds: 3),
-          ),
-        );
         Navigator.of(context).pop(false);
         return;
       }
@@ -443,14 +424,6 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
           existingParentId: existingParents.first,
           newParentId: parentId,
           linkCodeDocId: linkCodeDoc.id,
-        );
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('✅ Solicitud enviada. El padre actual debe aprobar esta vinculación.'),
-            backgroundColor: Colors.orange,
-            duration: Duration(seconds: 4),
-          ),
         );
 
         Navigator.of(context).pop(true);
@@ -599,13 +572,6 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
         'usedAt': FieldValue.serverTimestamp(),
         'isActive': false,
       });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('✅ ¡Vinculado exitosamente con tu padre/madre!'),
-          backgroundColor: Colors.green,
-        ),
-      );
 
       Navigator.of(context).pop(true);
     } catch (e) {

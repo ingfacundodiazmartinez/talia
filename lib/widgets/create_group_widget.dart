@@ -516,6 +516,7 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
           // Nombre del grupo
           TextField(
             controller: _groupNameController,
+            textCapitalization: TextCapitalization.words,
             style: TextStyle(color: colorScheme.onSurface),
             decoration: InputDecoration(
               labelText: 'Nombre del grupo *',
@@ -537,6 +538,7 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
           TextField(
             controller: _groupDescriptionController,
             maxLines: 3,
+            textCapitalization: TextCapitalization.sentences,
             style: TextStyle(color: colorScheme.onSurface),
             decoration: InputDecoration(
               labelText: 'Descripción (opcional)',

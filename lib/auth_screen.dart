@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'services/phone_verification_service.dart';
 import 'widgets/phone_verification_widget.dart';
 import 'screens/common/profile_completion_screen.dart';
@@ -14,7 +13,6 @@ class AuthScreen extends StatefulWidget {
 class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   final PhoneVerificationService _phoneService = PhoneVerificationService();
 
-  final bool _showPhoneVerification = true; // Siempre mostrar verificación SMS
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
 
@@ -58,6 +56,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
+      resizeToAvoidBottomInset: true, // Ajustar layout cuando aparece el teclado
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(

@@ -6,20 +6,33 @@ import '../screens/story_camera_screen.dart';
 import '../screens/story_viewer_screen.dart';
 import '../theme_service.dart';
 
-class StoriesSection extends StatelessWidget {
+class StoriesSection extends StatefulWidget {
   const StoriesSection({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final StoryService storyService = StoryService();
+  State<StoriesSection> createState() => _StoriesSectionState();
+}
 
+class _StoriesSectionState extends State<StoriesSection> {
+  final StoryService storyService = StoryService();
+  List<UserStories>? _cachedStories;
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
       height: 90,
       margin: EdgeInsets.symmetric(vertical: 4),
       child: StreamBuilder<List<UserStories>>(
         stream: storyService.getStoriesFromWhitelist(),
+        initialData: _cachedStories,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
+          // Actualizar cache cuando llegan datos nuevos
+          if (snapshot.hasData && snapshot.data != null) {
+            _cachedStories = snapshot.data;
+          }
+
+          // Solo mostrar loading si NO hay cache y estamos esperando
+          if (snapshot.connectionState == ConnectionState.waiting && _cachedStories == null) {
             return Center(
               child: CircularProgressIndicator(
                 color: Theme.of(context).colorScheme.primary,
@@ -27,13 +40,13 @@ class StoriesSection extends StatelessWidget {
             );
           }
 
-          if (snapshot.hasError) {
+          if (snapshot.hasError && _cachedStories == null) {
             return Center(
               child: Text('Error: ${snapshot.error}'),
             );
           }
 
-          final userStoriesList = snapshot.data ?? [];
+          final userStoriesList = snapshot.data ?? _cachedStories ?? [];
 
           return ListView.builder(
             scrollDirection: Axis.horizontal,

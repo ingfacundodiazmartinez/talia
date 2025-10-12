@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -35,6 +37,7 @@ class IncomingCallDialog extends StatefulWidget {
 class _IncomingCallDialogState extends State<IncomingCallDialog> with SingleTickerProviderStateMixin {
   late AnimationController _pulseController;
   final AudioPlayer _audioPlayer = AudioPlayer();
+  StreamSubscription<DocumentSnapshot>? _callStatusSubscription;
 
   @override
   void initState() {
@@ -54,6 +57,7 @@ class _IncomingCallDialogState extends State<IncomingCallDialog> with SingleTick
 
   @override
   void dispose() {
+    _callStatusSubscription?.cancel();
     _pulseController.dispose();
     _audioPlayer.stop();
     _audioPlayer.dispose();
@@ -99,9 +103,10 @@ class _IncomingCallDialogState extends State<IncomingCallDialog> with SingleTick
   }
 
   void _listenToCallStatus() {
-    VideoCallService().watchCallStatus(widget.callId).listen((snapshot) {
+    _callStatusSubscription = VideoCallService().watchCallStatus(widget.callId).listen((snapshot) {
       if (!snapshot.exists) {
         // La llamada fue eliminada
+        print('📵 Llamada eliminada - cerrando diálogo');
         if (mounted) {
           Navigator.of(context).pop();
         }
@@ -113,7 +118,13 @@ class _IncomingCallDialogState extends State<IncomingCallDialog> with SingleTick
 
       // Si la llamada fue cancelada, rechazada o terminada, cerrar el diálogo
       if (status == 'ended' || status == 'rejected' || status == 'cancelled') {
-        print('📵 Llamada cancelada/terminada por el caller - cerrando diálogo');
+        print('📵 Llamada $status por el caller - cerrando diálogo');
+        if (mounted) {
+          Navigator.of(context).pop();
+        }
+      } else if (status == 'accepted') {
+        // Si la llamada fue aceptada (puede ser desde otro dispositivo), también cerrar
+        print('📵 Llamada aceptada desde otro lugar - cerrando diálogo');
         if (mounted) {
           Navigator.of(context).pop();
         }
@@ -350,39 +361,83 @@ class _IncomingCallDialogState extends State<IncomingCallDialog> with SingleTick
 
   Future<void> _acceptCall(BuildContext context) async {
     try {
-      // Detener sonido
-      await _audioPlayer.stop();
+      // Verificar que el usuario esté autenticado
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) {
+        throw 'Usuario no autenticado. Por favor, vuelve a iniciar sesión.';
+      }
 
       print('📞 Aceptando llamada: ${widget.callId}');
       print('📞 Channel name: ${widget.channelName} (tipo: ${widget.channelName.runtimeType})');
+      print('🔐 Usuario autenticado: ${currentUser.email ?? currentUser.phoneNumber}');
+
+      // ⚠️ IMPORTANTE: Cancelar listener ANTES de aceptar la llamada
+      // para evitar que el listener cierre el diálogo antes de navegar
+      print('🛑 Cancelando listener de estado de llamada...');
+      await _callStatusSubscription?.cancel();
+      _callStatusSubscription = null;
+
+      // Detener sonido inmediatamente para mejor UX
+      await _audioPlayer.stop();
 
       // Aceptar la llamada en Firestore
+      print('📝 Actualizando estado de llamada en Firestore...');
       await VideoCallService().acceptCall(widget.callId);
+      print('✅ Llamada aceptada en Firestore');
 
       // Generar token de Agora usando Cloud Function
-      print('🎫 Generando token de Agora...');
+      print('🎫 Generando token de Agora para receptor...');
       print('🎫 Enviando channelName: "${widget.channelName}", uid: 0');
-      final functions = FirebaseFunctions.instance;
-      final result = await functions.httpsCallable('generateAgoraToken').call({
-        'channelName': widget.channelName.toString().trim(),
-        'uid': 0, // 0 = Agora asigna automáticamente
-      });
 
-      final token = result.data['token'] as String;
-      final uid = result.data['uid'] as int;
-
-      print('✅ Token generado para receptor: $token');
-
-      // Cerrar pantalla ANTES de navegar
-      if (context.mounted) {
-        Navigator.of(context).pop();
+      // ✅ Obtener token de App Check de uso limitado para Cloud Functions
+      String? appCheckTokenValue;
+      try {
+        final appCheckToken = await FirebaseAppCheck.instance.getToken();
+        appCheckTokenValue = appCheckToken;
+        print('🔐 App Check token obtenido: ${appCheckTokenValue?.substring(0, 20)}...');
+      } catch (appCheckError) {
+        print('⚠️ Error obteniendo App Check token: $appCheckError');
+        print('⚠️ Tipo de error: ${appCheckError.runtimeType}');
+        // Continuar de todos modos - el servidor decidirá si rechazar
       }
 
-      // Esperar un momento para que la pantalla se cierre completamente
-      await Future.delayed(const Duration(milliseconds: 100));
+      print('☁️ Llamando Cloud Function generateAgoraToken...');
+      final functions = FirebaseFunctions.instance;
+      final callable = functions.httpsCallable('generateAgoraToken');
 
-      // Navegar a la pantalla correspondiente según el tipo de llamada
+      String token;
+      int uid;
+
+      try {
+        final result = await callable.call({
+          'channelName': widget.channelName.toString().trim(),
+          'uid': 0, // 0 = Agora asigna automáticamente
+        });
+
+        token = result.data['token'] as String;
+        uid = result.data['uid'] as int;
+
+        print('✅ Token generado para receptor exitosamente');
+        print('✅ UID asignado: $uid');
+      } catch (cloudFunctionError) {
+        print('❌ Error en Cloud Function generateAgoraToken:');
+        print('   Tipo: ${cloudFunctionError.runtimeType}');
+        print('   Mensaje: $cloudFunctionError');
+
+        if (cloudFunctionError.toString().contains('unauthenticated')) {
+          throw 'Error de autenticación. Por favor, vuelve a iniciar sesión.';
+        } else if (cloudFunctionError.toString().contains('App Check')) {
+          throw 'Error de verificación de App Check. Asegúrate de que la app esté correctamente configurada.';
+        } else {
+          throw 'Error generando token de Agora: $cloudFunctionError';
+        }
+      }
+
+      // Cerrar pantalla y navegar inmediatamente
       if (context.mounted) {
+        Navigator.of(context).pop();
+
+        // Navegar a la pantalla correspondiente según el tipo de llamada
         if (widget.callType == 'audio') {
           // Navegar a pantalla de llamada de audio
           Navigator.of(context).push(
@@ -414,19 +469,22 @@ class _IncomingCallDialogState extends State<IncomingCallDialog> with SingleTick
         }
       }
     } catch (e) {
-      print('❌ Error aceptando llamada: $e');
+      print('❌ Error general aceptando llamada:');
+      print('   Tipo: ${e.runtimeType}');
+      print('   Mensaje: $e');
 
       // Cerrar pantalla si hay error
       if (context.mounted) {
         Navigator.of(context).pop();
       }
 
-      // Mostrar error
+      // Mostrar error con más detalle
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error al aceptar la llamada: $e'),
+            content: Text('Error al aceptar la llamada: ${e.toString().length > 80 ? e.toString().substring(0, 80) + '...' : e}'),
             backgroundColor: Colors.red,
+            duration: Duration(seconds: 5),
           ),
         );
       }

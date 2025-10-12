@@ -1,15 +1,8 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show VoidCallback;
-
-/// Excepción para indicar autenticación de prueba exitosa
-class _TestAuthenticationSuccess implements Exception {
-  final String message;
-  _TestAuthenticationSuccess({this.message = 'Test authentication successful'});
-}
 
 class PhoneVerificationService {
   static final PhoneVerificationService _instance =
@@ -26,18 +19,10 @@ class PhoneVerificationService {
 
   // Configuración
   static const int _verificationTimeoutSeconds = 60;
-  static const int _resendCooldownSeconds = 30;
 
   // Control de sistema de pruebas - false para SMS reales
   static const bool _useTestNumbers =
       false; // <-- Cambiado para recibir SMS reales
-
-  // Números de prueba para desarrollo (con códigos fijos)
-  static final Map<String, String> _testPhoneNumbers = {
-    '+5493875433442': '123456', // Tu número de prueba
-    '+1234567890': '123456', // Número genérico de prueba
-    '+5491112345678': '123456', // Otro número argentino de prueba
-  };
 
   // Estados de verificación
   bool get isVerificationInProgress => _verificationId != null;
@@ -163,12 +148,12 @@ class PhoneVerificationService {
 
       print('🔢 Verificando código SMS: $smsCode');
 
-      // En desarrollo, verificar si es un código de prueba (solo si está habilitado)
-      if (kDebugMode &&
-          _useTestNumbers &&
-          _verificationId!.startsWith('TEST_VERIFICATION_ID')) {
-        return await _handleTestCodeVerification(smsCode);
-      }
+      // TODO: En desarrollo, verificar si es un código de prueba (solo si está habilitado)
+      // if (kDebugMode &&
+      //     _useTestNumbers &&
+      //     _verificationId!.startsWith('TEST_VERIFICATION_ID')) {
+      //   return await _handleTestCodeVerification(smsCode);
+      // }
 
       final credential = PhoneAuthCredential.credential(
         verificationId: _verificationId!,
@@ -349,93 +334,6 @@ class PhoneVerificationService {
       print('❌ Error verificando estado de teléfono: $e');
       return false;
     }
-  }
-
-  /// Detectar si estamos ejecutando en un emulador
-  bool _isEmulator() {
-    if (kIsWeb) return false;
-
-    // En Android, verificar si es un emulador
-    if (Platform.isAndroid) {
-      // Los emuladores de Android suelen tener estas características
-      return Platform.environment['ANDROID_EMU'] != null ||
-          Platform.environment.containsKey('ANDROID_AVD_HOME');
-    }
-
-    // En iOS, verificar si es simulador
-    if (Platform.isIOS) {
-      return Platform.environment['SIMULATOR_DEVICE_NAME'] != null;
-    }
-
-    return false;
-  }
-
-  /// Manejar números de prueba en desarrollo
-  Future<PhoneVerificationResult> _handleTestPhoneNumber(
-    String phoneNumber,
-    VoidCallback? onCodeSent,
-  ) async {
-    try {
-      // Simular envío de código
-      _verificationId =
-          'TEST_VERIFICATION_ID_${DateTime.now().millisecondsSinceEpoch}';
-
-      // Notificar que el código fue "enviado"
-      onCodeSent?.call();
-
-      print('📨 Código de prueba "enviado" para $phoneNumber');
-      print('🔐 Usa el código: ${_testPhoneNumbers[phoneNumber]}');
-
-      return PhoneVerificationResult.codeSent(_verificationId!);
-    } catch (e) {
-      return PhoneVerificationResult.error(
-        'Error en verificación de prueba: $e',
-      );
-    }
-  }
-
-  /// Manejar verificación de códigos de prueba
-  Future<PhoneVerificationResult> _handleTestCodeVerification(
-    String smsCode,
-  ) async {
-    try {
-      // Verificar si el código coincide con alguno de los códigos de prueba
-      bool isValidTestCode = _testPhoneNumbers.values.contains(smsCode);
-
-      if (!isValidTestCode) {
-        throw Exception('Código de verificación incorrecto');
-      }
-
-      print('✅ Código de prueba verificado exitosamente');
-
-      // Para números de prueba, devolvemos éxito sin credencial real
-      try {
-        await _createTestUserCredential();
-      } catch (e) {
-        if (e is _TestAuthenticationSuccess) {
-          // En desarrollo, aceptamos la verificación sin autenticación real
-          print('🧪 Verificación de prueba completada exitosamente');
-          return PhoneVerificationResult.testSuccess();
-        }
-        rethrow;
-      }
-
-      // Fallback (no debería llegar aquí)
-      return PhoneVerificationResult.testSuccess();
-    } catch (e) {
-      print('❌ Error verificando código de prueba: $e');
-      return PhoneVerificationResult.error(_getErrorMessage(e));
-    }
-  }
-
-  /// Crear credencial de usuario de prueba (solo para desarrollo)
-  Future<UserCredential> _createTestUserCredential() async {
-    // Para desarrollo, simulamos una autenticación exitosa
-    // En lugar de crear un usuario real, indicamos éxito sin autenticar
-    print('🧪 Simulando autenticación exitosa de usuario de prueba');
-
-    // Lanzar excepción controlada para indicar éxito en el flujo de prueba
-    throw _TestAuthenticationSuccess();
   }
 
   /// Obtener número de teléfono del usuario

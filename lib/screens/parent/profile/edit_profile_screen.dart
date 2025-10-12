@@ -98,7 +98,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         setState(() {
           _profileImageUrl = imageUrl;
         });
-        _showSuccessSnackBar('Foto de perfil actualizada exitosamente');
       }
     } catch (e) {
       if (mounted) {
@@ -124,7 +123,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       );
 
       if (mounted) {
-        _showSuccessSnackBar('Perfil actualizado exitosamente');
         Navigator.pop(context);
       }
     } catch (e) {
@@ -136,15 +134,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         setState(() => _isLoading = false);
       }
     }
-  }
-
-  void _showSuccessSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.green,
-      ),
-    );
   }
 
   void _showErrorSnackBar(String message) {
@@ -273,6 +262,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         SizedBox(height: 8),
         TextFormField(
           controller: _nameController,
+          textCapitalization: TextCapitalization.words,
           decoration: InputDecoration(
             hintText: 'Ingresa tu nombre completo',
             prefixIcon: Icon(Icons.person_outline, color: colorScheme.primary),

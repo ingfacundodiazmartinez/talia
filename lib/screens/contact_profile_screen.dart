@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import '../services/video_call_service.dart';
 import '../services/block_service.dart';
 import '../services/contact_alias_service.dart';
 import '../models/user.dart';
 import '../models/child.dart';
+import 'video_call_screen.dart';
+import 'audio_call_screen.dart';
+import '../widgets/profile_photo_viewer.dart';
 
 class ContactProfileScreen extends StatefulWidget {
   final String contactId;
@@ -23,7 +25,6 @@ class ContactProfileScreen extends StatefulWidget {
 
 class _ContactProfileScreenState extends State<ContactProfileScreen> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final firebase_auth.FirebaseAuth _auth = firebase_auth.FirebaseAuth.instance;
   final VideoCallService _videoCallService = VideoCallService();
   final BlockService _blockService = BlockService();
   final ContactAliasService _aliasService = ContactAliasService();
@@ -73,14 +74,6 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
           setState(() {
             _isBlocked = false;
           });
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('${widget.contactName} desbloqueado'),
-                backgroundColor: Colors.green,
-              ),
-            );
-          }
         }
       } else {
         // Bloquear
@@ -111,14 +104,7 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
           setState(() {
             _isBlocked = true;
           });
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('${widget.contactName} bloqueado'),
-                backgroundColor: Colors.orange,
-              ),
-            );
-          }
+          // Contacto bloqueado - sin mensaje
         }
       }
     } catch (e) {
@@ -147,43 +133,43 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
   }
 
   Future<void> _startVideoCall() async {
-    try {
-      final currentUserId = _auth.currentUser!.uid;
+    // Usar el método consolidado del servicio
+    final result = await _videoCallService.initiateCall(
+      receiverId: widget.contactId,
+      receiverName: widget.contactName,
+      isVideo: true,
+    );
 
-      // Obtener nombre del usuario actual
-      final currentUserDoc = await _firestore
-          .collection('users')
-          .doc(currentUserId)
-          .get();
-      final currentUserName =
-          currentUserDoc.data()?['name'] ?? 'Usuario';
+    if (!mounted) return;
 
-      await _videoCallService.startCall(
-        callerId: currentUserId,
-        callerName: currentUserName,
-        receiverId: widget.contactId,
-        receiverName: widget.contactName,
+    if (result['success']) {
+      // Cerrar el perfil
+      Navigator.pop(context);
+
+      // Navegar a la pantalla de videollamada
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => VideoCallScreen(
+            callId: result['channelName'],
+            channelName: result['channelName'],
+            token: result['token'],
+            uid: result['uid'],
+            isCaller: true,
+            remoteName: widget.contactName,
+          ),
+        ),
       );
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Videollamada iniciada'),
-            backgroundColor: Colors.green,
+    } else {
+      // Mostrar error
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Error al iniciar videollamada: ${result['error'].toString().length > 80 ? result['error'].toString().substring(0, 80) + '...' : result['error']}',
           ),
-        );
-        Navigator.pop(context);
-      }
-    } catch (e) {
-      print('Error iniciando videollamada: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al iniciar videollamada'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 5),
+        ),
+      );
     }
   }
 
@@ -202,9 +188,31 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
               'Puedes personalizar el nombre de este contacto. Solo tú verás este nombre.',
               style: TextStyle(fontSize: 14, color: Colors.grey[600]),
             ),
+            SizedBox(height: 12),
+            Container(
+              padding: EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.blue.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.blue.withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.blue, size: 18),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Borra todo el texto para restaurar el nombre original',
+                      style: TextStyle(fontSize: 12, color: Colors.blue[800]),
+                    ),
+                  ),
+                ],
+              ),
+            ),
             SizedBox(height: 16),
             TextField(
               controller: nameController,
+              textCapitalization: TextCapitalization.words,
               decoration: InputDecoration(
                 labelText: 'Nombre personalizado',
                 hintText: 'Ej: Papá, Mamá, Hermano...',
@@ -212,6 +220,7 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
                 suffixIcon: IconButton(
                   icon: Icon(Icons.clear),
                   onPressed: () => nameController.clear(),
+                  tooltip: 'Borrar para restaurar nombre original',
                 ),
               ),
               autofocus: true,
@@ -238,32 +247,19 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
       ),
     );
 
-    if (result != null && result.isNotEmpty) {
+    if (result != null) {
       try {
-        if (result == '___RESTORE___') {
+        // Verificar si el resultado está vacío O es el comando de restaurar
+        final shouldRemoveAlias = result.isEmpty || result == '___RESTORE___';
+
+        if (shouldRemoveAlias) {
           // Restaurar nombre original (eliminar alias)
           await _aliasService.removeAlias(widget.contactId);
-
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Nombre restaurado a "${widget.contactName}"'),
-                backgroundColor: Colors.green,
-              ),
-            );
-          }
+          // El StreamBuilder se actualizará automáticamente
         } else {
           // Guardar nuevo alias
           await _aliasService.setAlias(widget.contactId, result);
-
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Nombre actualizado a "$result"'),
-                backgroundColor: Colors.green,
-              ),
-            );
-          }
+          // El StreamBuilder se actualizará automáticamente
         }
       } catch (e) {
         if (mounted) {
@@ -279,43 +275,43 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
   }
 
   Future<void> _startAudioCall() async {
-    try {
-      final currentUserId = _auth.currentUser!.uid;
+    // Usar el método consolidado del servicio
+    final result = await _videoCallService.initiateCall(
+      receiverId: widget.contactId,
+      receiverName: widget.contactName,
+      isVideo: false,
+    );
 
-      // Obtener nombre del usuario actual
-      final currentUserDoc = await _firestore
-          .collection('users')
-          .doc(currentUserId)
-          .get();
-      final currentUserName =
-          currentUserDoc.data()?['name'] ?? 'Usuario';
+    if (!mounted) return;
 
-      await _videoCallService.startAudioCall(
-        callerId: currentUserId,
-        callerName: currentUserName,
-        receiverId: widget.contactId,
-        receiverName: widget.contactName,
+    if (result['success']) {
+      // Cerrar el perfil
+      Navigator.pop(context);
+
+      // Navegar a la pantalla de llamada de audio
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => AudioCallScreen(
+            callId: result['channelName'],
+            channelName: result['channelName'],
+            token: result['token'],
+            uid: result['uid'],
+            isCaller: true,
+            remoteName: widget.contactName,
+          ),
+        ),
       );
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Llamada de audio iniciada'),
-            backgroundColor: Colors.green,
+    } else {
+      // Mostrar error
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Error al iniciar llamada: ${result['error'].toString().length > 80 ? result['error'].toString().substring(0, 80) + '...' : result['error']}',
           ),
-        );
-        Navigator.pop(context);
-      }
-    } catch (e) {
-      print('Error iniciando llamada de audio: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al iniciar llamada'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 5),
+        ),
+      );
     }
   }
 
@@ -377,17 +373,9 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
           final role = userData['role'] ?? 'adult';
           final isOnline = userData['isOnline'] ?? false;
 
-          // Calculate age using User model
+          // Usar User.age getter para calcular la edad
           final birthDate = User.parseBirthDate(userData['birthDate'] ?? userData['age']);
-          final today = DateTime.now();
-          int age = 0;
-          if (birthDate != null) {
-            age = (today.year - birthDate.year).toInt();
-            if (today.month < birthDate.month ||
-                (today.month == birthDate.month && today.day < birthDate.day)) {
-              age--;
-            }
-          }
+          final age = User.calculateAge(birthDate);
 
           return SingleChildScrollView(
             child: Column(
@@ -413,27 +401,14 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
                   padding: EdgeInsets.symmetric(vertical: 32),
                   child: Column(
                     children: [
-                      // Avatar
+                      // Avatar (clickeable para ampliar)
                       Stack(
                         children: [
-                          CircleAvatar(
+                          ClickableAvatar(
+                            photoUrl: photoURL,
+                            name: widget.contactName,
                             radius: 60,
                             backgroundColor: Colors.white.withValues(alpha: 0.3),
-                            backgroundImage: photoURL != null && photoURL!.isNotEmpty
-                                ? NetworkImage(photoURL!)
-                                : null,
-                            child: photoURL == null || photoURL!.isEmpty
-                                ? Text(
-                                    widget.contactName.isNotEmpty
-                                        ? widget.contactName[0].toUpperCase()
-                                        : 'U',
-                                    style: TextStyle(
-                                      fontSize: 48,
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  )
-                                : null,
                           ),
                           // Indicador de en línea
                           if (isOnline)
@@ -658,24 +633,13 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
                             return Column(
                               children: parents.map((parent) {
                                 return ListTile(
-                                  leading: CircleAvatar(
+                                  leading: ClickableAvatar(
+                                    photoUrl: parent['photoURL'] != null && parent['photoURL']!.isNotEmpty
+                                        ? parent['photoURL']!
+                                        : null,
+                                    name: parent['name'] ?? 'Padre/Madre',
+                                    radius: 20,
                                     backgroundColor: Color(0xFF9D7FE8).withValues(alpha: 0.2),
-                                    backgroundImage: parent['photoURL'] != null &&
-                                            parent['photoURL']!.isNotEmpty
-                                        ? NetworkImage(parent['photoURL']!)
-                                        : null,
-                                    child: parent['photoURL'] == null ||
-                                            parent['photoURL']!.isEmpty
-                                        ? Text(
-                                            parent['name'] != null && parent['name']!.isNotEmpty
-                                                ? parent['name']![0].toUpperCase()
-                                                : 'P',
-                                            style: TextStyle(
-                                              color: Color(0xFF9D7FE8),
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          )
-                                        : null,
                                   ),
                                   title: Text(
                                     parent['name'] ?? 'Padre/Madre',
@@ -710,6 +674,9 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
     required String label,
     required String value,
   }) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: 16, vertical: 16),
       child: Row(
@@ -717,12 +684,12 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
           Container(
             padding: EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: Color(0xFF9D7FE8).withValues(alpha: 0.1),
+              color: colorScheme.primary.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(10),
             ),
             child: Icon(
               icon,
-              color: Color(0xFF9D7FE8),
+              color: colorScheme.primary,
               size: 24,
             ),
           ),
@@ -735,7 +702,7 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
                   label,
                   style: TextStyle(
                     fontSize: 12,
-                    color: Colors.grey[600],
+                    color: isDarkMode ? Colors.grey[400] : Colors.grey[600],
                   ),
                 ),
                 SizedBox(height: 4),
@@ -744,7 +711,7 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w600,
-                    color: Color(0xFF2D3142),
+                    color: colorScheme.onSurface,
                   ),
                 ),
               ],

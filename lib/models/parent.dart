@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'user.dart';
 import 'child.dart';
+import '../services/contact_service.dart';
 
 /// Modelo para usuarios con rol de Padre/Madre
 class Parent extends User {
@@ -64,19 +65,21 @@ class Parent extends User {
         .snapshots();
   }
 
-  /// Obtiene todos los contactos del padre
+  /// Obtiene todos los contactos del padre (con cache)
   Future<List<DocumentSnapshot>> loadAllContacts() async {
     try {
-      final query = await FirebaseFirestore.instance
-          .collection('contacts')
-          .where('users', arrayContains: id)
-          .get();
-
-      return query.docs;
+      final contactService = ContactService();
+      return await contactService.getUserContacts(id);
     } catch (e) {
       print('❌ Error cargando contactos: $e');
       return [];
     }
+  }
+
+  /// Stream de todos los contactos del padre (con cache automático)
+  Stream<QuerySnapshot> watchAllContacts() {
+    final contactService = ContactService();
+    return contactService.watchUserContacts(id);
   }
 
   /// Stream de solicitudes de aprobación pendientes

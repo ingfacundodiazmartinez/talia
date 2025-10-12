@@ -69,6 +69,20 @@ class BlockService {
     }
   }
 
+  // Stream para verificar si un contacto está bloqueado (en tiempo real)
+  Stream<bool> isBlockedStream(String contactId) {
+    final user = _auth.currentUser;
+    if (user == null) return Stream.value(false);
+
+    return _firestore
+        .collection('blocked_contacts')
+        .where('userId', isEqualTo: user.uid)
+        .where('blockedUserId', isEqualTo: contactId)
+        .limit(1)
+        .snapshots()
+        .map((snapshot) => snapshot.docs.isNotEmpty);
+  }
+
   // Verificar si el usuario actual fue bloqueado por otro usuario
   Future<bool> isBlockedBy(String userId) async {
     final user = _auth.currentUser;
@@ -87,6 +101,20 @@ class BlockService {
       print('Error verificando si fue bloqueado: $e');
       return false;
     }
+  }
+
+  // Stream para verificar si el usuario actual fue bloqueado por otro usuario (en tiempo real)
+  Stream<bool> isBlockedByStream(String userId) {
+    final user = _auth.currentUser;
+    if (user == null) return Stream.value(false);
+
+    return _firestore
+        .collection('blocked_contacts')
+        .where('userId', isEqualTo: userId)
+        .where('blockedUserId', isEqualTo: user.uid)
+        .limit(1)
+        .snapshots()
+        .map((snapshot) => snapshot.docs.isNotEmpty);
   }
 
   // Obtener lista de contactos bloqueados

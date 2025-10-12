@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
+import 'dart:io';
 import '../services/video_call_service.dart';
+import '../services/voip_service.dart';
+import '../services/callkit_service.dart';
 
 class AudioCallScreen extends StatefulWidget {
   final String callId;
@@ -27,8 +30,8 @@ class AudioCallScreen extends StatefulWidget {
 class _AudioCallScreenState extends State<AudioCallScreen> {
   final VideoCallService _callService = VideoCallService();
 
-  bool _isJoined = false;
   bool _isMuted = false;
+  bool _isJoined = false;
   int? _remoteUid;
   bool _isConnecting = true;
   bool _isEnding = false;
@@ -150,6 +153,15 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
     _isEnding = true;
 
     try {
+      // Cerrar CallKit UI en ambas plataformas
+      if (Platform.isIOS) {
+        // En iOS usamos VoIPService para notificar a CallKit nativo
+        await VoIPService().notifyCallEnded(widget.callId);
+      } else if (Platform.isAndroid) {
+        // En Android usamos flutter_callkit_incoming
+        await CallKitService().endCall(widget.callId);
+      }
+
       await _callService.endCall(widget.callId);
       await _callService.leaveChannel();
 

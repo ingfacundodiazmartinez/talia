@@ -28,6 +28,8 @@ class _EmergencyDetailScreenState extends State<EmergencyDetailScreen> {
   @override
   void initState() {
     super.initState();
+    print('🆘 [EmergencyDetailScreen] initState - emergencyId: ${widget.emergencyId}');
+    print('🆘 [EmergencyDetailScreen] emergencyData: ${widget.emergencyData}');
     _loadLocationTracking();
   }
 
@@ -38,17 +40,36 @@ class _EmergencyDetailScreenState extends State<EmergencyDetailScreen> {
   }
 
   Future<void> _loadLocationTracking() async {
-    // La ubicación inicial está en los datos de emergencia
-    final initialLocation = widget.emergencyData['location'];
-    if (initialLocation != null) {
-      final initialLatLng = LatLng(
-        initialLocation['latitude'] as double,
-        initialLocation['longitude'] as double,
-      );
+    try {
+      print('🆘 [EmergencyDetailScreen] _loadLocationTracking iniciado');
+      // La ubicación inicial está en los datos de emergencia
+      final initialLocation = widget.emergencyData['location'];
+      print('🆘 [EmergencyDetailScreen] initialLocation: $initialLocation');
 
-      setState(() {
-        _locationPoints.add(initialLatLng);
-      });
+      if (initialLocation != null) {
+        final lat = initialLocation['latitude'];
+        final lng = initialLocation['longitude'];
+        print('🆘 [EmergencyDetailScreen] lat: $lat, lng: $lng');
+
+        if (lat != null && lng != null) {
+          final initialLatLng = LatLng(
+            lat is double ? lat : (lat as num).toDouble(),
+            lng is double ? lng : (lng as num).toDouble(),
+          );
+
+          setState(() {
+            _locationPoints.add(initialLatLng);
+          });
+          print('✅ [EmergencyDetailScreen] Ubicación inicial agregada: $initialLatLng');
+        } else {
+          print('⚠️ Ubicación inicial sin coordenadas válidas');
+        }
+      } else {
+        print('⚠️ [EmergencyDetailScreen] No hay ubicación inicial');
+      }
+    } catch (e, stackTrace) {
+      print('❌ Error cargando ubicación inicial: $e');
+      print('❌ Stack trace: $stackTrace');
     }
   }
 
@@ -56,16 +77,42 @@ class _EmergencyDetailScreenState extends State<EmergencyDetailScreen> {
     if (trackingDocs.isEmpty) return _locationPoints;
 
     final newPoints = trackingDocs.map((doc) {
-      final data = doc.data() as Map<String, dynamic>;
-      return LatLng(
-        data['latitude'] as double,
-        data['longitude'] as double,
-      );
-    }).toList();
+      try {
+        final data = doc.data() as Map<String, dynamic>;
+        final lat = data['latitude'];
+        final lng = data['longitude'];
 
-    // Combinar con punto inicial si existe
+        if (lat == null || lng == null) {
+          print('⚠️ Documento de tracking sin coordenadas: ${doc.id}');
+          return null;
+        }
+
+        return LatLng(
+          lat is double ? lat : (lat as num).toDouble(),
+          lng is double ? lng : (lng as num).toDouble(),
+        );
+      } catch (e) {
+        print('❌ Error procesando punto de tracking ${doc.id}: $e');
+        return null;
+      }
+    }).whereType<LatLng>().toList(); // Filtrar nulos
+
+    // 🔥 OPTIMIZACIÓN: Mostrar solo los ÚLTIMOS puntos (los más recientes y relevantes)
+    // Para emergencias activas, lo importante es la ubicación reciente
+    final List<LatLng> recentPoints;
+    const maxRecentPoints = 50;
+
+    if (newPoints.length > maxRecentPoints) {
+      // Tomar solo los últimos 50 puntos (más recientes)
+      recentPoints = newPoints.sublist(newPoints.length - maxRecentPoints);
+      print('⚡ [EmergencyDetailScreen] Mostrando últimos puntos: ${newPoints.length} total -> ${recentPoints.length} recientes');
+    } else {
+      recentPoints = newPoints;
+    }
+
+    // Combinar con punto inicial si existe (para contexto de dónde empezó)
     final allPoints = List<LatLng>.from(_locationPoints.take(1)); // Solo el primer punto (inicial)
-    allPoints.addAll(newPoints);
+    allPoints.addAll(recentPoints);
 
     return allPoints;
   }
@@ -176,12 +223,6 @@ class _EmergencyDetailScreenState extends State<EmergencyDetailScreen> {
     final success = await _emergencyService.resolveEmergency(widget.emergencyId);
 
     if (success && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Emergencia marcada como resuelta'),
-          backgroundColor: Colors.green,
-        ),
-      );
       Navigator.pop(context);
     } else if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -198,9 +239,11 @@ class _EmergencyDetailScreenState extends State<EmergencyDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
+    print('🆘 [EmergencyDetailScreen] build iniciado');
     final childName = widget.emergencyData['childName'] ?? 'Desconocido';
     final message = widget.emergencyData['message'] ?? 'Emergencia activada';
     final initialLocation = widget.emergencyData['location'];
+    print('🆘 [EmergencyDetailScreen] childName: $childName, message: $message');
 
     return Scaffold(
       appBar: AppBar(
@@ -286,13 +329,34 @@ class _EmergencyDetailScreenState extends State<EmergencyDetailScreen> {
                   .doc(widget.emergencyId)
                   .collection('location_tracking')
                   .orderBy('timestamp', descending: false)
-                  .snapshots(),
+                  .snapshots()
+                  .handleError((error) {
+                    print('❌ Error en stream de location_tracking: $error');
+                    return null;
+                  }),
               builder: (context, snapshot) {
+                print('🆘 [EmergencyDetailScreen] StreamBuilder rebuild');
+                print('🆘 [EmergencyDetailScreen] connectionState: ${snapshot.connectionState}');
+                print('🆘 [EmergencyDetailScreen] hasData: ${snapshot.hasData}');
+                print('🆘 [EmergencyDetailScreen] hasError: ${snapshot.hasError}');
+
+                // Manejo de errores
+                if (snapshot.hasError) {
+                  print('❌ Error en StreamBuilder de location_tracking: ${snapshot.error}');
+                }
+
                 // Construir puntos sin setState
                 final trackingDocs = snapshot.hasData ? snapshot.data!.docs : <QueryDocumentSnapshot>[];
+                print('🆘 [EmergencyDetailScreen] trackingDocs count: ${trackingDocs.length}');
+
                 final locationPoints = _buildLocationPoints(trackingDocs);
+                print('🆘 [EmergencyDetailScreen] locationPoints count: ${locationPoints.length}');
+
                 final polylines = _buildPolylines(locationPoints);
+                print('🆘 [EmergencyDetailScreen] polylines count: ${polylines.length}');
+
                 final markers = _buildMarkers(locationPoints);
+                print('🆘 [EmergencyDetailScreen] markers count: ${markers.length}');
 
                 return Stack(
                   children: [
@@ -353,7 +417,8 @@ class _EmergencyDetailScreenState extends State<EmergencyDetailScreen> {
                               Icon(Icons.route, color: Colors.red, size: 20),
                               SizedBox(width: 8),
                               Text(
-                                '${locationPoints.length} puntos',
+                                // Mostrar el total de tracking docs (incluyendo inicial)
+                                '${trackingDocs.length + 1} puntos',
                                 style: TextStyle(
                                   fontWeight: FontWeight.bold,
                                   color: Colors.red[900],

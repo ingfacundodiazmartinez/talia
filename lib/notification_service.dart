@@ -2,9 +2,10 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'firebase_options.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
-import 'package:image/image.dart' as img;
 import 'package:flutter/services.dart';
 import 'dart:io';
 import 'dart:async';
@@ -12,16 +13,63 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'constants/notification_types.dart';
 import 'services/notification_filter.dart';
+import 'services/callkit_service.dart';
 
 // Manejador de mensajes en segundo plano (debe estar fuera de la clase)
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  print('📩 Mensaje en segundo plano: ${message.notification?.title}');
+  print('🔥 ============================================');
+  print('📩 BACKGROUND MESSAGE HANDLER EJECUTADO');
+  print('🔥 ============================================');
+  print('📩 Notification title: ${message.notification?.title}');
+  print('📩 Notification body: ${message.notification?.body}');
   print('📦 Tipo: ${message.data['type']}');
-  print('📦 Data: ${message.data}');
+  print('📦 Data completa: ${message.data}');
+  print('🔥 ============================================');
 
-  // Las notificaciones de llamadas se manejan automáticamente por el sistema
-  // No necesitamos mostrar notificación local aquí porque FCM ya lo hace
+  // Inicializar Firebase si no está inicializado
+  // Esto es necesario para que el background handler funcione en iOS
+  try {
+    if (Firebase.apps.isEmpty) {
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
+      print('✅ Firebase inicializado en background handler');
+    }
+  } catch (e) {
+    print('❌ Error inicializando Firebase en background: $e');
+  }
+
+  // Si es una llamada, mostrar CallKit en pantalla completa
+  if (message.data['type'] == 'video_call' || message.data['type'] == 'audio_call') {
+    print('📞 LLAMADA ENTRANTE DETECTADA EN SEGUNDO PLANO');
+    print('📞 Tipo de llamada: ${message.data['type']}');
+    print('📞 Call ID: ${message.data['callId']}');
+    print('📞 Caller Name: ${message.data['callerName']}');
+    print('📞 Caller ID: ${message.data['callerId']}');
+
+    try {
+      final callKit = CallKitService();
+      await callKit.showIncomingCall(
+        callId: message.data['callId'] ?? message.messageId ?? '',
+        callerName: message.data['callerName'] ?? 'Usuario',
+        callerId: message.data['callerId'] ?? message.data['senderId'] ?? '',
+        callerPhotoUrl: message.data['callerPhotoURL'],
+        callType: message.data['type'] == 'audio_call' ? 'audio' : 'video',
+        isEmergency: message.data['isEmergency'] == 'true',
+        extraData: message.data,
+      );
+      print('✅ CallKit mostrado exitosamente');
+    } catch (e) {
+      print('❌ ERROR mostrando CallKit: $e');
+      print('❌ Stack trace: ${StackTrace.current}');
+    }
+  }
+
+  // Las demás notificaciones se manejan automáticamente por FCM
+  print('🔥 ============================================');
+  print('📩 BACKGROUND HANDLER FINALIZADO');
+  print('🔥 ============================================');
 }
 
 class NotificationService {
@@ -35,10 +83,13 @@ class NotificationService {
   final FlutterLocalNotificationsPlugin _localNotifications =
       FlutterLocalNotificationsPlugin();
   final NotificationFilter _filter = NotificationFilter();
+  final CallKitService _callKit = CallKitService();
 
   String? _fcmToken;
   bool _isInitialized = false;
-  String? _activeChatId; // ID del chat actualmente abierto
+
+  // Trackear el chat actual para suprimir notificaciones solo cuando estás dentro de él
+  String? _currentChatId;
 
   // Stream para notificar videollamadas entrantes
   final _incomingCallController = StreamController<Map<String, dynamic>>.broadcast();
@@ -52,15 +103,21 @@ class NotificationService {
   final _emergencyNotificationTapController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get emergencyNotificationTapStream => _emergencyNotificationTapController.stream;
 
-  // Establecer el chat activo (para filtrar notificaciones)
-  void setActiveChatId(String? chatId) {
-    _activeChatId = chatId;
-    print('🔔 Chat activo actualizado: ${chatId ?? 'ninguno'}');
-  }
-
   // Método público para emitir llamadas entrantes al stream
   void emitIncomingCall(Map<String, dynamic> callData) {
     _incomingCallController.add(callData);
+  }
+
+  // Establecer el chat actual (para suprimir notificaciones solo de ese chat)
+  void setCurrentChat(String chatId) {
+    _currentChatId = chatId;
+    print('📍 Chat actual establecido: $chatId');
+  }
+
+  // Limpiar el chat actual (cuando sales del chat)
+  void clearCurrentChat() {
+    print('📍 Chat actual limpiado: $_currentChatId');
+    _currentChatId = null;
   }
 
   // Helper para upsert de datos de usuario
@@ -93,7 +150,10 @@ class NotificationService {
       // 4. Obtener token FCM
       await _getFCMToken();
 
-      // 5. Configurar listeners
+      // 5. Inicializar CallKit
+      _initializeCallKit();
+
+      // 6. Configurar listeners
       _setupListeners();
 
       _isInitialized = true;
@@ -240,6 +300,26 @@ class NotificationService {
     }
   }
 
+  // Inicializar CallKit para llamadas en pantalla completa
+  void _initializeCallKit() {
+    _callKit.initialize(
+      onCallAccepted: (callData) {
+        print('✅ CallKit: Llamada aceptada');
+        // Emitir evento para que la app navegue a la pantalla de llamada
+        _incomingCallController.add(callData);
+      },
+      onCallDeclined: (callId) {
+        print('❌ CallKit: Llamada rechazada - $callId');
+        // Aquí podrías enviar una notificación al llamador de que se rechazó
+      },
+      onCallEnded: (callId) {
+        print('🔚 CallKit: Llamada finalizada - $callId');
+        // Limpiar recursos si es necesario
+      },
+    );
+    print('✅ CallKit inicializado correctamente');
+  }
+
   // Configurar listeners de mensajes
   void _setupListeners() {
     // Mensajes cuando la app está en primer plano
@@ -251,18 +331,31 @@ class NotificationService {
       // Verificar si es una videollamada o llamada de audio
       if (message.data['type'] == 'video_call' || message.data['type'] == 'audio_call') {
         print('📞 ${message.data['type'] == 'video_call' ? 'Videollamada' : 'Llamada de audio'} entrante detectada');
-        _incomingCallController.add(message.data);
+
+        // Mostrar CallKit en pantalla completa
+        _callKit.showIncomingCall(
+          callId: message.data['callId'] ?? message.messageId ?? '',
+          callerName: message.data['callerName'] ?? 'Usuario',
+          callerId: message.data['callerId'] ?? message.data['senderId'] ?? '',
+          callerPhotoUrl: message.data['callerPhotoURL'],
+          callType: message.data['type'] == 'audio_call' ? 'audio' : 'video',
+          isEmergency: message.data['isEmergency'] == 'true',
+          extraData: message.data,
+        );
       } else if (message.data['type'] == 'chat_message') {
-        // Mostrar notificación de mensaje solo si no está en el chat activo
-        final messageChatId = message.data['chatId'];
-        if (messageChatId != null && messageChatId == _activeChatId) {
-          print('💬 Mensaje del chat activo - no mostrar notificación');
+        // Solo suprimir notificación si estás DENTRO del chat específico
+        final incomingChatId = message.data['chatId'];
+
+        if (_currentChatId != null && _currentChatId == incomingChatId) {
+          print('💬 Mensaje del chat actual - no mostrar notificación (ya estás dentro)');
           return;
         }
-        print('💬 Mensaje de chat recibido en primer plano - mostrando notificación');
+
+        // Si estás en otro chat o en la lista de chats, mostrar notificación
+        print('💬 Mensaje de otro chat - mostrando notificación');
         _showLocalNotification(message);
       } else {
-        // Mostrar notificación normal para otros tipos
+        // Mostrar notificación normal para otros tipos (emergencias, etc)
         _showLocalNotification(message);
       }
     });
@@ -279,7 +372,10 @@ class NotificationService {
         print(
           '🚀 App abierta desde notificación: ${message.notification?.title}',
         );
-        _handleNotificationTap(message.data);
+        // Delay para dar tiempo a que los shells se inicialicen y agreguen sus listeners
+        Future.delayed(Duration(milliseconds: 500), () {
+          _handleNotificationTap(message.data);
+        });
       }
     });
   }
@@ -420,51 +516,6 @@ class NotificationService {
     }
   }
 
-  // Guardar imagen en archivo temporal con orientación corregida
-  Future<String> _saveImageToFile(List<int> bytes, String fileName) async {
-    try {
-      // Convertir a Uint8List
-      final imageBytes = Uint8List.fromList(bytes);
-
-      // Decodificar la imagen
-      img.Image? image = img.decodeImage(imageBytes);
-
-      if (image == null) {
-        // Si no se puede decodificar, guardar los bytes originales
-        print('⚠️ No se pudo decodificar la imagen, guardando bytes originales');
-        final directory = await getTemporaryDirectory();
-        final filePath = '${directory.path}/$fileName';
-        final file = File(filePath);
-        await file.writeAsBytes(bytes);
-        return filePath;
-      }
-
-      // Corregir orientación automáticamente basándose en metadatos EXIF
-      // La función bakeOrientation corrige la orientación y elimina el flag EXIF
-      image = img.bakeOrientation(image);
-
-      // Codificar la imagen corregida como JPG
-      final correctedBytes = img.encodeJpg(image, quality: 90);
-
-      // Guardar la imagen corregida
-      final directory = await getTemporaryDirectory();
-      final filePath = '${directory.path}/$fileName';
-      final file = File(filePath);
-      await file.writeAsBytes(correctedBytes);
-
-      print('✅ Imagen guardada con orientación corregida: $filePath');
-      return filePath;
-    } catch (e) {
-      print('❌ Error procesando imagen: $e');
-      // En caso de error, guardar bytes originales
-      final directory = await getTemporaryDirectory();
-      final filePath = '${directory.path}/$fileName';
-      final file = File(filePath);
-      await file.writeAsBytes(bytes);
-      return filePath;
-    }
-  }
-
   // Manejar tap en notificación local
   void _onNotificationTapped(NotificationResponse response) {
     print('👆 Notificación local tocada: ${response.payload}');
@@ -491,8 +542,8 @@ class NotificationService {
     if (data['type'] == 'video_call' || data['type'] == 'audio_call') {
       print('📞 Notificación de ${data['type'] == 'video_call' ? 'videollamada' : 'llamada de audio'} tocada, mostrando diálogo');
       _incomingCallController.add(data);
-    } else if (data['type'] == 'chat_message') {
-      print('💬 Notificación de chat tocada, navegando al chat');
+    } else if (data['type'] == 'chat_message' || data['type'] == 'group_message') {
+      print('💬 Notificación de ${data['type'] == 'group_message' ? 'mensaje grupal' : 'chat'} tocada, navegando');
       _chatNotificationTapController.add(data);
     } else if (data['type'] == 'emergency') {
       print('🆘 Notificación de emergencia tocada, navegando a detalles');
@@ -938,6 +989,30 @@ class NotificationService {
       print('❌ Notificación de historia rechazada enviada/verificada');
     } catch (e) {
       print('❌ Error enviando notificación de rechazo: $e');
+    }
+  }
+
+  // Enviar notificación de respuesta a historia
+  Future<void> sendStoryReplyNotification({
+    required String userId,
+    required String replierName,
+    required String replyText,
+  }) async {
+    try {
+      await _createNotificationIfAllowed(
+        userId: userId,
+        notificationType: NotificationTypes.storyReply,
+        title: '💬 Nueva respuesta a tu historia',
+        body: '$replierName respondió: $replyText',
+        data: {
+          'type': NotificationTypes.storyReply,
+          'replierName': replierName,
+          'replyText': replyText,
+        },
+      );
+      print('💬 Notificación de respuesta a historia enviada/verificada');
+    } catch (e) {
+      print('❌ Error enviando notificación de respuesta: $e');
     }
   }
 

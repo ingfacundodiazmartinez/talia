@@ -33,6 +33,7 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _codeController = TextEditingController();
   final PageController _pageController = PageController();
+  final FocusNode _codeFocusNode = FocusNode();
 
   // Animation Controllers
   late AnimationController _buttonController;
@@ -97,6 +98,7 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
     _phoneController.dispose();
     _codeController.dispose();
     _pageController.dispose();
+    _codeFocusNode.dispose();
     _buttonController.dispose();
     _progressController.dispose();
     _countdownTimer?.cancel();
@@ -193,7 +195,6 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
         onCodeSent: () {
           _setLoading(false);
           _startResendCountdown();
-          _showSuccessMessage('Código reenviado');
         },
         onError: (error) {
           _setLoading(false);
@@ -218,7 +219,14 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
       1,
       duration: Duration(milliseconds: 300),
       curve: Curves.easeInOut,
-    );
+    ).then((_) {
+      // Focus automático en el campo del código después de la animación
+      Future.delayed(Duration(milliseconds: 100), () {
+        if (mounted) {
+          _codeFocusNode.requestFocus();
+        }
+      });
+    });
   }
 
   void _goBackToPhoneStep() {
@@ -279,16 +287,6 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
     });
   }
 
-  void _showSuccessMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.green,
-        duration: Duration(seconds: 2),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -305,6 +303,9 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
         ],
       ),
       child: SingleChildScrollView(
+        // Asegurar que el teclado no tape los elementos
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.manual,
+        physics: BouncingScrollPhysics(),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -321,6 +322,8 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
             _buildActionButton(),
             SizedBox(height: 16),
             _buildSecondaryActions(),
+            // Espacio adicional para evitar que el teclado tape el contenido
+            SizedBox(height: MediaQuery.of(context).viewInsets.bottom > 0 ? 20 : 0),
           ],
         ),
       ),
@@ -484,6 +487,7 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
     return TextField(
       controller: _phoneController,
       keyboardType: TextInputType.phone,
+      enabled: _currentStep == 0, // Deshabilitar cuando estamos en el paso del código
       decoration: InputDecoration(
         labelText: 'Número de teléfono',
         hintText: '11 1234 5678',
@@ -507,8 +511,10 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
       children: [
         TextField(
           controller: _codeController,
+          focusNode: _codeFocusNode,
           keyboardType: TextInputType.number,
           textAlign: TextAlign.center,
+          autofocus: true,
           style: TextStyle(
             fontSize: 24,
             fontWeight: FontWeight.bold,
@@ -718,7 +724,6 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
                 onPressed: () {
                   Clipboard.setData(ClipboardData(text: token));
                   Navigator.of(context).pop();
-                  _showSuccessMessage('Token copiado al portapapeles');
                 },
                 child: Text('Copiar'),
               ),

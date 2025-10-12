@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
+import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../services/video_call_service.dart';
+import '../services/voip_service.dart';
+import '../services/callkit_service.dart';
 
 class VideoCallScreen extends StatefulWidget {
   final String callId;
@@ -28,11 +32,11 @@ class VideoCallScreen extends StatefulWidget {
 class _VideoCallScreenState extends State<VideoCallScreen> {
   final VideoCallService _videoCallService = VideoCallService();
 
-  bool _isJoined = false;
   bool _isMuted = false;
   bool _isCameraOff = false;
-  int? _remoteUid;
-  int? _localUid; // UID local real asignado por Agora
+  bool _isJoined = false;
+  int? _localUid;
+  Set<int> _remoteUids = {}; // Múltiples UIDs remotos para llamadas grupales
   bool _isConnecting = true;
   bool _isEnding = false;
 
@@ -64,18 +68,20 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
           onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
             print('👤 Usuario remoto unido: $remoteUid');
             setState(() {
-              _remoteUid = remoteUid;
+              _remoteUids.add(remoteUid);
               _isConnecting = false;
             });
           },
           onUserOffline: (RtcConnection connection, int remoteUid, UserOfflineReasonType reason) {
             print('👋 Usuario remoto desconectado: $remoteUid');
             setState(() {
-              _remoteUid = null;
+              _remoteUids.remove(remoteUid);
             });
 
-            // Si el usuario remoto se desconecta, terminar la llamada
-            _endCall();
+            // Si todos los usuarios remotos se desconectaron, terminar la llamada
+            if (_remoteUids.isEmpty) {
+              _endCall();
+            }
           },
           onError: (ErrorCodeType err, String msg) {
             print('❌ Error de Agora: $err - $msg');
@@ -147,12 +153,183 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     _videoCallService.switchCamera();
   }
 
+  /// Mostrar diálogo para invitar a más personas
+  Future<void> _showInviteDialog() async {
+    try {
+      final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+      if (currentUserId == null) return;
+
+      // Obtener contactos del usuario
+      final contactsSnapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUserId)
+          .collection('contacts')
+          .get();
+
+      if (!mounted) return;
+
+      // Mostrar diálogo con lista de contactos
+      showDialog(
+        context: context,
+        builder: (context) => Dialog(
+          backgroundColor: Colors.grey[900],
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Container(
+            constraints: const BoxConstraints(maxHeight: 500),
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Título
+                Row(
+                  children: [
+                    const Icon(Icons.person_add, color: Colors.white),
+                    const SizedBox(width: 8),
+                    const Text(
+                      'Invitar a la llamada',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const Spacer(),
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ],
+                ),
+                const Divider(color: Colors.white24),
+                const SizedBox(height: 8),
+
+                // Lista de contactos
+                Flexible(
+                  child: contactsSnapshot.docs.isEmpty
+                      ? const Center(
+                          child: Text(
+                            'No tienes contactos disponibles',
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                        )
+                      : ListView.builder(
+                          shrinkWrap: true,
+                          itemCount: contactsSnapshot.docs.length,
+                          itemBuilder: (context, index) {
+                            final contactData = contactsSnapshot.docs[index].data();
+                            final contactId = contactsSnapshot.docs[index].id;
+                            final contactName = contactData['name'] ?? 'Usuario';
+                            final contactPhotoURL = contactData['photoURL'];
+
+                            return ListTile(
+                              leading: CircleAvatar(
+                                backgroundImage: contactPhotoURL != null
+                                    ? NetworkImage(contactPhotoURL)
+                                    : null,
+                                child: contactPhotoURL == null
+                                    ? Text(
+                                        contactName[0].toUpperCase(),
+                                        style: const TextStyle(color: Colors.white),
+                                      )
+                                    : null,
+                              ),
+                              title: Text(
+                                contactName,
+                                style: const TextStyle(color: Colors.white),
+                              ),
+                              trailing: const Icon(
+                                Icons.add_circle_outline,
+                                color: Colors.green,
+                              ),
+                              onTap: () async {
+                                Navigator.pop(context); // Cerrar diálogo
+                                await _inviteUserToCall(contactId, contactName);
+                              },
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    } catch (e) {
+      print('❌ Error mostrando diálogo de invitación: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Error al cargar contactos'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  /// Invitar a un usuario a la llamada actual
+  Future<void> _inviteUserToCall(String userId, String userName) async {
+    try {
+      print('📞 Invitando a $userName a la llamada...');
+
+      // Mostrar loading
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Invitando a $userName...'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+
+      // Usar VideoCallService para enviar la invitación
+      final result = await _videoCallService.inviteToOngoingCall(
+        callId: widget.callId,
+        channelName: widget.channelName,
+        invitedUserId: userId,
+        invitedUserName: userName,
+      );
+
+      if (mounted) {
+        if (result['success'] != true) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(result['error'] ?? 'Error al invitar'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      print('❌ Error invitando a usuario: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Error al enviar invitación'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   /// Terminar la llamada
   Future<void> _endCall() async {
     if (_isEnding) return; // Evitar múltiples llamadas
     _isEnding = true;
 
     try {
+      // Cerrar CallKit UI en ambas plataformas
+      if (Platform.isIOS) {
+        // En iOS usamos VoIPService para notificar a CallKit nativo
+        await VoIPService().notifyCallEnded(widget.callId);
+      } else if (Platform.isAndroid) {
+        // En Android usamos flutter_callkit_incoming
+        await CallKitService().endCall(widget.callId);
+      }
+
       await _videoCallService.endCall(widget.callId);
       await _videoCallService.leaveChannel();
 
@@ -175,19 +352,18 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Determinar si es llamada grupal (más de 1 participante remoto)
+    bool isGroupCall = _remoteUids.length > 1;
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          // Video remoto (pantalla completa)
-          _remoteVideo(),
-
-          // Video local (esquina superior derecha)
-          Positioned(
-            top: 50,
-            right: 16,
-            child: _localVideoPreview(),
-          ),
+          // Mostrar layout según tipo de llamada
+          if (isGroupCall)
+            _groupCallLayout()
+          else
+            _oneToOneCallLayout(),
 
           // Indicador de conexión
           if (_isConnecting)
@@ -218,26 +394,56 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
               ),
             ),
 
-          // Nombre del contacto
-          Positioned(
-            top: 50,
-            left: 16,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              decoration: BoxDecoration(
-                color: Colors.black54,
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(
-                widget.remoteName,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
+          // Nombre del contacto (solo para llamadas 1:1)
+          if (!isGroupCall)
+            Positioned(
+              top: 50,
+              left: 16,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  widget.remoteName,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
             ),
-          ),
+
+          // Contador de participantes (solo para llamadas grupales)
+          if (isGroupCall)
+            Positioned(
+              top: 50,
+              left: 16,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.people, color: Colors.white, size: 18),
+                    const SizedBox(width: 8),
+                    Text(
+                      '${_remoteUids.length + 1} participantes',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
 
           // Controles de llamada
           Positioned(
@@ -251,9 +457,113 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     );
   }
 
-  /// Widget de video remoto
+  /// Layout para llamadas 1:1
+  Widget _oneToOneCallLayout() {
+    return Stack(
+      children: [
+        // Video remoto (pantalla completa)
+        _remoteVideo(),
+
+        // Video local (esquina superior derecha)
+        Positioned(
+          top: 50,
+          right: 16,
+          child: _localVideoPreview(),
+        ),
+      ],
+    );
+  }
+
+  /// Layout para llamadas grupales (grid)
+  Widget _groupCallLayout() {
+    // Incluir UID local en la lista de participantes
+    List<int?> allParticipants = [_localUid, ..._remoteUids];
+
+    // Calcular número de columnas según cantidad de participantes
+    int participantCount = allParticipants.length;
+    int columns = participantCount <= 2 ? 1 : 2;
+
+    return GridView.builder(
+      padding: const EdgeInsets.all(8),
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: columns,
+        childAspectRatio: 0.75,
+        crossAxisSpacing: 8,
+        mainAxisSpacing: 8,
+      ),
+      itemCount: participantCount,
+      itemBuilder: (context, index) {
+        final uid = allParticipants[index];
+        bool isLocal = uid == _localUid;
+
+        return Container(
+          decoration: BoxDecoration(
+            color: Colors.grey[900],
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isLocal ? Colors.blue : Colors.white.withOpacity(0.3),
+              width: 2,
+            ),
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: Stack(
+              children: [
+                // Video del participante
+                if (uid != null)
+                  isLocal
+                      ? (_isCameraOff
+                          ? const Center(
+                              child: Icon(Icons.videocam_off,
+                                  color: Colors.white, size: 40),
+                            )
+                          : AgoraVideoView(
+                              controller: VideoViewController(
+                                rtcEngine: _videoCallService.engine!,
+                                canvas: const VideoCanvas(uid: 0),
+                              ),
+                            ))
+                      : AgoraVideoView(
+                          controller: VideoViewController.remote(
+                            rtcEngine: _videoCallService.engine!,
+                            canvas: VideoCanvas(uid: uid),
+                            connection:
+                                RtcConnection(channelId: widget.channelName),
+                          ),
+                        ),
+
+                // Etiqueta
+                Positioned(
+                  bottom: 8,
+                  left: 8,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.black54,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      isLocal ? 'Tú' : 'Participante',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// Widget de video remoto (para llamadas 1:1)
   Widget _remoteVideo() {
-    if (_remoteUid == null) {
+    if (_remoteUids.isEmpty) {
       return Container(
         color: Colors.black,
         child: Center(
@@ -279,10 +589,13 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       );
     }
 
+    // Para llamadas 1:1, mostrar el primer (y único) UID remoto
+    final remoteUid = _remoteUids.first;
+
     return AgoraVideoView(
       controller: VideoViewController.remote(
         rtcEngine: _videoCallService.engine!,
-        canvas: VideoCanvas(uid: _remoteUid),
+        canvas: VideoCanvas(uid: remoteUid),
         connection: RtcConnection(channelId: widget.channelName),
       ),
     );
@@ -321,7 +634,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
         child: AgoraVideoView(
           controller: VideoViewController(
             rtcEngine: _videoCallService.engine!,
-            canvas: const VideoCanvas(uid: 0), // UID 0 = stream local
+            canvas: const VideoCanvas(uid: 0), // 0 = video local
           ),
         ),
       ),
@@ -330,6 +643,9 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
   /// Controles de la llamada
   Widget _callControls() {
+    // Determinar si es llamada 1:1 (mostrar botón invitar)
+    bool isOneToOne = _remoteUids.length == 1;
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 32),
       child: Row(
@@ -371,8 +687,15 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
             iconColor: _isCameraOff ? Colors.red : Colors.white,
           ),
 
-          // Placeholder para simetría
-          const SizedBox(width: 56),
+          // Botón invitar a más personas (solo en llamadas 1:1)
+          if (isOneToOne)
+            _controlButton(
+              icon: Icons.person_add,
+              onPressed: _showInviteDialog,
+              backgroundColor: Colors.white.withOpacity(0.2),
+            )
+          else
+            const SizedBox(width: 56), // Placeholder para simetría
         ],
       ),
     );

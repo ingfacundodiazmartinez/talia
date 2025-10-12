@@ -190,7 +190,7 @@ class ImageService {
       } else {
         // Permiso denegado pero no permanentemente
         print('❌ Android: Permiso denegado: $status');
-        final bool openSettings = await PermissionDialog.showPermissionDeniedDialog(
+        await PermissionDialog.showPermissionDeniedDialog(
           context: context,
           title: 'Permiso Denegado',
           message: 'Sin este permiso no podemos ${source == ImageSource.camera ? 'tomar fotos' : 'acceder a tu galería'}. '
@@ -210,7 +210,7 @@ class ImageService {
     String title,
     ImageSource source,
   ) async {
-    final bool openSettings = await PermissionDialog.showPermissionDeniedDialog(
+    await PermissionDialog.showPermissionDeniedDialog(
       context: context,
       title: '$title Requerido',
       message: 'Este permiso fue denegado permanentemente. Para ${source == ImageSource.camera ? 'tomar fotos' : 'acceder a tu galería'}, '
@@ -218,36 +218,6 @@ class ImageService {
     );
 
     return false; // No podemos continuar sin el permiso
-  }
-
-  Future<bool> _requestPermissions(ImageSource source) async {
-    try {
-      if (source == ImageSource.camera) {
-        final status = await Permission.camera.request();
-        return status == PermissionStatus.granted;
-      } else {
-        // Para galería, depende de la versión de Android
-        if (Platform.isAndroid) {
-          final deviceInfo = await _getAndroidVersion();
-          if (deviceInfo >= 33) {
-            // Android 13+ usa READ_MEDIA_IMAGES
-            final status = await Permission.photos.request();
-            return status == PermissionStatus.granted;
-          } else {
-            // Versiones anteriores usan READ_EXTERNAL_STORAGE
-            final status = await Permission.storage.request();
-            return status == PermissionStatus.granted;
-          }
-        } else {
-          // iOS
-          final status = await Permission.photos.request();
-          return status == PermissionStatus.granted;
-        }
-      }
-    } catch (e) {
-      print('Error requesting permissions: $e');
-      return false;
-    }
   }
 
   Future<int> _getAndroidVersion() async {

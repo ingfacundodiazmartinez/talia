@@ -307,16 +307,7 @@ class _NotificationSettingsScreenState
   Future<void> _updatePref(String key, dynamic value) async {
     try {
       await _prefsService.updatePreference(key, value);
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Preferencia actualizada'),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 1),
-          ),
-        );
-      }
+      // Success feedback removed - preference updates are silent
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

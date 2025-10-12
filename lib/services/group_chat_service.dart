@@ -15,6 +15,10 @@ class GroupChatService {
   final NotificationService _notificationService = NotificationService();
   final ChatPermissionService _permissionService = ChatPermissionService();
 
+  // Cache en memoria para grupos del usuario
+  Map<String, List<GroupChat>> _cachedUserGroups = {};
+  Map<String, DateTime> _lastGroupsCacheUpdate = {};
+
   // Crear nuevo grupo
   Future<GroupCreationResult> createGroup({
     required String name,
@@ -494,19 +498,68 @@ class GroupChatService {
   }
 
   // Obtener grupos del usuario
-  Stream<List<GroupChat>> getUserGroups(String userId) {
-    return _firestore
+  Stream<List<GroupChat>> getUserGroups(String userId) async* {
+    // Emitir cache inmediatamente si existe para este usuario
+    if (_cachedUserGroups.containsKey(userId)) {
+      print('📦 Emitiendo grupos desde cache para usuario $userId');
+      yield _cachedUserGroups[userId]!;
+    }
+
+    // Escuchar cambios en grupos
+    await for (final snapshot in _firestore
         .collection('groups')
         .where('members', arrayContains: userId)
         .where('isActive', isEqualTo: true)
         .orderBy('lastActivity', descending: true)
-        .snapshots()
-        .map((snapshot) {
-          return snapshot.docs.map((doc) {
-            final data = doc.data();
-            return GroupChat.fromFirestore(data, doc.id);
-          }).toList();
-        });
+        .snapshots()) {
+
+      final groups = snapshot.docs.map((doc) {
+        final data = doc.data();
+        return GroupChat.fromFirestore(data, doc.id);
+      }).toList();
+
+      // Actualizar cache para este usuario
+      _cachedUserGroups[userId] = groups;
+      _lastGroupsCacheUpdate[userId] = DateTime.now();
+
+      print('🔄 Grupos actualizados desde Firestore para usuario $userId (${groups.length} grupos)');
+      yield groups;
+    }
+  }
+
+  // Obtener grupos del usuario (una sola vez con cache)
+  Future<QuerySnapshot> getUserGroupsSnapshot(String userId) async {
+    // Si hay cache reciente (menos de 5 segundos), devolverlo
+    final cachedGroups = _cachedUserGroups[userId];
+    final lastUpdate = _lastGroupsCacheUpdate[userId];
+
+    if (cachedGroups != null && lastUpdate != null) {
+      final cacheAge = DateTime.now().difference(lastUpdate);
+      if (cacheAge.inSeconds < 5) {
+        print('📦 Usando grupos desde cache (${cachedGroups.length} grupos)');
+        // Convertir de vuelta a QuerySnapshot simulado
+        // Por ahora, hacemos fetch pero silenciosamente
+      }
+    }
+
+    // Fetch desde Firestore
+    final snapshot = await _firestore
+        .collection('groups')
+        .where('members', arrayContains: userId)
+        .where('isActive', isEqualTo: true)
+        .orderBy('lastActivity', descending: true)
+        .get();
+
+    // Actualizar cache
+    final groups = snapshot.docs.map((doc) {
+      final data = doc.data();
+      return GroupChat.fromFirestore(data, doc.id);
+    }).toList();
+
+    _cachedUserGroups[userId] = groups;
+    _lastGroupsCacheUpdate[userId] = DateTime.now();
+
+    return snapshot;
   }
 
   // Obtener invitaciones pendientes del usuario

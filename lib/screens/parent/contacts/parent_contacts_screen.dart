@@ -8,6 +8,7 @@ import '../../../services/user_role_service.dart';
 import '../../../services/contact_alias_service.dart';
 import '../../../services/auto_approval_service.dart';
 import '../../../services/video_call_service.dart';
+import '../../../services/block_service.dart';
 import '../../../notification_service.dart';
 import '../../../theme_service.dart';
 import '../../../link_parent_child.dart';
@@ -15,6 +16,7 @@ import '../../add_contact_screen.dart';
 import '../../../controllers/parent_dashboard_controller.dart';
 import 'widgets/contact_card_widget.dart';
 import 'widgets/filterable_contact_item.dart';
+import 'widgets/approval_requests_badge.dart';
 
 /// Pantalla de gestión de contactos del padre
 ///
@@ -35,8 +37,12 @@ class _ParentContactsScreenState extends State<ParentContactsScreen> {
   final firebase_auth.FirebaseAuth _auth = firebase_auth.FirebaseAuth.instance;
   late ParentDashboardController _controller;
   final ContactAliasService _aliasService = ContactAliasService();
+  final BlockService _blockService = BlockService();
   final ValueNotifier<String> _contactsSearchQuery = ValueNotifier('');
   final TextEditingController _contactsSearchController = TextEditingController();
+
+  // Cache local para evitar rebuilds innecesarios
+  List<String>? _cachedLinkedChildren;
 
   @override
   void initState() {
@@ -105,15 +111,26 @@ class _ParentContactsScreenState extends State<ParentContactsScreen> {
                         ),
                       ],
                     ),
-                    IconButton(
-                      icon: Icon(Icons.person_add, color: Colors.white, size: 26),
-                      onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (context) => AddContactScreen()),
-                        );
-                      },
-                      padding: EdgeInsets.all(8),
+                    Row(
+                      children: [
+                        // Badge de solicitudes de aprobación pendientes
+                        ApprovalRequestsBadge(
+                          parentId: currentUserId ?? '',
+                          iconColor: Colors.white,
+                          iconSize: 26,
+                        ),
+                        // Botón de agregar contacto
+                        IconButton(
+                          icon: Icon(Icons.person_add, color: Colors.white, size: 26),
+                          onPressed: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (context) => AddContactScreen()),
+                            );
+                          },
+                          padding: EdgeInsets.all(8),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -176,7 +193,14 @@ class _ParentContactsScreenState extends State<ParentContactsScreen> {
                         child: FutureBuilder<List<String>>(
                           future: userRoleService.getLinkedChildren(currentUserId!),
                           builder: (context, childrenSnapshot) {
-                            if (childrenSnapshot.connectionState == ConnectionState.waiting) {
+                            // Actualizar cache cuando llegan datos
+                            if (childrenSnapshot.hasData) {
+                              _cachedLinkedChildren = childrenSnapshot.data;
+                            }
+
+                            // Solo mostrar loading si NO hay cache y estamos esperando
+                            if (childrenSnapshot.connectionState == ConnectionState.waiting &&
+                                _cachedLinkedChildren == null) {
                               return Center(
                                 child: CircularProgressIndicator(
                                   color: Theme.of(context).colorScheme.primary,
@@ -184,19 +208,26 @@ class _ParentContactsScreenState extends State<ParentContactsScreen> {
                               );
                             }
 
-                            final linkedChildren = childrenSnapshot.data ?? [];
+                            final linkedChildren = childrenSnapshot.data ?? _cachedLinkedChildren ?? [];
 
-                            // Load contacts with users array format
-                            return FutureBuilder<List<DocumentSnapshot>>(
-                              future: Parent(id: currentUserId, name: '').loadAllContacts(),
-                              builder: (context, contactsSnapshot) {
+                            // Load contacts with users array format (using StreamBuilder for automatic caching)
+                            return StreamBuilder<List<String>>(
+                              stream: _blockService.getBlockedContactsStream(),
+                              builder: (context, blockedSnapshot) {
+                                final blockedContacts = blockedSnapshot.data ?? [];
+
+                                return StreamBuilder<QuerySnapshot>(
+                                  stream: Parent(id: currentUserId, name: '').watchAllContacts(),
+                                  builder: (context, contactsSnapshot) {
                               if (contactsSnapshot.hasError) {
                                 return Center(
                                   child: Text('Error: ${contactsSnapshot.error}'),
                                 );
                               }
 
-                              if (contactsSnapshot.connectionState == ConnectionState.waiting) {
+                              // Solo mostrar loading si NO hay datos disponibles
+                              if (contactsSnapshot.connectionState == ConnectionState.waiting &&
+                                  !contactsSnapshot.hasData) {
                                 return Center(
                                   child: CircularProgressIndicator(
                                     color: Theme.of(context).colorScheme.primary,
@@ -204,7 +235,7 @@ class _ParentContactsScreenState extends State<ParentContactsScreen> {
                                 );
                               }
 
-                              final allContactDocs = contactsSnapshot.data ?? [];
+                              final allContactDocs = contactsSnapshot.data?.docs ?? [];
 
                               // Separar hijos y otros contactos
                               final childrenContacts = <Widget>[];
@@ -221,7 +252,10 @@ class _ParentContactsScreenState extends State<ParentContactsScreen> {
                                   orElse: () => '',
                                 );
 
-                                if (otherUserId.isEmpty || processedUserIds.contains(otherUserId)) {
+                                // Filtrar usuarios bloqueados
+                                if (otherUserId.isEmpty ||
+                                    processedUserIds.contains(otherUserId) ||
+                                    blockedContacts.contains(otherUserId)) {
                                   continue;
                                 }
 
@@ -273,7 +307,7 @@ class _ParentContactsScreenState extends State<ParentContactsScreen> {
 
                               // Also add any linked children that don't have contact documents yet
                               for (var childId in linkedChildren) {
-                                if (!processedUserIds.contains(childId)) {
+                                if (!processedUserIds.contains(childId) && !blockedContacts.contains(childId)) {
                                   processedUserIds.add(childId);
 
                                   final widget = FutureBuilder<DocumentSnapshot?>(
@@ -347,9 +381,9 @@ class _ParentContactsScreenState extends State<ParentContactsScreen> {
                                 );
                               }
 
-                              return ListView(
-                                padding: EdgeInsets.all(16),
-                                children: [
+                                  return ListView(
+                                    padding: EdgeInsets.all(16),
+                                    children: [
                                   if (childrenContacts.isNotEmpty) ...[
                                     Padding(
                                       padding: EdgeInsets.only(bottom: 12, left: 4),
@@ -404,11 +438,13 @@ class _ParentContactsScreenState extends State<ParentContactsScreen> {
                                       ),
                                     ),
                                     ...otherContacts,
-                                  ],
-                                ],
+                                      ],
+                                    ],
+                                  );
+                                },
                               );
-                            },
-                          );
+                              },
+                            );
                           },
                         ),
                       ),
@@ -460,16 +496,7 @@ class _ParentContactsScreenState extends State<ParentContactsScreen> {
 
               try {
                 // Desvincular usando el controller
-                final success = await _controller.unlinkChild(childId);
-
-                if (success && mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('$childName ha sido desvinculado'),
-                      backgroundColor: Colors.green,
-                    ),
-                  );
-                }
+                await _controller.unlinkChild(childId);
               } catch (e) {
                 if (mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(

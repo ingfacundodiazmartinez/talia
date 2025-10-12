@@ -1,0 +1,480 @@
+import 'dart:async';
+import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
+import 'package:audioplayers/audioplayers.dart';
+import 'package:audio_waveforms/audio_waveforms.dart' hide PlayerState;
+import 'package:path_provider/path_provider.dart';
+import 'package:http/http.dart' as http;
+import '../../../services/waveform_cache_service.dart';
+
+/// Widget para reproducir mensajes de audio en el chat
+class AudioPlayerWidget extends StatefulWidget {
+  final String audioUrl;
+  final bool isMe;
+  final ColorScheme colorScheme;
+
+  const AudioPlayerWidget({
+    super.key,
+    required this.audioUrl,
+    required this.isMe,
+    required this.colorScheme,
+  });
+
+  @override
+  State<AudioPlayerWidget> createState() => _AudioPlayerWidgetState();
+}
+
+class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
+    with TickerProviderStateMixin {
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  final WaveformCacheService _cacheService = WaveformCacheService();
+  PlayerController? _waveController;
+  bool _isPlaying = false;
+  bool _isLoading = false;
+  Duration _duration = Duration.zero;
+  Duration _position = Duration.zero;
+  Ticker? _ticker;
+  List<double>? _waveformData; // Datos reales del waveform
+
+  @override
+  void initState() {
+    super.initState();
+
+    // Configurar volumen al máximo
+    _audioPlayer.setVolume(1.0);
+
+    // Configurar modo de reproducción
+    _audioPlayer.setReleaseMode(ReleaseMode.stop);
+    _audioPlayer.setPlayerMode(PlayerMode.mediaPlayer);
+
+    // Cargar la duración del audio inmediatamente
+    _loadAudioDuration();
+
+    // Extraer waveform real del audio
+    _extractWaveform();
+
+    _audioPlayer.onDurationChanged.listen((duration) {
+      if (mounted) {
+        setState(() {
+          _duration = duration;
+        });
+      }
+    });
+
+    // Escuchar cambios de estado del player
+    _audioPlayer.onPlayerStateChanged.listen((state) {
+      if (mounted) {
+        final wasPlaying = _isPlaying;
+        final shouldPlay = state == PlayerState.playing;
+
+        if (!wasPlaying && shouldPlay) {
+          // Empezando reproducción
+          _isPlaying = true;
+          _isLoading = false;
+          _startProgressTimer();
+          setState(() {});
+        } else if (wasPlaying && !shouldPlay) {
+          // Pausando/deteniendo reproducción
+          _isPlaying = false;
+          _stopProgressTimer();
+          // Obtener posición real del player cuando se pausa
+          _audioPlayer.getCurrentPosition().then((pos) {
+            if (mounted && pos != null) {
+              setState(() {
+                _position = pos;
+              });
+            }
+          });
+        }
+      }
+    });
+
+    _audioPlayer.onPlayerComplete.listen((event) {
+      if (mounted) {
+        setState(() {
+          _isPlaying = false;
+          _position = Duration.zero;
+        });
+        _stopProgressTimer();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _ticker?.dispose();
+    _audioPlayer.dispose();
+    _waveController?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadAudioDuration() async {
+    try {
+      await _audioPlayer.setSourceUrl(widget.audioUrl);
+      // La duración se actualizará automáticamente via onDurationChanged
+    } catch (e) {
+      print('Error cargando duración del audio: $e');
+    }
+  }
+
+  /// Extrae el waveform real del audio usando audio_waveforms
+  Future<void> _extractWaveform() async {
+    try {
+      print('🎵 [WAVEFORM] Iniciando extracción para ${widget.audioUrl}');
+
+      // 1. Verificar cache primero
+      final cachedWaveform = await _cacheService.getWaveform(widget.audioUrl);
+      if (cachedWaveform != null && mounted) {
+        print('✅ [WAVEFORM] Usando datos cacheados (${cachedWaveform.length} puntos)');
+        setState(() {
+          _waveformData = cachedWaveform;
+        });
+        return; // Salir temprano, no necesitamos procesar
+      }
+
+      print('🔄 [WAVEFORM] No hay cache, procesando audio...');
+
+      // 2. Descargar el archivo de audio
+      final tempDir = await getTemporaryDirectory();
+      final audioFile = File('${tempDir.path}/audio_${widget.audioUrl.hashCode}.m4a');
+
+      if (!await audioFile.exists()) {
+        print('📥 [WAVEFORM] Descargando audio...');
+        final response = await http.get(Uri.parse(widget.audioUrl));
+        if (response.statusCode == 200) {
+          await audioFile.writeAsBytes(response.bodyBytes);
+          print('✅ [WAVEFORM] Audio descargado: ${audioFile.lengthSync()} bytes');
+        } else {
+          print('❌ [WAVEFORM] Error descargando: ${response.statusCode}');
+          return;
+        }
+      } else {
+        print('📦 [WAVEFORM] Usando cache: ${audioFile.lengthSync()} bytes');
+      }
+
+      // 2. Crear controller y usar extractWaveformData() en lugar de preparePlayer()
+      _waveController = PlayerController();
+      print('🎧 [WAVEFORM] Llamando extractWaveformData()...');
+
+      // IMPORTANTE: extractWaveformData() es el método correcto para extraer de archivos existentes
+      final waveData = await _waveController!.extractWaveformData(
+        path: audioFile.path,
+        noOfSamples: 35, // 35 barras para buena visualización
+      );
+
+      print('📊 [WAVEFORM] extractWaveformData retornó: ${waveData.length} puntos');
+      print('📊 [WAVEFORM] waveformData isEmpty: ${waveData.isEmpty}');
+
+      if (waveData.isNotEmpty && mounted) {
+        print('✅ [WAVEFORM] Extraídos ${waveData.length} puntos');
+        print('📊 [WAVEFORM] Primeros 5 valores: ${waveData.take(5).toList()}');
+
+        // Convertir a valores absolutos
+        final absValues = waveData.map((v) => v.abs()).toList();
+
+        // Encontrar min y max para normalización real
+        final maxVal = absValues.reduce((a, b) => a > b ? a : b);
+        final minVal = absValues.reduce((a, b) => a < b ? a : b);
+        final range = maxVal - minVal;
+
+        print('📊 [WAVEFORM] Min: $minVal, Max: $maxVal, Range: $range');
+
+        if (range > 0) {
+          // Normalizar entre 0 y 1 usando min-max
+          final normalized = absValues.map((v) {
+            return ((v - minVal) / range).clamp(0.0, 1.0);
+          }).toList();
+
+          // Amplificar diferencias con curva exponencial más agresiva
+          final amplified = normalized.map((v) {
+            // Usar una curva más agresiva para amplificar diferencias
+            final powered = v * v * v; // x^3 para más contraste
+            // Garantizar un mínimo visible (20%) y máximo
+            return (powered * 0.8 + 0.2).clamp(0.2, 1.0);
+          }).toList();
+
+          setState(() {
+            _waveformData = amplified;
+          });
+
+          // Guardar en cache para futuros usos
+          await _cacheService.saveWaveform(widget.audioUrl, amplified);
+
+          print('✅ [WAVEFORM] Aplicado a UI con ${amplified.length} barras (rango amplificado)');
+          print('📊 [WAVEFORM] Primeros 5 amplificados: ${amplified.take(5).toList()}');
+        } else {
+          // Si no hay variación, usar altura uniforme media
+          final uniformData = List.filled(waveData.length, 0.5);
+          setState(() {
+            _waveformData = uniformData;
+          });
+
+          // Guardar en cache también los uniformes
+          await _cacheService.saveWaveform(widget.audioUrl, uniformData);
+
+          print('⚠️ [WAVEFORM] Audio sin variación detectada');
+        }
+      } else {
+        print('⚠️ [WAVEFORM] extractWaveformData retornó lista vacía. mounted: $mounted');
+      }
+    } catch (e, stackTrace) {
+      print('❌ [WAVEFORM] Error: $e');
+      print('   Stack: $stackTrace');
+    }
+  }
+
+  Future<void> _togglePlayPause() async {
+    if (_isPlaying) {
+      await _audioPlayer.pause();
+      // El estado se actualizará a través de onPlayerStateChanged
+    } else {
+      // Mostrar spinner inmediatamente al presionar play
+      setState(() {
+        _isLoading = true;
+      });
+
+      try {
+        await _audioPlayer.play(UrlSource(widget.audioUrl));
+        // El estado se actualizará a través de onPlayerStateChanged
+      } catch (e) {
+        print('Error reproduciendo audio: $e');
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  void _startProgressTimer() {
+    _ticker?.dispose();
+
+    // Guardar posición inicial cuando empieza el ticker
+    final startPosition = _position;
+
+    _ticker = createTicker((elapsed) {
+      if (mounted) {
+        // Posición = posición inicial + tiempo transcurrido
+        final newPosition = startPosition + elapsed;
+
+        setState(() {
+          _position = newPosition >= _duration ? _duration : newPosition;
+        });
+      }
+    });
+    _ticker!.start();
+  }
+
+  void _stopProgressTimer() {
+    _ticker?.stop();
+    _ticker?.dispose();
+    _ticker = null;
+  }
+
+  String _formatDuration(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    final minutes = twoDigits(duration.inMinutes.remainder(60));
+    final seconds = twoDigits(duration.inSeconds.remainder(60));
+    return '$minutes:$seconds';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(8),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+                // Botón play/pause o spinner
+                _isLoading
+                    ? Padding(
+                        padding: const EdgeInsets.all(8.0),
+                        child: SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              widget.isMe ? Colors.white : widget.colorScheme.primary,
+                            ),
+                          ),
+                        ),
+                      )
+                    : IconButton(
+                        icon: Icon(
+                          _isPlaying ? Icons.pause : Icons.play_arrow,
+                          color: widget.isMe ? Colors.white : widget.colorScheme.primary,
+                        ),
+                        onPressed: _togglePlayPause,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                const SizedBox(width: 8),
+                // Barra de progreso con waveform
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      GestureDetector(
+                        onTapDown: (details) async {
+                          if (_duration.inSeconds > 0) {
+                            final box = context.findRenderObject() as RenderBox?;
+                            if (box != null) {
+                              final localPosition = box.globalToLocal(details.globalPosition);
+                              final width = box.size.width - 80; // Restar espacio del botón y padding
+                              final relativePosition = (localPosition.dx - 40) / width;
+                              final clampedPosition = relativePosition.clamp(0.0, 1.0);
+                              final seekPosition = Duration(
+                                seconds: (_duration.inSeconds * clampedPosition).round(),
+                              );
+                              await _audioPlayer.seek(seekPosition);
+                            }
+                          }
+                        },
+                        child: _AudioWaveform(
+                          progress: _duration.inMilliseconds > 0
+                              ? _position.inMilliseconds / _duration.inMilliseconds
+                              : 0.0,
+                          activeColor: widget.isMe
+                              ? Colors.white
+                              : widget.colorScheme.primary,
+                          inactiveColor: widget.isMe
+                              ? Colors.white.withValues(alpha: 0.3)
+                              : widget.colorScheme.primary.withValues(alpha: 0.3),
+                          waveformData: _waveformData, // Pasar datos reales
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        child: Text(
+                          '${_formatDuration(_position)} / ${_formatDuration(_duration)}',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: widget.isMe
+                                ? Colors.white.withValues(alpha: 0.7)
+                                : widget.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // Icono de audio
+                Icon(
+                  Icons.mic,
+                  size: 20,
+                  color: widget.isMe
+                      ? Colors.white.withValues(alpha: 0.7)
+                      : widget.colorScheme.primary.withValues(alpha: 0.7),
+                ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Widget para mostrar el waveform del audio
+class _AudioWaveform extends StatelessWidget {
+  final double progress;
+  final Color activeColor;
+  final Color inactiveColor;
+  final List<double>? waveformData;
+
+  const _AudioWaveform({
+    required this.progress,
+    required this.activeColor,
+    required this.inactiveColor,
+    this.waveformData,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 32,
+      child: CustomPaint(
+        painter: _WaveformPainter(
+          progress: progress,
+          activeColor: activeColor,
+          inactiveColor: inactiveColor,
+          waveformData: waveformData,
+        ),
+        size: Size.infinite,
+      ),
+    );
+  }
+}
+
+/// Painter para dibujar el waveform
+class _WaveformPainter extends CustomPainter {
+  final double progress;
+  final Color activeColor;
+  final Color inactiveColor;
+  final List<double>? waveformData;
+
+  // Alturas de barras aleatorias para fallback
+  static final List<double> _fallbackHeights = [
+    0.3, 0.6, 0.8, 0.5, 0.9, 0.4, 0.7, 0.6, 0.8, 0.5,
+    0.4, 0.7, 0.9, 0.6, 0.5, 0.8, 0.4, 0.6, 0.7, 0.5,
+    0.8, 0.6, 0.4, 0.9, 0.5, 0.7, 0.6, 0.8, 0.4, 0.5,
+    0.6, 0.9, 0.7, 0.5, 0.8, 0.4, 0.6, 0.7, 0.5, 0.8,
+  ];
+
+  _WaveformPainter({
+    required this.progress,
+    required this.activeColor,
+    required this.inactiveColor,
+    this.waveformData,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Usar datos reales si están disponibles, sino usar fallback
+    final dataToUse = waveformData ?? _fallbackHeights;
+
+    // Dibujar exactamente la cantidad de barras que tenemos en los datos
+    final barCount = dataToUse.length;
+    const barWidth = 3.0;
+
+    // Calcular spacing para distribuir barras uniformemente en el ancho
+    final totalBarsWidth = barCount * barWidth;
+    final totalSpacing = size.width - totalBarsWidth;
+    final barSpacing = barCount > 1 ? totalSpacing / (barCount - 1) : 0;
+
+    final progressX = size.width * progress;
+
+    for (int i = 0; i < barCount; i++) {
+      // Posición x distribuida uniformemente
+      final x = i * (barWidth + barSpacing);
+
+      // Obtener altura directamente del índice (sin interpolar)
+      final heightValue = dataToUse[i];
+
+      // Calcular altura sin mínimo - valores bajos pueden ser casi invisibles
+      // Rango: 0.5px mínimo hasta 100% de la altura total
+      final minHeight = 0.5;
+      final maxHeight = size.height;
+      final barHeight = (heightValue * maxHeight).clamp(minHeight, maxHeight);
+      final y = (size.height - barHeight) / 2;
+
+      final paint = Paint()
+        ..color = x <= progressX ? activeColor : inactiveColor
+        ..strokeWidth = barWidth
+        ..strokeCap = StrokeCap.round;
+
+      canvas.drawLine(
+        Offset(x, y),
+        Offset(x, y + barHeight),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_WaveformPainter oldDelegate) {
+    return oldDelegate.progress != progress ||
+        oldDelegate.activeColor != activeColor ||
+        oldDelegate.inactiveColor != inactiveColor ||
+        oldDelegate.waveformData != waveformData;
+  }
+}

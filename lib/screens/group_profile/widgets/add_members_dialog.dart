@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../../services/chat_permission_service.dart';
 import '../../../services/contact_alias_service.dart';
+import '../../../services/group_invitation_service.dart';
 import 'group_profile_constants.dart';
 
 class AddMembersDialog extends StatefulWidget {
@@ -21,6 +22,7 @@ class AddMembersDialog extends StatefulWidget {
 
 class _AddMembersDialogState extends State<AddMembersDialog> {
   final ChatPermissionService _permissionService = ChatPermissionService();
+  final GroupInvitationService _invitationService = GroupInvitationService();
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final ContactAliasService _aliasService = ContactAliasService();
@@ -85,12 +87,28 @@ class _AddMembersDialogState extends State<AddMembersDialog> {
     setState(() => _isAdding = true);
 
     try {
-      await _firestore.collection('groups').doc(widget.groupId).update({
-        'members': FieldValue.arrayUnion(_selectedContactIds.toList()),
-      });
+      int successCount = 0;
+      int invitationCount = 0;
+
+      for (final contactId in _selectedContactIds) {
+        // Crear invitación (el servicio detectará si requiere aprobaciones)
+        final result = await _invitationService.createGroupInvitation(
+          groupId: widget.groupId,
+          invitedChildId: contactId,
+        );
+
+        if (result['success']) {
+          if (result['requiresApprovals'] == true) {
+            invitationCount++;
+          } else {
+            successCount++;
+          }
+        }
+      }
 
       if (mounted) {
-        Navigator.pop(context, true); // Return true to indicate success
+        // Invitaciones enviadas - sin mensaje
+        Navigator.pop(context, true);
       }
     } catch (e) {
       print('❌ Error agregando miembros: $e');

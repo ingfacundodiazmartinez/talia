@@ -1,9 +1,12 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../models/story.dart';
 import '../services/story_service.dart';
+import 'story_viewer/widgets/story_progress_indicators.dart';
+import 'story_viewer/widgets/story_user_header.dart';
+import 'story_viewer/widgets/story_caption_widget.dart';
+import 'story_viewer/widgets/story_reply_input.dart';
 
 class StoryViewerScreen extends StatefulWidget {
   final List<UserStories> allUserStories;
@@ -28,9 +31,15 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
   int _currentUserIndex = 0;
   int _currentStoryIndex = 0;
   Timer? _storyTimer;
+  bool _isCurrentStoryLoaded = false;
 
   final StoryService _storyService = StoryService();
   final Duration _storyDuration = Duration(seconds: 5);
+
+  // Controlador para respuestas
+  final TextEditingController _replyController = TextEditingController();
+  final FocusNode _replyFocusNode = FocusNode();
+  bool _isSendingReply = false;
 
   // Obtener las historias apropiadas para cada usuario
   List<Story> _getStoriesForUser(UserStories userStories) {
@@ -39,9 +48,22 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
 
     // Para el usuario actual, mostrar todas las historias (incluyendo pendientes/rechazadas)
     // Para otros usuarios, mostrar solo historias aprobadas
-    return isCurrentUser
+    final stories = isCurrentUser
         ? userStories.allUserStories
         : userStories.sortedStories;
+
+    // Ordenar: primero las no vistas, luego las vistas
+    // Dentro de cada grupo, mantener orden cronológico
+    if (currentUser == null) return stories;
+
+    final unviewedStories = stories.where((story) => !story.isViewedBy(currentUser.uid)).toList();
+    final viewedStories = stories.where((story) => story.isViewedBy(currentUser.uid)).toList();
+
+    // Mantener orden cronológico dentro de cada grupo
+    unviewedStories.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    viewedStories.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+
+    return [...unviewedStories, ...viewedStories];
   }
 
   @override
@@ -55,11 +77,26 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       duration: _storyDuration,
     );
 
+    // Listener para pausar/reanudar historia cuando se escribe una respuesta
+    _replyFocusNode.addListener(() {
+      if (_replyFocusNode.hasFocus) {
+        _pauseStoryTimer();
+      } else {
+        _resumeStoryTimer();
+      }
+    });
+
     _startStoryTimer();
     _markCurrentStoryAsViewed();
   }
 
   void _startStoryTimer() {
+    // Solo iniciar si la historia actual está cargada
+    if (!_isCurrentStoryLoaded) {
+      print('⏸️ Historia no cargada, esperando...');
+      return;
+    }
+
     _progressController.reset();
     _progressController.forward();
 
@@ -67,6 +104,50 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     _storyTimer = Timer(_storyDuration, () {
       _nextStory();
     });
+  }
+
+  void _onStoryLoaded() {
+    if (_isCurrentStoryLoaded) return; // Ya estaba cargada
+
+    setState(() {
+      _isCurrentStoryLoaded = true;
+    });
+    print('✅ Historia cargada, iniciando timer');
+    _startStoryTimer();
+
+    // Precargar las siguientes historias
+    _preloadNextStories();
+  }
+
+  void _preloadNextStories() {
+    try {
+      final currentUserStories = widget.allUserStories[_currentUserIndex];
+      final stories = _getStoriesForUser(currentUserStories);
+
+      // Precargar la siguiente historia del mismo usuario
+      if (_currentStoryIndex < stories.length - 1) {
+        final nextStory = stories[_currentStoryIndex + 1];
+        if (nextStory.mediaType == 'image') {
+          precacheImage(NetworkImage(nextStory.mediaUrl), context);
+          print('🔄 Precargando siguiente historia del mismo usuario');
+        }
+      }
+
+      // Precargar la primera historia del siguiente usuario
+      if (_currentUserIndex < widget.allUserStories.length - 1) {
+        final nextUserStories = widget.allUserStories[_currentUserIndex + 1];
+        final nextUserStoriesList = _getStoriesForUser(nextUserStories);
+        if (nextUserStoriesList.isNotEmpty) {
+          final firstStoryOfNextUser = nextUserStoriesList[0];
+          if (firstStoryOfNextUser.mediaType == 'image') {
+            precacheImage(NetworkImage(firstStoryOfNextUser.mediaUrl), context);
+            print('🔄 Precargando primera historia del siguiente usuario');
+          }
+        }
+      }
+    } catch (e) {
+      print('⚠️ Error precargando historias: $e');
+    }
   }
 
   void _pauseStoryTimer() {
@@ -94,12 +175,13 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       // Siguiente historia del mismo usuario
       setState(() {
         _currentStoryIndex++;
+        _isCurrentStoryLoaded = false; // Reset para la nueva historia
       });
       _storyPageController.nextPage(
         duration: Duration(milliseconds: 300),
         curve: Curves.easeInOut,
       );
-      _startStoryTimer();
+      // No iniciar timer aquí - esperará a que _onStoryLoaded() lo inicie
       _markCurrentStoryAsViewed();
     } else {
       // Siguiente usuario
@@ -112,12 +194,13 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       // Historia anterior del mismo usuario
       setState(() {
         _currentStoryIndex--;
+        _isCurrentStoryLoaded = false; // Reset para la nueva historia
       });
       _storyPageController.previousPage(
         duration: Duration(milliseconds: 300),
         curve: Curves.easeInOut,
       );
-      _startStoryTimer();
+      _startStoryTimer(); // Se ejecutará cuando la historia cargue
       _markCurrentStoryAsViewed();
     } else {
       // Usuario anterior
@@ -130,12 +213,13 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       setState(() {
         _currentUserIndex++;
         _currentStoryIndex = 0;
+        _isCurrentStoryLoaded = false; // Reset para la nueva historia
       });
       _userPageController.nextPage(
         duration: Duration(milliseconds: 300),
         curve: Curves.easeInOut,
       );
-      _startStoryTimer();
+      _startStoryTimer(); // Se ejecutará cuando la historia cargue
       _markCurrentStoryAsViewed();
     } else {
       Navigator.pop(context);
@@ -150,6 +234,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
           widget.allUserStories[_currentUserIndex],
         );
         _currentStoryIndex = stories.length - 1;
+        _isCurrentStoryLoaded = false; // Reset para la nueva historia
       });
       _userPageController.previousPage(
         duration: Duration(milliseconds: 300),
@@ -203,17 +288,8 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       // Eliminar la historia
       await _storyService.deleteStory(currentStory.id);
 
-      // Mostrar mensaje de éxito
+      // Si era la única historia, cerrar el visor
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Historia eliminada'),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 2),
-          ),
-        );
-
-        // Si era la única historia, cerrar el visor
         if (stories.length == 1) {
           Navigator.pop(context);
         } else {
@@ -235,12 +311,97 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     }
   }
 
+  Future<void> _sendReply() async {
+    final text = _replyController.text.trim();
+    if (text.isEmpty || _isSendingReply) return;
+
+    setState(() {
+      _isSendingReply = true;
+    });
+
+    try {
+      final currentUserStories = widget.allUserStories[_currentUserIndex];
+      final stories = _getStoriesForUser(currentUserStories);
+      final currentStory = stories[_currentStoryIndex];
+
+      // Limpiar input y cerrar teclado INMEDIATAMENTE (optimista)
+      _replyController.clear();
+      _replyFocusNode.unfocus();
+
+      // Mostrar feedback inmediato
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Enviando respuesta...'),
+            backgroundColor: Colors.blue,
+            duration: Duration(milliseconds: 800),
+            behavior: SnackBarBehavior.floating,
+            margin: EdgeInsets.only(
+              bottom: MediaQuery.of(context).size.height - 150,
+              left: 20,
+              right: 20,
+            ),
+          ),
+        );
+      }
+
+      // Enviar en background (sin await bloqueante para el usuario)
+      _storyService.replyToStory(
+        storyId: currentStory.id,
+        text: text,
+      ).catchError((e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Error al enviar respuesta'),
+              backgroundColor: Colors.red,
+              duration: Duration(seconds: 2),
+              behavior: SnackBarBehavior.floating,
+              margin: EdgeInsets.only(
+                bottom: MediaQuery.of(context).size.height - 150,
+                left: 20,
+                right: 20,
+              ),
+            ),
+          );
+        }
+      }).whenComplete(() {
+        if (mounted) {
+          setState(() {
+            _isSendingReply = false;
+          });
+        }
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isSendingReply = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al enviar respuesta'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+            margin: EdgeInsets.only(
+              bottom: MediaQuery.of(context).size.height - 150,
+              left: 20,
+              right: 20,
+            ),
+          ),
+        );
+      }
+    }
+  }
+
   @override
   void dispose() {
     _storyTimer?.cancel();
     _progressController.dispose();
     _userPageController.dispose();
     _storyPageController.dispose();
+    _replyController.dispose();
+    _replyFocusNode.dispose();
     super.dispose();
   }
 
@@ -253,6 +414,12 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
           _pauseStoryTimer();
         },
         onTapUp: (details) {
+          // Si el teclado está abierto, cerrarlo
+          if (_replyFocusNode.hasFocus) {
+            _replyFocusNode.unfocus();
+            return;
+          }
+
           final screenWidth = MediaQuery.of(context).size.width;
           if (details.localPosition.dx < screenWidth / 3) {
             _previousStory();
@@ -275,8 +442,9 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
                 setState(() {
                   _currentUserIndex = index;
                   _currentStoryIndex = 0;
+                  _isCurrentStoryLoaded = false; // Reset para la nueva historia
                 });
-                _startStoryTimer();
+                // No iniciar timer aquí - esperará a que _onStoryLoaded() lo inicie
                 _markCurrentStoryAsViewed();
               },
               itemBuilder: (context, userIndex) {
@@ -292,8 +460,9 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
                     if (userIndex == _currentUserIndex) {
                       setState(() {
                         _currentStoryIndex = storyIndex;
+                        _isCurrentStoryLoaded = false; // Reset para la nueva historia
                       });
-                      _startStoryTimer();
+                      // No iniciar timer aquí - esperará a que _onStoryLoaded() lo inicie
                       _markCurrentStoryAsViewed();
                     }
                   },
@@ -309,7 +478,13 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
                               fit: BoxFit.cover,
                               loadingBuilder:
                                   (context, child, loadingProgress) {
-                                    if (loadingProgress == null) return child;
+                                    if (loadingProgress == null) {
+                                      // Imagen cargada, notificar y devolver la imagen
+                                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                                        _onStoryLoaded();
+                                      });
+                                      return child;
+                                    }
                                     return Center(
                                       child: CircularProgressIndicator(
                                         color: Colors.white,
@@ -362,140 +537,27 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
               child: Column(
                 children: [
                   // Indicadores de progreso
-                  Container(
-                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    child: Row(
-                      children: List.generate(
-                        _getStoriesForUser(
-                          widget.allUserStories[_currentUserIndex],
-                        ).length,
-                        (index) {
-                          return Expanded(
-                            child: Container(
-                              height: 3,
-                              margin: EdgeInsets.symmetric(horizontal: 1),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.3),
-                                borderRadius: BorderRadius.circular(1.5),
-                              ),
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(1.5),
-                                child: LinearProgressIndicator(
-                                  backgroundColor: Colors.transparent,
-                                  valueColor: AlwaysStoppedAnimation<Color>(
-                                    Colors.white,
-                                  ),
-                                  value: index < _currentStoryIndex
-                                      ? 1.0
-                                      : index == _currentStoryIndex
-                                      ? _progressController.value
-                                      : 0.0,
-                                ),
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
+                  StoryProgressIndicators(
+                    storyCount: _getStoriesForUser(
+                      widget.allUserStories[_currentUserIndex],
+                    ).length,
+                    currentStoryIndex: _currentStoryIndex,
+                    progressAnimation: _progressController,
                   ),
 
                   // Header con información del usuario
-                  Container(
-                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                    child: Row(
-                      children: [
-                        CircleAvatar(
-                          radius: 20,
-                          backgroundColor: Colors.white.withOpacity(0.3),
-                          backgroundImage:
-                              widget
-                                      .allUserStories[_currentUserIndex]
-                                      .userPhotoURL !=
-                                  null
-                              ? NetworkImage(
-                                  widget
-                                      .allUserStories[_currentUserIndex]
-                                      .userPhotoURL!,
-                                )
-                              : null,
-                          child:
-                              widget
-                                      .allUserStories[_currentUserIndex]
-                                      .userPhotoURL ==
-                                  null
-                              ? Text(
-                                  widget
-                                      .allUserStories[_currentUserIndex]
-                                      .userName[0]
-                                      .toUpperCase(),
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                )
-                              : null,
-                        ),
-                        SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                widget
-                                    .allUserStories[_currentUserIndex]
-                                    .userName,
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              Text(
-                                _formatStoryTime(
-                                  _getStoriesForUser(
-                                    widget.allUserStories[_currentUserIndex],
-                                  )[_currentStoryIndex].createdAt,
-                                ),
-                                style: TextStyle(
-                                  color: Colors.white.withOpacity(0.8),
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        // Menú de opciones si es la historia del usuario actual
-                        if (widget.allUserStories[_currentUserIndex].userId ==
-                            FirebaseAuth.instance.currentUser?.uid)
-                          PopupMenuButton<String>(
-                            icon: Icon(Icons.more_vert, color: Colors.white),
-                            color: Colors.black87,
-                            onSelected: (value) async {
-                              if (value == 'delete') {
-                                _deleteCurrentStory();
-                              }
-                            },
-                            itemBuilder: (context) => [
-                              PopupMenuItem(
-                                value: 'delete',
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.delete, color: Colors.red),
-                                    SizedBox(width: 8),
-                                    Text(
-                                      'Eliminar historia',
-                                      style: TextStyle(color: Colors.white),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        IconButton(
-                          onPressed: () => Navigator.pop(context),
-                          icon: Icon(Icons.close, color: Colors.white),
-                        ),
-                      ],
+                  StoryUserHeader(
+                    userName: widget.allUserStories[_currentUserIndex].userName,
+                    userPhotoURL: widget.allUserStories[_currentUserIndex].userPhotoURL,
+                    timeAgo: _formatStoryTime(
+                      _getStoriesForUser(
+                        widget.allUserStories[_currentUserIndex],
+                      )[_currentStoryIndex].createdAt,
                     ),
+                    isCurrentUser: widget.allUserStories[_currentUserIndex].userId ==
+                        FirebaseAuth.instance.currentUser?.uid,
+                    onDelete: _deleteCurrentStory,
+                    onClose: () => Navigator.pop(context),
                   ),
 
                   Spacer(),
@@ -505,27 +567,203 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
                         widget.allUserStories[_currentUserIndex],
                       )[_currentStoryIndex].caption !=
                       null)
-                    Container(
-                      width: double.infinity,
-                      padding: EdgeInsets.all(16),
-                      child: Container(
-                        padding: EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 12,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.5),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Text(
-                          _getStoriesForUser(
-                            widget.allUserStories[_currentUserIndex],
-                          )[_currentStoryIndex].caption!,
-                          style: TextStyle(color: Colors.white, fontSize: 14),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
+                    StoryCaptionWidget(
+                      caption: _getStoriesForUser(
+                        widget.allUserStories[_currentUserIndex],
+                      )[_currentStoryIndex].caption!,
+                      isCurrentUser: widget.allUserStories[_currentUserIndex].userId ==
+                          FirebaseAuth.instance.currentUser?.uid,
                     ),
+
+                  // Mostrar respuestas si es la historia del usuario actual y tiene respuestas
+                  Builder(
+                    builder: (context) {
+                      final currentUser = FirebaseAuth.instance.currentUser;
+                      final isCurrentUser =
+                          currentUser?.uid ==
+                          widget.allUserStories[_currentUserIndex].userId;
+                      final currentStory = _getStoriesForUser(
+                        widget.allUserStories[_currentUserIndex],
+                      )[_currentStoryIndex];
+
+                      if (isCurrentUser && currentStory.replies.isNotEmpty) {
+                        return Container(
+                          width: double.infinity,
+                          padding: EdgeInsets.symmetric(horizontal: 16),
+                          child: GestureDetector(
+                            onTap: () async {
+                              _pauseStoryTimer();
+                              await showModalBottomSheet(
+                                context: context,
+                                backgroundColor: Colors.transparent,
+                                builder: (context) => Container(
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withOpacity(0.9),
+                                    borderRadius: BorderRadius.only(
+                                      topLeft: Radius.circular(20),
+                                      topRight: Radius.circular(20),
+                                    ),
+                                  ),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Padding(
+                                        padding: EdgeInsets.all(16),
+                                        child: Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            Text(
+                                              'Respuestas (${currentStory.replies.length})',
+                                              style: TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 18,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                            IconButton(
+                                              onPressed: () {
+                                                Navigator.pop(context);
+                                              },
+                                              icon: Icon(
+                                                Icons.close,
+                                                color: Colors.white,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      Divider(
+                                        color: Colors.white.withOpacity(0.2),
+                                        height: 1,
+                                      ),
+                                      Flexible(
+                                        child: ListView.builder(
+                                          shrinkWrap: true,
+                                          itemCount: currentStory.replies.length,
+                                          itemBuilder: (context, index) {
+                                            final reply = currentStory
+                                                .replies[currentStory.replies.length - 1 - index];
+                                            return Container(
+                                              padding: EdgeInsets.symmetric(
+                                                horizontal: 16,
+                                                vertical: 12,
+                                              ),
+                                              child: Row(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  CircleAvatar(
+                                                    radius: 16,
+                                                    backgroundColor:
+                                                        Colors.white.withOpacity(0.2),
+                                                    backgroundImage:
+                                                        reply.userPhotoURL != null
+                                                            ? NetworkImage(
+                                                                reply.userPhotoURL!)
+                                                            : null,
+                                                    child: reply.userPhotoURL == null
+                                                        ? Text(
+                                                            reply.userName[0]
+                                                                .toUpperCase(),
+                                                            style: TextStyle(
+                                                              color: Colors.white,
+                                                              fontSize: 14,
+                                                            ),
+                                                          )
+                                                        : null,
+                                                  ),
+                                                  SizedBox(width: 12),
+                                                  Expanded(
+                                                    child: Column(
+                                                      crossAxisAlignment:
+                                                          CrossAxisAlignment.start,
+                                                      children: [
+                                                        Row(
+                                                          children: [
+                                                            Text(
+                                                              reply.userName,
+                                                              style: TextStyle(
+                                                                color: Colors.white,
+                                                                fontWeight:
+                                                                    FontWeight.w600,
+                                                                fontSize: 14,
+                                                              ),
+                                                            ),
+                                                            SizedBox(width: 8),
+                                                            Text(
+                                                              _formatStoryTime(
+                                                                  reply.timestamp),
+                                                              style: TextStyle(
+                                                                color: Colors.white
+                                                                    .withOpacity(0.6),
+                                                                fontSize: 12,
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                        SizedBox(height: 4),
+                                                        Text(
+                                                          reply.text,
+                                                          style: TextStyle(
+                                                            color: Colors.white
+                                                                .withOpacity(0.9),
+                                                            fontSize: 14,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                      ),
+                                      SizedBox(height: 16),
+                                    ],
+                                  ),
+                                ),
+                              );
+                              // Reanudar timer solo después de cerrar el bottom sheet
+                              _resumeStoryTimer();
+                            },
+                            child: Container(
+                              padding: EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 10,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withOpacity(0.5),
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.chat_bubble_outline,
+                                    color: Colors.white,
+                                    size: 16,
+                                  ),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    '${currentStory.replies.length} ${currentStory.replies.length == 1 ? "respuesta" : "respuestas"}',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      }
+
+                      return SizedBox.shrink();
+                    },
+                  ),
 
                   // Indicador de estado para historias del usuario actual
                   Builder(
@@ -633,6 +871,20 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
                 ],
               ),
             ),
+
+            // Campo de respuesta (solo si NO es la historia del usuario actual)
+            if (widget.allUserStories[_currentUserIndex].userId !=
+                FirebaseAuth.instance.currentUser?.uid)
+              Positioned(
+                bottom: 0,
+                left: 0,
+                right: 0,
+                child: StoryReplyInput(
+                  controller: _replyController,
+                  focusNode: _replyFocusNode,
+                  onSend: _sendReply,
+                ),
+              ),
 
             // Indicadores de zona táctil (solo en debug)
             if (false) // Cambiar a true para mostrar zonas táctiles

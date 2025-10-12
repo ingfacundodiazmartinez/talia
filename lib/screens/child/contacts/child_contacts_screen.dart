@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../../controllers/child_home_controller.dart';
 import '../../../services/chat_permission_service.dart';
+import '../../../services/block_service.dart';
 import '../../../screens/add_contact_screen.dart';
 import '../../chat_detail_screen.dart';
 
@@ -32,6 +33,7 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final ChatPermissionService _permissionService = ChatPermissionService();
+  final BlockService _blockService = BlockService();
 
   String _contactSearchQuery = '';
 
@@ -94,16 +96,21 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
               style: TextStyle(color: colorScheme.onSurface),
             ),
           ),
-          // Lista de contactos con triple StreamBuilder
+          // Lista de contactos con StreamBuilder para bloqueados
           Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              // Solicitudes donde YO soy el hijo (mis padres deben aprobar)
-              stream: _firestore
-                  .collection('contact_requests')
-                  .where('childId', isEqualTo: _auth.currentUser?.uid)
-                  .where('status', isEqualTo: 'pending')
-                  .snapshots(),
-              builder: (context, myRequestsSnapshot) {
+            child: StreamBuilder<List<String>>(
+              stream: _blockService.getBlockedContactsStream(),
+              builder: (context, blockedSnapshot) {
+                final blockedContacts = blockedSnapshot.data ?? [];
+
+                return StreamBuilder<QuerySnapshot>(
+                  // Solicitudes donde YO soy el hijo (mis padres deben aprobar)
+                  stream: _firestore
+                      .collection('contact_requests')
+                      .where('childId', isEqualTo: _auth.currentUser?.uid)
+                      .where('status', isEqualTo: 'pending')
+                      .snapshots(),
+                  builder: (context, myRequestsSnapshot) {
                 return StreamBuilder<QuerySnapshot>(
                   // Solicitudes donde YO soy el contacto (padres del otro deben aprobar)
                   stream: _firestore
@@ -173,7 +180,7 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
                               SizedBox(height: 24),
                             ],
 
-                            // Sección de contactos aprobados
+                            // Sección de contactos aprobados (filtrar bloqueados)
                             if (hasApprovedContacts) ...[
                               _buildSectionHeader(
                                 'Contactos Aprobados',
@@ -181,7 +188,9 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
                                 isPending: false,
                               ),
                               SizedBox(height: 12),
-                              ...approvedSnapshot.data!.map((contactId) {
+                              ...approvedSnapshot.data!
+                                  .where((contactId) => !blockedContacts.contains(contactId))
+                                  .map((contactId) {
                                 return FutureBuilder<DocumentSnapshot>(
                                   future: _firestore.collection('users').doc(contactId).get(),
                                   builder: (context, userSnapshot) {
@@ -214,6 +223,8 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
                               }).toList(),
                             ],
                           ],
+                        );
+                      },
                         );
                       },
                     );
@@ -302,7 +313,6 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
 
       final firstRequest = requests.first.data() as Map<String, dynamic>;
       final childId = firstRequest['childId'] as String;
-      final contactId = firstRequest['contactId'] as String;
 
       final otherUserName = (childId == currentUserId)
           ? (firstRequest['contactName'] ?? 'Usuario')

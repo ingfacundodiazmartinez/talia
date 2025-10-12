@@ -93,7 +93,7 @@ class _TwoFactorVerificationScreenState
 
         // Marcar como verificado en la sesión
         final sessionService = TwoFactorSessionService();
-        sessionService.markAsVerified(widget.userId);
+        await sessionService.markAsVerified(widget.userId);
 
         // Navegar a la pantalla correspondiente según el rol
         if (mounted) {

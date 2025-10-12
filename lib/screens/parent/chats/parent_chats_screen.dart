@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../services/contact_alias_service.dart';
+import '../../../services/block_service.dart';
 import '../../../widgets/stories_section.dart';
 import '../../../widgets/create_group_widget.dart';
 import '../../../utils/chat_utils.dart';
@@ -32,6 +33,7 @@ class ParentChatsScreen extends StatefulWidget {
 class _ParentChatsScreenState extends State<ParentChatsScreen> {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final ContactAliasService _aliasService = ContactAliasService();
+  final BlockService _blockService = BlockService();
   final TextEditingController _searchController = TextEditingController();
   final ValueNotifier<String> _searchQuery = ValueNotifier<String>('');
   late ParentChatsController _controller;
@@ -144,72 +146,80 @@ class _ParentChatsScreenState extends State<ParentChatsScreen> {
                       ),
                       // Lista de chats (filtrable)
                       Expanded(
-                        child: StreamBuilder<QuerySnapshot>(
-                          stream: _controller.getChatsStream(),
-                          builder: (context, snapshot) {
-                            // En caso de error, continuar con lista vacía de chats pero buscar grupos
-                            if (snapshot.hasError) {
-                              debugPrint(
-                                '⚠️ Error en stream de chats (continuando con grupos): ${snapshot.error}',
-                              );
-                            }
-
-                            if (snapshot.connectionState == ConnectionState.waiting) {
-                              return Center(child: CircularProgressIndicator());
-                            }
+                        child: StreamBuilder<List<String>>(
+                          stream: _blockService.getBlockedContactsStream(),
+                          builder: (context, blockedSnapshot) {
+                            final blockedContacts = blockedSnapshot.data ?? [];
 
                             return StreamBuilder<QuerySnapshot>(
-                              stream: _controller.getParentChildLinksStream(),
-                              builder: (context, linksSnapshot) {
-                                if (linksSnapshot.connectionState ==
-                                    ConnectionState.waiting) {
+                              stream: _controller.getChatsStream(),
+                              builder: (context, snapshot) {
+                                // En caso de error, continuar con lista vacía de chats pero buscar grupos
+                                if (snapshot.hasError) {
+                                  debugPrint(
+                                    '⚠️ Error en stream de chats (continuando con grupos): ${snapshot.error}',
+                                  );
+                                }
+
+                                // Solo mostrar spinner si está esperando Y no hay datos
+                                if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
                                   return Center(child: CircularProgressIndicator());
                                 }
 
-                                final childrenLinks = linksSnapshot.data?.docs ?? [];
-                                final childrenIds = _controller.extractChildrenIds(childrenLinks);
-
-                                // Filtrar chats eliminados
-                                final chatDocs = snapshot.data != null
-                                    ? _controller.filterDeletedChats(snapshot.data!)
-                                    : <QueryDocumentSnapshot>[];
-
-                                // Separar chats en: con hijos y con otros
-                                final separated = _controller.separateChats(
-                                  chatDocs: chatDocs,
-                                  childrenIds: childrenIds,
-                                );
-                                final otherChats = separated['otherChats']!;
-
-                                // Obtener grupos del parent
                                 return StreamBuilder<QuerySnapshot>(
-                                  stream: _controller.getGroupsStream(),
-                                  builder: (context, groupsSnapshot) {
-                                    final groups = groupsSnapshot.data?.docs ?? [];
+                                  stream: _controller.getParentChildLinksStream(),
+                                  builder: (context, linksSnapshot) {
+                                    // Solo mostrar spinner si está esperando Y no hay datos
+                                    if (linksSnapshot.connectionState == ConnectionState.waiting && !linksSnapshot.hasData) {
+                                      return Center(child: CircularProgressIndicator());
+                                    }
 
-                                    // Build the list items using controller
-                                    final listItems = _controller.buildListItems(
-                                      childrenLinks: childrenLinks,
-                                      childrenIds: childrenIds,
+                                    final childrenLinks = linksSnapshot.data?.docs ?? [];
+                                    final childrenIds = _controller.extractChildrenIds(childrenLinks);
+
+                                    // Filtrar solo chats eliminados (NO filtrar bloqueados)
+                                    final chatDocs = snapshot.data != null
+                                        ? _controller.filterDeletedChats(snapshot.data!)
+                                        : <QueryDocumentSnapshot>[];
+
+                                    // Separar chats en: con hijos y con otros
+                                    final separated = _controller.separateChats(
                                       chatDocs: chatDocs,
-                                      otherChats: otherChats,
-                                      groups: groups,
+                                      childrenIds: childrenIds,
                                     );
+                                    final otherChats = separated['otherChats']!;
 
-                                    return ValueListenableBuilder<String>(
-                                      valueListenable: _searchQuery,
-                                      builder: (context, query, _) {
-                                        return ListView.builder(
-                                          padding: EdgeInsets.all(16),
-                                          itemCount: listItems.length,
-                                          itemBuilder: (context, index) {
-                                            final item = listItems[index];
-                                            return _buildItemWidget(
-                                              item,
-                                              childrenLinks,
-                                              chatDocs,
-                                              childrenIds,
-                                              query.toLowerCase(),
+                                    // Obtener grupos del parent
+                                    return StreamBuilder<QuerySnapshot>(
+                                      stream: _controller.getGroupsStream(),
+                                      builder: (context, groupsSnapshot) {
+                                        final groups = groupsSnapshot.data?.docs ?? [];
+
+                                        // Build the list items using controller
+                                        final listItems = _controller.buildListItems(
+                                          childrenLinks: childrenLinks,
+                                          childrenIds: childrenIds,
+                                          chatDocs: chatDocs,
+                                          otherChats: otherChats,
+                                          groups: groups,
+                                        );
+
+                                        return ValueListenableBuilder<String>(
+                                          valueListenable: _searchQuery,
+                                          builder: (context, query, _) {
+                                            return ListView.builder(
+                                              padding: EdgeInsets.all(16),
+                                              itemCount: listItems.length,
+                                              itemBuilder: (context, index) {
+                                                final item = listItems[index];
+                                                return _buildItemWidget(
+                                                  item,
+                                                  childrenLinks,
+                                                  chatDocs,
+                                                  childrenIds,
+                                                  query.toLowerCase(),
+                                                );
+                                              },
                                             );
                                           },
                                         );
@@ -337,11 +347,19 @@ class _ParentChatsScreenState extends State<ParentChatsScreen> {
 
       case GroupItem(:final groupId, :final groupData):
         final groupName = groupData['name'] ?? 'Grupo';
+        final parentId = _auth.currentUser?.uid ?? '';
 
         // Filter by search
         if (searchQuery.isNotEmpty &&
             !groupName.toLowerCase().contains(searchQuery)) {
           return SizedBox.shrink();
+        }
+
+        // Leer contador de mensajes no leídos para este usuario
+        final unreadCount = groupData['unreadCount_$parentId'] ?? 0;
+
+        if (unreadCount > 0) {
+          print('💬 [ChatList] Grupo $groupId tiene $unreadCount mensajes no leídos');
         }
 
         return GroupChatListItem(
@@ -351,6 +369,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen> {
           lastMessage: groupData['lastMessage'] ?? 'Toca para abrir',
           messageCount: groupData['messageCount'] ?? 0,
           groupImageUrl: groupData['imageUrl'],
+          unreadCount: unreadCount,
           onLeaveGroup: () =>
               _confirmLeaveGroup(groupId, groupName),
         );
@@ -376,34 +395,52 @@ class _ParentChatsScreenState extends State<ParentChatsScreen> {
       builder: (context, aliasSnapshot) {
         final displayName = aliasSnapshot.data ?? realName;
 
-        if (chatDoc != null) {
-          // Chat con mensajes existentes
-          final chatData = chatDoc.data() as Map<String, dynamic>;
-          return ChatListItem(
-            chatId: chatDoc.id,
-            userId: childId,
-            name: displayName,
-            lastMessage: chatData['lastMessage'] ?? '',
-            time: ChatUtils.formatChatTime(chatData['lastMessageTime']),
-            unreadCount: 0,
-            isOnline: isOnline,
-            photoURL: photoURL,
-            isEmpty: false,
-          );
-        } else {
-          // Chat vacío (placeholder)
-          return ChatListItem(
-            chatId: ChatUtils.getChatId(parentId, childId),
-            userId: childId,
-            name: displayName,
-            lastMessage: 'Toca para iniciar conversación',
-            time: '',
-            unreadCount: 0,
-            isOnline: isOnline,
-            photoURL: photoURL,
-            isEmpty: true,
-          );
-        }
+        // ✅ Verificar si el contacto está bloqueado
+        return StreamBuilder<bool>(
+          stream: _blockService.isBlockedStream(childId),
+          initialData: false,
+          builder: (context, blockedSnapshot) {
+            final isBlocked = blockedSnapshot.data ?? false;
+
+            if (chatDoc != null) {
+              // Chat con mensajes existentes
+              final chatData = chatDoc.data() as Map<String, dynamic>;
+              // Leer contador de mensajes no leídos para este usuario
+              final unreadCount = chatData['unreadCount_$parentId'] ?? 0;
+
+              if (unreadCount > 0) {
+                print('💬 [ChatList] Chat ${chatDoc.id} tiene $unreadCount mensajes no leídos');
+              }
+
+              return ChatListItem(
+                chatId: chatDoc.id,
+                userId: childId,
+                name: displayName,
+                lastMessage: isBlocked ? '🔒 Contacto bloqueado' : (chatData['lastMessage'] ?? ''),
+                time: ChatUtils.formatChatTime(chatData['lastMessageTime']),
+                unreadCount: isBlocked ? 0 : unreadCount,
+                isOnline: isOnline,
+                photoURL: photoURL,
+                isEmpty: false,
+                isBlocked: isBlocked,
+              );
+            } else {
+              // Chat vacío (placeholder)
+              return ChatListItem(
+                chatId: ChatUtils.getChatId(parentId, childId),
+                userId: childId,
+                name: displayName,
+                lastMessage: isBlocked ? '🔒 Contacto bloqueado' : 'Toca para iniciar conversación',
+                time: '',
+                unreadCount: 0,
+                isOnline: isOnline,
+                photoURL: photoURL,
+                isEmpty: true,
+                isBlocked: isBlocked,
+              );
+            }
+          },
+        );
       },
     );
   }
@@ -452,15 +489,6 @@ class _ParentChatsScreenState extends State<ParentChatsScreen> {
 
       // Refrescar la UI
       setState(() {});
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Has salido del grupo "$groupName"'),
-          backgroundColor: Colors.green,
-          duration: Duration(seconds: 2),
-        ),
-      );
     } catch (e) {
       if (!mounted) return;
       Navigator.pop(context); // Cerrar loading

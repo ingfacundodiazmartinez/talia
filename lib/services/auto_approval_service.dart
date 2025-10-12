@@ -1,6 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import '../notification_service.dart';
 import 'user_role_service.dart';
 import 'group_chat_service.dart';
@@ -71,17 +70,6 @@ class AutoApprovalService {
             }
           }
         });
-  }
-
-  /// Verificar si un hijo pertenece a un padre específico usando parent_child_links
-  Future<bool> _isChildOfParent(String childId, String parentId) async {
-    try {
-      final userRoleService = UserRoleService();
-      return await userRoleService.hasSpecificParentLink(childId, parentId);
-    } catch (e) {
-      print('❌ Error verificando relación padre-hijo: $e');
-      return false;
-    }
   }
 
   /// Procesar aprobación automática si está habilitada

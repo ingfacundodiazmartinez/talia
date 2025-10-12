@@ -443,9 +443,16 @@ class ArFiltersPlugin : FlutterPlugin, MethodCallHandler, StreamHandler, Activit
     }
 
     private fun sendEvent(type: String, data: Map<String, Any>) {
+        // Filtrar el bitmap del mapa de datos si existe
+        // Flutter no puede serializar objetos Bitmap
+        val filteredData = data.filterKeys { key ->
+            val value = data[key]
+            value !is Bitmap && value !is android.graphics.Bitmap
+        }
+
         val event = mapOf(
             "type" to type,
-            "data" to data,
+            "data" to filteredData,
             "timestamp" to System.currentTimeMillis()
         )
 

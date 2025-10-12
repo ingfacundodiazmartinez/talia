@@ -10,10 +10,14 @@ import '../../../../parent_approval_requests_screen.dart';
 /// - Navegar a pantalla de solicitudes al tocar
 class ApprovalRequestsBadge extends StatelessWidget {
   final String parentId;
+  final Color? iconColor;
+  final double? iconSize;
 
   const ApprovalRequestsBadge({
     super.key,
     required this.parentId,
+    this.iconColor,
+    this.iconSize,
   });
 
   @override
@@ -31,7 +35,11 @@ class ApprovalRequestsBadge extends StatelessWidget {
         return Stack(
           children: [
             IconButton(
-              icon: Icon(Icons.notification_important),
+              icon: Icon(
+                Icons.notification_important,
+                color: iconColor,
+                size: iconSize,
+              ),
               onPressed: () {
                 Navigator.push(
                   context,

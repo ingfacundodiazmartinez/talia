@@ -21,6 +21,7 @@ class DeepARService {
   bool _isInitialized = false;
   bool _isRecording = false;
   String? _currentFilter;
+  bool _isDisposing = false;
 
   // Streams
   StreamSubscription? _eventSubscription;
@@ -35,6 +36,21 @@ class DeepARService {
   /// Inicializar DeepAR con license key
   Future<bool> initialize({required String licenseKey}) async {
     try {
+      // CRÍTICO: Esperar si dispose está en proceso
+      if (_isDisposing) {
+        print('⏳ Esperando a que dispose termine...');
+        int attempts = 0;
+        while (_isDisposing && attempts < 50) {
+          await Future.delayed(Duration(milliseconds: 100));
+          attempts++;
+        }
+        if (_isDisposing) {
+          print('❌ Timeout esperando dispose');
+          return false;
+        }
+        print('✅ Dispose completado, continuando con inicialización');
+      }
+
       print('🎭 Inicializando DeepAR...');
 
       final result = await _channel.invokeMethod('initialize', {
@@ -288,6 +304,14 @@ class DeepARService {
 
   /// Limpiar recursos completamente
   Future<void> dispose() async {
+    if (_isDisposing) {
+      print('⚠️ Dispose ya en proceso, ignorando llamada duplicada');
+      return;
+    }
+
+    _isDisposing = true;
+    print('🗑️ [dispose] Iniciando cleanup (bloqueando nuevas inicializaciones)...');
+
     try {
       await _eventSubscription?.cancel();
 
@@ -297,7 +321,13 @@ class DeepARService {
       }
 
       if (_isInitialized) {
+        print('🗑️ [dispose] Llamando dispose nativo...');
         await _channel.invokeMethod('dispose');
+
+        // CRÍTICO: Dar tiempo para que el shutdown nativo complete
+        print('⏳ [dispose] Esperando 500ms para que cleanup nativo complete...');
+        await Future.delayed(Duration(milliseconds: 500));
+
         _isInitialized = false;
         _isRecording = false;
         _currentFilter = null;
@@ -306,6 +336,9 @@ class DeepARService {
       print('✅ DeepAR resources disposed');
     } catch (e) {
       print('❌ Error disposing DeepAR: $e');
+    } finally {
+      _isDisposing = false;
+      print('✅ [dispose] Flag _isDisposing reseteado, listo para nueva inicialización');
     }
   }
 }
@@ -427,6 +460,9 @@ class DeepARFilters {
   static const String flowerFace = 'flower_face.deepar';
   static const String galaxyBackground = 'galaxy_background.deepar';
   static const String vikingHelmet = 'viking_helmet.deepar';
+  static const String barbieAd = 'barbie-ad.deepar';
+  static const String faceSwap = 'face-swap.deepar';
+  static const String harryPotter = 'harry-potter.deepar';
 
   /// Lista de todos los filtros disponibles
   static const List<String> all = [

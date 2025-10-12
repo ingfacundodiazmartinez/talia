@@ -240,12 +240,6 @@ class ProfileHeaderWidget extends StatelessWidget {
       }
 
       if (downloadUrl != null && context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Foto de perfil actualizada exitosamente'),
-            backgroundColor: Colors.green,
-          ),
-        );
         onImageChanged();
       }
     } catch (e) {
@@ -292,12 +286,6 @@ class ProfileHeaderWidget extends StatelessWidget {
         await controller.deleteProfileImage();
 
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Foto de perfil eliminada'),
-              backgroundColor: Colors.green,
-            ),
-          );
           onImageChanged();
         }
       } catch (e) {

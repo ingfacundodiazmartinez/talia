@@ -75,13 +75,6 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
           _userCode = newCode;
           _isLoading = false;
         });
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('✅ Código regenerado exitosamente'),
-            backgroundColor: Colors.green,
-          ),
-        );
       } catch (e) {
         setState(() {
           _errorMessage = 'Error regenerando código: $e';
@@ -114,9 +107,6 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
-
     return Scaffold(
       appBar: AppBar(
         title: Text('Mi Código'),
@@ -216,7 +206,6 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
 
   Widget _buildCodeDisplay() {
     final colorScheme = Theme.of(context).colorScheme;
-    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
     return SingleChildScrollView(
       padding: EdgeInsets.all(24),

@@ -1,8 +1,6 @@
 import 'dart:io';
 import 'package:device_info_plus/device_info_plus.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:crypto/crypto.dart';
 import 'dart:convert';
@@ -13,7 +11,6 @@ class DeviceManagementService {
   factory DeviceManagementService() => _instance;
   DeviceManagementService._internal();
 
-  final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final DeviceInfoPlugin _deviceInfo = DeviceInfoPlugin();
 

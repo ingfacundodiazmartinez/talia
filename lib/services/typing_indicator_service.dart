@@ -88,6 +88,38 @@ class TypingIndicatorService {
     });
   }
 
+  // Escuchar usuarios escribiendo en un grupo
+  Stream<List<String>> watchGroupTypingUsers(String groupId, String currentUserId) {
+    return _firestore
+        .collection('groups')
+        .doc(groupId)
+        .collection('typing')
+        .snapshots()
+        .map((snapshot) {
+      final typingUsers = <String>[];
+
+      for (final doc in snapshot.docs) {
+        // No incluir al usuario actual
+        if (doc.id == currentUserId) continue;
+
+        final data = doc.data();
+        final isTyping = data['isTyping'] as bool? ?? false;
+        final timestamp = data['timestamp'] as Timestamp?;
+
+        // Solo considerar como "escribiendo" si fue en los últimos 5 segundos
+        if (timestamp != null && isTyping) {
+          final now = DateTime.now();
+          final diff = now.difference(timestamp.toDate());
+          if (diff.inSeconds < 5) {
+            typingUsers.add(doc.id);
+          }
+        }
+      }
+
+      return typingUsers;
+    });
+  }
+
   // Limpiar al salir del chat
   void stopTyping() {
     _typingTimer?.cancel();

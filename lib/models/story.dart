@@ -7,6 +7,42 @@ enum StoryStatus {
   expired,    // Expirada (24h)
 }
 
+class StoryReply {
+  final String userId;
+  final String userName;
+  final String? userPhotoURL;
+  final String text;
+  final DateTime timestamp;
+
+  StoryReply({
+    required this.userId,
+    required this.userName,
+    this.userPhotoURL,
+    required this.text,
+    required this.timestamp,
+  });
+
+  factory StoryReply.fromMap(Map<String, dynamic> data) {
+    return StoryReply(
+      userId: data['userId'] ?? '',
+      userName: data['userName'] ?? 'Usuario',
+      userPhotoURL: data['userPhotoURL'],
+      text: data['text'] ?? '',
+      timestamp: (data['timestamp'] as Timestamp).toDate(),
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'userId': userId,
+      'userName': userName,
+      'userPhotoURL': userPhotoURL,
+      'text': text,
+      'timestamp': Timestamp.fromDate(timestamp),
+    };
+  }
+}
+
 class Story {
   final String id;
   final String userId;
@@ -18,6 +54,7 @@ class Story {
   final DateTime createdAt;
   final DateTime expiresAt;
   final List<String> viewedBy;
+  final List<StoryReply> replies; // Respuestas a la historia
   final Map<String, dynamic>? filter; // Información del filtro aplicado
   final StoryStatus status;
   final String? approvedBy; // ID del padre que aprobó
@@ -35,6 +72,7 @@ class Story {
     required this.createdAt,
     required this.expiresAt,
     required this.viewedBy,
+    this.replies = const [],
     this.filter,
     this.status = StoryStatus.pending,
     this.approvedBy,
@@ -45,6 +83,12 @@ class Story {
   // Factory constructor para crear desde Firestore
   factory Story.fromFirestore(DocumentSnapshot doc) {
     final data = doc.data() as Map<String, dynamic>;
+
+    // Parse replies
+    final repliesList = data['replies'] as List<dynamic>? ?? [];
+    final replies = repliesList
+        .map((reply) => StoryReply.fromMap(reply as Map<String, dynamic>))
+        .toList();
 
     return Story(
       id: doc.id,
@@ -57,6 +101,7 @@ class Story {
       createdAt: (data['createdAt'] as Timestamp).toDate(),
       expiresAt: (data['expiresAt'] as Timestamp).toDate(),
       viewedBy: List<String>.from(data['viewedBy'] ?? []),
+      replies: replies,
       filter: data['filter'],
       status: _parseStoryStatus(data['status']),
       approvedBy: data['approvedBy'],
@@ -93,6 +138,7 @@ class Story {
       'createdAt': Timestamp.fromDate(createdAt),
       'expiresAt': Timestamp.fromDate(expiresAt),
       'viewedBy': viewedBy,
+      'replies': replies.map((reply) => reply.toMap()).toList(),
       'filter': filter,
       'status': status.toString().split('.').last,
       'approvedBy': approvedBy,
@@ -142,6 +188,7 @@ class Story {
     DateTime? createdAt,
     DateTime? expiresAt,
     List<String>? viewedBy,
+    List<StoryReply>? replies,
     Map<String, dynamic>? filter,
     StoryStatus? status,
     String? approvedBy,
@@ -159,6 +206,7 @@ class Story {
       createdAt: createdAt ?? this.createdAt,
       expiresAt: expiresAt ?? this.expiresAt,
       viewedBy: viewedBy ?? this.viewedBy,
+      replies: replies ?? this.replies,
       filter: filter ?? this.filter,
       status: status ?? this.status,
       approvedBy: approvedBy ?? this.approvedBy,

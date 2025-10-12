@@ -1,11 +1,533 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // ⚠️ REGLAS TEMPORALES PARA TESTING - MUY INSEGURAS
-    // ⚠️ RESTAURAR REGLAS SEGURAS DESPUÉS DE PROBAR
 
-    match /{document=**} {
-      allow read, write: if true;
+    // Usuarios
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth.uid == userId;
+
+      // Permitir actualizar role cuando se vincula un hijo
+      allow update: if request.auth != null &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'updatedAt']) &&
+        request.resource.data.role == 'parent';
+
+      // Permitir actualizar additionalParentLinkedAt cuando se aprueba un segundo padre
+      allow update: if request.auth != null &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['additionalParentLinkedAt']);
+
+      // Dispositivos del usuario
+      match /devices/{deviceId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+
+    // Parent-children relationships
+    match /parent_children/{docId} {
+      allow read: if request.auth != null &&
+        (resource.data.parentId == request.auth.uid ||
+         resource.data.childId == request.auth.uid);
+      allow write: if request.auth != null;
+    }
+
+    // Parent-child links
+    match /parent_child_links/{docId} {
+      // Permitir leer documentos individuales si el usuario está involucrado
+      allow get: if request.auth != null &&
+        (resource.data.parentId == request.auth.uid ||
+         resource.data.childId == request.auth.uid);
+
+      // Permitir queries (list) si el usuario está autenticado
+      // La app filtra por childId o parentId en la query
+      allow list: if request.auth != null;
+
+      allow write: if request.auth != null;
+    }
+
+    // Chats
+    match /chats/{chatId} {
+      // Función auxiliar para verificar si el usuario es padre de alguno de los participantes
+      function isParentOfParticipant() {
+        let participants = resource.data.participants;
+        return exists(/databases/$(database)/documents/parent_child_links/$(request.auth.uid + '_' + participants[0])) ||
+               exists(/databases/$(database)/documents/parent_child_links/$(request.auth.uid + '_' + participants[1])) ||
+               exists(/databases/$(database)/documents/parent_child_links/$(participants[0] + '_' + request.auth.uid)) ||
+               exists(/databases/$(database)/documents/parent_child_links/$(participants[1] + '_' + request.auth.uid));
+      }
+
+      // Permitir leer si:
+      // 1. Eres participante del chat, O
+      // 2. Eres padre de alguno de los participantes
+      allow read: if request.auth != null && (
+        request.auth.uid in resource.data.participants ||
+        isParentOfParticipant()
+      );
+
+      // Permitir crear chat si el usuario está en participants
+      allow create: if request.auth != null &&
+        request.auth.uid in request.resource.data.participants;
+
+      // Permitir actualizar si:
+      // 1. El usuario es participante, O
+      // 2. El usuario es padre de uno de los participantes Y solo está actualizando campos de moderación
+      allow update: if request.auth != null && (
+        request.auth.uid in resource.data.participants ||
+        (isParentOfParticipant() &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['moderationEnabled', 'moderationParentId', 'moderationEnabledAt', 'updatedAt', 'participants']))
+      );
+
+      match /messages/{messageId} {
+        // Función auxiliar para verificar si el chat existe y si eres participante
+        function isParticipantIfChatExists() {
+          return exists(/databases/$(database)/documents/chats/$(chatId)) &&
+                 request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+        }
+
+        // Función auxiliar para verificar si el usuario es padre de alguno de los participantes del chat
+        function isParentOfChatParticipant() {
+          let chatDoc = get(/databases/$(database)/documents/chats/$(chatId));
+          let participants = chatDoc.data.participants;
+          return exists(/databases/$(database)/documents/parent_child_links/$(request.auth.uid + '_' + participants[0])) ||
+                 exists(/databases/$(database)/documents/parent_child_links/$(request.auth.uid + '_' + participants[1])) ||
+                 exists(/databases/$(database)/documents/parent_child_links/$(participants[0] + '_' + request.auth.uid)) ||
+                 exists(/databases/$(database)/documents/parent_child_links/$(participants[1] + '_' + request.auth.uid));
+        }
+
+        // Permitir leer mensaje individual si eres sender, receiver, o padre de algún participante
+        allow get: if request.auth != null && (
+          request.auth.uid == resource.data.senderId ||
+          request.auth.uid == resource.data.receiverId ||
+          (exists(/databases/$(database)/documents/chats/$(chatId)) && isParentOfChatParticipant())
+        );
+
+        // Permitir listar mensajes si:
+        // 1. El chat existe y eres participante,
+        // 2. El chat no existe aún (permitir query vacía sin error), O
+        // 3. Eres padre de alguno de los participantes del chat
+        allow list: if request.auth != null && (
+          isParticipantIfChatExists() ||
+          !exists(/databases/$(database)/documents/chats/$(chatId)) ||
+          (exists(/databases/$(database)/documents/chats/$(chatId)) && isParentOfChatParticipant())
+        );
+
+        // Permitir crear mensaje si eres el sender
+        allow create: if request.auth != null &&
+          request.auth.uid == request.resource.data.senderId;
+
+        // Permitir actualizar (ej: marcar como leído) si eres el receiver o sender
+        allow update: if request.auth != null && (
+          request.auth.uid == resource.data.senderId ||
+          request.auth.uid == resource.data.receiverId
+        );
+
+        // Permitir eliminar si eres el sender
+        allow delete: if request.auth != null &&
+          request.auth.uid == resource.data.senderId;
+      }
+
+      // Typing indicators
+      match /typing/{userId} {
+        allow read: if request.auth != null &&
+          request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+        allow write: if request.auth != null &&
+          request.auth.uid == userId &&
+          request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+      }
+
+      // Reported messages - Mensajes reportados por los usuarios como ofensivos
+      match /reported_messages/{messageId} {
+        // Permitir leer reportes si eres participante del chat
+        allow read: if request.auth != null &&
+          request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+
+        // Permitir crear reporte si eres participante del chat
+        allow create: if request.auth != null &&
+          request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants &&
+          request.auth.uid == request.resource.data.reportedBy;
+
+        // No permitir actualizar ni eliminar reportes (son permanentes)
+      }
+    }
+
+    // Messages (colección global)
+    // CORREGIDO: Esta colección no se usa directamente, se usan subcollections
+    // Si realmente se necesita, descomentar y validar apropiadamente
+    match /messages/{messageId} {
+      allow read: if request.auth != null &&
+        (request.auth.uid == resource.data.senderId ||
+         request.auth.uid == resource.data.receiverId);
+      allow write: if request.auth != null &&
+        request.auth.uid == request.resource.data.senderId;
+    }
+
+    // Contactos - SOLO Cloud Functions pueden escribir
+    match /contacts/{contactId} {
+      // Permitir leer si está autenticado
+      // La app filtra por relaciones padre-hijo
+      allow read: if request.auth != null;
+      // Solo Cloud Functions pueden crear/modificar
+      allow write: if false;
+    }
+
+    // Notificaciones
+    match /notifications/{notificationId} {
+      allow read: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+      allow write: if request.auth != null;
+    }
+
+    // Preferencias de notificaciones
+    match /notification_preferences/{userId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Excepciones de Do Not Disturb
+    match /dnd_exceptions/{exceptionId} {
+      allow read: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow write: if request.auth != null && request.resource.data.userId == request.auth.uid;
+    }
+
+    // Solicitudes de exportación de datos
+    match /data_export_requests/{requestId} {
+      allow read: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      allow update: if false; // Solo Cloud Functions actualizan
+      allow delete: if request.auth != null && resource.data.userId == request.auth.uid;
+    }
+
+    // Logs de seguridad (solo lectura para el usuario, escritura para el servicio)
+    match /security_logs/{logId} {
+      allow read: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow write: if request.auth != null && request.resource.data.userId == request.auth.uid;
+    }
+
+    // Analytics de notificaciones (opcional)
+    match /notification_analytics/{analyticsId} {
+      allow read: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow write: if request.auth != null && request.resource.data.userId == request.auth.uid;
+    }
+
+    // Configuraciones de padres
+    match /parent_settings/{userId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Configuraciones de hijos
+    match /child_settings/{userId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Actividades
+    match /activities/{activityId} {
+      allow read: if request.auth != null &&
+        resource.data.parentId == request.auth.uid;
+      allow write: if request.auth != null;
+    }
+
+    // Alertas
+    match /alerts/{alertId} {
+      allow read: if request.auth != null &&
+        (resource.data.parentId == request.auth.uid ||
+         resource.data.childId == request.auth.uid);
+      allow write: if request.auth != null;
+    }
+
+    // Story approval requests
+    match /story_approval_requests/{requestId} {
+      allow read: if request.auth != null &&
+        (resource.data.parentId == request.auth.uid ||
+         resource.data.childId == request.auth.uid);
+      allow write: if request.auth != null;
+    }
+
+    // Stories
+    match /stories/{storyId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+
+    // Grupos
+    match /groups/{groupId} {
+      allow read: if request.auth != null &&
+        request.auth.uid in resource.data.members;
+      allow write: if request.auth != null &&
+        request.auth.uid in request.resource.data.members;
+
+      match /messages/{messageId} {
+        // CORREGIDO: Solo miembros del grupo pueden leer/escribir mensajes
+        allow read: if request.auth != null &&
+          request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.members;
+        allow write: if request.auth != null &&
+          request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.members;
+      }
+
+      // Typing indicators
+      match /typing/{userId} {
+        allow read: if request.auth != null &&
+          request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.members;
+        allow write: if request.auth != null &&
+          request.auth.uid == userId &&
+          request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.members;
+      }
+    }
+
+    // Parent approval requests
+    match /parent_approval_requests/{requestId} {
+      // Permitir leer documentos individuales si el usuario está involucrado
+      allow get: if request.auth != null &&
+        (resource.data.existingParentId == request.auth.uid ||
+         resource.data.newParentId == request.auth.uid ||
+         resource.data.childId == request.auth.uid);
+
+      // Permitir queries (list) si el usuario está autenticado
+      // Se asume que la app filtra correctamente por existingParentId, newParentId o childId
+      allow list: if request.auth != null;
+
+      allow write: if request.auth != null;
+    }
+
+    // Link codes
+    match /link_codes/{codeId} {
+      // Permitir leer documento individual si es el creador
+      allow get: if request.auth != null &&
+        request.auth.uid == resource.data.createdBy;
+
+      // Permitir queries (list) a usuarios autenticados
+      // La seguridad se mantiene porque solo pueden filtrar por sus propios códigos
+      allow list: if request.auth != null;
+
+      // Permitir crear código si el usuario es el createdBy
+      allow create: if request.auth != null &&
+        request.auth.uid == request.resource.data.createdBy;
+
+      // Permitir actualizar si:
+      // 1. Eres el creador (padre), O
+      // 2. Estás marcando el código como usado (hijo vinculándose)
+      allow update: if request.auth != null && (
+        request.auth.uid == resource.data.createdBy ||
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['used', 'usedBy', 'usedAt', 'isActive']) &&
+         request.resource.data.used == true &&
+         request.resource.data.usedBy == request.auth.uid)
+      );
+
+      // Permitir eliminar solo si es el creador
+      allow delete: if request.auth != null &&
+        request.auth.uid == resource.data.createdBy;
+    }
+
+    // User codes (códigos de usuario para agregar contactos)
+    match /user_codes/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Locations
+    match /locations/{locationId} {
+      allow read: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+      allow write: if request.auth != null;
+    }
+
+    // Video calls
+    match /video_calls/{callId} {
+      // CORREGIDO: Solo caller y receiver pueden ver/modificar la llamada
+      allow read: if request.auth != null &&
+        (request.auth.uid == resource.data.callerId ||
+         request.auth.uid == resource.data.receiverId);
+      allow write: if request.auth != null &&
+        (request.auth.uid == request.resource.data.callerId ||
+         request.auth.uid == request.resource.data.receiverId);
+    }
+
+    // Chat permissions
+    match /chat_permissions/{permissionId} {
+      allow read: if request.auth != null &&
+        (resource.data.childId == request.auth.uid ||
+         resource.data.parentId == request.auth.uid);
+      allow write: if request.auth != null;
+    }
+
+    // User locations
+    match /user_locations/{userId} {
+      // Permitir lectura si es el usuario mismo
+      // O si el usuario autenticado está en la lista de padres aprobados
+      allow read: if request.auth != null && (
+        request.auth.uid == userId ||
+        (resource.data.approvedParents != null && request.auth.uid in resource.data.approvedParents)
+      );
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Location history
+    match /location_history/{locationId} {
+      allow read: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow write: if request.auth != null;
+    }
+
+    // Whitelist
+    match /whitelist/{whitelistId} {
+      allow read: if request.auth != null &&
+        (resource.data.childId == request.auth.uid ||
+         resource.data.parentId == request.auth.uid);
+      allow write: if request.auth != null;
+    }
+
+    // Blocked chats
+    match /blocked_chats/{blockedId} {
+      // Función auxiliar para verificar si el usuario es padre de alguno de los participantes
+      // Solo se ejecuta si el documento existe
+      function isParentOfBlockedChatParticipant() {
+        return resource != null &&
+               resource.data != null &&
+               (exists(/databases/$(database)/documents/parent_child_links/$(request.auth.uid + '_' + resource.data.childId)) ||
+                exists(/databases/$(database)/documents/parent_child_links/$(resource.data.childId + '_' + request.auth.uid)) ||
+                exists(/databases/$(database)/documents/parent_child_links/$(request.auth.uid + '_' + resource.data.contactId)) ||
+                exists(/databases/$(database)/documents/parent_child_links/$(resource.data.contactId + '_' + request.auth.uid)));
+      }
+
+      // Permitir leer si:
+      // 1. Eres uno de los participantes (tu UID está en el documento ID), O
+      // 2. El documento existe Y eres padre de alguno de los participantes
+      allow read: if request.auth != null && (
+        blockedId.matches('.*' + request.auth.uid + '.*') ||
+        isParentOfBlockedChatParticipant()
+      );
+
+      // Permitir escribir si el usuario está autenticado
+      // El ChatBlockService se asegura de que blockedBy sea el usuario actual
+      allow write: if request.auth != null;
+    }
+
+    // Blocked contacts
+    match /blocked_contacts/{blockedId} {
+      allow read: if request.auth != null &&
+        (resource.data.userId == request.auth.uid ||
+         resource.data.blockedUserId == request.auth.uid);
+      allow write: if request.auth != null;
+    }
+
+    // Message analysis (AI analysis)
+    match /message_analysis/{analysisId} {
+      // CORREGIDO: Solo el usuario o sus padres pueden ver el análisis
+      allow read: if request.auth != null &&
+        (request.auth.uid == resource.data.userId ||
+         (resource.data.parentIds != null && request.auth.uid in resource.data.parentIds));
+      allow write: if false; // Solo Cloud Functions
+    }
+
+    // AI batch analysis
+    match /ai_batch_analysis/{batchId} {
+      // CORREGIDO: Solo el usuario o sus padres pueden ver el análisis
+      allow read: if request.auth != null &&
+        (request.auth.uid == resource.data.userId ||
+         (resource.data.parentIds != null && request.auth.uid in resource.data.parentIds));
+      allow write: if false; // Solo Cloud Functions
+    }
+
+    // Support reports
+    match /support_reports/{reportId} {
+      allow read: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow write: if request.auth != null && request.resource.data.userId == request.auth.uid;
+    }
+
+    // Connection tests
+    match /connection_test/{testId} {
+      // CORREGIDO: Solo el usuario puede ver sus tests de conexión
+      allow read: if request.auth != null &&
+        request.auth.uid == resource.data.userId;
+      allow write: if request.auth != null &&
+        request.auth.uid == request.resource.data.userId;
+    }
+
+    // Contact requests - SOLO Cloud Functions pueden escribir
+    match /contact_requests/{requestId} {
+      allow read: if request.auth != null;
+      // Solo Cloud Functions pueden crear/modificar
+      allow write: if false;
+    }
+
+    // Weekly reports
+    match /weekly_reports/{reportId} {
+      allow read: if request.auth != null &&
+        (resource.data.childId == request.auth.uid ||
+         resource.data.parentId == request.auth.uid);
+      allow write: if false; // Solo Cloud Functions pueden escribir
+    }
+
+    // Emergencies
+    match /emergencies/{emergencyId} {
+      // Función auxiliar para verificar si el usuario es padre del niño de la emergencia
+      function isParentOfEmergencyChild() {
+        let childId = resource.data.childId;
+        // Verificar en parent_child_links
+        return exists(/databases/$(database)/documents/parent_child_links/$(request.auth.uid + '_' + childId)) ||
+               exists(/databases/$(database)/documents/parent_child_links/$(childId + '_' + request.auth.uid)) ||
+               // Verificar en parent_children (legacy)
+               exists(/databases/$(database)/documents/parent_children/$(request.auth.uid + '_' + childId)) ||
+               exists(/databases/$(database)/documents/parent_children/$(childId + '_' + request.auth.uid));
+      }
+
+      // Permitir leer si eres el niño O eres padre del niño
+      allow read: if request.auth != null && (
+        request.auth.uid == resource.data.childId ||
+        isParentOfEmergencyChild()
+      );
+
+      // Permitir crear/actualizar si eres el niño o un padre con status approved
+      allow write: if request.auth != null && (
+        request.auth.uid == request.resource.data.childId ||
+        isParentOfEmergencyChild()
+      );
+
+      // Location tracking subcollection
+      match /location_tracking/{trackingId} {
+        // Heredar permisos del documento padre
+        function isAuthorizedForEmergency() {
+          let childId = get(/databases/$(database)/documents/emergencies/$(emergencyId)).data.childId;
+          return request.auth.uid == childId ||
+                 exists(/databases/$(database)/documents/parent_child_links/$(request.auth.uid + '_' + childId)) ||
+                 exists(/databases/$(database)/documents/parent_child_links/$(childId + '_' + request.auth.uid)) ||
+                 exists(/databases/$(database)/documents/parent_children/$(request.auth.uid + '_' + childId)) ||
+                 exists(/databases/$(database)/documents/parent_children/$(childId + '_' + request.auth.uid));
+        }
+
+        allow read: if request.auth != null && isAuthorizedForEmergency();
+        allow write: if request.auth != null && isAuthorizedForEmergency();
+      }
+    }
+
+    // Permission requests (para invitaciones a grupos, etc)
+    match /permission_requests/{requestId} {
+      allow read: if request.auth != null &&
+        (resource.data.parentId == request.auth.uid ||
+         resource.data.childId == request.auth.uid);
+      allow create: if request.auth != null;
+      allow update: if request.auth != null &&
+        (resource.data.parentId == request.auth.uid ||
+         resource.data.childId == request.auth.uid);
+      allow delete: if request.auth != null &&
+        (resource.data.parentId == request.auth.uid ||
+         resource.data.childId == request.auth.uid);
+    }
+
+    // Group invitations (con aprobación en cascada)
+    match /groupInvitations/{invitationId} {
+      // Permitir leer si estás autenticado (filtrado en queries)
+      allow read: if request.auth != null;
+
+      // Permitir crear invitaciones
+      allow create: if request.auth != null &&
+        request.auth.uid == request.resource.data.inviterId;
+
+      // Permitir actualizar (para aprobaciones y cambios de estado)
+      allow update: if request.auth != null;
+
+      // Solo Cloud Functions pueden eliminar
+      allow delete: if false;
     }
   }
 }

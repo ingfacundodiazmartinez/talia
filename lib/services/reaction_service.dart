@@ -6,6 +6,7 @@ class ReactionService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
   /// Agregar o quitar reacción a un mensaje
+  /// Si el usuario ya tiene una reacción diferente, se reemplaza con la nueva
   Future<void> toggleReaction({
     required String chatId,
     required String messageId,
@@ -32,28 +33,42 @@ class ReactionService {
         }
 
         final data = snapshot.data() as Map<String, dynamic>;
-        final reactions = Map<String, List<String>>.from(
-          data['reactions'] ?? {},
-        );
+        final reactions = Map<String, dynamic>.from(data['reactions'] ?? {});
 
-        // Si el usuario ya reaccionó con este emoji, quitarlo
-        if (reactions.containsKey(reaction)) {
-          final users = List<String>.from(reactions[reaction]!);
-          if (users.contains(currentUser.uid)) {
-            users.remove(currentUser.uid);
-            if (users.isEmpty) {
-              reactions.remove(reaction);
-            } else {
+        // Primero, eliminar cualquier reacción previa del usuario en otros emojis
+        String? previousReaction;
+        reactions.forEach((emoji, users) {
+          if (users is List && users.contains(currentUser.uid)) {
+            previousReaction = emoji;
+          }
+        });
+
+        // Eliminar reacción anterior si existe
+        if (previousReaction != null) {
+          final prevReaction = previousReaction!; // Null check para type safety
+          final users = List<String>.from(reactions[prevReaction]!);
+          users.remove(currentUser.uid);
+          if (users.isEmpty) {
+            reactions.remove(prevReaction);
+          } else {
+            reactions[prevReaction] = users;
+          }
+        }
+
+        // Si está intentando reaccionar con el mismo emoji que tenía, solo quitarlo
+        if (previousReaction == reaction) {
+          // Ya fue eliminado arriba
+        } else {
+          // Agregar nueva reacción
+          if (reactions.containsKey(reaction)) {
+            final users = List<String>.from(reactions[reaction]!);
+            if (!users.contains(currentUser.uid)) {
+              users.add(currentUser.uid);
               reactions[reaction] = users;
             }
           } else {
-            // Agregar reacción
-            users.add(currentUser.uid);
-            reactions[reaction] = users;
+            reactions[reaction] = [currentUser.uid];
           }
-        } else {
-          // Primera reacción de este tipo
-          reactions[reaction] = [currentUser.uid];
         }
 
         transaction.update(messageRef, {'reactions': reactions});

@@ -23,13 +23,32 @@ class ChatBlockService {
       // Generar ID del chat (mismo formato que se usa en la app)
       final chatId = _getChatId(childId, contactId);
 
+      final blockedByUser = blockedBy ?? _auth.currentUser?.uid;
+      final currentUser = _auth.currentUser;
+      print('📝 Datos del documento:');
+      print('   chatId: $chatId');
+      print('   childId: $childId');
+      print('   contactId: $contactId');
+      print('   blockedBy: $blockedByUser');
+      print('   reason: $reason');
+      print('🔐 Usuario autenticado:');
+      print('   UID: ${currentUser?.uid}');
+      print('   Email: ${currentUser?.email}');
+      print('   Phone: ${currentUser?.phoneNumber}');
+      print('   Is Anonymous: ${currentUser?.isAnonymous}');
+
+      print('🔧 Configuración de Firestore:');
+      print('   App: ${_firestore.app.name}');
+      print('   Settings: ${_firestore.settings}');
+
       // Crear registro de chat bloqueado
+      print('📤 Intentando crear documento en blocked_chats/$chatId...');
       await _firestore.collection('blocked_chats').doc(chatId).set({
         'chatId': chatId,
         'childId': childId,
         'contactId': contactId,
         'blockedAt': FieldValue.serverTimestamp(),
-        'blockedBy': blockedBy ?? _auth.currentUser?.uid,
+        'blockedBy': blockedByUser,
         'reason': reason,
         'isActive': true,
         'participants': [childId, contactId],
