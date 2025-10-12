@@ -32,6 +32,9 @@ import 'services/online_status_service.dart';
 import 'services/voip_service.dart';
 import 'services/analytics_service.dart';
 import 'services/performance_service.dart';
+import 'services/snackbar_service.dart';
+import 'services/network_status_service.dart';
+import 'widgets/loading_overlay.dart';
 import 'dart:async';
 
 // IMPORTANTE: Después de ejecutar 'flutterfire configure',
@@ -108,6 +111,14 @@ void main() async {
     print('✅ Performance Monitoring inicializado');
   } catch (e) {
     print('⚠️ Error inicializando Performance: $e (continuando...)');
+  }
+
+  // Inicializar Network Status Service
+  try {
+    await NetworkStatusService().initialize();
+    print('✅ Network Status Service inicializado');
+  } catch (e) {
+    print('⚠️ Error inicializando Network Status: $e (continuando...)');
   }
 
   // Activar Firebase App Check con Play Integrity para producción
@@ -441,15 +452,17 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
         // Cerrar teclado al tocar fuera de cualquier input
         FocusManager.instance.primaryFocus?.unfocus();
       },
-      child: MaterialApp(
-        key: ValueKey('app_${_currentUserRole ?? "unknown"}'),
-        navigatorKey: _navigatorKey,
-        title: 'Talia',
-        debugShowCheckedModeBanner: false,
-        theme: themeService.currentTheme,
-        home: const AnimatedSplashScreen(
-          nextScreen: AuthWrapper(),
-        ),
+      child: NetworkStatusBanner(
+        child: MaterialApp(
+          key: ValueKey('app_${_currentUserRole ?? "unknown"}'),
+          navigatorKey: _navigatorKey,
+          scaffoldMessengerKey: SnackbarService().scaffoldMessengerKey,
+          title: 'Talia',
+          debugShowCheckedModeBanner: false,
+          theme: themeService.currentTheme,
+          home: const AnimatedSplashScreen(
+            nextScreen: AuthWrapper(),
+          ),
         onGenerateRoute: (settings) {
           if (settings.name == '/chat_moderation_settings') {
             final args = settings.arguments as Map<String, dynamic>;
@@ -467,6 +480,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
           }
           return null;
         },
+        ),
       ),
     );
   }
