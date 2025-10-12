@@ -35,6 +35,7 @@ import 'services/performance_service.dart';
 import 'services/snackbar_service.dart';
 import 'services/network_status_service.dart';
 import 'services/offline_queue_service.dart';
+import 'services/accessibility_service.dart';
 import 'widgets/loading_overlay.dart';
 import 'dart:async';
 
@@ -128,6 +129,14 @@ void main() async {
     print('✅ Offline Queue Service inicializado');
   } catch (e) {
     print('⚠️ Error inicializando Offline Queue: $e (continuando...)');
+  }
+
+  // Inicializar Accessibility Service
+  try {
+    await AccessibilityService().initialize();
+    print('✅ Accessibility Service inicializado');
+  } catch (e) {
+    print('⚠️ Error inicializando Accessibility: $e (continuando...)');
   }
 
   // Activar Firebase App Check con Play Integrity para producción
@@ -456,6 +465,14 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final themeService = Provider.of<ThemeService>(context);
 
+    // Aplicar alto contraste si está habilitado
+    final baseTheme = themeService.currentTheme;
+    final accessibleTheme = accessibility.highContrast
+        ? baseTheme.copyWith(
+            colorScheme: accessibility.getHighContrastColors(baseTheme.colorScheme),
+          )
+        : baseTheme;
+
     return GestureDetector(
       onTap: () {
         // Cerrar teclado al tocar fuera de cualquier input
@@ -468,7 +485,16 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
           scaffoldMessengerKey: SnackbarService().scaffoldMessengerKey,
           title: 'Talia',
           debugShowCheckedModeBanner: false,
-          theme: themeService.currentTheme,
+          theme: accessibleTheme,
+          builder: (context, child) {
+            // Aplicar text scale factor globalmente
+            return MediaQuery(
+              data: MediaQuery.of(context).copyWith(
+                textScaler: TextScaler.linear(accessibility.textScale),
+              ),
+              child: child!,
+            );
+          },
           home: const AnimatedSplashScreen(
             nextScreen: AuthWrapper(),
           ),
