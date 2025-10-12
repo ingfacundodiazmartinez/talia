@@ -52,6 +52,7 @@ lib/firebase_options.dart
 !OFFLINE_SYNC.md
 !UX_IMPROVEMENTS.md
 !MULTI_DEVICE_TESTING.md
+!PERMISSIONS.md
 
 # Scripts
 *.sh
