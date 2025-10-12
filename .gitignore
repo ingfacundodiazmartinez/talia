@@ -53,6 +53,7 @@ lib/firebase_options.dart
 !UX_IMPROVEMENTS.md
 !MULTI_DEVICE_TESTING.md
 !PERMISSIONS.md
+!DATA_MANAGEMENT.md
 
 # Scripts
 *.sh
