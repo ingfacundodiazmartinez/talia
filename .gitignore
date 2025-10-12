@@ -38,9 +38,19 @@ lib/firebase_options.dart
 # Si necesitas estos archivos en git para CI/CD, considera cifrarlos
 # o usar secrets de GitHub Actions
 
-# Documentation and reports (keep only README.md)
+# Documentation and reports (keep core documentation)
 *.md
 !README.md
+!CONTRIBUTING.md
+!PRIVACY_POLICY.md
+!TERMS_OF_SERVICE.md
+!BUG_REPORT.md
+!FIREBASE_SETUP.md
+!ACCESSIBILITY.md
+!TESTING.md
+!NOTIFICATIONS.md
+!OFFLINE_SYNC.md
+!UX_IMPROVEMENTS.md
 
 # Scripts
 *.sh
