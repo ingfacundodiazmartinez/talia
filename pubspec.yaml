@@ -92,6 +92,9 @@ dev_dependencies:
   flutter_native_splash: ^2.4.3
   mockito: ^5.4.4
   build_runner: ^2.4.13
+  fake_cloud_firestore: ^3.0.3
+  integration_test:
+    sdk: flutter
 
 flutter_launcher_icons:
   android: true
