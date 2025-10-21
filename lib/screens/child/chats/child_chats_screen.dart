@@ -9,6 +9,7 @@ import '../../../services/chat_service.dart';
 import '../../../services/block_service.dart';
 import '../../../screens/group_chat_screen.dart';
 import '../../chat_detail_screen.dart';
+import 'child_archived_chats_screen.dart';
 
 /// Pantalla completa de chats para niños
 ///
@@ -146,6 +147,22 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              GestureDetector(
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => ChildArchivedChatsScreen(),
+                    ),
+                  );
+                },
+                child: Icon(
+                  Icons.archive,
+                  color: isDarkMode ? colorScheme.onSurface : Colors.white,
+                  size: 22,
+                ),
+              ),
+              SizedBox(width: 8),
               GestureDetector(
                 onTap: () {
                   showModalBottomSheet(

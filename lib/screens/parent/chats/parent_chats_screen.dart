@@ -15,6 +15,7 @@ import 'widgets/chat_list_item.dart';
 import 'widgets/group_chat_list_item.dart';
 import 'widgets/parent_chat_header.dart';
 import 'widgets/chat_search_bar.dart';
+import 'parent_archived_chats_screen.dart';
 
 /// Pantalla de chats para padres
 ///
@@ -95,6 +96,22 @@ class _ParentChatsScreenState extends State<ParentChatsScreen> {
                           ),
                         ),
                       ],
+                    ),
+                    IconButton(
+                      icon: Icon(
+                        Icons.archive,
+                        color: Colors.white,
+                        size: 26,
+                      ),
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => ParentArchivedChatsScreen(),
+                          ),
+                        );
+                      },
+                      padding: EdgeInsets.all(8),
                     ),
                     IconButton(
                       icon: Icon(
