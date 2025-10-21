@@ -152,7 +152,9 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (context) => ChildArchivedChatsScreen(),
+                      builder: (context) => ChildArchivedChatsScreen(
+                        childId: widget.childId,
+                      ),
                     ),
                   );
                 },
