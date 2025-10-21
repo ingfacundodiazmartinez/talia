@@ -13,6 +13,9 @@ import '../services/media_service.dart';
 import '../services/media_compression_service.dart';
 import '../services/message_cache_service.dart';
 import '../services/sound_service.dart';
+import '../services/user_profile_cache_service.dart';
+import '../services/read_receipts_service.dart';
+import '../services/delivery_receipts_service.dart';
 
 /// Controller optimista para chat individual
 ///
@@ -34,6 +37,9 @@ class ChatControllerOptimistic extends ChangeNotifier {
   final MediaService _mediaService;
   final MessageCacheService _cacheService;
   final SoundService _soundService;
+  final UserProfileCacheService _userProfileCache;
+  final ReadReceiptsService _readReceiptsService;
+  final DeliveryReceiptsService _deliveryReceiptsService;
 
   // Lista de mensajes en memoria (optimistic + cache + firestore)
   final List<ChatMessage> _messages = [];
@@ -82,13 +88,19 @@ class ChatControllerOptimistic extends ChangeNotifier {
     MediaService? mediaService,
     MessageCacheService? cacheService,
     SoundService? soundService,
+    UserProfileCacheService? userProfileCache,
+    ReadReceiptsService? readReceiptsService,
+    DeliveryReceiptsService? deliveryReceiptsService,
   })  : _firestore = firestore ?? FirebaseFirestore.instance,
         _auth = auth ?? FirebaseAuth.instance,
         _notificationService = notificationService ?? NotificationService(),
         _typingService = typingService ?? TypingIndicatorService(),
         _mediaService = mediaService ?? MediaService(),
         _cacheService = cacheService ?? MessageCacheService(),
-        _soundService = soundService ?? SoundService() {
+        _soundService = soundService ?? SoundService(),
+        _userProfileCache = userProfileCache ?? UserProfileCacheService(),
+        _readReceiptsService = readReceiptsService ?? ReadReceiptsService(),
+        _deliveryReceiptsService = deliveryReceiptsService ?? DeliveryReceiptsService() {
     _controllerId = DateTime.now().millisecondsSinceEpoch.toString().substring(8);
     print('🏗️ [Controller-$_controllerId] Creado para chat: $chatId');
   }
