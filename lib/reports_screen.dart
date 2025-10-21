@@ -46,7 +46,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
       ),
       body: StreamBuilder<QuerySnapshot>(
         stream: _firestore
-            .collection('parent_child_links')
+            .collection('parent_children')
             .where('parentId', isEqualTo: _auth.currentUser?.uid)
             .where('status', isEqualTo: 'approved')
             .snapshots(),

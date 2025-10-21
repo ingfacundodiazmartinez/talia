@@ -1,10 +1,14 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     
     <!-- PERMISOS FUERA DEL BLOQUE APPLICATION -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+
+    <!-- Permisos para contactos -->
+    <uses-permission android:name="android.permission.READ_CONTACTS"/>
 
     <!-- Permisos para cámara y galería -->
     <uses-permission android:name="android.permission.CAMERA"/>
@@ -26,7 +30,12 @@
     <!-- Permisos para CallKit / Full-Screen Intent -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
+
+    <!-- Remover permisos no usados que vienen de dependencias -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" tools:node="remove"/>
+    <uses-permission android:name="com.google.android.gms.permission.AD_ID" tools:node="remove"/>
 
     <!-- Características opcionales -->
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
@@ -76,6 +85,29 @@
             </intent-filter>
         </receiver>
         
+        <!-- ═══════════════════════════════════════════════════════════════
+             FIREBASE CLOUD MESSAGING SERVICE
+             ═══════════════════════════════════════════════════════════════ -->
+
+        <!-- Servicio para recibir notificaciones FCM en background -->
+        <service
+            android:name="io.flutter.plugins.firebase.messaging.FlutterFirebaseMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- Icono de notificación por defecto -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@mipmap/ic_launcher" />
+
+        <!-- Color del icono de notificación -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@android:color/white" />
+
         <!-- Canal de notificaciones para Firebase -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"

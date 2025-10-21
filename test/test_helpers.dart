@@ -164,17 +164,4 @@ extension WidgetTesterExtensions on WidgetTester {
     await enterText(finder, text);
     await pumpAndSettle();
   }
-
-  /// Scroll hasta encontrar un widget
-  Future<void> scrollUntilVisible(
-    Finder finder,
-    Finder scrollable, {
-    double delta = 100,
-  }) async {
-    await scrollUntilVisible(
-      finder,
-      delta,
-      scrollable: scrollable,
-    );
-  }
 }

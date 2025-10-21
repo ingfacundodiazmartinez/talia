@@ -175,16 +175,16 @@ describe("Firestore Security Rules", () => {
   });
 
   // ═══════════════════════════════════════════════════════════════
-  // TESTS: Colección parent_child_links
+  // TESTS: Colección parent_children
   // ═══════════════════════════════════════════════════════════════
 
-  describe("parent_child_links collection", () => {
+  describe("parent_children collection", () => {
     test("Padre puede leer vínculo con su hijo", async () => {
       const parent = testEnv.authenticatedContext("parent1");
       await testEnv.withSecurityRulesDisabled(async (context) => {
         await context
           .firestore()
-          .collection("parent_child_links")
+          .collection("parent_children")
           .doc("parent1_child1")
           .set({
             parentId: "parent1",
@@ -197,7 +197,7 @@ describe("Firestore Security Rules", () => {
       await assertSucceeds(
         parent
           .firestore()
-          .collection("parent_child_links")
+          .collection("parent_children")
           .doc("parent1_child1")
           .get()
       );
@@ -209,7 +209,7 @@ describe("Firestore Security Rules", () => {
       await assertFails(
         parent
           .firestore()
-          .collection("parent_child_links")
+          .collection("parent_children")
           .doc("parent1_child2")
           .set({
             parentId: "parent1",
@@ -225,7 +225,7 @@ describe("Firestore Security Rules", () => {
       await testEnv.withSecurityRulesDisabled(async (context) => {
         await context
           .firestore()
-          .collection("parent_child_links")
+          .collection("parent_children")
           .doc("parent1_child1")
           .set({
             parentId: "parent1",
@@ -238,7 +238,7 @@ describe("Firestore Security Rules", () => {
       await assertFails(
         attacker
           .firestore()
-          .collection("parent_child_links")
+          .collection("parent_children")
           .doc("parent1_child1")
           .get()
       );

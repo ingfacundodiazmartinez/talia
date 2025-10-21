@@ -33,28 +33,66 @@ class DeepARCameraController(
     private var cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // Cámara frontal por defecto
+    // Intentar cámara frontal por defecto, pero será ajustado según disponibilidad
     private var lensFacing = CameraSelector.LENS_FACING_FRONT
+    private var hasDetectedCameras = false
 
     fun startCamera() {
         Log.d(TAG, "📷 Iniciando CameraX...")
+        Log.i("flutter", "📱 [ANDROID] 📷 DeepARCameraController.startCamera() llamado")
 
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
 
         cameraProviderFuture.addListener({
             try {
                 cameraProvider = cameraProviderFuture.get()
+                Log.i("flutter", "📱 [ANDROID] ✅ CameraProvider obtenido, llamando bindCamera()")
                 bindCamera()
                 Log.d(TAG, "✅ CameraX iniciado correctamente")
+                Log.i("flutter", "📱 [ANDROID] ✅ CameraX iniciado correctamente")
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Error iniciando CameraX", e)
+                Log.e("flutter", "📱 [ANDROID] ❌ Error iniciando CameraX: ${e.message}")
             }
         }, ContextCompat.getMainExecutor(context))
     }
 
     @SuppressLint("UnsafeOptInUsageError")
     private fun bindCamera() {
-        val cameraProvider = this.cameraProvider ?: return
+        val cameraProvider = this.cameraProvider ?: run {
+            Log.e("flutter", "📱 [ANDROID] ❌ bindCamera: cameraProvider es null")
+            return
+        }
+
+        Log.i("flutter", "📱 [ANDROID] 🔍 bindCamera: Detectando cámaras disponibles...")
+
+        // Detectar qué cámaras están disponibles si aún no lo hemos hecho
+        if (!hasDetectedCameras) {
+            val hasFrontCamera = cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)
+            val hasBackCamera = cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA)
+
+            Log.d(TAG, "📋 Cámaras disponibles:")
+            Log.d(TAG, "   Frontal: $hasFrontCamera")
+            Log.d(TAG, "   Trasera: $hasBackCamera")
+            Log.i("flutter", "📱 [ANDROID] 📋 Cámaras - Frontal: $hasFrontCamera, Trasera: $hasBackCamera")
+
+            // Usar cámara frontal si está disponible, sino usar trasera
+            lensFacing = if (hasFrontCamera) {
+                Log.d(TAG, "✅ Usando cámara FRONTAL")
+                Log.i("flutter", "📱 [ANDROID] ✅ Usando cámara FRONTAL")
+                CameraSelector.LENS_FACING_FRONT
+            } else if (hasBackCamera) {
+                Log.d(TAG, "✅ Usando cámara TRASERA (frontal no disponible)")
+                Log.i("flutter", "📱 [ANDROID] ✅ Usando cámara TRASERA")
+                CameraSelector.LENS_FACING_BACK
+            } else {
+                Log.e(TAG, "❌ No hay cámaras disponibles")
+                Log.e("flutter", "📱 [ANDROID] ❌ No hay cámaras disponibles")
+                return
+            }
+
+            hasDetectedCameras = true
+        }
 
         // Configurar análisis de imagen para procesar frames con mayor resolución
         imageAnalyzer = ImageAnalysis.Builder()
@@ -76,6 +114,7 @@ class DeepARCameraController(
         try {
             // Desvincular todos los use cases antes de vincular nuevos
             cameraProvider.unbindAll()
+            Log.i("flutter", "📱 [ANDROID] 🔄 Use cases desvinculados")
 
             // Vincular use cases a la cámara
             camera = cameraProvider.bindToLifecycle(
@@ -83,10 +122,19 @@ class DeepARCameraController(
                 cameraSelector,
                 imageAnalyzer
             )
+            Log.i("flutter", "📱 [ANDROID] ✅ Cámara vinculada al lifecycle")
+
+            // ✅ IMPORTANTE: Configurar zoom inicial a 1.0 (sin zoom) para Android
+            camera?.cameraControl?.setZoomRatio(1.0f)
+            Log.d(TAG, "✅ Zoom configurado a 1.0 (sin zoom)")
+            Log.i("flutter", "📱 [ANDROID] ✅ Zoom configurado a 1.0")
 
             Log.d(TAG, "✅ Cámara vinculada y capturando frames")
+            Log.i("flutter", "📱 [ANDROID] ✅ ¡Cámara iniciada! Esperando frames...")
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error vinculando cámara", e)
+            Log.e("flutter", "📱 [ANDROID] ❌ Error vinculando cámara: ${e.message}")
+            e.printStackTrace()
         }
     }
 
@@ -109,6 +157,7 @@ class DeepARCameraController(
             val currentTime = System.currentTimeMillis()
             if (frameCount % 30 == 0 || currentTime - lastLogTime > 2000) {
                 Log.d(TAG, "📹 Frame #$frameCount procesado: ${width}x${height}")
+                Log.i("flutter", "📱 [ANDROID] 📹 Frame #$frameCount procesado: ${width}x${height}")
                 lastLogTime = currentTime
             }
 
@@ -204,15 +253,37 @@ class DeepARCameraController(
     fun switchCamera() {
         Log.d(TAG, "🔄 Cambiando cámara...")
 
-        // Primero desvincular la cámara actual
-        cameraProvider?.unbindAll()
+        val provider = cameraProvider ?: run {
+            Log.e(TAG, "❌ CameraProvider es null, no se puede cambiar cámara")
+            return
+        }
 
-        // Cambiar dirección de la cámara
-        lensFacing = if (lensFacing == CameraSelector.LENS_FACING_FRONT) {
+        // Primero desvincular la cámara actual
+        provider.unbindAll()
+
+        // Determinar la nueva cámara a usar
+        val newLensFacing = if (lensFacing == CameraSelector.LENS_FACING_FRONT) {
             CameraSelector.LENS_FACING_BACK
         } else {
             CameraSelector.LENS_FACING_FRONT
         }
+
+        // Verificar que la nueva cámara esté disponible
+        val newCameraSelector = if (newLensFacing == CameraSelector.LENS_FACING_FRONT) {
+            CameraSelector.DEFAULT_FRONT_CAMERA
+        } else {
+            CameraSelector.DEFAULT_BACK_CAMERA
+        }
+
+        if (!provider.hasCamera(newCameraSelector)) {
+            Log.e(TAG, "❌ La cámara ${if (newLensFacing == CameraSelector.LENS_FACING_FRONT) "frontal" else "trasera"} no está disponible")
+            // Revincular la cámara actual
+            bindCamera()
+            return
+        }
+
+        // Cambiar dirección de la cámara
+        lensFacing = newLensFacing
 
         // Vincular la nueva cámara
         bindCamera()

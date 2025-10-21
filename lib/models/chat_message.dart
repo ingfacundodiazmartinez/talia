@@ -4,6 +4,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 enum MessageStatus {
   sending,   // Mensaje siendo enviado (optimistic)
   sent,      // Confirmado en Firestore
+  delivered, // Entregado al receptor (confirmación de entrega)
+  seen,      // Visto por el receptor (confirmación de lectura)
   error,     // Error al enviar
 }
 

@@ -126,7 +126,7 @@ class FirebaseService {
 
     // Obtener todos los padres vinculados
     final parentLinks = await _firestore
-        .collection('parent_child_links')
+        .collection('parent_children')
         .where('childId', isEqualTo: childId)
         .where('status', isEqualTo: 'approved')
         .get();

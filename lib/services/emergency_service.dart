@@ -238,16 +238,16 @@ class EmergencyService {
   // Obtener lista de padres/tutores
   Future<List<Map<String, dynamic>>> _getParents(String childId) async {
     try {
-      // Buscar relaciones padre-hijo en parent_child_links (nuevo)
+      // Buscar relaciones padre-hijo en parent_children (nuevo)
       var querySnapshot = await _firestore
-          .collection('parent_child_links')
+          .collection('parent_children')
           .where('childId', isEqualTo: childId)
           .where('status', isEqualTo: 'approved')
           .get();
 
       // Si no se encontraron, buscar en parent_children (legacy)
       if (querySnapshot.docs.isEmpty) {
-        print('🔍 No se encontraron padres en parent_child_links, buscando en parent_children...');
+        print('🔍 No se encontraron padres en parent_children, buscando en parent_children...');
         querySnapshot = await _firestore
             .collection('parent_children')
             .where('childId', isEqualTo: childId)
@@ -569,14 +569,14 @@ class EmergencyService {
       print('🚨 [EmergencyService] Buscando emergencias para padre: $parentId');
 
       // Obtener IDs de todos los hijos del padre
-      // Intentar primero con parent_child_links (nuevo)
+      // Intentar primero con parent_children (nuevo)
       var linksSnapshot = await _firestore
-          .collection('parent_child_links')
+          .collection('parent_children')
           .where('parentId', isEqualTo: parentId)
           .where('status', isEqualTo: 'approved')
           .get();
 
-      print('🔍 [EmergencyService] parent_child_links docs: ${linksSnapshot.docs.length}');
+      print('🔍 [EmergencyService] parent_children docs: ${linksSnapshot.docs.length}');
 
       var childrenIds = linksSnapshot.docs
           .map((doc) {
@@ -588,7 +588,7 @@ class EmergencyService {
 
       // Si no se encontraron hijos, intentar con parent_children (legacy)
       if (childrenIds.isEmpty) {
-        print('🔍 [EmergencyService] No se encontraron hijos en parent_child_links, buscando en parent_children...');
+        print('🔍 [EmergencyService] No se encontraron hijos en parent_children, buscando en parent_children...');
         final legacySnapshot = await _firestore
             .collection('parent_children')
             .where('parentId', isEqualTo: parentId)

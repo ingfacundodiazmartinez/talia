@@ -35,7 +35,7 @@ class _ChatModerationManagementScreenState
 
       // Obtener hijos vinculados
       final childrenSnapshot = await _firestore
-          .collection('parent_child_links')
+          .collection('parent_children')
           .where('parentId', isEqualTo: currentUserId)
           .get();
 

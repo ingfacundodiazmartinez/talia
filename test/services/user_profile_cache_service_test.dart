@@ -39,19 +39,19 @@ void main() {
       expect(profile2, isNotNull);
     });
 
-    test('invalidateCache removes user from cache', () {
+    test('invalidateUser removes user from cache', () {
       final userId = 'test_user';
-      service.invalidateCache(userId);
+      service.invalidateUser(userId);
 
       // Should not throw error even if user wasn't cached
-      expect(() => service.invalidateCache(userId), returnsNormally);
+      expect(() => service.invalidateUser(userId), returnsNormally);
     });
 
-    test('invalidateAllCache clears entire cache', () {
-      service.invalidateAllCache();
+    test('clearCache clears entire cache', () {
+      service.clearCache();
 
       // Should not throw error
-      expect(() => service.invalidateAllCache(), returnsNormally);
+      expect(() => service.clearCache(), returnsNormally);
     });
 
     test('preloadProfiles handles empty list', () async {

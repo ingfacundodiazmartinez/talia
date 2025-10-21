@@ -30,6 +30,8 @@ class _WhitelistScreenState extends State<WhitelistScreen>
   final TextEditingController _searchController = TextEditingController();
   final ValueNotifier<String> _searchQuery = ValueNotifier<String>('');
 
+  List<Map<String, dynamic>> _currentPendingRequests = [];
+
   @override
   void initState() {
     super.initState();
@@ -118,18 +120,8 @@ class _WhitelistScreenState extends State<WhitelistScreen>
                       ],
                     ),
                     SizedBox(height: 16),
-                    ElevatedButton.icon(
-                      onPressed: () {
-                        Navigator.pushNamed(context, '/chat_moderation_management');
-                      },
-                      icon: Icon(Icons.psychology),
-                      label: Text('Moderación con IA'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.white,
-                        foregroundColor: Theme.of(context).colorScheme.primary,
-                        padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                      ),
-                    ),
+                    // OPCIÓN C: Card Completa con Diseño Híbrido
+                    _buildModerationCard(context),
                   ],
                 ),
               ),
@@ -851,6 +843,97 @@ class _WhitelistScreenState extends State<WhitelistScreen>
   void _showInfoSnackBar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message)),
+    );
+  }
+
+  Widget _buildModerationCard(BuildContext context) {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    return GestureDetector(
+      onTap: () {
+        Navigator.pushNamed(context, '/chat_moderation_management');
+      },
+      child: Container(
+        width: double.infinity,
+        padding: EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          gradient: isDarkMode
+              ? LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Color(0xFF667eea), // Soft indigo
+                    Color(0xFF764ba2), // Deep purple
+                  ],
+                )
+              : null,
+          color: isDarkMode ? null : Colors.white,
+          border: isDarkMode
+              ? null
+              : Border.all(
+                  color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.2),
+                  width: 2,
+                ),
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: isDarkMode
+                  ? Color(0xFF667eea).withValues(alpha: 0.3)
+                  : Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
+              blurRadius: 12,
+              offset: Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: isDarkMode
+                    ? Colors.white.withValues(alpha: 0.2)
+                    : Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.psychology,
+                color: isDarkMode ? Colors.white : Theme.of(context).colorScheme.primary,
+                size: 28,
+              ),
+            ),
+            SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Moderación con IA',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: isDarkMode ? Colors.white : Theme.of(context).colorScheme.onSurface,
+                    ),
+                  ),
+                  SizedBox(height: 4),
+                  Text(
+                    'Gestiona la protección automática',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: isDarkMode
+                          ? Colors.white.withValues(alpha: 0.9)
+                          : Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              Icons.arrow_forward_ios,
+              color: isDarkMode ? Colors.white : Theme.of(context).colorScheme.primary,
+              size: 18,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

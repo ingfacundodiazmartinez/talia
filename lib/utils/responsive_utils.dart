@@ -3,6 +3,7 @@
 /// Proporciona helpers para adaptar la UI a diferentes tamaños de pantalla
 library;
 
+import 'dart:math';
 import 'package:flutter/material.dart';
 
 /// Categoría de tamaño de dispositivo
@@ -43,7 +44,7 @@ class ResponsiveUtils {
 
     // Calcular diagonal en píxeles
     final diagonalPixels =
-        (size.width * size.width + size.height * size.height).sqrt();
+        sqrt(size.width * size.width + size.height * size.height);
 
     // Asumir ~160 DPI como estándar (puede variar)
     final dpi = 160 * devicePixelRatio;

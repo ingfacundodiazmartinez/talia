@@ -65,6 +65,24 @@
       ]
     },
     {
+      "collectionGroup": "alerts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "childId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "parentId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "timestamp",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
       "collectionGroup": "contacts",
       "queryScope": "COLLECTION",
       "fields": [
@@ -205,6 +223,24 @@
       ]
     },
     {
+      "collectionGroup": "notifications",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "userId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "read",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "timestamp",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
       "collectionGroup": "contact_requests",
       "queryScope": "COLLECTION",
       "fields": [
@@ -247,7 +283,7 @@
       ]
     },
     {
-      "collectionGroup": "parent_child_links",
+      "collectionGroup": "parent_children",
       "queryScope": "COLLECTION",
       "fields": [
         {
@@ -261,7 +297,7 @@
       ]
     },
     {
-      "collectionGroup": "parent_child_links",
+      "collectionGroup": "parent_children",
       "queryScope": "COLLECTION",
       "fields": [
         {

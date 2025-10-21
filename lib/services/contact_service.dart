@@ -123,4 +123,37 @@ class ContactService {
         .where('status', isEqualTo: 'approved')
         .snapshots();
   }
+
+  /// Eliminar un contacto
+  /// Cambia el status del contacto a 'deleted'
+  Future<void> deleteContact(String currentUserId, String contactId) async {
+    try {
+      // Buscar el documento de contacto
+      final contactQuery = await _firestore
+          .collection('contacts')
+          .where('users', arrayContains: currentUserId)
+          .get();
+
+      for (final doc in contactQuery.docs) {
+        final data = doc.data();
+        final users = List<String>.from(data['users'] ?? []);
+
+        // Verificar si este documento incluye el contactId
+        if (users.contains(contactId)) {
+          // Actualizar el status a 'deleted'
+          await doc.reference.update({
+            'status': 'deleted',
+            'deletedAt': FieldValue.serverTimestamp(),
+          });
+          print('✅ Contacto $contactId eliminado exitosamente');
+          return;
+        }
+      }
+
+      print('⚠️ Contacto no encontrado');
+    } catch (e) {
+      print('❌ Error eliminando contacto: $e');
+      rethrow;
+    }
+  }
 }

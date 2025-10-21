@@ -36,6 +36,7 @@ import 'services/snackbar_service.dart';
 import 'services/network_status_service.dart';
 import 'services/offline_queue_service.dart';
 import 'services/accessibility_service.dart';
+import 'services/foreground_message_listener.dart';
 import 'widgets/loading_overlay.dart';
 import 'dart:async';
 
@@ -357,6 +358,11 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
       );
       if (user != null) {
         print('✅ Usuario autenticado: ${user.uid}');
+
+        // Inicializar ForegroundMessageListener para notificaciones en tiempo real
+        print('🔔 Inicializando ForegroundMessageListener...');
+        ForegroundMessageListener().initialize(_navigatorKey);
+        print('✅ ForegroundMessageListener inicializado');
 
         // Cancelar suscripción anterior si existe
         _userRoleSubscription?.cancel();

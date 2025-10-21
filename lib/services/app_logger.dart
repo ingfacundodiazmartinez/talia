@@ -138,7 +138,7 @@ class AppLogger {
     if (tag != null) {
       return '[$tag] $message';
     }
-    return message';
+    return message;
   }
 }
 

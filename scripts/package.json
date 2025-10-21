@@ -1,0 +1,16 @@
+{
+  "name": "talia-demo-scripts",
+  "version": "1.0.0",
+  "description": "Scripts para generar datos de demostración para screenshots",
+  "scripts": {
+    "seed": "node seed_demo_data.js",
+    "clean": "node clean_demo_data.js",
+    "setup": "npm install && echo '\n✅ Dependencias instaladas. Ahora descarga el service account de Firebase y colócalo en la raíz del proyecto.'"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.7.0"
+  },
+  "author": "Talia Team",
+  "license": "UNLICENSED",
+  "private": true
+}

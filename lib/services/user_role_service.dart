@@ -54,7 +54,7 @@ class UserRoleService {
   Future<bool> hasParentLink(String userId) async {
     try {
       final links = await _firestore
-          .collection('parent_child_links')
+          .collection('parent_children')
           .where('childId', isEqualTo: userId)
           .where('status', isEqualTo: 'approved')
           .limit(1)
@@ -71,7 +71,7 @@ class UserRoleService {
   Future<bool> hasSpecificParentLink(String childId, String parentId) async {
     try {
       final links = await _firestore
-          .collection('parent_child_links')
+          .collection('parent_children')
           .where('childId', isEqualTo: childId)
           .where('parentId', isEqualTo: parentId)
           .where('status', isEqualTo: 'approved')
@@ -89,7 +89,7 @@ class UserRoleService {
   Future<List<String>> getLinkedParents(String userId) async {
     try {
       final links = await _firestore
-          .collection('parent_child_links')
+          .collection('parent_children')
           .where('childId', isEqualTo: userId)
           .where('status', isEqualTo: 'approved')
           .get();
@@ -107,12 +107,12 @@ class UserRoleService {
       print('🔍 Consultando hijos vinculados para padre: $parentId');
 
       final links = await _firestore
-          .collection('parent_child_links')
+          .collection('parent_children')
           .where('parentId', isEqualTo: parentId)
           .where('status', isEqualTo: 'approved')
           .get();
 
-      print('📊 Encontrados ${links.docs.length} documentos en parent_child_links');
+      print('📊 Encontrados ${links.docs.length} documentos en parent_children');
 
       for (var doc in links.docs) {
         print('   - Doc ID: ${doc.id}, childId: ${doc.data()['childId']}');

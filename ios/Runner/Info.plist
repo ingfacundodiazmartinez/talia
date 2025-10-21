@@ -84,6 +84,8 @@
 		<string>Esta aplicación necesita acceso al micrófono para hacer videollamadas con tus contactos.</string>
 		<key>NSPhotoLibraryUsageDescription</key>
 		<string>Esta aplicación necesita acceso a la galería de fotos para seleccionar imágenes de perfil.</string>
+		<key>NSContactsUsageDescription</key>
+		<string>Esta aplicación necesita acceso a tus contactos para ayudarte a encontrar amigos que ya usan Talia.</string>
 		<key>NSLocationWhenInUseUsageDescription</key>
 		<string>Esta aplicación necesita acceso a tu ubicación para compartirla con tus padres para tu seguridad.</string>
 		<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
@@ -96,6 +98,41 @@
 		<array>
 			<string>INSendMessageIntent</string>
 		</array>
+		<key>NSAppTransportSecurity</key>
+		<dict>
+			<key>NSAllowsArbitraryLoads</key>
+			<true/>
+			<key>NSExceptionDomains</key>
+			<dict>
+				<key>firebasestorage.googleapis.com</key>
+				<dict>
+					<key>NSIncludesSubdomains</key>
+					<true/>
+					<key>NSTemporaryExceptionAllowsInsecureHTTPLoads</key>
+					<false/>
+					<key>NSTemporaryExceptionMinimumTLSVersion</key>
+					<string>TLSv1.2</string>
+				</dict>
+				<key>googleapis.com</key>
+				<dict>
+					<key>NSIncludesSubdomains</key>
+					<true/>
+					<key>NSTemporaryExceptionAllowsInsecureHTTPLoads</key>
+					<false/>
+					<key>NSTemporaryExceptionMinimumTLSVersion</key>
+					<string>TLSv1.2</string>
+				</dict>
+				<key>firebasestorage.app</key>
+				<dict>
+					<key>NSIncludesSubdomains</key>
+					<true/>
+					<key>NSTemporaryExceptionAllowsInsecureHTTPLoads</key>
+					<false/>
+					<key>NSTemporaryExceptionMinimumTLSVersion</key>
+					<string>TLSv1.2</string>
+				</dict>
+			</dict>
+		</dict>
 		<key>UIStatusBarHidden</key>
 		<true/>
 		<key>UIViewControllerBasedStatusBarAppearance</key>

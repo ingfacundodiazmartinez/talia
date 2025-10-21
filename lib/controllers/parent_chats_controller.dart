@@ -36,7 +36,7 @@ class ParentChatsController {
   /// Stream de relaciones padre-hijo aprobadas
   Stream<QuerySnapshot> getParentChildLinksStream() {
     return _firestore
-        .collection('parent_child_links')
+        .collection('parent_children')
         .where('parentId', isEqualTo: userId)
         .where('status', isEqualTo: 'approved')
         .snapshots();

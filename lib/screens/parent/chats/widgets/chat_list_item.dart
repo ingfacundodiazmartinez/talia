@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../../../../services/typing_indicator_service.dart';
+import '../../../../models/chat_message.dart';
+import '../../../../widgets/message_status_indicator.dart';
 import '../../../chat_detail_screen.dart';
 
 class ChatListItem extends StatelessWidget {
@@ -14,6 +17,9 @@ class ChatListItem extends StatelessWidget {
   final String? photoURL;
   final bool isEmpty;
   final bool isBlocked;
+  final String? lastMessageSenderId;
+  final MessageStatus? lastMessageStatus;
+  final ModerationStatus? lastMessageModerationStatus;
 
   const ChatListItem({
     super.key,
@@ -27,6 +33,9 @@ class ChatListItem extends StatelessWidget {
     this.photoURL,
     this.isEmpty = false,
     this.isBlocked = false,
+    this.lastMessageSenderId,
+    this.lastMessageStatus,
+    this.lastMessageModerationStatus,
   });
 
   @override
@@ -167,19 +176,37 @@ class ChatListItem extends StatelessWidget {
                           );
                         }
 
-                        return Text(
-                          lastMessage,
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: isBlocked
-                                ? Colors.red.withValues(alpha: 0.7)
-                                : colorScheme.onSurfaceVariant,
-                            fontStyle: (isEmpty || isBlocked)
-                                ? FontStyle.italic
-                                : FontStyle.normal,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                        // Mostrar indicador de estado + mensaje
+                        return Row(
+                          children: [
+                            // Indicador de estado (solo para mensajes propios)
+                            if (lastMessageSenderId != null &&
+                                lastMessageSenderId == FirebaseAuth.instance.currentUser?.uid &&
+                                lastMessageStatus != null) ...[
+                              MessageStatusIndicator(
+                                status: lastMessageStatus!,
+                                moderationStatus: lastMessageModerationStatus,
+                                size: 12,
+                              ),
+                              const SizedBox(width: 4),
+                            ],
+                            Expanded(
+                              child: Text(
+                                lastMessage,
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: isBlocked
+                                      ? Colors.red.withValues(alpha: 0.7)
+                                      : colorScheme.onSurfaceVariant,
+                                  fontStyle: (isEmpty || isBlocked)
+                                      ? FontStyle.italic
+                                      : FontStyle.normal,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
                         );
                       },
                     ),

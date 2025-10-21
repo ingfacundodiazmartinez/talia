@@ -217,9 +217,9 @@ class StoryService {
         }
       }
 
-      // 2. Si es padre: obtener hijos vinculados desde parent_child_links
+      // 2. Si es padre: obtener hijos vinculados desde parent_children
       final parentLinksSnapshot = await _firestore
-          .collection('parent_child_links')
+          .collection('parent_children')
           .where('parentId', isEqualTo: user.uid)
           .where('status', isEqualTo: 'approved')
           .get();
@@ -231,9 +231,9 @@ class StoryService {
         }
       }
 
-      // 3. Si es hijo: obtener padres vinculados desde parent_child_links
+      // 3. Si es hijo: obtener padres vinculados desde parent_children
       final childLinksSnapshot = await _firestore
-          .collection('parent_child_links')
+          .collection('parent_children')
           .where('childId', isEqualTo: user.uid)
           .where('status', isEqualTo: 'approved')
           .get();
@@ -537,6 +537,150 @@ class StoryService {
       }
 
       return pendingStories;
+    });
+  }
+
+  // Obtener historias pendientes de un hijo específico
+  Stream<List<Story>> getPendingStoriesForParentByChild(String childId) {
+    return _firestore
+        .collection('stories')
+        .where('userId', isEqualTo: childId)
+        .where('status', isEqualTo: 'pending')
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .map((snapshot) {
+      return snapshot.docs.map((doc) {
+        try {
+          return Story.fromFirestore(doc);
+        } catch (e) {
+          print('Error parseando historia: $e');
+          rethrow;
+        }
+      }).toList();
+    });
+  }
+
+  // Obtener historias aprobadas del padre
+  Stream<List<Story>> getApprovedStoriesForParent() {
+    final user = _auth.currentUser;
+    if (user == null) return Stream.value([]);
+
+    return _firestore
+        .collection('stories')
+        .where('status', isEqualTo: 'approved')
+        .snapshots()
+        .asyncMap((snapshot) async {
+      // Primero obtener los IDs de los hijos del padre actual
+      final userRoleService = UserRoleService();
+      final linkedChildren = await userRoleService.getLinkedChildren(user.uid);
+
+      if (linkedChildren.isEmpty) {
+        return <Story>[];
+      }
+
+      // Ahora buscar historias aprobadas de esos hijos
+      final approvedStoriesSnapshot = await _firestore
+          .collection('stories')
+          .where('userId', whereIn: linkedChildren)
+          .where('status', isEqualTo: 'approved')
+          .orderBy('createdAt', descending: true)
+          .limit(20) // Limitar a las últimas 20 historias aprobadas
+          .get();
+
+      final List<Story> approvedStories = [];
+      for (final doc in approvedStoriesSnapshot.docs) {
+        try {
+          final story = Story.fromFirestore(doc);
+          approvedStories.add(story);
+        } catch (e) {
+          print('Error obteniendo historia aprobada: $e');
+        }
+      }
+
+      return approvedStories;
+    });
+  }
+
+  // Obtener historias aprobadas de un hijo específico
+  Stream<List<Story>> getApprovedStoriesForParentByChild(String childId) {
+    return _firestore
+        .collection('stories')
+        .where('userId', isEqualTo: childId)
+        .where('status', isEqualTo: 'approved')
+        .orderBy('createdAt', descending: true)
+        .limit(20)
+        .snapshots()
+        .map((snapshot) {
+      return snapshot.docs.map((doc) {
+        try {
+          return Story.fromFirestore(doc);
+        } catch (e) {
+          print('Error parseando historia aprobada: $e');
+          rethrow;
+        }
+      }).toList();
+    });
+  }
+
+  // Obtener historias rechazadas del padre (para poder aprobarlas después)
+  Stream<List<Story>> getRejectedStoriesForParent() {
+    final user = _auth.currentUser;
+    if (user == null) return Stream.value([]);
+
+    return _firestore
+        .collection('stories')
+        .where('status', isEqualTo: 'rejected')
+        .snapshots()
+        .asyncMap((snapshot) async {
+      // Primero obtener los IDs de los hijos del padre actual
+      final userRoleService = UserRoleService();
+      final linkedChildren = await userRoleService.getLinkedChildren(user.uid);
+
+      if (linkedChildren.isEmpty) {
+        return <Story>[];
+      }
+
+      // Ahora buscar historias rechazadas de esos hijos
+      final rejectedStoriesSnapshot = await _firestore
+          .collection('stories')
+          .where('userId', whereIn: linkedChildren)
+          .where('status', isEqualTo: 'rejected')
+          .orderBy('createdAt', descending: true)
+          .limit(20) // Limitar a las últimas 20 historias rechazadas
+          .get();
+
+      final List<Story> rejectedStories = [];
+      for (final doc in rejectedStoriesSnapshot.docs) {
+        try {
+          final story = Story.fromFirestore(doc);
+          rejectedStories.add(story);
+        } catch (e) {
+          print('Error obteniendo historia rechazada: $e');
+        }
+      }
+
+      return rejectedStories;
+    });
+  }
+
+  // Obtener historias rechazadas de un hijo específico
+  Stream<List<Story>> getRejectedStoriesForParentByChild(String childId) {
+    return _firestore
+        .collection('stories')
+        .where('userId', isEqualTo: childId)
+        .where('status', isEqualTo: 'rejected')
+        .orderBy('createdAt', descending: true)
+        .limit(20)
+        .snapshots()
+        .map((snapshot) {
+      return snapshot.docs.map((doc) {
+        try {
+          return Story.fromFirestore(doc);
+        } catch (e) {
+          print('Error parseando historia rechazada: $e');
+          rethrow;
+        }
+      }).toList();
     });
   }
 

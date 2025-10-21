@@ -78,3 +78,6 @@ android/build/reports/
 # Old/backup directories
 v2-files/
 *.old.*
+
+# Firebase Admin SDK Service Account
+*firebase*adminsdk*.json

@@ -3,6 +3,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../services/contact_alias_service.dart';
 import '../../../services/block_service.dart';
+import '../../../services/message_status_helper.dart';
+import '../../../models/chat_message.dart';
 import '../../../widgets/stories_section.dart';
 import '../../../widgets/create_group_widget.dart';
 import '../../../utils/chat_utils.dart';
@@ -412,17 +414,67 @@ class _ParentChatsScreenState extends State<ParentChatsScreen> {
                 print('💬 [ChatList] Chat ${chatDoc.id} tiene $unreadCount mensajes no leídos');
               }
 
-              return ChatListItem(
-                chatId: chatDoc.id,
-                userId: childId,
-                name: displayName,
-                lastMessage: isBlocked ? '🔒 Contacto bloqueado' : (chatData['lastMessage'] ?? ''),
-                time: ChatUtils.formatChatTime(chatData['lastMessageTime']),
-                unreadCount: isBlocked ? 0 : unreadCount,
-                isOnline: isOnline,
-                photoURL: photoURL,
-                isEmpty: false,
-                isBlocked: isBlocked,
+              // Obtener el último mensaje para mostrar su estado
+              return StreamBuilder<QuerySnapshot>(
+                stream: FirebaseFirestore.instance
+                    .collection('chats')
+                    .doc(chatDoc.id)
+                    .collection('messages')
+                    .orderBy('timestamp', descending: true)
+                    .limit(1)
+                    .snapshots(),
+                builder: (context, messageSnapshot) {
+                  String? lastMessageSenderId;
+                  MessageStatus? lastMessageStatus;
+                  ModerationStatus? lastMessageModerationStatus;
+
+                  if (messageSnapshot.hasData && messageSnapshot.data!.docs.isNotEmpty) {
+                    final lastMessageDoc = messageSnapshot.data!.docs.first;
+                    final lastMessageData = lastMessageDoc.data() as Map<String, dynamic>;
+
+                    final senderId = lastMessageData['senderId'] as String? ?? '';
+                    lastMessageSenderId = senderId;
+
+                    // Calcular el estado del mensaje
+                    lastMessageStatus = MessageStatusHelper.calculateStatus(
+                      data: lastMessageData,
+                      senderId: senderId,
+                      hasServerTimestamp: lastMessageData['timestamp'] != null,
+                    );
+
+                    // Obtener estado de moderación
+                    final modStatusString = lastMessageData['moderationStatus'] as String?;
+                    if (modStatusString != null) {
+                      switch (modStatusString) {
+                        case 'approved':
+                          lastMessageModerationStatus = ModerationStatus.approved;
+                          break;
+                        case 'blocked':
+                          lastMessageModerationStatus = ModerationStatus.blocked;
+                          break;
+                        case 'pending':
+                          lastMessageModerationStatus = ModerationStatus.pending;
+                          break;
+                      }
+                    }
+                  }
+
+                  return ChatListItem(
+                    chatId: chatDoc.id,
+                    userId: childId,
+                    name: displayName,
+                    lastMessage: isBlocked ? '🔒 Contacto bloqueado' : (chatData['lastMessage'] ?? ''),
+                    time: ChatUtils.formatChatTime(chatData['lastMessageTime']),
+                    unreadCount: isBlocked ? 0 : unreadCount,
+                    isOnline: isOnline,
+                    photoURL: photoURL,
+                    isEmpty: false,
+                    isBlocked: isBlocked,
+                    lastMessageSenderId: lastMessageSenderId,
+                    lastMessageStatus: lastMessageStatus,
+                    lastMessageModerationStatus: lastMessageModerationStatus,
+                  );
+                },
               );
             } else {
               // Chat vacío (placeholder)

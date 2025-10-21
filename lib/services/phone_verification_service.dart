@@ -155,7 +155,7 @@ class PhoneVerificationService {
       //   return await _handleTestCodeVerification(smsCode);
       // }
 
-      final credential = PhoneAuthCredential.credential(
+      final credential = PhoneAuthProvider.credential(
         verificationId: _verificationId!,
         smsCode: smsCode,
       );

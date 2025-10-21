@@ -507,59 +507,66 @@ class DeepARPlatformView(
     private var container: FrameLayout
     private var surfaceView: SurfaceView? = null
 
+    private var retryCount = 0
+    private val maxRetries = 3
+    private var initializationHandler: Handler? = null
+
     init {
         Log.d(TAG, "🎯 Configurando DeepAR view (viewId: $viewId)")
+        Log.i("flutter", "📱 [ANDROID] DeepARPlatformView init - viewId: $viewId")
         container = FrameLayout(context)
 
         val deepAR = plugin.deepAR
         if (deepAR == null) {
             Log.e(TAG, "❌ DeepAR no está disponible")
+            Log.e("flutter", "📱 [ANDROID] ERROR: DeepAR no disponible")
             showErrorView("DeepAR no disponible")
         } else {
             // En Android, siempre crear nuevo SurfaceView para evitar problemas con surfaces inválidos
             // (iOS puede reutilizar porque UIView funciona diferente)
             Log.d(TAG, "🎭 Creando SurfaceView nuevo...")
+            Log.i("flutter", "📱 [ANDROID] Creando SurfaceView para DeepAR")
             val arView = SurfaceView(context)
 
             // Configurar surface holder
             arView.holder.addCallback(object : SurfaceHolder.Callback {
                 override fun surfaceCreated(holder: SurfaceHolder) {
-                    Log.d(TAG, "✅ Surface creada: ${holder.surfaceFrame.width()}x${holder.surfaceFrame.height()}")
+                    val width = holder.surfaceFrame.width()
+                    val height = holder.surfaceFrame.height()
+                    Log.d(TAG, "✅ Surface creada: ${width}x${height}")
+                    Log.i("flutter", "📱 [ANDROID] ✅ Surface creada: ${width}x${height}")
+
                     try {
+                        // CRÍTICO: Verificar que las dimensiones son válidas
+                        if (width <= 0 || height <= 0) {
+                            Log.e(TAG, "❌ Dimensiones de surface inválidas: ${width}x${height}")
+                            Log.e("flutter", "📱 [ANDROID] ❌ Dimensiones inválidas: ${width}x${height}")
+                            Log.e(TAG, "   → Esperando dimensiones válidas...")
+                            return
+                        }
+
                         // CRÍTICO: Configurar la superficie de renderizado
-                        deepAR.setRenderSurface(holder.surface, holder.surfaceFrame.width(), holder.surfaceFrame.height())
-                        Log.d(TAG, "✅ Superficie de renderizado configurada")
+                        deepAR.setRenderSurface(holder.surface, width, height)
+                        Log.d(TAG, "✅ Superficie de renderizado configurada: ${width}x${height}")
+                        Log.i("flutter", "📱 [ANDROID] ✅ Superficie configurada: ${width}x${height}")
 
                         // CRÍTICO: Despausar DeepAR cuando se recrea la superficie
                         deepAR.setPaused(false)
                         Log.d(TAG, "▶️ DeepAR despausado")
+                        Log.i("flutter", "📱 [ANDROID] ▶️ DeepAR despausado")
 
-                        // Iniciar captura de cámara con CameraController
-                        if (!plugin.isCaptureStarted && plugin.activity != null) {
-                            Log.d(TAG, "📷 Creando CameraController...")
-
-                            // Crear camera controller si no existe
-                            if (plugin.cameraController == null) {
-                                plugin.cameraController = DeepARCameraController(
-                                    context,
-                                    deepAR,
-                                    plugin.activity as androidx.lifecycle.LifecycleOwner
-                                )
-                            }
-
-                            // Iniciar cámara
-                            plugin.cameraController?.startCamera()
-                            plugin.isCaptureStarted = true
-                            Log.d(TAG, "✅ CameraController iniciado - frames siendo enviados a DeepAR")
-                        }
+                        // CRÍTICO: Iniciar la cámara con reintentos
+                        initializeCameraWithRetry(deepAR)
                     } catch (e: Exception) {
                         Log.e(TAG, "❌ Error configurando surface: ${e.message}", e)
+                        Log.e("flutter", "📱 [ANDROID] ❌ Error configurando surface: ${e.message}")
                         e.printStackTrace()
                     }
                 }
 
                 override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
                     Log.d(TAG, "🔄 Surface cambió: ${width}x${height}")
+                    Log.i("flutter", "📱 [ANDROID] 🔄 Surface cambió: ${width}x${height}")
                     try {
                         deepAR.setRenderSurface(holder.surface, width, height)
                         // CRÍTICO: Despausar DeepAR también cuando cambia la superficie
@@ -567,27 +574,37 @@ class DeepARPlatformView(
                         Log.d(TAG, "▶️ DeepAR despausado después de cambio de superficie")
                     } catch (e: Exception) {
                         Log.e(TAG, "❌ Error actualizando surface: ${e.message}", e)
+                        Log.e("flutter", "📱 [ANDROID] ❌ Error actualizando surface: ${e.message}")
                     }
                 }
 
                 override fun surfaceDestroyed(holder: SurfaceHolder) {
                     Log.d(TAG, "⏹️ Surface destruida")
+                    Log.i("flutter", "📱 [ANDROID] ⏹️ Surface destruida")
                     try {
+                        // Cancelar cualquier reintento pendiente
+                        initializationHandler?.removeCallbacksAndMessages(null)
+                        initializationHandler = null
+                        retryCount = 0
+
                         // CRÍTICO: Limpiar la superficie de renderizado de DeepAR
                         deepAR.setRenderSurface(null, 0, 0)
                         Log.d(TAG, "🧹 Superficie de renderizado limpiada")
                     } catch (e: Exception) {
                         Log.e(TAG, "❌ Error limpiando superficie: ${e.message}", e)
+                        Log.e("flutter", "📱 [ANDROID] ❌ Error limpiando superficie: ${e.message}")
                     }
                     // CRÍTICO: Resetear flag para permitir reiniciar cuando se recree la superficie
                     plugin.isCaptureStarted = false
                     Log.d(TAG, "🔄 isCaptureStarted reseteado a false por destrucción de superficie")
+                    Log.i("flutter", "📱 [ANDROID] 🔄 isCaptureStarted = false")
                 }
             })
 
             surfaceView = arView
             plugin.currentARView = arView
             Log.d(TAG, "✅ Vista de DeepAR creada")
+            Log.i("flutter", "📱 [ANDROID] ✅ Vista de DeepAR creada")
 
             // Agregar al contenedor
             val layoutParams = FrameLayout.LayoutParams(
@@ -596,7 +613,78 @@ class DeepARPlatformView(
             )
             container.addView(arView, layoutParams)
             Log.d(TAG, "✅ SurfaceView configurado en contenedor")
+            Log.i("flutter", "📱 [ANDROID] ✅ SurfaceView agregado al contenedor")
         }
+    }
+
+    private fun initializeCameraWithRetry(deepAR: DeepAR) {
+        Log.i("flutter", "📱 [ANDROID] 📷 initializeCameraWithRetry - intento ${retryCount + 1}/$maxRetries")
+
+        if (initializationHandler == null) {
+            initializationHandler = Handler(Looper.getMainLooper())
+        }
+
+        // Incrementar delay con cada reintento: 500ms, 1000ms, 1500ms
+        val delayMs = 500L + (retryCount * 500L)
+
+        initializationHandler?.postDelayed({
+            try {
+                if (plugin.isCaptureStarted) {
+                    Log.i("flutter", "📱 [ANDROID] ✅ Cámara ya iniciada, saltando")
+                    return@postDelayed
+                }
+
+                Log.i("flutter", "📱 [ANDROID] 🔍 Verificando Activity (delay: ${delayMs}ms)...")
+
+                val activity = plugin.activity
+                if (activity == null) {
+                    Log.e("flutter", "📱 [ANDROID] ❌ Activity es null (intento ${retryCount + 1})")
+
+                    if (retryCount < maxRetries) {
+                        retryCount++
+                        Log.i("flutter", "📱 [ANDROID] 🔄 Reintentando inicialización de cámara...")
+                        initializeCameraWithRetry(deepAR)
+                    } else {
+                        Log.e("flutter", "📱 [ANDROID] ❌ Máximo de reintentos alcanzado - Activity sigue null")
+                    }
+                    return@postDelayed
+                }
+
+                if (activity !is androidx.lifecycle.LifecycleOwner) {
+                    Log.e("flutter", "📱 [ANDROID] ❌ Activity no implementa LifecycleOwner")
+                    return@postDelayed
+                }
+
+                Log.i("flutter", "📱 [ANDROID] ✅ Activity disponible, creando CameraController...")
+
+                // Crear camera controller si no existe
+                if (plugin.cameraController == null) {
+                    Log.i("flutter", "📱 [ANDROID] 🎥 Creando nuevo CameraController...")
+                    plugin.cameraController = DeepARCameraController(
+                        context,
+                        deepAR,
+                        activity
+                    )
+                }
+
+                // Iniciar cámara
+                Log.i("flutter", "📱 [ANDROID] 🚀 Llamando a cameraController.startCamera()...")
+                plugin.cameraController?.startCamera()
+                plugin.isCaptureStarted = true
+                retryCount = 0  // Reset en caso de éxito
+                Log.i("flutter", "📱 [ANDROID] ✅ CameraController iniciado exitosamente")
+                Log.d(TAG, "✅ CameraController iniciado - frames siendo enviados a DeepAR")
+            } catch (e: Exception) {
+                Log.e("flutter", "📱 [ANDROID] ❌ Error inicializando cámara: ${e.message}")
+                Log.e(TAG, "❌ Error en initializeCameraWithRetry: ${e.message}", e)
+
+                if (retryCount < maxRetries) {
+                    retryCount++
+                    Log.i("flutter", "📱 [ANDROID] 🔄 Reintentando después de error...")
+                    initializeCameraWithRetry(deepAR)
+                }
+            }
+        }, delayMs)
     }
 
     private fun showErrorView(message: String) {

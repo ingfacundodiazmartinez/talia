@@ -37,6 +37,20 @@ class MessageStatusIcon extends StatelessWidget {
           color: Colors.grey,
         );
 
+      case MessageStatus.delivered:
+        return const Icon(
+          Icons.done_all,
+          size: 16,
+          color: Colors.grey,
+        );
+
+      case MessageStatus.seen:
+        return const Icon(
+          Icons.done_all,
+          size: 16,
+          color: Colors.blue,
+        );
+
       case MessageStatus.error:
         return GestureDetector(
           onTap: onRetry,

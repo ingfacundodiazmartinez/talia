@@ -4,91 +4,274 @@ import '../models/story.dart';
 import '../services/story_service.dart';
 
 class StoryApprovalScreen extends StatefulWidget {
-  const StoryApprovalScreen({super.key});
+  final String? childId; // Opcional: filtrar por hijo específico
+
+  const StoryApprovalScreen({
+    super.key,
+    this.childId,
+  });
 
   @override
   State<StoryApprovalScreen> createState() => _StoryApprovalScreenState();
 }
 
-class _StoryApprovalScreenState extends State<StoryApprovalScreen> {
+class _StoryApprovalScreenState extends State<StoryApprovalScreen> with SingleTickerProviderStateMixin {
   final StoryService _storyService = StoryService();
+  late TabController _tabController;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 3, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    // Determinar título según si hay filtro de hijo
+    final title = widget.childId != null
+        ? 'Historias del Hijo'
+        : 'Aprobar Historias';
+
     return Scaffold(
       appBar: AppBar(
-        title: Text('Aprobar Historias'),
+        title: Text(title),
         backgroundColor: Color(0xFF9D7FE8),
         foregroundColor: Colors.white,
         elevation: 0,
+        bottom: TabBar(
+          controller: _tabController,
+          indicatorColor: Colors.white,
+          labelColor: Colors.white,
+          unselectedLabelColor: Colors.white70,
+          tabs: [
+            Tab(text: 'Pendientes'),
+            Tab(text: 'Aprobadas'),
+            Tab(text: 'Rechazadas'),
+          ],
+        ),
       ),
-      body: StreamBuilder<List<Story>>(
-        stream: _storyService.getPendingStoriesForParent(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return Center(
-              child: CircularProgressIndicator(color: Color(0xFF9D7FE8)),
-            );
-          }
-
-          if (snapshot.hasError) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.error_outline, size: 48, color: Colors.red),
-                  SizedBox(height: 16),
-                  Text('Error: ${snapshot.error}'),
-                ],
-              ),
-            );
-          }
-
-          final pendingStories = snapshot.data ?? [];
-
-          if (pendingStories.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    Icons.check_circle_outline,
-                    size: 64,
-                    color: Colors.green,
-                  ),
-                  SizedBox(height: 16),
-                  Text(
-                    'No hay historias pendientes',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF2D3142),
-                    ),
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    'Todas las historias han sido revisadas',
-                    style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-                  ),
-                ],
-              ),
-            );
-          }
-
-          return ListView.builder(
-            padding: EdgeInsets.all(16),
-            itemCount: pendingStories.length,
-            itemBuilder: (context, index) {
-              final story = pendingStories[index];
-              return _buildStoryApprovalCard(story);
-            },
-          );
-        },
+      body: TabBarView(
+        controller: _tabController,
+        children: [
+          _buildPendingStoriesTab(),
+          _buildApprovedStoriesTab(),
+          _buildRejectedStoriesTab(),
+        ],
       ),
     );
   }
 
-  Widget _buildStoryApprovalCard(Story story) {
+  Widget _buildPendingStoriesTab() {
+    return StreamBuilder<List<Story>>(
+      stream: widget.childId != null
+          ? _storyService.getPendingStoriesForParentByChild(widget.childId!)
+          : _storyService.getPendingStoriesForParent(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return Center(
+            child: CircularProgressIndicator(color: Color(0xFF9D7FE8)),
+          );
+        }
+
+        if (snapshot.hasError) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.error_outline, size: 48, color: Colors.red),
+                SizedBox(height: 16),
+                Text('Error: ${snapshot.error}'),
+              ],
+            ),
+          );
+        }
+
+        final pendingStories = snapshot.data ?? [];
+
+        if (pendingStories.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.check_circle_outline,
+                  size: 64,
+                  color: Colors.green,
+                ),
+                SizedBox(height: 16),
+                Text(
+                  'No hay historias pendientes',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF2D3142),
+                  ),
+                ),
+                SizedBox(height: 8),
+                Text(
+                  'Todas las historias han sido revisadas',
+                  style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return ListView.builder(
+          padding: EdgeInsets.all(16),
+          itemCount: pendingStories.length,
+          itemBuilder: (context, index) {
+            final story = pendingStories[index];
+            return _buildStoryApprovalCard(story, status: 'pending');
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildApprovedStoriesTab() {
+    return StreamBuilder<List<Story>>(
+      stream: widget.childId != null
+          ? _storyService.getApprovedStoriesForParentByChild(widget.childId!)
+          : _storyService.getApprovedStoriesForParent(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return Center(
+            child: CircularProgressIndicator(color: Color(0xFF9D7FE8)),
+          );
+        }
+
+        if (snapshot.hasError) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.error_outline, size: 48, color: Colors.red),
+                SizedBox(height: 16),
+                Text('Error: ${snapshot.error}'),
+              ],
+            ),
+          );
+        }
+
+        final approvedStories = snapshot.data ?? [];
+
+        if (approvedStories.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.history,
+                  size: 64,
+                  color: Colors.grey,
+                ),
+                SizedBox(height: 16),
+                Text(
+                  'No hay historias aprobadas',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF2D3142),
+                  ),
+                ),
+                SizedBox(height: 8),
+                Text(
+                  'Las historias aprobadas aparecerán aquí',
+                  style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return ListView.builder(
+          padding: EdgeInsets.all(16),
+          itemCount: approvedStories.length,
+          itemBuilder: (context, index) {
+            final story = approvedStories[index];
+            return _buildStoryApprovalCard(story, status: 'approved');
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildRejectedStoriesTab() {
+    return StreamBuilder<List<Story>>(
+      stream: widget.childId != null
+          ? _storyService.getRejectedStoriesForParentByChild(widget.childId!)
+          : _storyService.getRejectedStoriesForParent(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return Center(
+            child: CircularProgressIndicator(color: Color(0xFF9D7FE8)),
+          );
+        }
+
+        if (snapshot.hasError) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.error_outline, size: 48, color: Colors.red),
+                SizedBox(height: 16),
+                Text('Error: ${snapshot.error}'),
+              ],
+            ),
+          );
+        }
+
+        final rejectedStories = snapshot.data ?? [];
+
+        if (rejectedStories.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.block,
+                  size: 64,
+                  color: Colors.grey,
+                ),
+                SizedBox(height: 16),
+                Text(
+                  'No hay historias rechazadas',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF2D3142),
+                  ),
+                ),
+                SizedBox(height: 8),
+                Text(
+                  'Las historias rechazadas aparecerán aquí',
+                  style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return ListView.builder(
+          padding: EdgeInsets.all(16),
+          itemCount: rejectedStories.length,
+          itemBuilder: (context, index) {
+            final story = rejectedStories[index];
+            return _buildStoryApprovalCard(story, status: 'rejected');
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildStoryApprovalCard(Story story, {required String status}) {
     return Container(
       margin: EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
@@ -141,7 +324,11 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen> {
                         ),
                       ),
                       Text(
-                        'Quiere compartir una historia',
+                        status == 'pending'
+                            ? 'Quiere compartir una historia'
+                            : status == 'approved'
+                                ? 'Historia aprobada'
+                                : 'Historia rechazada',
                         style: TextStyle(fontSize: 14, color: Colors.grey[600]),
                       ),
                     ],
@@ -150,15 +337,27 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen> {
                 Container(
                   padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
-                    color: Colors.orange.withOpacity(0.1),
+                    color: status == 'pending'
+                        ? Colors.orange.withOpacity(0.1)
+                        : status == 'approved'
+                            ? Colors.green.withOpacity(0.1)
+                            : Colors.red.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
-                    'Pendiente',
+                    status == 'pending'
+                        ? 'Pendiente'
+                        : status == 'approved'
+                            ? 'Aprobada'
+                            : 'Rechazada',
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
-                      color: Colors.orange[700],
+                      color: status == 'pending'
+                          ? Colors.orange[700]
+                          : status == 'approved'
+                              ? Colors.green[700]
+                              : Colors.red[700],
                     ),
                   ),
                 ),
@@ -243,8 +442,7 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen> {
                   _formatTime(story.createdAt),
                   style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                 ),
-                if (story.filter != null) ...[
-                  SizedBox(width: 16),
+                if (story.filter != null) ...[ SizedBox(width: 16),
                   Icon(Icons.photo_filter, size: 16, color: Colors.grey[600]),
                   SizedBox(width: 4),
                   Text(
@@ -256,43 +454,44 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen> {
             ),
           ),
 
-          // Botones de acción
-          Padding(
-            padding: EdgeInsets.all(16),
-            child: Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => _showRejectDialog(story),
-                    icon: Icon(Icons.close, size: 18),
-                    label: Text('Rechazar'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.red,
-                      side: BorderSide(color: Colors.red),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
+          // Botones de acción (solo para historias pendientes)
+          if (status == 'pending')
+            Padding(
+              padding: EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _showRejectDialog(story),
+                      icon: Icon(Icons.close, size: 18),
+                      label: Text('Rechazar'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.red,
+                        side: BorderSide(color: Colors.red),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
                       ),
                     ),
                   ),
-                ),
-                SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () => _approveStory(story),
-                    icon: Icon(Icons.check, size: 18),
-                    label: Text('Aprobar'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () => _approveStory(story),
+                      icon: Icon(Icons.check, size: 18),
+                      label: Text('Aprobar'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
         ],
       ),
     );

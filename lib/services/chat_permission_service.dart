@@ -133,9 +133,9 @@ class ChatPermissionService {
   /// Verificar si un usuario es padre de otro usuario
   Future<bool> _isParentOf(String potentialParentId, String potentialChildId) async {
     try {
-      // Verificar en la colección parent_child_links
+      // Verificar en la colección parent_children
       final parentChildQuery = await _firestore
-          .collection('parent_child_links')
+          .collection('parent_children')
           .where('parentId', isEqualTo: potentialParentId)
           .where('childId', isEqualTo: potentialChildId)
           .get();

@@ -162,8 +162,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // Simulate keyboard showing (half screen)
-      tester.view.viewInsets =
-          FakeViewPadding.fromWindowPadding(const FakeWindowPadding(bottom: 400));
+      tester.view.viewInsets = const FakeViewPadding(bottom: 400);
       await tester.pumpAndSettle();
 
       // Verify text field is still visible (scrolled into view)

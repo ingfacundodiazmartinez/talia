@@ -250,10 +250,19 @@ import AVFoundation
         print("✅ Filtro cambiado a: \(filterPath)")
     }
 
+    private var recordingOutputPath: String?
+
     private func handleStartRecording(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         guard isInitialized else {
             result(FlutterError(code: "NOT_INITIALIZED",
                                message: "DeepAR no está inicializado",
+                               details: nil))
+            return
+        }
+
+        guard let deepAR = deepAR else {
+            result(FlutterError(code: "NOT_INITIALIZED",
+                               message: "DeepAR instance no disponible",
                                details: nil))
             return
         }
@@ -267,26 +276,29 @@ import AVFoundation
             return
         }
 
-        let width = args["width"] as? Int ?? 1280
-        let height = args["height"] as? Int ?? 720
-        let bitRate = args["bitRate"] as? Int ?? 4000000
+        // Usar dimensiones estándar de video HD para portrait (720x1280)
+        // Esto coincide con la resolución típica de la cámara de DeepAR
+        // y evita distorsiones por diferencias de aspect ratio
+        let defaultWidth = 720
+        let defaultHeight = 1280
 
-        print("🎬 Iniciando grabación: \(outputPath) (\(width)x\(height), \(bitRate)bps)")
+        let width = args["width"] as? Int ?? defaultWidth
+        let height = args["height"] as? Int ?? defaultHeight
 
-        // Por ahora, simulamos inicio de grabación exitoso
-        // TODO: Implementar grabación real con DeepAR SDK
+        print("🎬 Iniciando grabación REAL con DeepAR: \(outputPath) (\(width)x\(height))")
+        print("📱 Usando dimensiones estándar HD portrait: \(defaultWidth)x\(defaultHeight)")
+
+        // Guardar el path para usarlo en el delegate
+        recordingOutputPath = outputPath
+
+        // Iniciar grabación real con DeepAR SDK
+        // Usar el método correcto de DeepAR
+        deepAR.startVideoRecording(withOutputWidth: Int32(width), outputHeight: Int32(height))
+
         isRecording = true
 
-        // Enviar evento de inicio de grabación
-        sendEvent(type: "recordingStarted", data: [
-            "outputPath": outputPath,
-            "width": width,
-            "height": height,
-            "bitRate": bitRate
-        ])
-
         result(true)
-        print("✅ Grabación iniciada (simulado)")
+        print("✅ Grabación REAL iniciada con DeepAR SDK")
     }
 
     private func handleStopRecording(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -297,17 +309,22 @@ import AVFoundation
             return
         }
 
-        print("⏹️ Deteniendo grabación")
+        guard let deepAR = deepAR else {
+            result(FlutterError(code: "NOT_INITIALIZED",
+                               message: "DeepAR instance no disponible",
+                               details: nil))
+            return
+        }
 
-        // Por ahora, simulamos detención de grabación exitosa
-        // TODO: Implementar detención real de grabación con DeepAR SDK
-        isRecording = false
+        print("⏹️ Deteniendo grabación REAL con DeepAR")
 
-        // Enviar evento de fin de grabación
-        sendEvent(type: "recordingStopped", data: ["success": true])
+        // Detener grabación real con DeepAR SDK
+        deepAR.finishVideoRecording()
 
+        // El resultado se enviará en el delegate didFinishVideoRecording
+        // Por ahora, devolvemos éxito inmediatamente
         result(true)
-        print("✅ Grabación detenida (simulado)")
+        print("✅ Comando de detención enviado a DeepAR SDK")
     }
 
     private func handleTakeScreenshot(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -652,10 +669,46 @@ extension ArFiltersPlugin: DeepARDelegate {
     public func didFinishVideoRecording(_ videoFilePath: String!) {
         print("✅ DeepAR delegate: grabación finalizada - \(videoFilePath ?? "unknown")")
         isRecording = false
-        sendEvent(type: "recordingStopped", data: [
-            "success": true,
-            "filePath": videoFilePath ?? ""
-        ])
+
+        // Si tenemos un path guardado, mover el archivo ahí
+        if let outputPath = recordingOutputPath, let tempPath = videoFilePath {
+            print("📁 Moviendo video de \(tempPath) a \(outputPath)")
+
+            do {
+                let fileManager = FileManager.default
+
+                // Eliminar archivo existente si hay
+                if fileManager.fileExists(atPath: outputPath) {
+                    try fileManager.removeItem(atPath: outputPath)
+                }
+
+                // Mover archivo temporal al path deseado
+                try fileManager.moveItem(atPath: tempPath, toPath: outputPath)
+
+                print("✅ Video movido exitosamente a: \(outputPath)")
+
+                sendEvent(type: "recordingStopped", data: [
+                    "success": true,
+                    "filePath": outputPath
+                ])
+            } catch {
+                print("❌ Error moviendo video: \(error.localizedDescription)")
+
+                // Enviar el path temporal si falló mover
+                sendEvent(type: "recordingStopped", data: [
+                    "success": true,
+                    "filePath": tempPath
+                ])
+            }
+
+            recordingOutputPath = nil
+        } else {
+            // Sin path guardado, usar el path temporal de DeepAR
+            sendEvent(type: "recordingStopped", data: [
+                "success": true,
+                "filePath": videoFilePath ?? ""
+            ])
+        }
     }
 
     public func recordingFailedWithError(_ error: Error!) {

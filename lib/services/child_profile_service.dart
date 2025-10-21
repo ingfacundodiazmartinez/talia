@@ -31,7 +31,7 @@ class ChildProfileService {
   /// Stream de links padre-hijo aprobados para un child
   Stream<QuerySnapshot> getParentChildLinksStream(String childId) {
     return _firestore
-        .collection('parent_child_links')
+        .collection('parent_children')
         .where('childId', isEqualTo: childId)
         .where('status', isEqualTo: 'approved')
         .snapshots();
@@ -98,7 +98,7 @@ class ChildProfileService {
   Future<bool> isLinkedToParent(String childId) async {
     try {
       final snapshot = await _firestore
-          .collection('parent_child_links')
+          .collection('parent_children')
           .where('childId', isEqualTo: childId)
           .where('status', isEqualTo: 'approved')
           .limit(1)

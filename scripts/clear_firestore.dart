@@ -23,7 +23,7 @@ void main() async {
   final collections = [
     'users',
     'parent_children',
-    'parent_child_links',
+    'parent_children',
     'chats',
     'messages',
     'contacts',

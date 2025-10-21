@@ -69,7 +69,7 @@ class Child extends User {
   static Future<List<Child>> getLinkedChildren(String parentId) async {
     try {
       final linksSnapshot = await FirebaseFirestore.instance
-          .collection('parent_child_links')
+          .collection('parent_children')
           .where('parentId', isEqualTo: parentId)
           .where('status', isEqualTo: 'approved')
           .get();
@@ -94,7 +94,7 @@ class Child extends User {
   /// Stream de hijos vinculados de un padre
   static Stream<List<String>> getLinkedChildrenIdsStream(String parentId) {
     return FirebaseFirestore.instance
-        .collection('parent_child_links')
+        .collection('parent_children')
         .where('parentId', isEqualTo: parentId)
         .where('status', isEqualTo: 'approved')
         .snapshots()
@@ -178,7 +178,7 @@ class Child extends User {
   Future<List<Map<String, dynamic>>> getParents() async {
     try {
       final linksSnapshot = await FirebaseFirestore.instance
-          .collection('parent_child_links')
+          .collection('parent_children')
           .where('childId', isEqualTo: id)
           .where('status', isEqualTo: 'approved')
           .get();

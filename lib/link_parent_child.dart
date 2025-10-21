@@ -396,9 +396,9 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
         return;
       }
 
-      // Verificar si ya existe un vínculo con este padre en parent_child_links
+      // Verificar si ya existe un vínculo con este padre en parent_children
       final existingLink = await _firestore
-          .collection('parent_child_links')
+          .collection('parent_children')
           .where('parentId', isEqualTo: parentId)
           .where('childId', isEqualTo: childId)
           .where('status', isEqualTo: 'approved')
@@ -411,7 +411,7 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
         return;
       }
 
-      // Verificar si ya está vinculado con otro padre usando parent_child_links
+      // Verificar si ya está vinculado con otro padre usando parent_children
       final userRoleService = UserRoleService();
       final existingParents = await userRoleService.getLinkedParents(childId);
 
@@ -462,7 +462,7 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
       }
 
       // NOTA: Código de migración de whitelist deshabilitado (colección eliminada)
-      // El sistema ahora usa 'contacts' y 'parent_child_links'
+      // El sistema ahora usa 'contacts' y 'parent_children'
       /*
       print('🔄 Migrando contactos existentes del niño al padre...');
       final existingContacts = await _firestore

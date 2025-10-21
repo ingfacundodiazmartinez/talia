@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../../../models/child.dart';
 import '../../../../theme_service.dart';
+import '../../../../services/dashboard_cache_service.dart';
 import '../../../child_location_screen.dart';
-import 'child_metrics_row.dart';
+import '../../contacts/child_contacts_filter_screen.dart';
+import '../../../story_approval_screen.dart';
+import 'child_notifications_screen.dart';
 
-class ChildDashboardCard extends StatelessWidget {
+class ChildDashboardCard extends StatefulWidget {
   final String childId;
 
   const ChildDashboardCard({
@@ -13,106 +17,397 @@ class ChildDashboardCard extends StatelessWidget {
   });
 
   @override
+  State<ChildDashboardCard> createState() => _ChildDashboardCardState();
+}
+
+class _ChildDashboardCardState extends State<ChildDashboardCard> {
+  final _cacheService = DashboardCacheService();
+  Child? _cachedChild;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadChild();
+  }
+
+  Future<void> _loadChild() async {
+    // 1. Intentar cargar desde cache primero (instantáneo)
+    final cachedChild = await _cacheService.getChild(widget.childId);
+    if (cachedChild != null && mounted) {
+      setState(() {
+        _cachedChild = cachedChild;
+      });
+    }
+
+    // 2. Cargar desde Firestore en segundo plano
+    final freshChild = await Child.getById(widget.childId);
+    if (freshChild != null) {
+      // 3. Actualizar cache con datos frescos
+      await _cacheService.saveChild(freshChild);
+
+      // 4. Actualizar UI
+      if (mounted) {
+        setState(() {
+          _cachedChild = freshChild;
+        });
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return FutureBuilder<Child?>(
-      future: Child.getById(childId),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData || snapshot.data == null) {
-          return SizedBox.shrink();
-        }
-
-        final child = snapshot.data!;
-
-        return Container(
-          margin: EdgeInsets.only(bottom: 16),
-          padding: EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                context.customColors.gradientStart,
-                context.customColors.gradientEnd,
-              ],
-            ),
-            borderRadius: BorderRadius.circular(20),
-            boxShadow: [
-              BoxShadow(
-                color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
-                blurRadius: 12,
-                offset: Offset(0, 6),
-              ),
+    // Si no hay datos en cache, mostrar loading
+    if (_cachedChild == null) {
+      return Container(
+        margin: EdgeInsets.only(bottom: 16),
+        padding: EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              context.customColors.gradientStart,
+              context.customColors.gradientEnd,
             ],
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  CircleAvatar(
-                    radius: 30,
-                    backgroundColor: Colors.white.withValues(alpha: 0.3),
-                    backgroundImage:
-                        child.photoURL != null ? NetworkImage(child.photoURL!) : null,
-                    child: child.photoURL == null
-                        ? Text(
-                            child.initials,
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 28,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          )
-                        : null,
-                  ),
-                  SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          child.name,
-                          style: TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                          ),
-                        ),
-                        SizedBox(height: 4),
-                        Text(
-                          '${child.age} años',
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Colors.white.withValues(alpha: 0.9),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    icon: Icon(Icons.location_on, color: Colors.white),
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => ChildLocationScreen(
-                            childId: child.id,
-                            childName: child.name,
-                          ),
-                        ),
-                      );
-                    },
-                  ),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Center(
+          child: CircularProgressIndicator(color: Colors.white),
+        ),
+      );
+    }
+
+    final child = _cachedChild!;
+
+    // OPCIÓN A: Diseño Adaptativo
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
+    return Container(
+      margin: EdgeInsets.only(bottom: 16),
+      padding: EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: isDarkMode
+            ? LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Color(0xFF667eea), // Soft indigo
+                  Color(0xFF764ba2), // Deep purple
                 ],
+              )
+            : null,
+        color: isDarkMode ? null : Theme.of(context).colorScheme.surfaceContainerHighest,
+        border: isDarkMode
+            ? null
+            : Border.all(
+                color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.2),
+                width: 2,
               ),
-              SizedBox(height: 20),
-              Divider(color: Colors.white.withValues(alpha: 0.3), thickness: 1),
-              SizedBox(height: 16),
-              ChildMetricsRow(childId: child.id),
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: isDarkMode
+                ? Color(0xFF667eea).withValues(alpha: 0.4)
+                : Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
+            blurRadius: isDarkMode ? 15 : 12,
+            offset: Offset(0, isDarkMode ? 8 : 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 30,
+                backgroundColor: isDarkMode
+                    ? Colors.white.withValues(alpha: 0.3)
+                    : Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
+                backgroundImage:
+                    child.photoURL != null ? CachedNetworkImageProvider(child.photoURL!) : null,
+                child: child.photoURL == null
+                    ? Text(
+                        child.initials,
+                        style: TextStyle(
+                          color: isDarkMode ? Colors.white : Theme.of(context).colorScheme.primary,
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      )
+                    : null,
+              ),
+              SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      child.name,
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        color: isDarkMode ? Colors.white : Theme.of(context).colorScheme.onSurface,
+                      ),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      '${child.age} años',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: isDarkMode
+                            ? Colors.white.withValues(alpha: 0.9)
+                            : Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              GestureDetector(
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => ChildLocationScreen(
+                        childId: child.id,
+                        childName: child.name,
+                      ),
+                    ),
+                  );
+                },
+                child: Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    color: isDarkMode
+                        ? Colors.white.withValues(alpha: 0.25)
+                        : Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Stack(
+                    children: [
+                      // Mini mapa ilustrativo
+                      Positioned.fill(
+                        child: CustomPaint(
+                          painter: _MiniMapPainter(
+                            isDarkMode: isDarkMode,
+                            primaryColor: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                      ),
+                      // Icono de ubicación centrado
+                      Center(
+                        child: Icon(
+                          Icons.location_on,
+                          color: isDarkMode ? Colors.white : Theme.of(context).colorScheme.primary,
+                          size: 28,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ],
           ),
-        );
-      },
+          SizedBox(height: 20),
+          Divider(
+            color: isDarkMode
+                ? Colors.white.withValues(alpha: 0.3)
+                : Theme.of(context).colorScheme.outlineVariant,
+            thickness: 1,
+          ),
+          SizedBox(height: 16),
+          _buildQuickActions(context, child),
+        ],
+      ),
     );
   }
+
+  Widget _buildQuickActions(BuildContext context, Child child) {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
+    return Row(
+      children: [
+        Expanded(
+          child: _buildActionButton(
+            context: context,
+            icon: Icons.people,
+            label: 'Contactos',
+            color: Colors.blue,
+            isDarkMode: isDarkMode,
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => ChildContactsFilterScreen(
+                    childId: child.id,
+                    childName: child.name,
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        SizedBox(width: 12),
+        Expanded(
+          child: _buildActionButton(
+            context: context,
+            icon: Icons.photo_library,
+            label: 'Historias',
+            color: Colors.purple,
+            isDarkMode: isDarkMode,
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => StoryApprovalScreen(
+                    childId: child.id,
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        SizedBox(width: 12),
+        Expanded(
+          child: _buildActionButton(
+            context: context,
+            icon: Icons.notifications,
+            label: 'Alertas',
+            color: Colors.orange,
+            isDarkMode: isDarkMode,
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => ChildNotificationsScreen(
+                    childId: child.id,
+                    childName: child.name,
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildActionButton({
+    required BuildContext context,
+    required IconData icon,
+    required String label,
+    required Color color,
+    required bool isDarkMode,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: isDarkMode
+          ? Colors.white.withValues(alpha: 0.2)
+          : Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: EdgeInsets.symmetric(vertical: 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                color: isDarkMode ? Colors.white : Theme.of(context).colorScheme.primary,
+                size: 28,
+              ),
+              SizedBox(height: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  color: isDarkMode ? Colors.white : Theme.of(context).colorScheme.onSurface,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Painter para dibujar un mini mapa ilustrativo
+class _MiniMapPainter extends CustomPainter {
+  final bool isDarkMode;
+  final Color primaryColor;
+
+  _MiniMapPainter({
+    required this.isDarkMode,
+    required this.primaryColor,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Líneas de calles (ilustrativas)
+    final streetPaint = Paint()
+      ..color = isDarkMode
+          ? Colors.white.withValues(alpha: 0.15)
+          : primaryColor.withValues(alpha: 0.15)
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke;
+
+    // Calle horizontal
+    canvas.drawLine(
+      Offset(0, size.height * 0.4),
+      Offset(size.width, size.height * 0.4),
+      streetPaint,
+    );
+
+    // Calle vertical
+    canvas.drawLine(
+      Offset(size.width * 0.6, 0),
+      Offset(size.width * 0.6, size.height),
+      streetPaint,
+    );
+
+    // Edificios/bloques pequeños (ilustrativos)
+    final blockPaint = Paint()
+      ..color = isDarkMode
+          ? Colors.white.withValues(alpha: 0.1)
+          : primaryColor.withValues(alpha: 0.1)
+      ..style = PaintingStyle.fill;
+
+    // Bloque superior izquierdo
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(8, 8, 18, 14),
+        Radius.circular(3),
+      ),
+      blockPaint,
+    );
+
+    // Bloque inferior derecho
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(size.width - 20, size.height - 18, 14, 12),
+        Radius.circular(3),
+      ),
+      blockPaint,
+    );
+
+    // Punto de interés (pequeño círculo)
+    canvas.drawCircle(
+      Offset(size.width * 0.3, size.height * 0.7),
+      3,
+      Paint()
+        ..color = isDarkMode
+            ? Colors.white.withValues(alpha: 0.2)
+            : primaryColor.withValues(alpha: 0.2),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
