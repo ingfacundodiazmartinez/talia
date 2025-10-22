@@ -22,6 +22,7 @@ import 'chat/widgets/attachment_options.dart';
 import 'chat/widgets/recording_indicator.dart';
 import 'contact_profile_screen.dart';
 import 'video_call_screen.dart';
+import 'forward_messages_screen.dart';
 
 /// Pantalla de chat individual (1 a 1)
 ///
@@ -34,12 +35,14 @@ class ChatDetailScreen extends StatefulWidget {
   final String contactId;
   final String contactName;
   final String chatId;
+  final String? scrollToMessageId;
 
   const ChatDetailScreen({
     super.key,
     required this.contactId,
     required this.contactName,
     required this.chatId,
+    this.scrollToMessageId,
   });
 
   @override
@@ -65,6 +68,14 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
   bool _isBlockedBy = false;
   Map<String, dynamic>? _replyingTo;
   OverlayEntry? _reactionOverlay;
+
+  // Selection mode for forwarding multiple messages
+  bool _isSelectionMode = false;
+  final Set<String> _selectedMessageIds = {};
+
+  // Highlight message state
+  String? _highlightedMessageId;
+  bool _hasScrolledToMessage = false;
 
   @override
   void initState() {
@@ -110,7 +121,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
 
     // Scroll inicial al cargar mensajes
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _scrollToBottom(animate: false);
+      if (widget.scrollToMessageId != null) {
+        _scrollToSpecificMessage(widget.scrollToMessageId!);
+      } else {
+        _scrollToBottom(animate: false);
+      }
     });
   }
 
@@ -149,11 +164,62 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
     if (mounted) {
       setState(() {});
 
-      // Auto-scroll al recibir nuevos mensajes
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _scrollToBottom();
-      });
+      // Auto-scroll al recibir nuevos mensajes (solo si no estamos esperando scroll a mensaje específico)
+      if (widget.scrollToMessageId == null || _hasScrolledToMessage) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _scrollToBottom();
+        });
+      } else {
+        // Intentar scroll a mensaje específico si aún no se ha hecho
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _scrollToSpecificMessage(widget.scrollToMessageId!);
+        });
+      }
     }
+  }
+
+  /// Scroll a un mensaje específico por su ID
+  void _scrollToSpecificMessage(String messageId) {
+    if (!_scrollController.hasClients || _hasScrolledToMessage) return;
+
+    // Buscar el índice del mensaje
+    final messageIndex = _controller.messages.indexWhere((msg) => msg.id == messageId);
+
+    if (messageIndex == -1) {
+      // Mensaje no encontrado todavía, intentar de nuevo más tarde
+      print('⏳ Mensaje $messageId no encontrado aún, esperando...');
+      return;
+    }
+
+    print('✅ Scroll a mensaje $messageId en índice $messageIndex');
+    _hasScrolledToMessage = true;
+
+    // Calcular posición aproximada
+    // Como la lista está en reverse, el índice 0 es el más reciente (abajo)
+    // Cada item tiene aproximadamente 100-150px de altura
+    const itemHeight = 120.0;
+    final targetPosition = messageIndex * itemHeight;
+
+    // Animar al mensaje
+    _scrollController.animateTo(
+      targetPosition,
+      duration: const Duration(milliseconds: 500),
+      curve: Curves.easeInOut,
+    );
+
+    // Resaltar temporalmente el mensaje
+    setState(() {
+      _highlightedMessageId = messageId;
+    });
+
+    // Quitar resaltado después de 2 segundos
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) {
+        setState(() {
+          _highlightedMessageId = null;
+        });
+      }
+    });
   }
 
   @override
@@ -525,6 +591,16 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
     }
   }
 
+  /// Editar mensaje bloqueado
+  Future<void> _handleEditBlockedMessage(String messageId, String originalText) async {
+    // Poner el texto original en el campo de input del chat
+    _messageController.text = originalText;
+
+    // Eliminar el mensaje bloqueado inmediatamente (local y Firestore)
+    // Esto evita duplicación cuando el usuario envía el mensaje editado
+    await _controller.deleteMessage(messageId, null);
+  }
+
   Future<void> _handleClearChat() async {
     final success = await _controller.clearChat();
 
@@ -538,6 +614,33 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
         );
       }
     }
+  }
+
+  /// Reenviar mensajes seleccionados
+  Future<void> _forwardSelectedMessages(BuildContext context) async {
+    if (_selectedMessageIds.isEmpty) return;
+
+    // Obtener los mensajes seleccionados
+    final selectedMessages = _controller.messages
+        .where((msg) => _selectedMessageIds.contains(msg.id))
+        .toList();
+
+    // Salir del modo de selección
+    setState(() {
+      _isSelectionMode = false;
+      _selectedMessageIds.clear();
+    });
+
+    // Navegar a pantalla de reenvío con los mensajes seleccionados
+    await Navigator.of(context, rootNavigator: true).push(
+      MaterialPageRoute(
+        builder: (context) => ForwardMessagesScreen(
+          messages: selectedMessages,
+          originalChatId: widget.chatId,
+          contactName: widget.contactName,
+        ),
+      ),
+    );
   }
 
   /// Devolver llamada
@@ -567,8 +670,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
       if (result['success'] == true) {
         // Navegar a pantalla de videollamada
         if (mounted) {
-          Navigator.push(
-            context,
+          Navigator.of(context, rootNavigator: true).push(
             MaterialPageRoute(
               builder: (context) => VideoCallScreen(
                 callId: result['channelName'],
@@ -613,37 +715,63 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: ChatAppBar(
-        contactId: widget.contactId,
-        contactName: widget.contactName,
-        contactPhotoURL: _controller.contactPhotoURL,
-        chatId: widget.chatId,
-        onTap: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => ContactProfileScreen(
-                contactId: widget.contactId,
-                contactName: widget.contactName,
+      appBar: _isSelectionMode
+          ? AppBar(
+              leading: IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: () {
+                  setState(() {
+                    _isSelectionMode = false;
+                    _selectedMessageIds.clear();
+                  });
+                },
               ),
+              title: Text('${_selectedMessageIds.length} seleccionados'),
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.forward),
+                  onPressed: _selectedMessageIds.isEmpty
+                      ? null
+                      : () => _forwardSelectedMessages(context),
+                ),
+              ],
+            )
+          : ChatAppBar(
+              contactId: widget.contactId,
+              contactName: widget.contactName,
+              contactPhotoURL: _controller.contactPhotoURL,
+              chatId: widget.chatId,
+              onTap: () {
+                Navigator.of(context, rootNavigator: true).push(
+                  MaterialPageRoute(
+                    builder: (context) => ContactProfileScreen(
+                      contactId: widget.contactId,
+                      contactName: widget.contactName,
+                    ),
+                  ),
+                );
+              },
+              onClearChat: _handleClearChat,
             ),
-          );
-        },
-        onClearChat: _handleClearChat,
-      ),
       body: Stack(
         children: [
-          SafeArea(
-            child: Column(
-              children: [
-                Expanded(child: _buildMessagesList()),
-                _buildTypingIndicator(),
-                if (_isBlocked || _isBlockedBy) _buildBlockedBar(),
-                if (_replyingTo != null) _buildReplyBar(),
-                _buildInputBar(),
-                if (_showEmojiPicker) _buildEmojiPicker(),
-              ],
-            ),
+          Column(
+            children: [
+              Expanded(
+                child: SafeArea(
+                  child: Column(
+                    children: [
+                      Expanded(child: _buildMessagesList()),
+                      _buildTypingIndicator(),
+                    ],
+                  ),
+                ),
+              ),
+              if (_isBlocked || _isBlockedBy) _buildBlockedBar(),
+              if (_replyingTo != null) _buildReplyBar(),
+              _buildInputBar(),
+              if (_showEmojiPicker) _buildEmojiPicker(),
+            ],
           ),
           // Indicador de grabación (overlay)
           if (_isRecording)
@@ -715,8 +843,17 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
         final message = _controller.messages[index];
         final isMe = message.senderId == FirebaseAuth.instance.currentUser!.uid;
         final timeString = '${message.effectiveTimestamp.hour}:${message.effectiveTimestamp.minute.toString().padLeft(2, '0')}';
+        final isSelected = _selectedMessageIds.contains(message.id);
 
-        return MessageBubble(
+        // Debug forwarding fields antes de crear el widget
+        if (message.isForwarded) {
+          print('🔨 Construyendo MessageBubble(${message.id.substring(0, 8)}...): isForwarded=${message.isForwarded}, originalContactName="${message.originalContactName}"');
+        }
+
+        // Aplicar highlight si es el mensaje buscado
+        final isHighlighted = _highlightedMessageId == message.id;
+
+        Widget messageBubble = MessageBubble(
           key: ValueKey('msg_${message.id}'),
           messageId: message.id,
           chatId: widget.chatId,
@@ -725,6 +862,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
           videoUrl: message.videoUrl,
           audioUrl: message.audioUrl,
           localPath: message.localPath,
+          waveformData: message.waveformData,
           status: message.status,
           replyTo: message.replyTo,
           reactions: message.reactions,
@@ -737,11 +875,15 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
           moderationStatus: message.moderationStatus,
           moderationReason: message.moderationReason,
           moderationSeverity: message.moderationSeverity,
+          originalText: message.originalText,
           type: message.type,
           callType: message.callType,
           onCallBack: message.callType != null
               ? () => _handleCallBack(message.callType!)
               : null,
+          isForwarded: message.isForwarded,
+          originalContactName: message.originalContactName,
+          contactName: widget.contactName,
           onReply: () {
             setState(() {
               _replyingTo = {
@@ -757,7 +899,62 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
           },
           onLongPress: _showReactionPicker,
           onDelete: _handleDeleteMessage,
+          onEdit: _handleEditBlockedMessage,
+          onSelectMessages: () {
+            setState(() {
+              _isSelectionMode = true;
+              _selectedMessageIds.add(message.id);
+            });
+          },
         );
+
+        // Wrap con highlight si es necesario
+        if (isHighlighted) {
+          messageBubble = Container(
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.3),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: messageBubble,
+          );
+        }
+
+        // Wrap with selection mode support
+        if (_isSelectionMode) {
+          return GestureDetector(
+            onTap: () {
+              setState(() {
+                if (isSelected) {
+                  _selectedMessageIds.remove(message.id);
+                } else {
+                  _selectedMessageIds.add(message.id);
+                }
+              });
+            },
+            child: Container(
+              color: isSelected ? Colors.blue.withValues(alpha: 0.1) : Colors.transparent,
+              child: Row(
+                children: [
+                  Checkbox(
+                    value: isSelected,
+                    onChanged: (value) {
+                      setState(() {
+                        if (value == true) {
+                          _selectedMessageIds.add(message.id);
+                        } else {
+                          _selectedMessageIds.remove(message.id);
+                        }
+                      });
+                    },
+                  ),
+                  Expanded(child: messageBubble),
+                ],
+              ),
+            ),
+          );
+        }
+
+        return messageBubble;
       },
     );
   }

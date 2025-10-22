@@ -10,6 +10,7 @@ import '../controllers/group_chat_controller.dart';
 import '../notification_service.dart';
 import '../services/reaction_service.dart';
 import '../services/contact_alias_service.dart';
+import '../services/message_status_helper.dart';
 import '../widgets/reaction_picker.dart';
 import '../models/chat_message.dart';
 import 'chat/widgets/group_chat_app_bar.dart';
@@ -31,11 +32,13 @@ import 'group_profile/group_profile_screen.dart';
 class GroupChatScreen extends StatefulWidget {
   final String groupId;
   final String groupName;
+  final String? scrollToMessageId;
 
   const GroupChatScreen({
     super.key,
     required this.groupId,
     required this.groupName,
+    this.scrollToMessageId,
   });
 
   @override
@@ -64,6 +67,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   bool _isLoadingMore = false;
   final List<DocumentSnapshot> _loadedMessages = [];
 
+  // Highlight message state
+  String? _highlightedMessageId;
+  bool _hasScrolledToMessage = false;
+
   @override
   void initState() {
     super.initState();
@@ -81,6 +88,70 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     _controller.initialize();
     _scrollController.addListener(_onScroll);
     _messageController.addListener(_onTypingChanged);
+
+    // Scroll a mensaje específico si se proporciona
+    if (widget.scrollToMessageId != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _scrollToSpecificMessage(widget.scrollToMessageId!);
+      });
+    }
+  }
+
+  /// Scroll a un mensaje específico por su ID
+  void _scrollToSpecificMessage(String messageId) {
+    if (!_scrollController.hasClients || _hasScrolledToMessage) return;
+
+    // Esperar un frame para que la lista se haya construido
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (!mounted || !_scrollController.hasClients) return;
+
+      // Buscar el índice del mensaje en los documentos cargados
+      final messageIndex = _loadedMessages.indexWhere((doc) => doc.id == messageId);
+
+      if (messageIndex == -1) {
+        // Mensaje no encontrado todavía
+        print('⏳ Mensaje $messageId no encontrado en grupo, esperando...');
+        // Intentar de nuevo después de un tiempo
+        Future.delayed(const Duration(milliseconds: 1000), () {
+          if (!_hasScrolledToMessage) {
+            _scrollToSpecificMessage(messageId);
+          }
+        });
+        return;
+      }
+
+      print('✅ Scroll a mensaje $messageId en índice $messageIndex');
+      _hasScrolledToMessage = true;
+
+      // Calcular posición aproximada
+      // Como la lista está en reverse, el índice 0 es el más reciente (abajo)
+      // Cada item tiene aproximadamente 100-150px de altura
+      const itemHeight = 120.0;
+      final targetPosition = messageIndex * itemHeight;
+
+      // Animar al mensaje
+      _scrollController.animateTo(
+        targetPosition,
+        duration: const Duration(milliseconds: 500),
+        curve: Curves.easeInOut,
+      );
+
+      // Resaltar temporalmente el mensaje
+      if (mounted) {
+        setState(() {
+          _highlightedMessageId = messageId;
+        });
+
+        // Quitar resaltado después de 2 segundos
+        Future.delayed(const Duration(seconds: 2), () {
+          if (mounted) {
+            setState(() {
+              _highlightedMessageId = null;
+            });
+          }
+        });
+      }
+    });
   }
 
   @override
@@ -145,6 +216,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
         _loadedMessages.addAll(newMessages);
         _isLoadingMore = false;
       });
+
+      // Si estamos esperando scroll a un mensaje específico, intentarlo de nuevo
+      if (widget.scrollToMessageId != null && !_hasScrolledToMessage) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _scrollToSpecificMessage(widget.scrollToMessageId!);
+        });
+      }
     }
   }
 
@@ -355,6 +433,15 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     }
   }
 
+  /// Editar mensaje bloqueado
+  void _handleEditBlockedMessage(String messageId, String originalText) {
+    // Poner el texto original en el campo de input del chat
+    _messageController.text = originalText;
+
+    // Eliminar el mensaje bloqueado de Firestore
+    _controller.deleteMessage(messageId, null);
+  }
+
   // Build Methods (SOLO UI)
 
   @override
@@ -364,8 +451,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
         groupId: widget.groupId,
         groupName: widget.groupName,
         onTap: () {
-          Navigator.push(
-            context,
+          Navigator.of(context, rootNavigator: true).push(
             MaterialPageRoute(
               builder: (context) => GroupProfileScreen(
                 groupId: widget.groupId,
@@ -378,8 +464,16 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
         children: [
           Column(
             children: [
-              Expanded(child: _buildMessagesList()),
-              _buildTypingIndicator(),
+              Expanded(
+                child: SafeArea(
+                  child: Column(
+                    children: [
+                      Expanded(child: _buildMessagesList()),
+                      _buildTypingIndicator(),
+                    ],
+                  ),
+                ),
+              ),
               if (_replyingTo != null) _buildReplyBar(),
               _buildInputBar(),
               if (_showEmojiPicker) _buildEmojiPicker(),
@@ -514,8 +608,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
                     stream: _aliasService.watchDisplayName(senderId, realName),
                     builder: (context, aliasSnapshot) {
                       final displayName = aliasSnapshot.data ?? realName;
+                      final isHighlighted = _highlightedMessageId == messageDoc.id;
 
-                      return MessageBubble(
+                      Widget messageBubble = MessageBubble(
                         key: ValueKey('msg_${messageDoc.id}'),
                         messageId: messageDoc.id,
                         chatId: widget.groupId,
@@ -523,6 +618,15 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
                         imageUrl: messageData['imageUrl'],
                         videoUrl: messageData['videoUrl'],
                         audioUrl: messageData['audioUrl'],
+                        localPath: messageData['localPath'],
+                        waveformData: messageData['waveformData'] != null
+                            ? List<double>.from(messageData['waveformData'] as List)
+                            : null,
+                        status: MessageStatusHelper.calculateStatus(
+                          data: messageData,
+                          senderId: senderId,
+                          hasServerTimestamp: timestamp != null,
+                        ),
                         replyTo: messageData['replyTo'],
                         reactions: messageData['reactions'],
                         isMe: isMe,
@@ -533,8 +637,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
                         moderationStatus: moderationStatus,
                         moderationReason: messageData['moderationReason'] as String?,
                         moderationSeverity: messageData['moderationSeverity'] as String?,
+                        originalText: messageData['originalText'] as String?,
                         isGroupChat: true,
                         senderPhotoURL: photoURL,
+                        isForwarded: messageData['isForwarded'] ?? false,
+                        originalContactName: messageData['originalContactName'] as String?,
+                        contactName: widget.groupName,
                         onReply: () {
                           setState(() {
                             _replyingTo = {
@@ -550,7 +658,21 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
                         },
                         onLongPress: _showReactionPicker,
                         onDelete: _handleDeleteMessage,
+                        onEdit: _handleEditBlockedMessage,
                       );
+
+                      // Wrap con highlight si es necesario
+                      if (isHighlighted) {
+                        messageBubble = Container(
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.3),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: messageBubble,
+                        );
+                      }
+
+                      return messageBubble;
                     },
                   );
                 },

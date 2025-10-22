@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../services/contact_alias_service.dart';
 import '../../../services/block_service.dart';
 import '../../../services/message_status_helper.dart';
+import '../../../services/search_service.dart';
 import '../../../models/chat_message.dart';
 import '../../../widgets/stories_section.dart';
 import '../../../widgets/create_group_widget.dart';
@@ -11,10 +12,13 @@ import '../../../utils/chat_utils.dart';
 import '../../../models/chat_list_item_type.dart';
 import '../../../controllers/parent_chats_controller.dart';
 import '../../../theme_service.dart';
+import '../../chat_detail_screen.dart';
+import '../../group_chat_screen.dart';
 import 'widgets/chat_list_item.dart';
 import 'widgets/group_chat_list_item.dart';
 import 'widgets/parent_chat_header.dart';
 import 'widgets/chat_search_bar.dart';
+import 'widgets/search_result_widgets.dart';
 import 'parent_archived_chats_screen.dart';
 
 /// Pantalla de chats para padres
@@ -37,6 +41,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen> {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final ContactAliasService _aliasService = ContactAliasService();
   final BlockService _blockService = BlockService();
+  final SearchService _searchService = SearchService();
   final TextEditingController _searchController = TextEditingController();
   final ValueNotifier<String> _searchQuery = ValueNotifier<String>('');
   late ParentChatsController _controller;
@@ -52,6 +57,124 @@ class _ParentChatsScreenState extends State<ParentChatsScreen> {
     _searchController.dispose();
     _searchQuery.dispose();
     super.dispose();
+  }
+
+  /// Busca en mensajes de todos los chats cuando hay un query activo
+  Future<SearchResults> _performMessageSearch({
+    required String query,
+    required List<QueryDocumentSnapshot> chatDocs,
+    required List<QueryDocumentSnapshot> childrenLinks,
+    required List<QueryDocumentSnapshot> groups,
+  }) async {
+    if (query.isEmpty) {
+      return SearchResults(chatResults: [], messageResults: []);
+    }
+
+    final chatResults = <ChatSearchResult>[];
+    final messageResults = <MessageSearchResult>[];
+
+    // Buscar en chats directos (hijos y otros contactos)
+    for (final chatDoc in chatDocs) {
+      final chatData = chatDoc.data() as Map<String, dynamic>;
+      final chatId = chatDoc.id;
+      final participants = chatData['participants'] as List<dynamic>?;
+
+      if (participants == null) continue;
+
+      final otherUserId = participants.firstWhere(
+        (id) => id != _auth.currentUser!.uid,
+        orElse: () => null,
+      );
+
+      if (otherUserId == null) continue;
+
+      try {
+        // Obtener datos del usuario
+        final userDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(otherUserId)
+            .get();
+
+        if (!userDoc.exists) continue;
+
+        final userData = userDoc.data() as Map<String, dynamic>?;
+        if (userData == null) continue;
+
+        final userName = userData['name'] ?? 'Usuario';
+        final photoURL = userData['photoURL'] as String?;
+
+        // Obtener alias si existe
+        String displayName = userName;
+        try {
+          displayName = await _aliasService.watchDisplayName(otherUserId, userName).first;
+        } catch (e) {
+          // Si falla, usar el nombre original
+        }
+
+        // Verificar si coincide por nombre (usar SearchService para normalizar)
+        if (_searchService.matchesQuery(displayName, query) ||
+            _searchService.matchesQuery(userName, query)) {
+          // Determinar tipo de chat
+          final isChildChat = childrenLinks.any((doc) => doc['childId'] == otherUserId);
+          chatResults.add(ChatSearchResult(
+            chatId: chatId,
+            chatName: displayName,
+            chatPhotoUrl: photoURL,
+            chatType: isChildChat ? ChatType.child : ChatType.direct,
+          ));
+        }
+
+        // Buscar en mensajes del chat
+        final isChildChat = childrenLinks.any((doc) => doc['childId'] == otherUserId);
+        final chatMessageResults = await _searchService.searchInChatMessages(
+          chatId: chatId,
+          query: query,
+          chatName: displayName,
+          chatPhotoUrl: photoURL,
+          chatType: isChildChat ? ChatType.child : ChatType.direct,
+        );
+        messageResults.addAll(chatMessageResults);
+      } catch (e) {
+        print('❌ Error buscando en chat $chatId: $e');
+      }
+    }
+
+    // Buscar en grupos
+    for (final groupDoc in groups) {
+      final groupData = groupDoc.data() as Map<String, dynamic>;
+      final groupId = groupDoc.id;
+      final groupName = groupData['name'] ?? 'Grupo';
+      final avatar = groupData['avatar'] as String?;
+
+      // Verificar si coincide por nombre
+      if (_searchService.matchesQuery(groupName, query)) {
+        chatResults.add(ChatSearchResult(
+          chatId: groupId,
+          chatName: groupName,
+          chatPhotoUrl: avatar,
+          chatType: ChatType.group,
+        ));
+      }
+
+      // Buscar en mensajes del grupo
+      try {
+        final groupMessageResults = await _searchService.searchInChatMessages(
+          chatId: groupId,
+          query: query,
+          chatName: groupName,
+          chatPhotoUrl: avatar,
+          chatType: ChatType.group,
+        );
+        messageResults.addAll(groupMessageResults);
+      } catch (e) {
+        print('❌ Error buscando en grupo $groupId: $e');
+      }
+    }
+
+    return SearchResults(
+      chatResults: chatResults,
+      messageResults: messageResults,
+    );
   }
 
   @override
@@ -104,8 +227,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen> {
                         size: 26,
                       ),
                       onPressed: () {
-                        Navigator.push(
-                          context,
+                        Navigator.of(context, rootNavigator: true).push(
                           MaterialPageRoute(
                             builder: (context) => ParentArchivedChatsScreen(),
                           ),
@@ -196,10 +318,13 @@ class _ParentChatsScreenState extends State<ParentChatsScreen> {
                                     final childrenLinks = linksSnapshot.data?.docs ?? [];
                                     final childrenIds = _controller.extractChildrenIds(childrenLinks);
 
-                                    // Filtrar solo chats eliminados (NO filtrar bloqueados)
-                                    final chatDocs = snapshot.data != null
+                                    // Filtrar chats eliminados y archivados (NO filtrar bloqueados)
+                                    var chatDocs = snapshot.data != null
                                         ? _controller.filterDeletedChats(snapshot.data!)
                                         : <QueryDocumentSnapshot>[];
+
+                                    // Filtrar chats archivados
+                                    chatDocs = _controller.filterArchivedChats(chatDocs);
 
                                     // Separar chats en: con hijos y con otros
                                     final separated = _controller.separateChats(
@@ -212,7 +337,9 @@ class _ParentChatsScreenState extends State<ParentChatsScreen> {
                                     return StreamBuilder<QuerySnapshot>(
                                       stream: _controller.getGroupsStream(),
                                       builder: (context, groupsSnapshot) {
-                                        final groups = groupsSnapshot.data?.docs ?? [];
+                                        // Filtrar grupos archivados
+                                        final allGroups = groupsSnapshot.data?.docs ?? [];
+                                        final groups = _controller.filterArchivedGroups(allGroups);
 
                                         // Build the list items using controller
                                         final listItems = _controller.buildListItems(
@@ -226,17 +353,95 @@ class _ParentChatsScreenState extends State<ParentChatsScreen> {
                                         return ValueListenableBuilder<String>(
                                           valueListenable: _searchQuery,
                                           builder: (context, query, _) {
-                                            return ListView.builder(
-                                              padding: EdgeInsets.all(16),
-                                              itemCount: listItems.length,
-                                              itemBuilder: (context, index) {
-                                                final item = listItems[index];
-                                                return _buildItemWidget(
-                                                  item,
-                                                  childrenLinks,
-                                                  chatDocs,
-                                                  childrenIds,
-                                                  query.toLowerCase(),
+                                            // Si no hay query, mostrar lista normal
+                                            if (query.trim().isEmpty) {
+                                              return ListView.builder(
+                                                padding: EdgeInsets.all(16),
+                                                itemCount: listItems.length,
+                                                itemBuilder: (context, index) {
+                                                  final item = listItems[index];
+                                                  return _buildItemWidget(
+                                                    item,
+                                                    childrenLinks,
+                                                    chatDocs,
+                                                    childrenIds,
+                                                    query.toLowerCase(),
+                                                  );
+                                                },
+                                              );
+                                            }
+
+                                            // Si hay query, mostrar resultados de búsqueda
+                                            return FutureBuilder<SearchResults>(
+                                              future: _performMessageSearch(
+                                                query: query,
+                                                chatDocs: chatDocs,
+                                                childrenLinks: childrenLinks,
+                                                groups: groups,
+                                              ),
+                                              builder: (context, snapshot) {
+                                                if (snapshot.connectionState == ConnectionState.waiting) {
+                                                  return Center(
+                                                    child: CircularProgressIndicator(),
+                                                  );
+                                                }
+
+                                                if (snapshot.hasError) {
+                                                  return Center(
+                                                    child: Text('Error en la búsqueda: ${snapshot.error}'),
+                                                  );
+                                                }
+
+                                                final results = snapshot.data;
+                                                if (results == null || results.isEmpty) {
+                                                  return SearchEmptyState(query: query);
+                                                }
+
+                                                return ListView.builder(
+                                                  padding: EdgeInsets.all(16),
+                                                  itemCount: results.chatResults.length +
+                                                             results.messageResults.length +
+                                                             2, // +2 para las cabeceras
+                                                  itemBuilder: (context, index) {
+                                                    // Cabecera de chats
+                                                    if (index == 0 && results.chatResults.isNotEmpty) {
+                                                      return SearchResultsHeader(
+                                                        title: 'CHATS',
+                                                        count: results.chatResults.length,
+                                                      );
+                                                    }
+
+                                                    // Resultados de chats
+                                                    if (index > 0 && index <= results.chatResults.length) {
+                                                      final chatResult = results.chatResults[index - 1];
+                                                      return ChatSearchResultCard(
+                                                        result: chatResult,
+                                                        onTap: () => _navigateToChat(chatResult),
+                                                      );
+                                                    }
+
+                                                    // Cabecera de mensajes
+                                                    if (index == results.chatResults.length + 1 &&
+                                                        results.messageResults.isNotEmpty) {
+                                                      return SearchResultsHeader(
+                                                        title: 'MENSAJES',
+                                                        count: results.messageResults.length,
+                                                      );
+                                                    }
+
+                                                    // Resultados de mensajes
+                                                    final messageIndex = index - results.chatResults.length - 2;
+                                                    if (messageIndex >= 0 &&
+                                                        messageIndex < results.messageResults.length) {
+                                                      final messageResult = results.messageResults[messageIndex];
+                                                      return MessageSearchResultCard(
+                                                        result: messageResult,
+                                                        onTap: () => _navigateToMessage(messageResult),
+                                                      );
+                                                    }
+
+                                                    return SizedBox.shrink();
+                                                  },
                                                 );
                                               },
                                             );
@@ -381,16 +586,65 @@ class _ParentChatsScreenState extends State<ParentChatsScreen> {
           print('💬 [ChatList] Grupo $groupId tiene $unreadCount mensajes no leídos');
         }
 
-        return GroupChatListItem(
-          groupId: groupId,
-          groupName: groupName,
-          memberCount: (groupData['members'] as List?)?.length ?? 0,
-          lastMessage: groupData['lastMessage'] ?? 'Toca para abrir',
-          messageCount: groupData['messageCount'] ?? 0,
-          groupImageUrl: groupData['imageUrl'],
-          unreadCount: unreadCount,
-          onLeaveGroup: () =>
-              _confirmLeaveGroup(groupId, groupName),
+        // Obtener el último mensaje para mostrar su estado
+        return StreamBuilder<QuerySnapshot>(
+          stream: FirebaseFirestore.instance
+              .collection('groups')
+              .doc(groupId)
+              .collection('messages')
+              .orderBy('timestamp', descending: true)
+              .limit(1)
+              .snapshots(),
+          builder: (context, messageSnapshot) {
+            String? lastMessageSenderId;
+            MessageStatus? lastMessageStatus;
+            ModerationStatus? lastMessageModerationStatus;
+
+            if (messageSnapshot.hasData && messageSnapshot.data!.docs.isNotEmpty) {
+              final lastMessageDoc = messageSnapshot.data!.docs.first;
+              final lastMessageData = lastMessageDoc.data() as Map<String, dynamic>;
+
+              final senderId = lastMessageData['senderId'] as String? ?? '';
+              lastMessageSenderId = senderId;
+
+              // Calcular el estado del mensaje
+              lastMessageStatus = MessageStatusHelper.calculateStatus(
+                data: lastMessageData,
+                senderId: senderId,
+                hasServerTimestamp: lastMessageData['timestamp'] != null,
+              );
+
+              // Obtener estado de moderación
+              final modStatusString = lastMessageData['moderationStatus'] as String?;
+              if (modStatusString != null) {
+                switch (modStatusString) {
+                  case 'approved':
+                    lastMessageModerationStatus = ModerationStatus.approved;
+                    break;
+                  case 'blocked':
+                    lastMessageModerationStatus = ModerationStatus.blocked;
+                    break;
+                  case 'pending':
+                    lastMessageModerationStatus = ModerationStatus.pending;
+                    break;
+                }
+              }
+            }
+
+            return GroupChatListItem(
+              groupId: groupId,
+              groupName: groupName,
+              memberCount: (groupData['members'] as List?)?.length ?? 0,
+              lastMessage: groupData['lastMessage'] ?? 'Toca para abrir',
+              messageCount: groupData['messageCount'] ?? 0,
+              groupImageUrl: groupData['imageUrl'],
+              unreadCount: unreadCount,
+              onLeaveGroup: () => _confirmLeaveGroup(groupId, groupName),
+              lastMessageSenderId: lastMessageSenderId,
+              lastMessageStatus: lastMessageStatus,
+              lastMessageModerationStatus: lastMessageModerationStatus,
+            );
+          },
         );
 
       default:
@@ -570,6 +824,84 @@ class _ParentChatsScreenState extends State<ParentChatsScreen> {
           duration: Duration(seconds: 4),
         ),
       );
+    }
+  }
+
+  /// Navega al chat desde un resultado de búsqueda
+  void _navigateToChat(ChatSearchResult result) {
+    // Limpiar el buscador
+    _searchController.clear();
+    _searchQuery.value = '';
+
+    // Navegar según el tipo de chat
+    if (result.chatType == ChatType.group) {
+      Navigator.of(context, rootNavigator: true).push(
+        MaterialPageRoute(
+          builder: (context) => GroupChatScreen(
+            groupId: result.chatId,
+            groupName: result.chatName,
+          ),
+        ),
+      );
+    } else {
+      // Para chats directos (hijos y otros contactos)
+      // Necesitamos obtener el contactId del chatId
+      _navigateToDirectChat(result.chatId, result.chatName);
+    }
+  }
+
+  /// Navega al chat y al mensaje específico desde un resultado de búsqueda
+  void _navigateToMessage(MessageSearchResult result) {
+    // Limpiar el buscador
+    _searchController.clear();
+    _searchQuery.value = '';
+
+    // Navegar según el tipo de chat, pasando el messageId para hacer scroll
+    if (result.chatType == ChatType.group) {
+      Navigator.of(context, rootNavigator: true).push(
+        MaterialPageRoute(
+          builder: (context) => GroupChatScreen(
+            groupId: result.chatId,
+            groupName: result.chatName,
+            scrollToMessageId: result.message.id,
+          ),
+        ),
+      );
+    } else {
+      // Para chats directos (hijos y otros contactos)
+      _navigateToDirectChat(result.chatId, result.chatName, result.message.id);
+    }
+  }
+
+  /// Helper para navegar a chat directo obteniendo el contactId
+  Future<void> _navigateToDirectChat(String chatId, String contactName, [String? scrollToMessageId]) async {
+    try {
+      // Obtener el chat doc para sacar el contactId
+      final chatDoc = await FirebaseFirestore.instance.collection('chats').doc(chatId).get();
+      if (!chatDoc.exists) return;
+
+      final participants = chatDoc.data()?['participants'] as List<dynamic>?;
+      if (participants == null) return;
+
+      final contactId = participants.firstWhere(
+        (id) => id != _auth.currentUser!.uid,
+        orElse: () => null,
+      );
+
+      if (contactId == null) return;
+
+      Navigator.of(context, rootNavigator: true).push(
+        MaterialPageRoute(
+          builder: (context) => ChatDetailScreen(
+            chatId: chatId,
+            contactId: contactId,
+            contactName: contactName,
+            scrollToMessageId: scrollToMessageId,
+          ),
+        ),
+      );
+    } catch (e) {
+      print('Error navegando a chat directo: $e');
     }
   }
 }

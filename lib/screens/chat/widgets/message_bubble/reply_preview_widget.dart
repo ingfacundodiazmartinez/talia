@@ -5,11 +5,13 @@ import 'package:cached_network_image/cached_network_image.dart';
 class ReplyPreviewWidget extends StatelessWidget {
   final Map<String, dynamic> replyTo;
   final bool isMe;
+  final VoidCallback? onTap;
 
   const ReplyPreviewWidget({
     super.key,
     required this.replyTo,
     required this.isMe,
+    this.onTap,
   });
 
   @override
@@ -20,20 +22,22 @@ class ReplyPreviewWidget extends StatelessWidget {
     final hasAudio = replyTo['audioUrl'] != null;
     final hasText = replyTo['text'] != null && replyTo['text'].toString().isNotEmpty;
 
-    return Container(
-      padding: const EdgeInsets.all(8),
-      margin: const EdgeInsets.only(bottom: 8),
-      decoration: BoxDecoration(
-        color: (isMe ? Colors.white : colorScheme.primary).withValues(alpha: 0.2),
-        borderRadius: BorderRadius.circular(8),
-        border: Border(
-          left: BorderSide(
-            color: isMe ? Colors.white : colorScheme.primary,
-            width: 3,
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        margin: const EdgeInsets.only(bottom: 8),
+        decoration: BoxDecoration(
+          color: (isMe ? Colors.white : colorScheme.primary).withValues(alpha: 0.2),
+          borderRadius: BorderRadius.circular(8),
+          border: Border(
+            left: BorderSide(
+              color: isMe ? Colors.white : colorScheme.primary,
+              width: 3,
+            ),
           ),
         ),
-      ),
-      child: Row(
+        child: Row(
         children: [
           // Miniatura de la foto/video/audio si existe
           if (hasImage || hasVideo || hasAudio)
@@ -119,6 +123,7 @@ class ReplyPreviewWidget extends StatelessWidget {
           ),
         ],
       ),
+    ),
     );
   }
 }
