@@ -898,10 +898,41 @@ class VideoCallService {
     try {
       print('📵 Terminando llamada: $callId');
 
-      await _firestore.collection('video_calls').doc(callId).update({
-        'status': 'ended',
-        'endedAt': FieldValue.serverTimestamp(),
-      });
+      // Obtener datos de la llamada antes de terminarla
+      final callDoc = await _firestore.collection('video_calls').doc(callId).get();
+      final callData = callDoc.data();
+
+      if (callData != null) {
+        final startedAt = callData['startedAt'] as Timestamp?;
+        final status = callData['status'] as String?;
+
+        // Actualizar status a ended
+        await _firestore.collection('video_calls').doc(callId).update({
+          'status': 'ended',
+          'endedAt': FieldValue.serverTimestamp(),
+        });
+
+        // Si la llamada fue contestada (tiene startedAt), crear mensaje de historial
+        if (startedAt != null && status == 'active') {
+          final endedAt = DateTime.now();
+          final startTime = startedAt.toDate();
+          final durationSeconds = endedAt.difference(startTime).inSeconds;
+
+          await _createAnsweredCallMessage(
+            callerId: callData['callerId'] ?? '',
+            receiverId: callData['receiverId'] ?? '',
+            callType: callData['callType'] ?? 'video',
+            callId: callId,
+            durationSeconds: durationSeconds,
+          );
+        }
+      } else {
+        // Si no hay datos, solo actualizar status
+        await _firestore.collection('video_calls').doc(callId).update({
+          'status': 'ended',
+          'endedAt': FieldValue.serverTimestamp(),
+        });
+      }
 
       await leaveChannel();
     } catch (e) {
@@ -1109,10 +1140,6 @@ class VideoCallService {
       final chatService = await import_chatService();
       final chatId = chatService.getChatId(callerId, receiverId);
 
-      // Obtener nombre del caller
-      final callerDoc = await _firestore.collection('users').doc(callerId).get();
-      final callerName = callerDoc.data()?['name'] ?? 'Usuario';
-
       // Crear mensaje de llamada perdida en el chat
       await _firestore
           .collection('chats')
@@ -1144,6 +1171,74 @@ class VideoCallService {
     } catch (e) {
       print('❌ Error creando mensaje de llamada perdida: $e');
       // No relanzar el error, es una operación secundaria
+    }
+  }
+
+  /// Crear un mensaje de llamada contestada con duración en el chat
+  Future<void> _createAnsweredCallMessage({
+    required String callerId,
+    required String receiverId,
+    required String callType, // 'video' o 'audio'
+    required String callId,
+    required int durationSeconds,
+  }) async {
+    try {
+      print('📞 Creando mensaje de llamada contestada en el chat (${durationSeconds}s)');
+
+      // Obtener información del chat entre los dos usuarios
+      final chatService = await import_chatService();
+      final chatId = chatService.getChatId(callerId, receiverId);
+
+      // Formatear duración
+      final duration = _formatDuration(durationSeconds);
+
+      // Crear mensaje de llamada contestada en el chat
+      await _firestore
+          .collection('chats')
+          .doc(chatId)
+          .collection('messages')
+          .add({
+        'senderId': callerId,
+        'type': 'answered_call',
+        'callType': callType,
+        'callId': callId,
+        'callDuration': durationSeconds,
+        'text': callType == 'video'
+            ? '📹 Videollamada • $duration'
+            : '📞 Llamada • $duration',
+        'timestamp': FieldValue.serverTimestamp(),
+        'isRead': false,
+      });
+
+      // Actualizar último mensaje del chat
+      await _firestore.collection('chats').doc(chatId).set({
+        'lastMessage': callType == 'video'
+            ? '📹 Videollamada • $duration'
+            : '📞 Llamada • $duration',
+        'lastMessageSender': callerId,
+        'lastMessageTime': FieldValue.serverTimestamp(),
+        'participants': [callerId, receiverId],
+      }, SetOptions(merge: true));
+
+      print('✅ Mensaje de llamada contestada creado en el chat');
+    } catch (e) {
+      print('❌ Error creando mensaje de llamada contestada: $e');
+      // No relanzar el error, es una operación secundaria
+    }
+  }
+
+  /// Formatear duración en formato legible
+  String _formatDuration(int seconds) {
+    if (seconds < 60) {
+      return '${seconds}s';
+    } else if (seconds < 3600) {
+      final minutes = seconds ~/ 60;
+      final secs = seconds % 60;
+      return secs > 0 ? '${minutes}m ${secs}s' : '${minutes}m';
+    } else {
+      final hours = seconds ~/ 3600;
+      final minutes = (seconds % 3600) ~/ 60;
+      return minutes > 0 ? '${hours}h ${minutes}m' : '${hours}h';
     }
   }
 

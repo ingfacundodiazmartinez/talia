@@ -226,16 +226,27 @@ class _ParentArchivedChatsScreenState extends State<ParentArchivedChatsScreen> {
                                     builder: (context, blockedSnapshot) {
                                       final isBlocked = blockedSnapshot.data ?? false;
 
+                                      // Verificar si el chat fue limpiado y no hay mensajes nuevos
+                                      final parentId = FirebaseAuth.instance.currentUser?.uid ?? '';
+                                      final clearedAt = chatData['clearedAt_$parentId'] as Timestamp?;
+                                      final lastMessageTime = chatData['lastMessageTime'] as Timestamp?;
+                                      final isChatCleared = clearedAt != null &&
+                                          (lastMessageTime == null || clearedAt.compareTo(lastMessageTime) >= 0);
+
                                       return _buildArchivedChatItem(
                                         chatId: chatDoc.id,
                                         userId: otherUserId,
                                         name: displayName,
                                         lastMessage: isBlocked
                                             ? '🔒 Contacto bloqueado'
-                                            : (chatData['lastMessage'] ?? ''),
-                                        time: ChatUtils.formatChatTime(
-                                          chatData['lastMessageTime'],
-                                        ),
+                                            : (isChatCleared
+                                                ? 'Inicia una conversación...'
+                                                : (chatData['lastMessage'] ?? '')),
+                                        time: isChatCleared
+                                            ? ''
+                                            : ChatUtils.formatChatTime(
+                                                chatData['lastMessageTime'],
+                                              ),
                                         isOnline: userData['isOnline'] ?? false,
                                         photoURL: userData['photoURL'],
                                         isBlocked: isBlocked,
@@ -290,8 +301,8 @@ class _ParentArchivedChatsScreenState extends State<ParentArchivedChatsScreen> {
       child: GestureDetector(
         onTap: () {
           // MaterialPageRoute evita parpadeo Y habilita swipe-to-go-back en iOS
-          Navigator.push(
-            context,
+          // El bottom nav se oculta automáticamente por el NavigatorObserver del shell
+          Navigator.of(context).push(
             MaterialPageRoute(
               builder: (context) => ChatDetailScreen(
                 chatId: chatId,

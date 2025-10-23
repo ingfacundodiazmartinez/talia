@@ -43,8 +43,7 @@ class NoChildrenCard extends StatelessWidget {
           SizedBox(height: 16),
           ElevatedButton.icon(
             onPressed: () {
-              Navigator.push(
-                context,
+              Navigator.of(context).push(
                 MaterialPageRoute(
                     builder: (context) => GenerateLinkCodeScreen()),
               );

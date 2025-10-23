@@ -168,7 +168,7 @@ class _DeleteAccountDialogState extends State<DeleteAccountDialog> {
                     await widget.onConfirm(
                       passwordController.text.trim(),
                     );
-                    Navigator.of(context, rootNavigator: true).pop();
+                    Navigator.of(context).pop();
                     // Navegar al login
                     Navigator.of(
                       context,

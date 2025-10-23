@@ -42,8 +42,9 @@ class ChatInputBar extends StatelessWidget {
     return Container(
       color: isDarkMode ? const Color(0xFF1C1B1F) : colorScheme.surface,
       child: SafeArea(
+        top: false,
         child: Container(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.fromLTRB(12, 16, 12, 12),
           decoration: BoxDecoration(
             color: Colors.transparent,
             boxShadow: isDarkMode
@@ -147,10 +148,15 @@ class ChatInputBar extends StatelessWidget {
                     );
                   }
 
-                  // Si no hay texto, mostrar botón de audio con presión continua
+                  // Si no hay texto, mostrar botón de audio con toggle
                   return GestureDetector(
-                    onLongPressStart: (_) => onRecordStart?.call(),
-                    onLongPressEnd: (_) => onRecordEnd?.call(),
+                    onTap: () {
+                      if (isRecording) {
+                        onRecordEnd?.call();
+                      } else {
+                        onRecordStart?.call();
+                      }
+                    },
                     child: Container(
                       width: 48,
                       height: 48,
@@ -159,7 +165,7 @@ class ChatInputBar extends StatelessWidget {
                         shape: BoxShape.circle,
                       ),
                       child: Icon(
-                        isRecording ? Icons.mic : Icons.mic_none,
+                        isRecording ? Icons.stop : Icons.mic_none,
                         color: Colors.white,
                         size: 24,
                       ),

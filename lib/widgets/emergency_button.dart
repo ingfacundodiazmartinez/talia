@@ -161,8 +161,7 @@ class _EmergencyButtonState extends State<EmergencyButton>
 
       // Navegar a la pantalla de videollamada
       if (mounted) {
-        await Navigator.push(
-          context,
+        await Navigator.of(context, rootNavigator: true).push(
           MaterialPageRoute(
             builder: (context) => VideoCallScreen(
               callId: emergencyId,

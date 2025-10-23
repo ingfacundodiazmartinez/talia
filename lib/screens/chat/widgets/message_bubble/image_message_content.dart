@@ -41,7 +41,7 @@ class ImageMessageContent extends StatelessWidget {
                   child: ConstrainedBox(
                     constraints: BoxConstraints(
                       maxWidth: MediaQuery.of(context).size.width * 0.6,
-                      maxHeight: 220,
+                      maxHeight: 300,
                     ),
                     child: Image.file(
                       File(localPath!),
@@ -65,106 +65,115 @@ class ImageMessageContent extends StatelessWidget {
                   },
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(8),
-                    child: Container(
-                      width: MediaQuery.of(context).size.width * 0.6,
-                      height: 180,
-                      color: Colors.black,
-                      child: Builder(
-                        builder: (context) {
-                          print('🖼️ [DEBUG] Intentando cargar imagen: $imageUrl');
-                          return CachedNetworkImage(
-                            imageUrl: imageUrl!,
-                            fit: BoxFit.cover,
-                            // Optimización de memoria: limitar tamaño en RAM
-                            memCacheWidth: (MediaQuery.of(context).size.width *
-                                    0.6 *
-                                    MediaQuery.of(context).devicePixelRatio)
-                                .round(),
-                            memCacheHeight: (180 * MediaQuery.of(context).devicePixelRatio).round(),
-                            // Optimización de disco: limitar tamaño de caché
-                            maxWidthDiskCache: 800,
-                            maxHeightDiskCache: 800,
-                            placeholder: (context, url) => Container(
-                          width: MediaQuery.of(context).size.width * 0.6,
-                          height: 180,
-                          decoration: BoxDecoration(
-                            color: colorScheme.surfaceContainerHighest,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.image_outlined,
-                                size: 48,
-                                color: colorScheme.onSurfaceVariant.withValues(alpha: 0.3),
+                    child: Builder(
+                      builder: (context) {
+                        print('🖼️ [DEBUG] Intentando cargar imagen: $imageUrl');
+                        return CachedNetworkImage(
+                          imageUrl: imageUrl!,
+                          // Usar imageBuilder para controlar el aspect ratio
+                          imageBuilder: (context, imageProvider) {
+                            return ConstrainedBox(
+                              constraints: BoxConstraints(
+                                maxWidth: MediaQuery.of(context).size.width * 0.6,
+                                maxHeight: 300,
                               ),
-                              const SizedBox(height: 12),
-                              const SizedBox(
-                                width: 32,
-                                height: 32,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 3,
-                                ),
+                              child: Image(
+                                image: imageProvider,
+                                fit: BoxFit.contain,
                               ),
-                            ],
-                          ),
+                            );
+                          },
+                          // Optimización de memoria: limitar tamaño en RAM
+                          memCacheWidth: (MediaQuery.of(context).size.width *
+                                  0.6 *
+                                  MediaQuery.of(context).devicePixelRatio)
+                              .round(),
+                          // Optimización de disco: limitar tamaño de caché
+                          maxWidthDiskCache: 800,
+                          maxHeightDiskCache: 800,
+                          placeholder: (context, url) => Container(
+                        width: MediaQuery.of(context).size.width * 0.6,
+                        height: 180,
+                        decoration: BoxDecoration(
+                          color: colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(8),
                         ),
-                        errorWidget: (context, url, error) => Container(
-                          width: MediaQuery.of(context).size.width * 0.6,
-                          height: 180,
-                          decoration: BoxDecoration(
-                            color: colorScheme.errorContainer,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.broken_image_outlined,
-                                size: 48,
-                                color: colorScheme.error,
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                'Error cargando imagen',
-                                style: TextStyle(
-                                  color: colorScheme.error,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ],
-                          ),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.image_outlined,
+                              size: 48,
+                              color: colorScheme.onSurfaceVariant.withValues(alpha: 0.3),
                             ),
-                          );
-                        },
+                            const SizedBox(height: 12),
+                            const SizedBox(
+                              width: 32,
+                              height: 32,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 3,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
+                      errorWidget: (context, url, error) => Container(
+                        width: MediaQuery.of(context).size.width * 0.6,
+                        height: 180,
+                        decoration: BoxDecoration(
+                          color: colorScheme.errorContainer,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.broken_image_outlined,
+                              size: 48,
+                              color: colorScheme.error,
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Error cargando imagen',
+                              style: TextStyle(
+                                color: colorScheme.error,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                          ),
+                        );
+                      },
                     ),
                   ),
                 ),
 
               // Overlay de "Subiendo..." si está enviando
               if (status == MessageStatus.sending)
-                Container(
-                  width: MediaQuery.of(context).size.width * 0.6,
-                  height: 200,
-                  color: Colors.black.withValues(alpha: 0.4),
-                  child: const Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      CircularProgressIndicator(
-                        color: Colors.white,
-                        strokeWidth: 2,
-                      ),
-                      SizedBox(height: 8),
-                      Text(
-                        'Subiendo...',
-                        style: TextStyle(
+                Positioned.fill(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.4),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        CircularProgressIndicator(
                           color: Colors.white,
-                          fontSize: 12,
+                          strokeWidth: 2,
                         ),
-                      ),
-                    ],
+                        SizedBox(height: 8),
+                        Text(
+                          'Subiendo...',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
             ],

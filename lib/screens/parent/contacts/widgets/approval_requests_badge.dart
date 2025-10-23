@@ -41,8 +41,7 @@ class ApprovalRequestsBadge extends StatelessWidget {
                 size: iconSize,
               ),
               onPressed: () {
-                Navigator.push(
-                  context,
+                Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (context) => ParentApprovalRequestsScreen(),
                   ),

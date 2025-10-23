@@ -1,0 +1,54 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_slidable/flutter_slidable.dart';
+
+/// Custom slidable action with better sizing for chat actions
+class CustomSlidableAction extends StatelessWidget {
+  final VoidCallback onTap;
+  final IconData icon;
+  final String label;
+  final Color backgroundColor;
+  final Color foregroundColor;
+
+  const CustomSlidableAction({
+    super.key,
+    required this.onTap,
+    required this.icon,
+    required this.label,
+    required this.backgroundColor,
+    this.foregroundColor = Colors.white,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () {
+        onTap();
+        Slidable.of(context)?.close();
+      },
+      child: Container(
+        width: 88, // Ancho fijo para cada botón
+        color: backgroundColor,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              color: foregroundColor,
+              size: 28, // Icono más grande
+            ),
+            SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: foregroundColor,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

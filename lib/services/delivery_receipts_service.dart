@@ -103,7 +103,8 @@ class DeliveryReceiptsService {
         .snapshots()
         .map((snapshot) {
       final data = snapshot.data();
-      return data?['showReadReceipts'] ?? true;
+      // Usar sendReadReceipts como campo principal
+      return data?['sendReadReceipts'] ?? true;
     });
   }
 }

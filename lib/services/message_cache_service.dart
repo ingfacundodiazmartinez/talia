@@ -15,7 +15,8 @@ class MessageCacheService {
   MessageCacheService._internal();
 
   static const String _boxName = 'messages_cache';
-  static const int maxMessagesPerChat = 200;
+  // Cache ilimitado - la paginación se maneja en los controllers
+  static const int? maxMessagesPerChat = null;
 
   Box? _messagesBox;
 
@@ -25,8 +26,36 @@ class MessageCacheService {
       await Hive.initFlutter();
       _messagesBox = await Hive.openBox(_boxName);
       print('✅ [MessageCacheService] Inicializado correctamente');
+
+      // Ejecutar limpieza de mensajes viejos (si es necesario)
+      await _checkAndCleanupOldMessages();
     } catch (e) {
       print('❌ [MessageCacheService] Error inicializando: $e');
+    }
+  }
+
+  /// Verifica si es necesario ejecutar limpieza y la ejecuta (máximo una vez al día)
+  Future<void> _checkAndCleanupOldMessages() async {
+    if (_messagesBox == null) return;
+
+    try {
+      const lastCleanupKey = '_last_cleanup_timestamp';
+      final lastCleanup = _messagesBox!.get(lastCleanupKey) as int?;
+      final now = DateTime.now().millisecondsSinceEpoch;
+
+      // Si no hay registro o han pasado más de 24 horas, ejecutar limpieza
+      if (lastCleanup == null || (now - lastCleanup) > 24 * 60 * 60 * 1000) {
+        print('🧹 [MessageCacheService] Ejecutando limpieza programada...');
+        await cleanupOldMessages();
+
+        // Guardar timestamp de esta limpieza
+        await _messagesBox!.put(lastCleanupKey, now);
+      } else {
+        final nextCleanup = Duration(milliseconds: 24 * 60 * 60 * 1000 - (now - lastCleanup));
+        print('⏭️ [MessageCacheService] Próxima limpieza en ${nextCleanup.inHours} horas');
+      }
+    } catch (e) {
+      print('❌ [MessageCacheService] Error verificando limpieza: $e');
     }
   }
 
@@ -163,14 +192,14 @@ class MessageCacheService {
 
   /// Limpiar mensajes viejos si excedemos el límite
   Future<void> _cleanOldMessages(String chatId) async {
-    if (_messagesBox == null) return;
+    if (_messagesBox == null || maxMessagesPerChat == null) return;
 
     try {
       final messages = await getMessages(chatId);
 
-      if (messages.length > maxMessagesPerChat) {
+      if (messages.length > maxMessagesPerChat!) {
         // Eliminar los mensajes más viejos
-        final toDelete = messages.skip(maxMessagesPerChat).toList();
+        final toDelete = messages.skip(maxMessagesPerChat!).toList();
         for (final message in toDelete) {
           await deleteMessage(chatId, message.id);
         }
@@ -238,6 +267,51 @@ class MessageCacheService {
         return MessageStatus.error;
       default:
         return MessageStatus.sent;
+    }
+  }
+
+  /// Limpiar mensajes más viejos de 7 días del cache local
+  Future<void> cleanupOldMessages({int daysToKeep = 7}) async {
+    if (_messagesBox == null) return;
+
+    try {
+      final now = DateTime.now();
+      final cutoffDate = now.subtract(Duration(days: daysToKeep));
+      final cutoffMillis = cutoffDate.millisecondsSinceEpoch;
+
+      int deletedCount = 0;
+      final keysToDelete = <String>[];
+
+      // Iterar sobre todos los mensajes en el cache
+      for (final key in _messagesBox!.keys) {
+        final data = _messagesBox!.get(key) as Map<dynamic, dynamic>?;
+        if (data != null) {
+          // Verificar timestamp
+          final timestamp = data['timestamp'] as int?;
+          final localTimestamp = data['localTimestamp'] as int?;
+
+          // Usar el timestamp que esté disponible
+          final messageTime = timestamp ?? localTimestamp;
+
+          if (messageTime != null && messageTime < cutoffMillis) {
+            keysToDelete.add(key.toString());
+            deletedCount++;
+          }
+        }
+      }
+
+      // Eliminar mensajes viejos
+      for (final key in keysToDelete) {
+        await _messagesBox!.delete(key);
+      }
+
+      if (deletedCount > 0) {
+        print('🗑️ [MessageCacheService] Limpiados $deletedCount mensajes más viejos de $daysToKeep días');
+      } else {
+        print('✅ [MessageCacheService] No hay mensajes viejos que limpiar');
+      }
+    } catch (e) {
+      print('❌ [MessageCacheService] Error limpiando mensajes viejos: $e');
     }
   }
 

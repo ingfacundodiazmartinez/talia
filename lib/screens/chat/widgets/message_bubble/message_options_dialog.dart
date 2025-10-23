@@ -4,7 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 /// Widget que muestra el diálogo de opciones de un mensaje
 class MessageOptionsDialog {
-  /// Muestra el bottom sheet con opciones del mensaje (reaccionar, eliminar, reportar)
+  /// Muestra el bottom sheet con opciones del mensaje (reaccionar, eliminar, reportar, reenviar)
   static void show({
     required BuildContext context,
     required bool isMe,
@@ -14,7 +14,17 @@ class MessageOptionsDialog {
     required String messageId,
     required String chatId,
     String? messageText,
+    VoidCallback? onForward,
+    VoidCallback? onSelectMessages,
+    bool isGroupChat = false,
+    VoidCallback? onViewInfo,
   }) {
+    print('🔍 [MessageOptionsDialog] Mostrando diálogo');
+    print('   isMe: $isMe');
+    print('   isGroupChat: $isGroupChat');
+    print('   onViewInfo != null: ${onViewInfo != null}');
+    print('   Mostrar "Ver información": ${isMe && isGroupChat && onViewInfo != null}');
+
     // Verificar si puede eliminar el mensaje (propio y < 5 minutos)
     bool canDelete = false;
     if (isMe && timestamp != null && onDelete != null) {
@@ -41,6 +51,43 @@ class MessageOptionsDialog {
                     Navigator.pop(bottomSheetContext);
                     // Llamar al callback original para mostrar el picker de reacciones
                     onLongPress(context, messageId);
+                  },
+                ),
+              // Opción: Reenviar
+              if (onForward != null)
+                ListTile(
+                  leading: const Icon(Icons.forward),
+                  title: const Text('Reenviar'),
+                  onTap: () {
+                    Navigator.pop(bottomSheetContext);
+                    onForward();
+                  },
+                ),
+              // Opción: Seleccionar mensajes
+              if (onSelectMessages != null)
+                ListTile(
+                  leading: const Icon(Icons.checklist),
+                  title: const Text('Seleccionar mensajes'),
+                  onTap: () {
+                    Navigator.pop(bottomSheetContext);
+                    onSelectMessages();
+                  },
+                ),
+              // Opción: Ver información (solo para mensajes propios en grupos)
+              if (isMe && isGroupChat && onViewInfo != null)
+                ListTile(
+                  leading: const Icon(Icons.info_outline),
+                  title: const Text('Ver información'),
+                  subtitle: const Text('Ver quién leyó el mensaje', style: TextStyle(fontSize: 12)),
+                  onTap: () async {
+                    print('🔍 [MessageOptionsDialog] "Ver información" presionado');
+                    print('   Cerrando bottom sheet...');
+                    Navigator.pop(bottomSheetContext);
+                    print('   Esperando 300ms...');
+                    await Future.delayed(Duration(milliseconds: 300));
+                    print('   Llamando a onViewInfo()...');
+                    onViewInfo();
+                    print('   onViewInfo() completado');
                   },
                 ),
               // Opción: Eliminar (solo si es propio y < 5 minutos)

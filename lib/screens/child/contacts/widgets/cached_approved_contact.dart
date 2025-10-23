@@ -246,8 +246,7 @@ class _CachedApprovedContactState extends State<CachedApprovedContact> {
       child: GestureDetector(
         onTap: () {
           final chatId = _getChatId(widget.currentUserId, contactId);
-          Navigator.push(
-            context,
+          Navigator.of(context).push(
             MaterialPageRoute(
               builder: (context) => ChatDetailScreen(
                 chatId: chatId,

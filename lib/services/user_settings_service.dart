@@ -43,9 +43,10 @@ class UserSettingsService {
 
       final doc = await _firestore.collection('users').doc(uid).get();
       final data = doc.data();
-      return data?['showReadReceipts'] ?? true;
+      // Usar sendReadReceipts como campo principal
+      return data?['sendReadReceipts'] ?? true;
     } catch (e) {
-      print('Error checking showReadReceipts: $e');
+      print('Error checking sendReadReceipts: $e');
       return true; // Default to true en caso de error
     }
   }

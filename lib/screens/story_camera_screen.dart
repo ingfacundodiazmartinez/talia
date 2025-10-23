@@ -1,15 +1,20 @@
 import 'dart:io';
+import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:image/image.dart' as img;
+import 'package:image_picker/image_picker.dart';
 import '../services/deepar_service.dart';
+import '../services/story_service.dart';
+import '../services/stickers_service.dart';
 import '../widgets/permission_dialog.dart';
-import 'story/story_preview_screen.dart';
 import '../widgets/camera/flutter_camera_view.dart';
 import '../widgets/camera/deepar_camera_view.dart';
+import 'package:flutter_story_editor/flutter_story_editor.dart';
+import 'package:flutter_story_editor/src/controller/controller.dart';
 
 class StoryCameraScreen extends StatefulWidget {
   const StoryCameraScreen({super.key});
@@ -26,19 +31,28 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   bool _isLoading = false;
   int _selectedCameraIndex = 0;
   String? _selectedFilter;
-  String? _selectedARFilter = DeepARFilters.baseBeauty; // Iniciar con el nuevo filtro
+  String? _selectedARFilter = DeepARFilters.none; // Iniciar sin filtro
   String _filterType = 'deepar'; // Solo DeepAR por defecto
   bool _hasInitializationFailed = false;
   bool _isDeepARInitialized = false;
   bool _hasCameraPermissions = false; // CRÍTICO: Flag para saber si tenemos permisos
+  int _deepARReinitCounter = 0; // Contador para forzar recreación de DeepARCameraView
+  bool _isRecordingVideo = false;
+  String? _recordedVideoPath;
+  Timer? _recordingTimer; // Timer para límite de 10 segundos
+  int _recordingSecondsRemaining = 10; // Segundos restantes de grabación
 
   final DeepARService _deepARService = DeepARService();
+  final ImagePicker _imagePicker = ImagePicker();
+
+  // Stickers service and cache
+  List<StickerMetadata> _stickerMetadata = [];
+  bool _isLoadingStickers = false;
 
   // Filtros DeepAR disponibles realmente
   final Map<String, Map<String, dynamic>> _deepARFilters = {
     DeepARFilters.none: {'name': 'Normal', 'icon': Icons.face, 'emoji': '😊'},
     DeepARFilters.vendetta: {'name': 'Vendetta', 'icon': Icons.face, 'emoji': '🎭'},
-    DeepARFilters.baseBeauty: {'name': 'Base Beauty', 'icon': Icons.face, 'emoji': '✨'},
     DeepARFilters.eightBitHearts: {'name': '8-Bit Hearts', 'icon': Icons.favorite, 'emoji': '💕'},
     DeepARFilters.elephantTrunk: {'name': 'Elephant Trunk', 'icon': Icons.face, 'emoji': '🐘'},
     DeepARFilters.emotionMeter: {'name': 'Emotion Meter', 'icon': Icons.mood, 'emoji': '📊'},
@@ -49,7 +63,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     DeepARFilters.makeupLook: {'name': 'Makeup Look', 'icon': Icons.face, 'emoji': '💄'},
     DeepARFilters.neonDevilHorns: {'name': 'Neon Devil Horns', 'icon': Icons.ac_unit, 'emoji': '😈'},
     DeepARFilters.pingPong: {'name': 'Ping Pong', 'icon': Icons.sports_tennis, 'emoji': '🏓'},
-    DeepARFilters.snail: {'name': 'Snail', 'icon': Icons.pets, 'emoji': '🐌'},
+    // DeepARFilters.snail - ELIMINADO: tiene fondo blanco que hace invisibles los controles
     DeepARFilters.splitViewLook: {'name': 'Split View Look', 'icon': Icons.flip, 'emoji': '🔀'},
     DeepARFilters.stallone: {'name': 'Stallone', 'icon': Icons.face, 'emoji': '🥊'},
     DeepARFilters.vendettaMask: {'name': 'Vendetta Mask', 'icon': Icons.face, 'emoji': '🎭'},
@@ -69,6 +83,9 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     WidgetsBinding.instance.addObserver(this);
 
     _initializeCamera();
+
+    // Cargar stickers en segundo plano mientras la cámara se inicializa
+    _loadCustomStickers();
   }
 
   Future<void> _initializeCamera() async {
@@ -345,26 +362,15 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         throw Exception('El archivo de imagen no existe: $finalImagePath');
       }
 
-      print('✅ Navegando a StoryPreviewScreen con: $finalImagePath');
+      print('✅ Navegando al editor de stories con: $finalImagePath');
 
-      // Navegar a pantalla de preview
+      // Navegar a pantalla de edición
       if (mounted) {
         // Esperar un frame antes de navegar para asegurar que el estado se actualizó
         await Future.delayed(Duration(milliseconds: 100));
 
         if (mounted) {
-          await Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => StoryPreviewScreen(
-                imagePath: finalImagePath,
-                filter: _selectedFilter,
-                arFilter: _selectedARFilter,
-              ),
-            ),
-          );
-
-          print('✅ Regresó de StoryPreviewScreen');
+          await _openStoryEditor(finalImagePath, isVideo: false);
         }
       }
     } catch (e, stackTrace) {
@@ -431,6 +437,478 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       return imagePath;
     }
   }
+
+  Future<void> _startVideoRecording() async {
+    if (_isLoading || _isRecordingVideo) return;
+
+    try {
+      print('🎥 Iniciando grabación de video...');
+      setState(() {
+        _isLoading = true;
+        _recordingSecondsRemaining = 10; // Reset contador
+      });
+
+      // Si estamos en modo DeepAR, usar su grabación de video
+      if (_filterType == 'deepar' && _isDeepARInitialized) {
+        print('🎥 Iniciando grabación con DeepAR...');
+        // Generar path para el video
+        final directory = await getTemporaryDirectory();
+        final videoPath =
+            '${directory.path}/deepar_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
+
+        // Obtener dimensiones de la pantalla
+        final screenWidth = MediaQuery.of(context).size.width;
+        final screenHeight = MediaQuery.of(context).size.height;
+        final devicePixelRatio = MediaQuery.of(context).devicePixelRatio;
+
+        // Calcular dimensiones en píxeles
+        final widthPx = (screenWidth * devicePixelRatio).round();
+        final heightPx = (screenHeight * devicePixelRatio).round();
+
+        print('📱 Dimensiones de pantalla: ${widthPx}x${heightPx}');
+
+        final success = await _deepARService.startRecording(
+          outputPath: videoPath,
+          width: widthPx,
+          height: heightPx,
+        );
+
+        if (success) {
+          setState(() {
+            _isRecordingVideo = true;
+            _recordedVideoPath = videoPath;
+            _isLoading = false;
+          });
+
+          // CRÍTICO: Iniciar timer de 10 segundos
+          _startRecordingTimer();
+          print('✅ Grabación de video iniciada: $videoPath');
+        } else {
+          throw Exception('No se pudo iniciar la grabación con DeepAR');
+        }
+      } else {
+        // Modo Flutter camera
+        if (_controller == null || !_controller!.value.isInitialized) {
+          throw Exception('Cámara no inicializada');
+        }
+
+        await _controller!.startVideoRecording();
+        setState(() {
+          _isRecordingVideo = true;
+          _isLoading = false;
+        });
+
+        // CRÍTICO: Iniciar timer de 10 segundos
+        _startRecordingTimer();
+        print('✅ Grabación de video iniciada con Flutter Camera');
+      }
+    } catch (e) {
+      print('❌ Error iniciando grabación: $e');
+      setState(() {
+        _isLoading = false;
+        _isRecordingVideo = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al iniciar grabación'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  /// Iniciar timer de grabación con límite de 10 segundos
+  void _startRecordingTimer() {
+    _recordingTimer?.cancel(); // Cancelar timer anterior si existe
+    _recordingTimer = Timer.periodic(Duration(seconds: 1), (timer) {
+      setState(() {
+        _recordingSecondsRemaining--;
+      });
+
+      print('⏱️ Tiempo restante: $_recordingSecondsRemaining segundos');
+
+      // Si llegamos a 0, detener automáticamente
+      if (_recordingSecondsRemaining <= 0) {
+        timer.cancel();
+        print('⏱️ Límite de 10 segundos alcanzado - deteniendo grabación automáticamente');
+        _stopVideoRecording();
+      }
+    });
+  }
+
+  Future<void> _stopVideoRecording() async {
+    if (!_isRecordingVideo) return;
+
+    // 🛑 Cancelar timer de grabación
+    _recordingTimer?.cancel();
+    _recordingTimer = null;
+
+    // CRÍTICO: Marcar como no grabando INMEDIATAMENTE para prevenir llamadas múltiples
+    setState(() {
+      _isRecordingVideo = false;
+      _isLoading = true;
+    });
+
+    try {
+      print('🛑 Deteniendo grabación de video...');
+      String? videoPath;
+
+      if (_filterType == 'deepar' && _isDeepARInitialized) {
+        print('🛑 Deteniendo grabación con DeepAR...');
+        final success = await _deepARService.stopRecording();
+
+        if (success) {
+          // Usar el path que guardamos al iniciar la grabación
+          videoPath = _recordedVideoPath;
+          print('✅ Video grabado con DeepAR: $videoPath');
+
+          // IMPORTANTE: Esperar a que el archivo esté completamente escrito
+          // DeepAR puede necesitar un momento para finalizar la escritura del archivo
+          print('⏳ Esperando a que el video termine de escribirse...');
+          await Future.delayed(Duration(milliseconds: 1000));
+
+          // Verificar múltiples veces si el archivo existe
+          int attempts = 0;
+          bool fileFound = false;
+          while (attempts < 15 && videoPath != null) {
+            if (await File(videoPath).exists()) {
+              final fileSize = await File(videoPath).length();
+              print('✅ Archivo verificado: $videoPath (${fileSize} bytes)');
+              fileFound = true;
+              break;
+            }
+            print('⏳ Esperando archivo... (intento ${attempts + 1}/15)');
+            await Future.delayed(Duration(milliseconds: 500));
+            attempts++;
+          }
+
+          // Si no encontramos el archivo en el path esperado, buscar en el directorio temporal
+          if (!fileFound) {
+            print('⚠️ Archivo no encontrado en path esperado, buscando en directorio temporal...');
+            final directory = await getTemporaryDirectory();
+            final tempDir = Directory(directory.path);
+
+            // Buscar archivos .mp4 recientes (últimos 30 segundos)
+            final now = DateTime.now();
+            final files = tempDir.listSync()
+                .where((file) => file.path.endsWith('.mp4'))
+                .map((file) => File(file.path))
+                .where((file) {
+                  final stat = file.statSync();
+                  final modified = stat.modified;
+                  return now.difference(modified).inSeconds < 30;
+                })
+                .toList();
+
+            files.sort((a, b) => b.statSync().modified.compareTo(a.statSync().modified));
+
+            if (files.isNotEmpty) {
+              videoPath = files.first.path;
+              print('✅ Archivo encontrado en búsqueda: $videoPath');
+            } else {
+              print('❌ No se encontró ningún archivo de video reciente');
+              videoPath = null;
+            }
+          }
+        } else {
+          throw Exception('Error deteniendo grabación de DeepAR');
+        }
+      } else {
+        // Modo Flutter camera
+        if (_controller == null || !_controller!.value.isInitialized) {
+          throw Exception('Cámara no inicializada');
+        }
+
+        final video = await _controller!.stopVideoRecording();
+        videoPath = video.path;
+        print('✅ Video grabado con Flutter Camera: $videoPath');
+      }
+
+      // Actualizar estado de loading
+      setState(() {
+        _isLoading = false;
+      });
+
+      // Verificar que el archivo existe
+      if (videoPath != null && await File(videoPath).exists()) {
+        // Verificar tamaño del archivo
+        final fileSize = await File(videoPath).length();
+        print('📹 Video capturado - Tamaño: ${fileSize / 1024 / 1024} MB');
+
+        print('✅ Navegando al editor de stories con video: $videoPath');
+
+        if (mounted) {
+          await _openStoryEditor(videoPath, isVideo: true);
+        }
+
+          // Reinicializar DeepAR si es necesario
+          if (_filterType == 'deepar' && mounted) {
+            print('🔄 Reinicializando DeepAR...');
+            await _deepARService.dispose();
+            setState(() {
+              _isDeepARInitialized = false;
+              _deepARReinitCounter++;
+            });
+          }
+        }
+      else {
+        throw Exception('El archivo de video no existe');
+      }
+    } catch (e) {
+      print('❌ Error deteniendo grabación: $e');
+      setState(() {
+        _isLoading = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al grabar video'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  /// Toggle video recording on/off
+  Future<void> _toggleVideoRecording() async {
+    if (_isRecordingVideo) {
+      // Detener grabación
+      await _stopVideoRecording();
+    } else {
+      // Iniciar grabación
+      await _startVideoRecording();
+    }
+  }
+
+  /// Cargar stickers personalizados desde Firebase Storage
+  /// Carga metadata de stickers de forma asíncrona (no bloquea la UI)
+  /// Los stickers individuales se descargarán lazy cuando se muestren
+  Future<void> _loadCustomStickers() async {
+    if (_isLoadingStickers || _stickerMetadata.isNotEmpty) {
+      print('⏭️ Skipping stickers load: isLoading=$_isLoadingStickers, count=${_stickerMetadata.length}');
+      return;
+    }
+
+    setState(() {
+      _isLoadingStickers = true;
+    });
+
+    try {
+      print('🎨 Cargando metadata de stickers desde Firestore...');
+      final stickersService = StickersService();
+
+      // Solo obtener metadata (rápido, no descarga archivos)
+      print('📥 Obteniendo metadata de stickers...');
+      final stickersMetadata = await stickersService.getAvailableStickers();
+      print('✅ Metadata obtenida: ${stickersMetadata.length} stickers encontrados');
+
+      if (stickersMetadata.isEmpty) {
+        print('⚠️ No hay stickers en Firestore!');
+      }
+
+      if (mounted) {
+        setState(() {
+          _stickerMetadata = stickersMetadata;
+          _isLoadingStickers = false;
+        });
+        print('✅ Metadata cargada en memoria: ${_stickerMetadata.length} stickers');
+
+        // Debug: mostrar categorías
+        final categories = stickersMetadata.map((s) => s.category).toSet();
+        print('📂 Categorías: ${categories.join(", ")}');
+        print('⚡ Descarga lazy habilitada - los stickers se descargarán cuando se muestren');
+      }
+    } catch (e, stackTrace) {
+      print('❌ Error cargando stickers: $e');
+      print('Stack trace: $stackTrace');
+      if (mounted) {
+        setState(() {
+          _isLoadingStickers = false;
+        });
+      }
+    }
+  }
+
+  /// Abrir editor de historias con FlutterStoryEditor
+  Future<void> _openStoryEditor(String mediaPath, {required bool isVideo}) async {
+    try {
+      print('🎨 Abriendo editor de stories...');
+      print('📊 Stickers disponibles: ${_stickerMetadata.length}');
+
+      final controller = FlutterStoryEditorController();
+      final captionController = TextEditingController();
+
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => Scaffold(
+            body: FlutterStoryEditor(
+              controller: controller,
+              captionController: captionController,
+              selectedFiles: [File(mediaPath)],
+              stickerMetadata: _stickerMetadata.isNotEmpty ? _stickerMetadata.cast<dynamic>() : null,
+              useCustomStickersOnly: _stickerMetadata.isNotEmpty, // Use only custom stickers if available
+              onSaveClickListener: (List<File> editedFiles) async {
+                print('✅ Archivos editados: ${editedFiles.length}');
+
+                if (editedFiles.isNotEmpty && mounted) {
+                  final editedPath = editedFiles.first.path;
+                  print('📝 Publicando historia directamente...');
+
+                  // Publicar historia primero (ANTES de cerrar el editor)
+                  await _publishStory(
+                    mediaPath: editedPath,
+                    isVideo: isVideo,
+                    caption: captionController.text.trim().isEmpty
+                        ? null
+                        : captionController.text.trim(),
+                  );
+
+                  // Cerrar el editor DESPUÉS de publicar
+                  if (mounted) {
+                    Navigator.pop(context);
+                  }
+                }
+              },
+            ),
+          ),
+        ),
+      );
+
+      print('✅ Regresó del editor');
+    } catch (e) {
+      print('❌ Error en editor de stories: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al editar la historia'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  /// Publicar historia directamente desde el editor
+  Future<void> _publishStory({
+    required String mediaPath,
+    required bool isVideo,
+    String? caption,
+  }) async {
+    try {
+      // NO mostrar dialog aquí - el loading se muestra en el CaptionView
+
+      final storyId = await StoryService().createStory(
+        mediaPath: mediaPath,
+        mediaType: isVideo ? 'video' : 'image',
+        caption: caption,
+        filter: _selectedFilter != null || _selectedARFilter != null
+            ? {'type': _selectedFilter, 'arFilter': _selectedARFilter}
+            : null,
+      );
+
+      print('✅ Historia publicada: $storyId');
+
+      // Cerrar la pantalla de cámara DESPUÉS de publicar
+      if (mounted) {
+        Navigator.pop(context); // Cerrar cámara
+      }
+    } catch (e) {
+      print('❌ Error publicando historia: $e');
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al compartir historia: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  /// Pick image or video from gallery
+  Future<void> _pickFromGallery() async {
+    try {
+      print('📸 Abriendo selector de galería...');
+
+      // Mostrar diálogo para seleccionar tipo de media
+      final mediaType = await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('Seleccionar media'),
+          content: Text('¿Qué deseas compartir?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'image'),
+              child: Text('📷 Foto'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'video'),
+              child: Text('🎥 Video'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text('Cancelar'),
+            ),
+          ],
+        ),
+      );
+
+      if (mediaType == null) return;
+
+      setState(() {
+        _isLoading = true;
+      });
+
+      XFile? pickedFile;
+      if (mediaType == 'image') {
+        pickedFile = await _imagePicker.pickImage(
+          source: ImageSource.gallery,
+          maxWidth: 1920,
+          maxHeight: 1920,
+          imageQuality: 85,
+        );
+      } else if (mediaType == 'video') {
+        pickedFile = await _imagePicker.pickVideo(
+          source: ImageSource.gallery,
+          maxDuration: Duration(seconds: 10), // Límite de 10 segundos
+        );
+      }
+
+      if (pickedFile != null && mounted) {
+        print('✅ Archivo seleccionado: ${pickedFile.path}');
+
+        // Abrir editor con el archivo seleccionado
+        await _openStoryEditor(
+          pickedFile!.path,
+          isVideo: mediaType == 'video',
+        );
+
+        print('✅ Regresó del editor');
+      }
+
+      setState(() {
+        _isLoading = false;
+      });
+    } catch (e) {
+      print('❌ Error seleccionando de galería: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al seleccionar archivo'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
 
   Widget _buildARFilterList() {
     return ListView.builder(
@@ -644,6 +1122,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     print('🗑️ StoryCameraScreen disposing...');
     WidgetsBinding.instance.removeObserver(this);
 
+    // Cancelar timer de grabación si existe
+    _recordingTimer?.cancel();
+    _recordingTimer = null;
+
     // Dispose controller de forma segura
     final controller = _controller;
     if (controller != null) {
@@ -766,9 +1248,85 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
+                        // Galería
+                        IconButton(
+                          onPressed: _isLoading || _isRecordingVideo ? null : _pickFromGallery,
+                          icon: Icon(
+                            Icons.photo_library,
+                            color: Colors.white,
+                            size: 32,
+                          ),
+                        ),
+
+                        // Botón para FOTO
+                        GestureDetector(
+                          onTap: _isLoading || _isRecordingVideo ? null : _takePicture,
+                          child: Container(
+                            width: 70,
+                            height: 70,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Colors.white.withOpacity(0.3),
+                              border: Border.all(
+                                color: Colors.white,
+                                width: 3,
+                              ),
+                            ),
+                            child: _isLoading && !_isRecordingVideo
+                                ? Center(
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 3,
+                                      valueColor: AlwaysStoppedAnimation<Color>(
+                                        Colors.white,
+                                      ),
+                                    ),
+                                  )
+                                : Icon(
+                                    Icons.camera_alt,
+                                    color: Colors.white,
+                                    size: 32,
+                                  ),
+                          ),
+                        ),
+
+                        // Botón para VIDEO
+                        GestureDetector(
+                          onTap: _isLoading ? null : _toggleVideoRecording,
+                          child: Container(
+                            width: 70,
+                            height: 70,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: _isRecordingVideo
+                                  ? Colors.red
+                                  : Colors.white.withOpacity(0.3),
+                              border: Border.all(
+                                color: _isRecordingVideo ? Colors.red : Colors.white,
+                                width: 3,
+                              ),
+                            ),
+                            child: _isLoading && _isRecordingVideo
+                                ? Center(
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 3,
+                                      valueColor: AlwaysStoppedAnimation<Color>(
+                                        Colors.white,
+                                      ),
+                                    ),
+                                  )
+                                : Icon(
+                                    _isRecordingVideo
+                                        ? Icons.stop
+                                        : Icons.videocam,
+                                    color: Colors.white,
+                                    size: 32,
+                                  ),
+                          ),
+                        ),
+
                         // Cambiar cámara
                         IconButton(
-                          onPressed: _cameras != null && _cameras!.length > 1
+                          onPressed: _cameras != null && _cameras!.length > 1 && !_isRecordingVideo
                               ? _switchCamera
                               : null,
                           icon: Icon(
@@ -777,37 +1335,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                             size: 32,
                           ),
                         ),
-
-                        // Botón de captura
-                        GestureDetector(
-                          onTap: _isLoading ? null : _takePicture,
-                          child: Container(
-                            width: 80,
-                            height: 80,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: Colors.white,
-                              border: Border.all(color: Colors.white, width: 4),
-                            ),
-                            child: _isLoading
-                                ? Center(
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 3,
-                                      valueColor: AlwaysStoppedAnimation<Color>(
-                                        Colors.black,
-                                      ),
-                                    ),
-                                  )
-                                : Icon(
-                                    Icons.camera_alt,
-                                    color: Colors.black,
-                                    size: 32,
-                                  ),
-                          ),
-                        ),
-
-                        // Placeholder para balance
-                        SizedBox(width: 48),
                       ],
                     ),
                   ),

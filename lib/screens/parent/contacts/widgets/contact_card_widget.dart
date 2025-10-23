@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../../../utils/chat_utils.dart';
 import '../../../chat_detail_screen.dart';
 import '../../../child_location_screen.dart';
@@ -43,8 +44,7 @@ class ContactCardWidget extends StatelessWidget {
     return GestureDetector(
       onTap: () {
         final chatId = ChatUtils.getChatId(currentUserId, contactId);
-        Navigator.push(
-          context,
+        Navigator.of(context).push(
           MaterialPageRoute(
             builder: (context) => ChatDetailScreen(
               chatId: chatId,
@@ -70,7 +70,7 @@ class ContactCardWidget extends StatelessWidget {
                   radius: 28,
                   backgroundColor: colorScheme.primary.withValues(alpha: 0.2),
                   backgroundImage: photoURL != null && photoURL!.isNotEmpty
-                      ? NetworkImage(photoURL!)
+                      ? CachedNetworkImageProvider(photoURL!)
                       : null,
                   child: photoURL == null || photoURL!.isEmpty
                       ? Text(

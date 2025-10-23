@@ -90,6 +90,12 @@ class _ChatAppBarState extends State<ChatAppBar> {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
     return AppBar(
+      leading: IconButton(
+        icon: const Icon(Icons.arrow_back),
+        onPressed: () {
+          Navigator.of(context).pop();
+        },
+      ),
       title: InkWell(
         onTap: widget.onTap,
         child: StreamBuilder<DocumentSnapshot>(

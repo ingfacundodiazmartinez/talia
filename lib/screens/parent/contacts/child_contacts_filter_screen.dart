@@ -246,8 +246,7 @@ class _ChildContactsFilterScreenState extends State<ChildContactsFilterScreen> {
           final chatId = _generateChatId(currentUserId, otherUserId);
 
           // Navegar al chat
-          Navigator.push(
-            context,
+          Navigator.of(context).push(
             MaterialPageRoute(
               builder: (context) => ChatDetailScreen(
                 contactId: otherUserId,

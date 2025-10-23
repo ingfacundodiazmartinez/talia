@@ -253,16 +253,34 @@ class StoryService {
         userStoriesList.add(currentUserStories);
       }
 
-      // Obtener historias de contactos
+      // Obtener historias de contactos (excluir usuario actual para evitar duplicados)
       for (final contactId in contactIds) {
+        // Skip si es el usuario actual (ya lo agregamos arriba)
+        if (contactId == user.uid) {
+          print('⚠️ Saltando usuario actual en contactIds para evitar duplicado');
+          continue;
+        }
+
         final contactStories = await _getUserStories(contactId);
         if (contactStories != null) {
           userStoriesList.add(contactStories);
         }
       }
 
+      // Eliminar duplicados por userId (segunda capa de protección)
+      final seenUserIds = <String>{};
+      final uniqueUserStoriesList = <UserStories>[];
+      for (final userStories in userStoriesList) {
+        if (!seenUserIds.contains(userStories.userId)) {
+          seenUserIds.add(userStories.userId);
+          uniqueUserStoriesList.add(userStories);
+        } else {
+          print('⚠️ Duplicado detectado y eliminado: ${userStories.userName} (${userStories.userId})');
+        }
+      }
+
       // Ordenar por si tiene historias no vistas primero, luego por historia más reciente
-      userStoriesList.sort((a, b) {
+      uniqueUserStoriesList.sort((a, b) {
         if (a.hasUnviewed && !b.hasUnviewed) return -1;
         if (!a.hasUnviewed && b.hasUnviewed) return 1;
 
@@ -277,10 +295,10 @@ class StoryService {
       });
 
       // Actualizar cache
-      _cachedStories = userStoriesList;
+      _cachedStories = uniqueUserStoriesList;
       _lastCacheUpdate = DateTime.now();
 
-      yield userStoriesList;
+      yield uniqueUserStoriesList;
     }
   }
 

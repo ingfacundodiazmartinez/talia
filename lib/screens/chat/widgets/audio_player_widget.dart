@@ -13,12 +13,16 @@ class AudioPlayerWidget extends StatefulWidget {
   final String audioUrl;
   final bool isMe;
   final ColorScheme colorScheme;
+  final List<double>? waveformData; // Waveform ya procesado (optimistic)
+  final bool isLocal; // Si el audio es local (aún no subido)
 
   const AudioPlayerWidget({
     super.key,
     required this.audioUrl,
     required this.isMe,
     required this.colorScheme,
+    this.waveformData,
+    this.isLocal = false,
   });
 
   @override
@@ -41,6 +45,12 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
   void initState() {
     super.initState();
 
+    // Si ya tenemos waveformData (optimistic), usarlo directamente
+    if (widget.waveformData != null && widget.waveformData!.isNotEmpty) {
+      print('✅ [AUDIO PLAYER] Usando waveform pre-procesado (${widget.waveformData!.length} puntos)');
+      _waveformData = widget.waveformData;
+    }
+
     // Configurar volumen al máximo
     _audioPlayer.setVolume(1.0);
 
@@ -51,8 +61,10 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
     // Cargar la duración del audio inmediatamente
     _loadAudioDuration();
 
-    // Extraer waveform real del audio
-    _extractWaveform();
+    // Solo extraer waveform si no lo tenemos ya
+    if (_waveformData == null) {
+      _extractWaveform();
+    }
 
     _audioPlayer.onDurationChanged.listen((duration) {
       if (mounted) {
@@ -111,7 +123,12 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
 
   Future<void> _loadAudioDuration() async {
     try {
-      await _audioPlayer.setSourceUrl(widget.audioUrl);
+      // Si es archivo local, usar setSourceDeviceFile, sino setSourceUrl
+      if (widget.isLocal) {
+        await _audioPlayer.setSource(DeviceFileSource(widget.audioUrl));
+      } else {
+        await _audioPlayer.setSourceUrl(widget.audioUrl);
+      }
       // La duración se actualizará automáticamente via onDurationChanged
     } catch (e) {
       print('Error cargando duración del audio: $e');
@@ -235,7 +252,12 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
       });
 
       try {
-        await _audioPlayer.play(UrlSource(widget.audioUrl));
+        // Si es archivo local, usar DeviceFileSource, sino UrlSource
+        if (widget.isLocal) {
+          await _audioPlayer.play(DeviceFileSource(widget.audioUrl));
+        } else {
+          await _audioPlayer.play(UrlSource(widget.audioUrl));
+        }
         // El estado se actualizará a través de onPlayerStateChanged
       } catch (e) {
         print('Error reproduciendo audio: $e');

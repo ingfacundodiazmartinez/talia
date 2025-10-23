@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../../controllers/child_home_controller.dart';
 import '../../../services/chat_permission_service.dart';
 import '../../../services/block_service.dart';
@@ -515,7 +516,7 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
                 radius: 28,
                 backgroundColor: colorScheme.primaryContainer,
                 backgroundImage: photoURL != null && photoURL.isNotEmpty
-                    ? NetworkImage(photoURL)
+                    ? CachedNetworkImageProvider(photoURL)
                     : null,
                 child: photoURL == null || photoURL.isEmpty
                     ? Text(
@@ -574,8 +575,7 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
           IconButton(
             onPressed: () {
               final chatId = _getChatId(_auth.currentUser!.uid, contactId);
-              Navigator.push(
-                context,
+              Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (context) => ChatDetailScreen(
                     chatId: chatId,

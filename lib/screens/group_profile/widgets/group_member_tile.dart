@@ -8,6 +8,7 @@ class GroupMemberTile extends StatelessWidget {
   final bool isUserAdmin;
   final bool isCurrentUser;
   final bool canManage;
+  final bool isPending;
   final VoidCallback? onToggleAdmin;
   final VoidCallback? onRemoveMember;
 
@@ -19,6 +20,7 @@ class GroupMemberTile extends StatelessWidget {
     required this.isUserAdmin,
     required this.isCurrentUser,
     required this.canManage,
+    this.isPending = false,
     this.onToggleAdmin,
     this.onRemoveMember,
   });
@@ -28,7 +30,7 @@ class GroupMemberTile extends StatelessWidget {
     return ListTile(
       leading: _buildAvatar(),
       title: Text(userName, style: TextStyle(fontWeight: FontWeight.w500)),
-      subtitle: isUserAdmin ? _buildAdminSubtitle() : null,
+      subtitle: _buildSubtitle(),
       trailing: _buildActions(),
     );
   }
@@ -40,11 +42,26 @@ class GroupMemberTile extends StatelessWidget {
     );
   }
 
-  Widget _buildAdminSubtitle() {
-    return Text(
-      'Administrador',
-      style: TextStyle(color: GroupProfileConstants.primaryColor),
-    );
+  Widget? _buildSubtitle() {
+    if (isPending) {
+      return Row(
+        children: [
+          Icon(Icons.schedule, size: 14, color: Colors.orange[700]),
+          SizedBox(width: 4),
+          Text(
+            'Pendiente de aprobación',
+            style: TextStyle(color: Colors.orange[700], fontSize: 12),
+          ),
+        ],
+      );
+    }
+    if (isUserAdmin) {
+      return Text(
+        'Administrador',
+        style: TextStyle(color: GroupProfileConstants.primaryColor),
+      );
+    }
+    return null;
   }
 
   Widget? _buildActions() {

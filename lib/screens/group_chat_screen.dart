@@ -8,9 +8,12 @@ import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import '../controllers/group_chat_controller.dart';
 import '../notification_service.dart';
+import '../services/foreground_message_listener.dart';
 import '../services/reaction_service.dart';
 import '../services/contact_alias_service.dart';
 import '../services/message_status_helper.dart';
+import '../services/read_receipts_service.dart';
+import '../services/delivery_receipts_service.dart';
 import '../widgets/reaction_picker.dart';
 import '../models/chat_message.dart';
 import 'chat/widgets/group_chat_app_bar.dart';
@@ -21,6 +24,7 @@ import 'chat/widgets/group_typing_indicator.dart';
 import 'chat/widgets/attachment_options.dart';
 import 'chat/widgets/recording_indicator.dart';
 import 'group_profile/group_profile_screen.dart';
+import 'message_info_screen.dart';
 
 /// Pantalla de chat grupal
 ///
@@ -55,6 +59,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   final AudioRecorder _audioRecorder = AudioRecorder();
   final ReactionService _reactionService = ReactionService();
   final ContactAliasService _aliasService = ContactAliasService();
+  final ReadReceiptsService _readReceiptsService = ReadReceiptsService();
+  final DeliveryReceiptsService _deliveryReceiptsService = DeliveryReceiptsService();
 
   // Estado local de UI SOLAMENTE
   bool _showEmojiPicker = false;
@@ -81,6 +87,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     // Establecer el chat actual (grupo) para suprimir notificaciones de este grupo
     NotificationService().setCurrentChat(widget.groupId);
 
+    // Establecer el chat actual en ForegroundMessageListener para suprimir custom notifications
+    ForegroundMessageListener().setCurrentOpenChat(widget.groupId);
+
     _controller = GroupChatController(
       groupId: widget.groupId,
       groupName: widget.groupName,
@@ -88,6 +97,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     _controller.initialize();
     _scrollController.addListener(_onScroll);
     _messageController.addListener(_onTypingChanged);
+
+    // Marcar mensajes como entregados y leídos al abrir el grupo
+    _markMessagesAsDeliveredAndSeen();
 
     // Scroll a mensaje específico si se proporciona
     if (widget.scrollToMessageId != null) {
@@ -159,6 +171,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     // Limpiar el chat actual para permitir notificaciones de nuevo
     NotificationService().clearCurrentChat();
 
+    // Limpiar el chat actual en ForegroundMessageListener para permitir custom notifications
+    ForegroundMessageListener().setCurrentOpenChat(null);
+
     WidgetsBinding.instance.removeObserver(this);
     _controller.dispose();
     _messageController.removeListener(_onTypingChanged);
@@ -177,6 +192,26 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
       print('⚠️ [GroupChatScreen] App inactive mientras grababa - cancelando grabación');
       _cancelRecording();
     }
+
+    // Marcar mensajes como leídos cuando la app vuelve al foreground
+    if (state == AppLifecycleState.resumed) {
+      _markMessagesAsDeliveredAndSeen();
+    }
+  }
+
+  /// Marca los mensajes del grupo como entregados y leídos
+  Future<void> _markMessagesAsDeliveredAndSeen() async {
+    // Marcar como entregados
+    await _deliveryReceiptsService.markMessagesAsDelivered(
+      chatId: widget.groupId,
+      isGroupChat: true,
+    );
+
+    // Marcar como leídos
+    await _readReceiptsService.markMessagesAsSeen(
+      chatId: widget.groupId,
+      isGroupChat: true,
+    );
   }
 
   Future<void> _cancelRecording() async {
@@ -230,16 +265,22 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     final text = _messageController.text.trim();
     if (text.isEmpty) return;
 
+    // Capturar replyTo antes de limpiarlo (para el envío)
+    final replyToCapture = _replyingTo;
+
     _messageController.clear();
+
+    // Limpiar el reply optimísticamente (ANTES de enviar)
+    if (mounted) {
+      setState(() => _replyingTo = null);
+    }
 
     final success = await _controller.sendTextMessage(
       text: text,
-      replyTo: _replyingTo,
+      replyTo: replyToCapture,
     );
 
-    if (success && mounted) {
-      setState(() => _replyingTo = null);
-    } else if (!success && mounted) {
+    if (!success && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Error al enviar mensaje'),
@@ -442,6 +483,20 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     _controller.deleteMessage(messageId, null);
   }
 
+  /// Navegar a la pantalla de información del mensaje
+  void _navigateToMessageInfo(String messageId) {
+    if (!mounted) return;
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => MessageInfoScreen(
+          groupId: widget.groupId,
+          messageId: messageId,
+        ),
+      ),
+    );
+  }
+
   // Build Methods (SOLO UI)
 
   @override
@@ -451,7 +506,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
         groupId: widget.groupId,
         groupName: widget.groupName,
         onTap: () {
-          Navigator.of(context, rootNavigator: true).push(
+          Navigator.of(context).push(
             MaterialPageRoute(
               builder: (context) => GroupProfileScreen(
                 groupId: widget.groupId,
@@ -466,9 +521,15 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
             children: [
               Expanded(
                 child: SafeArea(
-                  child: Column(
+                  child: Stack(
                     children: [
-                      Expanded(child: _buildMessagesList()),
+                      // Lista de mensajes ocupa todo el espacio
+                      Column(
+                        children: [
+                          Expanded(child: _buildMessagesList()),
+                        ],
+                      ),
+                      // Indicador flotante en la parte inferior
                       _buildTypingIndicator(),
                     ],
                   ),
@@ -480,11 +541,14 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
             ],
           ),
           // Indicador de grabación (overlay)
+          // Usar IgnorePointer para permitir toques en el botón de detener
           if (_isRecording)
             Positioned.fill(
-              child: Container(
-                color: Colors.black.withValues(alpha: 0.3),
-                child: const RecordingIndicator(),
+              child: IgnorePointer(
+                child: Container(
+                  color: Colors.black.withValues(alpha: 0.3),
+                  child: const RecordingIndicator(),
+                ),
               ),
             ),
         ],
@@ -656,9 +720,15 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
                             };
                           });
                         },
+                        onReplyTap: (String messageId) {
+                          _scrollToSpecificMessage(messageId);
+                        },
                         onLongPress: _showReactionPicker,
                         onDelete: _handleDeleteMessage,
                         onEdit: _handleEditBlockedMessage,
+                        onViewMessageInfo: isMe
+                            ? () => _navigateToMessageInfo(messageDoc.id)
+                            : null,
                       );
 
                       // Wrap con highlight si es necesario
@@ -700,14 +770,38 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
       stream: _controller.watchTypingUsers(),
       builder: (context, snapshot) {
         final typingUserIds = snapshot.data ?? [];
-        if (typingUserIds.isEmpty) return const SizedBox();
+
+        // Indicador flotante - solo se muestra cuando alguien está escribiendo
+        if (typingUserIds.isEmpty) return const SizedBox.shrink();
 
         // Obtener nombres de los usuarios escribiendo
         final typingUserNames = typingUserIds
             .map((userId) => _controller.getUserName(userId))
             .toList();
 
-        return GroupTypingIndicator(typingUserNames: typingUserNames);
+        return Positioned(
+          bottom: 8, // Separación del borde inferior
+          left: 8,
+          child: AnimatedOpacity(
+            opacity: typingUserIds.isNotEmpty ? 1.0 : 0.0,
+            duration: const Duration(milliseconds: 200),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.1),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: GroupTypingIndicator(typingUserNames: typingUserNames),
+            ),
+          ),
+        );
       },
     );
   }

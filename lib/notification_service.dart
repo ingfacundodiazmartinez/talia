@@ -144,6 +144,15 @@ class NotificationService {
       // 2. Solicitar permisos
       await _requestPermissions();
 
+      // 2.1. Desactivar notificaciones push en foreground (iOS)
+      // Las custom notifications in-app se encargan de mostrar los mensajes
+      await _fcm.setForegroundNotificationPresentationOptions(
+        alert: false,
+        badge: false,
+        sound: false,
+      );
+      print('✅ Notificaciones push desactivadas en foreground (solo custom notifications)');
+
       // 3. Configurar notificaciones locales
       await _initializeLocalNotifications();
 
@@ -342,21 +351,11 @@ class NotificationService {
           isEmergency: message.data['isEmergency'] == 'true',
           extraData: message.data,
         );
-      } else if (message.data['type'] == 'chat_message') {
-        // Solo suprimir notificación si estás DENTRO del chat específico
-        final incomingChatId = message.data['chatId'];
-
-        if (_currentChatId != null && _currentChatId == incomingChatId) {
-          print('💬 Mensaje del chat actual - no mostrar notificación (ya estás dentro)');
-          return;
-        }
-
-        // Si estás en otro chat o en la lista de chats, mostrar notificación
-        print('💬 Mensaje de otro chat - mostrando notificación');
-        _showLocalNotification(message);
       } else {
-        // Mostrar notificación normal para otros tipos (emergencias, etc)
-        _showLocalNotification(message);
+        // ✅ NO mostrar notificaciones push cuando la app está en foreground
+        // Las custom notifications (ForegroundMessageListener) se encargan de mostrar los mensajes
+        print('✅ App en foreground - mensaje manejado por custom notifications (no push)');
+        return;
       }
     });
 

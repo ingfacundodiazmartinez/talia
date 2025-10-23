@@ -30,9 +30,13 @@ class ParentDashboardScreen extends StatefulWidget {
   State<ParentDashboardScreen> createState() => _ParentDashboardScreenState();
 }
 
-class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
+class _ParentDashboardScreenState extends State<ParentDashboardScreen>
+    with AutomaticKeepAliveClientMixin {
   final firebase_auth.FirebaseAuth _auth = firebase_auth.FirebaseAuth.instance;
   late ParentDashboardController _controller;
+
+  @override
+  bool get wantKeepAlive => true;
 
   @override
   void initState() {
@@ -55,6 +59,7 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context); // Necesario para AutomaticKeepAliveClientMixin
     return _buildDashboard();
   }
 

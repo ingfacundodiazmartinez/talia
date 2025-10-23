@@ -37,7 +37,8 @@ class ParentChatsScreen extends StatefulWidget {
   State<ParentChatsScreen> createState() => _ParentChatsScreenState();
 }
 
-class _ParentChatsScreenState extends State<ParentChatsScreen> {
+class _ParentChatsScreenState extends State<ParentChatsScreen>
+    with AutomaticKeepAliveClientMixin {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final ContactAliasService _aliasService = ContactAliasService();
   final BlockService _blockService = BlockService();
@@ -45,6 +46,9 @@ class _ParentChatsScreenState extends State<ParentChatsScreen> {
   final TextEditingController _searchController = TextEditingController();
   final ValueNotifier<String> _searchQuery = ValueNotifier<String>('');
   late ParentChatsController _controller;
+
+  @override
+  bool get wantKeepAlive => true;
 
   @override
   void initState() {
@@ -179,6 +183,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context); // Necesario para AutomaticKeepAliveClientMixin
     return Scaffold(
       body: Container(
         decoration: BoxDecoration(
@@ -227,7 +232,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen> {
                         size: 26,
                       ),
                       onPressed: () {
-                        Navigator.of(context, rootNavigator: true).push(
+                        Navigator.of(context).push(
                           MaterialPageRoute(
                             builder: (context) => ParentArchivedChatsScreen(),
                           ),
@@ -637,7 +642,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen> {
               memberCount: (groupData['members'] as List?)?.length ?? 0,
               lastMessage: groupData['lastMessage'] ?? 'Toca para abrir',
               messageCount: groupData['messageCount'] ?? 0,
-              groupImageUrl: groupData['imageUrl'],
+              groupImageUrl: groupData['avatar'], // Campo correcto es 'avatar' no 'imageUrl'
               unreadCount: unreadCount,
               onLeaveGroup: () => _confirmLeaveGroup(groupId, groupName),
               lastMessageSenderId: lastMessageSenderId,
@@ -730,20 +735,30 @@ class _ParentChatsScreenState extends State<ParentChatsScreen> {
                     }
                   }
 
+                  // Verificar si el chat fue limpiado y no hay mensajes nuevos
+                  final clearedAt = chatData['clearedAt_$parentId'] as Timestamp?;
+                  final lastMessageTime = chatData['lastMessageTime'] as Timestamp?;
+                  final isChatCleared = clearedAt != null &&
+                      (lastMessageTime == null || clearedAt.compareTo(lastMessageTime) >= 0);
+
                   return ChatListItem(
                     chatId: chatDoc.id,
                     userId: childId,
                     name: displayName,
-                    lastMessage: isBlocked ? '🔒 Contacto bloqueado' : (chatData['lastMessage'] ?? ''),
-                    time: ChatUtils.formatChatTime(chatData['lastMessageTime']),
+                    lastMessage: isBlocked
+                        ? '🔒 Contacto bloqueado'
+                        : (isChatCleared
+                            ? 'Inicia una conversación...'
+                            : (chatData['lastMessage'] ?? '')),
+                    time: isChatCleared ? '' : ChatUtils.formatChatTime(chatData['lastMessageTime']),
                     unreadCount: isBlocked ? 0 : unreadCount,
                     isOnline: isOnline,
                     photoURL: photoURL,
-                    isEmpty: false,
+                    isEmpty: isChatCleared,
                     isBlocked: isBlocked,
-                    lastMessageSenderId: lastMessageSenderId,
-                    lastMessageStatus: lastMessageStatus,
-                    lastMessageModerationStatus: lastMessageModerationStatus,
+                    lastMessageSenderId: isChatCleared ? null : lastMessageSenderId,
+                    lastMessageStatus: isChatCleared ? null : lastMessageStatus,
+                    lastMessageModerationStatus: isChatCleared ? null : lastMessageModerationStatus,
                   );
                 },
               );
@@ -835,7 +850,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen> {
 
     // Navegar según el tipo de chat
     if (result.chatType == ChatType.group) {
-      Navigator.of(context, rootNavigator: true).push(
+      Navigator.of(context).push(
         MaterialPageRoute(
           builder: (context) => GroupChatScreen(
             groupId: result.chatId,
@@ -858,7 +873,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen> {
 
     // Navegar según el tipo de chat, pasando el messageId para hacer scroll
     if (result.chatType == ChatType.group) {
-      Navigator.of(context, rootNavigator: true).push(
+      Navigator.of(context).push(
         MaterialPageRoute(
           builder: (context) => GroupChatScreen(
             groupId: result.chatId,
@@ -890,7 +905,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen> {
 
       if (contactId == null) return;
 
-      Navigator.of(context, rootNavigator: true).push(
+      Navigator.of(context).push(
         MaterialPageRoute(
           builder: (context) => ChatDetailScreen(
             chatId: chatId,

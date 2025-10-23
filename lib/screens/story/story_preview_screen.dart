@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:video_player/video_player.dart';
 import '../../services/story_service.dart';
 
 /// Pantalla de preview de la historia antes de compartir
@@ -8,12 +9,16 @@ class StoryPreviewScreen extends StatefulWidget {
   final String imagePath;
   final String? filter;
   final String? arFilter;
+  final bool isVideo;
+  final bool isFromCamera; // Indica si el video fue grabado desde la cámara
 
   const StoryPreviewScreen({
     super.key,
     required this.imagePath,
     this.filter,
     this.arFilter,
+    this.isVideo = false,
+    this.isFromCamera = false,
   });
 
   @override
@@ -24,6 +29,35 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
   final TextEditingController _captionController = TextEditingController();
   final StoryService _storyService = StoryService();
   bool _isUploading = false;
+  VideoPlayerController? _videoController;
+  bool _isMuted = false; // Estado del mute
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.isVideo) {
+      _initializeVideoPlayer();
+    }
+  }
+
+  Future<void> _initializeVideoPlayer() async {
+    _videoController = VideoPlayerController.file(File(widget.imagePath));
+    await _videoController!.initialize();
+    await _videoController!.setLooping(true);
+    await _videoController!.setVolume(1.0); // Iniciar con volumen normal
+    await _videoController!.play();
+    setState(() {});
+  }
+
+  // Toggle mute/unmute
+  void _toggleMute() {
+    if (_videoController != null) {
+      setState(() {
+        _isMuted = !_isMuted;
+        _videoController!.setVolume(_isMuted ? 0.0 : 1.0);
+      });
+    }
+  }
 
   Future<void> _shareStory() async {
     setState(() {
@@ -33,7 +67,7 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
     try {
       final storyId = await _storyService.createStory(
         mediaPath: widget.imagePath,
-        mediaType: 'image',
+        mediaType: widget.isVideo ? 'video' : 'image',
         caption: _captionController.text.trim().isEmpty
             ? null
             : _captionController.text.trim(),
@@ -47,9 +81,21 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
           .collection('stories')
           .doc(storyId)
           .get();
+
       final storyStatus = storyDoc.data()?['status'] ?? 'approved';
 
       if (!mounted) return;
+
+      // Pausar y limpiar el video ANTES de cerrar las pantallas
+      if (_videoController != null) {
+        try {
+          await _videoController!.pause();
+          await _videoController!.dispose();
+          _videoController = null;
+        } catch (e) {
+          print('❌ Error limpiando video controller: $e');
+        }
+      }
 
       Navigator.pop(context); // Cerrar preview
       Navigator.pop(context); // Cerrar cámara
@@ -57,7 +103,7 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
       // Historia creada - sin mensaje de confirmación
     } catch (e) {
       if (!mounted) return;
-      
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Error al compartir historia: $e'),
@@ -76,6 +122,11 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
   @override
   void dispose() {
     _captionController.dispose();
+    // Solo hacer dispose si el controller no fue limpiado antes
+    if (_videoController != null) {
+      _videoController?.dispose();
+      _videoController = null;
+    }
     super.dispose();
   }
 
@@ -86,6 +137,8 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
 
     return Scaffold(
       backgroundColor: Colors.black,
+      resizeToAvoidBottomInset:
+          true, // Permitir que el teclado ajuste la pantalla
       body: SafeArea(
         child: Column(
           children: [
@@ -113,20 +166,66 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
               ),
             ),
 
-            // Imagen preview
+            // Media preview (imagen o video)
             Expanded(
               child: Container(
-                margin: const EdgeInsets.symmetric(horizontal: 20),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(16),
-                  child: Image.file(
-                    File(widget.imagePath),
-                    fit: BoxFit.cover,
-                    width: double.infinity,
-                  ),
+                width: double.infinity, // ✅ Ancho completo
+                color: Colors.black,
+                child: Stack(
+                  fit: StackFit.expand, // ✅ Stack ocupa todo el espacio
+                  children: [
+                    // Video o imagen
+                    if (widget.isVideo &&
+                        _videoController != null &&
+                        _videoController!.value.isInitialized)
+                      Center(
+                        child: AspectRatio(
+                          aspectRatio: _videoController!.value.aspectRatio,
+                          child: VideoPlayer(_videoController!),
+                        ),
+                      )
+                    else if (widget.isVideo)
+                      const Center(
+                        child: CircularProgressIndicator(
+                          color: Color(0xFF9D7FE8),
+                        ),
+                      )
+                    else
+                      Center(
+                        child: Image.file(
+                          File(widget.imagePath),
+                          fit: BoxFit.contain,
+                        ),
+                      ),
+
+                    // Botón de mute (solo para videos)
+                    if (widget.isVideo &&
+                        _videoController != null &&
+                        _videoController!.value.isInitialized)
+                      Positioned(
+                        top: 80,
+                        right: 20,
+                        child: Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: _toggleMute,
+                            borderRadius: BorderRadius.circular(25),
+                            child: Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withOpacity(0.5),
+                                shape: BoxShape.circle,
+                              ),
+                              child: Icon(
+                                _isMuted ? Icons.volume_off : Icons.volume_up,
+                                color: Colors.white,
+                                size: 24,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
               ),
             ),
@@ -136,28 +235,42 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
               margin: const EdgeInsets.all(20),
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
-                color: isDarkMode
-                    ? Colors.white.withOpacity(0.1)
-                    : colorScheme.surface,
+                // ✅ Background suave con gradiente para mejor visibilidad
+                gradient: LinearGradient(
+                  colors: [
+                    Colors.black.withOpacity(0.6),
+                    Colors.black.withOpacity(0.5),
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                border: Border.all(
+                  color: Colors.white.withOpacity(0.5),
+                  width: 1.5,
+                ),
                 borderRadius: BorderRadius.circular(25),
-                border: isDarkMode
-                    ? null
-                    : Border.all(color: colorScheme.outline.withOpacity(0.3)),
+                // Sombra sutil para resaltar el input
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.3),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
               ),
               child: TextField(
                 controller: _captionController,
                 textCapitalization: TextCapitalization.sentences,
-                style: TextStyle(
-                  color: isDarkMode ? Colors.white : colorScheme.onSurface,
-                ),
+                style: const TextStyle(color: Colors.white, fontSize: 16),
                 decoration: InputDecoration(
                   hintText: 'Agregar una descripción...',
-                  hintStyle: TextStyle(
-                    color: isDarkMode
-                        ? Colors.white.withOpacity(0.7)
-                        : colorScheme.onSurfaceVariant,
-                  ),
+                  hintStyle: TextStyle(color: Colors.white.withOpacity(0.6)),
                   border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  filled: false, // No usar fill del TextField
+                  contentPadding: EdgeInsets.zero, // Sin padding extra
+                  counterStyle: TextStyle(color: Colors.white.withOpacity(0.6)),
                 ),
                 maxLines: null,
                 maxLength: 200,

@@ -16,34 +16,33 @@ class GroupTypingIndicator extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
     final String message = _buildTypingMessage();
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 20,
-            height: 20,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              valueColor: AlwaysStoppedAnimation<Color>(
-                colorScheme.primary,
-              ),
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 16,
+          height: 16,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            valueColor: AlwaysStoppedAnimation<Color>(
+              colorScheme.primary,
             ),
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              message,
-              style: TextStyle(
-                fontSize: 12,
-                color: colorScheme.onSurfaceVariant,
-                fontStyle: FontStyle.italic,
-              ),
-              overflow: TextOverflow.ellipsis,
+        ),
+        const SizedBox(width: 8),
+        Flexible(
+          child: Text(
+            message,
+            style: TextStyle(
+              fontSize: 12,
+              color: colorScheme.onSurfaceVariant,
+              fontStyle: FontStyle.italic,
             ),
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 

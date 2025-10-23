@@ -110,8 +110,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               color: colorScheme.onSurfaceVariant,
             ),
             onTap: () {
-              Navigator.push(
-                context,
+              Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (context) => NotificationSettingsScreen(),
                 ),
@@ -147,8 +146,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               color: colorScheme.onSurfaceVariant,
             ),
             onTap: () {
-              Navigator.push(
-                context,
+              Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (context) => PrivacySecurityScreen(),
                 ),
@@ -170,8 +168,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               color: colorScheme.onSurfaceVariant,
             ),
             onTap: () {
-              Navigator.push(
-                context,
+              Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (context) => PrivacySecurityScreen(),
                 ),

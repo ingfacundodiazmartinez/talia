@@ -5,6 +5,7 @@ import '../../../controllers/whitelist_controller.dart';
 import '../../../models/contact_request.dart';
 import '../../../models/permission_request.dart';
 import '../../../theme_service.dart';
+import '../chat_moderation_management_screen.dart';
 import 'widgets/pending_request_card.dart';
 import 'widgets/approved_request_card.dart';
 import 'widgets/rejected_request_card.dart';
@@ -23,7 +24,7 @@ class WhitelistScreen extends StatefulWidget {
 }
 
 class _WhitelistScreenState extends State<WhitelistScreen>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, AutomaticKeepAliveClientMixin {
   late WhitelistController _controller;
   late TabController _tabController;
 
@@ -31,6 +32,9 @@ class _WhitelistScreenState extends State<WhitelistScreen>
   final ValueNotifier<String> _searchQuery = ValueNotifier<String>('');
 
   List<Map<String, dynamic>> _currentPendingRequests = [];
+
+  @override
+  bool get wantKeepAlive => true;
 
   @override
   void initState() {
@@ -55,6 +59,7 @@ class _WhitelistScreenState extends State<WhitelistScreen>
 
   @override
   Widget build(BuildContext context) {
+    super.build(context); // Necesario para AutomaticKeepAliveClientMixin
     return Scaffold(
       body: Container(
         decoration: BoxDecoration(
@@ -850,7 +855,11 @@ class _WhitelistScreenState extends State<WhitelistScreen>
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
     return GestureDetector(
       onTap: () {
-        Navigator.pushNamed(context, '/chat_moderation_management');
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => const ChatModerationManagementScreen(),
+          ),
+        );
       },
       child: Container(
         width: double.infinity,

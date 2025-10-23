@@ -27,8 +27,10 @@ import 'theme_service.dart';
 import 'services/two_factor_session_service.dart';
 import 'services/app_config_service.dart';
 import 'services/message_cache_service.dart';
+import 'services/dashboard_cache_service.dart';
 import 'services/device_session_service.dart';
 import 'services/online_status_service.dart';
+import 'services/screenshot_protection_service.dart';
 import 'services/voip_service.dart';
 import 'services/analytics_service.dart';
 import 'services/performance_service.dart';
@@ -37,6 +39,8 @@ import 'services/network_status_service.dart';
 import 'services/offline_queue_service.dart';
 import 'services/accessibility_service.dart';
 import 'services/foreground_message_listener.dart';
+import 'services/stickers_service.dart';
+import 'services/unread_messages_service.dart';
 import 'widgets/loading_overlay.dart';
 import 'dart:async';
 
@@ -54,6 +58,18 @@ void main() async {
   ]);
   print('📱 Rotación de pantalla bloqueada a portrait');
 
+  // Configurar el status bar para que sea visible
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent, // Hacer el status bar transparente
+      statusBarIconBrightness: Brightness.dark, // Iconos oscuros para fondo claro
+      statusBarBrightness: Brightness.light, // Para iOS
+      systemNavigationBarColor: Colors.white, // Barra de navegación blanca
+      systemNavigationBarIconBrightness: Brightness.dark, // Iconos oscuros
+    ),
+  );
+  print('📱 Status bar configurado como visible');
+
   print('🚀 Iniciando aplicación Talia...');
 
   // Inicializar MessageCacheService (Hive)
@@ -62,6 +78,14 @@ void main() async {
     print('✅ MessageCacheService inicializado');
   } catch (e) {
     print('❌ Error inicializando MessageCacheService: $e');
+  }
+
+  // Inicializar DashboardCacheService (Hive)
+  try {
+    await DashboardCacheService().initialize();
+    print('✅ DashboardCacheService inicializado');
+  } catch (e) {
+    print('❌ Error inicializando DashboardCacheService: $e');
   }
 
   // Inicializar Firebase solo si no está inicializado
@@ -139,6 +163,13 @@ void main() async {
   } catch (e) {
     print('⚠️ Error inicializando Accessibility: $e (continuando...)');
   }
+
+  // Pre-cargar stickers en segundo plano (sin bloquear la app)
+  StickersService().preloadStickers().then((_) {
+    print('✅ Stickers pre-cargados en segundo plano');
+  }).catchError((e) {
+    print('⚠️ Error pre-cargando stickers: $e (continuando...)');
+  });
 
   // Activar Firebase App Check con Play Integrity para producción
   if (kDebugMode) {
@@ -364,6 +395,16 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
         ForegroundMessageListener().initialize(_navigatorKey);
         print('✅ ForegroundMessageListener inicializado');
 
+        // Inicializar protección de screenshots
+        print('📸 Inicializando ScreenshotProtectionService...');
+        ScreenshotProtectionService().initialize();
+        print('✅ ScreenshotProtectionService inicializado');
+
+        // Inicializar listener de badge del ícono
+        print('🔔 Inicializando badge listener...');
+        UnreadMessagesService().startBadgeListener();
+        print('✅ Badge listener inicializado');
+
         // Cancelar suscripción anterior si existe
         _userRoleSubscription?.cancel();
 
@@ -493,12 +534,32 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
           debugShowCheckedModeBanner: false,
           theme: accessibleTheme,
           builder: (context, child) {
-            // Aplicar text scale factor globalmente
-            return MediaQuery(
-              data: MediaQuery.of(context).copyWith(
-                textScaler: TextScaler.linear(accessibility.textScale),
+            // Obtener el brightness del tema actual
+            final brightness = Theme.of(context).brightness;
+
+            // Aplicar text scale factor y status bar style
+            return AnnotatedRegion<SystemUiOverlayStyle>(
+              value: SystemUiOverlayStyle(
+                statusBarColor: Colors.transparent,
+                statusBarIconBrightness: brightness == Brightness.dark
+                    ? Brightness.light  // Iconos claros para modo oscuro
+                    : Brightness.dark,  // Iconos oscuros para modo claro
+                statusBarBrightness: brightness == Brightness.dark
+                    ? Brightness.dark
+                    : Brightness.light,
+                systemNavigationBarColor: brightness == Brightness.dark
+                    ? Colors.black
+                    : Colors.white,
+                systemNavigationBarIconBrightness: brightness == Brightness.dark
+                    ? Brightness.light
+                    : Brightness.dark,
               ),
-              child: child!,
+              child: MediaQuery(
+                data: MediaQuery.of(context).copyWith(
+                  textScaler: TextScaler.linear(accessibility.textScale),
+                ),
+                child: child!,
+              ),
             );
           },
           home: const AnimatedSplashScreen(

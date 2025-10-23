@@ -20,6 +20,7 @@ class ForegroundMessageListener {
 
   /// StreamSubscriptions activos
   StreamSubscription? _chatsSubscription;
+  StreamSubscription? _groupsSubscription;
   StreamSubscription? _notificationsSubscription;
 
   /// Último mensaje procesado por chat (para evitar duplicados)
@@ -46,6 +47,7 @@ class ForegroundMessageListener {
     // Limpiar listeners anteriores si existen (hot restart)
     appLogger.log('🧹 Limpiando listeners antiguos si existen...', level: 'INFO');
     _chatsSubscription?.cancel();
+    _groupsSubscription?.cancel();
     _notificationsSubscription?.cancel();
     _lastProcessedMessageIds.clear();
     _processedNotificationIds.clear();
@@ -84,10 +86,13 @@ class ForegroundMessageListener {
     appLogger.log('🎯 Iniciando listeners para usuario: ${user.uid.substring(0, 8)}...', level: 'INFO');
     appLogger.log('   Timestamp de inicio: $_startTime', level: 'INFO');
 
-    // ✅ LISTENER 1: CHATS - Para detectar mensajes nuevos
+    // ✅ LISTENER 1: CHATS - Para detectar mensajes nuevos en chats individuales
     _startChatsListener(user.uid);
 
-    // ✅ LISTENER 2: NOTIFICATIONS - Para solicitudes de contacto, historias, etc.
+    // ✅ LISTENER 2: GROUPS - Para detectar mensajes nuevos en chats grupales
+    _startGroupsListener(user.uid);
+
+    // ✅ LISTENER 3: NOTIFICATIONS - Para solicitudes de contacto, historias, etc.
     _startNotificationsListener(user.uid);
   }
 
@@ -135,6 +140,52 @@ class ForegroundMessageListener {
     });
 
     appLogger.log('✅ Listener de chats configurado', level: 'INFO');
+  }
+
+  /// Listener de GROUPS - Detecta mensajes nuevos en grupos
+  void _startGroupsListener(String userId) {
+    appLogger.log('', level: 'INFO');
+    appLogger.log('🎯 2️⃣ Iniciando listener de GROUPS (mensajes de grupo)...', level: 'INFO');
+
+    _groupsSubscription = _firestore
+        .collection('groups')
+        .where('members', arrayContains: userId)
+        .snapshots()
+        .listen((groupsSnapshot) {
+      appLogger.log('', level: 'INFO');
+      appLogger.log('═══════════════════════════════════════════════════════════', level: 'INFO');
+      appLogger.log('👥 SNAPSHOT DE GROUPS RECIBIDO', level: 'INFO');
+      appLogger.log('═══════════════════════════════════════════════════════════', level: 'INFO');
+      appLogger.log('   Total grupos: ${groupsSnapshot.docs.length}', level: 'INFO');
+      appLogger.log('   Cambios: ${groupsSnapshot.docChanges.length}', level: 'INFO');
+
+      // Procesar TODOS los cambios
+      for (var change in groupsSnapshot.docChanges) {
+        final groupDoc = change.doc;
+        final groupId = groupDoc.id;
+
+        appLogger.log('   🔍 Cambio detectado en grupo ${groupId.substring(0, 8)}...', level: 'INFO');
+        appLogger.log('      Tipo: ${change.type}', level: 'INFO');
+
+        if (change.type == DocumentChangeType.modified) {
+          final groupData = groupDoc.data() as Map<String, dynamic>;
+          appLogger.log('   📝 Grupo modificado: ${groupId.substring(0, 8)}...', level: 'INFO');
+          _handleGroupUpdate(groupId, groupData);
+        } else if (change.type == DocumentChangeType.added) {
+          appLogger.log('   ➕ Grupo nuevo agregado (ignorando)', level: 'INFO');
+        } else if (change.type == DocumentChangeType.removed) {
+          appLogger.log('   ➖ Grupo eliminado (ignorando)', level: 'INFO');
+        }
+      }
+
+      appLogger.log('✅ Snapshot de grupos procesado', level: 'INFO');
+      appLogger.log('═══════════════════════════════════════════════════════════', level: 'INFO');
+      appLogger.log('', level: 'INFO');
+    }, onError: (error) {
+      appLogger.log('❌❌❌ ERROR en listener de grupos: $error', level: 'ERROR');
+    });
+
+    appLogger.log('✅ Listener de grupos configurado', level: 'INFO');
   }
 
   /// Listener de NOTIFICATIONS - Para eventos no relacionados con mensajes
@@ -186,6 +237,98 @@ class ForegroundMessageListener {
     });
 
     appLogger.log('✅ Listener de notifications configurado', level: 'INFO');
+  }
+
+  /// Manejar actualización de un grupo (mensaje nuevo)
+  Future<void> _handleGroupUpdate(
+    String groupId,
+    Map<String, dynamic> groupData,
+  ) async {
+    appLogger.log('🔍 Procesando actualización de grupo $groupId', level: 'INFO');
+
+    final user = _auth.currentUser;
+    if (user == null) {
+      appLogger.log('❌ Usuario no autenticado', level: 'ERROR');
+      return;
+    }
+
+    // Leer lastMessage del documento del grupo
+    final lastMessageText = groupData['lastMessage'] as String?;
+    final lastMessageTime = groupData['lastMessageTime'] as Timestamp?;
+    final lastMessageSender = groupData['lastMessageSender'] as String?;
+
+    appLogger.log('📩 Último mensaje:', level: 'INFO');
+    appLogger.log('   Text: ${lastMessageText ?? "null"}', level: 'INFO');
+    appLogger.log('   Time: ${lastMessageTime?.toDate()}', level: 'INFO');
+    appLogger.log('   Sender: ${lastMessageSender ?? "null"}', level: 'INFO');
+
+    // Validar datos básicos
+    if (lastMessageText == null || lastMessageTime == null || lastMessageSender == null) {
+      appLogger.log('⚠️ No hay último mensaje válido', level: 'WARNING');
+      return;
+    }
+
+    // Crear ID único del mensaje
+    final messageId = '${lastMessageTime.millisecondsSinceEpoch}_$lastMessageSender';
+
+    // Si ya procesamos este mensaje, ignorar
+    if (_lastProcessedMessageIds[groupId] == messageId) {
+      appLogger.log('⏭️ Mensaje ya procesado, SALTANDO', level: 'INFO');
+      return;
+    }
+
+    // Marcar como procesado
+    _lastProcessedMessageIds[groupId] = messageId;
+    appLogger.log('✅ Mensaje marcado como procesado', level: 'INFO');
+
+    // Ignorar mensajes del usuario actual
+    if (lastMessageSender == user.uid) {
+      appLogger.log('❌ Mensaje ignorado: es del usuario actual', level: 'ERROR');
+      return;
+    }
+
+    // Ignorar mensajes anteriores al inicio del listener
+    if (_startTime != null && lastMessageTime.toDate().isBefore(_startTime!)) {
+      appLogger.log('❌ Mensaje ignorado: anterior al inicio del listener', level: 'ERROR');
+      return;
+    }
+
+    // Ignorar si el usuario está viendo este grupo
+    if (_currentOpenChatId == groupId) {
+      appLogger.log('📖 Mensaje ignorado: usuario está viendo el grupo', level: 'INFO');
+      return;
+    }
+
+    // Verificar si el grupo está silenciado para el usuario actual
+    final isMuted = groupData['muted_${user.uid}'] as bool? ?? false;
+    if (isMuted) {
+      appLogger.log('🔕 Mensaje ignorado: grupo silenciado para el usuario', level: 'INFO');
+      return;
+    }
+
+    appLogger.log('🔔 Nuevo mensaje detectado en grupo $groupId', level: 'INFO');
+
+    // Obtener información del remitente
+    final senderDoc = await _firestore.collection('users').doc(lastMessageSender).get();
+    final senderData = senderDoc.data();
+    final senderName = senderData?['name'] as String? ?? 'Usuario';
+    final senderPhotoUrl = senderData?['photoURL'] as String?;
+
+    // Obtener nombre del grupo
+    final groupName = groupData['name'] as String? ?? 'Grupo';
+
+    // Preview del mensaje (formato: "NombreUsuario: mensaje")
+    final messagePreview = '$senderName: $lastMessageText';
+
+    // Mostrar banner con el nombre del grupo
+    _showBanner(
+      senderName: groupName,
+      messagePreview: messagePreview,
+      senderPhotoUrl: groupData['avatar'] as String?, // Usar avatar del grupo
+      chatId: groupId,
+      senderId: lastMessageSender,
+      isGroupChat: true, // Indicar que es un grupo
+    );
   }
 
   /// Manejar actualización de un chat (mensaje nuevo)
@@ -360,6 +503,7 @@ class ForegroundMessageListener {
     String? senderId,
     String? notificationType,
     Map<String, dynamic>? notificationData,
+    bool isGroupChat = false,
   }) {
     appLogger.log('', level: 'INFO');
     appLogger.log('═══════════════════════════════════════════════════════════', level: 'INFO');
@@ -387,8 +531,21 @@ class ForegroundMessageListener {
         // Determinar la acción al tocar según el tipo de notificación
         VoidCallback? onTapAction;
 
-        if (chatId != null && senderId != null) {
-          // Navegación a chat
+        if (chatId != null && isGroupChat) {
+          // Navegación a chat grupal
+          onTapAction = () {
+            appLogger.log('👆 Usuario tocó el banner, navegando al grupo...', level: 'INFO');
+            Navigator.pushNamed(
+              context,
+              '/group_chat',
+              arguments: {
+                'groupId': chatId,
+                'groupName': senderName,
+              },
+            );
+          };
+        } else if (chatId != null && senderId != null) {
+          // Navegación a chat individual
           onTapAction = () {
             appLogger.log('👆 Usuario tocó el banner, navegando al chat...', level: 'INFO');
             Navigator.push(
@@ -469,6 +626,7 @@ class ForegroundMessageListener {
   void dispose() {
     appLogger.log('🛑 Deteniendo todos los listeners', level: 'INFO');
     _chatsSubscription?.cancel();
+    _groupsSubscription?.cancel();
     _notificationsSubscription?.cancel();
     _lastProcessedMessageIds.clear();
     _processedNotificationIds.clear();

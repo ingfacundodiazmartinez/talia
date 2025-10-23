@@ -454,12 +454,13 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen> with SingleTi
             ),
           ),
 
-          // Botones de acción (solo para historias pendientes)
-          if (status == 'pending')
-            Padding(
-              padding: EdgeInsets.all(16),
-              child: Row(
-                children: [
+          // Botones de acción
+          Padding(
+            padding: EdgeInsets.all(16),
+            child: Row(
+              children: [
+                // Botón Rechazar (pendientes y aprobadas)
+                if (status == 'pending' || status == 'approved')
                   Expanded(
                     child: OutlinedButton.icon(
                       onPressed: () => _showRejectDialog(story),
@@ -474,7 +475,11 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen> with SingleTi
                       ),
                     ),
                   ),
-                  SizedBox(width: 12),
+
+                if (status == 'pending') SizedBox(width: 12),
+
+                // Botón Aprobar (pendientes y rechazadas)
+                if (status == 'pending' || status == 'rejected')
                   Expanded(
                     child: ElevatedButton.icon(
                       onPressed: () => _approveStory(story),
@@ -489,9 +494,9 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen> with SingleTi
                       ),
                     ),
                   ),
-                ],
-              ),
+              ],
             ),
+          ),
         ],
       ),
     );
@@ -513,8 +518,7 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen> with SingleTi
   }
 
   void _showStoryPreview(Story story) {
-    Navigator.push(
-      context,
+    Navigator.of(context).push(
       MaterialPageRoute(
         builder: (context) => StoryPreviewForApproval(story: story),
       ),

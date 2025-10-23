@@ -43,12 +43,37 @@ class GroupInvitationService {
         return {'success': false, 'error': 'El usuario ya es miembro del grupo'};
       }
 
-      // Obtener padre del invitado
+      // Obtener información del invitado
       final invitedUserDoc = await _firestore.collection('users').doc(invitedChildId).get();
-      final invitedParentId = invitedUserDoc.data()?['parentId'] as String?;
+      final invitedUserData = invitedUserDoc.data();
+
+      if (invitedUserData == null) {
+        return {'success': false, 'error': 'Usuario no encontrado'};
+      }
+
+      final userRole = invitedUserData['role'] ?? 'child';
+      final isParentOrAdult = userRole == 'parent' || userRole == 'adult';
+
+      // Si el invitado es padre/adulto, agregarlo directamente sin requerir aprobaciones
+      if (isParentOrAdult) {
+        await _firestore.collection('groups').doc(groupId).update({
+          'members': FieldValue.arrayUnion([invitedChildId]),
+        });
+
+        print('✅ Padre/Adulto agregado directamente al grupo: $invitedChildId');
+
+        return {
+          'success': true,
+          'requiresApprovals': false,
+          'addedDirectly': true,
+        };
+      }
+
+      // Si es un child, verificar que tenga padre
+      final invitedParentId = invitedUserData['parentId'] as String?;
 
       if (invitedParentId == null) {
-        return {'success': false, 'error': 'El invitado no tiene padre asignado'};
+        return {'success': false, 'error': 'El niño no tiene padre asignado'};
       }
 
       // Verificar contactos no aprobados
@@ -56,6 +81,27 @@ class GroupInvitationService {
         invitedChildId: invitedChildId,
         groupMembers: members,
       );
+
+      // Si no hay aprobaciones requeridas, agregar directamente al grupo
+      if (requiredApprovals.isEmpty) {
+        await _firestore.collection('groups').doc(groupId).update({
+          'members': FieldValue.arrayUnion([invitedChildId]),
+        });
+
+        print('✅ Niño agregado directamente al grupo (no requiere aprobaciones): $invitedChildId');
+
+        return {
+          'success': true,
+          'requiresApprovals': false,
+          'addedDirectly': true,
+        };
+      }
+
+      // Hay aprobaciones requeridas - crear invitación y agregar a pending_members
+      // Agregar a pending_members en el grupo
+      await _firestore.collection('groups').doc(groupId).update({
+        'pending_members': FieldValue.arrayUnion([invitedChildId]),
+      });
 
       // Calcular fecha de expiración (48 horas)
       final expiresAt = DateTime.now().add(const Duration(hours: 48));
@@ -77,9 +123,9 @@ class GroupInvitationService {
         },
       });
 
-      print('✅ Invitación creada: ${invitationRef.id}');
+      print('✅ Invitación creada (requiere aprobaciones): ${invitationRef.id}');
 
-      // TODO: Enviar notificaciones push
+      // Enviar notificaciones push
       await _sendInvitationNotifications(
         invitationId: invitationRef.id,
         groupName: groupName,
@@ -91,7 +137,7 @@ class GroupInvitationService {
       return {
         'success': true,
         'invitationId': invitationRef.id,
-        'requiresApprovals': requiredApprovals.isNotEmpty,
+        'requiresApprovals': true,
       };
     } catch (e) {
       print('❌ Error creando invitación: $e');

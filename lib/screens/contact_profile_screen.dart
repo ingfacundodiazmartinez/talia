@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:intl/intl.dart';
 import '../services/video_call_service.dart';
 import '../services/block_service.dart';
 import '../services/contact_alias_service.dart';
@@ -130,6 +131,30 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
       default:
         return role;
     }
+  }
+
+  String _formatBirthday(DateTime? birthDate) {
+    if (birthDate == null) return '';
+
+    final months = {
+      1: 'enero',
+      2: 'febrero',
+      3: 'marzo',
+      4: 'abril',
+      5: 'mayo',
+      6: 'junio',
+      7: 'julio',
+      8: 'agosto',
+      9: 'septiembre',
+      10: 'octubre',
+      11: 'noviembre',
+      12: 'diciembre',
+    };
+
+    final day = birthDate.day;
+    final month = months[birthDate.month] ?? '';
+
+    return '$day de $month';
   }
 
   Future<void> _startVideoCall() async {
@@ -553,7 +578,9 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
                       _buildInfoTile(
                         icon: Icons.cake_outlined,
                         label: 'Edad',
-                        value: '$age años',
+                        value: birthDate != null
+                            ? '$age años (${_formatBirthday(birthDate)})'
+                            : '$age años',
                       ),
                       Divider(height: 1),
                       _buildInfoTile(

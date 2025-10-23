@@ -1,10 +1,12 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:share_plus/share_plus.dart';
 import '../../services/data_export_service.dart';
 import '../../services/two_factor_auth_service.dart';
 import '../../services/user_settings_service.dart';
 import '../../services/account_deletion_service.dart';
+import '../../services/online_status_service.dart';
+import '../../services/screenshot_protection_service.dart';
 import 'widgets/enable_2fa_dialog.dart';
 import 'widgets/delete_account_dialog.dart';
 
@@ -22,6 +24,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
 
   bool _twoFactorEnabled = false;
   bool _showOnlineStatus = true;
+  bool _sendReadReceipts = true;
   bool _allowScreenshots = false;
 
   @override
@@ -36,6 +39,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
       setState(() {
         _twoFactorEnabled = data['twoFactorEnabled'] ?? false;
         _showOnlineStatus = data['showOnlineStatus'] ?? true;
+        _sendReadReceipts = data['sendReadReceipts'] ?? true;
         _allowScreenshots = data['allowScreenshots'] ?? false;
       });
     } catch (e) {
@@ -112,21 +116,46 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
             title: 'Mostrar Estado en Línea',
             subtitle: 'Otros pueden ver cuando estás activo',
             value: _showOnlineStatus,
-            onChanged: (value) {
+            onChanged: (value) async {
               setState(() => _showOnlineStatus = value);
-              _updateSetting('showOnlineStatus', value);
+              await _updateSetting('showOnlineStatus', value);
+
+              // Forzar actualización inmediata del estado online
+              if (value) {
+                await OnlineStatusService().setOnline();
+              } else {
+                await OnlineStatusService().setOffline();
+              }
+            },
+          ),
+
+          _buildSwitchOption(
+            icon: Icons.done_all,
+            title: 'Confirmaciones de Lectura',
+            subtitle: 'Permite que otros vean cuándo leíste sus mensajes',
+            value: _sendReadReceipts,
+            onChanged: (value) async {
+              setState(() => _sendReadReceipts = value);
+              await _updateSetting('sendReadReceipts', value);
             },
           ),
 
           _buildSwitchOption(
             icon: Icons.screenshot_outlined,
             title: 'Permitir Capturas de Pantalla',
-            subtitle: 'Permite tomar screenshots en la app',
+            subtitle: Platform.isIOS
+                ? 'No disponible en iOS - Apple no permite bloquear screenshots'
+                : 'Permite tomar screenshots en la app',
             value: _allowScreenshots,
-            onChanged: (value) {
-              setState(() => _allowScreenshots = value);
-              _updateSetting('allowScreenshots', value);
-            },
+            onChanged: Platform.isIOS
+                ? null  // Deshabilitar en iOS
+                : (value) {
+                    setState(() => _allowScreenshots = value);
+                    _updateSetting('allowScreenshots', value);
+
+                    // Actualizar protección de screenshots
+                    ScreenshotProtectionService().updateProtection(value);
+                  },
           ),
 
           SizedBox(height: 32),
@@ -147,6 +176,13 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
             title: 'Descargar Mis Datos',
             subtitle: 'Descarga una copia de tu información',
             onTap: _showDownloadDataDialog,
+          ),
+
+          _buildSecurityOption(
+            icon: Icons.upload_outlined,
+            title: 'Importar Datos',
+            subtitle: 'Restaura un backup desde otro dispositivo',
+            onTap: _showImportDataDialog,
           ),
 
           _buildSecurityOption(
@@ -207,7 +243,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
     required String title,
     required String subtitle,
     required bool value,
-    required Function(bool) onChanged,
+    Function(bool)? onChanged,
   }) {
     final colorScheme = Theme.of(context).colorScheme;
 
@@ -244,6 +280,147 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
 
   void _showDownloadDataDialog() {
     final colorScheme = Theme.of(context).colorScheme;
+    final passwordController = TextEditingController();
+    bool isExporting = false;
+    double exportProgress = 0.0;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Row(
+            children: [
+              Icon(Icons.download_outlined, color: colorScheme.primary),
+              SizedBox(width: 8),
+              Text('Exportar Cache Local'),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (!isExporting) ...[
+                Text(
+                  'Crea un backup encriptado de tus mensajes en cache para migrar a otro dispositivo.',
+                  style: TextStyle(fontSize: 14, color: colorScheme.onSurfaceVariant),
+                ),
+                SizedBox(height: 16),
+                Container(
+                  padding: EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: colorScheme.primary.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.security, color: colorScheme.primary, size: 20),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'El archivo será encriptado con tu contraseña',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: colorScheme.primary,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(height: 16),
+                Text(
+                  'Ingresa una contraseña para encriptar el backup:',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                ),
+                SizedBox(height: 8),
+                TextField(
+                  controller: passwordController,
+                  obscureText: true,
+                  decoration: InputDecoration(
+                    hintText: 'Contraseña',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    prefixIcon: Icon(Icons.lock_outline),
+                  ),
+                ),
+              ] else ...[
+                Column(
+                  children: [
+                    CircularProgressIndicator(value: exportProgress),
+                    SizedBox(height: 16),
+                    Text(
+                      'Exportando cache... ${(exportProgress * 100).toInt()}%',
+                      style: TextStyle(fontSize: 14, color: colorScheme.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            if (!isExporting) ...[
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text('Cancelar'),
+              ),
+              ElevatedButton(
+                onPressed: () async {
+                  if (passwordController.text.length < 6) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('La contraseña debe tener al menos 6 caracteres'),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                    return;
+                  }
+
+                  setState(() => isExporting = true);
+
+                  final exportService = DataExportService();
+                  final filePath = await exportService.exportEncryptedCache(
+                    password: passwordController.text,
+                    onProgress: (progress) {
+                      setState(() => exportProgress = progress);
+                    },
+                  );
+
+                  Navigator.pop(context);
+
+                  if (filePath != null) {
+                    // Mostrar opciones para compartir
+                    _showExportSuccessDialog(filePath);
+                  } else {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Error al exportar cache'),
+                          backgroundColor: Colors.red,
+                        ),
+                      );
+                    }
+                  }
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: colorScheme.primary,
+                  foregroundColor: Colors.white,
+                ),
+                child: Text('Exportar'),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showExportSuccessDialog(String filePath) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final exportService = DataExportService();
 
     showDialog(
       context: context,
@@ -251,15 +428,42 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Row(
           children: [
-            Icon(Icons.construction, color: Colors.orange),
+            Icon(Icons.check_circle, color: Colors.green),
             SizedBox(width: 8),
-            Text('Funcionalidad en Desarrollo'),
+            Text('Backup Creado'),
           ],
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Text(
+              'Tu cache ha sido exportado exitosamente.',
+              style: TextStyle(fontSize: 14),
+            ),
+            SizedBox(height: 16),
+            Container(
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Archivo:',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                  ),
+                  SizedBox(height: 4),
+                  Text(
+                    filePath.split('/').last,
+                    style: TextStyle(fontSize: 11, fontFamily: 'monospace'),
+                  ),
+                ],
+              ),
+            ),
+            SizedBox(height: 16),
             Container(
               padding: EdgeInsets.all(12),
               decoration: BoxDecoration(
@@ -268,40 +472,17 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
               ),
               child: Row(
                 children: [
-                  Icon(Icons.info_outline, color: Colors.orange, size: 20),
+                  Icon(Icons.warning_amber, color: Colors.orange, size: 20),
                   SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'Esta funcionalidad está en progreso',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.orange[800],
-                      ),
+                      'Guarda este archivo de forma segura',
+                      style: TextStyle(fontSize: 12, color: Colors.orange[800]),
                     ),
                   ),
                 ],
               ),
             ),
-            SizedBox(height: 16),
-            Text(
-              'La exportación de datos aún no está disponible. Estamos trabajando para habilitarla pronto.',
-              style: TextStyle(fontSize: 14, color: colorScheme.onSurfaceVariant),
-            ),
-            SizedBox(height: 16),
-            Text(
-              '¿Qué podrás hacer cuando esté lista?',
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: colorScheme.onSurface,
-              ),
-            ),
-            SizedBox(height: 8),
-            _buildFeatureItem('• Descargar toda tu información personal'),
-            _buildFeatureItem('• Exportar tus mensajes y conversaciones'),
-            _buildFeatureItem('• Obtener historial de actividad'),
-            _buildFeatureItem('• Cumplimiento con GDPR y CCPA'),
           ],
         ),
         actions: [
@@ -311,9 +492,266 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
               backgroundColor: colorScheme.primary,
               foregroundColor: Colors.white,
             ),
-            child: Text('Entendido'),
+            child: Text('Cerrar'),
           ),
         ],
+      ),
+    );
+  }
+
+  void _showImportDataDialog() async {
+    final colorScheme = Theme.of(context).colorScheme;
+    final exportService = DataExportService();
+
+    // Obtener lista de backups disponibles
+    final backups = await exportService.listAvailableBackups();
+
+    if (!mounted) return;
+
+    if (backups.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('No hay backups disponibles'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    // Mostrar lista de backups para seleccionar
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            Icon(Icons.upload_outlined, color: colorScheme.primary),
+            SizedBox(width: 8),
+            Text('Seleccionar Backup'),
+          ],
+        ),
+        content: Container(
+          width: double.maxFinite,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Selecciona el backup que deseas restaurar:',
+                style: TextStyle(fontSize: 14, color: colorScheme.onSurfaceVariant),
+              ),
+              SizedBox(height: 16),
+              Container(
+                constraints: BoxConstraints(maxHeight: 300),
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: backups.length,
+                  itemBuilder: (context, index) {
+                    final backup = backups[index];
+                    return Card(
+                      margin: EdgeInsets.only(bottom: 8),
+                      child: ListTile(
+                        leading: Icon(Icons.folder_zip, color: colorScheme.primary),
+                        title: Text(
+                          backup.fileName,
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                        ),
+                        subtitle: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            SizedBox(height: 4),
+                            Text(
+                              backup.formattedDate,
+                              style: TextStyle(fontSize: 11),
+                            ),
+                            Text(
+                              'Tamaño: ${backup.fileSizeMB} MB',
+                              style: TextStyle(fontSize: 11),
+                            ),
+                          ],
+                        ),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _showImportPasswordDialog(backup.filePath);
+                        },
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancelar'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showImportPasswordDialog(String filePath) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final passwordController = TextEditingController();
+    bool isImporting = false;
+    double importProgress = 0.0;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Row(
+            children: [
+              Icon(Icons.upload_outlined, color: colorScheme.primary),
+              SizedBox(width: 8),
+              Text('Importar Backup'),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (!isImporting) ...[
+                Text(
+                  'Restaura tus mensajes desde un backup encriptado.',
+                  style: TextStyle(fontSize: 14, color: colorScheme.onSurfaceVariant),
+                ),
+                SizedBox(height: 16),
+                Container(
+                  padding: EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Archivo seleccionado:',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        filePath.split('/').last,
+                        style: TextStyle(fontSize: 11, fontFamily: 'monospace'),
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(height: 16),
+                Container(
+                  padding: EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.warning_amber, color: Colors.orange, size: 20),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Esto sobrescribirá tu cache actual',
+                          style: TextStyle(fontSize: 12, color: Colors.orange[800]),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(height: 16),
+                Text(
+                  'Ingresa la contraseña del backup:',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                ),
+                SizedBox(height: 8),
+                TextField(
+                  controller: passwordController,
+                  obscureText: true,
+                  decoration: InputDecoration(
+                    hintText: 'Contraseña',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    prefixIcon: Icon(Icons.lock_outline),
+                  ),
+                ),
+              ] else ...[
+                Column(
+                  children: [
+                    CircularProgressIndicator(value: importProgress),
+                    SizedBox(height: 16),
+                    Text(
+                      'Importando backup... ${(importProgress * 100).toInt()}%',
+                      style: TextStyle(fontSize: 14, color: colorScheme.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            if (!isImporting) ...[
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text('Cancelar'),
+              ),
+              ElevatedButton(
+                onPressed: () async {
+                  if (passwordController.text.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Ingresa la contraseña del backup'),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                    return;
+                  }
+
+                  setState(() => isImporting = true);
+
+                  final exportService = DataExportService();
+                  final success = await exportService.importEncryptedCache(
+                    filePath: filePath,
+                    password: passwordController.text,
+                    onProgress: (progress) {
+                      setState(() => importProgress = progress);
+                    },
+                  );
+
+                  Navigator.pop(context);
+
+                  if (success) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('✅ Backup importado correctamente'),
+                          backgroundColor: Colors.green,
+                        ),
+                      );
+                    }
+                  } else {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Error: Contraseña incorrecta o archivo corrupto'),
+                          backgroundColor: Colors.red,
+                        ),
+                      );
+                    }
+                  }
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: colorScheme.primary,
+                  foregroundColor: Colors.white,
+                ),
+                child: Text('Importar'),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }

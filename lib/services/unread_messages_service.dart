@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:app_badge_plus/app_badge_plus.dart';
 
 class UnreadMessagesService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -138,24 +139,42 @@ class UnreadMessagesService {
     });
   }
 
-  /// Actualizar badge icon con el total de mensajes sin leer
+  /// Actualizar badge icon con el total de mensajes sin leer y notificaciones
   Future<void> updateBadgeCount() async {
     try {
-      final totalUnread = await getTotalUnreadCount();
+      final user = _auth.currentUser;
+      if (user == null) return;
 
-      // Actualizar badge en iOS
-      await _localNotifications
-          .resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>()
-          ?.requestPermissions(badge: true);
+      // Obtener total de mensajes no leídos
+      final totalUnreadMessages = await getTotalUnreadCount();
 
-      // En iOS, el badge se actualiza automáticamente cuando se muestra una notificación
-      // Pero también podemos forzar la actualización
-      print('🔔 Badge actualizado: $totalUnread mensajes sin leer');
+      // Obtener total de notificaciones no leídas
+      final notificationsSnapshot = await _firestore
+          .collection('notifications')
+          .where('userId', isEqualTo: user.uid)
+          .where('read', isEqualTo: false)
+          .get();
+      final unreadNotifications = notificationsSnapshot.docs.length;
 
-      // TODO: En iOS necesitamos usar un método nativo para actualizar el badge
-      // Por ahora, el badge se actualizará cuando lleguen notificaciones push
+      // Calcular total
+      final totalBadgeCount = totalUnreadMessages + unreadNotifications;
+
+      // Verificar si el dispositivo soporta badges
+      final isSupported = await AppBadgePlus.isSupported();
+
+      if (isSupported) {
+        if (totalBadgeCount > 0) {
+          await AppBadgePlus.updateBadge(totalBadgeCount);
+          print('🔔 Badge del ícono actualizado: $totalBadgeCount ($totalUnreadMessages mensajes + $unreadNotifications notificaciones)');
+        } else {
+          await AppBadgePlus.updateBadge(0);
+          print('🔔 Badge del ícono removido (no hay mensajes ni notificaciones)');
+        }
+      } else {
+        print('⚠️ Este dispositivo no soporta app badges');
+      }
     } catch (e) {
-      print('❌ Error actualizando badge: $e');
+      print('❌ Error actualizando badge del ícono: $e');
     }
   }
 

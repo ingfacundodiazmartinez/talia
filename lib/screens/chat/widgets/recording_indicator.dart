@@ -120,18 +120,18 @@ class _RecordingIndicatorState extends State<RecordingIndicator>
               ),
             ),
             const SizedBox(height: 12),
-            // Indicación de soltar
+            // Indicación de cómo detener
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(
-                  Icons.arrow_upward,
+                  Icons.stop_circle_outlined,
                   color: Colors.white70,
                   size: 16,
                 ),
                 const SizedBox(width: 4),
                 const Text(
-                  'Suelta para enviar',
+                  'Toca el botón para detener',
                   style: TextStyle(
                     color: Colors.white70,
                     fontSize: 12,

@@ -62,6 +62,28 @@ class ParentChatsController {
     return _chatService.filterDeletedChats(snapshot);
   }
 
+  /// Filtra chats archivados para el usuario actual
+  List<QueryDocumentSnapshot> filterArchivedChats(
+    List<QueryDocumentSnapshot> chatDocs,
+  ) {
+    return chatDocs.where((doc) {
+      final chatData = doc.data() as Map<String, dynamic>;
+      final isArchived = chatData['archived_$userId'] ?? false;
+      return !isArchived; // Solo mostrar chats NO archivados
+    }).toList();
+  }
+
+  /// Filtra grupos archivados para el usuario actual
+  List<QueryDocumentSnapshot> filterArchivedGroups(
+    List<QueryDocumentSnapshot> groupDocs,
+  ) {
+    return groupDocs.where((doc) {
+      final groupData = doc.data() as Map<String, dynamic>;
+      final isArchived = groupData['archived_$userId'] ?? false;
+      return !isArchived; // Solo mostrar grupos NO archivados
+    }).toList();
+  }
+
   /// Construye la lista de items para mostrar en la UI (sin historias ni buscador)
   List<ChatListItemType> buildListItems({
     required List<QueryDocumentSnapshot> childrenLinks,
@@ -76,18 +98,39 @@ class ParentChatsController {
     if (childrenLinks.isNotEmpty) {
       items.add(const HeaderItem(title: 'Mis Hijos', isChildrenHeader: true));
 
-      // Add each child chat
+      // Crear lista de chats con hijos y ordenar por última actividad
+      final childChatItems = <({String childId, QueryDocumentSnapshot? chatDoc, Timestamp? lastActivity})>[];
+
       for (final linkDoc in childrenLinks) {
         final childId = linkDoc['childId'] as String;
-
-        // Find the chat doc for this child
         final chatDoc = _findChatForChild(childId, chatDocs);
 
+        // Obtener timestamp de última actividad
+        Timestamp? lastActivity;
+        if (chatDoc != null) {
+          final chatData = chatDoc.data() as Map<String, dynamic>;
+          lastActivity = chatData['lastMessageTime'] as Timestamp? ??
+                        chatData['createdAt'] as Timestamp?;
+        }
+
+        childChatItems.add((childId: childId, chatDoc: chatDoc, lastActivity: lastActivity));
+      }
+
+      // Ordenar por última actividad (más reciente primero)
+      childChatItems.sort((a, b) {
+        if (a.lastActivity == null && b.lastActivity == null) return 0;
+        if (a.lastActivity == null) return 1;
+        if (b.lastActivity == null) return -1;
+        return b.lastActivity!.compareTo(a.lastActivity!);
+      });
+
+      // Agregar items ordenados
+      for (final item in childChatItems) {
         items.add(
           ChatItem(
-            userId: childId,
+            userId: item.childId,
             userData: {}, // Will be populated by StreamBuilder
-            chatDoc: chatDoc,
+            chatDoc: item.chatDoc,
           ),
         );
       }
@@ -99,7 +142,24 @@ class ParentChatsController {
         HeaderItem(title: childrenLinks.isEmpty ? 'Chats' : 'Otros Chats'),
       );
 
-      for (final chatDoc in otherChats) {
+      // Ordenar otros chats por última actividad
+      final sortedOtherChats = List<QueryDocumentSnapshot>.from(otherChats);
+      sortedOtherChats.sort((a, b) {
+        final aData = a.data() as Map<String, dynamic>;
+        final bData = b.data() as Map<String, dynamic>;
+        final aTime = aData['lastMessageTime'] as Timestamp? ??
+                     aData['createdAt'] as Timestamp?;
+        final bTime = bData['lastMessageTime'] as Timestamp? ??
+                     bData['createdAt'] as Timestamp?;
+
+        if (aTime == null && bTime == null) return 0;
+        if (aTime == null) return 1;
+        if (bTime == null) return -1;
+
+        return bTime.compareTo(aTime);
+      });
+
+      for (final chatDoc in sortedOtherChats) {
         final chatData = chatDoc.data() as Map<String, dynamic>;
         final participants = List<String>.from(chatData['participants'] ?? []);
         final otherUserId = participants.firstWhere(
@@ -119,7 +179,7 @@ class ParentChatsController {
       }
     }
 
-    // Add groups
+    // Add groups (ya vienen ordenados por lastActivity desde el stream)
     for (final groupDoc in groups) {
       final groupData = groupDoc.data() as Map<String, dynamic>;
       items.add(GroupItem(groupId: groupDoc.id, groupData: groupData));

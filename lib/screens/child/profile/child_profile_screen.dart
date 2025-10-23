@@ -106,8 +106,7 @@ class _ChildProfileScreenState extends State<ChildProfileScreen> {
                 title: 'Editar Perfil',
                 subtitle: 'Actualiza tu información personal',
                 onTap: () {
-                  Navigator.push(
-                    context,
+                  Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (context) => const EditProfileScreen(),
                     ),
@@ -140,8 +139,7 @@ class _ChildProfileScreenState extends State<ChildProfileScreen> {
                     title: 'Vincular Hijo',
                     subtitle: 'Genera código para vincular un hijo',
                     onTap: () {
-                      Navigator.push(
-                        context,
+                      Navigator.of(context).push(
                         MaterialPageRoute(
                           builder: (context) => const GenerateLinkCodeScreen(),
                         ),
@@ -176,8 +174,7 @@ class _ChildProfileScreenState extends State<ChildProfileScreen> {
                     title: 'Vincular con Padre/Madre',
                     subtitle: 'Ingresa código de vinculación',
                     onTap: () {
-                      Navigator.push(
-                        context,
+                      Navigator.of(context).push(
                         MaterialPageRoute(
                           builder: (context) => const EnterLinkCodeScreen(),
                         ),
@@ -198,8 +195,7 @@ class _ChildProfileScreenState extends State<ChildProfileScreen> {
                 title: 'Configuración',
                 subtitle: 'Personaliza tu experiencia',
                 onTap: () {
-                  Navigator.push(
-                    context,
+                  Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (context) => const ChildSettingsScreen(),
                     ),
@@ -212,8 +208,7 @@ class _ChildProfileScreenState extends State<ChildProfileScreen> {
                 title: 'Mi Código',
                 subtitle: 'Comparte tu código para agregar contactos',
                 onTap: () {
-                  Navigator.push(
-                    context,
+                  Navigator.of(context).push(
                     MaterialPageRoute(builder: (context) => const MyCodeScreen()),
                   );
                 },

@@ -513,12 +513,18 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
             builder: (context, aliasSnapshot) {
               final displayName = aliasSnapshot.data ?? realName;
 
+              // Verificar si el chat fue limpiado y no hay mensajes nuevos
+              final clearedAt = chatData['clearedAt_${widget.childId}'] as Timestamp?;
+              final lastMessageTime = chatData['lastMessageTime'] as Timestamp?;
+              final isChatCleared = clearedAt != null &&
+                  (lastMessageTime == null || clearedAt.compareTo(lastMessageTime) >= 0);
+
               return _buildChatItem(
                 chatId: chatDoc.id,
                 userId: otherUserId,
                 name: displayName,
-                lastMessage: chatData['lastMessage'] ?? '',
-                time: _chatsController.formatTime(chatData['lastMessageTime']),
+                lastMessage: isChatCleared ? 'Inicia una conversación...' : (chatData['lastMessage'] ?? ''),
+                time: isChatCleared ? '' : _chatsController.formatTime(chatData['lastMessageTime']),
                 unreadCount: unreadCount is int ? unreadCount : 0,
                 isOnline: userData?['isOnline'] ?? false,
                 photoURL: userData?['photoURL'],
@@ -588,14 +594,22 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
                     builder: (context, aliasSnapshot) {
                       final displayName = aliasSnapshot.data ?? realName;
 
+                      // Verificar si el chat fue limpiado y no hay mensajes nuevos
+                      final clearedAt = chatData['clearedAt_${widget.childId}'] as Timestamp?;
+                      final lastMessageTime = chatData['lastMessageTime'] as Timestamp?;
+                      final isChatCleared = clearedAt != null &&
+                          (lastMessageTime == null || clearedAt.compareTo(lastMessageTime) >= 0);
+
                       return _buildChatItem(
                         chatId: chatId,
                         userId: otherUserId,
                         name: displayName,
                         lastMessage: isBlocked
                             ? '🔒 Contacto bloqueado'
-                            : (chatData['lastMessage'] ?? ''),
-                        time: _chatsController.formatTime(chatData['lastMessageTime']),
+                            : (isChatCleared
+                                ? 'Inicia una conversación...'
+                                : (chatData['lastMessage'] ?? '')),
+                        time: isChatCleared ? '' : _chatsController.formatTime(chatData['lastMessageTime']),
                         unreadCount: isBlocked ? 0 : (unreadCount is int ? unreadCount : 0),
                         isOnline: userData?['isOnline'] ?? false,
                         photoURL: userData?['photoURL'],
@@ -681,8 +695,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
   }) {
     return GestureDetector(
       onTap: () {
-        Navigator.push(
-          context,
+        Navigator.of(context).push(
           MaterialPageRoute(
             builder: (context) => GroupChatScreen(
               groupId: groupId,
@@ -765,8 +778,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
     return GestureDetector(
       onTap: isRevoked ? null : () {
         print('Navegando al chat: $chatId con usuario: $userId');
-        Navigator.push(
-          context,
+        Navigator.of(context).push(
           MaterialPageRoute(
             builder: (context) => ChatDetailScreen(
               contactId: userId,

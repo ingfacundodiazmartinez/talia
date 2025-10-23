@@ -28,8 +28,7 @@ class VideoMessageContent extends StatelessWidget {
         GestureDetector(
           onTap: videoUrl != null && status != MessageStatus.sending
               ? () {
-                  Navigator.push(
-                    context,
+                  Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (context) => MediaViewerScreen(
                         mediaItems: mediaItems,

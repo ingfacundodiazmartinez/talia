@@ -440,7 +440,7 @@ class _IncomingCallDialogState extends State<IncomingCallDialog> with SingleTick
         // Navegar a la pantalla correspondiente según el tipo de llamada
         if (widget.callType == 'audio') {
           // Navegar a pantalla de llamada de audio
-          Navigator.of(context).push(
+          Navigator.of(context, rootNavigator: true).push(
             MaterialPageRoute(
               builder: (context) => AudioCallScreen(
                 callId: widget.callId,
@@ -454,7 +454,7 @@ class _IncomingCallDialogState extends State<IncomingCallDialog> with SingleTick
           );
         } else {
           // Navegar a pantalla de videollamada
-          Navigator.of(context).push(
+          Navigator.of(context, rootNavigator: true).push(
             MaterialPageRoute(
               builder: (context) => VideoCallScreen(
                 callId: widget.callId,

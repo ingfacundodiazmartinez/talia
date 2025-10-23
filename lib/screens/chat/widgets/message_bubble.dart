@@ -14,6 +14,9 @@ import 'message_bubble/group_chat_avatar.dart';
 import 'message_bubble/media_gallery_service.dart';
 import 'message_bubble/message_options_dialog.dart';
 import 'missed_call_bubble.dart';
+import 'answered_call_bubble.dart';
+import '../../forward_message_screen.dart';
+import '../../message_info_screen.dart';
 
 /// Widget que muestra un mensaje individual en el chat
 ///
@@ -34,6 +37,7 @@ class MessageBubble extends StatefulWidget {
   final String? videoUrl;
   final String? audioUrl;
   final String? localPath;
+  final List<double>? waveformData; // Datos de forma de onda para audio
   final MessageStatus status;
   final Map<String, dynamic>? replyTo;
   final Map<String, dynamic>? reactions;
@@ -43,23 +47,38 @@ class MessageBubble extends StatefulWidget {
   final String senderName;
   final Timestamp? timestamp;
   final VoidCallback? onReply;
+  final Function(String)? onReplyTap; // Callback para navegar al mensaje original del reply
   final Function(BuildContext, String)? onLongPress;
   final Function(String, Timestamp?)? onDelete;
+  final Function(String, String)? onEdit; // Callback para editar mensaje bloqueado
+  final VoidCallback? onSelectMessages; // Callback para entrar en modo selección
   final List<ChatMessage>? allMessages;
 
   // Campos de moderación
   final ModerationStatus? moderationStatus;
   final String? moderationReason;
   final String? moderationSeverity;
+  final String? originalText; // Texto original antes de ser bloqueado
 
   // Campo para identificar si es chat grupal
   final bool isGroupChat;
   final String? senderPhotoURL;
 
-  // Campos para llamadas perdidas
-  final String? type; // 'missed_call', etc.
+  // Campos para llamadas
+  final String? type; // 'missed_call', 'answered_call', etc.
   final String? callType; // 'video' o 'audio'
+  final int? callDuration; // Duración en segundos (para answered_call)
   final VoidCallback? onCallBack; // Callback para devolver llamada
+
+  // Campos para mensajes reenviados
+  final bool isForwarded;
+  final String? originalContactName;
+
+  // Nombre del contacto del chat actual (para reenvíos)
+  final String? contactName;
+
+  // Callback para ver información del mensaje (solo grupos)
+  final VoidCallback? onViewMessageInfo;
 
   const MessageBubble({
     super.key,
@@ -70,6 +89,7 @@ class MessageBubble extends StatefulWidget {
     this.videoUrl,
     this.audioUrl,
     this.localPath,
+    this.waveformData,
     this.status = MessageStatus.sent,
     this.replyTo,
     this.reactions,
@@ -79,17 +99,26 @@ class MessageBubble extends StatefulWidget {
     required this.senderName,
     this.timestamp,
     this.onReply,
+    this.onReplyTap,
     this.onLongPress,
     this.onDelete,
+    this.onEdit,
+    this.onSelectMessages,
     this.allMessages,
     this.moderationStatus,
     this.moderationReason,
     this.moderationSeverity,
+    this.originalText,
     this.isGroupChat = false,
     this.senderPhotoURL,
     this.type,
     this.callType,
+    this.callDuration,
     this.onCallBack,
+    this.isForwarded = false,
+    this.originalContactName,
+    this.contactName,
+    this.onViewMessageInfo,
   });
 
   @override
@@ -147,14 +176,14 @@ class _MessageBubbleState extends State<MessageBubble>
           alignment: widget.isMe ? Alignment.centerRight : Alignment.centerLeft,
           child: Dismissible(
             key: Key('dismiss_${widget.messageId}'),
-            direction: DismissDirection.startToEnd,
+            direction: widget.isMe ? DismissDirection.endToStart : DismissDirection.startToEnd,
             confirmDismiss: (direction) async {
               widget.onReply?.call();
               return false; // No eliminar, solo activar reply
             },
             background: Container(
-              alignment: Alignment.centerLeft,
-              padding: const EdgeInsets.only(left: 20),
+              alignment: widget.isMe ? Alignment.centerRight : Alignment.centerLeft,
+              padding: widget.isMe ? const EdgeInsets.only(right: 20) : const EdgeInsets.only(left: 20),
               child: Icon(Icons.reply, color: colorScheme.primary, size: 30),
             ),
             child: Column(
@@ -201,6 +230,14 @@ class _MessageBubbleState extends State<MessageBubble>
                                     time: widget.time,
                                     onCallBack: widget.onCallBack!,
                                   )
+                                : widget.type == 'answered_call' && widget.callType != null && widget.onCallBack != null
+                                ? AnsweredCallBubble(
+                                    isMe: widget.isMe,
+                                    callType: widget.callType!,
+                                    time: widget.time,
+                                    callDuration: widget.callDuration,
+                                    onCallBack: widget.onCallBack!,
+                                  )
                                 : Container(
                               margin: const EdgeInsets.only(bottom: 4),
                               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
@@ -225,15 +262,67 @@ class _MessageBubbleState extends State<MessageBubble>
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  // Si el mensaje está bloqueado, mostrar UI especial
-                                  if (widget.moderationStatus == ModerationStatus.blocked)
-                                    BlockedMessageContent(isMe: widget.isMe)
+                                  // Si el mensaje está bloqueado O tiene originalText sin text (fue bloqueado antes), mostrar UI especial
+                                  // Un mensaje bloqueado debe permanecer bloqueado incluso si se desactiva la moderación
+                                  if (widget.moderationStatus == ModerationStatus.blocked ||
+                                      (widget.originalText != null &&
+                                       widget.originalText!.isNotEmpty &&
+                                       (widget.text == null || widget.text!.isEmpty)))
+                                    BlockedMessageContent(
+                                      isMe: widget.isMe,
+                                      moderationReason: widget.moderationReason ??
+                                          'Este mensaje fue bloqueado anteriormente por moderación',
+                                      originalText: widget.originalText,
+                                      messageId: widget.messageId,
+                                      onEdit: widget.onEdit,
+                                    )
                                   else ...[
+                                    // Forwarded message indicator
+                                    Builder(
+                                      builder: (context) {
+                                        // Debug logging
+                                        if (widget.isForwarded) {
+                                          if (widget.originalContactName != null) {
+                                            print('💬 MessageBubble(${widget.messageId.substring(0, 8)}...): Mostrando indicador - isForwarded=true, originalContactName="${widget.originalContactName}" ✅');
+                                          } else {
+                                            print('⚠️ MessageBubble(${widget.messageId.substring(0, 8)}...): isForwarded=true pero originalContactName=null! NO se muestra indicador');
+                                          }
+                                        }
+
+                                        if (widget.isForwarded && widget.originalContactName != null) {
+                                          return Padding(
+                                            padding: const EdgeInsets.only(bottom: 6),
+                                            child: Row(
+                                              children: [
+                                                Icon(
+                                                  Icons.forward,
+                                                  size: 14,
+                                                  color: widget.isMe ? Colors.white70 : Colors.grey[600],
+                                                ),
+                                                const SizedBox(width: 4),
+                                                Text(
+                                                  'Reenviado de ${widget.originalContactName}',
+                                                  style: TextStyle(
+                                                    fontSize: 11,
+                                                    fontStyle: FontStyle.italic,
+                                                    color: widget.isMe ? Colors.white70 : Colors.grey[600],
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          );
+                                        }
+                                        return const SizedBox.shrink();
+                                      },
+                                    ),
                                     // Reply preview
                                     if (widget.replyTo != null)
                                       ReplyPreviewWidget(
                                         replyTo: widget.replyTo!,
                                         isMe: widget.isMe,
+                                        onTap: widget.onReplyTap != null && widget.replyTo!['id'] != null
+                                            ? () => widget.onReplyTap!(widget.replyTo!['id'])
+                                            : null,
                                       ),
                                     // Imagen
                                     if (_shouldShowImage())
@@ -259,9 +348,11 @@ class _MessageBubbleState extends State<MessageBubble>
                                     if (_shouldShowAudio())
                                       AudioMessageContent(
                                         audioUrl: widget.audioUrl,
+                                        localPath: widget.localPath,
                                         status: widget.status,
                                         isMe: widget.isMe,
                                         text: widget.text,
+                                        waveformData: widget.waveformData,
                                       ),
                                     // Texto
                                     if (widget.text != null && widget.text!.isNotEmpty)
@@ -274,6 +365,7 @@ class _MessageBubbleState extends State<MessageBubble>
                                     MessageTimestamp(
                                       time: widget.time,
                                       isMe: widget.isMe,
+                                      status: widget.status,
                                     ),
                                   ],
                                 ],
@@ -354,7 +446,7 @@ class _MessageBubbleState extends State<MessageBubble>
     );
   }
 
-  /// Mostrar opciones del mensaje (reaccionar, eliminar)
+  /// Mostrar opciones del mensaje (reaccionar, eliminar, reenviar)
   void _showMessageOptions(BuildContext context) {
     MessageOptionsDialog.show(
       context: context,
@@ -365,6 +457,70 @@ class _MessageBubbleState extends State<MessageBubble>
       messageId: widget.messageId,
       chatId: widget.chatId,
       messageText: widget.text,
+      onForward: () => _forwardMessage(context),
+      onSelectMessages: widget.onSelectMessages,
+      isGroupChat: widget.isGroupChat,
+      onViewInfo: widget.onViewMessageInfo, // Usar el callback del padre
+    );
+  }
+
+  /// Navegar a la pantalla de información del mensaje (solo grupos)
+  void _viewMessageInfo() {
+    print('🔍 [MessageBubble] _viewMessageInfo llamado');
+    print('   mounted: $mounted');
+    print('   chatId: ${widget.chatId}');
+    print('   messageId: ${widget.messageId}');
+
+    if (!mounted) {
+      print('❌ [MessageBubble] Widget no mounted, abortando navegación');
+      return;
+    }
+
+    try {
+      print('✅ [MessageBubble] Navegando a MessageInfoScreen...');
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) {
+            print('✅ [MessageBubble] Builder de MessageInfoScreen ejecutado');
+            return MessageInfoScreen(
+              groupId: widget.chatId,
+              messageId: widget.messageId,
+            );
+          },
+        ),
+      );
+      print('✅ [MessageBubble] Navigator.push completado');
+    } catch (e, stackTrace) {
+      print('❌ [MessageBubble] Error en navegación: $e');
+      print('   StackTrace: $stackTrace');
+    }
+  }
+
+  /// Navegar a la pantalla de reenvío de mensaje
+  void _forwardMessage(BuildContext context) {
+    // Crear objeto ChatMessage con los datos actuales
+    final message = ChatMessage(
+      id: widget.messageId,
+      senderId: widget.senderId,
+      text: widget.text ?? '',
+      imageUrl: widget.imageUrl,
+      videoUrl: widget.videoUrl,
+      audioUrl: widget.audioUrl,
+      timestamp: widget.timestamp,
+      type: widget.type ?? 'text',
+      waveformData: widget.waveformData,
+      status: widget.status,
+    );
+
+    // Navegar a la pantalla de reenvío
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => ForwardMessageScreen(
+          message: message,
+          chatId: widget.chatId,
+          contactName: widget.contactName,
+        ),
+      ),
     );
   }
 }

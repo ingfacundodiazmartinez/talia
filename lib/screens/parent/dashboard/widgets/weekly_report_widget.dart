@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../../../reports_screen.dart';
+import '../../../../theme_service.dart';
 
 /// Widget de acceso rápido a reportes con IA
 ///
@@ -20,9 +21,21 @@ class WeeklyReportWidget extends StatelessWidget {
       padding: EdgeInsets.all(20),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [Color(0xFF9D7FE8), Color(0xFFB39DDB)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            context.customColors.gradientStart,
+            context.customColors.gradientEnd,
+          ],
         ),
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
+            blurRadius: 10,
+            offset: Offset(0, 4),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -52,14 +65,13 @@ class WeeklyReportWidget extends StatelessWidget {
           SizedBox(height: 16),
           ElevatedButton(
             onPressed: () {
-              Navigator.push(
-                context,
+              Navigator.of(context).push(
                 MaterialPageRoute(builder: (context) => ReportsScreen()),
               );
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.white,
-              foregroundColor: Color(0xFF9D7FE8),
+              foregroundColor: Theme.of(context).colorScheme.primary,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
               ),

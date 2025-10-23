@@ -71,7 +71,7 @@ Future<MigrationResult> _migrateFile(File file) async {
   // Add import if needed
   if (!hasImport) {
     // Find where to insert import (after first import or at top)
-    final importPattern = RegExp(r"^import ['\"].*['\"];$", multiLine: true);
+    final importPattern = RegExp(r'^import [' "'" r'"].*[' "'" r'"];$', multiLine: true);
     final firstImport = importPattern.firstMatch(content);
 
     if (firstImport != null) {

@@ -76,7 +76,9 @@ class _EmergencyDetailScreenState extends State<EmergencyDetailScreen> {
   List<LatLng> _buildLocationPoints(List<QueryDocumentSnapshot> trackingDocs) {
     if (trackingDocs.isEmpty) return _locationPoints;
 
-    final newPoints = trackingDocs.map((doc) {
+    // ⚡ Firestore ya limita a 10 documentos en orden descendente (más recientes primero)
+    // Los invertimos para mostrarlos cronológicamente (del más antiguo al más reciente)
+    final newPoints = trackingDocs.reversed.map((doc) {
       try {
         final data = doc.data() as Map<String, dynamic>;
         final lat = data['latitude'];
@@ -97,22 +99,11 @@ class _EmergencyDetailScreenState extends State<EmergencyDetailScreen> {
       }
     }).whereType<LatLng>().toList(); // Filtrar nulos
 
-    // 🔥 OPTIMIZACIÓN: Mostrar solo los ÚLTIMOS puntos (los más recientes y relevantes)
-    // Para emergencias activas, lo importante es la ubicación reciente
-    final List<LatLng> recentPoints;
-    const maxRecentPoints = 50;
-
-    if (newPoints.length > maxRecentPoints) {
-      // Tomar solo los últimos 50 puntos (más recientes)
-      recentPoints = newPoints.sublist(newPoints.length - maxRecentPoints);
-      print('⚡ [EmergencyDetailScreen] Mostrando últimos puntos: ${newPoints.length} total -> ${recentPoints.length} recientes');
-    } else {
-      recentPoints = newPoints;
-    }
+    print('⚡ [EmergencyDetailScreen] Mostrando ${newPoints.length} puntos de tracking (máx 10)');
 
     // Combinar con punto inicial si existe (para contexto de dónde empezó)
     final allPoints = List<LatLng>.from(_locationPoints.take(1)); // Solo el primer punto (inicial)
-    allPoints.addAll(recentPoints);
+    allPoints.addAll(newPoints);
 
     return allPoints;
   }
@@ -328,7 +319,8 @@ class _EmergencyDetailScreenState extends State<EmergencyDetailScreen> {
                   .collection('emergencies')
                   .doc(widget.emergencyId)
                   .collection('location_tracking')
-                  .orderBy('timestamp', descending: false)
+                  .orderBy('timestamp', descending: true) // Más recientes primero
+                  .limit(10) // ⚡ LIMITAR A 10 DOCUMENTOS DESDE FIRESTORE
                   .snapshots()
                   .handleError((error) {
                     print('❌ Error en stream de location_tracking: $error');
@@ -417,11 +409,12 @@ class _EmergencyDetailScreenState extends State<EmergencyDetailScreen> {
                               Icon(Icons.route, color: Colors.red, size: 20),
                               SizedBox(width: 8),
                               Text(
-                                // Mostrar el total de tracking docs (incluyendo inicial)
-                                '${trackingDocs.length + 1} puntos',
+                                // Mostrar solo los puntos recientes (máx 10 + inicial)
+                                '${trackingDocs.length + 1} puntos recientes',
                                 style: TextStyle(
                                   fontWeight: FontWeight.bold,
                                   color: Colors.red[900],
+                                  fontSize: 12,
                                 ),
                               ),
                             ],

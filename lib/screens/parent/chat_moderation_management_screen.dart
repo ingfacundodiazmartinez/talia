@@ -406,6 +406,7 @@ class _ContactTileWidgetState extends State<_ContactTileWidget> with AutomaticKe
           builder: (context, chatSnapshot) {
             final chatData = chatSnapshot.data?.data() as Map<String, dynamic>?;
             final serverModerationEnabled = chatData?['moderationEnabled'] ?? false;
+            final serverModerationLevel = chatData?['moderationLevel'] ?? 'high';
 
             // Usar el estado pendiente si existe (durante actualización),
             // de lo contrario usar el valor del servidor
@@ -444,70 +445,125 @@ class _ContactTileWidgetState extends State<_ContactTileWidget> with AutomaticKe
               builder: (context, blockedSnapshot) {
                 final blockedCount = blockedSnapshot.data?.docs.length ?? 0;
 
-                return ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor: widget.colorScheme.secondaryContainer,
-                    backgroundImage: contactPhotoURL != null ? NetworkImage(contactPhotoURL) : null,
-                    child: contactPhotoURL == null
-                        ? Icon(
-                            Icons.person,
-                            color: widget.colorScheme.onSecondaryContainer,
-                          )
-                        : null,
-                  ),
-                  title: Text(contactName),
-              subtitle: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    displayValue
-                        ? 'Moderación activa'
-                        : 'Moderación desactivada',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: displayValue ? Colors.green : widget.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                  if (blockedCount > 0)
-                    Text(
-                      '$blockedCount mensaje${blockedCount > 1 ? 's' : ''} bloqueado${blockedCount > 1 ? 's' : ''}',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Colors.orange,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                ],
-              ),
-                  trailing: Switch(
-                    value: displayValue,
-                    onChanged: (value) {
-                      // Actualizar estado pendiente inmediatamente para feedback visual
-                      setState(() {
-                        _pendingModerationState = value;
-                      });
+                return Card(
+                  margin: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  child: Column(
+                    children: [
+                      ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: widget.colorScheme.secondaryContainer,
+                          backgroundImage: contactPhotoURL != null ? NetworkImage(contactPhotoURL) : null,
+                          child: contactPhotoURL == null
+                              ? Icon(
+                                  Icons.person,
+                                  color: widget.colorScheme.onSecondaryContainer,
+                                )
+                              : null,
+                        ),
+                        title: Text(contactName),
+                        subtitle: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              displayValue
+                                  ? 'Moderación activa - Nivel: ${_getLevelLabel(serverModerationLevel)}'
+                                  : 'Moderación desactivada',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: displayValue ? Colors.green : widget.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                            if (blockedCount > 0)
+                              Text(
+                                '$blockedCount mensaje${blockedCount > 1 ? 's' : ''} bloqueado${blockedCount > 1 ? 's' : ''}',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.orange,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                          ],
+                        ),
+                        trailing: Switch(
+                          value: displayValue,
+                          onChanged: (value) {
+                            // Actualizar estado pendiente inmediatamente para feedback visual
+                            setState(() {
+                              _pendingModerationState = value;
+                            });
 
-                      // Luego actualizar en el servidor
-                      _toggleModeration(
-                        context: context,
-                        chatId: widget.chatId,
-                        contactName: contactName,
-                        enabled: value,
-                        firestore: widget.firestore,
-                      );
-                    },
+                            // Luego actualizar en el servidor
+                            _toggleModeration(
+                              context: context,
+                              chatId: widget.chatId,
+                              contactName: contactName,
+                              enabled: value,
+                              level: serverModerationLevel,
+                              firestore: widget.firestore,
+                            );
+                          },
+                        ),
+                        onTap: () {
+                          // Navegar a pantalla de detalles de moderación
+                          Navigator.pushNamed(
+                            context,
+                            '/chat_moderation_settings',
+                            arguments: {
+                              'chatId': widget.chatId,
+                              'contactName': contactName,
+                            },
+                          );
+                        },
+                      ),
+                      // Selector de nivel (solo visible cuando moderación está activa)
+                      if (displayValue)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Nivel de moderación',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: widget.colorScheme.onSurface,
+                                ),
+                              ),
+                              SizedBox(height: 8),
+                              SegmentedButton<String>(
+                                segments: [
+                                  ButtonSegment(
+                                    value: 'high',
+                                    label: Text('Alto', style: TextStyle(fontSize: 12)),
+                                    icon: Icon(Icons.shield, size: 16),
+                                  ),
+                                  ButtonSegment(
+                                    value: 'medium',
+                                    label: Text('Medio', style: TextStyle(fontSize: 12)),
+                                    icon: Icon(Icons.shield_moon, size: 16),
+                                  ),
+                                  ButtonSegment(
+                                    value: 'low',
+                                    label: Text('Bajo', style: TextStyle(fontSize: 12)),
+                                    icon: Icon(Icons.shield_outlined, size: 16),
+                                  ),
+                                ],
+                                selected: {serverModerationLevel},
+                                onSelectionChanged: (Set<String> newSelection) {
+                                  _changeModerationLevel(
+                                    context: context,
+                                    chatId: widget.chatId,
+                                    level: newSelection.first,
+                                    firestore: widget.firestore,
+                                  );
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
                   ),
-                  onTap: () {
-                    // Navegar a pantalla de detalles de moderación
-                    Navigator.pushNamed(
-                      context,
-                      '/chat_moderation_settings',
-                      arguments: {
-                        'chatId': widget.chatId,
-                        'contactName': contactName,
-                      },
-                    );
-                  },
                 );
               },
             );
@@ -517,11 +573,25 @@ class _ContactTileWidgetState extends State<_ContactTileWidget> with AutomaticKe
     );
   }
 
+  String _getLevelLabel(String level) {
+    switch (level) {
+      case 'high':
+        return 'Alto';
+      case 'medium':
+        return 'Medio';
+      case 'low':
+        return 'Bajo';
+      default:
+        return 'Alto';
+    }
+  }
+
   static Future<void> _toggleModeration({
     required BuildContext context,
     required String chatId,
     required String contactName,
     required bool enabled,
+    required String level,
     required FirebaseFirestore firestore,
   }) async {
     try {
@@ -533,12 +603,14 @@ class _ContactTileWidgetState extends State<_ContactTileWidget> with AutomaticKe
       print('🔧 Toggle Moderation - chatId: $chatId');
       print('🔧 participantIds: $participantIds');
       print('🔧 enabled: $enabled (type: ${enabled.runtimeType})');
+      print('🔧 level: $level');
       print('🔧 currentUserId: $currentUserId');
 
       // Asegurar que el documento del chat existe con los campos necesarios
       final updateData = {
         'participants': participantIds, // Necesario para las reglas de seguridad
         'moderationEnabled': enabled,
+        'moderationLevel': level, // Guardar nivel
         'moderationParentId': enabled ? currentUserId : null,
         'moderationEnabledAt': enabled ? FieldValue.serverTimestamp() : null,
         'updatedAt': FieldValue.serverTimestamp(),
@@ -567,6 +639,41 @@ class _ContactTileWidgetState extends State<_ContactTileWidget> with AutomaticKe
       }
     } catch (e) {
       print('❌ Error actualizando moderación: $e');
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  static Future<void> _changeModerationLevel({
+    required BuildContext context,
+    required String chatId,
+    required String level,
+    required FirebaseFirestore firestore,
+  }) async {
+    try {
+      await firestore.collection('chats').doc(chatId).update({
+        'moderationLevel': level,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      print('✅ Nivel de moderación actualizado: $level');
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Nivel de moderación actualizado'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      print('❌ Error actualizando nivel: $e');
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

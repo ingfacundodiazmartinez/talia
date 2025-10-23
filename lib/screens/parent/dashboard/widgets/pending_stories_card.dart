@@ -18,8 +18,7 @@ class PendingStoriesCard extends StatelessWidget {
 
         return GestureDetector(
           onTap: () {
-            Navigator.push(
-              context,
+            Navigator.of(context).push(
               MaterialPageRoute(builder: (context) => StoryApprovalScreen()),
             );
           },

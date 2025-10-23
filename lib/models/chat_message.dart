@@ -30,9 +30,10 @@ class ChatMessage {
   final Map<String, dynamic>? reactions;
   final String? type; // 'text', 'image', 'video', 'audio', 'missed_call', etc.
 
-  // Campos para llamadas perdidas
+  // Campos para llamadas
   final String? callType; // 'video' o 'audio'
   final String? callId; // ID de la llamada en Firestore
+  final int? callDuration; // Duración de la llamada en segundos (solo para answered_call)
 
   // Nuevos campos para optimistic updates
   final MessageStatus status;
@@ -44,6 +45,16 @@ class ChatMessage {
   final ModerationStatus? moderationStatus;  // Estado de moderación
   final String? moderationReason;            // Razón del bloqueo/alerta
   final String? moderationSeverity;          // Severidad: none, low, medium, high
+  final String? originalText;                // Texto original antes de ser bloqueado
+
+  // Campos para audio
+  final List<double>? waveformData;          // Datos de forma de onda para audio
+
+  // Campos para mensajes reenviados
+  final bool isForwarded;                    // Indica si el mensaje fue reenviado
+  final String? originalSenderId;            // ID del remitente original
+  final String? originalChatId;              // ID del chat original
+  final String? originalContactName;         // Nombre del contacto original
 
   ChatMessage({
     required this.id,
@@ -59,6 +70,7 @@ class ChatMessage {
     this.type,
     this.callType,
     this.callId,
+    this.callDuration,
     this.status = MessageStatus.sent,  // Por defecto "sent" para mensajes existentes
     this.localTimestamp,
     this.retryCount = 0,
@@ -66,16 +78,25 @@ class ChatMessage {
     this.moderationStatus,
     this.moderationReason,
     this.moderationSeverity,
+    this.originalText,
+    this.waveformData,
+    this.isForwarded = false,
+    this.originalSenderId,
+    this.originalChatId,
+    this.originalContactName,
   });
 
   /// Factory constructor desde Firestore DocumentSnapshot
-  factory ChatMessage.fromFirestore(DocumentSnapshot doc) {
+  factory ChatMessage.fromFirestore(DocumentSnapshot doc, {String? currentUserId}) {
     final data = doc.data() as Map<String, dynamic>;
-    return ChatMessage.fromMap(doc.id, data);
+    return ChatMessage.fromMap(doc.id, data, currentUserId: currentUserId);
   }
 
   /// Factory constructor desde Map
-  factory ChatMessage.fromMap(String id, Map<String, dynamic> data) {
+  factory ChatMessage.fromMap(String id, Map<String, dynamic> data, {String? currentUserId}) {
+    // Debug forwarding fields
+    _debugForwardingFields(id, data);
+
     // Parse moderation status from string
     ModerationStatus? moderationStatus;
     final modStatusString = data['moderationStatus'] as String?;
@@ -93,6 +114,24 @@ class ChatMessage {
       }
     }
 
+    // Calcular el status del mensaje basándose en readBy
+    MessageStatus status = MessageStatus.sent; // Por defecto
+
+    // Solo calcular status si es un mensaje propio
+    if (currentUserId != null && data['senderId'] == currentUserId) {
+      final readBy = List<String>.from(data['readBy'] ?? []);
+
+      // Si readBy contiene a otros usuarios (no solo a mí), el mensaje fue visto
+      final othersRead = readBy.where((userId) => userId != currentUserId).isNotEmpty;
+
+      if (othersRead) {
+        status = MessageStatus.seen;
+      } else {
+        // Podríamos distinguir entre 'sent' y 'delivered' aquí si tuviéramos ese campo
+        status = MessageStatus.sent;
+      }
+    }
+
     return ChatMessage(
       id: id,
       senderId: data['senderId'] ?? '',
@@ -107,11 +146,33 @@ class ChatMessage {
       type: data['type'],
       callType: data['callType'],
       callId: data['callId'],
-      status: MessageStatus.sent,  // Mensajes de Firestore ya están enviados
+      callDuration: data['callDuration'] as int?,
+      status: status,
       moderationStatus: moderationStatus,
       moderationReason: data['moderationReason'] as String?,
       moderationSeverity: data['moderationSeverity'] as String?,
+      originalText: data['originalText'] as String?,
+      waveformData: data['waveformData'] != null
+          ? List<double>.from(data['waveformData'] as List)
+          : null,
+      isForwarded: data['isForwarded'] ?? false,
+      originalSenderId: data['originalSenderId'] as String?,
+      originalChatId: data['originalChatId'] as String?,
+      originalContactName: data['originalContactName'] as String?,
     );
+  }
+
+  /// Debug helper para logging
+  static void _debugForwardingFields(String id, Map<String, dynamic> data) {
+    final isForwarded = data['isForwarded'] ?? false;
+    final originalContactName = data['originalContactName'] as String?;
+    if (isForwarded) {
+      if (originalContactName != null) {
+        print('📥 fromMap(${id.substring(0, 8)}...): isForwarded=$isForwarded, originalContactName="$originalContactName" ✅');
+      } else {
+        print('⚠️ fromMap(${id.substring(0, 8)}...): isForwarded=$isForwarded pero originalContactName es NULL!');
+      }
+    }
   }
 
   /// Factory constructor para mensajes optimistas (pendientes de envío)
@@ -125,6 +186,7 @@ class ChatMessage {
     String? localPath,
     Map<String, dynamic>? replyTo,
     String? type,
+    List<double>? waveformData,
   }) {
     return ChatMessage(
       id: id,
@@ -141,6 +203,7 @@ class ChatMessage {
       type: type,
       status: MessageStatus.sending,
       retryCount: 0,
+      waveformData: waveformData,
     );
   }
 
@@ -149,6 +212,7 @@ class ChatMessage {
     final map = <String, dynamic>{
       'senderId': senderId,
       'isRead': isRead,
+      'isForwarded': isForwarded,
     };
 
     if (text != null) map['text'] = text;
@@ -159,6 +223,11 @@ class ChatMessage {
     if (replyTo != null) map['replyTo'] = replyTo;
     if (reactions != null) map['reactions'] = reactions;
     if (type != null) map['type'] = type;
+
+    // Campos de reenvío
+    if (originalSenderId != null) map['originalSenderId'] = originalSenderId;
+    if (originalChatId != null) map['originalChatId'] = originalChatId;
+    if (originalContactName != null) map['originalContactName'] = originalContactName;
 
     return map;
   }
@@ -256,6 +325,8 @@ class ChatMessage {
     ModerationStatus? moderationStatus,
     String? moderationReason,
     String? moderationSeverity,
+    String? originalText,
+    List<double>? waveformData,
   }) {
     return ChatMessage(
       id: id ?? this.id,
@@ -278,6 +349,13 @@ class ChatMessage {
       moderationStatus: moderationStatus ?? this.moderationStatus,
       moderationReason: moderationReason ?? this.moderationReason,
       moderationSeverity: moderationSeverity ?? this.moderationSeverity,
+      originalText: originalText ?? this.originalText,
+      waveformData: waveformData ?? this.waveformData,
+      // Preservar campos de reenvío
+      isForwarded: this.isForwarded,
+      originalSenderId: this.originalSenderId,
+      originalChatId: this.originalChatId,
+      originalContactName: this.originalContactName,
     );
   }
 

@@ -45,7 +45,8 @@ class NotificationFilter {
       final preferenceKey = NotificationTypes.getPreferenceKey(notificationType);
 
       if (preferenceKey != null) {
-        final isEnabled = prefs[preferenceKey] ?? true;
+        final prefValue = prefs[preferenceKey];
+        final isEnabled = prefValue is bool ? prefValue : true;
 
         if (!isEnabled) {
           _logDecision(
@@ -109,10 +110,15 @@ class NotificationFilter {
     try {
       final prefs = await _prefsService.getPreferences();
 
+      // Manejo seguro de valores que pueden ser null
+      final soundValue = prefs['soundEnabled'];
+      final vibrationValue = prefs['vibrationEnabled'];
+      final inAppValue = prefs['inAppSoundEnabled'];
+
       return NotificationSoundConfig(
-        soundEnabled: prefs['soundEnabled'] ?? true,
-        vibrationEnabled: prefs['vibrationEnabled'] ?? true,
-        inAppSoundEnabled: prefs['inAppSoundEnabled'] ?? true,
+        soundEnabled: soundValue is bool ? soundValue : true,
+        vibrationEnabled: vibrationValue is bool ? vibrationValue : true,
+        inAppSoundEnabled: inAppValue is bool ? inAppValue : true,
       );
     } catch (e) {
       print('⚠️ Error obteniendo configuración de sonido: $e');

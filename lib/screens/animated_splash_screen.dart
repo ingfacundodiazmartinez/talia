@@ -109,7 +109,7 @@ class _AnimatedSplashScreenState extends State<AnimatedSplashScreen>
                     const SizedBox(height: 8),
                     // Tagline
                     Text(
-                      'Comunicación Familiar Segura',
+                      'Comunicación Inteligente',
                       style: TextStyle(
                         fontSize: 14,
                         color: Colors.grey[600],

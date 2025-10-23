@@ -33,7 +33,8 @@ class ParentContactsScreen extends StatefulWidget {
   State<ParentContactsScreen> createState() => _ParentContactsScreenState();
 }
 
-class _ParentContactsScreenState extends State<ParentContactsScreen> {
+class _ParentContactsScreenState extends State<ParentContactsScreen>
+    with AutomaticKeepAliveClientMixin {
   final firebase_auth.FirebaseAuth _auth = firebase_auth.FirebaseAuth.instance;
   late ParentDashboardController _controller;
   final ContactAliasService _aliasService = ContactAliasService();
@@ -43,6 +44,9 @@ class _ParentContactsScreenState extends State<ParentContactsScreen> {
 
   // Cache local para evitar rebuilds innecesarios
   List<String>? _cachedLinkedChildren;
+
+  @override
+  bool get wantKeepAlive => true;
 
   @override
   void initState() {
@@ -66,6 +70,7 @@ class _ParentContactsScreenState extends State<ParentContactsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context); // Necesario para AutomaticKeepAliveClientMixin
     final userRoleService = UserRoleService();
     final currentUserId = _auth.currentUser?.uid;
 
@@ -123,8 +128,7 @@ class _ParentContactsScreenState extends State<ParentContactsScreen> {
                         IconButton(
                           icon: Icon(Icons.person_add, color: Colors.white, size: 26),
                           onPressed: () {
-                            Navigator.push(
-                              context,
+                            Navigator.of(context).push(
                               MaterialPageRoute(builder: (context) => AddContactScreen()),
                             );
                           },
@@ -458,8 +462,7 @@ class _ParentContactsScreenState extends State<ParentContactsScreen> {
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () {
-          Navigator.push(
-            context,
+          Navigator.of(context).push(
             MaterialPageRoute(builder: (context) => GenerateLinkCodeScreen()),
           );
         },

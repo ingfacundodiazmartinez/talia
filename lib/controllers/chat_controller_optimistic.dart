@@ -16,6 +16,7 @@ import '../services/sound_service.dart';
 import '../services/user_profile_cache_service.dart';
 import '../services/read_receipts_service.dart';
 import '../services/delivery_receipts_service.dart';
+import '../services/audio_processing_service.dart';
 
 /// Controller optimista para chat individual
 ///
@@ -55,6 +56,16 @@ class ChatControllerOptimistic extends ChangeNotifier {
   bool _hasLoadedInitialMessages = false;
   bool get hasLoadedInitialMessages => _hasLoadedInitialMessages;
 
+  // Paginación
+  bool _isLoadingMore = false;
+  bool get isLoadingMore => _isLoadingMore;
+
+  bool _hasMoreMessages = true;
+  bool get hasMoreMessages => _hasMoreMessages;
+
+  static const int _messagesPerPage = 50;
+  DocumentSnapshot? _lastDocument;
+
   // Estado del contacto
   String _contactPhotoURL = '';
   String _contactIsOnline = 'false';
@@ -70,6 +81,9 @@ class ChatControllerOptimistic extends ChangeNotifier {
 
   // Bandera para indicar si el listener ya se inicializó (para evitar duplicados)
   bool _listenerInitialized = false;
+
+  // Timestamp de cuándo se limpió el chat (para filtrar mensajes anteriores)
+  Timestamp? _clearedAtTimestamp;
 
   // Timeout para marcar mensaje como error
   static const Duration _sendTimeout = Duration(seconds: 20);
@@ -178,6 +192,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
       if (chatDoc.exists) {
         final chatData = chatDoc.data();
         clearedAt = chatData?['clearedAt_$currentUserId'] as Timestamp?;
+        _clearedAtTimestamp = clearedAt; // Guardar para el listener
         if (clearedAt != null) {
           print('🧹 Chat limpiado en: ${clearedAt.toDate()}');
         }
@@ -188,11 +203,19 @@ class ChatControllerOptimistic extends ChangeNotifier {
           .doc(chatId)
           .collection('messages')
           .orderBy('timestamp', descending: true)
-          .limit(50)
+          .limit(_messagesPerPage)
           .get();
 
+      // Guardar el último documento para paginación
+      if (snapshot.docs.isNotEmpty) {
+        _lastDocument = snapshot.docs.last;
+        _hasMoreMessages = snapshot.docs.length == _messagesPerPage;
+      } else {
+        _hasMoreMessages = false;
+      }
+
       final firestoreMessages = snapshot.docs
-          .map((doc) => ChatMessage.fromFirestore(doc))
+          .map((doc) => ChatMessage.fromFirestore(doc, currentUserId: currentUserId))
           .where((message) {
             // Filtrar mensajes anteriores al clearedAt
             if (clearedAt != null && message.timestamp != null) {
@@ -212,14 +235,38 @@ class ChatControllerOptimistic extends ChangeNotifier {
           _messages.add(message);
           newCount++;
         } else {
-          // ✅ OPTIMIZACIÓN: Si es mensaje propio ya en cache, solo actualizar status
+          // ✅ OPTIMIZACIÓN: Si es mensaje propio ya en cache, solo actualizar campos necesarios
           if (message.senderId == currentUserId) {
+            // Usar el mensaje de Firestore pero preservar datos locales como localPath si existen
             final currentMessage = _messages[index];
-            final updatedWithStatus = currentMessage.copyWith(
+            _messages[index] = ChatMessage(
+              id: message.id,
+              senderId: message.senderId,
+              text: message.text,
+              imageUrl: message.imageUrl,
+              videoUrl: message.videoUrl,
+              audioUrl: message.audioUrl,
+              timestamp: message.timestamp,
+              isRead: message.isRead,
+              replyTo: message.replyTo,
+              reactions: message.reactions,
+              type: message.type,
+              callType: message.callType,
+              callId: message.callId,
               status: message.status,
-              timestamp: message.timestamp ?? currentMessage.timestamp,
+              moderationStatus: message.moderationStatus,
+              moderationReason: message.moderationReason,
+              moderationSeverity: message.moderationSeverity,
+              originalText: message.originalText,
+              waveformData: message.waveformData,
+              // Preservar localPath del cache si existe y el mensaje está siendo enviado
+              localPath: currentMessage.status == MessageStatus.sending ? currentMessage.localPath : null,
+              // IMPORTANTE: Copiar campos de forwarding desde Firestore
+              isForwarded: message.isForwarded,
+              originalSenderId: message.originalSenderId,
+              originalChatId: message.originalChatId,
+              originalContactName: message.originalContactName,
             );
-            _messages[index] = updatedWithStatus;
             skippedCount++;
           } else {
             // Para mensajes del contacto, actualizar completamente
@@ -251,6 +298,74 @@ class ChatControllerOptimistic extends ChangeNotifier {
     }
   }
 
+  /// Cargar más mensajes antiguos (paginación)
+  Future<void> loadMoreMessages() async {
+    // Evitar cargas duplicadas
+    if (_isLoadingMore || !_hasMoreMessages || _lastDocument == null) {
+      print('📄 [Pagination] No se pueden cargar más: isLoading=$_isLoadingMore, hasMore=$_hasMoreMessages, lastDoc=${_lastDocument != null}');
+      return;
+    }
+
+    _isLoadingMore = true;
+    notifyListeners();
+
+    try {
+      print('📄 [Pagination] Cargando más mensajes antiguos...');
+
+      final snapshot = await _firestore
+          .collection('chats')
+          .doc(chatId)
+          .collection('messages')
+          .orderBy('timestamp', descending: true)
+          .startAfterDocument(_lastDocument!)
+          .limit(_messagesPerPage)
+          .get();
+
+      if (snapshot.docs.isEmpty) {
+        _hasMoreMessages = false;
+        print('📄 [Pagination] No hay más mensajes');
+        return;
+      }
+
+      // Actualizar el último documento
+      _lastDocument = snapshot.docs.last;
+      _hasMoreMessages = snapshot.docs.length == _messagesPerPage;
+
+      final newMessages = snapshot.docs
+          .map((doc) => ChatMessage.fromFirestore(doc, currentUserId: currentUserId))
+          .where((message) {
+            // Filtrar mensajes anteriores al clearedAt
+            if (_clearedAtTimestamp != null && message.timestamp != null) {
+              return message.timestamp!.compareTo(_clearedAtTimestamp!) > 0;
+            }
+            return true;
+          })
+          .toList();
+
+      // Agregar solo mensajes nuevos (evitar duplicados)
+      int addedCount = 0;
+      for (final message in newMessages) {
+        final exists = _messages.any((m) => m.id == message.id);
+        if (!exists) {
+          _messages.add(message);
+          addedCount++;
+        }
+      }
+
+      _sortMessages();
+
+      // Guardar en cache
+      await _cacheService.saveMessages(chatId, _messages);
+
+      print('📄 [Pagination] Cargados $addedCount mensajes adicionales (${snapshot.docs.length} totales). Total mensajes: ${_messages.length}');
+    } catch (e) {
+      print('❌ [Pagination] Error cargando más mensajes: $e');
+    } finally {
+      _isLoadingMore = false;
+      notifyListeners();
+    }
+  }
+
   /// ✅ NUEVO: Configurar listener en tiempo real para nuevos mensajes
   void _setupMessagesListener() {
     // Escuchar TODOS los mensajes (sin filtro de timestamp)
@@ -273,7 +388,36 @@ class ChatControllerOptimistic extends ChangeNotifier {
 
         for (final change in snapshot.docChanges) {
           if (change.type == DocumentChangeType.added) {
-            final newMessage = ChatMessage.fromFirestore(change.doc);
+            final newMessage = ChatMessage.fromFirestore(change.doc, currentUserId: currentUserId);
+
+            // ✅ CASO ESPECIAL: Mensajes bloqueados propios (deben reemplazar el optimista)
+            if (newMessage.senderId == currentUserId &&
+                newMessage.moderationStatus == ModerationStatus.blocked) {
+              print('🚫 [Realtime] Mensaje bloqueado propio recibido: ${newMessage.id}');
+
+              // Buscar el mensaje optimista en _pendingMessages para reemplazarlo
+              final pendingIndex = _pendingMessages.indexWhere((m) =>
+                m.senderId == currentUserId &&
+                m.status == MessageStatus.sending
+              );
+
+              if (pendingIndex != -1) {
+                final optimisticId = _pendingMessages[pendingIndex].id;
+                print('🔄 Reemplazando mensaje optimista $optimisticId con bloqueado ${newMessage.id}');
+
+                // Reemplazar en la lista de mensajes
+                final messageIndex = _messages.indexWhere((m) => m.id == optimisticId);
+                if (messageIndex != -1) {
+                  _messages[messageIndex] = newMessage;
+                  _pendingMessages.removeAt(pendingIndex);
+                  _cacheService.deleteMessage(chatId, optimisticId);
+                  _cacheService.saveMessage(chatId, newMessage);
+                  notifyListeners();
+                  print('✅ Mensaje optimista reemplazado por mensaje bloqueado');
+                }
+              }
+              continue;
+            }
 
             // ✅ OPTIMIZACIÓN: Ignorar mensajes propios del listener (ya están en cache)
             // Solo procesar mensajes del contacto
@@ -286,6 +430,14 @@ class ChatControllerOptimistic extends ChangeNotifier {
             final existingIndex = _messages.indexWhere((m) => m.id == newMessage.id);
 
             if (existingIndex == -1) {
+              // ✅ Filtrar mensajes anteriores al clearedAt
+              if (_clearedAtTimestamp != null && newMessage.timestamp != null) {
+                if (newMessage.timestamp!.compareTo(_clearedAtTimestamp!) <= 0) {
+                  print('🧹 [Realtime] Ignorando mensaje anterior a limpieza: ${newMessage.id}');
+                  continue;
+                }
+              }
+
               // Es del CONTACTO: verificar que no sea duplicado antes de agregar
               final isDuplicate = newMessage.timestamp != null &&
                 _messages.any((m) =>
@@ -313,17 +465,18 @@ class ChatControllerOptimistic extends ChangeNotifier {
               print('🚫 [Realtime] Mensaje ya existe (por ID): ${newMessage.id}');
             }
           } else if (change.type == DocumentChangeType.modified) {
-            final updatedMessage = ChatMessage.fromFirestore(change.doc);
+            final updatedMessage = ChatMessage.fromFirestore(change.doc, currentUserId: currentUserId);
             final index = _messages.indexWhere((m) => m.id == updatedMessage.id);
 
             if (index != -1) {
-              // Si es mensaje propio, solo actualizar el status (no todo el mensaje)
+              // Si es mensaje propio, actualizar status y reacciones
               if (updatedMessage.senderId == currentUserId) {
-                print('🔄 [Realtime] Actualizando status de mensaje propio: ${updatedMessage.id}');
+                print('🔄 [Realtime] Actualizando mensaje propio: ${updatedMessage.id}');
                 final currentMessage = _messages[index];
                 final updatedWithStatus = currentMessage.copyWith(
                   status: updatedMessage.status,
                   timestamp: updatedMessage.timestamp ?? currentMessage.timestamp,
+                  reactions: updatedMessage.reactions, // ✅ Actualizar reacciones también
                 );
                 _messages[index] = updatedWithStatus;
                 _cacheService.saveMessage(chatId, updatedWithStatus);
@@ -379,7 +532,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
 
       final snapshot = await query.get();
       final newMessages = snapshot.docs
-          .map((doc) => ChatMessage.fromFirestore(doc))
+          .map((doc) => ChatMessage.fromFirestore(doc, currentUserId: currentUserId))
           .toList();
 
       if (newMessages.isNotEmpty) {
@@ -438,17 +591,44 @@ class ChatControllerOptimistic extends ChangeNotifier {
 
     // 3. 🔒 MODERACIÓN EN PARALELO: Verificar si el mensaje cumple con las normas
     try {
+      // Verificar moderación a nivel de CHAT
       final chatDoc = await _firestore.collection('chats').doc(chatId).get();
-      final moderationEnabled = chatDoc.data()?['moderationEnabled'] ?? false;
+      bool moderationEnabled = chatDoc.data()?['moderationEnabled'] ?? false;
+
+      // Verificar moderación a nivel de CONTACTO (del receptor)
+      if (!moderationEnabled) {
+        // Buscar contacto usando el array ordenado (más eficiente y correcto)
+        final sortedUsers = [currentUserId, contactId]..sort();
+        final contactsQuery = await _firestore
+            .collection('contacts')
+            .where('users', isEqualTo: sortedUsers)
+            .limit(1)
+            .get();
+
+        if (contactsQuery.docs.isNotEmpty) {
+          final contactDoc = contactsQuery.docs.first;
+          final moderationSettings = contactDoc.data()['moderationSettings'] as Map<String, dynamic>?;
+
+          if (moderationSettings != null) {
+            // Verificar si el RECEPTOR tiene moderación activada
+            final receiverSettings = moderationSettings[contactId] as Map<String, dynamic>?;
+            if (receiverSettings != null && receiverSettings['enabled'] == true) {
+              moderationEnabled = true;
+              print('🔒 Contacto receptor tiene moderación activa');
+            }
+          }
+        }
+      }
 
       if (moderationEnabled) {
-        print('🔒 Chat con moderación activa, verificando mensaje en background...');
+        print('🔒 Moderación activa, verificando mensaje en background...');
 
         final functions = FirebaseFunctions.instance;
         final result = await functions.httpsCallable('checkMessageBeforeSending').call({
           'chatId': chatId,
           'text': text,
           'type': 'text',
+          'localId': tempId, // ✅ Pasar el ID temporal para vincular con el mensaje bloqueado
         });
 
         final approved = result.data['approved'] as bool;
@@ -457,14 +637,12 @@ class ChatControllerOptimistic extends ChangeNotifier {
           final reason = result.data['reason'] as String? ?? 'Contenido inapropiado detectado';
           print('🚫 Mensaje bloqueado: $reason');
 
-          // Eliminar mensaje optimista
-          _messages.removeWhere((m) => m.id == tempId);
-          _pendingMessages.removeWhere((m) => m.id == tempId);
-          await _cacheService.deleteMessage(chatId, tempId);
-          notifyListeners();
+          // ✅ NO eliminar el mensaje optimista - será reemplazado por el listener
+          // cuando reciba el mensaje bloqueado de Firestore con el mismo localId
+          print('⏳ Esperando mensaje bloqueado del listener...');
 
-          // Lanzar excepción para que el error sea manejado por el UI
-          throw Exception(reason);
+          // NO lanzar excepción - el flujo continúa y el mensaje será reemplazado
+          return;
         }
 
         print('✅ Mensaje aprobado por moderación');
@@ -862,20 +1040,27 @@ class ChatControllerOptimistic extends ChangeNotifier {
         throw Exception('El audio excede el límite de 10 MB');
       }
 
-      // 2. Crear mensaje optimista CON localPath
+      // 2. Procesar waveform ANTES de crear el mensaje optimista
+      print('🎵 Procesando waveform del audio...');
+      final AudioProcessingService audioProcessing = AudioProcessingService();
+      final waveformData = await audioProcessing.extractWaveform(validatedAudio);
+      print('✅ Waveform procesado: ${waveformData.length} puntos');
+
+      // 3. Crear mensaje optimista CON localPath y waveform
       final tempId = const Uuid().v4();
       final optimisticMessage = ChatMessage.optimistic(
         id: tempId,
         senderId: currentUserId,
         type: 'audio',
-        localPath: validatedAudio.path, // Path local para placeholder
+        localPath: validatedAudio.path, // Path local para reproducir inmediatamente
+        waveformData: waveformData, // Waveform real procesado
       );
 
       _messages.insert(0, optimisticMessage);
       _pendingMessages.add(optimisticMessage);
       notifyListeners();
 
-      // 3. Subir audio
+      // 4. Subir audio
       final audioUrl = await _mediaService.uploadAudioFile(
         audioFile: validatedAudio,
         chatId: chatId,
@@ -884,7 +1069,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
 
       if (audioUrl == null) throw Exception('Error subiendo audio');
 
-      // 4. Enviar a Firestore
+      // 5. Enviar a Firestore CON waveformData
       final docRef = await _firestore
           .collection('chats')
           .doc(chatId)
@@ -895,15 +1080,17 @@ class ChatControllerOptimistic extends ChangeNotifier {
             'type': 'audio',
             'timestamp': FieldValue.serverTimestamp(),
             'isRead': false,
+            'waveformData': waveformData, // Incluir waveform en Firestore
           })
           .timeout(_sendTimeout);
 
-      // 5. Actualizar mensaje
+      // 6. Actualizar mensaje
       final sentMessage = optimisticMessage.copyWith(
         id: docRef.id,
         audioUrl: audioUrl,
         status: MessageStatus.sent,
         localPath: null, // Limpiar localPath ya que tenemos URL
+        waveformData: waveformData, // Mantener waveform
       );
 
       _updateMessage(tempId, sentMessage);
@@ -911,7 +1098,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
 
       await _updateChatDocument('🎤 Audio');
       await _sendNotification('🎤 Audio');
-      print('✅ [ChatController] Audio enviado');
+      print('✅ [ChatController] Audio enviado con waveform');
     } catch (e) {
       print('❌ [ChatController] Error enviando audio: $e');
       // Buscar el mensaje pendiente
@@ -985,9 +1172,13 @@ class ChatControllerOptimistic extends ChangeNotifier {
 
     try {
       // Marcar timestamp de limpieza en Firestore
+      final now = Timestamp.now();
       await _firestore.collection('chats').doc(chatId).set({
-        'clearedAt_$currentUserId': FieldValue.serverTimestamp(),
+        'clearedAt_$currentUserId': now,
       }, SetOptions(merge: true));
+
+      // Guardar el timestamp de limpieza para filtrar en el listener
+      _clearedAtTimestamp = now;
 
       // Limpiar mensajes locales
       _messages.clear();

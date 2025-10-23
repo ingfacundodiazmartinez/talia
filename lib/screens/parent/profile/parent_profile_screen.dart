@@ -20,10 +20,14 @@ class ParentProfileScreen extends StatefulWidget {
   State<ParentProfileScreen> createState() => _ParentProfileScreenState();
 }
 
-class _ParentProfileScreenState extends State<ParentProfileScreen> {
+class _ParentProfileScreenState extends State<ParentProfileScreen>
+    with AutomaticKeepAliveClientMixin {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   late ProfileController _controller;
   late Parent _parent;
+
+  @override
+  bool get wantKeepAlive => true;
 
   @override
   void initState() {
@@ -42,6 +46,7 @@ class _ParentProfileScreenState extends State<ParentProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context); // Necesario para AutomaticKeepAliveClientMixin
     return Scaffold(
       appBar: AppBar(
         title: Text('Mi Perfil'),
@@ -256,36 +261,31 @@ class _ParentProfileScreenState extends State<ParentProfileScreen> {
 
   // Navigation methods
   void _navigateToEditProfile() {
-    Navigator.push(
-      context,
+    Navigator.of(context).push(
       MaterialPageRoute(builder: (context) => EditProfileScreen()),
     );
   }
 
   void _navigateToPrivacySecurity() {
-    Navigator.push(
-      context,
+    Navigator.of(context).push(
       MaterialPageRoute(builder: (context) => PrivacySecurityScreen()),
     );
   }
 
   void _navigateToSettings() {
-    Navigator.push(
-      context,
+    Navigator.of(context).push(
       MaterialPageRoute(builder: (context) => SettingsScreen()),
     );
   }
 
   void _navigateToHelpSupport() {
-    Navigator.push(
-      context,
+    Navigator.of(context).push(
       MaterialPageRoute(builder: (context) => HelpSupportScreen()),
     );
   }
 
   void _navigateToPrivacyPolicy() {
-    Navigator.push(
-      context,
+    Navigator.of(context).push(
       MaterialPageRoute(builder: (context) => PrivacyPolicyScreen()),
     );
   }

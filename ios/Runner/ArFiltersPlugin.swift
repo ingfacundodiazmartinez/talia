@@ -276,9 +276,6 @@ import AVFoundation
             return
         }
 
-        // Usar dimensiones estándar de video HD para portrait (720x1280)
-        // Esto coincide con la resolución típica de la cámara de DeepAR
-        // y evita distorsiones por diferencias de aspect ratio
         let defaultWidth = 720
         let defaultHeight = 1280
 
@@ -286,7 +283,6 @@ import AVFoundation
         let height = args["height"] as? Int ?? defaultHeight
 
         print("🎬 Iniciando grabación REAL con DeepAR: \(outputPath) (\(width)x\(height))")
-        print("📱 Usando dimensiones estándar HD portrait: \(defaultWidth)x\(defaultHeight)")
 
         // Guardar el path para usarlo en el delegate
         recordingOutputPath = outputPath

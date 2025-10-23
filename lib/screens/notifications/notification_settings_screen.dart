@@ -169,8 +169,7 @@ class _NotificationSettingsScreenState
                     ? 'Activado (${prefs['dndStartTime']} - ${prefs['dndEndTime']})'
                     : 'Desactivado',
                 onTap: () {
-                  Navigator.push(
-                    context,
+                  Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (context) =>
                           DoNotDisturbSettingsScreen(preferences: prefs),

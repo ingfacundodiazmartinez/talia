@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../models/story.dart';
 import '../services/story_service.dart';
 import '../screens/story_camera_screen.dart';
@@ -48,22 +49,31 @@ class _StoriesSectionState extends State<StoriesSection> {
 
           final userStoriesList = snapshot.data ?? _cachedStories ?? [];
 
+          // Ordenar grupos: primero los que tienen historias no vistas, luego los que tienen todas vistas
+          final sortedUserStoriesList = List<UserStories>.from(userStoriesList);
+          sortedUserStoriesList.sort((a, b) {
+            // Si ambos tienen o no tienen historias no vistas, mantener orden original
+            if (a.hasUnviewed == b.hasUnviewed) return 0;
+            // Grupos con historias no vistas van primero
+            return a.hasUnviewed ? -1 : 1;
+          });
+
           return ListView.builder(
             scrollDirection: Axis.horizontal,
             padding: EdgeInsets.symmetric(horizontal: 16),
             itemCount:
-                userStoriesList.length + 1, // +1 para el botón "Mi Historia"
+                sortedUserStoriesList.length + 1, // +1 para el botón "Mi Historia"
             itemBuilder: (context, index) {
               if (index == 0) {
                 // Botón para crear historia
                 return _buildAddStoryButton(context);
               }
 
-              final userStories = userStoriesList[index - 1];
+              final userStories = sortedUserStoriesList[index - 1];
               return _buildStoryItem(
                 context: context,
                 userStories: userStories,
-                allUserStories: userStoriesList,
+                allUserStories: sortedUserStoriesList,
                 userIndex: index - 1,
               );
             },
@@ -76,8 +86,7 @@ class _StoriesSectionState extends State<StoriesSection> {
   Widget _buildAddStoryButton(BuildContext context) {
     return GestureDetector(
       onTap: () {
-        Navigator.push(
-          context,
+        Navigator.of(context).push(
           MaterialPageRoute(builder: (context) => StoryCameraScreen()),
         );
       },
@@ -186,8 +195,7 @@ class _StoriesSectionState extends State<StoriesSection> {
 
     return GestureDetector(
       onTap: () {
-        Navigator.push(
-          context,
+        Navigator.of(context).push(
           MaterialPageRoute(
             builder: (context) => StoryViewerScreen(
               allUserStories: allUserStories,
@@ -219,7 +227,7 @@ class _StoriesSectionState extends State<StoriesSection> {
                       radius: 24,
                       backgroundColor: Colors.grey[200],
                       backgroundImage: userStories.userPhotoURL != null
-                          ? NetworkImage(userStories.userPhotoURL!)
+                          ? CachedNetworkImageProvider(userStories.userPhotoURL!)
                           : null,
                       child: userStories.userPhotoURL == null
                           ? Text(

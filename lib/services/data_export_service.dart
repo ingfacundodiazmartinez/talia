@@ -3,6 +3,11 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 import 'dart:convert';
+import 'dart:typed_data';
+import 'package:encrypt/encrypt.dart' as encrypt_lib;
+import 'package:crypto/crypto.dart';
+import 'package:hive_flutter/hive_flutter.dart';
+import 'package:share_plus/share_plus.dart';
 
 /// Servicio para exportación de datos personales (GDPR/CCPA)
 ///
@@ -125,6 +130,366 @@ class DataExportService {
           .map((doc) => ExportRequest.fromFirestore(doc.id, doc.data()))
           .toList();
     });
+  }
+
+  // ============================================================================
+  // ENCRYPTED CACHE EXPORT/IMPORT (Para migración entre dispositivos)
+  // ============================================================================
+
+  static const String _cacheBoxName = 'messages_cache';
+  static const String _backupVersion = '1.0.0';
+
+  /// Obtener el directorio de backups (crea si no existe)
+  Future<Directory> _getBackupsDirectory() async {
+    final appDocDir = await getApplicationDocumentsDirectory();
+    final backupsDir = Directory('${appDocDir.path}/Talia/Backups');
+
+    if (!await backupsDir.exists()) {
+      await backupsDir.create(recursive: true);
+      print('📁 [CacheExport] Creado directorio de backups: ${backupsDir.path}');
+    }
+
+    return backupsDir;
+  }
+
+  /// Exportar cache local encriptado para migración entre dispositivos
+  ///
+  /// [password] - Contraseña para encriptar los datos
+  /// [onProgress] - Callback para reportar progreso (0.0 a 1.0)
+  ///
+  /// Returns: Ruta del archivo generado o null si hay error
+  Future<String?> exportEncryptedCache({
+    required String password,
+    Function(double progress)? onProgress,
+  }) async {
+    try {
+      if (_currentUserId == null) {
+        throw Exception('Usuario no autenticado');
+      }
+
+      onProgress?.call(0.1);
+      print('📦 [CacheExport] Iniciando exportación de cache...');
+
+      // 1. Obtener datos del cache
+      final messagesBox = await Hive.openBox(_cacheBoxName);
+      final allData = <String, dynamic>{};
+
+      for (final key in messagesBox.keys) {
+        // Skip metadata keys
+        if (key.toString().startsWith('_')) continue;
+
+        final value = messagesBox.get(key);
+        if (value != null) {
+          allData[key.toString()] = value;
+        }
+      }
+
+      onProgress?.call(0.3);
+      print('📊 [CacheExport] Recopilados ${allData.length} mensajes del cache');
+
+      // 2. Crear estructura de exportación con metadata
+      final exportData = {
+        'version': _backupVersion,
+        'exportDate': DateTime.now().toIso8601String(),
+        'userId': _currentUserId,
+        'messageCount': allData.length,
+        'data': allData,
+      };
+
+      onProgress?.call(0.5);
+
+      // 3. Convertir a JSON
+      final jsonData = json.encode(exportData);
+      final jsonBytes = utf8.encode(jsonData);
+      print('💾 [CacheExport] Tamaño del backup: ${(jsonBytes.length / 1024 / 1024).toStringAsFixed(2)} MB');
+
+      onProgress?.call(0.6);
+
+      // 4. Encriptar datos con AES-256-GCM
+      final encryptedData = _encryptData(jsonBytes, password);
+
+      onProgress?.call(0.8);
+
+      // 5. Guardar archivo en carpeta fija
+      final backupsDir = await _getBackupsDirectory();
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final fileName = 'talia_backup_$timestamp.talia';
+      final filePath = '${backupsDir.path}/$fileName';
+
+      final file = File(filePath);
+      await file.writeAsBytes(encryptedData);
+
+      onProgress?.call(1.0);
+      print('✅ [CacheExport] Backup creado exitosamente: $filePath');
+
+      return filePath;
+    } catch (e) {
+      print('❌ [CacheExport] Error exportando cache: $e');
+      return null;
+    }
+  }
+
+  /// Importar cache desde archivo encriptado
+  ///
+  /// [filePath] - Ruta del archivo .talia
+  /// [password] - Contraseña para desencriptar
+  /// [onProgress] - Callback para reportar progreso (0.0 a 1.0)
+  ///
+  /// Returns: true si la importación fue exitosa
+  Future<bool> importEncryptedCache({
+    required String filePath,
+    required String password,
+    Function(double progress)? onProgress,
+  }) async {
+    try {
+      if (_currentUserId == null) {
+        throw Exception('Usuario no autenticado');
+      }
+
+      onProgress?.call(0.1);
+      print('📥 [CacheImport] Iniciando importación desde: $filePath');
+
+      // 1. Leer archivo
+      final file = File(filePath);
+      if (!await file.exists()) {
+        throw Exception('Archivo no encontrado');
+      }
+
+      final encryptedData = await file.readAsBytes();
+      onProgress?.call(0.2);
+
+      // 2. Desencriptar
+      final decryptedBytes = _decryptData(encryptedData, password);
+      if (decryptedBytes == null) {
+        throw Exception('Contraseña incorrecta o archivo corrupto');
+      }
+
+      onProgress?.call(0.4);
+
+      // 3. Parsear JSON
+      final jsonString = utf8.decode(decryptedBytes);
+      final Map<String, dynamic> importData = json.decode(jsonString);
+
+      // 4. Validar estructura
+      if (importData['version'] == null || importData['data'] == null) {
+        throw Exception('Formato de backup inválido');
+      }
+
+      onProgress?.call(0.5);
+      print('📊 [CacheImport] Versión del backup: ${importData['version']}');
+      print('📊 [CacheImport] Fecha de exportación: ${importData['exportDate']}');
+      print('📊 [CacheImport] Mensajes a importar: ${importData['messageCount']}');
+
+      // 5. Verificar que el backup sea del mismo usuario
+      if (importData['userId'] != _currentUserId) {
+        print('⚠️ [CacheImport] Advertencia: El backup es de un usuario diferente');
+        print('   Backup userId: ${importData['userId']}');
+        print('   Current userId: $_currentUserId');
+      }
+
+      onProgress?.call(0.6);
+
+      // 6. Importar datos al cache
+      final messagesBox = await Hive.openBox(_cacheBoxName);
+      final data = importData['data'] as Map<String, dynamic>;
+
+      int importedCount = 0;
+      final totalItems = data.length;
+
+      for (final entry in data.entries) {
+        await messagesBox.put(entry.key, entry.value);
+        importedCount++;
+
+        // Reportar progreso durante la importación
+        if (importedCount % 100 == 0) {
+          final progress = 0.6 + (0.4 * (importedCount / totalItems));
+          onProgress?.call(progress);
+        }
+      }
+
+      onProgress?.call(1.0);
+      print('✅ [CacheImport] Importados $importedCount mensajes correctamente');
+
+      return true;
+    } catch (e) {
+      print('❌ [CacheImport] Error importando cache: $e');
+      return false;
+    }
+  }
+
+  /// Listar archivos de backup disponibles
+  Future<List<BackupFileInfo>> listAvailableBackups() async {
+    try {
+      final backupsDir = await _getBackupsDirectory();
+      final files = backupsDir
+          .listSync()
+          .where((file) => file.path.endsWith('.talia'))
+          .map((file) => File(file.path))
+          .toList();
+
+      // Ordenar por fecha de modificación (más reciente primero)
+      files.sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
+
+      final backupInfoList = <BackupFileInfo>[];
+      for (final file in files) {
+        final stat = file.statSync();
+        final fileName = file.path.split('/').last;
+
+        backupInfoList.add(BackupFileInfo(
+          filePath: file.path,
+          fileName: fileName,
+          fileSize: stat.size,
+          lastModified: stat.modified,
+        ));
+      }
+
+      print('📋 [CacheExport] Encontrados ${backupInfoList.length} backups');
+      return backupInfoList;
+    } catch (e) {
+      print('❌ [CacheExport] Error listando backups: $e');
+      return [];
+    }
+  }
+
+  /// Compartir archivo de backup
+  Future<void> shareBackupFile(String filePath) async {
+    try {
+      final file = File(filePath);
+      if (await file.exists()) {
+        await Share.shareXFiles(
+          [XFile(filePath)],
+          subject: 'Talia Backup',
+          text: 'Backup encriptado de Talia - Guarda este archivo de forma segura',
+        );
+        print('📤 [CacheExport] Compartiendo archivo: $filePath');
+      }
+    } catch (e) {
+      print('❌ [CacheExport] Error compartiendo archivo: $e');
+    }
+  }
+
+  /// Obtener información de un archivo de backup sin desencriptarlo completamente
+  Future<Map<String, dynamic>?> getBackupInfo(String filePath) async {
+    try {
+      final file = File(filePath);
+      if (!await file.exists()) {
+        return null;
+      }
+
+      final fileSize = await file.length();
+      final lastModified = await file.lastModified();
+
+      return {
+        'filePath': filePath,
+        'fileName': filePath.split('/').last,
+        'fileSize': fileSize,
+        'fileSizeMB': (fileSize / 1024 / 1024).toStringAsFixed(2),
+        'lastModified': lastModified.toIso8601String(),
+      };
+    } catch (e) {
+      print('❌ [CacheExport] Error obteniendo info del backup: $e');
+      return null;
+    }
+  }
+
+  /// Eliminar archivo de backup
+  Future<bool> deleteBackupFile(String filePath) async {
+    try {
+      final file = File(filePath);
+      if (await file.exists()) {
+        await file.delete();
+        print('🗑️ [CacheExport] Backup eliminado: $filePath');
+        return true;
+      }
+      return false;
+    } catch (e) {
+      print('❌ [CacheExport] Error eliminando backup: $e');
+      return false;
+    }
+  }
+
+  // ==========================================================================
+  // MÉTODOS DE ENCRIPTACIÓN
+  // ==========================================================================
+
+  /// Encriptar datos usando AES-256-GCM con password
+  List<int> _encryptData(List<int> data, String password) {
+    // Generar salt aleatorio
+    final salt = encrypt_lib.IV.fromSecureRandom(16);
+
+    // Derivar key desde password usando PBKDF2
+    final key = _deriveKeyFromPassword(password, salt.bytes);
+
+    // Generar IV aleatorio para AES
+    final iv = encrypt_lib.IV.fromSecureRandom(16);
+
+    // Crear encriptador AES-256-GCM
+    final encrypter = encrypt_lib.Encrypter(
+      encrypt_lib.AES(key, mode: encrypt_lib.AESMode.gcm),
+    );
+
+    // Encriptar
+    final encrypted = encrypter.encryptBytes(data, iv: iv);
+
+    // Estructura del archivo: [salt(16)] [iv(16)] [encrypted_data]
+    final result = <int>[];
+    result.addAll(salt.bytes);
+    result.addAll(iv.bytes);
+    result.addAll(encrypted.bytes);
+
+    return result;
+  }
+
+  /// Desencriptar datos usando AES-256-GCM con password
+  List<int>? _decryptData(List<int> encryptedData, String password) {
+    try {
+      // Extraer salt, iv y datos encriptados
+      if (encryptedData.length < 32) {
+        throw Exception('Datos encriptados inválidos');
+      }
+
+      final salt = encryptedData.sublist(0, 16);
+      final iv = encrypt_lib.IV(Uint8List.fromList(encryptedData.sublist(16, 32)));
+      final encrypted = encryptedData.sublist(32);
+
+      // Derivar key desde password usando el mismo salt
+      final key = _deriveKeyFromPassword(password, salt);
+
+      // Crear desencriptador
+      final encrypter = encrypt_lib.Encrypter(
+        encrypt_lib.AES(key, mode: encrypt_lib.AESMode.gcm),
+      );
+
+      // Desencriptar
+      final decrypted = encrypter.decryptBytes(
+        encrypt_lib.Encrypted(Uint8List.fromList(encrypted)),
+        iv: iv,
+      );
+
+      return decrypted;
+    } catch (e) {
+      print('❌ [Decrypt] Error desencriptando: $e');
+      return null;
+    }
+  }
+
+  /// Derivar key de 256 bits desde password usando PBKDF2
+  encrypt_lib.Key _deriveKeyFromPassword(String password, List<int> salt) {
+    const iterations = 10000;
+    final passwordBytes = utf8.encode(password);
+
+    // PBKDF2 con SHA-256
+    final pbkdf2 = _Pbkdf2(
+      iterations: iterations,
+      bits: 256,
+    );
+
+    final keyBytes = pbkdf2.deriveKey(
+      secretKey: passwordBytes,
+      nonce: salt,
+    );
+
+    return encrypt_lib.Key(Uint8List.fromList(keyBytes));
   }
 
   // ============================================================================
@@ -509,4 +874,85 @@ enum ExportStatus {
   completed,    // Completado y listo para descargar
   failed,       // Falló el procesamiento
   expired,      // Link de descarga expirado
+}
+
+/// Información de un archivo de backup
+class BackupFileInfo {
+  final String filePath;
+  final String fileName;
+  final int fileSize;
+  final DateTime lastModified;
+
+  BackupFileInfo({
+    required this.filePath,
+    required this.fileName,
+    required this.fileSize,
+    required this.lastModified,
+  });
+
+  String get fileSizeMB => (fileSize / 1024 / 1024).toStringAsFixed(2);
+
+  String get formattedDate {
+    final now = DateTime.now();
+    final difference = now.difference(lastModified);
+
+    if (difference.inDays == 0) {
+      return 'Hoy a las ${lastModified.hour.toString().padLeft(2, '0')}:${lastModified.minute.toString().padLeft(2, '0')}';
+    } else if (difference.inDays == 1) {
+      return 'Ayer a las ${lastModified.hour.toString().padLeft(2, '0')}:${lastModified.minute.toString().padLeft(2, '0')}';
+    } else if (difference.inDays < 7) {
+      return 'Hace ${difference.inDays} días';
+    } else {
+      return '${lastModified.day}/${lastModified.month}/${lastModified.year}';
+    }
+  }
+}
+
+// ==========================================================================
+// PBKDF2 IMPLEMENTATION (Para derivación de keys desde password)
+// ==========================================================================
+
+class _Pbkdf2 {
+  final int iterations;
+  final int bits;
+
+  _Pbkdf2({
+    required this.iterations,
+    required this.bits,
+  });
+
+  List<int> deriveKey({
+    required List<int> secretKey,
+    required List<int> nonce,
+  }) {
+    // SHA-256 tiene un blockSize de 64 bytes (512 bits)
+    const hashOutputSize = 32; // SHA-256 produce 32 bytes
+    final blockCount = (bits + hashOutputSize * 8 - 1) ~/ (hashOutputSize * 8);
+    final result = <int>[];
+
+    for (var i = 1; i <= blockCount; i++) {
+      result.addAll(_f(secretKey, nonce, i));
+    }
+
+    return result.sublist(0, bits ~/ 8);
+  }
+
+  List<int> _f(List<int> password, List<int> salt, int blockIndex) {
+    final hmac = Hmac(sha256, password);
+
+    // U1 = PRF(password, salt || INT_32_BE(i))
+    final saltAndIndex = [...salt, ...Uint8List(4)..buffer.asByteData().setUint32(0, blockIndex, Endian.big)];
+    var u = hmac.convert(saltAndIndex).bytes;
+    final result = List<int>.from(u);
+
+    // U2...Uc
+    for (var i = 1; i < iterations; i++) {
+      u = hmac.convert(u).bytes;
+      for (var j = 0; j < result.length; j++) {
+        result[j] ^= u[j];
+      }
+    }
+
+    return result;
+  }
 }

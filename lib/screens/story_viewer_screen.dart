@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:video_player/video_player.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../models/story.dart';
 import '../services/story_service.dart';
 import 'story_viewer/widgets/story_progress_indicators.dart';
@@ -36,6 +38,9 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
   final StoryService _storyService = StoryService();
   final Duration _storyDuration = Duration(seconds: 5);
 
+  // VideoPlayerController map para manejar múltiples videos
+  final Map<String, VideoPlayerController> _videoControllers = {};
+
   // Controlador para respuestas
   final TextEditingController _replyController = TextEditingController();
   final FocusNode _replyFocusNode = FocusNode();
@@ -52,26 +57,42 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
         ? userStories.allUserStories
         : userStories.sortedStories;
 
-    // Ordenar: primero las no vistas, luego las vistas
-    // Dentro de cada grupo, mantener orden cronológico
-    if (currentUser == null) return stories;
+    // Mantener orden cronológico (NO reorganizar por vistas/no vistas)
+    // El índice inicial se calcula en initState() para comenzar en la primera no vista
+    final sortedStories = List<Story>.from(stories);
+    sortedStories.sort((a, b) => a.createdAt.compareTo(b.createdAt));
 
-    final unviewedStories = stories.where((story) => !story.isViewedBy(currentUser.uid)).toList();
-    final viewedStories = stories.where((story) => story.isViewedBy(currentUser.uid)).toList();
+    return sortedStories;
+  }
 
-    // Mantener orden cronológico dentro de cada grupo
-    unviewedStories.sort((a, b) => a.createdAt.compareTo(b.createdAt));
-    viewedStories.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+  // Calcular el índice de la primera historia NO vista de un grupo
+  int _getInitialStoryIndex(List<Story> stories) {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return 0;
 
-    return [...unviewedStories, ...viewedStories];
+    // Buscar la primera historia no vista
+    final firstUnviewedIndex = stories.indexWhere(
+      (story) => !story.isViewedBy(currentUser.uid)
+    );
+
+    // Si encontramos una historia no vista, comenzar ahí
+    // Si no, comenzar en 0 (todas ya fueron vistas)
+    return firstUnviewedIndex != -1 ? firstUnviewedIndex : 0;
   }
 
   @override
   void initState() {
     super.initState();
     _currentUserIndex = widget.initialUserIndex;
+
+    // Calcular el índice de la primera historia NO vista del grupo actual
+    final currentUserStories = widget.allUserStories[_currentUserIndex];
+    final stories = _getStoriesForUser(currentUserStories);
+    final initialStoryIndex = _getInitialStoryIndex(stories);
+
+    _currentStoryIndex = initialStoryIndex;
     _userPageController = PageController(initialPage: _currentUserIndex);
-    _storyPageController = PageController();
+    _storyPageController = PageController(initialPage: initialStoryIndex);
     _progressController = AnimationController(
       vsync: this,
       duration: _storyDuration,
@@ -128,7 +149,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       if (_currentStoryIndex < stories.length - 1) {
         final nextStory = stories[_currentStoryIndex + 1];
         if (nextStory.mediaType == 'image') {
-          precacheImage(NetworkImage(nextStory.mediaUrl), context);
+          precacheImage(CachedNetworkImageProvider(nextStory.mediaUrl), context);
           print('🔄 Precargando siguiente historia del mismo usuario');
         }
       }
@@ -140,7 +161,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
         if (nextUserStoriesList.isNotEmpty) {
           final firstStoryOfNextUser = nextUserStoriesList[0];
           if (firstStoryOfNextUser.mediaType == 'image') {
-            precacheImage(NetworkImage(firstStoryOfNextUser.mediaUrl), context);
+            precacheImage(CachedNetworkImageProvider(firstStoryOfNextUser.mediaUrl), context);
             print('🔄 Precargando primera historia del siguiente usuario');
           }
         }
@@ -171,6 +192,13 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     final currentUserStories = widget.allUserStories[_currentUserIndex];
     final stories = _getStoriesForUser(currentUserStories);
 
+    // CRÍTICO: Pausar el video actual antes de cambiar de historia
+    final currentStory = stories[_currentStoryIndex];
+    if (currentStory.mediaType == 'video' && _videoControllers.containsKey(currentStory.id)) {
+      _videoControllers[currentStory.id]?.pause();
+      print('🎬 Video pausado al cambiar de historia: ${currentStory.id}');
+    }
+
     if (_currentStoryIndex < stories.length - 1) {
       // Siguiente historia del mismo usuario
       setState(() {
@@ -200,7 +228,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
         duration: Duration(milliseconds: 300),
         curve: Curves.easeInOut,
       );
-      _startStoryTimer(); // Se ejecutará cuando la historia cargue
+      // No iniciar timer aquí - esperará a que _onStoryLoaded() lo inicie
       _markCurrentStoryAsViewed();
     } else {
       // Usuario anterior
@@ -212,14 +240,16 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     if (_currentUserIndex < widget.allUserStories.length - 1) {
       setState(() {
         _currentUserIndex++;
-        _currentStoryIndex = 0;
+        // Calcular índice inicial de la primera historia no vista del nuevo grupo
+        final stories = _getStoriesForUser(widget.allUserStories[_currentUserIndex]);
+        _currentStoryIndex = _getInitialStoryIndex(stories);
         _isCurrentStoryLoaded = false; // Reset para la nueva historia
       });
       _userPageController.nextPage(
         duration: Duration(milliseconds: 300),
         curve: Curves.easeInOut,
       );
-      _startStoryTimer(); // Se ejecutará cuando la historia cargue
+      // No iniciar timer aquí - esperará a que _onStoryLoaded() lo inicie
       _markCurrentStoryAsViewed();
     } else {
       Navigator.pop(context);
@@ -230,17 +260,16 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     if (_currentUserIndex > 0) {
       setState(() {
         _currentUserIndex--;
-        final stories = _getStoriesForUser(
-          widget.allUserStories[_currentUserIndex],
-        );
-        _currentStoryIndex = stories.length - 1;
+        // Calcular índice inicial de la primera historia no vista del nuevo grupo
+        final stories = _getStoriesForUser(widget.allUserStories[_currentUserIndex]);
+        _currentStoryIndex = _getInitialStoryIndex(stories);
         _isCurrentStoryLoaded = false; // Reset para la nueva historia
       });
       _userPageController.previousPage(
         duration: Duration(milliseconds: 300),
         curve: Curves.easeInOut,
       );
-      _startStoryTimer();
+      // No iniciar timer aquí - esperará a que _onStoryLoaded() lo inicie
       _markCurrentStoryAsViewed();
     }
   }
@@ -394,6 +423,78 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     }
   }
 
+  Widget _buildVideoPlayer(Story story) {
+    // Si el video controller no existe para esta historia, crear uno nuevo
+    if (!_videoControllers.containsKey(story.id)) {
+      print('🎬 Creando nuevo VideoPlayerController para historia: ${story.id}');
+      final newController = VideoPlayerController.networkUrl(
+        Uri.parse(story.mediaUrl),
+      );
+      _videoControllers[story.id] = newController;
+
+      newController.initialize().then((_) {
+        if (mounted) {
+          setState(() {});
+          newController.play();
+          newController.setLooping(true);
+
+          // CRÍTICO: Esperar a que el video REALMENTE esté reproduciendo
+          void videoPlayingListener() {
+            if (mounted &&
+                newController.value.isPlaying &&
+                !_isCurrentStoryLoaded &&
+                newController.value.position.inMilliseconds > 0) {
+              print('🎬 Video reproduciendo, iniciando timer');
+              _onStoryLoaded();
+              newController.removeListener(videoPlayingListener);
+            }
+          }
+          newController.addListener(videoPlayingListener);
+        }
+      }).catchError((error) {
+        print('❌ Error inicializando video: $error');
+      });
+    }
+
+    final controller = _videoControllers[story.id]!;
+    if (!controller.value.isInitialized) {
+      return Center(
+        child: CircularProgressIndicator(color: Colors.white),
+      );
+    }
+
+    // Preservar aspect ratio con cover fit
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final screenWidth = constraints.maxWidth;
+        final screenHeight = constraints.maxHeight;
+        final screenAspectRatio = screenWidth / screenHeight;
+        final videoAspectRatio = controller.value.aspectRatio;
+
+        double videoWidth;
+        double videoHeight;
+
+        if (screenAspectRatio > videoAspectRatio) {
+          // Pantalla más ancha que video - ajustar por ancho
+          videoWidth = screenWidth;
+          videoHeight = screenWidth / videoAspectRatio;
+        } else {
+          // Pantalla más alta que video - ajustar por alto
+          videoHeight = screenHeight;
+          videoWidth = screenHeight * videoAspectRatio;
+        }
+
+        return Center(
+          child: SizedBox(
+            width: videoWidth,
+            height: videoHeight,
+            child: VideoPlayer(controller),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   void dispose() {
     _storyTimer?.cancel();
@@ -402,6 +503,13 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     _storyPageController.dispose();
     _replyController.dispose();
     _replyFocusNode.dispose();
+
+    // Limpiar todos los video controllers
+    for (var controller in _videoControllers.values) {
+      controller.dispose();
+    }
+    _videoControllers.clear();
+
     super.dispose();
   }
 
@@ -473,59 +581,57 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
                       width: double.infinity,
                       height: double.infinity,
                       child: story.mediaType == 'image'
-                          ? Image.network(
-                              story.mediaUrl,
-                              fit: BoxFit.cover,
-                              loadingBuilder:
-                                  (context, child, loadingProgress) {
-                                    if (loadingProgress == null) {
-                                      // Imagen cargada, notificar y devolver la imagen
-                                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                                        _onStoryLoaded();
-                                      });
-                                      return child;
-                                    }
-                                    return Center(
-                                      child: CircularProgressIndicator(
-                                        color: Colors.white,
-                                        value:
-                                            loadingProgress
-                                                    .expectedTotalBytes !=
-                                                null
-                                            ? loadingProgress
-                                                      .cumulativeBytesLoaded /
-                                                  loadingProgress
-                                                      .expectedTotalBytes!
-                                            : null,
-                                      ),
-                                    );
-                                  },
-                              errorBuilder: (context, error, stackTrace) {
-                                return Center(
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(
-                                        Icons.error,
-                                        color: Colors.white,
-                                        size: 48,
-                                      ),
-                                      SizedBox(height: 16),
-                                      Text(
-                                        'Error cargando imagen',
-                                        style: TextStyle(color: Colors.white),
-                                      ),
-                                    ],
-                                  ),
+                          ? CachedNetworkImage(
+                              imageUrl: story.mediaUrl,
+                              fit: BoxFit.contain,
+                              width: double.infinity,
+                              height: double.infinity,
+                              // Optimización: solo cachear en tamaño máximo de pantalla
+                              memCacheWidth: (MediaQuery.of(context).size.width * MediaQuery.of(context).devicePixelRatio).round(),
+                              memCacheHeight: (MediaQuery.of(context).size.height * MediaQuery.of(context).devicePixelRatio).round(),
+                              maxWidthDiskCache: 1080, // Máximo en disco
+                              maxHeightDiskCache: 1920,
+                              placeholder: (context, url) => Center(
+                                child: CircularProgressIndicator(
+                                  color: Colors.white,
+                                ),
+                              ),
+                              errorWidget: (context, url, error) => Center(
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(
+                                      Icons.error,
+                                      color: Colors.white,
+                                      size: 48,
+                                    ),
+                                    SizedBox(height: 16),
+                                    Text(
+                                      'Error cargando imagen',
+                                      style: TextStyle(color: Colors.white),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              imageBuilder: (context, imageProvider) {
+                                // Imagen cargada, notificar solo si aún no está cargada
+                                if (!_isCurrentStoryLoaded &&
+                                    userIndex == _currentUserIndex &&
+                                    storyIndex == _currentStoryIndex) {
+                                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                                    print('🖼️ Imagen completamente cargada, iniciando timer');
+                                    _onStoryLoaded();
+                                  });
+                                }
+                                return Image(
+                                  image: imageProvider,
+                                  fit: BoxFit.contain,
+                                  width: double.infinity,
+                                  height: double.infinity,
                                 );
                               },
                             )
-                          : Center(
-                              child: Text(
-                                'Video no soportado aún',
-                                style: TextStyle(color: Colors.white),
-                              ),
-                            ),
+                          : _buildVideoPlayer(story),
                     );
                   },
                 );
@@ -659,7 +765,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
                                                         Colors.white.withOpacity(0.2),
                                                     backgroundImage:
                                                         reply.userPhotoURL != null
-                                                            ? NetworkImage(
+                                                            ? CachedNetworkImageProvider(
                                                                 reply.userPhotoURL!)
                                                             : null,
                                                     child: reply.userPhotoURL == null

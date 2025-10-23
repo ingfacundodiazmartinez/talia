@@ -74,8 +74,7 @@ class EmergencyAlertWidget extends StatelessWidget {
                 print('🆘 [EmergencyAlertWidget] emergencyData: $emergencyData');
 
                 try {
-                  Navigator.push(
-                    context,
+                  Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (context) {
                         print('🆘 [EmergencyAlertWidget] Construyendo EmergencyDetailScreen');

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../../../../models/child.dart';
 import '../../../../theme_service.dart';
 import '../../../../services/dashboard_cache_service.dart';
@@ -166,8 +168,7 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
               ),
               GestureDetector(
                 onTap: () {
-                  Navigator.push(
-                    context,
+                  Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (context) => ChildLocationScreen(
                         childId: child.id,
@@ -237,8 +238,7 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
             color: Colors.blue,
             isDarkMode: isDarkMode,
             onTap: () {
-              Navigator.push(
-                context,
+              Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (context) => ChildContactsFilterScreen(
                     childId: child.id,
@@ -258,8 +258,7 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
             color: Colors.purple,
             isDarkMode: isDarkMode,
             onTap: () {
-              Navigator.push(
-                context,
+              Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (context) => StoryApprovalScreen(
                     childId: child.id,
@@ -271,15 +270,65 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
         ),
         SizedBox(width: 12),
         Expanded(
-          child: _buildActionButton(
+          child: _buildNotificationsButton(
             context: context,
-            icon: Icons.notifications,
-            label: 'Alertas',
-            color: Colors.orange,
+            child: child,
             isDarkMode: isDarkMode,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildNotificationsButton({
+    required BuildContext context,
+    required Child child,
+    required bool isDarkMode,
+  }) {
+    final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+    if (currentUserId == null) {
+      return _buildActionButton(
+        context: context,
+        icon: Icons.notifications,
+        label: 'Alertas',
+        color: Colors.orange,
+        isDarkMode: isDarkMode,
+        onTap: () {},
+      );
+    }
+
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('notifications')
+          .where('userId', isEqualTo: currentUserId)
+          .where('read', isEqualTo: false)
+          .snapshots(),
+      builder: (context, snapshot) {
+        // Contar notificaciones no leídas relacionadas a este hijo
+        int unreadCount = 0;
+        if (snapshot.hasData) {
+          final notifications = snapshot.data!.docs;
+          for (final doc in notifications) {
+            final data = doc.data() as Map<String, dynamic>;
+            final notifData = data['data'] as Map<String, dynamic>?;
+
+            // Verificar si la notificación está relacionada con este hijo
+            if (notifData?['childId'] == child.id ||
+                notifData?['senderId'] == child.id ||
+                data['senderId'] == child.id) {
+              unreadCount++;
+            }
+          }
+        }
+
+        return Material(
+          color: isDarkMode
+              ? Colors.white.withValues(alpha: 0.2)
+              : Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(12),
+          child: InkWell(
             onTap: () {
-              Navigator.push(
-                context,
+              Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (context) => ChildNotificationsScreen(
                     childId: child.id,
@@ -288,9 +337,67 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
                 ),
               );
             },
+            borderRadius: BorderRadius.circular(12),
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      Icon(
+                        Icons.notifications,
+                        color: isDarkMode
+                            ? Colors.white
+                            : Theme.of(context).colorScheme.primary,
+                        size: 28,
+                      ),
+                      if (unreadCount > 0)
+                        Positioned(
+                          right: -8,
+                          top: -4,
+                          child: Container(
+                            padding: EdgeInsets.all(4),
+                            decoration: BoxDecoration(
+                              color: Colors.red,
+                              shape: BoxShape.circle,
+                            ),
+                            constraints: BoxConstraints(
+                              minWidth: 18,
+                              minHeight: 18,
+                            ),
+                            child: Text(
+                              unreadCount > 9 ? '9+' : '$unreadCount',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  SizedBox(height: 6),
+                  Text(
+                    'Alertas',
+                    style: TextStyle(
+                      color: isDarkMode
+                          ? Colors.white
+                          : Theme.of(context).colorScheme.onSurface,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
           ),
-        ),
-      ],
+        );
+      },
     );
   }
 

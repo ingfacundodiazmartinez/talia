@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../../models/parent.dart';
 
 /// Widget que muestra la lista de hijos vinculados al padre
 class ChildrenListWidget extends StatelessWidget {
@@ -25,6 +26,7 @@ class ChildrenListWidget extends StatelessWidget {
         return Column(
           children: snapshot.data!.docs.map((doc) {
             final childId = doc['childId'];
+            final linkDocId = doc.id;
             return FutureBuilder<DocumentSnapshot>(
               future: FirebaseFirestore.instance
                   .collection('users')
@@ -37,7 +39,12 @@ class ChildrenListWidget extends StatelessWidget {
                     userSnapshot.data!.data() as Map<String, dynamic>?;
                 final name = userData?['name'] ?? 'Usuario';
 
-                return _buildChildCard(context, name);
+                return _buildChildCard(
+                  context,
+                  childId: childId,
+                  name: name,
+                  linkDocId: linkDocId,
+                );
               },
             );
           }).toList(),
@@ -64,7 +71,12 @@ class ChildrenListWidget extends StatelessWidget {
     );
   }
 
-  Widget _buildChildCard(BuildContext context, String name) {
+  Widget _buildChildCard(
+    BuildContext context, {
+    required String childId,
+    required String name,
+    required String linkDocId,
+  }) {
     final colorScheme = Theme.of(context).colorScheme;
 
     return Container(
@@ -116,13 +128,146 @@ class ChildrenListWidget extends StatelessWidget {
               ],
             ),
           ),
-          Icon(
-            Icons.arrow_forward_ios,
-            size: 16,
-            color: colorScheme.onSurfaceVariant,
+          // Botón de menú con opciones
+          PopupMenuButton<String>(
+            icon: Icon(
+              Icons.more_vert,
+              color: colorScheme.onSurfaceVariant,
+            ),
+            onSelected: (value) {
+              if (value == 'unlink') {
+                _showUnlinkDialog(context, childId: childId, name: name);
+              }
+            },
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                value: 'unlink',
+                child: Row(
+                  children: [
+                    Icon(Icons.link_off, color: Colors.red, size: 20),
+                    SizedBox(width: 12),
+                    Text(
+                      'Desvincular',
+                      style: TextStyle(color: Colors.red),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),
     );
+  }
+
+  /// Muestra un diálogo para confirmar la desvinculación
+  Future<void> _showUnlinkDialog(
+    BuildContext context, {
+    required String childId,
+    required String name,
+  }) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.warning, color: Colors.orange),
+            SizedBox(width: 8),
+            Text('Desvincular hijo'),
+          ],
+        ),
+        content: Text(
+          '¿Estás seguro de que deseas desvincular a $name?\n\n'
+          'Esta acción eliminará el vínculo padre-hijo y $name ya no estará bajo supervisión parental.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text('Cancelar'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+            ),
+            child: Text('Desvincular'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && context.mounted) {
+      await _unlinkChild(context, childId: childId, name: name);
+    }
+  }
+
+  /// Desvincula un hijo del padre
+  Future<void> _unlinkChild(
+    BuildContext context, {
+    required String childId,
+    required String name,
+  }) async {
+    // Mostrar dialog de progreso en lugar de SnackBar
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Dialog(
+        child: Padding(
+          padding: EdgeInsets.all(20),
+          child: Row(
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(width: 20),
+              Expanded(
+                child: Text('Desvinculando a $name...'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    try {
+      // Crear instancia de Parent y desvincular
+      final parent = Parent(id: parentId, name: '');
+      final success = await parent.unlinkChild(childId);
+
+      // Cerrar dialog de progreso
+      if (context.mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+
+      if (context.mounted) {
+        if (success) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('✅ $name ha sido desvinculado exitosamente'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Error al desvincular a $name'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      // Cerrar dialog de progreso en caso de error
+      if (context.mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 }

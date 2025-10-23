@@ -9,6 +9,7 @@ import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import '../controllers/chat_controller_optimistic.dart';
 import '../notification_service.dart';
+import '../services/foreground_message_listener.dart';
 import '../services/reaction_service.dart';
 import '../services/video_call_service.dart';
 import '../services/block_service.dart';
@@ -23,6 +24,7 @@ import 'chat/widgets/recording_indicator.dart';
 import 'contact_profile_screen.dart';
 import 'video_call_screen.dart';
 import 'forward_messages_screen.dart';
+import 'message_info_screen.dart';
 
 /// Pantalla de chat individual (1 a 1)
 ///
@@ -88,6 +90,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
     // Establecer el chat actual para suprimir notificaciones de este chat
     NotificationService().setCurrentChat(widget.chatId);
 
+    // Establecer el chat actual en ForegroundMessageListener para suprimir custom notifications
+    ForegroundMessageListener().setCurrentOpenChat(widget.chatId);
+
     _controller = ChatControllerOptimistic(
       chatId: widget.chatId,
       contactId: widget.contactId,
@@ -98,6 +103,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
     // Escuchar cambios del controller para rebuilds
     _controller.addListener(_onControllerChanged);
     _messageController.addListener(_onTypingChanged);
+
+    // ✅ Escuchar scroll para cargar más mensajes (paginación)
+    _scrollController.addListener(_onScroll);
 
     // Escuchar cambios en el estado de bloqueo
     _blockService.isBlockedStream(widget.contactId).listen((isBlocked) {
@@ -178,6 +186,19 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
     }
   }
 
+  /// ✅ Detectar scroll para cargar más mensajes (lazy loading)
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+
+    final maxScroll = _scrollController.position.maxScrollExtent;
+    final currentScroll = _scrollController.position.pixels;
+
+    // Si el usuario scrolleó más del 80% hacia arriba, cargar más mensajes
+    if (currentScroll >= maxScroll * 0.8) {
+      _controller.loadMoreMessages();
+    }
+  }
+
   /// Scroll a un mensaje específico por su ID
   void _scrollToSpecificMessage(String messageId) {
     if (!_scrollController.hasClients || _hasScrolledToMessage) return;
@@ -229,11 +250,15 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
     // Limpiar el chat actual para permitir notificaciones de nuevo
     NotificationService().clearCurrentChat();
 
+    // Limpiar el chat actual en ForegroundMessageListener para permitir custom notifications
+    ForegroundMessageListener().setCurrentOpenChat(null);
+
     WidgetsBinding.instance.removeObserver(this);
     _controller.removeListener(_onControllerChanged);
     _controller.dispose();
     _messageController.removeListener(_onTypingChanged);
     _messageController.dispose();
+    _scrollController.removeListener(_onScroll); // ✅ Remover listener de paginación
     _scrollController.dispose();
     _audioRecorder.dispose();
     _reactionOverlay?.remove();
@@ -284,18 +309,22 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
     final text = _messageController.text.trim();
     if (text.isEmpty) return;
 
+    // Capturar replyTo antes de limpiarlo (para el envío)
+    final replyToCapture = _replyingTo;
+
     _messageController.clear();
+
+    // Limpiar el reply optimísticamente (ANTES de enviar)
+    if (mounted) {
+      setState(() => _replyingTo = null);
+    }
 
     try {
       // Envío optimista - pero ahora con verificación de moderación
       await _controller.sendTextMessage(
         text: text,
-        replyTo: _replyingTo,
+        replyTo: replyToCapture,
       );
-
-      if (mounted) {
-        setState(() => _replyingTo = null);
-      }
     } catch (e) {
       // Mensaje bloqueado por moderación o error
       print('❌ Error enviando mensaje: $e');
@@ -632,7 +661,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
     });
 
     // Navegar a pantalla de reenvío con los mensajes seleccionados
-    await Navigator.of(context, rootNavigator: true).push(
+    await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (context) => ForwardMessagesScreen(
           messages: selectedMessages,
@@ -742,7 +771,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
               contactPhotoURL: _controller.contactPhotoURL,
               chatId: widget.chatId,
               onTap: () {
-                Navigator.of(context, rootNavigator: true).push(
+                Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (context) => ContactProfileScreen(
                       contactId: widget.contactId,
@@ -759,9 +788,15 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
             children: [
               Expanded(
                 child: SafeArea(
-                  child: Column(
+                  child: Stack(
                     children: [
-                      Expanded(child: _buildMessagesList()),
+                      // Lista de mensajes ocupa todo el espacio
+                      Column(
+                        children: [
+                          Expanded(child: _buildMessagesList()),
+                        ],
+                      ),
+                      // Indicador flotante en la parte inferior
                       _buildTypingIndicator(),
                     ],
                   ),
@@ -774,11 +809,14 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
             ],
           ),
           // Indicador de grabación (overlay)
+          // Usar Stack para permitir toques en el botón de detener pero mostrar overlay visual
           if (_isRecording)
             Positioned.fill(
-              child: Container(
-                color: Colors.black.withValues(alpha: 0.3),
-                child: const RecordingIndicator(),
+              child: IgnorePointer(
+                child: Container(
+                  color: Colors.black.withValues(alpha: 0.3),
+                  child: const RecordingIndicator(),
+                ),
               ),
             ),
         ],
@@ -878,6 +916,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
           originalText: message.originalText,
           type: message.type,
           callType: message.callType,
+          callDuration: message.callDuration,
           onCallBack: message.callType != null
               ? () => _handleCallBack(message.callType!)
               : null,
@@ -896,6 +935,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
                 if (message.audioUrl != null) 'audioUrl': message.audioUrl,
               };
             });
+          },
+          onReplyTap: (String messageId) {
+            _scrollToSpecificMessage(messageId);
           },
           onLongPress: _showReactionPicker,
           onDelete: _handleDeleteMessage,
@@ -964,9 +1006,33 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
       stream: _controller.watchTypingIndicator(),
       builder: (context, snapshot) {
         final isTyping = snapshot.data ?? false;
-        if (!isTyping) return const SizedBox();
 
-        return TypingIndicator(userName: widget.contactName);
+        // Indicador flotante - solo se muestra cuando está escribiendo
+        if (!isTyping) return const SizedBox.shrink();
+
+        return Positioned(
+          bottom: 8, // Separación del borde inferior
+          left: 8,
+          child: AnimatedOpacity(
+            opacity: isTyping ? 1.0 : 0.0,
+            duration: const Duration(milliseconds: 200),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.1),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: TypingIndicator(userName: widget.contactName),
+            ),
+          ),
+        );
       },
     );
   }

@@ -422,14 +422,15 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
 
         final members = List<String>.from(groupData['members'] ?? []);
         final admins = List<String>.from(groupData['admins'] ?? []);
-        _currentImageUrl = groupData['imageUrl'];
+        final pendingMembers = List<String>.from(groupData['pending_members'] ?? []);
+        _currentImageUrl = groupData['avatar'];
 
         return SingleChildScrollView(
           child: Column(
             children: [
               GroupProfileHeader(
                 groupData: groupData,
-                memberCount: members.length,
+                memberCount: members.length + pendingMembers.length,
                 isAdmin: _isAdmin,
                 isEditing: _isEditing,
                 isUploading: _isUploading,
@@ -438,7 +439,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                 onPickImage: _pickAndUploadImage,
               ),
               _buildActionButtons(members),
-              _buildMembersList(members, admins),
+              _buildMembersList(members, admins, pendingMembers),
             ],
           ),
         );
@@ -480,7 +481,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     );
   }
 
-  Widget _buildMembersList(List<String> members, List<String> admins) {
+  Widget _buildMembersList(List<String> members, List<String> admins, List<String> pendingMembers) {
     return Padding(
       padding: EdgeInsets.all(16),
       child: Column(
@@ -488,7 +489,22 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
         children: [
           _buildMembersHeader(members),
           SizedBox(height: 16),
-          ...members.map((memberId) => _buildMemberTile(memberId, admins)),
+          // Miembros activos
+          ...members.map((memberId) => _buildMemberTile(memberId, admins, isPending: false)),
+          // Miembros pendientes
+          if (pendingMembers.isNotEmpty) ...[
+            SizedBox(height: 16),
+            Text(
+              'Pendientes de aprobación',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: Colors.orange[700],
+              ),
+            ),
+            SizedBox(height: 8),
+            ...pendingMembers.map((memberId) => _buildMemberTile(memberId, admins, isPending: true)),
+          ],
         ],
       ),
     );
@@ -525,11 +541,16 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     );
   }
 
-  Widget _buildMemberTile(String memberId, List<String> admins) {
+  Widget _buildMemberTile(String memberId, List<String> admins, {required bool isPending}) {
     final isUserAdmin = admins.contains(memberId);
     final userName = _userNames[memberId] ?? 'Cargando...';
     final userPhoto = _userPhotos[memberId] ?? '';
     final isCurrentUser = memberId == _auth.currentUser!.uid;
+
+    // Cargar datos del usuario si no están cargados
+    if (!_userNames.containsKey(memberId)) {
+      _loadUserData(memberId);
+    }
 
     return GroupMemberTile(
       userId: memberId,
@@ -537,7 +558,8 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
       userPhoto: userPhoto,
       isUserAdmin: isUserAdmin,
       isCurrentUser: isCurrentUser,
-      canManage: _isAdmin,
+      canManage: _isAdmin && !isPending, // No se puede gestionar si está pendiente
+      isPending: isPending,
       onToggleAdmin: () => _toggleAdmin(memberId, isUserAdmin),
       onRemoveMember: () => _removeMember(memberId, userName),
     );

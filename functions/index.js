@@ -2059,6 +2059,139 @@ exports.cleanupExpiredStories = onSchedule(
 );
 
 /**
+ * Limpia mensajes antiguos (>7 días) automáticamente
+ * Ejecuta diariamente a las 3:00 AM
+ * Mantiene los costos de Firestore bajos eliminando mensajes viejos
+ */
+exports.cleanupOldMessages = onSchedule(
+  {
+    schedule: "0 3 * * *", // Todos los días a las 3:00 AM
+    timeZone: "America/Argentina/Buenos_Aires",
+    memory: "512MiB", // Más memoria porque puede procesar muchos chats
+    timeoutSeconds: 540, // 9 minutos (máximo para scheduled functions)
+  },
+  async (event) => {
+    console.log("🧹 Iniciando limpieza de mensajes antiguos (>7 días)...");
+
+    const db = getFirestore();
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const cutoffTimestamp = Timestamp.fromDate(sevenDaysAgo);
+
+    console.log(`📅 Eliminando mensajes anteriores a: ${sevenDaysAgo.toISOString()}`);
+
+    let totalDeleted = 0;
+    let totalChatsProcessed = 0;
+    let totalGroupsProcessed = 0;
+
+    try {
+      // ==========================================
+      // PARTE 1: Limpiar mensajes de chats individuales
+      // ==========================================
+      console.log("📱 Procesando chats individuales...");
+
+      const chats = await db.collection("chats").get();
+      console.log(`📊 Chats encontrados: ${chats.size}`);
+
+      for (const chatDoc of chats.docs) {
+        try {
+          const chatId = chatDoc.id;
+
+          // Buscar mensajes antiguos en este chat (procesar en batches pequeños)
+          const oldMessages = await db
+            .collection("chats")
+            .doc(chatId)
+            .collection("messages")
+            .where("timestamp", "<=", cutoffTimestamp)
+            .limit(500) // Limitar para no agotar memoria
+            .get();
+
+          if (!oldMessages.empty) {
+            const batch = db.batch();
+            let batchCount = 0;
+
+            for (const msgDoc of oldMessages.docs) {
+              batch.delete(msgDoc.ref);
+              batchCount++;
+              totalDeleted++;
+            }
+
+            await batch.commit();
+            console.log(`✅ Chat ${chatId}: ${batchCount} mensajes eliminados`);
+          }
+
+          totalChatsProcessed++;
+        } catch (chatError) {
+          console.error(`❌ Error procesando chat ${chatDoc.id}:`, chatError.message);
+          // Continuar con el siguiente chat
+        }
+      }
+
+      // ==========================================
+      // PARTE 2: Limpiar mensajes de grupos
+      // ==========================================
+      console.log("👥 Procesando grupos...");
+
+      const groups = await db.collection("groups").get();
+      console.log(`📊 Grupos encontrados: ${groups.size}`);
+
+      for (const groupDoc of groups.docs) {
+        try {
+          const groupId = groupDoc.id;
+
+          // Buscar mensajes antiguos en este grupo
+          const oldMessages = await db
+            .collection("groups")
+            .doc(groupId)
+            .collection("messages")
+            .where("timestamp", "<=", cutoffTimestamp)
+            .limit(500)
+            .get();
+
+          if (!oldMessages.empty) {
+            const batch = db.batch();
+            let batchCount = 0;
+
+            for (const msgDoc of oldMessages.docs) {
+              batch.delete(msgDoc.ref);
+              batchCount++;
+              totalDeleted++;
+            }
+
+            await batch.commit();
+            console.log(`✅ Grupo ${groupId}: ${batchCount} mensajes eliminados`);
+          }
+
+          totalGroupsProcessed++;
+        } catch (groupError) {
+          console.error(`❌ Error procesando grupo ${groupDoc.id}:`, groupError.message);
+          // Continuar con el siguiente grupo
+        }
+      }
+
+      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+      console.log(`✅ Limpieza completada exitosamente`);
+      console.log(`📊 Estadísticas:`);
+      console.log(`   - Chats procesados: ${totalChatsProcessed}`);
+      console.log(`   - Grupos procesados: ${totalGroupsProcessed}`);
+      console.log(`   - Total mensajes eliminados: ${totalDeleted}`);
+      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+      return {
+        success: true,
+        chatsProcessed: totalChatsProcessed,
+        groupsProcessed: totalGroupsProcessed,
+        messagesDeleted: totalDeleted,
+        cutoffDate: sevenDaysAgo.toISOString(),
+      };
+    } catch (error) {
+      console.error("❌ Error en limpieza de mensajes:", error);
+      throw error;
+    }
+  }
+);
+
+/**
  * Auto-resuelve emergencias antiguas (>24 horas sin respuesta)
  * Ejecuta cada hora
  */
@@ -2395,137 +2528,181 @@ exports.createContactRequest = onCall(
         console.log(`✅ Documento contacts creado: ${contactDoc.id}`);
       }
 
-      // 9. Crear contact_request para user1
-      const user1RequestData = {
-        childId: participants[0],
-        contactId: participants[1],
-        contactName: participants[1] === currentUserId ? currentUserName : contactName,
-        contactEmail: participants[1] === currentUserId ? currentUserEmail : contactEmail,
-        childName: participants[0] === currentUserId ? currentUserName : contactName,
-        childEmail: participants[0] === currentUserId ? currentUserEmail : contactEmail,
-        status: user1NeedsApproval ? "pending" : "approved",
-        requestedAt: new Date(),
-        contactDocId: contactDoc.id,
-      };
-
+      // 9. Crear contact_request para user1 (una por cada padre si tiene múltiples)
       if (user1NeedsApproval) {
-        user1RequestData.parentId = user1Parents[0];
+        // Crear una solicitud para CADA padre vinculado
+        for (const parentId of user1Parents) {
+          const user1RequestData = {
+            childId: participants[0],
+            contactId: participants[1],
+            contactName: participants[1] === currentUserId ? currentUserName : contactName,
+            contactEmail: participants[1] === currentUserId ? currentUserEmail : contactEmail,
+            childName: participants[0] === currentUserId ? currentUserName : contactName,
+            childEmail: participants[0] === currentUserId ? currentUserEmail : contactEmail,
+            status: "pending",
+            requestedAt: new Date(),
+            contactDocId: contactDoc.id,
+            parentId: parentId,
+          };
+          await db.collection("contact_requests").add(user1RequestData);
+          console.log(`✅ Solicitud creada para padre ${parentId} de user1`);
+        }
+      } else {
+        // Si no necesita aprobación, crear una solicitud sin parentId
+        const user1RequestData = {
+          childId: participants[0],
+          contactId: participants[1],
+          contactName: participants[1] === currentUserId ? currentUserName : contactName,
+          contactEmail: participants[1] === currentUserId ? currentUserEmail : contactEmail,
+          childName: participants[0] === currentUserId ? currentUserName : contactName,
+          childEmail: participants[0] === currentUserId ? currentUserEmail : contactEmail,
+          status: "approved",
+          requestedAt: new Date(),
+          contactDocId: contactDoc.id,
+        };
+        await db.collection("contact_requests").add(user1RequestData);
       }
 
-      await db.collection("contact_requests").add(user1RequestData);
-
-      // 10. Crear contact_request para user2
-      const user2RequestData = {
-        childId: participants[1],
-        contactId: participants[0],
-        contactName: participants[0] === currentUserId ? currentUserName : contactName,
-        contactEmail: participants[0] === currentUserId ? currentUserEmail : contactEmail,
-        childName: participants[1] === currentUserId ? currentUserName : contactName,
-        childEmail: participants[1] === currentUserId ? currentUserEmail : contactEmail,
-        status: user2NeedsApproval ? "pending" : "approved",
-        requestedAt: new Date(),
-        contactDocId: contactDoc.id,
-      };
-
+      // 10. Crear contact_request para user2 (una por cada padre si tiene múltiples)
       if (user2NeedsApproval) {
-        user2RequestData.parentId = user2Parents[0];
+        // Crear una solicitud para CADA padre vinculado
+        for (const parentId of user2Parents) {
+          const user2RequestData = {
+            childId: participants[1],
+            contactId: participants[0],
+            contactName: participants[0] === currentUserId ? currentUserName : contactName,
+            contactEmail: participants[0] === currentUserId ? currentUserEmail : contactEmail,
+            childName: participants[1] === currentUserId ? currentUserName : contactName,
+            childEmail: participants[1] === currentUserId ? currentUserEmail : contactEmail,
+            status: "pending",
+            requestedAt: new Date(),
+            contactDocId: contactDoc.id,
+            parentId: parentId,
+          };
+          await db.collection("contact_requests").add(user2RequestData);
+          console.log(`✅ Solicitud creada para padre ${parentId} de user2`);
+        }
+      } else {
+        // Si no necesita aprobación, crear una solicitud sin parentId
+        const user2RequestData = {
+          childId: participants[1],
+          contactId: participants[0],
+          contactName: participants[0] === currentUserId ? currentUserName : contactName,
+          contactEmail: participants[0] === currentUserId ? currentUserEmail : contactEmail,
+          childName: participants[1] === currentUserId ? currentUserName : contactName,
+          childEmail: participants[1] === currentUserId ? currentUserEmail : contactEmail,
+          status: "approved",
+          requestedAt: new Date(),
+          contactDocId: contactDoc.id,
+        };
+        await db.collection("contact_requests").add(user2RequestData);
       }
 
-      await db.collection("contact_requests").add(user2RequestData);
-
-      // 11. Enviar notificaciones push a padres
+      // 11. Enviar notificaciones push a TODOS los padres vinculados
       const messaging = getMessaging();
 
-      if (user1NeedsApproval) {
-        console.log(`📬 Enviando notificación al padre de ${user1RequestData.childName}...`);
-        const parent1Doc = await db.collection("users").doc(user1Parents[0]).get();
-        const parent1Data = parent1Doc.data();
-        const parent1Token = parent1Data?.fcmToken;
+      // Obtener nombres de los hijos para las notificaciones
+      const user1Doc = await db.collection("users").doc(participants[0]).get();
+      const user2Doc = await db.collection("users").doc(participants[1]).get();
+      const user1Name = user1Doc.data()?.name || "Usuario";
+      const user2Name = user2Doc.data()?.name || "Usuario";
 
-        console.log(`   Padre ID: ${user1Parents[0]}`);
-        console.log(`   Padre nombre: ${parent1Data?.name || "Desconocido"}`);
-        console.log(`   Token FCM: ${parent1Token ? `${parent1Token.substring(0, 20)}...` : "NO DISPONIBLE"}`);
+      if (user1NeedsApproval && user1Parents.length > 0) {
+        console.log(`📬 Enviando notificaciones a ${user1Parents.length} padre(s) de ${user1Name}...`);
 
-        if (!parent1Token) {
-          console.warn(`⚠️ Padre ${user1Parents[0]} no tiene token FCM registrado`);
-        } else {
-          try {
-            await messaging.send({
-              token: parent1Token,
-              notification: {
-                title: "Nueva solicitud de contacto",
-                body: `${user1RequestData.childName} quiere agregar a ${user1RequestData.contactName}`,
-              },
-              data: {
-                type: "contact_request",
-                childId: participants[0],
-              },
-              android: {
-                priority: "high",
-              },
-              apns: {
-                headers: {
-                  "apns-priority": "10",
+        for (const parentId of user1Parents) {
+          const parentDoc = await db.collection("users").doc(parentId).get();
+          const parentData = parentDoc.data();
+          const parentToken = parentData?.fcmToken;
+
+          console.log(`   Padre ID: ${parentId}`);
+          console.log(`   Padre nombre: ${parentData?.name || "Desconocido"}`);
+          console.log(`   Token FCM: ${parentToken ? `${parentToken.substring(0, 20)}...` : "NO DISPONIBLE"}`);
+
+          if (!parentToken) {
+            console.warn(`⚠️ Padre ${parentId} no tiene token FCM registrado`);
+          } else {
+            try {
+              await messaging.send({
+                token: parentToken,
+                notification: {
+                  title: "Nueva solicitud de contacto",
+                  body: `${user1Name} quiere agregar a ${user2Name}`,
                 },
-                payload: {
-                  aps: {
-                    sound: "default",
+                data: {
+                  type: "contact_request",
+                  childId: participants[0],
+                },
+                android: {
+                  priority: "high",
+                },
+                apns: {
+                  headers: {
+                    "apns-priority": "10",
+                  },
+                  payload: {
+                    aps: {
+                      sound: "default",
+                    },
                   },
                 },
-              },
-            });
-            console.log(`✅ Notificación enviada exitosamente al padre de ${user1RequestData.childName}`);
-          } catch (err) {
-            console.error(`❌ Error enviando notificación al padre ${user1Parents[0]}:`, err);
-            console.error(`   Código de error: ${err.code}`);
-            console.error(`   Mensaje: ${err.message}`);
+              });
+              console.log(`✅ Notificación enviada exitosamente al padre ${parentId}`);
+            } catch (err) {
+              console.error(`❌ Error enviando notificación al padre ${parentId}:`, err);
+              console.error(`   Código de error: ${err.code}`);
+              console.error(`   Mensaje: ${err.message}`);
+            }
           }
         }
       }
 
-      if (user2NeedsApproval) {
-        console.log(`📬 Enviando notificación al padre de ${user2RequestData.childName}...`);
-        const parent2Doc = await db.collection("users").doc(user2Parents[0]).get();
-        const parent2Data = parent2Doc.data();
-        const parent2Token = parent2Data?.fcmToken;
+      if (user2NeedsApproval && user2Parents.length > 0) {
+        console.log(`📬 Enviando notificaciones a ${user2Parents.length} padre(s) de ${user2Name}...`);
 
-        console.log(`   Padre ID: ${user2Parents[0]}`);
-        console.log(`   Padre nombre: ${parent2Data?.name || "Desconocido"}`);
-        console.log(`   Token FCM: ${parent2Token ? `${parent2Token.substring(0, 20)}...` : "NO DISPONIBLE"}`);
+        for (const parentId of user2Parents) {
+          const parentDoc = await db.collection("users").doc(parentId).get();
+          const parentData = parentDoc.data();
+          const parentToken = parentData?.fcmToken;
 
-        if (!parent2Token) {
-          console.warn(`⚠️ Padre ${user2Parents[0]} no tiene token FCM registrado`);
-        } else {
-          try {
-            await messaging.send({
-              token: parent2Token,
-              notification: {
-                title: "Nueva solicitud de contacto",
-                body: `${user2RequestData.childName} quiere agregar a ${user2RequestData.contactName}`,
-              },
-              data: {
-                type: "contact_request",
-                childId: participants[1],
-              },
-              android: {
-                priority: "high",
-              },
-              apns: {
-                headers: {
-                  "apns-priority": "10",
+          console.log(`   Padre ID: ${parentId}`);
+          console.log(`   Padre nombre: ${parentData?.name || "Desconocido"}`);
+          console.log(`   Token FCM: ${parentToken ? `${parentToken.substring(0, 20)}...` : "NO DISPONIBLE"}`);
+
+          if (!parentToken) {
+            console.warn(`⚠️ Padre ${parentId} no tiene token FCM registrado`);
+          } else {
+            try {
+              await messaging.send({
+                token: parentToken,
+                notification: {
+                  title: "Nueva solicitud de contacto",
+                  body: `${user2Name} quiere agregar a ${user1Name}`,
                 },
-                payload: {
-                  aps: {
-                    sound: "default",
+                data: {
+                  type: "contact_request",
+                  childId: participants[1],
+                },
+                android: {
+                  priority: "high",
+                },
+                apns: {
+                  headers: {
+                    "apns-priority": "10",
+                  },
+                  payload: {
+                    aps: {
+                      sound: "default",
+                    },
                   },
                 },
-              },
-            });
-            console.log(`✅ Notificación enviada exitosamente al padre de ${user2RequestData.childName}`);
-          } catch (err) {
-            console.error(`❌ Error enviando notificación al padre ${user2Parents[0]}:`, err);
-            console.error(`   Código de error: ${err.code}`);
-            console.error(`   Mensaje: ${err.message}`);
+              });
+              console.log(`✅ Notificación enviada exitosamente al padre ${parentId}`);
+            } catch (err) {
+              console.error(`❌ Error enviando notificación al padre ${parentId}:`, err);
+              console.error(`   Código de error: ${err.code}`);
+              console.error(`   Mensaje: ${err.message}`);
+            }
           }
         }
       }
@@ -2963,43 +3140,72 @@ INFORMACIÓN DE LOS PARTICIPANTES:
 `;
 
     // Determinar instrucciones según el nivel de moderación
-    const moderationInstructions = moderationLevel === "high" ? `
+    let moderationInstructions;
+    if (moderationLevel === "high") {
+      moderationInstructions = `
 NIVEL DE MODERACIÓN: HIGH (ESTRICTO)
-- Bloquea cualquier contenido potencialmente peligroso
-- Bloquea insultos, vulgaridades, y lenguaje inapropiado si hay un niño involucrado
-- Sé MUY precavido: ante la duda, mejor bloquear
-- Protege a menores de cualquier contenido cuestionable
-` : `
-NIVEL DE MODERACIÓN: LOW (PERMISIVO)
-- Solo bloquea contenido MUY severo o cuando estés 100% seguro
-- Permite lenguaje coloquial y vulgaridades si AMBOS son adultos
-- Solo bloquea: amenazas reales, contenido sexual explícito, grooming, autolesión
-- Da el beneficio de la duda: si no estás completamente seguro, NO bloquees
+- Bloquea contenido potencialmente peligroso, insultos directos y palabrotas
+- Protege a menores de contenido cuestionable
+- Permite lenguaje coloquial y tono informal sin insultos
+- Ante duda sobre si es insulto o tono: bloquea
 `;
+    } else if (moderationLevel === "medium") {
+      moderationInstructions = `
+NIVEL DE MODERACIÓN: MEDIUM (EQUILIBRADO)
+- Bloquea insultos directos, palabrotas y contenido sexual
+- Permite lenguaje coloquial, sarcasmo e ironía sin insultos
+- Más flexible con el tono, pero estricto con el contenido
+- Solo bloquea cuando hay clara intención ofensiva
+`;
+    } else {
+      moderationInstructions = `
+NIVEL DE MODERACIÓN: LOW (PERMISIVO)
+- Solo bloquea contenido MUY severo: amenazas, contenido sexual explícito, grooming, autolesión
+- Permite lenguaje coloquial y vulgaridades si AMBOS son adultos
+- Da el beneficio de la duda: si no estás completamente seguro, NO bloquees
+- Respeta la libertad de expresión entre adultos
+`;
+    }
 
     // Instrucciones específicas según edad de participantes Y nivel de moderación
-    const ageInstructions = allAdults ?
-      (moderationLevel === "high" ? `
+    let ageInstructions = "";
+    if (allAdults) {
+      if (moderationLevel === "high") {
+        ageInstructions = `
 ⚠️ IMPORTANTE - CHAT ENTRE ADULTOS (NIVEL HIGH):
 - AMBOS participantes son adultos (>18 años)
-- A pesar de ser adultos, el usuario eligió NIVEL HIGH (estricto)
-- BLOQUEA insultos, palabrotas, y contenido agresivo
-- Solo permite conversación cordial y respetuosa
-- El usuario QUIERE protección estricta incluso siendo adulto
-` : `
+- BLOQUEA insultos directos y palabrotas
+- Permite tono informal y lenguaje coloquial sin insultos
+- El usuario quiere conversación respetuosa
+`;
+      } else if (moderationLevel === "medium") {
+        ageInstructions = `
+⚠️ IMPORTANTE - CHAT ENTRE ADULTOS (NIVEL MEDIUM):
+- AMBOS participantes son adultos (>18 años)
+- BLOQUEA solo insultos claros y contenido sexual
+- Permite lenguaje coloquial, sarcasmo e ironía
+- Sé flexible con el tono, estricto con el contenido
+`;
+      } else {
+        ageInstructions = `
 ⚠️ IMPORTANTE - CHAT ENTRE ADULTOS (NIVEL LOW):
 - AMBOS participantes son adultos (>18 años)
-- NO bloquees vulgaridades, palabrotas, o lenguaje coloquial entre adultos
+- NO bloquees vulgaridades o palabrotas entre adultos
 - NO bloquees bromas adultas o humor irreverente
-- Solo bloquea contenido realmente peligroso: amenazas serias, acoso severo, contenido ilegal
-- Respeta la libertad de expresión entre adultos
-`) : hasMinor ? `
+- Solo bloquea contenido muy peligroso: amenazas, acoso severo, contenido ilegal
+- Respeta la libertad de expresión
+`;
+      }
+    } else if (hasMinor) {
+      ageInstructions = `
 ⚠️ IMPORTANTE - HAY UN MENOR PRESENTE:
 - Al menos uno de los participantes es menor de 18 años
-- Aplica protección de menores según el nivel de moderación configurado
-- Si nivel es HIGH: Bloquea insultos, vulgaridades, y contenido inapropiado
-- Si nivel es LOW: Solo bloquea contenido muy severo
-` : "";
+- Aplica protección de menores según nivel configurado
+- HIGH: Bloquea insultos, palabrotas y contenido inapropiado
+- MEDIUM: Bloquea insultos claros y contenido sexual
+- LOW: Solo bloquea contenido muy severo
+`;
+    }
 
     const prompt = `Eres un experto en psicología infantil y protección de menores. Analiza el siguiente mensaje para detectar contenido inapropiado.
 
@@ -3177,12 +3383,12 @@ exports.checkMessageBeforeSending = onCall(
       // 2. Verificar moderación en este orden:
       // 2.1. Primero verificar moderación POR CHAT (activada por padre)
       let moderationEnabled = chatData.moderationEnabled || false;
-      let moderationLevel = "high";
+      let moderationLevel = chatData.moderationLevel || "high"; // Leer nivel del chat
       let moderationType = "none";
 
       if (moderationEnabled) {
         moderationType = "parent_chat";
-        console.log(`🔒 [Pre-moderación] Moderación POR CHAT (padre) activa`);
+        console.log(`🔒 [Pre-moderación] Moderación POR CHAT (padre) activa (nivel: ${moderationLevel})`);
       } else {
         // 2.2. Si no hay moderación por chat, verificar moderación POR CONTACTO (activada por receptor)
         // Buscar el contacto entre sender y receiver
@@ -3502,7 +3708,6 @@ exports.moderateMessage = onDocumentCreated(
       console.log(`👤 [Moderación] Receptor del mensaje: ${receiverId}`);
 
       const receiverData = receiverDoc.data();
-      const moderationEnabled = receiverData.moderationEnabled || false;
 
       // Obtener datos del sender
       let senderName = "Usuario";
@@ -3513,8 +3718,49 @@ exports.moderateMessage = onDocumentCreated(
         senderPhotoUrl = senderData.photoURL || null;
       }
 
+      // ✅ Verificar moderación en este orden (igual que checkMessageBeforeSending):
+      // 1. Moderación POR CHAT (activada por padre)
+      let moderationEnabled = chatData.moderationEnabled || false;
+      let moderationLevel = chatData.moderationLevel || "high"; // Leer nivel del chat
+      let moderationType = "none";
+
+      if (moderationEnabled) {
+        moderationType = "parent_chat";
+        console.log(`🔒 [Moderación] Moderación POR CHAT (padre) activa (nivel: ${moderationLevel})`);
+      } else {
+        // 2. Moderación POR CONTACTO (activada por receptor)
+        const sortedUsers = [senderId, receiverId].sort();
+        console.log(`🔍 [Moderación] Buscando contacto con users: ${sortedUsers}`);
+
+        const contactQuery = await db
+          .collection("contacts")
+          .where("users", "==", sortedUsers)
+          .limit(1)
+          .get();
+
+        if (!contactQuery.empty) {
+          const contactDoc = contactQuery.docs[0];
+          const contactData = contactDoc.data();
+          console.log(`📄 [Moderación] Contact ID: ${contactDoc.id}`);
+
+          const moderationSettings = contactData.moderationSettings || {};
+          const receiverSettings = moderationSettings[receiverId] || {};
+
+          moderationEnabled = receiverSettings.enabled || false;
+          if (moderationEnabled) {
+            moderationLevel = receiverSettings.level || "high"; // Leer nivel del contacto
+            moderationType = "user_contact";
+            console.log(`🔒 [Moderación] Moderación POR CONTACTO del receptor activa (nivel: ${moderationLevel})`);
+          } else {
+            console.log(`✅ [Moderación] Moderación POR CONTACTO NO está activa para el receptor`);
+          }
+        } else {
+          console.log(`⚠️ [Moderación] No se encontró documento de contacto`);
+        }
+      }
+
       if (!moderationEnabled) {
-        console.log(`✅ Moderación desactivada para usuario ${receiverId}`);
+        console.log(`✅ Moderación desactivada (tipo: ${moderationType})`);
 
         // ⚡ OPTIMIZACIÓN: Solo aprobar mensaje
         // Las notificaciones ahora se envían desde chat_controller_optimistic.dart
@@ -3528,11 +3774,7 @@ exports.moderateMessage = onDocumentCreated(
         return;
       }
 
-      console.log(`🔒 Moderación activa para usuario ${receiverId}`);
-
-      // 3. Obtener nivel de moderación del RECEPTOR (default: 'high')
-      const moderationLevel = receiverData.moderationLevel || "high";
-      console.log(`📊 [Moderación] Nivel de moderación: ${moderationLevel}`);
+      console.log(`🔒 Moderación activa (tipo: ${moderationType}, nivel: ${moderationLevel})`);
 
       // 4. Obtener información de los participantes (edades y ubicaciones)
       const participantsAges = [];
@@ -5462,4 +5704,14 @@ exports.onUserRegistered = onDocumentCreated(
     }
   },
 );
+
+
+// ═══════════════════════════════════════════════════════════════
+// STICKER SYNC SERVICE
+// ═══════════════════════════════════════════════════════════════
+
+const stickerFunctions = require('./sticker-functions');
+exports.syncStickersScheduled = stickerFunctions.syncStickersScheduled;
+exports.syncStickersManual = stickerFunctions.syncStickersManual;
+exports.cleanupOldStickers = stickerFunctions.cleanupOldStickers;
 

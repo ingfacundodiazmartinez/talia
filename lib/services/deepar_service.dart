@@ -441,7 +441,6 @@ class DeepARFilters {
   static const String tripleface = 'tripleface.deepar';
   static const String twistedFace = 'twistedface.deepar';
   static const String vendetta = 'Vendetta.deepar';
-  static const String baseBeauty = 'baseBeauty.deepar';
   static const String eightBitHearts = '8bitHearts.deepar';
   static const String elephantTrunk = 'Elephant_Trunk.deepar';
   static const String emotionMeter = 'Emotion_Meter.deepar';
@@ -485,7 +484,6 @@ class DeepARFilters {
     tripleface,
     twistedFace,
     vendetta,
-    baseBeauty,
     eightBitHearts,
     elephantTrunk,
     emotionMeter,
@@ -528,7 +526,6 @@ class DeepARFilters {
       case tripleface: return 'Triple cara';
       case twistedFace: return 'Cara retorcida';
       case vendetta: return 'Vendetta';
-      case baseBeauty: return 'Base Beauty';
       case eightBitHearts: return '8-Bit Hearts';
       case elephantTrunk: return 'Elephant Trunk';
       case emotionMeter: return 'Emotion Meter';

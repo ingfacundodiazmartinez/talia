@@ -234,16 +234,26 @@ class _ChildArchivedChatsScreenState extends State<ChildArchivedChatsScreen> {
                                     builder: (context, blockedSnapshot) {
                                       final isBlocked = blockedSnapshot.data ?? false;
 
+                                      // Verificar si el chat fue limpiado y no hay mensajes nuevos
+                                      final clearedAt = chatData['clearedAt_${widget.childId}'] as Timestamp?;
+                                      final lastMessageTime = chatData['lastMessageTime'] as Timestamp?;
+                                      final isChatCleared = clearedAt != null &&
+                                          (lastMessageTime == null || clearedAt.compareTo(lastMessageTime) >= 0);
+
                                       return _buildArchivedChatItem(
                                         chatId: chatDoc.id,
                                         userId: otherUserId,
                                         name: displayName,
                                         lastMessage: isBlocked
                                             ? '🔒 Contacto bloqueado'
-                                            : (chatData['lastMessage'] ?? ''),
-                                        time: ChatUtils.formatChatTime(
-                                          chatData['lastMessageTime'],
-                                        ),
+                                            : (isChatCleared
+                                                ? 'Inicia una conversación...'
+                                                : (chatData['lastMessage'] ?? '')),
+                                        time: isChatCleared
+                                            ? ''
+                                            : ChatUtils.formatChatTime(
+                                                chatData['lastMessageTime'],
+                                              ),
                                         isOnline: userData['isOnline'] ?? false,
                                         photoURL: userData['photoURL'],
                                         isBlocked: isBlocked,
@@ -297,8 +307,7 @@ class _ChildArchivedChatsScreenState extends State<ChildArchivedChatsScreen> {
       ),
       child: GestureDetector(
         onTap: () {
-          Navigator.push(
-            context,
+          Navigator.of(context).push(
             PageRouteBuilder(
               pageBuilder: (context, animation, secondaryAnimation) => ChatDetailScreen(
                 chatId: chatId,

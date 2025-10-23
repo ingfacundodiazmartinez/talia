@@ -24,6 +24,12 @@ class GroupChatAppBar extends StatelessWidget implements PreferredSizeWidget {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
     return AppBar(
+      leading: IconButton(
+        icon: const Icon(Icons.arrow_back),
+        onPressed: () {
+          Navigator.of(context).pop();
+        },
+      ),
       title: InkWell(
         onTap: onTap,
         child: StreamBuilder<DocumentSnapshot>(

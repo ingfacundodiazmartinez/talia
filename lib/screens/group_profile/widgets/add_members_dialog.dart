@@ -258,6 +258,9 @@ class _AddMembersDialogState extends State<AddMembersDialog> {
   }
 
   Widget _buildFooter() {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isSmallScreen = screenWidth < 360;
+
     return Container(
       padding: EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -267,39 +270,56 @@ class _AddMembersDialogState extends State<AddMembersDialog> {
           bottomRight: Radius.circular(20),
         ),
       ),
-      child: Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            '${_selectedContactIds.length} seleccionados',
-            style: TextStyle(color: Colors.grey[700]),
-          ),
-          Spacer(),
-          TextButton(
-            onPressed: _isAdding ? null : () => Navigator.pop(context),
-            child: Text('Cancelar'),
-          ),
-          SizedBox(width: 8),
-          ElevatedButton(
-            onPressed: _isAdding || _selectedContactIds.isEmpty
-                ? null
-                : _addSelectedMembers,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: GroupProfileConstants.primaryColor,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
+          if (!isSmallScreen)
+            Padding(
+              padding: EdgeInsets.only(bottom: 12),
+              child: Text(
+                '${_selectedContactIds.length} seleccionados',
+                style: TextStyle(color: Colors.grey[700]),
               ),
             ),
-            child: _isAdding
-                ? SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      valueColor: AlwaysStoppedAnimation(Colors.white),
-                    ),
-                  )
-                : Text('Agregar'),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              if (isSmallScreen)
+                Expanded(
+                  child: Text(
+                    '${_selectedContactIds.length} seleccionados',
+                    style: TextStyle(color: Colors.grey[700], fontSize: 12),
+                  ),
+                ),
+              if (isSmallScreen) SizedBox(width: 8),
+              TextButton(
+                onPressed: _isAdding ? null : () => Navigator.pop(context),
+                child: Text('Cancelar'),
+              ),
+              SizedBox(width: 8),
+              ElevatedButton(
+                onPressed: _isAdding || _selectedContactIds.isEmpty
+                    ? null
+                    : _addSelectedMembers,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: GroupProfileConstants.primaryColor,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                child: _isAdding
+                    ? SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation(Colors.white),
+                        ),
+                      )
+                    : Text('Agregar'),
+              ),
+            ],
           ),
         ],
       ),
