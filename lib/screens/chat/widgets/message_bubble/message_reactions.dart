@@ -22,61 +22,44 @@ class MessageReactions extends StatelessWidget {
     final reactionService = ReactionService();
     final auth = FirebaseAuth.instance;
 
-    return Padding(
-      padding: const EdgeInsets.only(top: 4),
-      child: Wrap(
-        spacing: 4,
-        children: reactions.entries.map((entry) {
-          final reaction = entry.key;
-          final users = entry.value as List;
-          final count = users.length;
-          final hasReacted = users.contains(auth.currentUser?.uid);
+    // Convertir formato antiguo {userId: emoji} a formato nuevo {emoji: [userId]}
+    final Map<String, List<String>> normalizedReactions = {};
 
-          return GestureDetector(
-            onTap: () => reactionService.toggleReaction(
-              chatId: chatId,
-              messageId: messageId,
-              reaction: reaction,
-            ),
-            child: Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 8,
-                vertical: 4,
-              ),
-              decoration: BoxDecoration(
-                color: hasReacted
-                    ? colorScheme.primary.withValues(alpha: 0.2)
-                    : (isDarkMode
-                        ? colorScheme.surfaceContainerHighest
-                        : Colors.grey.withValues(alpha: 0.2)),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color:
-                      hasReacted ? colorScheme.primary : Colors.transparent,
-                  width: 1,
-                ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(reaction, style: const TextStyle(fontSize: 16)),
-                  if (count > 1) ...[
-                    const SizedBox(width: 4),
-                    Text(
-                      count.toString(),
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: colorScheme.onSurface,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          );
-        }).toList(),
-      ),
+    reactions.forEach((key, value) {
+      if (value is List) {
+        // Formato correcto: {emoji: [userId1, userId2]}
+        normalizedReactions[key] = List<String>.from(value);
+      } else if (value is String) {
+        // Formato antiguo: {userId: emoji}
+        final userId = key;
+        final emoji = value;
+
+        // Agrupar por emoji
+        if (normalizedReactions.containsKey(emoji)) {
+          normalizedReactions[emoji]!.add(userId);
+        } else {
+          normalizedReactions[emoji] = [userId];
+        }
+      }
+    });
+
+    print('🔄 Reacciones normalizadas: $normalizedReactions');
+
+    return Wrap(
+      spacing: 4,
+      runSpacing: 4,
+      children: normalizedReactions.entries.map((entry) {
+        final reaction = entry.key;
+
+        return GestureDetector(
+          onTap: () => reactionService.toggleReaction(
+            chatId: chatId,
+            messageId: messageId,
+            reaction: reaction,
+          ),
+          child: Text(reaction, style: const TextStyle(fontSize: 16)),
+        );
+      }).toList(),
     );
   }
 }

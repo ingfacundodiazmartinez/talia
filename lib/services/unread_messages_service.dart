@@ -139,25 +139,63 @@ class UnreadMessagesService {
     });
   }
 
-  /// Actualizar badge icon con el total de mensajes sin leer y notificaciones
+  /// Actualizar badge icon con el total de mensajes sin leer y notificaciones relevantes
+  /// ✅ SOLO cuenta: chats no leídos + historias pendientes + emergencias no resueltas + solicitudes de contacto
   Future<void> updateBadgeCount() async {
     try {
       final user = _auth.currentUser;
       if (user == null) return;
 
-      // Obtener total de mensajes no leídos
+      // 1. Obtener total de mensajes no leídos
       final totalUnreadMessages = await getTotalUnreadCount();
 
-      // Obtener total de notificaciones no leídas
-      final notificationsSnapshot = await _firestore
+      // 2. Obtener IDs de hijos vinculados (solo para padres)
+      final linksSnapshot = await _firestore
+          .collection('parentChildLinks')
+          .where('parentId', isEqualTo: user.uid)
+          .where('status', isEqualTo: 'approved')
+          .get();
+
+      final childrenIds = linksSnapshot.docs
+          .map((doc) => doc.data()['childId'] as String)
+          .toList();
+
+      // 3. Contar historias pendientes de los hijos
+      int pendingStoriesCount = 0;
+      if (childrenIds.isNotEmpty) {
+        final storiesSnapshot = await _firestore
+            .collection('stories')
+            .where('userId', whereIn: childrenIds)
+            .where('status', isEqualTo: 'pending')
+            .get();
+        pendingStoriesCount = storiesSnapshot.docs.length;
+      }
+
+      // 4. Contar emergencias no resueltas de los hijos
+      int unresolvedEmergenciesCount = 0;
+      if (childrenIds.isNotEmpty) {
+        final emergenciesSnapshot = await _firestore
+            .collection('emergencies')
+            .where('childId', whereIn: childrenIds)
+            .get();
+
+        // Filtrar manualmente las que no están resueltas (whereNotIn no funciona bien con un solo valor)
+        unresolvedEmergenciesCount = emergenciesSnapshot.docs
+            .where((doc) => doc.data()['status'] != 'resolved')
+            .length;
+      }
+
+      // 5. Contar solicitudes de contacto pendientes (notificaciones)
+      final contactRequestsSnapshot = await _firestore
           .collection('notifications')
           .where('userId', isEqualTo: user.uid)
           .where('read', isEqualTo: false)
+          .where('type', isEqualTo: 'contact_request')
           .get();
-      final unreadNotifications = notificationsSnapshot.docs.length;
+      final contactRequestsCount = contactRequestsSnapshot.docs.length;
 
-      // Calcular total
-      final totalBadgeCount = totalUnreadMessages + unreadNotifications;
+      // Calcular total (suma de todos los badges del bottom nav)
+      final totalBadgeCount = totalUnreadMessages + pendingStoriesCount + unresolvedEmergenciesCount + contactRequestsCount;
 
       // Verificar si el dispositivo soporta badges
       final isSupported = await AppBadgePlus.isSupported();
@@ -165,7 +203,7 @@ class UnreadMessagesService {
       if (isSupported) {
         if (totalBadgeCount > 0) {
           await AppBadgePlus.updateBadge(totalBadgeCount);
-          print('🔔 Badge del ícono actualizado: $totalBadgeCount ($totalUnreadMessages mensajes + $unreadNotifications notificaciones)');
+          print('🔔 Badge del ícono actualizado: $totalBadgeCount ($totalUnreadMessages chats + $pendingStoriesCount historias + $unresolvedEmergenciesCount emergencias + $contactRequestsCount contactos)');
         } else {
           await AppBadgePlus.updateBadge(0);
           print('🔔 Badge del ícono removido (no hay mensajes ni notificaciones)');

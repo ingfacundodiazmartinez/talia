@@ -41,9 +41,26 @@ class ParentDashboardController {
 
   /// Inicializa todos los listeners y servicios
   Future<void> initialize() async {
-    await _initializeAutoApproval();
-    _setupEmergencyNotificationListener();
-    _listenForIncomingCalls();
+    print('🚀 [ParentDashboardController] Iniciando initialize() para parentId: $parentId');
+
+    try {
+      print('🔧 [ParentDashboardController] Inicializando auto-approval...');
+      await _initializeAutoApproval();
+      print('✅ [ParentDashboardController] Auto-approval inicializado');
+
+      print('🔧 [ParentDashboardController] Configurando listener de emergencias...');
+      _setupEmergencyNotificationListener();
+      print('✅ [ParentDashboardController] Listener de emergencias configurado');
+
+      print('🔧 [ParentDashboardController] Iniciando listener de llamadas entrantes...');
+      _listenForIncomingCalls();
+      print('✅ [ParentDashboardController] Listener de llamadas entrantes iniciado');
+
+      print('✅✅✅ [ParentDashboardController] Initialize() completado exitosamente');
+    } catch (e) {
+      print('❌ [ParentDashboardController] Error en initialize(): $e');
+      print('❌ [ParentDashboardController] Stack trace: ${StackTrace.current}');
+    }
   }
 
   /// Configura el listener para notificaciones de emergencia

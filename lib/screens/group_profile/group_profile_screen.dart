@@ -298,6 +298,8 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
                 uid: uid,
                 isCaller: true,
                 remoteName: groupData['name'] ?? 'Grupo',
+                receiverId: widget.groupId, // ID del grupo para llamadas grupales
+                isVideo: true,
               ),
             ),
           );

@@ -25,6 +25,11 @@ class StoryService {
   List<UserStories>? _cachedStories;
   DateTime? _lastCacheUpdate;
 
+  // Cache para la lista de contactos (evitar recalcular en cada cambio de historia)
+  Set<String>? _cachedContactIds;
+  DateTime? _lastContactsCacheUpdate;
+  static const _contactsCacheDuration = Duration(minutes: 5);
+
   // Crear una nueva historia
   Future<String> createStory({
     required String mediaPath,
@@ -122,9 +127,9 @@ class StoryService {
         return;
       }
 
-      // Crear notificación y enviar a cada padre vinculado
+      // Crear solicitud de aprobación para cada padre vinculado
       for (final parentId in linkedParents) {
-        // Crear notificación para el padre
+        // Crear solicitud de aprobación (esto se muestra en PendingStoriesCard)
         await _firestore.collection('story_approval_requests').add({
           'parentId': parentId,
           'childId': childId,
@@ -134,14 +139,10 @@ class StoryService {
           'createdAt': FieldValue.serverTimestamp(),
         });
 
-        // Enviar notificación push
-        await _notificationService.sendStoryApprovalRequestNotification(
-          parentId: parentId,
-          childName: childName,
-          storyId: storyId,
-        );
+        // NO enviamos notificación push para evitar duplicados
+        // La solicitud en story_approval_requests ya se muestra en el dashboard
 
-        print('📱 Notificación enviada al padre $parentId para aprobar historia');
+        print('📱 Solicitud de aprobación creada para padre $parentId');
       }
 
       print('✅ Notificaciones enviadas a ${linkedParents.length} padre(s)');
@@ -176,6 +177,78 @@ class StoryService {
     }
   }
 
+  // Obtener y cachear la lista de contactos
+  Future<Set<String>> _getContactIds() async {
+    final user = _auth.currentUser;
+    if (user == null) return {};
+
+    // Verificar si el cache es válido
+    if (_cachedContactIds != null &&
+        _lastContactsCacheUpdate != null &&
+        DateTime.now().difference(_lastContactsCacheUpdate!) < _contactsCacheDuration) {
+      print('📋 Usando cache de contactos (${_cachedContactIds!.length} contactos)');
+      return _cachedContactIds!;
+    }
+
+    print('🔄 Recalculando lista de contactos...');
+    final contactIds = <String>{};
+
+    // 1. Obtener contactos desde la colección 'contacts' (bidireccional)
+    final contactsSnapshot = await _firestore
+        .collection('contacts')
+        .where('users', arrayContains: user.uid)
+        .where('status', isEqualTo: 'approved')
+        .get();
+
+    // Extraer los IDs de los contactos
+    for (final contactDoc in contactsSnapshot.docs) {
+      final data = contactDoc.data();
+      final users = List<String>.from(data['users'] ?? []);
+      // Agregar el otro usuario (no el actual)
+      for (final userId in users) {
+        if (userId != user.uid) {
+          contactIds.add(userId);
+        }
+      }
+    }
+
+    // 2. Si es padre: obtener hijos vinculados desde parent_children
+    final parentLinksSnapshot = await _firestore
+        .collection('parent_children')
+        .where('parentId', isEqualTo: user.uid)
+        .where('status', isEqualTo: 'approved')
+        .get();
+
+    for (final linkDoc in parentLinksSnapshot.docs) {
+      final childId = linkDoc.data()['childId'] as String?;
+      if (childId != null) {
+        contactIds.add(childId);
+      }
+    }
+
+    // 3. Si es hijo: obtener padres vinculados desde parent_children
+    final childLinksSnapshot = await _firestore
+        .collection('parent_children')
+        .where('childId', isEqualTo: user.uid)
+        .where('status', isEqualTo: 'approved')
+        .get();
+
+    for (final linkDoc in childLinksSnapshot.docs) {
+      final parentId = linkDoc.data()['parentId'] as String?;
+      if (parentId != null) {
+        contactIds.add(parentId);
+      }
+    }
+
+    print('✅ Contactos recalculados: ${contactIds.length}');
+
+    // Actualizar cache
+    _cachedContactIds = contactIds;
+    _lastContactsCacheUpdate = DateTime.now();
+
+    return contactIds;
+  }
+
   // Obtener historias de usuarios en la lista blanca del usuario actual
   Stream<List<UserStories>> getStoriesFromWhitelist() async* {
     final user = _auth.currentUser;
@@ -196,56 +269,9 @@ class StoryService {
         .snapshots()) {
 
       final List<UserStories> userStoriesList = [];
-      final contactIds = <String>{};
 
-      // 1. Obtener contactos desde la colección 'contacts' (bidireccional)
-      final contactsSnapshot = await _firestore
-          .collection('contacts')
-          .where('users', arrayContains: user.uid)
-          .where('status', isEqualTo: 'approved')
-          .get();
-
-      // Extraer los IDs de los contactos
-      for (final contactDoc in contactsSnapshot.docs) {
-        final data = contactDoc.data();
-        final users = List<String>.from(data['users'] ?? []);
-        // Agregar el otro usuario (no el actual)
-        for (final userId in users) {
-          if (userId != user.uid) {
-            contactIds.add(userId);
-          }
-        }
-      }
-
-      // 2. Si es padre: obtener hijos vinculados desde parent_children
-      final parentLinksSnapshot = await _firestore
-          .collection('parent_children')
-          .where('parentId', isEqualTo: user.uid)
-          .where('status', isEqualTo: 'approved')
-          .get();
-
-      for (final linkDoc in parentLinksSnapshot.docs) {
-        final childId = linkDoc.data()['childId'] as String?;
-        if (childId != null) {
-          contactIds.add(childId);
-        }
-      }
-
-      // 3. Si es hijo: obtener padres vinculados desde parent_children
-      final childLinksSnapshot = await _firestore
-          .collection('parent_children')
-          .where('childId', isEqualTo: user.uid)
-          .where('status', isEqualTo: 'approved')
-          .get();
-
-      for (final linkDoc in childLinksSnapshot.docs) {
-        final parentId = linkDoc.data()['parentId'] as String?;
-        if (parentId != null) {
-          contactIds.add(parentId);
-        }
-      }
-
-      print('📋 Total de contactos válidos: ${contactIds.length}');
+      // Usar la lista de contactos cacheada (se recalcula cada 5 minutos automáticamente)
+      final contactIds = await _getContactIds();
 
       // Incluir historias del usuario actual (todas, sin filtro de aprobación)
       final currentUserStories = await getCurrentUserStories();
@@ -305,7 +331,6 @@ class StoryService {
   // Obtener historias de un usuario específico
   Future<UserStories?> _getUserStories(String userId) async {
     try {
-      print('📖 Obteniendo historias de usuario: $userId');
       // Obtener datos del usuario desde cache primero, luego servidor si es necesario
       final userDoc = await _firestore
           .collection('users')
@@ -313,7 +338,6 @@ class StoryService {
           .get(const GetOptions(source: Source.cache))
           .catchError((_) => _firestore.collection('users').doc(userId).get());
       if (!userDoc.exists) {
-        print('❌ Usuario no existe: $userId');
         return null;
       }
 
@@ -323,7 +347,6 @@ class StoryService {
 
       // Obtener historias no expiradas y aprobadas del usuario
       final now = DateTime.now();
-      print('🕒 Buscando historias no expiradas después de: $now');
 
       // Simplificado para evitar índices compuestos complejos
       final storiesQuery = await _firestore
@@ -333,8 +356,6 @@ class StoryService {
           .orderBy('createdAt', descending: true)
           .get(const GetOptions(source: Source.server));
 
-      print('📚 Historias encontradas (todas) para $displayName ($userId): ${storiesQuery.docs.length}');
-
       // Filtrar manualmente las expiradas
       final validDocs = storiesQuery.docs.where((doc) {
         final data = doc.data() as Map<String, dynamic>;
@@ -342,10 +363,7 @@ class StoryService {
         return expiresAt != null && expiresAt.isAfter(now);
       }).toList();
 
-      print('📚 Historias no expiradas para $displayName ($userId): ${validDocs.length}');
-
       if (validDocs.isEmpty) {
-        print('⚠️ No hay historias aprobadas y no expiradas para $displayName');
         return null;
       }
 

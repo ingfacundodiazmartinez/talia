@@ -24,6 +24,7 @@ import 'screens/animated_splash_screen.dart';
 import 'notification_service.dart';
 import 'widgets/incoming_call_dialog.dart';
 import 'theme_service.dart';
+import 'services/callkit_service.dart';
 import 'services/two_factor_session_service.dart';
 import 'services/app_config_service.dart';
 import 'services/message_cache_service.dart';
@@ -41,7 +42,6 @@ import 'services/accessibility_service.dart';
 import 'services/foreground_message_listener.dart';
 import 'services/stickers_service.dart';
 import 'services/unread_messages_service.dart';
-import 'widgets/loading_overlay.dart';
 import 'dart:async';
 
 // IMPORTANTE: Después de ejecutar 'flutterfire configure',
@@ -62,7 +62,8 @@ void main() async {
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent, // Hacer el status bar transparente
-      statusBarIconBrightness: Brightness.dark, // Iconos oscuros para fondo claro
+      statusBarIconBrightness:
+          Brightness.dark, // Iconos oscuros para fondo claro
       statusBarBrightness: Brightness.light, // Para iOS
       systemNavigationBarColor: Colors.white, // Barra de navegación blanca
       systemNavigationBarIconBrightness: Brightness.dark, // Iconos oscuros
@@ -165,11 +166,14 @@ void main() async {
   }
 
   // Pre-cargar stickers en segundo plano (sin bloquear la app)
-  StickersService().preloadStickers().then((_) {
-    print('✅ Stickers pre-cargados en segundo plano');
-  }).catchError((e) {
-    print('⚠️ Error pre-cargando stickers: $e (continuando...)');
-  });
+  StickersService()
+      .preloadStickers()
+      .then((_) {
+        print('✅ Stickers pre-cargados en segundo plano');
+      })
+      .catchError((e) {
+        print('⚠️ Error pre-cargando stickers: $e (continuando...)');
+      });
 
   // Activar Firebase App Check con Play Integrity para producción
   if (kDebugMode) {
@@ -228,7 +232,9 @@ void main() async {
     await AppConfigService().initialize();
     print('✅ App Config Service inicializado');
   } catch (e) {
-    print('⚠️ Error inicializando App Config: $e (continuando con valores por defecto)');
+    print(
+      '⚠️ Error inicializando App Config: $e (continuando con valores por defecto)',
+    );
   }
 
   // Inicializar servicio de notificaciones
@@ -319,7 +325,9 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
   void _setupPendingCallListener() {
     if (!Platform.isIOS) return;
 
-    _pendingCallSubscription = VoIPService().pendingCallStream.listen((callData) {
+    _pendingCallSubscription = VoIPService().pendingCallStream.listen((
+      callData,
+    ) {
       print('📞 [Main] Llamada pendiente recibida del stream: $callData');
       _navigateToCall(callData);
     });
@@ -328,7 +336,9 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
   Future<void> _checkPendingCall() async {
     if (!Platform.isIOS) return;
 
-    await Future.delayed(const Duration(milliseconds: 500)); // Pequeño delay para que Flutter esté listo
+    await Future.delayed(
+      const Duration(milliseconds: 500),
+    ); // Pequeño delay para que Flutter esté listo
 
     final pendingData = VoIPService().getPendingCallData();
     if (pendingData != null) {
@@ -344,6 +354,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
     final uid = callData['uid'] as int;
     final callType = callData['callType'] as String?;
     final callerName = callData['callerName'] as String;
+    final callerId = callData['callerId'] as String? ?? '';
 
     print('🚀 [Main] Navegando a pantalla de llamada:');
     print('   - Call ID: $callId');
@@ -352,33 +363,21 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
     print('   - UID: $uid');
 
     if (_navigatorKey.currentContext != null) {
-      if (callType == 'audio') {
-        Navigator.of(_navigatorKey.currentContext!).push(
-          MaterialPageRoute(
-            builder: (context) => AudioCallScreen(
-              callId: callId,
-              channelName: channelName,
-              token: token,
-              uid: uid,
-              isCaller: false, // Estamos recibiendo la llamada
-              remoteName: callerName,
-            ),
+      // Usar VideoCallScreen tanto para video como audio
+      Navigator.of(_navigatorKey.currentContext!).push(
+        MaterialPageRoute(
+          builder: (context) => VideoCallScreen(
+            callId: callId,
+            channelName: channelName,
+            token: token,
+            uid: uid,
+            isCaller: false, // Estamos recibiendo la llamada
+            remoteName: callerName,
+            receiverId: callerId, // ID del que llama
+            isVideo: callType != 'audio', // false si es audio, true en cualquier otro caso
           ),
-        );
-      } else {
-        Navigator.of(_navigatorKey.currentContext!).push(
-          MaterialPageRoute(
-            builder: (context) => VideoCallScreen(
-              callId: callId,
-              channelName: channelName,
-              token: token,
-              uid: uid,
-              isCaller: false, // Estamos recibiendo la llamada
-              remoteName: callerName,
-            ),
-          ),
-        );
-      }
+        ),
+      );
     }
   }
 
@@ -459,7 +458,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
   void _setupIncomingCallListener() {
     _incomingCallSubscription = NotificationService().incomingCallStream.listen((
       callData,
-    ) {
+    ) async {
       // Usar callType directamente de los datos de la notificación
       final callType = callData['callType'] ?? 'video';
       final isAudioCall = callType == 'audio';
@@ -477,14 +476,32 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
         print('🆘 Es una llamada de EMERGENCIA');
       }
 
-      // En iOS, CallKit maneja todas las llamadas entrantes
-      // No mostramos el diálogo para evitar duplicación con CallKit
+      // En iOS, usar CallKit nativo directamente (no el diálogo de Flutter)
+      // Esto evita duplicación con VoIP push que puede llegar después
       if (Platform.isIOS) {
-        print('📱 [iOS] CallKit manejará esta llamada, omitiendo diálogo de Flutter');
-        return;
+        print(
+          '📱 [iOS] Procesando llamada - usando CallKit nativo para evitar duplicación',
+        );
+
+        // Importar CallKitService
+        final callKit = CallKitService();
+
+        // Mostrar CallKit usando el método nativo
+        await callKit.showIncomingCall(
+          callId: callData['callId'] ?? '',
+          callerName: callData['callerName'] ?? 'Usuario desconocido',
+          callerId: callData['callerId'] ?? '',
+          callerPhotoUrl: callData['callerPhotoURL'],
+          callType: callType,
+          isEmergency: isEmergency,
+          extraData: callData,
+        );
+
+        print('✅ [iOS] CallKit mostrado desde FCM foreground notification');
+        return; // No continuar con el diálogo de Flutter
       }
 
-      // Obtener el contexto del navegador (solo Android)
+      // ANDROID: Mostrar diálogo de Flutter
       final context = _navigatorKey.currentContext;
       if (context != null) {
         // Navegar a pantalla completa de llamada entrante
@@ -516,7 +533,9 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
     final baseTheme = themeService.currentTheme;
     final accessibleTheme = accessibility.highContrast
         ? baseTheme.copyWith(
-            colorScheme: accessibility.getHighContrastColors(baseTheme.colorScheme),
+            colorScheme: accessibility.getHighContrastColors(
+              baseTheme.colorScheme,
+            ),
           )
         : baseTheme;
 
@@ -542,8 +561,9 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
               value: SystemUiOverlayStyle(
                 statusBarColor: Colors.transparent,
                 statusBarIconBrightness: brightness == Brightness.dark
-                    ? Brightness.light  // Iconos claros para modo oscuro
-                    : Brightness.dark,  // Iconos oscuros para modo claro
+                    ? Brightness
+                          .light // Iconos claros para modo oscuro
+                    : Brightness.dark, // Iconos oscuros para modo claro
                 statusBarBrightness: brightness == Brightness.dark
                     ? Brightness.dark
                     : Brightness.light,
@@ -554,34 +574,40 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
                     ? Brightness.light
                     : Brightness.dark,
               ),
-              child: MediaQuery(
-                data: MediaQuery.of(context).copyWith(
-                  textScaler: TextScaler.linear(accessibility.textScale),
-                ),
-                child: child!,
+              child: Builder(
+                builder: (context) {
+                  final mediaQueryData = MediaQuery.maybeOf(context);
+                  if (mediaQueryData == null) {
+                    return child!;
+                  }
+                  return MediaQuery(
+                    data: mediaQueryData.copyWith(
+                      textScaler: TextScaler.linear(accessibility.textScale),
+                    ),
+                    child: child!,
+                  );
+                },
               ),
             );
           },
-          home: const AnimatedSplashScreen(
-            nextScreen: AuthWrapper(),
-          ),
-        onGenerateRoute: (settings) {
-          if (settings.name == '/chat_moderation_settings') {
-            final args = settings.arguments as Map<String, dynamic>;
-            return MaterialPageRoute(
-              builder: (context) => ChatModerationSettingsScreen(
-                chatId: args['chatId'] as String,
-                contactName: args['contactName'] as String,
-              ),
-            );
-          }
-          if (settings.name == '/chat_moderation_management') {
-            return MaterialPageRoute(
-              builder: (context) => const ChatModerationManagementScreen(),
-            );
-          }
-          return null;
-        },
+          home: const AnimatedSplashScreen(nextScreen: AuthWrapper()),
+          onGenerateRoute: (settings) {
+            if (settings.name == '/chat_moderation_settings') {
+              final args = settings.arguments as Map<String, dynamic>;
+              return MaterialPageRoute(
+                builder: (context) => ChatModerationSettingsScreen(
+                  chatId: args['chatId'] as String,
+                  contactName: args['contactName'] as String,
+                ),
+              );
+            }
+            if (settings.name == '/chat_moderation_management') {
+              return MaterialPageRoute(
+                builder: (context) => const ChatModerationManagementScreen(),
+              );
+            }
+            return null;
+          },
         ),
       ),
     );
@@ -621,9 +647,11 @@ class _AuthWrapperState extends State<AuthWrapper> {
           print('✅ Usuario autenticado: ${snapshot.data!.email}');
 
           // Registrar sesión del dispositivo
-          _deviceSessionService.registerDeviceSession(snapshot.data!.uid).catchError((e) {
-            print('⚠️ Error registrando sesión de dispositivo: $e');
-          });
+          _deviceSessionService
+              .registerDeviceSession(snapshot.data!.uid)
+              .catchError((e) {
+                print('⚠️ Error registrando sesión de dispositivo: $e');
+              });
 
           // Iniciar listener de sesión para detectar login en otro dispositivo
           _deviceSessionService.startSessionListener(context);
@@ -639,7 +667,10 @@ class _AuthWrapperState extends State<AuthWrapper> {
                 .doc(snapshot.data!.uid)
                 .snapshots(),
             builder: (context, userSnapshot) {
-              if (userSnapshot.connectionState == ConnectionState.waiting) {
+              // Si estamos esperando Y no tenemos datos cacheados, mostrar loading
+              // Si tenemos datos cacheados (hasData), usar esos datos aunque estemos waiting
+              if (userSnapshot.connectionState == ConnectionState.waiting &&
+                  !userSnapshot.hasData) {
                 return Scaffold(
                   body: Center(
                     child: Column(
@@ -656,8 +687,18 @@ class _AuthWrapperState extends State<AuthWrapper> {
 
               if (userSnapshot.hasError) {
                 print('❌ Error consultando usuario: ${userSnapshot.error}');
-                // En caso de error, mostrar pantalla de autenticación
-                return AuthScreen();
+                // Intentar obtener datos del cache local antes de mostrar error
+                // Si hay datos cacheados, usarlos aunque haya error de red
+                if (userSnapshot.hasData && userSnapshot.data != null) {
+                  print('⚠️ Error de red detectado, usando datos cacheados');
+                  // Continuar con los datos cacheados (no hacer return aquí)
+                } else {
+                  // Sin cache disponible, mostrar pantalla de autenticación
+                  print(
+                    '❌ Sin datos cacheados disponibles, mostrando AuthScreen',
+                  );
+                  return AuthScreen();
+                }
               }
 
               if (!userSnapshot.hasData || !userSnapshot.data!.exists) {

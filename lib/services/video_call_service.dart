@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -355,6 +356,10 @@ class VideoCallService {
       final docRef = _firestore.collection('video_calls').doc();
       final channelName = docRef.id;
 
+      // Obtener photoURL del caller
+      final callerDoc = await _firestore.collection('users').doc(callerId).get();
+      final callerPhotoURL = callerDoc.data()?['photoURL'] ?? '';
+
       // Crear documento con TODOS los campos de una vez (incluyendo channelName)
       await docRef.set({
         'callerId': callerId,
@@ -368,26 +373,45 @@ class VideoCallService {
         'callType': 'video', // Tipo de llamada
       });
 
-      // Crear notificación para disparar push notification al receptor
-      await _firestore.collection('notifications').add({
-        'userId': receiverId,
-        'type': 'video_call',
-        'title': 'Videollamada entrante',
-        'body': '$callerName te está llamando',
-        'priority': 'high',
-        'data': {
-          'callId': channelName, // Usar el ID del documento
-          'callerId': callerId,
-          'callerName': callerName,
-          'channelName': channelName,
-          'callType': 'video', // Importante: tipo de llamada
-        },
-        'createdAt': FieldValue.serverTimestamp(),
-        'read': false,
-      });
+      print('✅ Videollamada creada: $channelName');
 
-      print('✅ Videollamada creada: $channelName, Canal: $channelName');
-      print('✅ Notificación de videollamada enviada a $receiverName');
+      // ✅ Enviar VoIP push directamente usando Cloud Function
+      try {
+        final callable = FirebaseFunctions.instance.httpsCallable(
+          'sendInstantPushNotification',
+          options: HttpsCallableOptions(
+            timeout: const Duration(seconds: 10),
+          ),
+        );
+
+        final result = await callable.call({
+          'receiverId': receiverId,
+          'title': 'Videollamada entrante',
+          'body': '$callerName te está llamando',
+          'isCall': true,
+          'data': {
+            'type': 'video_call',
+            'callId': channelName,
+            'callerId': callerId,
+            'callerName': callerName,
+            'channelName': channelName,
+            'callType': 'video',
+            'senderPhotoUrl': callerPhotoURL,
+          },
+        });
+
+        print('✅ Push notification enviada: ${result.data}');
+
+        if (result.data['sentViaVoIP'] == true) {
+          print('✅ Enviado via VoIP push - CallKit se mostrará automáticamente');
+        } else {
+          print('✅ Enviado via FCM push');
+        }
+      } catch (pushError) {
+        print('⚠️ Error enviando push notification: $pushError');
+        // No lanzar error - la llamada ya se creó en Firestore
+      }
+
       return channelName;
     } catch (e) {
       print('❌ Error iniciando videollamada: $e');
@@ -409,6 +433,10 @@ class VideoCallService {
       final docRef = _firestore.collection('video_calls').doc();
       final channelName = docRef.id;
 
+      // Obtener photoURL del caller
+      final callerDoc = await _firestore.collection('users').doc(callerId).get();
+      final callerPhotoURL = callerDoc.data()?['photoURL'] ?? '';
+
       // Crear documento con TODOS los campos de una vez (incluyendo channelName)
       await docRef.set({
         'callerId': callerId,
@@ -422,26 +450,45 @@ class VideoCallService {
         'callType': 'audio', // Tipo de llamada: audio
       });
 
-      // Crear notificación para disparar push notification al receptor
-      await _firestore.collection('notifications').add({
-        'userId': receiverId,
-        'type': 'audio_call',
-        'title': 'Llamada entrante',
-        'body': '$callerName te está llamando',
-        'priority': 'high',
-        'data': {
-          'callId': channelName, // Usar el ID del documento
-          'callerId': callerId,
-          'callerName': callerName,
-          'channelName': channelName,
-          'callType': 'audio', // Importante: tipo de llamada
-        },
-        'createdAt': FieldValue.serverTimestamp(),
-        'read': false,
-      });
+      print('✅ Llamada de audio creada: $channelName');
 
-      print('✅ Llamada de audio creada: $channelName, Canal: $channelName');
-      print('✅ Notificación de llamada enviada a $receiverName');
+      // ✅ Enviar VoIP push directamente usando Cloud Function
+      try {
+        final callable = FirebaseFunctions.instance.httpsCallable(
+          'sendInstantPushNotification',
+          options: HttpsCallableOptions(
+            timeout: const Duration(seconds: 10),
+          ),
+        );
+
+        final result = await callable.call({
+          'receiverId': receiverId,
+          'title': 'Llamada entrante',
+          'body': '$callerName te está llamando',
+          'isCall': true,
+          'data': {
+            'type': 'audio_call',
+            'callId': channelName,
+            'callerId': callerId,
+            'callerName': callerName,
+            'channelName': channelName,
+            'callType': 'audio',
+            'senderPhotoUrl': callerPhotoURL,
+          },
+        });
+
+        print('✅ Push notification enviada: ${result.data}');
+
+        if (result.data['sentViaVoIP'] == true) {
+          print('✅ Enviado via VoIP push - CallKit se mostrará automáticamente');
+        } else {
+          print('✅ Enviado via FCM push');
+        }
+      } catch (pushError) {
+        print('⚠️ Error enviando push notification: $pushError');
+        // No lanzar error - la llamada ya se creó en Firestore
+      }
+
       return channelName;
     } catch (e) {
       print('❌ Error iniciando llamada de audio: $e');
@@ -519,33 +566,62 @@ class VideoCallService {
         'callType': 'video',
       });
 
-      // Enviar notificaciones a todos los participantes (excepto caller)
+      print('✅ Videollamada grupal creada: $channelName');
+
+      // Obtener photoURL del caller
+      final callerDoc = await _firestore.collection('users').doc(callerId).get();
+      final callerPhotoURL = callerDoc.data()?['photoURL'] ?? '';
+
+      // ✅ Enviar VoIP push a todos los participantes usando Cloud Function
+      int successCount = 0;
       for (String participantId in participantIds) {
-        await _firestore.collection('notifications').add({
-          'userId': participantId,
-          'type': isEmergency ? 'emergency_call' : 'group_video_call',
-          'title': isEmergency ? '🚨 Llamada de emergencia' : 'Videollamada grupal',
-          'body': isEmergency
+        try {
+          final callable = FirebaseFunctions.instance.httpsCallable(
+            'sendInstantPushNotification',
+            options: HttpsCallableOptions(
+              timeout: const Duration(seconds: 10),
+            ),
+          );
+
+          final title = isEmergency ? '🚨 Llamada de emergencia' : 'Videollamada grupal';
+          final body = isEmergency
               ? '$callerName necesita ayuda urgente'
-              : '$callerName te invitó a una videollamada grupal',
-          'priority': 'high',
-          'data': {
-            'callId': channelName,
-            'callerId': callerId,
-            'callerName': callerName,
-            'channelName': channelName,
-            'callType': 'video',
-            'isGroupCall': 'true',
-            'isEmergency': isEmergency.toString(),
-            'groupId': groupId ?? '',
-          },
-          'createdAt': FieldValue.serverTimestamp(),
-          'read': false,
-        });
+              : '$callerName te invitó a una videollamada grupal';
+
+          final result = await callable.call({
+            'receiverId': participantId,
+            'title': title,
+            'body': body,
+            'isCall': true,
+            'data': {
+              'type': isEmergency ? 'emergency_call' : 'group_video_call',
+              'callId': channelName,
+              'callerId': callerId,
+              'callerName': callerName,
+              'channelName': channelName,
+              'callType': 'video',
+              'isGroupCall': 'true',
+              'isEmergency': isEmergency.toString(),
+              'groupId': groupId ?? '',
+              'senderPhotoUrl': callerPhotoURL,
+            },
+          });
+
+          if (result.data['success'] == true) {
+            successCount++;
+            if (result.data['sentViaVoIP'] == true) {
+              print('✅ VoIP push enviado a participante $participantId');
+            } else {
+              print('✅ FCM push enviado a participante $participantId');
+            }
+          }
+        } catch (pushError) {
+          print('⚠️ Error enviando push a participante $participantId: $pushError');
+          // Continuar con los demás participantes
+        }
       }
 
-      print('✅ Videollamada grupal creada: $channelName');
-      print('✅ Notificaciones enviadas a ${participantIds.length} participantes');
+      print('✅ Notificaciones enviadas a $successCount/${participantIds.length} participantes');
       return channelName;
     } catch (e) {
       print('❌ Error iniciando videollamada grupal: $e');
@@ -610,33 +686,62 @@ class VideoCallService {
         'callType': 'audio',
       });
 
-      // Enviar notificaciones a todos los participantes (excepto caller)
+      print('✅ Llamada de audio grupal creada: $channelName');
+
+      // Obtener photoURL del caller
+      final callerDoc = await _firestore.collection('users').doc(callerId).get();
+      final callerPhotoURL = callerDoc.data()?['photoURL'] ?? '';
+
+      // ✅ Enviar VoIP push a todos los participantes usando Cloud Function
+      int successCount = 0;
       for (String participantId in participantIds) {
-        await _firestore.collection('notifications').add({
-          'userId': participantId,
-          'type': isEmergency ? 'emergency_call' : 'group_audio_call',
-          'title': isEmergency ? '🚨 Llamada de emergencia' : 'Llamada grupal',
-          'body': isEmergency
+        try {
+          final callable = FirebaseFunctions.instance.httpsCallable(
+            'sendInstantPushNotification',
+            options: HttpsCallableOptions(
+              timeout: const Duration(seconds: 10),
+            ),
+          );
+
+          final title = isEmergency ? '🚨 Llamada de emergencia' : 'Llamada grupal';
+          final body = isEmergency
               ? '$callerName necesita ayuda urgente'
-              : '$callerName te invitó a una llamada grupal',
-          'priority': 'high',
-          'data': {
-            'callId': channelName,
-            'callerId': callerId,
-            'callerName': callerName,
-            'channelName': channelName,
-            'callType': 'audio',
-            'isGroupCall': 'true',
-            'isEmergency': isEmergency.toString(),
-            'groupId': groupId ?? '',
-          },
-          'createdAt': FieldValue.serverTimestamp(),
-          'read': false,
-        });
+              : '$callerName te invitó a una llamada grupal';
+
+          final result = await callable.call({
+            'receiverId': participantId,
+            'title': title,
+            'body': body,
+            'isCall': true,
+            'data': {
+              'type': isEmergency ? 'emergency_call' : 'group_audio_call',
+              'callId': channelName,
+              'callerId': callerId,
+              'callerName': callerName,
+              'channelName': channelName,
+              'callType': 'audio',
+              'isGroupCall': 'true',
+              'isEmergency': isEmergency.toString(),
+              'groupId': groupId ?? '',
+              'senderPhotoUrl': callerPhotoURL,
+            },
+          });
+
+          if (result.data['success'] == true) {
+            successCount++;
+            if (result.data['sentViaVoIP'] == true) {
+              print('✅ VoIP push enviado a participante $participantId');
+            } else {
+              print('✅ FCM push enviado a participante $participantId');
+            }
+          }
+        } catch (pushError) {
+          print('⚠️ Error enviando push a participante $participantId: $pushError');
+          // Continuar con los demás participantes
+        }
       }
 
-      print('✅ Llamada de audio grupal creada: $channelName');
-      print('✅ Notificaciones enviadas a ${participantIds.length} participantes');
+      print('✅ Notificaciones enviadas a $successCount/${participantIds.length} participantes');
       return channelName;
     } catch (e) {
       print('❌ Error iniciando llamada de audio grupal: $e');
@@ -813,30 +918,52 @@ class VideoCallService {
         });
       }
 
-      // 5. Enviar notificación push al usuario invitado
+      // 5. Enviar VoIP push notification al usuario invitado
       final currentUserDoc = await _firestore
           .collection('users')
           .doc(currentUser.uid)
           .get();
       final inviterName = currentUserDoc.data()?['name'] ?? 'Usuario';
+      final inviterPhotoURL = currentUserDoc.data()?['photoURL'] ?? '';
 
-      await _firestore.collection('notifications').add({
-        'userId': invitedUserId,
-        'type': callType == 'video' ? 'group_video_call' : 'group_audio_call',
-        'title': callType == 'video' ? 'Videollamada grupal' : 'Llamada grupal',
-        'body': '$inviterName te invitó a unirte a la llamada',
-        'priority': 'high',
-        'data': {
-          'callId': callId,
-          'callerId': currentUser.uid,
-          'callerName': inviterName,
-          'channelName': channelName,
-          'callType': callType,
-          'isGroupCall': 'true',
-        },
-        'createdAt': FieldValue.serverTimestamp(),
-        'read': false,
-      });
+      // ✅ Enviar VoIP push usando Cloud Function
+      try {
+        final callable = FirebaseFunctions.instance.httpsCallable(
+          'sendInstantPushNotification',
+          options: HttpsCallableOptions(
+            timeout: const Duration(seconds: 10),
+          ),
+        );
+
+        final title = callType == 'video' ? 'Videollamada grupal' : 'Llamada grupal';
+        final body = '$inviterName te invitó a unirte a la llamada';
+
+        final result = await callable.call({
+          'receiverId': invitedUserId,
+          'title': title,
+          'body': body,
+          'isCall': true,
+          'data': {
+            'type': callType == 'video' ? 'group_video_call' : 'group_audio_call',
+            'callId': callId,
+            'callerId': currentUser.uid,
+            'callerName': inviterName,
+            'channelName': channelName,
+            'callType': callType,
+            'isGroupCall': 'true',
+            'senderPhotoUrl': inviterPhotoURL,
+          },
+        });
+
+        if (result.data['sentViaVoIP'] == true) {
+          print('✅ VoIP push enviado al usuario invitado');
+        } else {
+          print('✅ FCM push enviado al usuario invitado');
+        }
+      } catch (pushError) {
+        print('⚠️ Error enviando push al usuario invitado: $pushError');
+        // No lanzar error - la invitación ya se agregó a Firestore
+      }
 
       print('✅ Usuario invitado exitosamente a la llamada');
 
@@ -941,12 +1068,72 @@ class VideoCallService {
   }
 
   /// Escuchar llamadas entrantes para un usuario
+  /// Detecta tanto llamadas 1-a-1 (receiverId) como grupales (participantIds)
   Stream<QuerySnapshot> watchIncomingCalls(String userId) {
-    return _firestore
+    print('🔍 [watchIncomingCalls] Iniciando listener para userId: $userId');
+
+    // Crear un StreamController para combinar ambos streams
+    final controller = StreamController<QuerySnapshot>.broadcast();
+
+    // Stream para llamadas directas (1-a-1)
+    print('🔍 [watchIncomingCalls] Configurando stream de llamadas directas...');
+    final directCallsStream = _firestore
         .collection('video_calls')
         .where('receiverId', isEqualTo: userId)
         .where('status', isEqualTo: 'ringing')
         .snapshots();
+
+    // Stream para llamadas grupales (emergencias, grupos)
+    print('🔍 [watchIncomingCalls] Configurando stream de llamadas grupales...');
+    final groupCallsStream = _firestore
+        .collection('video_calls')
+        .where('participantIds', arrayContains: userId)
+        .where('status', isEqualTo: 'ringing')
+        .snapshots();
+
+    // Escuchar ambos streams y emitir cuando cualquiera cambie
+    print('🔍 [watchIncomingCalls] Iniciando listen() para directCallsStream...');
+    directCallsStream.listen(
+      (snapshot) {
+        print('📞 [watchIncomingCalls] Llamadas directas: ${snapshot.docs.length}');
+        if (snapshot.docs.isNotEmpty) {
+          print('📞 [watchIncomingCalls] Documentos directos:');
+          for (var doc in snapshot.docs) {
+            print('   - ${doc.id}: ${doc.data()}');
+          }
+        }
+        controller.add(snapshot);
+      },
+      onError: (error) {
+        print('❌ [watchIncomingCalls] Error en directCallsStream: $error');
+        controller.addError(error);
+      },
+    );
+
+    print('🔍 [watchIncomingCalls] Iniciando listen() para groupCallsStream...');
+    groupCallsStream.listen(
+      (snapshot) {
+        print('📞 [watchIncomingCalls] Llamadas grupales: ${snapshot.docs.length}');
+        if (snapshot.docs.isNotEmpty) {
+          print('📞 [watchIncomingCalls] Documentos grupales:');
+          for (var doc in snapshot.docs) {
+            final data = doc.data();
+            print('   - ${doc.id}');
+            print('     status: ${data['status']}');
+            print('     participantIds: ${data['participantIds']}');
+            print('     callerName: ${data['callerName']}');
+          }
+        }
+        controller.add(snapshot);
+      },
+      onError: (error) {
+        print('❌ [watchIncomingCalls] Error en groupCallsStream: $error');
+        controller.addError(error);
+      },
+    );
+
+    print('🔍 [watchIncomingCalls] Listeners configurados, retornando controller.stream');
+    return controller.stream;
   }
 
   /// Escuchar el estado de una llamada específica

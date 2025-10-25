@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
 import '../../../../services/typing_indicator_service.dart';
 import '../../../../services/chat_archive_service.dart';
@@ -18,7 +19,6 @@ class ChatListItem extends StatefulWidget {
   final String lastMessage;
   final String time;
   final int unreadCount;
-  final bool isOnline;
   final String? photoURL;
   final bool isEmpty;
   final bool isBlocked;
@@ -36,7 +36,6 @@ class ChatListItem extends StatefulWidget {
     required this.lastMessage,
     required this.time,
     required this.unreadCount,
-    required this.isOnline,
     this.photoURL,
     this.isEmpty = false,
     this.isBlocked = false,
@@ -294,22 +293,41 @@ class _ChatListItemState extends State<ChatListItem> {
                               child: Icon(Icons.block, color: Colors.white, size: 10),
                             ),
                           )
-                        else if (widget.isOnline)
-                          Positioned(
-                            right: 0,
-                            bottom: 0,
-                            child: Container(
-                              width: 14,
-                              height: 14,
-                              decoration: BoxDecoration(
-                                color: Colors.green,
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: colorScheme.surface,
-                                  width: 2,
+                        else
+                          // StreamBuilder para escuchar el estado online en tiempo real
+                          StreamBuilder<DocumentSnapshot>(
+                            stream: FirebaseFirestore.instance
+                                .collection('users')
+                                .doc(widget.userId)
+                                .snapshots(),
+                            builder: (context, userSnapshot) {
+                              bool isOnline = false;
+                              if (userSnapshot.hasData && userSnapshot.data!.data() != null) {
+                                final userData = userSnapshot.data!.data() as Map<String, dynamic>;
+                                isOnline = userData['isOnline'] ?? false;
+                              }
+
+                              if (!isOnline) {
+                                return SizedBox.shrink();
+                              }
+
+                              return Positioned(
+                                right: 0,
+                                bottom: 0,
+                                child: Container(
+                                  width: 14,
+                                  height: 14,
+                                  decoration: BoxDecoration(
+                                    color: Colors.green,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: colorScheme.surface,
+                                      width: 2,
+                                    ),
+                                  ),
                                 ),
-                              ),
-                            ),
+                              );
+                            },
                           ),
                       ],
                     ),

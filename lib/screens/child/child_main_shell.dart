@@ -63,11 +63,9 @@ class _ChildMainShellState extends State<ChildMainShell> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   // GlobalKeys para mantener el estado de navegación de cada tab
-  final List<GlobalKey<NavigatorState>> _navigatorKeys = [
-    GlobalKey<NavigatorState>(), // Chats
-    GlobalKey<NavigatorState>(), // Contactos
-    GlobalKey<NavigatorState>(), // Perfil
-  ];
+  final GlobalKey<NavigatorState> _chatsNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'ChildChats');
+  final GlobalKey<NavigatorState> _contactsNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'ChildContacts');
+  final GlobalKey<NavigatorState> _profileNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'ChildProfile');
 
   @override
   void initState() {
@@ -102,20 +100,23 @@ class _ChildMainShellState extends State<ChildMainShell> {
     try {
       final groupId = data['groupId'] as String?;
       final chatId = data['chatId'] as String?;
+      final isGroup = data['isGroup'] == true || data['isGroup'] == 'true';
 
       // Primero cambiar al tab de chats
       setState(() => _selectedIndex = 0);
 
       // Determinar si es un chat grupal o 1-on-1
-      if (groupId != null) {
+      // Si isGroup es true, el chatId es en realidad el groupId
+      if (groupId != null || (isGroup && chatId != null)) {
         // Notificación de mensaje grupal
+        final effectiveGroupId = groupId ?? chatId!;
         final groupName = data['groupName'] as String? ?? 'Grupo';
-        print('✅ [ChildMainShell] Navigating to group chat: $groupName (groupId: $groupId)');
+        print('✅ [ChildMainShell] Navigating to group chat: $groupName (groupId: $effectiveGroupId)');
 
         await Navigator.of(context).push(
           MaterialPageRoute(
             builder: (context) => GroupChatScreen(
-              groupId: groupId,
+              groupId: effectiveGroupId,
               groupName: groupName,
             ),
           ),
@@ -166,11 +167,10 @@ class _ChildMainShellState extends State<ChildMainShell> {
     }
   }
 
-  /// Construye un Navigator para cada tab, permitiendo mantener
-  /// el estado de navegación independiente en cada uno
-  Widget _buildNavigator(int index, Widget child) {
+  /// Construye un Navigator para un tab específico
+  Widget _buildNavigator(GlobalKey<NavigatorState> key, Widget child) {
     return Navigator(
-      key: _navigatorKeys[index],
+      key: key,
       onGenerateRoute: (RouteSettings settings) {
         return MaterialPageRoute(
           builder: (BuildContext context) => child,
@@ -182,14 +182,33 @@ class _ChildMainShellState extends State<ChildMainShell> {
 
   /// Callback cuando cambia la navegación en cualquier tab
   void _onNavigationChanged() {
-    setState(() {
-      // Rebuild para actualizar visibilidad del bottom nav bar
+    // Usar addPostFrameCallback para evitar llamar setState durante build
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        setState(() {
+          // Rebuild para actualizar visibilidad del bottom nav bar
+        });
+      }
     });
   }
 
   /// Verifica si el tab actual tiene rutas push (para ocultar bottom nav bar)
   bool get _hasNestedRoute {
-    final navigator = _navigatorKeys[_selectedIndex].currentState;
+    GlobalKey<NavigatorState> currentKey;
+    switch (_selectedIndex) {
+      case 0:
+        currentKey = _chatsNavigatorKey;
+        break;
+      case 1:
+        currentKey = _contactsNavigatorKey;
+        break;
+      case 2:
+        currentKey = _profileNavigatorKey;
+        break;
+      default:
+        return false;
+    }
+    final navigator = currentKey.currentState;
     if (navigator == null) return false;
     // Si el navigator puede hacer pop, significa que hay rutas anidadas
     return navigator.canPop();
@@ -203,7 +222,7 @@ class _ChildMainShellState extends State<ChildMainShell> {
     if (currentUserId == null) {
       return Scaffold(
         body: Center(
-          child: Text('Error: Usuario no autenticado'),
+          child: CircularProgressIndicator(),
         ),
       );
     }
@@ -213,12 +232,20 @@ class _ChildMainShellState extends State<ChildMainShell> {
     final showLabels = screenWidth >= 380;
 
     return Scaffold(
-      body: IndexedStack(
-        index: _selectedIndex,
+      body: Stack(
         children: [
-          _buildNavigator(0, ChildChatsScreen(childId: currentUserId, controller: _controller)),
-          _buildNavigator(1, ChildContactsScreen(childId: currentUserId, controller: _controller)),
-          _buildNavigator(2, ChildProfileScreen()),
+          Offstage(
+            offstage: _selectedIndex != 0,
+            child: _buildNavigator(_chatsNavigatorKey, ChildChatsScreen(childId: currentUserId, controller: _controller)),
+          ),
+          Offstage(
+            offstage: _selectedIndex != 1,
+            child: _buildNavigator(_contactsNavigatorKey, ChildContactsScreen(childId: currentUserId, controller: _controller)),
+          ),
+          Offstage(
+            offstage: _selectedIndex != 2,
+            child: _buildNavigator(_profileNavigatorKey, ChildProfileScreen()),
+          ),
         ],
       ),
       // Ocultar bottom nav bar cuando hay rutas anidadas (ej: chat abierto)

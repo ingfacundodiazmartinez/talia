@@ -1,7 +1,12 @@
 import 'dart:async';
+import 'dart:io' show Platform;
+import 'package:flutter/services.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:uuid/uuid.dart';
+
+// Method channel para comunicación con AppDelegate nativo (iOS)
+const MethodChannel _nativeCallKitChannel = MethodChannel('com.talia.chat/callkit');
 
 /// Servicio para manejar llamadas entrantes con CallKit (iOS) y Full-Screen Intent (Android)
 /// Muestra llamadas en pantalla completa incluso con la app cerrada
@@ -97,8 +102,63 @@ class CallKitService {
     Map<String, dynamic>? extraData,
   }) async {
     try {
+      // SOLUCIÓN AL CRASH: En iOS, usar el CXProvider nativo de AppDelegate
+      // No usar flutter_callkit_incoming porque crea conflictos con CXProvider
+      if (Platform.isIOS) {
+        print('📱 [iOS] Usando implementación nativa de CallKit vía Method Channel');
+
+        try {
+          // Llamar al AppDelegate nativo para mostrar CallKit UI
+          await _nativeCallKitChannel.invokeMethod('showIncomingCall', {
+            'callId': callId,
+            'callerId': callerId,
+            'callerName': callerName,
+            'callerPhotoURL': callerPhotoUrl ?? '',
+            'callType': callType,
+            'isEmergency': isEmergency,
+            'channelName': extraData?['channelName'] ?? callId,
+          });
+          print('✅ [iOS] CallKit UI mostrado desde AppDelegate nativo');
+        } catch (e) {
+          print('❌ [iOS] Error llamando a método nativo showIncomingCall: $e');
+          // Si falla, intentar con VoIP push como fallback
+          print('⚠️ [iOS] Esperando VoIP push notification para mostrar llamada');
+        }
+        return;
+      }
+
+      // ANDROID: Continuar con flutter_callkit_incoming
+      print('📱 [Android] Usando flutter_callkit_incoming para mostrar llamada');
+
+      // Verificar llamadas activas primero
+      List<dynamic> activeCalls = [];
+      try {
+        activeCalls = await FlutterCallkitIncoming.activeCalls();
+        print('📱 Llamadas activas antes de mostrar nueva: ${activeCalls.length}');
+      } catch (e) {
+        print('⚠️ Error obteniendo llamadas activas: $e');
+        // Asumir que no hay llamadas activas si falla
+      }
+
+      // Solo finalizar si hay llamadas activas
+      if (activeCalls.isNotEmpty) {
+        try {
+          print('🧹 Finalizando ${activeCalls.length} llamada(s) anterior(es)...');
+          await FlutterCallkitIncoming.endAllCalls();
+          // Pequeño delay para que el sistema procese el cierre
+          await Future.delayed(const Duration(milliseconds: 500));
+          print('✅ Llamadas anteriores finalizadas');
+        } catch (e) {
+          print('⚠️ Error finalizando llamadas anteriores: $e');
+          // Continuar de todas formas
+        }
+      }
+
+      print('📞 Preparando para mostrar llamada en Android...');
+
       // Generar UUID único si no se proporciona
       final uuid = callId.isNotEmpty ? callId : const Uuid().v4();
+      print('🔑 UUID de llamada: $uuid');
 
       final params = CallKitParams(
         id: uuid,
@@ -127,17 +187,18 @@ class CallKitService {
           'apiKey': 'talia_call_key',
           'platform': 'flutter',
         },
-        android: const AndroidParams(
+        android: AndroidParams(
           isCustomNotification: true,
           isShowLogo: true,
-          ringtonePath: 'system_ringtone_default',
+          ringtonePath: 'default',  // Usar tono predeterminado del sistema
           backgroundColor: '#9D7FE8',
           backgroundUrl: '',
           actionColor: '#9D7FE8',
           incomingCallNotificationChannelName: 'Llamadas entrantes',
           missedCallNotificationChannelName: 'Llamadas perdidas',
+          isShowCallID: false,  // Evitar conflictos de UI
         ),
-        ios: const IOSParams(
+        ios: IOSParams(
           iconName: 'AppIcon',
           handleType: 'generic',
           supportsVideo: true,
@@ -151,15 +212,19 @@ class CallKitService {
           supportsHolding: false,
           supportsGrouping: false,
           supportsUngrouping: false,
-          ringtonePath: 'system_ringtone_default',
+          ringtonePath: '',  // Dejar vacío para evitar banner de audio UNKNOWN_DURATION
         ),
       );
 
+      print('🚀 Llamando a FlutterCallkitIncoming.showCallkitIncoming()...');
       await FlutterCallkitIncoming.showCallkitIncoming(params);
-      print('✅ CallKit mostrado: $uuid');
-    } catch (e) {
+      print('✅ CallKit mostrado exitosamente: $uuid');
+    } catch (e, stackTrace) {
       print('❌ Error mostrando CallKit: $e');
-      rethrow;
+      print('📍 Stack trace: $stackTrace');
+      print('📦 Call data: callId=$callId, callerName=$callerName, callerId=$callerId');
+      // NO hacer rethrow para evitar crash de la app
+      // En su lugar, loggear el error y continuar
     }
   }
 

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter_slidable/flutter_slidable.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../../../controllers/child_home_controller.dart';
 import '../../../controllers/child_chats_controller.dart';
 import '../../../widgets/stories_section.dart';
@@ -7,8 +9,16 @@ import '../../../widgets/emergency_button.dart';
 import '../../../widgets/create_group_widget.dart';
 import '../../../services/chat_service.dart';
 import '../../../services/block_service.dart';
+import '../../../services/chat_archive_service.dart';
+import '../../../services/chat_mute_service.dart';
+import '../../../services/chat_clear_service.dart';
+import '../../../services/message_cache_service.dart';
+import '../../../services/typing_indicator_service.dart';
+import '../../../services/message_status_helper.dart';
 import '../../../screens/group_chat_screen.dart';
+import '../../../models/chat_message.dart';
 import '../../chat_detail_screen.dart';
+import '../../parent/chats/widgets/group_chat_list_item.dart';
 import 'child_archived_chats_screen.dart';
 
 /// Pantalla completa de chats para niños
@@ -37,10 +47,11 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
   late ChildChatsController _chatsController;
   final ChatService _chatService = ChatService();
   final BlockService _blockService = BlockService();
-
-  // Cache local para evitar rebuilds y mostrar datos inmediatamente
-  List<Widget>? _cachedChatList;
-  String? _lastSnapshotHash;
+  final ChatArchiveService _archiveService = ChatArchiveService();
+  final ChatMuteService _muteService = ChatMuteService();
+  final ChatClearService _clearService = ChatClearService();
+  final MessageCacheService _cacheService = MessageCacheService();
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   @override
   bool get wantKeepAlive => true;
@@ -49,23 +60,11 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
   void initState() {
     super.initState();
     _chatsController = ChildChatsController(childId: widget.childId);
-    _chatsController.addListener(_onControllerChanged);
     _chatsController.initialize();
-  }
-
-  void _onControllerChanged() {
-    if (mounted) {
-      setState(() {
-        // Limpiar cache cuando hay cambios
-        _cachedChatList = null;
-        _lastSnapshotHash = null;
-      });
-    }
   }
 
   @override
   void dispose() {
-    _chatsController.removeListener(_onControllerChanged);
     _chatsController.dispose();
     super.dispose();
   }
@@ -212,78 +211,338 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
   }
 
   Widget _buildChatList(ColorScheme colorScheme) {
-    // Si no está inicializado, mostrar loading
-    if (!_chatsController.isInitialized) {
-      return Center(child: CircularProgressIndicator());
-    }
+    return StreamBuilder<QuerySnapshot>(
+      stream: _firestore
+          .collection('chats')
+          .where('participants', arrayContains: widget.childId)
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
+          return Center(child: CircularProgressIndicator());
+        }
 
-    // Si tenemos cache de la lista, mostrarla
-    if (_cachedChatList != null) {
-      return ListView(
-        padding: EdgeInsets.all(16),
-        children: _cachedChatList!,
-      );
-    }
+        if (snapshot.hasError) {
+          return Center(child: Text('Error: ${snapshot.error}'));
+        }
 
-    // Si no tenemos snapshot, mostrar loading
-    if (_chatsController.cachedChatsSnapshot == null) {
-      return Center(child: CircularProgressIndicator());
-    }
+        var chatDocs = snapshot.hasData
+            ? _chatService.filterDeletedChats(snapshot.data!)
+            : <QueryDocumentSnapshot>[];
 
-    if (_chatsController.cachedChatsSnapshot!.docs.isEmpty) {
-      return _buildEmptyState(colorScheme);
-    }
+        // Filtrar chats archivados
+        chatDocs = chatDocs.where((chatDoc) {
+          final chatData = chatDoc.data() as Map<String, dynamic>;
+          final archived = chatData['archived_${widget.childId}'] as bool? ?? false;
+          return !archived;
+        }).toList();
 
-    final filteredChats = _chatService.filterDeletedChats(_chatsController.cachedChatsSnapshot!);
+        // Obtener grupos del niño
+        return StreamBuilder<QuerySnapshot>(
+          stream: _firestore
+              .collection('groups')
+              .where('members', arrayContains: widget.childId)
+              .snapshots(),
+          builder: (context, groupsSnapshot) {
+            final groups = groupsSnapshot.data?.docs ?? [];
 
-    // Crear hash del snapshot para detectar cambios
-    final snapshotHash = _chatsController.cachedChatsSnapshot!.docs.map((d) => d.id).join(',');
+            // Filtrar grupos archivados
+            final activeGroups = groups.where((groupDoc) {
+              final groupData = groupDoc.data() as Map<String, dynamic>;
+              final archived = groupData['archived_${widget.childId}'] as bool? ?? false;
+              return !archived;
+            }).toList();
 
-    // Solo reconstruir si los datos cambiaron
-    final shouldRebuild = _lastSnapshotHash != snapshotHash;
-
-    // Si no necesitamos reconstruir, mostrar loading mientras tanto
-    if (!shouldRebuild && _cachedChatList != null) {
-      return ListView(
-        padding: EdgeInsets.all(16),
-        children: _cachedChatList!,
-      );
-    }
-
-    return FutureBuilder<List<Widget>>(
-      future: _buildCategorizedChatList(filteredChats, colorScheme),
-      builder: (context, chatListSnapshot) {
-        // Si completó, actualizar cache
-        if (chatListSnapshot.connectionState == ConnectionState.done &&
-            chatListSnapshot.hasData) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) {
-              setState(() {
-                _cachedChatList = chatListSnapshot.data;
-                _lastSnapshotHash = snapshotHash;
-              });
+            if (chatDocs.isEmpty && activeGroups.isEmpty) {
+              return _buildEmptyState(colorScheme);
             }
-          });
-        }
 
-        // Si tenemos cache previo, mostrarlo mientras carga
-        if (_cachedChatList != null) {
-          return ListView(
-            padding: EdgeInsets.all(16),
-            children: _cachedChatList!,
+            return ListView(
+              padding: EdgeInsets.all(16),
+              children: [
+                StoriesHeader(),
+                StoriesSection(),
+                SizedBox(height: 16),
+                ..._buildChatItems(chatDocs, activeGroups, colorScheme),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  List<Widget> _buildChatItems(
+    List<QueryDocumentSnapshot> chatDocs,
+    List<QueryDocumentSnapshot> groups,
+    ColorScheme colorScheme,
+  ) {
+    final widgets = <Widget>[];
+
+    // Por ahora, todos los chats se muestran en la sección "Otros Chats"
+    // OPTIMIZACIÓN: No separar por categoría para evitar StreamBuilders innecesarios
+    final otherChats = chatDocs;
+
+    // Build groups section
+    if (groups.isNotEmpty) {
+      widgets.add(_buildGroupsHeader(colorScheme));
+      for (final groupDoc in groups) {
+        widgets.add(_buildGroupItem(groupDoc, colorScheme));
+      }
+      widgets.add(SizedBox(height: 8));
+    }
+
+    // Build other chats section
+    if (otherChats.isNotEmpty) {
+      widgets.add(_buildOtherChatsHeader(colorScheme));
+      for (final chatDoc in otherChats) {
+        widgets.add(_buildSingleChatItem(chatDoc, false, colorScheme));
+      }
+    }
+
+    return widgets;
+  }
+
+  Widget _buildGroupsHeader(ColorScheme colorScheme) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: 12, left: 4, top: 8),
+      child: Text(
+        'Grupos',
+        style: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.bold,
+          color: colorScheme.onSurface,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGroupItem(QueryDocumentSnapshot groupDoc, ColorScheme colorScheme) {
+    final groupId = groupDoc.id;
+    final groupData = groupDoc.data() as Map<String, dynamic>;
+    final groupName = groupData['name'] ?? 'Grupo';
+    final unreadCount = groupData['unreadCount_${widget.childId}'] ?? 0;
+
+    // Obtener el último mensaje para mostrar su estado
+    return StreamBuilder<QuerySnapshot>(
+      stream: _firestore
+          .collection('groups')
+          .doc(groupId)
+          .collection('messages')
+          .orderBy('timestamp', descending: true)
+          .limit(1)
+          .snapshots(),
+      builder: (context, messageSnapshot) {
+        String? lastMessageSenderId;
+        MessageStatus? lastMessageStatus;
+        ModerationStatus? lastMessageModerationStatus;
+
+        if (messageSnapshot.hasData && messageSnapshot.data!.docs.isNotEmpty) {
+          final lastMessageDoc = messageSnapshot.data!.docs.first;
+          final lastMessageData = lastMessageDoc.data() as Map<String, dynamic>;
+
+          final senderId = lastMessageData['senderId'] as String? ?? '';
+          lastMessageSenderId = senderId;
+
+          // Calcular el estado del mensaje
+          lastMessageStatus = MessageStatusHelper.calculateStatus(
+            data: lastMessageData,
+            senderId: senderId,
+            hasServerTimestamp: lastMessageData['timestamp'] != null,
           );
+
+          // Obtener estado de moderación
+          final modStatusString = lastMessageData['moderationStatus'] as String?;
+          if (modStatusString != null) {
+            switch (modStatusString) {
+              case 'approved':
+                lastMessageModerationStatus = ModerationStatus.approved;
+                break;
+              case 'blocked':
+                lastMessageModerationStatus = ModerationStatus.blocked;
+                break;
+              case 'pending':
+                lastMessageModerationStatus = ModerationStatus.pending;
+                break;
+            }
+          }
         }
 
-        // Si está cargando y tenemos datos del snapshot, usarlos
-        if (chatListSnapshot.hasData) {
-          return ListView(
-            padding: EdgeInsets.all(16),
-            children: chatListSnapshot.data!,
-          );
-        }
+        return GroupChatListItem(
+          groupId: groupId,
+          groupName: groupName,
+          memberCount: (groupData['members'] as List?)?.length ?? 0,
+          lastMessage: groupData['lastMessage'] ?? 'Toca para abrir',
+          messageCount: groupData['messageCount'] ?? 0,
+          groupImageUrl: groupData['avatar'],
+          unreadCount: unreadCount,
+          onLeaveGroup: () => _confirmLeaveGroup(groupId, groupName),
+          lastMessageSenderId: lastMessageSenderId,
+          lastMessageStatus: lastMessageStatus,
+          lastMessageModerationStatus: lastMessageModerationStatus,
+        );
+      },
+    );
+  }
 
-        // Fallback: spinner
-        return Center(child: CircularProgressIndicator());
+  Future<void> _confirmLeaveGroup(String groupId, String groupName) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('¿Salir del grupo?'),
+        content: Text(
+          '¿Estás seguro de que quieres salir de "$groupName"?\n\n'
+          'Los demás miembros podrán seguir usando el grupo. Si eres el último miembro, el grupo será eliminado.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: Text('Salir'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await _leaveGroup(groupId, groupName);
+    }
+  }
+
+  Future<void> _leaveGroup(String groupId, String groupName) async {
+    try {
+      final groupRef = _firestore.collection('groups').doc(groupId);
+      final groupDoc = await groupRef.get();
+
+      if (!groupDoc.exists) {
+        throw Exception('El grupo no existe');
+      }
+
+      final groupData = groupDoc.data() as Map<String, dynamic>;
+      final members = List<String>.from(groupData['members'] ?? []);
+
+      // Eliminar al usuario de la lista de miembros
+      members.remove(widget.childId);
+
+      if (members.isEmpty) {
+        // Si no quedan miembros, eliminar el grupo
+        await groupRef.delete();
+      } else {
+        // Actualizar la lista de miembros
+        await groupRef.update({'members': members});
+
+        // Enviar mensaje de sistema que el usuario salió
+        await groupRef.collection('messages').add({
+          'type': 'system',
+          'text': 'Ha salido del grupo',
+          'senderId': widget.childId,
+          'timestamp': FieldValue.serverTimestamp(),
+        });
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Has salido de "$groupName"'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al salir del grupo: $e'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 4),
+          ),
+        );
+      }
+    }
+  }
+
+  Widget _buildSingleChatItem(
+    QueryDocumentSnapshot chatDoc,
+    bool isParent,
+    ColorScheme colorScheme,
+  ) {
+    final chatId = chatDoc.id;
+    final chatData = chatDoc.data() as Map<String, dynamic>;
+    final participants = List<String>.from(chatData['participants'] ?? []);
+    final otherUserId = participants.firstWhere(
+      (id) => id != widget.childId,
+      orElse: () => '',
+    );
+
+    if (otherUserId.isEmpty) return SizedBox.shrink();
+
+    // OPTIMIZACIÓN: Usar un solo StreamBuilder combinado para chat
+    // Los datos del usuario y alias se cargarán solo cuando sea necesario
+    return StreamBuilder<DocumentSnapshot>(
+      stream: _firestore.collection('chats').doc(chatId).snapshots(),
+      initialData: chatDoc,  // CRÍTICO: usar initialData para evitar flicker
+      builder: (context, chatSnapshot) {
+        final currentChatData = chatSnapshot.hasData
+            ? (chatSnapshot.data!.data() as Map<String, dynamic>?) ?? chatData
+            : chatData;
+
+        final unreadCount = currentChatData['unreadCount_${widget.childId}'] ?? 0;
+        final clearedAt = currentChatData['clearedAt_${widget.childId}'] as Timestamp?;
+        final lastMessageTime = currentChatData['lastMessageTime'] as Timestamp?;
+        final isChatCleared = clearedAt != null &&
+            (lastMessageTime == null || clearedAt.compareTo(lastMessageTime) >= 0);
+        final lastMessage = currentChatData['lastMessage'] ?? '';
+        final timeString = isChatCleared ? '' : _chatsController.formatTime(currentChatData['lastMessageTime']);
+
+        // OPTIMIZACIÓN: Cachear información del usuario para evitar consultas repetidas
+        return FutureBuilder<DocumentSnapshot>(
+          future: _firestore.collection('users').doc(otherUserId).get(),
+          builder: (context, userSnapshot) {
+            if (!userSnapshot.hasData) {
+              // Mostrar placeholder mientras carga
+              return _buildChatItem(
+                chatId: chatId,
+                userId: otherUserId,
+                name: '...',
+                lastMessage: lastMessage,
+                time: timeString,
+                unreadCount: unreadCount is int ? unreadCount : 0,
+                isOnline: false,
+                isParent: isParent,
+                isEmpty: isChatCleared,
+                isBlocked: false,
+                colorScheme: colorScheme,
+              );
+            }
+
+            final userData = userSnapshot.data!.data() as Map<String, dynamic>?;
+            if (userData == null) return SizedBox.shrink();
+
+            final realName = userData['name'] ?? 'Usuario';
+            final isOnline = userData['isOnline'] ?? false;
+            final photoURL = userData['photoURL'] as String?;
+
+            // OPTIMIZACIÓN: Solo usar StreamBuilder para cosas que cambian frecuentemente
+            // Alias y bloqueos no cambian tan seguido, usar FutureBuilder
+            return _buildChatItem(
+              chatId: chatId,
+              userId: otherUserId,
+              name: realName,  // Usar nombre real, no alias por ahora para simplificar
+              lastMessage: lastMessage,
+              time: timeString,
+              unreadCount: unreadCount is int ? unreadCount : 0,
+              isOnline: isOnline,
+              photoURL: photoURL,
+              isParent: isParent,
+              isEmpty: isChatCleared,
+              isBlocked: false,  // Simplificar por ahora
+              colorScheme: colorScheme,
+            );
+          },
+        );
       },
     );
   }
@@ -358,278 +617,6 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
     );
   }
 
-  Future<List<Widget>> _buildCategorizedChatList(
-    List<QueryDocumentSnapshot> chatDocs,
-    ColorScheme colorScheme,
-  ) async {
-    final List<Widget> widgets = [];
-    final List<Map<String, dynamic>> parentChats = [];
-    final List<Map<String, dynamic>> otherChats = [];
-
-    // Agregar sección de historias al principio
-    widgets.add(StoriesHeader());
-    widgets.add(StoriesSection());
-    widgets.add(SizedBox(height: 16));
-
-    // Obtener y agregar grupos (con cache)
-    try {
-      final groups = await _chatsController.getGroups();
-
-      if (groups.isNotEmpty) {
-        widgets.add(
-          Padding(
-            padding: EdgeInsets.only(left: 4, bottom: 12),
-            child: Text(
-              'Grupos',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: colorScheme.onSurface,
-              ),
-            ),
-          ),
-        );
-
-        for (final group in groups) {
-          widgets.add(_buildGroupChatItem(
-            groupId: group.groupId,
-            groupName: group.groupName,
-            memberCount: group.memberCount,
-            lastMessage: group.lastMessage,
-            messageCount: group.messageCount,
-            colorScheme: colorScheme,
-          ));
-        }
-
-        widgets.add(SizedBox(height: 16));
-      }
-    } catch (e) {
-      print('Error obteniendo grupos: $e');
-    }
-
-    // Obtener padres vinculados
-    final parentId = await _chatsController.getLinkedParentId();
-
-    // Separar chats de padres y otros
-    for (final chatDoc in chatDocs) {
-      final chatData = chatDoc.data() as Map<String, dynamic>;
-      final participants = List<String>.from(chatData['participants'] ?? []);
-      final otherUserId = participants.firstWhere(
-        (id) => id != widget.childId,
-        orElse: () => '',
-      );
-
-      if (otherUserId.isEmpty) continue;
-
-      try {
-        final userData = await _chatsController.getUserData(otherUserId);
-
-        final chatInfo = {
-          'chatDoc': chatDoc,
-          'chatData': chatData,
-          'otherUserId': otherUserId,
-          'userData': userData,
-        };
-
-        if (otherUserId == parentId || (userData?['isParent'] == true)) {
-          parentChats.add(chatInfo);
-        } else {
-          otherChats.add(chatInfo);
-        }
-      } catch (e) {
-        print('Error obteniendo datos del usuario $otherUserId: $e');
-      }
-    }
-
-    // Agregar chats de padres (o crear placeholder)
-    if (parentId != null) {
-      final existingParentChat = parentChats.any(
-        (chat) => chat['otherUserId'] == parentId,
-      );
-
-      if (!existingParentChat) {
-        try {
-          final parentData = await _chatsController.getUserData(parentId);
-
-          if (parentData != null) {
-            final realName = parentData['name'] ?? 'Padre/Madre';
-
-            widgets.add(_buildParentChatHeader(colorScheme));
-            widgets.add(
-              StreamBuilder<String>(
-                stream: _chatsController.watchDisplayName(parentId, realName),
-                initialData: realName,
-                builder: (context, aliasSnapshot) {
-                  final displayName = aliasSnapshot.data ?? realName;
-
-                  return _buildChatItem(
-                    chatId: _chatsController.getChatId(widget.childId, parentId),
-                    userId: parentId,
-                    name: displayName,
-                    lastMessage: 'Inicia una conversación',
-                    time: '',
-                    unreadCount: 0,
-                    isOnline: parentData['isOnline'] ?? false,
-                    photoURL: parentData['photoURL'],
-                    isParent: true,
-                    isEmpty: true,
-                    colorScheme: colorScheme,
-                  );
-                },
-              ),
-            );
-          }
-        } catch (e) {
-          print('Error obteniendo datos del padre: $e');
-        }
-      }
-    }
-
-    // Agregar chats de padres existentes
-    if (parentChats.isNotEmpty) {
-      widgets.add(_buildParentChatHeader(colorScheme));
-
-      parentChats.sort((a, b) {
-        final aTime = a['chatData']['lastMessageTime'] as Timestamp?;
-        final bTime = b['chatData']['lastMessageTime'] as Timestamp?;
-        if (aTime == null && bTime == null) return 0;
-        if (aTime == null) return 1;
-        if (bTime == null) return -1;
-        return bTime.compareTo(aTime);
-      });
-
-      for (final chat in parentChats) {
-        final chatDoc = chat['chatDoc'] as QueryDocumentSnapshot;
-        final chatData = chat['chatData'] as Map<String, dynamic>;
-        final userData = chat['userData'] as Map<String, dynamic>?;
-        final otherUserId = chat['otherUserId'] as String;
-        final realName = userData?['name'] ?? 'Usuario';
-
-        final unreadCount = chatData['unreadCount_${widget.childId}'] ?? 0;
-        widgets.add(
-          StreamBuilder<String>(
-            stream: _chatsController.watchDisplayName(otherUserId, realName),
-            initialData: realName,
-            builder: (context, aliasSnapshot) {
-              final displayName = aliasSnapshot.data ?? realName;
-
-              // Verificar si el chat fue limpiado y no hay mensajes nuevos
-              final clearedAt = chatData['clearedAt_${widget.childId}'] as Timestamp?;
-              final lastMessageTime = chatData['lastMessageTime'] as Timestamp?;
-              final isChatCleared = clearedAt != null &&
-                  (lastMessageTime == null || clearedAt.compareTo(lastMessageTime) >= 0);
-
-              return _buildChatItem(
-                chatId: chatDoc.id,
-                userId: otherUserId,
-                name: displayName,
-                lastMessage: isChatCleared ? 'Inicia una conversación...' : (chatData['lastMessage'] ?? ''),
-                time: isChatCleared ? '' : _chatsController.formatTime(chatData['lastMessageTime']),
-                unreadCount: unreadCount is int ? unreadCount : 0,
-                isOnline: userData?['isOnline'] ?? false,
-                photoURL: userData?['photoURL'],
-                isParent: true,
-                colorScheme: colorScheme,
-              );
-            },
-          ),
-        );
-      }
-    }
-
-    // Agregar separador si hay chats de padres y otros chats
-    if (widgets.isNotEmpty && otherChats.isNotEmpty) {
-      widgets.add(SizedBox(height: 16));
-      widgets.add(_buildOtherChatsHeader(colorScheme));
-    }
-
-    // Agregar otros chats
-    if (otherChats.isNotEmpty) {
-      if (widgets.isEmpty) {
-        widgets.add(_buildOtherChatsHeader(colorScheme));
-      }
-
-      otherChats.sort((a, b) {
-        final aTime = a['chatData']['lastMessageTime'] as Timestamp?;
-        final bTime = b['chatData']['lastMessageTime'] as Timestamp?;
-        if (aTime == null && bTime == null) return 0;
-        if (aTime == null) return 1;
-        if (bTime == null) return -1;
-        return bTime.compareTo(aTime);
-      });
-
-      for (final chat in otherChats) {
-        final chatDoc = chat['chatDoc'] as QueryDocumentSnapshot;
-        final chatData = chat['chatData'] as Map<String, dynamic>;
-        final userData = chat['userData'] as Map<String, dynamic>?;
-        final otherUserId = chat['otherUserId'] as String;
-        final realName = userData?['name'] ?? 'Usuario';
-
-        final unreadCount = chatData['unreadCount_${widget.childId}'] ?? 0;
-        final chatId = chatDoc.id;
-
-        widgets.add(
-          StreamBuilder<bool>(
-            stream: _chatsController.watchChatBlocked(chatId),
-            builder: (context, blockSnapshot) {
-              bool isRevoked = false;
-
-              // Ignorar errores de permisos
-              if (blockSnapshot.hasError) {
-                // El chat no está bloqueado si hay error
-                isRevoked = false;
-              } else if (blockSnapshot.hasData) {
-                isRevoked = blockSnapshot.data ?? false;
-              }
-
-              return StreamBuilder<bool>(
-                stream: _blockService.isBlockedStream(otherUserId),
-                initialData: false,
-                builder: (context, blockedSnapshot) {
-                  final isBlocked = blockedSnapshot.data ?? false;
-
-                  return StreamBuilder<String>(
-                    stream: _chatsController.watchDisplayName(otherUserId, realName),
-                    initialData: realName,
-                    builder: (context, aliasSnapshot) {
-                      final displayName = aliasSnapshot.data ?? realName;
-
-                      // Verificar si el chat fue limpiado y no hay mensajes nuevos
-                      final clearedAt = chatData['clearedAt_${widget.childId}'] as Timestamp?;
-                      final lastMessageTime = chatData['lastMessageTime'] as Timestamp?;
-                      final isChatCleared = clearedAt != null &&
-                          (lastMessageTime == null || clearedAt.compareTo(lastMessageTime) >= 0);
-
-                      return _buildChatItem(
-                        chatId: chatId,
-                        userId: otherUserId,
-                        name: displayName,
-                        lastMessage: isBlocked
-                            ? '🔒 Contacto bloqueado'
-                            : (isChatCleared
-                                ? 'Inicia una conversación...'
-                                : (chatData['lastMessage'] ?? '')),
-                        time: isChatCleared ? '' : _chatsController.formatTime(chatData['lastMessageTime']),
-                        unreadCount: isBlocked ? 0 : (unreadCount is int ? unreadCount : 0),
-                        isOnline: userData?['isOnline'] ?? false,
-                        photoURL: userData?['photoURL'],
-                        isParent: false,
-                        isRevoked: isRevoked,
-                        isBlocked: isBlocked,
-                        colorScheme: colorScheme,
-                      );
-                    },
-                  );
-                },
-              );
-            },
-          ),
-        );
-      }
-    }
-
-    return widgets;
-  }
 
   Widget _buildParentChatHeader(ColorScheme colorScheme) {
     return Padding(
@@ -775,151 +762,322 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
     bool isBlocked = false,
     required ColorScheme colorScheme,
   }) {
-    return GestureDetector(
-      onTap: isRevoked ? null : () {
-        print('Navegando al chat: $chatId con usuario: $userId');
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (context) => ChatDetailScreen(
-              contactId: userId,
-              contactName: name,
-              chatId: chatId,
+    final currentUserId = FirebaseAuth.instance.currentUser?.uid ?? '';
+
+    return StreamBuilder<bool>(
+      stream: _muteService.watchChatMuted(
+        chatId: chatId,
+        userId: currentUserId,
+      ),
+      initialData: false,
+      builder: (context, muteSnapshot) {
+        final isMuted = muteSnapshot.data ?? false;
+
+        return Slidable(
+          key: Key('chat_$chatId'),
+          closeOnScroll: false,
+          endActionPane: ActionPane(
+            motion: const ScrollMotion(),
+            extentRatio: 0.5,
+            children: [
+              // Botón Archivar
+              CustomSlidableAction(
+                onPressed: (context) async {
+                  final success = await _archiveService.archiveChat(
+                    chatId: chatId,
+                    userId: currentUserId,
+                  );
+
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          success ? 'Chat archivado' : 'Error al archivar chat',
+                        ),
+                        backgroundColor: success ? Colors.green : Colors.red,
+                      ),
+                    );
+                  }
+                },
+                backgroundColor: Color(0xFF4A90E2),
+                foregroundColor: Colors.white,
+                child: Icon(Icons.archive_outlined, size: 32, color: Colors.white),
+              ),
+              // Botón Silenciar/Desilenciar
+              CustomSlidableAction(
+                onPressed: (context) async {
+                  final success = isMuted
+                      ? await _muteService.unmuteChat(chatId: chatId, userId: currentUserId)
+                      : await _muteService.muteChat(chatId: chatId, userId: currentUserId);
+
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          success
+                              ? (isMuted ? 'Chat desilenciado' : 'Chat silenciado')
+                              : 'Error al ${isMuted ? 'desilenciar' : 'silenciar'} chat',
+                        ),
+                        backgroundColor: success ? Colors.green : Colors.red,
+                      ),
+                    );
+                  }
+                },
+                backgroundColor: Color(0xFF7B68EE),
+                foregroundColor: Colors.white,
+                child: Icon(
+                  isMuted ? Icons.notifications_active_outlined : Icons.notifications_off_outlined,
+                  size: 32,
+                  color: Colors.white,
+                ),
+              ),
+              // Botón Limpiar
+              CustomSlidableAction(
+                onPressed: (buttonContext) async {
+                  final confirmed = await showDialog<bool>(
+                    context: context,
+                    builder: (dialogContext) => AlertDialog(
+                      title: Text('¿Limpiar chat?'),
+                      content: Text(
+                        '¿Estás seguro de que quieres eliminar todo el historial de mensajes de este chat?\n\n'
+                        'Esta acción no se puede deshacer.',
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(dialogContext, false),
+                          child: Text('Cancelar'),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.pop(dialogContext, true),
+                          style: TextButton.styleFrom(foregroundColor: Colors.red),
+                          child: Text('Limpiar'),
+                        ),
+                      ],
+                    ),
+                  );
+
+                  if (confirmed == true) {
+                    final success = await _clearService.clearChat(
+                      chatId: chatId,
+                      userId: currentUserId,
+                    );
+
+                    if (success) {
+                      await _cacheService.clearChat(chatId);
+                    }
+
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            success ? 'Chat limpiado' : 'Error al limpiar chat',
+                          ),
+                          backgroundColor: success ? Colors.green : Colors.red,
+                        ),
+                      );
+                    }
+                  }
+                },
+                backgroundColor: Color(0xFFE74C3C),
+                foregroundColor: Colors.white,
+                child: Icon(Icons.delete_sweep_outlined, size: 32, color: Colors.white),
+              ),
+            ],
+          ),
+          child: GestureDetector(
+            onTap: isRevoked ? null : () {
+              print('Navegando al chat: $chatId con usuario: $userId');
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => ChatDetailScreen(
+                    contactId: userId,
+                    contactName: name,
+                    chatId: chatId,
+                  ),
+                ),
+              );
+            },
+            child: Opacity(
+              opacity: (isRevoked || isBlocked) ? 0.5 : 1.0,
+              child: Container(
+                margin: EdgeInsets.only(bottom: 8),
+                padding: EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: (isRevoked || isBlocked)
+                      ? colorScheme.surfaceContainerHighest.withValues(alpha: 0.5)
+                      : (unreadCount > 0 ? colorScheme.primaryContainer.withValues(alpha: 0.3) : Colors.transparent),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Row(
+                  children: [
+                    Stack(
+                      children: [
+                        CircleAvatar(
+                          radius: 25,
+                          backgroundColor: colorScheme.primaryContainer,
+                          backgroundImage: photoURL != null && photoURL.isNotEmpty ? NetworkImage(photoURL) : null,
+                          child: photoURL == null || photoURL.isEmpty
+                              ? Text(
+                                  name.isNotEmpty ? name[0].toUpperCase() : 'U',
+                                  style: TextStyle(color: colorScheme.primary, fontWeight: FontWeight.bold),
+                                )
+                              : null,
+                        ),
+                        if (isBlocked)
+                          Positioned(
+                            right: 0,
+                            bottom: 0,
+                            child: Container(
+                              width: 18,
+                              height: 18,
+                              decoration: BoxDecoration(
+                                color: Colors.red,
+                                shape: BoxShape.circle,
+                                border: Border.all(color: colorScheme.surface, width: 2),
+                              ),
+                              child: Icon(Icons.block, color: Colors.white, size: 10),
+                            ),
+                          )
+                        else if (isOnline)
+                          Positioned(
+                            right: 0,
+                            bottom: 0,
+                            child: Container(
+                              width: 14,
+                              height: 14,
+                              decoration: BoxDecoration(
+                                color: Colors.green,
+                                shape: BoxShape.circle,
+                                border: Border.all(color: colorScheme.surface, width: 2),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  name,
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 15,
+                                    color: colorScheme.onSurface,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              // Indicador de chat silenciado
+                              if (isMuted)
+                                Padding(
+                                  padding: EdgeInsets.only(right: 4),
+                                  child: Icon(
+                                    Icons.notifications_off,
+                                    size: 14,
+                                    color: colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              if (time.isNotEmpty)
+                                Text(
+                                  time,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                            ],
+                          ),
+                          SizedBox(height: 4),
+                          StreamBuilder<bool>(
+                            stream: TypingIndicatorService().watchOtherUserTyping(
+                              chatId,
+                              userId,
+                            ),
+                            builder: (context, typingSnapshot) {
+                              final isTyping = typingSnapshot.data ?? false;
+
+                              if (isTyping && !isBlocked && !isRevoked) {
+                                return Row(
+                                  children: [
+                                    SizedBox(
+                                      width: 12,
+                                      height: 12,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 1.5,
+                                        valueColor: AlwaysStoppedAnimation<Color>(
+                                          colorScheme.primary,
+                                        ),
+                                      ),
+                                    ),
+                                    SizedBox(width: 6),
+                                    Text(
+                                      'Escribiendo...',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: colorScheme.primary,
+                                        fontStyle: FontStyle.italic,
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              }
+
+                              return Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      isBlocked
+                                          ? '🔒 Contacto bloqueado'
+                                          : (isRevoked
+                                              ? '🔒 Contacto no habilitado por tus padres'
+                                              : lastMessage),
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: (isRevoked || isBlocked)
+                                            ? colorScheme.error.withValues(alpha: 0.7)
+                                            : (isEmpty
+                                                ? colorScheme.onSurfaceVariant.withValues(alpha: 0.7)
+                                                : colorScheme.onSurfaceVariant),
+                                        fontStyle: (isEmpty || isRevoked || isBlocked) ? FontStyle.italic : FontStyle.normal,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  if (unreadCount > 0 && !isRevoked && !isBlocked)
+                                    Container(
+                                      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: colorScheme.primary,
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      child: Text(
+                                        unreadCount.toString(),
+                                        style: TextStyle(
+                                          color: colorScheme.onPrimary,
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
         );
       },
-      child: Opacity(
-        opacity: (isRevoked || isBlocked) ? 0.5 : 1.0,
-        child: Container(
-          margin: EdgeInsets.only(bottom: 8),
-          padding: EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: (isRevoked || isBlocked)
-                ? colorScheme.surfaceContainerHighest.withValues(alpha: 0.5)
-                : (unreadCount > 0 ? colorScheme.primaryContainer.withValues(alpha: 0.3) : Colors.transparent),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Row(
-          children: [
-            Stack(
-              children: [
-                CircleAvatar(
-                  radius: 25,
-                  backgroundColor: colorScheme.primaryContainer,
-                  backgroundImage: photoURL != null && photoURL.isNotEmpty ? NetworkImage(photoURL) : null,
-                  child: photoURL == null || photoURL.isEmpty
-                      ? Text(
-                          name.isNotEmpty ? name[0].toUpperCase() : 'U',
-                          style: TextStyle(color: colorScheme.primary, fontWeight: FontWeight.bold),
-                        )
-                      : null,
-                ),
-                if (isBlocked)
-                  Positioned(
-                    right: 0,
-                    bottom: 0,
-                    child: Container(
-                      width: 18,
-                      height: 18,
-                      decoration: BoxDecoration(
-                        color: Colors.red,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: colorScheme.surface, width: 2),
-                      ),
-                      child: Icon(Icons.block, color: Colors.white, size: 10),
-                    ),
-                  )
-                else if (isOnline)
-                  Positioned(
-                    right: 0,
-                    bottom: 0,
-                    child: Container(
-                      width: 14,
-                      height: 14,
-                      decoration: BoxDecoration(
-                        color: Colors.green,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: colorScheme.surface, width: 2),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-            SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          name,
-                          style: TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontSize: 15,
-                            color: colorScheme.onSurface,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      if (time.isNotEmpty)
-                        Text(
-                          time,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                    ],
-                  ),
-                  SizedBox(height: 4),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          isBlocked
-                              ? '🔒 Contacto bloqueado'
-                              : (isRevoked
-                                  ? '🔒 Contacto no habilitado por tus padres'
-                                  : lastMessage),
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: (isRevoked || isBlocked)
-                                ? colorScheme.error.withValues(alpha: 0.7)
-                                : (isEmpty
-                                    ? colorScheme.onSurfaceVariant.withValues(alpha: 0.7)
-                                    : colorScheme.onSurfaceVariant),
-                            fontStyle: (isEmpty || isRevoked || isBlocked) ? FontStyle.italic : FontStyle.normal,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      if (unreadCount > 0 && !isRevoked && !isBlocked)
-                        Container(
-                          padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: colorScheme.primary,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Text(
-                            unreadCount.toString(),
-                            style: TextStyle(
-                              color: colorScheme.onPrimary,
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        ),
-      ),
     );
   }
 

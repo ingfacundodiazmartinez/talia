@@ -396,7 +396,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     );
   }
 
-  void _showReactionPicker(BuildContext messageContext, String messageId) {
+  void _showReactionPicker(BuildContext messageContext, String messageId) async {
+    // Cerrar el teclado si está abierto para evitar conflictos con el overlay
+    FocusScope.of(context).unfocus();
+
+    // Esperar un momento para que el teclado se cierre completamente y las posiciones se estabilicen
+    await Future.delayed(const Duration(milliseconds: 100));
+
     final RenderBox? renderBox =
         messageContext.findRenderObject() as RenderBox?;
     if (renderBox == null) return;
@@ -637,6 +643,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
                   ? '${timestamp.toDate().hour}:${timestamp.toDate().minute.toString().padLeft(2, '0')}'
                   : '';
 
+              // Verificar si necesitamos mostrar separador de fecha
+              final bool showDateSeparator = _shouldShowDateSeparator(index, allMessages);
+
               // Parse moderation status from Firestore
               ModerationStatus? moderationStatus;
               final modStatusString = messageData['moderationStatus'] as String?;
@@ -739,6 +748,17 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: messageBubble,
+                        );
+                      }
+
+                      // Agregar separador de fecha si es necesario
+                      if (showDateSeparator && timestamp != null) {
+                        return Column(
+                          children: [
+                            _buildDateSeparator(timestamp.toDate()),
+                            SizedBox(height: 16),
+                            messageBubble,
+                          ],
                         );
                       }
 
@@ -872,6 +892,80 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
             backspaceColor: colorScheme.primary,
             tabIndicatorAnimDuration: kTabScrollDuration,
             categoryIcons: const CategoryIcons(),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Determina si se debe mostrar un separador de fecha antes de este mensaje
+  bool _shouldShowDateSeparator(int index, List<DocumentSnapshot> messages) {
+    // Si es el último mensaje de la lista (el más antiguo), siempre mostrar fecha
+    if (index == messages.length - 1) {
+      return true;
+    }
+
+    final currentMessageData = messages[index].data() as Map<String, dynamic>;
+    final nextMessageData = messages[index + 1].data() as Map<String, dynamic>;
+
+    final currentTimestamp = currentMessageData['timestamp'] as Timestamp?;
+    final nextTimestamp = nextMessageData['timestamp'] as Timestamp?;
+
+    if (currentTimestamp == null || nextTimestamp == null) {
+      return false;
+    }
+
+    final currentDate = DateTime(
+      currentTimestamp.toDate().year,
+      currentTimestamp.toDate().month,
+      currentTimestamp.toDate().day,
+    );
+
+    final nextDate = DateTime(
+      nextTimestamp.toDate().year,
+      nextTimestamp.toDate().month,
+      nextTimestamp.toDate().day,
+    );
+
+    // Mostrar separador si las fechas son diferentes
+    return currentDate != nextDate;
+  }
+
+  /// Construye el widget del separador de fecha
+  Widget _buildDateSeparator(DateTime date) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final yesterday = today.subtract(Duration(days: 1));
+    final messageDate = DateTime(date.year, date.month, date.day);
+
+    String dateText;
+    if (messageDate == today) {
+      dateText = 'Hoy';
+    } else if (messageDate == yesterday) {
+      dateText = 'Ayer';
+    } else {
+      // Formato: "25 Dic, 2023"
+      const months = [
+        '', 'Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun',
+        'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'
+      ];
+      dateText = '${date.day} ${months[date.month]}, ${date.year}';
+    }
+
+    return Center(
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.7),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Text(
+          dateText,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+            letterSpacing: 0.3,
           ),
         ),
       ),

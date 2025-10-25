@@ -112,7 +112,9 @@ class OnlineStatusService with WidgetsBindingObserver {
 
       case AppLifecycleState.inactive:
         // App está inactiva (transición temporal)
-        // No hacer nada, esperar a ver si va a paused o resumed
+        // Marcar como offline inmediatamente para evitar estado "online" falso
+        // cuando el usuario cierra/mata la app
+        _setOnlineStatus(false);
         break;
 
       case AppLifecycleState.paused:

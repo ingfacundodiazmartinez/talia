@@ -134,18 +134,29 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
     return Scaffold(
       appBar: AppBar(
         title: Text('Vincular Hijo'),
-        backgroundColor: Color(0xFF9D7FE8),
-        foregroundColor: Colors.white,
+        backgroundColor: isDarkMode ? colorScheme.surface : colorScheme.primary,
+        foregroundColor: isDarkMode ? colorScheme.onSurface : colorScheme.onPrimary,
       ),
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [Color(0xFF9D7FE8).withOpacity(0.1), Colors.white],
+            colors: isDarkMode
+                ? [
+                    colorScheme.primary.withValues(alpha: 0.3),
+                    colorScheme.surface,
+                  ]
+                : [
+                    colorScheme.primary.withOpacity(0.1),
+                    colorScheme.surface,
+                  ],
           ),
         ),
         child: Center(
@@ -157,10 +168,14 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
                 Container(
                   padding: EdgeInsets.all(20),
                   decoration: BoxDecoration(
-                    color: Color(0xFF9D7FE8).withOpacity(0.1),
+                    color: colorScheme.primaryContainer,
                     shape: BoxShape.circle,
                   ),
-                  child: Icon(Icons.link, size: 80, color: Color(0xFF9D7FE8)),
+                  child: Icon(
+                    Icons.link,
+                    size: 80,
+                    color: colorScheme.primary,
+                  ),
                 ),
 
                 SizedBox(height: 32),
@@ -170,7 +185,7 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
                   style: TextStyle(
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
-                    color: Color(0xFF2D3142),
+                    color: colorScheme.onSurface,
                   ),
                 ),
 
@@ -179,7 +194,10 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
                 Text(
                   'Comparte este código con tu hijo para vincular su cuenta',
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 16, color: Colors.grey[600]),
+                  style: TextStyle(
+                    fontSize: 16,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
                 ),
 
                 SizedBox(height: 40),
@@ -188,15 +206,25 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
                   Container(
                     padding: EdgeInsets.all(24),
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: isDarkMode
+                          ? colorScheme.surfaceContainerHighest
+                          : colorScheme.surface,
                       borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.1),
-                          blurRadius: 20,
-                          offset: Offset(0, 10),
-                        ),
-                      ],
+                      border: isDarkMode
+                          ? Border.all(
+                              color: colorScheme.outline.withValues(alpha: 0.3),
+                              width: 1,
+                            )
+                          : null,
+                      boxShadow: isDarkMode
+                          ? null
+                          : [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.1),
+                                blurRadius: 20,
+                                offset: Offset(0, 10),
+                              ),
+                            ],
                     ),
                     child: Column(
                       children: [
@@ -207,7 +235,7 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
                             style: TextStyle(
                               fontSize: 48,
                               fontWeight: FontWeight.bold,
-                              color: Color(0xFF9D7FE8),
+                              color: colorScheme.primary,
                               letterSpacing: 8,
                             ),
                           ),
@@ -217,7 +245,7 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
                           _getTimeRemaining(),
                           style: TextStyle(
                             fontSize: 14,
-                            color: Colors.grey[600],
+                            color: colorScheme.onSurfaceVariant,
                           ),
                         ),
                       ],
@@ -234,8 +262,8 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
                         icon: Icon(Icons.copy),
                         label: Text('Copiar'),
                         style: OutlinedButton.styleFrom(
-                          foregroundColor: Color(0xFF9D7FE8),
-                          side: BorderSide(color: Color(0xFF9D7FE8)),
+                          foregroundColor: colorScheme.primary,
+                          side: BorderSide(color: colorScheme.primary),
                           padding: EdgeInsets.symmetric(
                             horizontal: 24,
                             vertical: 12,
@@ -251,8 +279,8 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
                         icon: Icon(Icons.refresh),
                         label: Text('Nuevo'),
                         style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.orange,
-                          side: BorderSide(color: Colors.orange),
+                          foregroundColor: colorScheme.tertiary,
+                          side: BorderSide(color: colorScheme.tertiary),
                           padding: EdgeInsets.symmetric(
                             horizontal: 24,
                             vertical: 12,
@@ -285,7 +313,7 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
                         style: TextStyle(fontSize: 18),
                       ),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Color(0xFF9D7FE8),
+                        backgroundColor: colorScheme.primary,
                         foregroundColor: Colors.white,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(16),
@@ -300,7 +328,7 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
                 Container(
                   padding: EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: Colors.blue.withOpacity(0.1),
+                    color: Colors.blue.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Row(
@@ -312,7 +340,9 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
                           'El código expira en 24 horas y solo puede usarse una vez',
                           style: TextStyle(
                             fontSize: 14,
-                            color: Colors.blue[800],
+                            color: isDarkMode
+                                ? Colors.blue.shade200
+                                : Colors.blue.shade800,
                           ),
                         ),
                       ),

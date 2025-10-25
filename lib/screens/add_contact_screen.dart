@@ -141,13 +141,15 @@ class _AddContactScreenState extends State<AddContactScreen>
         title: Text('Contactos'),
         actions: [
           if (_tabController.index == 0 && _userCode != null)
-            PopupMenuButton<String>(
-              icon: Icon(Icons.more_vert),
-              onSelected: (value) {
-                switch (value) {
-                  case 'copy':
-                    _copyCode();
-                    break;
+            Builder(
+              builder: (BuildContext context) {
+                return PopupMenuButton<String>(
+                  icon: Icon(Icons.more_vert),
+                  onSelected: (value) {
+                    switch (value) {
+                      case 'copy':
+                        _copyCode();
+                        break;
                   case 'share':
                     _shareCode();
                     break;
@@ -189,6 +191,8 @@ class _AddContactScreenState extends State<AddContactScreen>
                   ),
                 ),
               ],
+                );
+              },
             ),
         ],
         bottom: TabBar(

@@ -92,11 +92,15 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     try {
       print('📱 Inicializando cámara para historias...');
 
-      // Intentar obtener las cámaras directamente
-      // availableCameras() internamente solicita permisos en iOS
-      print('📷 Obteniendo cámaras disponibles (esto solicitará permisos si es necesario)...');
+      // Intentar obtener cámaras directamente - iOS pedirá permisos automáticamente si es necesario
+      print('📸 Obteniendo cámaras disponibles (iOS pedirá permisos si es necesario)...');
       try {
         _cameras = await availableCameras();
+
+        if (_cameras == null || _cameras!.isEmpty) {
+          throw Exception('No se encontraron cámaras en el dispositivo');
+        }
+
         print('✅ Cámaras disponibles: ${_cameras!.length}');
 
         setState(() {
@@ -105,51 +109,48 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         });
 
         print('🎭 Modo DeepAR por defecto - cámara lista');
-        return;
       } catch (e) {
         print('❌ Error obteniendo cámaras: $e');
-        // Si falla, verificar el estado del permiso
+
+        // Verificar si fue por permisos denegados
+        var cameraStatus = await Permission.camera.status;
+
+        if (cameraStatus.isPermanentlyDenied) {
+          print('⚠️ Permiso permanentemente denegado');
+          setState(() {
+            _hasInitializationFailed = true;
+            _hasCameraPermissions = false;
+          });
+          _showAppSettingsDialog();
+          return;
+        } else if (cameraStatus.isDenied) {
+          print('❌ Permiso de cámara denegado');
+          setState(() {
+            _hasInitializationFailed = true;
+            _hasCameraPermissions = false;
+          });
+
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Se requiere permiso de cámara para crear historias'),
+                backgroundColor: Colors.red,
+                duration: Duration(seconds: 3),
+              ),
+            );
+
+            Future.delayed(Duration(seconds: 3), () {
+              if (mounted) {
+                Navigator.pop(context);
+              }
+            });
+          }
+          return;
+        }
+
+        // Si no fue por permisos, es otro error
+        throw Exception('No se pudieron obtener las cámaras: $e');
       }
-
-      // Si availableCameras() falló, verificar permisos manualmente
-      print('🔍 Verificando estado de permisos de cámara...');
-      final cameraStatus = await Permission.camera.status;
-      print('📋 Estado de permiso: $cameraStatus');
-
-      if (cameraStatus.isPermanentlyDenied) {
-        print('⚠️ Permiso permanentemente denegado');
-        setState(() {
-          _hasInitializationFailed = true;
-          _hasCameraPermissions = false;
-        });
-        _showAppSettingsDialog();
-        return;
-      }
-
-      // Si llegamos aquí, algo salió mal
-      print('❌ No se pudo acceder a la cámara');
-      setState(() {
-        _hasInitializationFailed = true;
-        _hasCameraPermissions = false;
-      });
-
-      if (mounted) {
-        Navigator.pop(context);
-      }
-
-      if (_cameras == null || _cameras!.isEmpty) {
-        throw Exception('No se encontraron cámaras en el dispositivo');
-      }
-
-      // Si llegamos aquí, tenemos acceso a las cámaras
-      print('✅ Cámaras disponibles: ${_cameras!.length}');
-
-      setState(() {
-        _hasCameraPermissions = true;
-        _hasInitializationFailed = false;
-      });
-
-      print('🎭 Modo DeepAR por defecto - cámara lista');
     } catch (e) {
       print('❌ Error fatal inicializando cámara: $e');
 
@@ -161,7 +162,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error al inicializar cámara: $e'),
+            content: Text('Error al inicializar cámara. Por favor verifica los permisos.'),
             backgroundColor: Colors.red,
             duration: Duration(seconds: 3),
           ),

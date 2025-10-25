@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import '../../../../services/reaction_service.dart';
 
-/// Widget que muestra el diálogo de opciones de un mensaje
+/// Widget que muestra el diálogo de opciones de un mensaje con diseño moderno
 class MessageOptionsDialog {
-  /// Muestra el bottom sheet con opciones del mensaje (reaccionar, eliminar, reportar, reenviar)
+  /// Muestra el diálogo modal con opciones del mensaje
   static void show({
     required BuildContext context,
     required bool isMe,
@@ -15,15 +17,13 @@ class MessageOptionsDialog {
     required String chatId,
     String? messageText,
     VoidCallback? onForward,
+    VoidCallback? onReply,
     VoidCallback? onSelectMessages,
     bool isGroupChat = false,
     VoidCallback? onViewInfo,
+    Function(String)? onReact, // Nueva función para reaccionar directamente
   }) {
-    print('🔍 [MessageOptionsDialog] Mostrando diálogo');
-    print('   isMe: $isMe');
-    print('   isGroupChat: $isGroupChat');
-    print('   onViewInfo != null: ${onViewInfo != null}');
-    print('   Mostrar "Ver información": ${isMe && isGroupChat && onViewInfo != null}');
+    print('🔍 [MessageOptionsDialog] Mostrando diálogo moderno');
 
     // Verificar si puede eliminar el mensaje (propio y < 5 minutos)
     bool canDelete = false;
@@ -34,105 +34,343 @@ class MessageOptionsDialog {
       canDelete = difference.inMinutes < 5;
     }
 
-    showModalBottomSheet(
+    showDialog(
       context: context,
-      builder: (BuildContext bottomSheetContext) {
-        return Container(
-          padding: const EdgeInsets.symmetric(vertical: 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Opción: Reaccionar
-              if (onLongPress != null)
-                ListTile(
-                  leading: const Icon(Icons.add_reaction),
-                  title: const Text('Reaccionar'),
-                  onTap: () {
-                    Navigator.pop(bottomSheetContext);
-                    // Llamar al callback original para mostrar el picker de reacciones
-                    onLongPress(context, messageId);
-                  },
+      barrierColor: Colors.black.withOpacity(0.5),
+      builder: (BuildContext dialogContext) {
+        final colorScheme = Theme.of(context).colorScheme;
+
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: EdgeInsets.symmetric(horizontal: 16),
+          child: Container(
+            constraints: BoxConstraints(maxWidth: 400),
+            decoration: BoxDecoration(
+              color: colorScheme.surface,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Mensaje preview (arriba)
+                if (messageText != null && messageText.isNotEmpty)
+                  Container(
+                    padding: EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: colorScheme.surfaceContainerHighest.withOpacity(0.3),
+                      borderRadius: BorderRadius.only(
+                        topLeft: Radius.circular(20),
+                        topRight: Radius.circular(20),
+                      ),
+                    ),
+                    child: Text(
+                      messageText,
+                      style: TextStyle(
+                        fontSize: 15,
+                        color: colorScheme.onSurface,
+                        height: 1.4,
+                      ),
+                      maxLines: 4,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+
+                // Divisor sutil
+                if (messageText != null && messageText.isNotEmpty)
+                  Divider(height: 1, thickness: 0.5, color: colorScheme.outline.withOpacity(0.2)),
+
+                // Sección de reacciones rápidas
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Reaccionar',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: colorScheme.onSurfaceVariant,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                      SizedBox(height: 12),
+                      // Emojis de reacción
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceAround,
+                        children: [
+                          _buildReactionButton(
+                            context: dialogContext,
+                            emoji: '🔥',
+                            onTap: () {
+                              Navigator.pop(dialogContext);
+                              _reactToMessage(chatId, messageId, '🔥', isGroupChat);
+                            },
+                          ),
+                          _buildReactionButton(
+                            context: dialogContext,
+                            emoji: '🙌',
+                            onTap: () {
+                              Navigator.pop(dialogContext);
+                              _reactToMessage(chatId, messageId, '🙌', isGroupChat);
+                            },
+                          ),
+                          _buildReactionButton(
+                            context: dialogContext,
+                            emoji: '😭',
+                            onTap: () {
+                              Navigator.pop(dialogContext);
+                              _reactToMessage(chatId, messageId, '😭', isGroupChat);
+                            },
+                          ),
+                          _buildReactionButton(
+                            context: dialogContext,
+                            emoji: '🙈',
+                            onTap: () {
+                              Navigator.pop(dialogContext);
+                              _reactToMessage(chatId, messageId, '🙈', isGroupChat);
+                            },
+                          ),
+                          _buildReactionButton(
+                            context: dialogContext,
+                            emoji: '🙏',
+                            onTap: () {
+                              Navigator.pop(dialogContext);
+                              _reactToMessage(chatId, messageId, '🙏', isGroupChat);
+                            },
+                          ),
+                          _buildReactionButton(
+                            context: dialogContext,
+                            emoji: '😤',
+                            onTap: () {
+                              Navigator.pop(dialogContext);
+                              _reactToMessage(chatId, messageId, '😤', isGroupChat);
+                            },
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
-              // Opción: Reenviar
-              if (onForward != null)
-                ListTile(
-                  leading: const Icon(Icons.forward),
-                  title: const Text('Reenviar'),
-                  onTap: () {
-                    Navigator.pop(bottomSheetContext);
-                    onForward();
-                  },
+
+                // Divisor
+                Divider(height: 1, thickness: 0.5, color: colorScheme.outline.withOpacity(0.2)),
+
+                // Opciones de acción
+                Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: Column(
+                    children: [
+                      // Copy
+                      if (messageText != null && messageText.isNotEmpty)
+                        _buildOptionTile(
+                          context: dialogContext,
+                          icon: Icons.copy_rounded,
+                          label: 'Copiar',
+                          onTap: () {
+                            Navigator.pop(dialogContext);
+                            Clipboard.setData(ClipboardData(text: messageText));
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Mensaje copiado'),
+                                duration: Duration(seconds: 2),
+                                behavior: SnackBarBehavior.floating,
+                              ),
+                            );
+                          },
+                        ),
+
+                      // Reply
+                      if (onReply != null)
+                        _buildOptionTile(
+                          context: dialogContext,
+                          icon: Icons.reply_rounded,
+                          label: 'Responder',
+                          onTap: () {
+                            Navigator.pop(dialogContext);
+                            onReply();
+                          },
+                        ),
+
+                      // Forward
+                      if (onForward != null)
+                        _buildOptionTile(
+                          context: dialogContext,
+                          icon: Icons.forward_rounded,
+                          label: 'Reenviar',
+                          onTap: () {
+                            Navigator.pop(dialogContext);
+                            onForward();
+                          },
+                        ),
+
+                      // View Info (solo para mensajes propios en grupos)
+                      if (isMe && isGroupChat && onViewInfo != null)
+                        _buildOptionTile(
+                          context: dialogContext,
+                          icon: Icons.info_outline_rounded,
+                          label: 'Ver información',
+                          onTap: () async {
+                            Navigator.pop(dialogContext);
+                            await Future.delayed(Duration(milliseconds: 300));
+                            onViewInfo();
+                          },
+                        ),
+
+                      // Select Messages
+                      if (onSelectMessages != null)
+                        _buildOptionTile(
+                          context: dialogContext,
+                          icon: Icons.checklist_rounded,
+                          label: 'Seleccionar mensajes',
+                          onTap: () {
+                            Navigator.pop(dialogContext);
+                            onSelectMessages();
+                          },
+                        ),
+
+                      // Delete
+                      if (canDelete)
+                        _buildOptionTile(
+                          context: dialogContext,
+                          icon: Icons.delete_outline_rounded,
+                          label: 'Eliminar',
+                          isDestructive: true,
+                          onTap: () {
+                            Navigator.pop(dialogContext);
+                            _showDeleteConfirmation(
+                              context: context,
+                              messageId: messageId,
+                              timestamp: timestamp,
+                              onDelete: onDelete,
+                            );
+                          },
+                        ),
+
+                      // Report (solo para mensajes del contacto)
+                      if (!isMe)
+                        _buildOptionTile(
+                          context: dialogContext,
+                          icon: Icons.flag_outlined,
+                          label: 'Reportar',
+                          isWarning: true,
+                          onTap: () {
+                            Navigator.pop(dialogContext);
+                            _showReportConfirmation(
+                              context: context,
+                              chatId: chatId,
+                              messageId: messageId,
+                              messageText: messageText,
+                            );
+                          },
+                        ),
+                    ],
+                  ),
                 ),
-              // Opción: Seleccionar mensajes
-              if (onSelectMessages != null)
-                ListTile(
-                  leading: const Icon(Icons.checklist),
-                  title: const Text('Seleccionar mensajes'),
-                  onTap: () {
-                    Navigator.pop(bottomSheetContext);
-                    onSelectMessages();
-                  },
-                ),
-              // Opción: Ver información (solo para mensajes propios en grupos)
-              if (isMe && isGroupChat && onViewInfo != null)
-                ListTile(
-                  leading: const Icon(Icons.info_outline),
-                  title: const Text('Ver información'),
-                  subtitle: const Text('Ver quién leyó el mensaje', style: TextStyle(fontSize: 12)),
-                  onTap: () async {
-                    print('🔍 [MessageOptionsDialog] "Ver información" presionado');
-                    print('   Cerrando bottom sheet...');
-                    Navigator.pop(bottomSheetContext);
-                    print('   Esperando 300ms...');
-                    await Future.delayed(Duration(milliseconds: 300));
-                    print('   Llamando a onViewInfo()...');
-                    onViewInfo();
-                    print('   onViewInfo() completado');
-                  },
-                ),
-              // Opción: Eliminar (solo si es propio y < 5 minutos)
-              if (canDelete)
-                ListTile(
-                  leading: const Icon(Icons.delete, color: Colors.red),
-                  title: const Text('Eliminar mensaje', style: TextStyle(color: Colors.red)),
-                  onTap: () {
-                    Navigator.pop(bottomSheetContext);
-                    _showDeleteConfirmation(
-                      context: context,
-                      messageId: messageId,
-                      timestamp: timestamp,
-                      onDelete: onDelete,
-                    );
-                  },
-                ),
-              // Si no puede eliminar pero es propio, mostrar por qué
-              if (isMe && !canDelete && timestamp != null && onDelete != null)
-                ListTile(
-                  leading: const Icon(Icons.info_outline, color: Colors.grey),
-                  title: const Text('No se puede eliminar', style: TextStyle(color: Colors.grey)),
-                  subtitle: const Text('Han pasado más de 5 minutos', style: TextStyle(fontSize: 12)),
-                ),
-              // Opción: Reportar como ofensivo (solo para mensajes del contacto)
-              if (!isMe)
-                ListTile(
-                  leading: const Icon(Icons.flag, color: Colors.orange),
-                  title: const Text('Reportar como ofensivo', style: TextStyle(color: Colors.orange)),
-                  subtitle: const Text('Ayuda a mejorar la moderación con IA', style: TextStyle(fontSize: 12)),
-                  onTap: () {
-                    Navigator.pop(bottomSheetContext);
-                    _showReportConfirmation(
-                      context: context,
-                      chatId: chatId,
-                      messageId: messageId,
-                      messageText: messageText,
-                    );
-                  },
-                ),
-            ],
+              ],
+            ),
           ),
         );
       },
     );
+  }
+
+  /// Construye un botón de reacción
+  static Widget _buildReactionButton({
+    required BuildContext context,
+    required String emoji,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.5),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Center(
+          child: Text(
+            emoji,
+            style: TextStyle(fontSize: 24),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Construye una opción de acción
+  static Widget _buildOptionTile({
+    required BuildContext context,
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+    bool isDestructive = false,
+    bool isWarning = false,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    Color iconColor;
+    Color textColor;
+
+    if (isDestructive) {
+      iconColor = Colors.red.shade400;
+      textColor = Colors.red.shade400;
+    } else if (isWarning) {
+      iconColor = Colors.orange.shade400;
+      textColor = Colors.orange.shade400;
+    } else {
+      iconColor = colorScheme.onSurface;
+      textColor = colorScheme.onSurface;
+    }
+
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        child: Row(
+          children: [
+            Icon(icon, size: 22, color: iconColor),
+            SizedBox(width: 16),
+            Expanded(
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500,
+                  color: textColor,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Reacciona a un mensaje directamente
+  static Future<void> _reactToMessage(
+    String chatId,
+    String messageId,
+    String emoji,
+    bool isGroupChat,
+  ) async {
+    try {
+      final reactionService = ReactionService();
+      await reactionService.toggleReaction(
+        chatId: chatId,
+        messageId: messageId,
+        reaction: emoji,
+        isGroup: isGroupChat,
+      );
+
+      print('✅ Reacción agregada: $emoji');
+    } catch (e) {
+      print('❌ Error agregando reacción: $e');
+    }
   }
 
   /// Muestra el diálogo de confirmación para eliminar un mensaje
@@ -234,6 +472,17 @@ class MessageOptionsDialog {
       });
 
       print('✅ Mensaje reportado exitosamente: $messageId');
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Mensaje reportado correctamente'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
     } catch (e) {
       print('❌ Error reportando mensaje: $e');
 
@@ -242,6 +491,8 @@ class MessageOptionsDialog {
           SnackBar(
             content: Text('Error al reportar mensaje: $e'),
             backgroundColor: Colors.red,
+            duration: Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
           ),
         );
       }

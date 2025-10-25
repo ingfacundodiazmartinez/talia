@@ -1,6 +1,6 @@
 import 'dart:io';
 import 'package:flutter/services.dart';
-import 'package:flutter_windowmanager/flutter_windowmanager.dart';
+// import 'package:flutter_windowmanager/flutter_windowmanager.dart';  // Temporarily commented for build
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -47,9 +47,9 @@ class ScreenshotProtectionService {
     try {
       if (Platform.isAndroid) {
         // En Android, usar FLAG_SECURE para bloquear screenshots
-        await FlutterWindowManager.addFlags(FlutterWindowManager.FLAG_SECURE);
+        // await FlutterWindowManager.addFlags(FlutterWindowManager.FLAG_SECURE);  // Temporarily disabled
         _isProtectionEnabled = true;
-        print('🔒 Protección de screenshots habilitada (Android)');
+        print('🔒 Protección de screenshots habilitada (Android) - TEMPORARILY DISABLED');
       } else if (Platform.isIOS) {
         // En iOS no hay forma nativa de bloquear screenshots completamente
         // La app puede detectar cuando va a segundo plano y ocultar contenido
@@ -66,9 +66,9 @@ class ScreenshotProtectionService {
     try {
       if (Platform.isAndroid) {
         // Remover FLAG_SECURE para permitir screenshots
-        await FlutterWindowManager.clearFlags(FlutterWindowManager.FLAG_SECURE);
+        // await FlutterWindowManager.clearFlags(FlutterWindowManager.FLAG_SECURE);  // Temporarily disabled
         _isProtectionEnabled = false;
-        print('🔓 Protección de screenshots deshabilitada (Android)');
+        print('🔓 Protección de screenshots deshabilitada (Android) - TEMPORARILY DISABLED');
       } else if (Platform.isIOS) {
         _isProtectionEnabled = false;
         print('🔓 Protección de screenshots deshabilitada (iOS)');

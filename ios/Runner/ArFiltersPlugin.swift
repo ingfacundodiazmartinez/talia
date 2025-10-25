@@ -129,6 +129,10 @@ import AVFoundation
             deepARInstance.setLicenseKey(licenseKey)
             print("✅ License key configurada")
 
+            // Ocultar logo/watermark de DeepAR
+            deepARInstance.showStats(false)
+            print("✅ Logo de DeepAR ocultado")
+
             // DeepAR no necesita initialize() cuando usamos createARView
             // La inicialización se hace automáticamente al crear la vista AR
             print("✅ DeepAR instance lista para crear AR view")

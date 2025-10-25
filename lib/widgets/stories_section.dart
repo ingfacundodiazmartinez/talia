@@ -17,6 +17,14 @@ class StoriesSection extends StatefulWidget {
 class _StoriesSectionState extends State<StoriesSection> {
   final StoryService storyService = StoryService();
   List<UserStories>? _cachedStories;
+  late Stream<List<UserStories>> _storiesStream;
+
+  @override
+  void initState() {
+    super.initState();
+    // CRÍTICO: Crear el stream UNA SOLA VEZ para evitar bucle infinito
+    _storiesStream = storyService.getStoriesFromWhitelist();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -24,7 +32,7 @@ class _StoriesSectionState extends State<StoriesSection> {
       height: 90,
       margin: EdgeInsets.symmetric(vertical: 4),
       child: StreamBuilder<List<UserStories>>(
-        stream: storyService.getStoriesFromWhitelist(),
+        stream: _storiesStream,
         initialData: _cachedStories,
         builder: (context, snapshot) {
           // Actualizar cache cuando llegan datos nuevos

@@ -9,6 +9,7 @@ import '../chat_moderation_management_screen.dart';
 import 'widgets/pending_request_card.dart';
 import 'widgets/approved_request_card.dart';
 import 'widgets/rejected_request_card.dart';
+import '../../../services/unread_messages_service.dart';
 
 /// Screen principal de Control Parental (Lista Blanca)
 ///
@@ -564,6 +565,9 @@ class _WhitelistScreenState extends State<WhitelistScreen>
 
     setState(() {}); // Actualizar UI después de completar
 
+    // Actualizar badge del ícono de la app
+    await UnreadMessagesService().updateBadgeCount();
+
     if (!result['success'] && mounted) {
       _showErrorSnackBar(result['error']);
     }
@@ -576,6 +580,9 @@ class _WhitelistScreenState extends State<WhitelistScreen>
     );
 
     setState(() {});
+
+    // Actualizar badge del ícono de la app
+    await UnreadMessagesService().updateBadgeCount();
 
     if (result['success'] && mounted) {
       _showSuccessSnackBar('Solicitud rechazada');
@@ -680,6 +687,9 @@ class _WhitelistScreenState extends State<WhitelistScreen>
     );
 
     setState(() {});
+
+    // Actualizar badge del ícono de la app
+    await UnreadMessagesService().updateBadgeCount();
 
     if (result['success'] && mounted) {
       _showSuccessSnackBar('Solicitud re-aprobada');

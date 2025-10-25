@@ -305,12 +305,18 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
           .snapshots(),
       builder: (context, snapshot) {
         // Contar notificaciones no leídas relacionadas a este hijo
+        // EXCLUYENDO las notificaciones de mensajes de chat
         int unreadCount = 0;
         if (snapshot.hasData) {
           final notifications = snapshot.data!.docs;
           for (final doc in notifications) {
             final data = doc.data() as Map<String, dynamic>;
             final notifData = data['data'] as Map<String, dynamic>?;
+
+            // Filtrar notificaciones de chat
+            if (data['type'] == 'chat_message') {
+              continue; // Skip chat notifications
+            }
 
             // Verificar si la notificación está relacionada con este hijo
             if (notifData?['childId'] == child.id ||

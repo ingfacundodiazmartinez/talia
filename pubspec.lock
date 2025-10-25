@@ -529,23 +529,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.1.4"
-  ffmpeg_kit_flutter:
-    dependency: "direct overridden"
-    description:
-      path: "flutter/flutter"
-      ref: "flutter_fix_retired_v6.0.3"
-      resolved-ref: ff41066ee575d6eb9749ff943a03d845e51ca39a
-      url: "https://github.com/Sahad2701/ffmpeg-kit.git"
-    source: git
-    version: "6.0.3"
-  ffmpeg_kit_flutter_platform_interface:
-    dependency: transitive
-    description:
-      name: ffmpeg_kit_flutter_platform_interface
-      sha256: addf046ae44e190ad0101b2fde2ad909a3cd08a2a109f6106d2f7048b7abedee
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.2.1"
   file:
     dependency: transitive
     description:
@@ -1005,14 +988,6 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.0"
-  flutter_windowmanager:
-    dependency: "direct main"
-    description:
-      name: flutter_windowmanager
-      sha256: b4d0bc06f6777952b729c0cdb7ce9ad1ecabd8b8b1cb0acb57a36621457dab1b
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.2.0"
   font_awesome_flutter:
     dependency: transitive
     description:
@@ -2004,14 +1979,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.10.1"
-  transparent_image:
-    dependency: transitive
-    description:
-      name: transparent_image
-      sha256: e8991d955a2094e197ca24c645efec2faf4285772a4746126ca12875e54ca02f
-      url: "https://pub.dev"
-    source: hosted
-    version: "2.0.1"
   tuple:
     dependency: transitive
     description:
@@ -2180,14 +2147,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.5.6"
-  video_trimmer:
-    dependency: transitive
-    description:
-      name: video_trimmer
-      sha256: "9f25516d21788a91c5448e9a57e0c876509aaf735686b007862ff124ab6aff9e"
-      url: "https://pub.dev"
-    source: hosted
-    version: "3.0.1"
   vm_service:
     dependency: transitive
     description:

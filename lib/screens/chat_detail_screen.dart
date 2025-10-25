@@ -51,7 +51,8 @@ class ChatDetailScreen extends StatefulWidget {
   State<ChatDetailScreen> createState() => _ChatDetailScreenState();
 }
 
-class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBindingObserver {
+class _ChatDetailScreenState extends State<ChatDetailScreen>
+    with WidgetsBindingObserver {
   // Controller (maneja toda la lógica de negocio) - OPTIMISTIC
   late ChatControllerOptimistic _controller;
 
@@ -78,6 +79,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
   // Highlight message state
   String? _highlightedMessageId;
   bool _hasScrolledToMessage = false;
+
+  // Editing blocked message state
+  String? _editingBlockedMessageId;
 
   @override
   void initState() {
@@ -204,7 +208,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
     if (!_scrollController.hasClients || _hasScrolledToMessage) return;
 
     // Buscar el índice del mensaje
-    final messageIndex = _controller.messages.indexWhere((msg) => msg.id == messageId);
+    final messageIndex = _controller.messages.indexWhere(
+      (msg) => msg.id == messageId,
+    );
 
     if (messageIndex == -1) {
       // Mensaje no encontrado todavía, intentar de nuevo más tarde
@@ -258,7 +264,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
     _controller.dispose();
     _messageController.removeListener(_onTypingChanged);
     _messageController.dispose();
-    _scrollController.removeListener(_onScroll); // ✅ Remover listener de paginación
+    _scrollController.removeListener(
+      _onScroll,
+    ); // ✅ Remover listener de paginación
     _scrollController.dispose();
     _audioRecorder.dispose();
     _reactionOverlay?.remove();
@@ -270,7 +278,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
     // Si la app pierde el foco (ej: aparece diálogo de permisos) y estamos grabando,
     // detener la grabación para evitar que quede bloqueada
     if (state == AppLifecycleState.inactive && _isRecording) {
-      print('⚠️ [ChatDetailScreen] App inactive mientras grababa - cancelando grabación');
+      print(
+        '⚠️ [ChatDetailScreen] App inactive mientras grababa - cancelando grabación',
+      );
       _cancelRecording();
     }
   }
@@ -297,9 +307,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
     if (_isBlocked || _isBlockedBy) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(_isBlocked
-              ? 'No puedes enviar mensajes a este contacto porque lo has bloqueado'
-              : 'Este contacto te ha bloqueado'),
+          content: Text(
+            _isBlocked
+                ? 'No puedes enviar mensajes a este contacto porque lo has bloqueado'
+                : 'Este contacto te ha bloqueado',
+          ),
           backgroundColor: Colors.red,
         ),
       );
@@ -312,19 +324,28 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
     // Capturar replyTo antes de limpiarlo (para el envío)
     final replyToCapture = _replyingTo;
 
+    // Verificar si estamos editando un mensaje bloqueado
+    final editingMessageId = _editingBlockedMessageId;
+
     _messageController.clear();
 
     // Limpiar el reply optimísticamente (ANTES de enviar)
     if (mounted) {
-      setState(() => _replyingTo = null);
+      setState(() {
+        _replyingTo = null;
+        _editingBlockedMessageId = null; // Limpiar estado de edición
+      });
     }
 
     try {
-      // Envío optimista - pero ahora con verificación de moderación
-      await _controller.sendTextMessage(
-        text: text,
-        replyTo: replyToCapture,
-      );
+      if (editingMessageId != null) {
+        // Actualizar mensaje bloqueado existente (re-moderar)
+        print('🔄 Actualizando mensaje bloqueado: $editingMessageId');
+        await _controller.updateBlockedMessage(editingMessageId, text);
+      } else {
+        // Envío normal de mensaje nuevo
+        await _controller.sendTextMessage(text: text, replyTo: replyToCapture);
+      }
     } catch (e) {
       // Mensaje bloqueado por moderación o error
       print('❌ Error enviando mensaje: $e');
@@ -343,81 +364,84 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
               .doc(currentUserId)
               .get()
               .then((userDoc) {
-            final userData = userDoc.data();
-            final isParent = userData?['isParent'] ?? true;
+                final userData = userDoc.data();
+                final isParent = userData?['isParent'] ?? true;
 
-            print('🔍 DEBUG - Usuario: $currentUserId');
-            print('🔍 DEBUG - isParent: $isParent');
-            print('🔍 DEBUG - userData: $userData');
-            print('🔍 DEBUG - dialogContent: $dialogContent');
+                print('🔍 DEBUG - Usuario: $currentUserId');
+                print('🔍 DEBUG - isParent: $isParent');
+                print('🔍 DEBUG - userData: $userData');
+                print('🔍 DEBUG - dialogContent: $dialogContent');
 
-            // Texto personalizado según el rol
-            String title;
-            String explanation;
+                // Texto personalizado según el rol
+                String title;
+                String explanation;
 
-            if (isParent) {
-              // Para padres: mensaje neutral
-              title = 'Mensaje bloqueado';
-              explanation = 'Este mensaje contiene contenido inapropiado detectado por la moderación con IA:\n\n$dialogContent';
-              print('✅ Usando mensaje para PADRES');
-            } else {
-              // Para niños: mencionar a los padres
-              title = 'Mensaje no permitido';
-              explanation = 'Tus padres han activado la moderación con IA en este chat.\n\nMotivo del bloqueo: $dialogContent';
-              print('✅ Usando mensaje para HIJOS');
-            }
+                if (isParent) {
+                  // Para padres: mensaje neutral
+                  title = 'Mensaje bloqueado';
+                  explanation =
+                      'Este mensaje contiene contenido inapropiado detectado por la moderación con IA:\n\n$dialogContent';
+                  print('✅ Usando mensaje para PADRES');
+                } else {
+                  // Para niños: mencionar a los padres
+                  title = 'Mensaje no permitido';
+                  explanation =
+                      'Tus padres han activado la moderación con IA en este chat.\n\nMotivo del bloqueo: $dialogContent';
+                  print('✅ Usando mensaje para HIJOS');
+                }
 
-            if (mounted) {
-              showDialog(
-                context: context,
-                builder: (context) => AlertDialog(
-                  title: Row(
-                    children: [
-                      const Icon(Icons.block, color: Colors.red),
-                      const SizedBox(width: 12),
-                      Expanded(child: Text(title)),
-                    ],
-                  ),
-                  content: Text(
-                    explanation,
-                    style: const TextStyle(fontSize: 15),
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('Entendido'),
+                if (mounted) {
+                  showDialog(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: Row(
+                        children: [
+                          const Icon(Icons.block, color: Colors.red),
+                          const SizedBox(width: 12),
+                          Expanded(child: Text(title)),
+                        ],
+                      ),
+                      content: Text(
+                        explanation,
+                        style: const TextStyle(fontSize: 15),
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Entendido'),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-              );
-            }
-          }).catchError((error) {
-            // Si hay error obteniendo el rol, mostrar mensaje genérico
-            if (mounted) {
-              showDialog(
-                context: context,
-                builder: (context) => AlertDialog(
-                  title: const Row(
-                    children: [
-                      Icon(Icons.block, color: Colors.red),
-                      SizedBox(width: 12),
-                      Text('Mensaje bloqueado'),
-                    ],
-                  ),
-                  content: Text(
-                    dialogContent,
-                    style: const TextStyle(fontSize: 15),
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('Entendido'),
+                  );
+                }
+              })
+              .catchError((error) {
+                // Si hay error obteniendo el rol, mostrar mensaje genérico
+                if (mounted) {
+                  showDialog(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: const Row(
+                        children: [
+                          Icon(Icons.block, color: Colors.red),
+                          SizedBox(width: 12),
+                          Text('Mensaje bloqueado'),
+                        ],
+                      ),
+                      content: Text(
+                        dialogContent,
+                        style: const TextStyle(fontSize: 15),
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Entendido'),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-              );
-            }
-          });
+                  );
+                }
+              });
         }
       }
     }
@@ -431,9 +455,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(_isBlocked
-                ? 'No puedes enviar mensajes a este contacto porque lo has bloqueado'
-                : 'Este contacto te ha bloqueado'),
+            content: Text(
+              _isBlocked
+                  ? 'No puedes enviar mensajes a este contacto porque lo has bloqueado'
+                  : 'Este contacto te ha bloqueado',
+            ),
             backgroundColor: Colors.red,
           ),
         );
@@ -453,9 +479,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(_isBlocked
-                ? 'No puedes enviar mensajes a este contacto porque lo has bloqueado'
-                : 'Este contacto te ha bloqueado'),
+            content: Text(
+              _isBlocked
+                  ? 'No puedes enviar mensajes a este contacto porque lo has bloqueado'
+                  : 'Este contacto te ha bloqueado',
+            ),
             backgroundColor: Colors.red,
           ),
         );
@@ -473,7 +501,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
       final hasPermission = await _audioRecorder.hasPermission();
 
       if (!hasPermission) {
-        print('⚠️ [ChatDetailScreen] Permisos de micrófono denegados o pendientes');
+        print(
+          '⚠️ [ChatDetailScreen] Permisos de micrófono denegados o pendientes',
+        );
         return;
       }
 
@@ -533,7 +563,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
     }
   }
 
-
   void _showAttachmentOptions() {
     AttachmentOptions.show(
       context,
@@ -543,7 +572,16 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
     );
   }
 
-  void _showReactionPicker(BuildContext messageContext, String messageId) {
+  void _showReactionPicker(
+    BuildContext messageContext,
+    String messageId,
+  ) async {
+    // Cerrar el teclado si está abierto para evitar conflictos con el overlay
+    FocusScope.of(context).unfocus();
+
+    // Esperar un momento para que el teclado se cierre completamente y las posiciones se estabilicen
+    await Future.delayed(const Duration(milliseconds: 100));
+
     final RenderBox? renderBox =
         messageContext.findRenderObject() as RenderBox?;
     if (renderBox == null) return;
@@ -605,7 +643,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
     });
   }
 
-  Future<void> _handleDeleteMessage(String messageId, Timestamp? timestamp) async {
+  Future<void> _handleDeleteMessage(
+    String messageId,
+    Timestamp? timestamp,
+  ) async {
     final success = await _controller.deleteMessage(messageId, timestamp);
 
     if (mounted) {
@@ -621,13 +662,18 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
   }
 
   /// Editar mensaje bloqueado
-  Future<void> _handleEditBlockedMessage(String messageId, String originalText) async {
+  Future<void> _handleEditBlockedMessage(
+    String messageId,
+    String originalText,
+  ) async {
     // Poner el texto original en el campo de input del chat
-    _messageController.text = originalText;
+    setState(() {
+      _messageController.text = originalText;
+      _editingBlockedMessageId = messageId; // Guardar ID para actualizar en lugar de crear nuevo
+    });
 
-    // Eliminar el mensaje bloqueado inmediatamente (local y Firestore)
-    // Esto evita duplicación cuando el usuario envía el mensaje editado
-    await _controller.deleteMessage(messageId, null);
+    // Enfocar el campo de texto
+    FocusScope.of(context).requestFocus(FocusNode());
   }
 
   Future<void> _handleClearChat() async {
@@ -672,61 +718,27 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
     );
   }
 
-  /// Devolver llamada
+  /// Devolver llamada (con lógica optimista)
   Future<void> _handleCallBack(String callType) async {
     try {
       print('📞 Devolviendo llamada ($callType) a ${widget.contactName}');
 
-      // Mostrar loading
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => Center(
-          child: CircularProgressIndicator(),
-        ),
-      );
-
-      // Iniciar llamada usando VideoCallService
-      final result = await _videoCallService.initiateCall(
-        receiverId: widget.contactId,
-        receiverName: widget.contactName,
-        isVideo: callType == 'video',
-      );
-
-      // Cerrar loading
-      if (mounted) Navigator.pop(context);
-
-      if (result['success'] == true) {
-        // Navegar a pantalla de videollamada
-        if (mounted) {
-          Navigator.of(context, rootNavigator: true).push(
-            MaterialPageRoute(
-              builder: (context) => VideoCallScreen(
-                callId: result['channelName'],
-                channelName: result['channelName'],
-                token: result['token'],
-                uid: result['uid'],
-                isCaller: true,
-                remoteName: widget.contactName,
-              ),
+      // LÓGICA OPTIMISTA: Abrir pantalla inmediatamente sin esperar
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).push(
+          MaterialPageRoute(
+            builder: (context) => VideoCallScreen(
+              callId: DateTime.now().millisecondsSinceEpoch.toString(), // ID temporal
+              receiverId: widget.contactId,
+              remoteName: widget.contactName,
+              isCaller: true,
+              isVideo: callType == 'video',
+              // No pasar channelName, token, uid - se obtienen en background
             ),
-          );
-        }
-      } else {
-        // Mostrar error
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(result['error'] ?? 'Error al iniciar llamada'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
+          ),
+        );
       }
     } catch (e) {
-      // Cerrar loading si está abierto
-      if (mounted) Navigator.pop(context);
-
       print('❌ Error devolviendo llamada: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -791,11 +803,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
                   child: Stack(
                     children: [
                       // Lista de mensajes ocupa todo el espacio
-                      Column(
-                        children: [
-                          Expanded(child: _buildMessagesList()),
-                        ],
-                      ),
+                      Column(children: [Expanded(child: _buildMessagesList())]),
                       // Indicador flotante en la parte inferior
                       _buildTypingIndicator(),
                     ],
@@ -862,17 +870,14 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
       cacheExtent: 1000,
       addAutomaticKeepAlives: true,
       addRepaintBoundaries: true,
-      padding: const EdgeInsets.only(
-        left: 16,
-        right: 16,
-        top: 16,
-        bottom: 16,
-      ),
+      padding: const EdgeInsets.only(left: 16, right: 16, top: 16, bottom: 16),
       itemCount: _controller.messages.length,
       findChildIndexCallback: (Key key) {
         if (key is ValueKey<String>) {
           final messageId = key.value.replaceFirst('msg_', '');
-          final index = _controller.messages.indexWhere((msg) => msg.id == messageId);
+          final index = _controller.messages.indexWhere(
+            (msg) => msg.id == messageId,
+          );
           return index >= 0 ? index : null;
         }
         return null;
@@ -880,13 +885,19 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
       itemBuilder: (context, index) {
         final message = _controller.messages[index];
         final isMe = message.senderId == FirebaseAuth.instance.currentUser!.uid;
-        final timeString = '${message.effectiveTimestamp.hour}:${message.effectiveTimestamp.minute.toString().padLeft(2, '0')}';
+        final timeString =
+            '${message.effectiveTimestamp.hour}:${message.effectiveTimestamp.minute.toString().padLeft(2, '0')}';
         final isSelected = _selectedMessageIds.contains(message.id);
 
         // Debug forwarding fields antes de crear el widget
         if (message.isForwarded) {
-          print('🔨 Construyendo MessageBubble(${message.id.substring(0, 8)}...): isForwarded=${message.isForwarded}, originalContactName="${message.originalContactName}"');
+          print(
+            '🔨 Construyendo MessageBubble(${message.id.substring(0, 8)}...): isForwarded=${message.isForwarded}, originalContactName="${message.originalContactName}"',
+          );
         }
+
+        // Verificar si necesitamos mostrar separador de fecha
+        final bool showDateSeparator = _shouldShowDateSeparator(index);
 
         // Aplicar highlight si es el mensaje buscado
         final isHighlighted = _highlightedMessageId == message.id;
@@ -954,7 +965,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
         if (isHighlighted) {
           messageBubble = Container(
             decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.3),
+              color: Theme.of(
+                context,
+              ).colorScheme.primaryContainer.withValues(alpha: 0.3),
               borderRadius: BorderRadius.circular(12),
             ),
             child: messageBubble,
@@ -962,8 +975,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
         }
 
         // Wrap with selection mode support
+        Widget finalWidget;
         if (_isSelectionMode) {
-          return GestureDetector(
+          finalWidget = GestureDetector(
             onTap: () {
               setState(() {
                 if (isSelected) {
@@ -974,7 +988,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
               });
             },
             child: Container(
-              color: isSelected ? Colors.blue.withValues(alpha: 0.1) : Colors.transparent,
+              color: isSelected
+                  ? Colors.blue.withValues(alpha: 0.1)
+                  : Colors.transparent,
               child: Row(
                 children: [
                   Checkbox(
@@ -994,9 +1010,22 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
               ),
             ),
           );
+        } else {
+          finalWidget = messageBubble;
         }
 
-        return messageBubble;
+        // Agregar separador de fecha si es necesario
+        if (showDateSeparator) {
+          return Column(
+            children: [
+              _buildDateSeparator(message.effectiveTimestamp),
+              SizedBox(height: 16),
+              finalWidget,
+            ],
+          );
+        }
+
+        return finalWidget;
       },
     );
   }
@@ -1050,10 +1079,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
               _isBlocked
                   ? 'Has bloqueado a este contacto. No puedes enviar ni recibir mensajes.'
                   : 'Este contacto te ha bloqueado.',
-              style: TextStyle(
-                color: Colors.red,
-                fontSize: 13,
-              ),
+              style: TextStyle(color: Colors.red, fontSize: 13),
             ),
           ),
         ],
@@ -1108,8 +1134,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
             verticalSpacing: 0,
             horizontalSpacing: 0,
             gridPadding: EdgeInsets.zero,
-            backgroundColor:
-                isDarkMode ? colorScheme.surface : const Color(0xFFF2F2F2),
+            backgroundColor: isDarkMode
+                ? colorScheme.surface
+                : const Color(0xFFF2F2F2),
             buttonMode: ButtonMode.MATERIAL,
             recentsLimit: 28,
             noRecents: const Text(
@@ -1132,6 +1159,86 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> with WidgetsBinding
             backspaceColor: colorScheme.primary,
             tabIndicatorAnimDuration: kTabScrollDuration,
             categoryIcons: const CategoryIcons(),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Determina si se debe mostrar un separador de fecha antes de este mensaje
+  bool _shouldShowDateSeparator(int index) {
+    // Si es el último mensaje de la lista (el más antiguo), siempre mostrar fecha
+    if (index == _controller.messages.length - 1) {
+      return true;
+    }
+
+    final currentMessage = _controller.messages[index];
+    final nextMessage = _controller.messages[index + 1]; // Mensaje más antiguo
+
+    final currentDate = DateTime(
+      currentMessage.effectiveTimestamp.year,
+      currentMessage.effectiveTimestamp.month,
+      currentMessage.effectiveTimestamp.day,
+    );
+
+    final nextDate = DateTime(
+      nextMessage.effectiveTimestamp.year,
+      nextMessage.effectiveTimestamp.month,
+      nextMessage.effectiveTimestamp.day,
+    );
+
+    // Mostrar separador si las fechas son diferentes
+    return currentDate != nextDate;
+  }
+
+  /// Construye el widget del separador de fecha
+  Widget _buildDateSeparator(DateTime date) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final yesterday = today.subtract(Duration(days: 1));
+    final messageDate = DateTime(date.year, date.month, date.day);
+
+    String dateText;
+    if (messageDate == today) {
+      dateText = 'Hoy';
+    } else if (messageDate == yesterday) {
+      dateText = 'Ayer';
+    } else {
+      // Formato: "25 Dic, 2023"
+      const months = [
+        '',
+        'Ene',
+        'Feb',
+        'Mar',
+        'Abr',
+        'May',
+        'Jun',
+        'Jul',
+        'Ago',
+        'Sep',
+        'Oct',
+        'Nov',
+        'Dic',
+      ];
+      dateText = '${date.day} ${months[date.month]}, ${date.year}';
+    }
+
+    return Center(
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        decoration: BoxDecoration(
+          color: Theme.of(
+            context,
+          ).colorScheme.surfaceContainerHighest.withOpacity(0.7),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Text(
+          dateText,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+            letterSpacing: 0.3,
           ),
         ),
       ),

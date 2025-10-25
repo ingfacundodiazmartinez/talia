@@ -437,36 +437,21 @@ class _IncomingCallDialogState extends State<IncomingCallDialog> with SingleTick
       if (context.mounted) {
         Navigator.of(context).pop();
 
-        // Navegar a la pantalla correspondiente según el tipo de llamada
-        if (widget.callType == 'audio') {
-          // Navegar a pantalla de llamada de audio
-          Navigator.of(context, rootNavigator: true).push(
-            MaterialPageRoute(
-              builder: (context) => AudioCallScreen(
-                callId: widget.callId,
-                channelName: widget.channelName,
-                token: token,
-                uid: uid,
-                isCaller: false,
-                remoteName: widget.callerName,
-              ),
+        // Navegar a pantalla de llamada (usar VideoCallScreen para ambos tipos)
+        Navigator.of(context, rootNavigator: true).push(
+          MaterialPageRoute(
+            builder: (context) => VideoCallScreen(
+              callId: widget.callId,
+              channelName: widget.channelName,
+              token: token,
+              uid: uid,
+              isCaller: false,
+              remoteName: widget.callerName,
+              receiverId: widget.callerId,
+              isVideo: widget.callType != 'audio',
             ),
-          );
-        } else {
-          // Navegar a pantalla de videollamada
-          Navigator.of(context, rootNavigator: true).push(
-            MaterialPageRoute(
-              builder: (context) => VideoCallScreen(
-                callId: widget.callId,
-                channelName: widget.channelName,
-                token: token,
-                uid: uid,
-                isCaller: false,
-                remoteName: widget.callerName,
-              ),
-            ),
-          );
-        }
+          ),
+        );
       }
     } catch (e) {
       print('❌ Error general aceptando llamada:');

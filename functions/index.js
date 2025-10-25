@@ -81,6 +81,22 @@ async function sendVoIPPush(voipToken, payload) {
       const failure = result.failed[0];
       console.error(`❌ [VoIP] Status: ${failure.status}`);
       console.error(`❌ [VoIP] Response: ${JSON.stringify(failure.response)}`);
+
+      // Si el token es inválido, eliminarlo de Firestore
+      if (failure.response?.reason === "BadDeviceToken" ||
+          failure.response?.reason === "Unregistered" ||
+          failure.status === 410) {
+        console.warn(`🧹 [VoIP] Token inválido detectado - eliminando de Firestore`);
+        try {
+          // Aquí necesitaríamos el userId, pero no lo tenemos en este contexto
+          // Por ahora solo logueamos
+          console.warn(`⚠️ [VoIP] Token VoIP inválido para dispositivo: ${failure.device.substring(0, 20)}...`);
+          console.warn(`💡 [VoIP] Solución: Usuario debe abrir la app para regenerar token VoIP`);
+        } catch (cleanupError) {
+          console.error(`❌ Error limpiando token: ${cleanupError}`);
+        }
+      }
+
       return false;
     }
 
@@ -540,6 +556,10 @@ exports.sendNotificationOnCreate = onDocumentCreated(
       dataPayload.notificationId = event.params.notificationId;
       dataPayload.type = notification.type || "general";
 
+      // Agregar title y body al data payload (para Android)
+      dataPayload.title = notification.title || "Talia";
+      dataPayload.body = notification.body || "Tienes una nueva notificación";
+
       // Agregar URL de foto del sender si existe (para largeIcon en Flutter)
       if (senderPhotoURL) {
         dataPayload.senderPhotoUrl = senderPhotoURL;
@@ -592,25 +612,16 @@ exports.sendNotificationOnCreate = onDocumentCreated(
         } // Fin del else de validación callId/channelName
       } // Fin del if isCall
 
-      // Para llamadas: incluir notification para que iOS la muestre con app cerrada
+      // Para Android: NO enviar campo "notification" para que el servicio nativo lo procese
+      // Para iOS: SÍ enviar "notification" en APNs
       const message = {
         token: fcmToken,
-        notification: {
-          title: notification.title || "Talia",
-          body: notification.body || "Tienes una nueva notificación",
-        },
+        // NO incluir notification en el root - solo data
         data: dataPayload,
         android: {
           // ⚡ OPTIMIZACIÓN: Usar prioridad HIGH para todos los mensajes (no solo llamadas)
           priority: "high",
-          notification: {
-            channelId: isCall ? "calls_channel" : "high_importance_channel",
-            sound: "default",
-            priority: isCall ? "max" : "high", // ⚡ HIGH para mensajes normales también
-            tag: isCall ? "incoming_call" : undefined,
-            sticky: isCall ? true : false,
-            // NO agregar imageUrl aquí - se maneja en Flutter como largeIcon
-          },
+          // NO incluir android.notification - dejamos que el servicio nativo lo maneje
         },
         apns: {
           headers: {
@@ -650,8 +661,8 @@ exports.sendNotificationOnCreate = onDocumentCreated(
               senderId: notification.senderId || "unknown",
             } : {}),
           },
-          // fcm_options con image para que FCM maneje la imagen automáticamente
-          ...(senderPhotoURL ? { fcm_options: { image: senderPhotoURL } } : {}),
+          // NO usar fcm_options.image - dejamos que el servicio nativo procese la imagen
+          // fcm_options con image causa que se muestre como BigPictureStyle (negro en Android)
         },
       };
 
@@ -695,9 +706,6 @@ exports.sendNotificationOnCreate = onDocumentCreated(
 exports.sendInstantPushNotification = onCall(
   {
     cors: true,
-    enforceAppCheck: true,
-    // consumeAppCheckToken NO es necesario para notificaciones (solo para endpoints ultra-sensibles)
-    // y puede causar problemas con DeviceCheck en TestFlight
     // ⚡ OPTIMIZACIÓN: Mantener la función caliente para eliminar cold starts
     minInstances: 1, // Mantiene 1 instancia siempre activa
     maxInstances: 10, // Escala hasta 10 instancias si hay mucha carga
@@ -794,32 +802,24 @@ exports.sendInstantPushNotification = onCall(
         data.senderPhotoUrl.trim().length > 0 &&
         (data.senderPhotoUrl.startsWith("http://") || data.senderPhotoUrl.startsWith("https://"));
 
-      // ⚡ ANDROID: Enviar notification nativa para evitar crashes en background
+      // ⚡ ANDROID: NO enviar notification en root - dejar que servicio nativo lo maneje
       // iOS: Usar approach sofisticado con mutable-content para descargar imagen
       const message = {
         token: fcmToken,
-        // ✅ Incluir notification para que Android la muestre automáticamente
-        notification: {
-          title: title,
-          body: body,
-        },
+        // NO incluir notification en el root para Android - solo data
         data: {
           ...messageData,
-          // Agregar title y body en data también (para compatibilidad)
+          // Agregar title y body en data (para servicio nativo Android)
           title: title,
           body: body,
           channelId: isCallType ? "calls_channel" : "high_importance_channel",
           isCallType: isCallType ? "true" : "false",
+          // Agregar senderPhotoUrl si existe
+          ...(hasValidImageUrl ? { senderPhotoUrl: data.senderPhotoUrl } : {}),
         },
         android: {
           priority: "high",
-          notification: {
-            channelId: isCallType ? "calls_channel" : "high_importance_channel",
-            sound: "default",
-            priority: isCallType ? "max" : "high",
-            // Incluir imagen si está disponible
-            ...(hasValidImageUrl ? { imageUrl: data.senderPhotoUrl } : {}),
-          },
+          // NO incluir android.notification - dejar que servicio nativo MyFirebaseMessagingService lo maneje
         },
         apns: {
           headers: {
@@ -838,7 +838,7 @@ exports.sendInstantPushNotification = onCall(
               "mutable-content": 1,
             },
           },
-          fcm_options: hasValidImageUrl ? { image: data.senderPhotoUrl } : undefined,
+          // NO usar fcm_options.image - dejar que servicio nativo procese la imagen
         },
       };
 
@@ -862,9 +862,6 @@ exports.sendInstantPushNotification = onCall(
 exports.generateAgoraToken = onCall(
   {
     cors: true,
-    // ⚠️ TEMPORAL: App Check desactivado para debugging de navegación iOS
-    enforceAppCheck: false, // ⚠️ TEMPORAL: Desactivado para probar navegación
-    consumeAppCheckToken: false, // ⚠️ TEMPORAL: Desactivado para debugging
   },
   async (request) => {
     console.log("🎥 ===== GENERANDO TOKEN DE AGORA =====");
@@ -2601,11 +2598,9 @@ exports.createContactRequest = onCall(
       // 11. Enviar notificaciones push a TODOS los padres vinculados
       const messaging = getMessaging();
 
-      // Obtener nombres de los hijos para las notificaciones
-      const user1Doc = await db.collection("users").doc(participants[0]).get();
-      const user2Doc = await db.collection("users").doc(participants[1]).get();
-      const user1Name = user1Doc.data()?.name || "Usuario";
-      const user2Name = user2Doc.data()?.name || "Usuario";
+      // Usar nombres ya obtenidos anteriormente (línea 2476-2482)
+      const user1Name = user1Data.name || "Usuario";
+      const user2Name = user2Data.name || "Usuario";
 
       if (user1NeedsApproval && user1Parents.length > 0) {
         console.log(`📬 Enviando notificaciones a ${user1Parents.length} padre(s) de ${user1Name}...`);
@@ -3343,10 +3338,11 @@ Nivel LOW (permisivo en tono, estricto en insultos):
 exports.checkMessageBeforeSending = onCall(
   { region: "us-central1" },
   async (request) => {
-    const { chatId, text, type = "text", localId } = request.data;
+    const { chatId, text, type = "text", localId, messageId } = request.data;
     const userId = request.auth?.uid;
 
-    console.log(`🔍 [Pre-moderación] Verificando mensaje para chat ${chatId}`);
+    const isUpdate = messageId != null;
+    console.log(`🔍 [Pre-moderación] ${isUpdate ? 'Re-verificando' : 'Verificando'} mensaje para chat ${chatId}`);
 
     if (!userId) {
       throw new HttpsError("unauthenticated", "Usuario no autenticado");
@@ -3570,35 +3566,32 @@ exports.checkMessageBeforeSending = onCall(
         console.error("Error obteniendo sender:", e);
       }
 
-      // 1. Guardar mensaje bloqueado en Firestore para que el receptor lo vea
+      // 1. Guardar/Actualizar mensaje bloqueado en Firestore
       // IMPORTANTE: NO incluir la razón específica en el campo 'text' para que ambos usuarios vean el mismo mensaje genérico
       try {
-        await db.collection("chats").doc(chatId).collection("messages").add({
-          senderId: userId,
+        const blockedMessageData = {
           text: "", // Texto vacío - el widget BlockedMessageContent mostrará el mensaje genérico
           originalText: text, // ✅ Guardar texto original para poder editarlo después
-          type: "text",
           moderationStatus: "blocked",
           isInappropriate: true,
           moderationReason: analysis.reason, // Razón guardada en campo separado
           moderationSeverity: analysis.severity,
           timestamp: FieldValue.serverTimestamp(),
-          isRead: false,
-          localId: localId, // ✅ UUID local para rastrear el mensaje desde la creación optimista
-        });
-        console.log(`💾 [Pre-moderación] Mensaje bloqueado guardado en Firestore para que el receptor lo vea`);
+        };
 
-        // ✅ IMPORTANTE: Actualizar lastMessage del chat a mensaje genérico
-        // para que NO se muestre el texto ofensivo en la lista de chats
-        try {
-          await db.collection("chats").doc(chatId).update({
-            lastMessage: "🚫 Mensaje bloqueado",
-            lastMessageTime: FieldValue.serverTimestamp(),
-            lastMessageSender: userId,
-          });
-          console.log(`📝 [Pre-moderación] lastMessage actualizado a mensaje genérico`);
-        } catch (updateError) {
-          console.error("Error actualizando lastMessage:", updateError);
+        if (isUpdate) {
+          // Actualizar mensaje existente
+          await db.collection("chats").doc(chatId).collection("messages").doc(messageId).update(blockedMessageData);
+          console.log(`🔄 [Pre-moderación] Mensaje ${messageId} RE-BLOQUEADO y actualizado`);
+        } else {
+          // Crear nuevo mensaje bloqueado
+          blockedMessageData.senderId = userId;
+          blockedMessageData.type = "text";
+          blockedMessageData.isRead = false;
+          blockedMessageData.localId = localId; // ✅ UUID local para rastrear desde creación optimista
+
+          await db.collection("chats").doc(chatId).collection("messages").add(blockedMessageData);
+          console.log(`💾 [Pre-moderación] Mensaje bloqueado guardado en Firestore`);
         }
       } catch (e) {
         console.error("Error guardando mensaje bloqueado:", e);
@@ -3622,9 +3615,18 @@ exports.checkMessageBeforeSending = onCall(
               // NO incluir severity ni reason para el receptor (privacidad)
             },
           });
-          console.log(`📧 [Pre-moderación] Notificación genérica enviada al receptor ${receiverId}`);
+          console.log(`✅ [Pre-moderación] Notificación creada para ${receiverId}`);
+
+          // ✅ SINCRONIZACIÓN: Actualizar lastMessage y unreadCount inmediatamente después de notificación
+          await db.collection("chats").doc(chatId).update({
+            lastMessage: "🚫 Mensaje bloqueado",
+            lastMessageTime: FieldValue.serverTimestamp(),
+            lastMessageSender: userId,
+            [`unreadCount_${receiverId}`]: FieldValue.increment(1),
+          });
+          console.log(`📝 [Pre-moderación] Chat sincronizado: lastMessage="🚫 Mensaje bloqueado", unreadCount+1`);
         } catch (e) {
-          console.error("Error creando notificación:", e);
+          console.error("Error creando notificación o actualizando chat:", e);
         }
       }
 
@@ -3642,10 +3644,14 @@ exports.checkMessageBeforeSending = onCall(
 );
 
 /**
- * Trigger que se ejecuta cuando se crea un nuevo mensaje
- * Analiza el mensaje con IA si la conversación tiene moderación activa
- * NOTA: Esta función ahora solo se usa para chats SIN moderación,
- * ya que los chats CON moderación usan checkMessageBeforeSending
+ * ✅ FLUJO UNIFICADO - Trigger que se ejecuta para TODOS los mensajes
+ *
+ * Procesa todos los mensajes (con o sin moderación):
+ * - Si NO hay moderación → aprueba automáticamente y crea notificación
+ * - Si hay moderación → analiza con IA, aprueba/bloquea y crea notificación si approved
+ * - Si ya fue bloqueado por pre-moderación (checkMessageBeforeSending) → skip
+ *
+ * La notificación creada aquí dispara sendNotificationOnCreate para enviar el push
  */
 exports.moderateMessage = onDocumentCreated(
   {
@@ -3759,22 +3765,35 @@ exports.moderateMessage = onDocumentCreated(
         }
       }
 
-      if (!moderationEnabled) {
-        console.log(`✅ Moderación desactivada (tipo: ${moderationType})`);
+      // ✅ FLUJO UNIFICADO: Extraer contenido del mensaje (SIEMPRE)
+      const messageText = messageData.text || "";
+      let messageType = "text";
+      if (messageData.imageUrl) messageType = "image";
+      else if (messageData.videoUrl) messageType = "video";
+      else if (messageData.audioUrl) messageType = "audio";
 
-        // ⚡ OPTIMIZACIÓN: Solo aprobar mensaje
-        // Las notificaciones ahora se envían desde chat_controller_optimistic.dart
-        // usando sendInstantPushNotification para mejor latencia
+      // Variables para resultado de moderación
+      let moderationStatus = "approved";
+      let moderationReason = null;
+      let moderationSeverity = null;
+      let notificationTitle = null;
+      let notificationBody = null;
+
+      // Determinar si necesitamos análisis de IA
+      if (!moderationEnabled) {
+        console.log(`✅ Moderación desactivada (tipo: ${moderationType}) - aprobando automáticamente`);
+        moderationReason = "Sin moderación activa";
+
+        // Actualizar mensaje como aprobado
         await event.data.ref.update({
           moderationStatus: "approved",
           moderatedAt: new Date(),
+          moderationReason: moderationReason,
         });
 
-        console.log(`✅ Mensaje aprobado (notificación enviada por chat_controller)`);
-        return;
-      }
-
-      console.log(`🔒 Moderación activa (tipo: ${moderationType}, nivel: ${moderationLevel})`);
+        // Continuar al flujo de notificación (no hacer return)
+      } else {
+        console.log(`🔒 Moderación activa (tipo: ${moderationType}, nivel: ${moderationLevel})`);
 
       // 4. Obtener información de los participantes (edades y ubicaciones)
       const participantsAges = [];
@@ -3805,50 +3824,32 @@ exports.moderateMessage = onDocumentCreated(
         }
       }
 
-      // 4. Extraer contenido del mensaje
-      const messageText = messageData.text || "";
-      let messageType = "text";
+        // 4. Extraer contenido del mensaje y determinar si necesita análisis de IA
+        let skipAIAnalysis = false;
 
-      if (messageData.imageUrl) {
-        messageType = "image";
-        // Para imágenes, analizar si hay caption
-        if (!messageText) {
+        if (messageData.imageUrl && !messageText) {
+          // Para imágenes sin texto, aprobar sin análisis
           console.log(`📷 Mensaje es imagen sin texto, aprobando (análisis de imágenes requiere Gemini Vision)`);
-          await event.data.ref.update({
-            moderationStatus: "approved",
-            moderatedAt: new Date(),
-            moderationReason: "Imagen sin texto",
-          });
-          return;
+          moderationReason = "Imagen sin texto";
+          skipAIAnalysis = true;
+        } else if (messageData.videoUrl) {
+          console.log(`🎥 Mensaje es video, aprobando (análisis de videos no implementado)`);
+          moderationReason = "Video";
+          skipAIAnalysis = true;
+        } else if (messageData.audioUrl) {
+          console.log(`🎤 Mensaje es audio, aprobando (análisis de audio no implementado)`);
+          moderationReason = "Audio";
+          skipAIAnalysis = true;
         }
-      } else if (messageData.videoUrl) {
-        messageType = "video";
-        console.log(`🎥 Mensaje es video, aprobando (análisis de videos no implementado)`);
-        await event.data.ref.update({
-          moderationStatus: "approved",
-          moderatedAt: new Date(),
-          moderationReason: "Video",
-        });
-        return;
-      } else if (messageData.audioUrl) {
-        messageType = "audio";
-        console.log(`🎤 Mensaje es audio, aprobando (análisis de audio no implementado)`);
-        await event.data.ref.update({
-          moderationStatus: "approved",
-          moderatedAt: new Date(),
-          moderationReason: "Audio",
-        });
-        return;
-      }
 
-      if (!messageText || messageText.trim().length === 0) {
-        console.log(`✅ Mensaje sin texto, aprobando`);
-        await event.data.ref.update({
-          moderationStatus: "approved",
-          moderatedAt: new Date(),
-        });
-        return;
-      }
+        if (!skipAIAnalysis && (!messageText || messageText.trim().length === 0)) {
+          console.log(`✅ Mensaje sin texto, aprobando`);
+          moderationReason = "Sin texto";
+          skipAIAnalysis = true;
+        }
+
+        // Solo analizar con IA si tiene texto y moderación activa
+        if (!skipAIAnalysis) {
 
       // 3. Obtener contexto (últimos 20 mensajes) para análisis más preciso
       console.log(`📚 Obteniendo contexto de conversación...`);
@@ -3906,49 +3907,66 @@ exports.moderateMessage = onDocumentCreated(
         participantsLocations
       );
 
-      // 6. Determinar acción basada en análisis y nivel de moderación
-      let moderationStatus;
-      let notificationTitle;
-      let notificationBody;
-      let shouldBlock = false;
+          // 6. Determinar acción basada en análisis y nivel de moderación
+          let shouldBlock = false;
 
-      if (moderationLevel === "high") {
-        // HIGH: Bloquear severity 'low', 'medium', 'high'
-        shouldBlock = analysis.isInappropriate && ["low", "medium", "high"].includes(analysis.severity);
-      } else {
-        // LOW: Solo bloquear severity 'high'
-        shouldBlock = analysis.isInappropriate && analysis.severity === "high";
-      }
+          if (moderationLevel === "high") {
+            // HIGH: Bloquear severity 'low', 'medium', 'high'
+            shouldBlock = analysis.isInappropriate && ["low", "medium", "high"].includes(analysis.severity);
+          } else {
+            // LOW: Solo bloquear severity 'high'
+            shouldBlock = analysis.isInappropriate && analysis.severity === "high";
+          }
 
-      if (!shouldBlock) {
-        moderationStatus = "approved";
-        console.log(`✅ Mensaje aprobado (severity: ${analysis.severity}, level: ${moderationLevel})`);
-      } else {
-        // Mensaje bloqueado
-        moderationStatus = "blocked";
-        if (analysis.severity === "low") {
-          notificationTitle = "⚠️ Contenido cuestionable bloqueado";
-          notificationBody = `Contenido inapropiado detectado (severidad baja): ${analysis.reason}`;
-          console.log(`⚠️ Mensaje bloqueado (severidad baja): ${analysis.reason}`);
-        } else if (analysis.severity === "medium") {
-          notificationTitle = "🚫 Mensaje bloqueado";
-          notificationBody = `Contenido inapropiado detectado (severidad media): ${analysis.reason}`;
-          console.log(`🚫 Mensaje bloqueado (severidad media): ${analysis.reason}`);
-        } else {
-          // high severity
-          notificationTitle = "🚨 Alerta de seguridad";
-          notificationBody = `Contenido grave detectado: ${analysis.reason}`;
-          console.log(`🚨 Mensaje bloqueado (severidad alta): ${analysis.reason}`);
-        }
-      }
+          if (!shouldBlock) {
+            moderationStatus = "approved";
+            moderationReason = analysis.reason;
+            moderationSeverity = analysis.severity;
+            console.log(`✅ Mensaje aprobado (severity: ${analysis.severity}, level: ${moderationLevel})`);
+          } else {
+            // Mensaje bloqueado
+            moderationStatus = "blocked";
+            moderationReason = analysis.reason;
+            moderationSeverity = analysis.severity;
 
-      // 5. Actualizar mensaje con resultado
-      await event.data.ref.update({
+            if (analysis.severity === "low") {
+              notificationTitle = "⚠️ Contenido cuestionable bloqueado";
+              notificationBody = `Contenido inapropiado detectado (severidad baja): ${analysis.reason}`;
+              console.log(`⚠️ Mensaje bloqueado (severidad baja): ${analysis.reason}`);
+            } else if (analysis.severity === "medium") {
+              notificationTitle = "🚫 Mensaje bloqueado";
+              notificationBody = `Contenido inapropiado detectado (severidad media): ${analysis.reason}`;
+              console.log(`🚫 Mensaje bloqueado (severidad media): ${analysis.reason}`);
+            } else {
+              // high severity
+              notificationTitle = "🚨 Alerta de seguridad";
+              notificationBody = `Contenido grave detectado: ${analysis.reason}`;
+              console.log(`🚨 Mensaje bloqueado (severidad alta): ${analysis.reason}`);
+            }
+          }
+        } // Cierre del if (!skipAIAnalysis)
+      } // Cierre del else (moderación activa)
+
+      // 5. Actualizar mensaje con resultado (SIEMPRE, con o sin moderación)
+      const updateData = {
         moderationStatus: moderationStatus,
         moderatedAt: new Date(),
-        moderationReason: analysis.reason,
-        moderationSeverity: analysis.severity,
-      });
+      };
+      if (moderationReason) {
+        updateData.moderationReason = moderationReason;
+      }
+      if (moderationSeverity) {
+        updateData.moderationSeverity = moderationSeverity;
+      }
+
+      // ✅ Si el mensaje fue BLOQUEADO, guardar originalText y limpiar text
+      if (moderationStatus === "blocked" && messageText) {
+        updateData.originalText = messageText; // Guardar texto original para poder editarlo
+        updateData.text = ""; // Limpiar texto para que no se muestre contenido ofensivo
+        console.log(`💾 Mensaje bloqueado - guardando originalText para edición`);
+      }
+
+      await event.data.ref.update(updateData);
 
       // 6. Crear notificación de chat si el mensaje fue APROBADO
       if (receiverId && moderationStatus === "approved") {
@@ -3966,9 +3984,9 @@ exports.moderateMessage = onDocumentCreated(
           messagePreview = messageText.substring(0, 100) + "...";
         }
 
-        // ⚡ OPTIMIZACIÓN: Ya no enviamos push aquí
-        // Las notificaciones ahora se envían desde chat_controller_optimistic.dart
-        // usando sendInstantPushNotification para mejor latencia
+        // ⚡ IMPORTANTE: Con moderación activa, dejamos que sendNotificationOnCreate envíe el push
+        // El mensaje fue aprobado DESPUÉS de la creación, por lo que necesita notificación
+        // pushSent: false hará que sendNotificationOnCreate se active automáticamente
 
         // Crear notificación de chat con formato consistente (para historial)
         await db.collection("notifications").add({
@@ -3980,7 +3998,7 @@ exports.moderateMessage = onDocumentCreated(
           imageUrl: senderPhotoUrl,
           priority: "normal",
           read: false,
-          pushSent: true, // Ya fue enviado por chat_controller
+          pushSent: false, // FALSE para que sendNotificationOnCreate envíe el push
           timestamp: FieldValue.serverTimestamp(),
           data: {
             type: "chat_message",
@@ -3994,7 +4012,20 @@ exports.moderateMessage = onDocumentCreated(
           },
         });
 
-        console.log(`✅ Notificación completada (moderado) para ${receiverId} - Título: "💬 ${senderName}", Body: "${messagePreview}"`);
+        console.log(`✅ Notificación creada (mensaje aprobado) para ${receiverId}`);
+
+        // ✅ SINCRONIZACIÓN: Actualizar lastMessage y unreadCount inmediatamente después de notificación
+        try {
+          await db.collection("chats").doc(chatId).update({
+            lastMessage: messagePreview,
+            lastMessageTime: FieldValue.serverTimestamp(),
+            lastMessageSender: senderId,
+            [`unreadCount_${receiverId}`]: FieldValue.increment(1),
+          });
+          console.log(`📝 Chat sincronizado: lastMessage="${messagePreview.substring(0, 30)}...", unreadCount+1`);
+        } catch (updateError) {
+          console.error("Error actualizando chat:", updateError);
+        }
       }
 
       // 7. Notificar al receptor si el mensaje fue BLOQUEADO
@@ -4030,51 +4061,23 @@ exports.moderateMessage = onDocumentCreated(
           },
         });
 
-        console.log(`📧 Notificación enviada al receptor ${receiverId}`);
+        console.log(`✅ Notificación creada (mensaje bloqueado) para ${receiverId}`);
 
-        // 8. Actualizar el chat para quitar el mensaje bloqueado del preview
-        // Buscar el último mensaje APROBADO para actualizar el lastMessage del chat
+        // ✅ SINCRONIZACIÓN: Actualizar unreadCount y lastMessage inmediatamente después de notificación
         try {
-          const approvedMessages = await db
-            .collection("chats")
-            .doc(chatId)
-            .collection("messages")
-            .where("moderationStatus", "==", "approved")
-            .orderBy("timestamp", "desc")
-            .limit(1)
-            .get();
+          // 1. Incrementar unreadCount (el receptor verá la burbuja de "mensaje bloqueado")
+          // 2. Actualizar lastMessage a "🚫 Mensaje bloqueado" para que el receptor sepa que recibió un mensaje bloqueado
 
-          if (!approvedMessages.empty) {
-            // Hay un mensaje aprobado previo, usar ese como lastMessage
-            const lastApprovedMsg = approvedMessages.docs[0].data();
-            let lastMessagePreview = lastApprovedMsg.text || "";
-            if (lastApprovedMsg.imageUrl) {
-              lastMessagePreview = "📷 Foto";
-            } else if (lastApprovedMsg.videoUrl) {
-              lastMessagePreview = "🎥 Video";
-            } else if (lastApprovedMsg.audioUrl) {
-              lastMessagePreview = "🎤 Audio";
-            }
+          await db.collection("chats").doc(chatId).update({
+            [`unreadCount_${receiverId}`]: FieldValue.increment(1),
+            lastMessage: "🚫 Mensaje bloqueado",
+            lastMessageTime: FieldValue.serverTimestamp(),
+            lastMessageSender: senderId,
+          });
 
-            await db.collection("chats").doc(chatId).update({
-              lastMessage: lastMessagePreview,
-              lastMessageTime: lastApprovedMsg.timestamp,
-              lastMessageSender: lastApprovedMsg.senderId,
-            });
-
-            console.log(`✅ Chat actualizado con último mensaje aprobado`);
-          } else {
-            // No hay mensajes aprobados, limpiar el lastMessage
-            await db.collection("chats").doc(chatId).update({
-              lastMessage: "",
-              lastMessageTime: new Date(),
-              lastMessageSender: senderId,
-            });
-
-            console.log(`✅ Chat limpiado (no hay mensajes aprobados)`);
-          }
+          console.log(`📝 Chat sincronizado: unreadCount+1, lastMessage="🚫 Mensaje bloqueado"`);
         } catch (e) {
-          console.error(`⚠️ Error actualizando chat después de bloqueo: ${e}`);
+          console.error(`⚠️ Error sincronizando chat después de bloqueo: ${e}`);
         }
       }
 
@@ -5249,7 +5252,7 @@ exports.createEmergency = onCall(
       }
 
       // Crear documento de llamada grupal de emergencia con ID específico (emergencyId)
-      await db.collection("video_calls").doc(emergencyRef.id).set({
+      const videoCallData = {
         callId: emergencyRef.id,
         callerId: userId,
         callerName: childName,
@@ -5258,12 +5261,20 @@ exports.createEmergency = onCall(
         isEmergency: true,
         groupId: null,
         participants: participants,
+        participantIds: parentIds, // ✅ Array simple de IDs para queries
         status: "ringing",
         createdAt: FieldValue.serverTimestamp(),
         endedAt: null,
         token: "",
         callType: "video",
-      });
+      };
+
+      console.log(`🔍 [createEmergency] Creando video_calls/${emergencyRef.id} con datos:`);
+      console.log(`   - status: ${videoCallData.status}`);
+      console.log(`   - participants: ${JSON.stringify(participants)}`);
+      console.log(`   - participantIds: ${JSON.stringify(parentIds)}`);
+
+      await db.collection("video_calls").doc(emergencyRef.id).set(videoCallData);
 
       console.log(`✅ Videollamada de emergencia creada con ID: ${emergencyRef.id}`);
 

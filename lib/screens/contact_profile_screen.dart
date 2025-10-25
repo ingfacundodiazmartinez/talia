@@ -158,44 +158,24 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
   }
 
   Future<void> _startVideoCall() async {
-    // Usar el método consolidado del servicio
-    final result = await _videoCallService.initiateCall(
-      receiverId: widget.contactId,
-      receiverName: widget.contactName,
-      isVideo: true,
-    );
-
     if (!mounted) return;
 
-    if (result['success']) {
-      // Cerrar el perfil
-      Navigator.pop(context);
+    // Cerrar el perfil
+    Navigator.pop(context);
 
-      // Navegar a la pantalla de videollamada
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (context) => VideoCallScreen(
-            callId: result['channelName'],
-            channelName: result['channelName'],
-            token: result['token'],
-            uid: result['uid'],
-            isCaller: true,
-            remoteName: widget.contactName,
-          ),
+    // LÓGICA OPTIMISTA: Abrir pantalla inmediatamente
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => VideoCallScreen(
+          callId: DateTime.now().millisecondsSinceEpoch.toString(),
+          receiverId: widget.contactId,
+          remoteName: widget.contactName,
+          isCaller: true,
+          isVideo: true,
+          // Token y credenciales se obtienen en background
         ),
-      );
-    } else {
-      // Mostrar error
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Error al iniciar videollamada: ${result['error'].toString().length > 80 ? result['error'].toString().substring(0, 80) + '...' : result['error']}',
-          ),
-          backgroundColor: Colors.red,
-          duration: Duration(seconds: 5),
-        ),
-      );
-    }
+      ),
+    );
   }
 
   Future<void> _showEditNameDialog(String currentName) async {
@@ -300,44 +280,24 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
   }
 
   Future<void> _startAudioCall() async {
-    // Usar el método consolidado del servicio
-    final result = await _videoCallService.initiateCall(
-      receiverId: widget.contactId,
-      receiverName: widget.contactName,
-      isVideo: false,
-    );
-
     if (!mounted) return;
 
-    if (result['success']) {
-      // Cerrar el perfil
-      Navigator.pop(context);
+    // Cerrar el perfil
+    Navigator.pop(context);
 
-      // Navegar a la pantalla de llamada de audio
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (context) => AudioCallScreen(
-            callId: result['channelName'],
-            channelName: result['channelName'],
-            token: result['token'],
-            uid: result['uid'],
-            isCaller: true,
-            remoteName: widget.contactName,
-          ),
+    // LÓGICA OPTIMISTA: Abrir pantalla inmediatamente
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => VideoCallScreen(
+          callId: DateTime.now().millisecondsSinceEpoch.toString(),
+          receiverId: widget.contactId,
+          remoteName: widget.contactName,
+          isCaller: true,
+          isVideo: false,  // Modo de audio
+          // Token y credenciales se obtienen en background
         ),
-      );
-    } else {
-      // Mostrar error
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Error al iniciar llamada: ${result['error'].toString().length > 80 ? result['error'].toString().substring(0, 80) + '...' : result['error']}',
-          ),
-          backgroundColor: Colors.red,
-          duration: Duration(seconds: 5),
-        ),
-      );
-    }
+      ),
+    );
   }
 
   @override

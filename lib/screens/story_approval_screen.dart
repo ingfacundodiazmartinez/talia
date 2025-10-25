@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/story.dart';
 import '../services/story_service.dart';
+import '../services/unread_messages_service.dart';
 
 class StoryApprovalScreen extends StatefulWidget {
   final String? childId; // Opcional: filtrar por hijo específico
@@ -528,6 +529,8 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen> with SingleTi
   Future<void> _approveStory(Story story) async {
     try {
       await _storyService.approveStory(story.id);
+      // Actualizar badge del ícono de la app
+      await UnreadMessagesService().updateBadgeCount();
     } catch (e) {
       print('❌ Error aprobando historia: $e');
       // Solo mostrar error si realmente falló la aprobación
@@ -628,6 +631,9 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen> with SingleTi
         story.id,
         reason: reason.isEmpty ? null : reason,
       );
+
+      // Actualizar badge del ícono de la app
+      await UnreadMessagesService().updateBadgeCount();
 
       // Historia rechazada - sin mensaje
     } catch (e) {

@@ -70,6 +70,13 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+
+    // Firebase Messaging (para servicio nativo personalizado)
+    implementation("com.google.firebase:firebase-messaging:24.1.0")
+
+    // ExifInterface para corregir rotación de imágenes
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
+
     // DeepAR SDK from official Maven repository
     implementation("ai.deepar.ar:DeepAR:5.6.4")
 

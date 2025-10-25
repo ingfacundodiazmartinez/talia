@@ -147,29 +147,18 @@ class _EmergencyButtonState extends State<EmergencyButton>
     try {
       print('📞 Uniéndose a llamada de emergencia...');
 
-      // Generar token de Agora
-      final functions = FirebaseFunctions.instance;
-      final result = await functions.httpsCallable('generateAgoraToken').call({
-        'channelName': channelName,
-        'uid': 0,
-      });
-
-      final token = result.data['token'] as String;
-      final uid = result.data['uid'] as int;
-
-      print('✅ Token generado para hijo (caller): $token');
-
-      // Navegar a la pantalla de videollamada
+      // LÓGICA OPTIMISTA: Abrir pantalla inmediatamente
       if (mounted) {
         await Navigator.of(context, rootNavigator: true).push(
           MaterialPageRoute(
             builder: (context) => VideoCallScreen(
               callId: emergencyId,
               channelName: channelName,
-              token: token,
-              uid: uid,
+              receiverId: 'emergency_parents', // ID especial para emergencias
               isCaller: true,
               remoteName: 'Padres',
+              isVideo: true,
+              // Token y uid se generarán en background dentro del VideoCallScreen
             ),
           ),
         );

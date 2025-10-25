@@ -3,26 +3,31 @@ import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import '../services/video_call_service.dart';
 import '../services/voip_service.dart';
 import '../services/callkit_service.dart';
 
 class VideoCallScreen extends StatefulWidget {
   final String callId;
-  final String channelName;
-  final String token;
-  final int uid;
+  final String? channelName;  // Opcional para lógica optimista
+  final String? token;  // Opcional para lógica optimista
+  final int? uid;  // Opcional para lógica optimista
   final bool isCaller;
   final String remoteName;
+  final String receiverId;  // Para iniciar llamada en background
+  final bool isVideo;  // Para saber si es video o audio
 
   const VideoCallScreen({
     super.key,
     required this.callId,
-    required this.channelName,
-    required this.token,
-    required this.uid,
+    this.channelName,
+    this.token,
+    this.uid,
     required this.isCaller,
     required this.remoteName,
+    required this.receiverId,
+    required this.isVideo,
   });
 
   @override
@@ -37,23 +42,86 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   bool _isJoined = false;
   int? _localUid;
   Set<int> _remoteUids = {}; // Múltiples UIDs remotos para llamadas grupales
-  bool _isConnecting = true;
+  String _connectionStatus = 'Conectando...'; // 'Conectando...', 'Llamando...', 'Conectado'
   bool _isEnding = false;
+
+  // Datos de llamada (se llenan en background si es optimista)
+  String? _channelName;
+  String? _token;
+  int? _uid;
 
   @override
   void initState() {
     super.initState();
+    // Inicializar datos locales con los proporcionados
+    _channelName = widget.channelName;
+    _token = widget.token;
+    _uid = widget.uid;
+
+    // Si es llamada de audio, deshabilitar cámara automáticamente
+    if (!widget.isVideo) {
+      _isCameraOff = true;
+    }
+
     _initializeCall();
     _listenToCallStatus();
   }
 
-  /// Inicializar la llamada
+  /// Inicializar la llamada con lógica optimista
   Future<void> _initializeCall() async {
     try {
-      // Inicializar Agora
+      // Paso 1: Si es caller y no hay token/uid, obtener credenciales
+      if (widget.isCaller && (_token == null || _uid == null)) {
+        print('📱 [Optimistic] Iniciando llamada en background...');
+        setState(() {
+          _connectionStatus = 'Conectando...';
+        });
+
+        // Si ya tenemos channelName (ej: emergencia), solo generar token
+        if (_channelName != null) {
+          print('📱 [Emergency] Channel ya existe: $_channelName, generando token...');
+
+          final functions = FirebaseFunctions.instance;
+          final result = await functions.httpsCallable('generateAgoraToken').call({
+            'channelName': _channelName,
+            'uid': 0,
+          });
+
+          setState(() {
+            _token = result.data['token'] as String;
+            _uid = result.data['uid'] as int;
+            _connectionStatus = 'Llamando...';
+          });
+
+          print('✅ [Emergency] Token generado: uid=$_uid');
+        } else {
+          // Caso normal: iniciar llamada completa
+          final result = await _videoCallService.initiateCall(
+            receiverId: widget.receiverId,
+            receiverName: widget.remoteName,
+            isVideo: widget.isVideo,
+          );
+
+          if (result['success'] != true) {
+            throw Exception(result['error'] ?? 'Error iniciando llamada');
+          }
+
+          // Actualizar datos de llamada
+          setState(() {
+            _channelName = result['channelName'];
+            _token = result['token'];
+            _uid = result['uid'];
+            _connectionStatus = 'Llamando...';
+          });
+
+          print('✅ [Optimistic] Datos de llamada obtenidos: channel=$_channelName, uid=$_uid');
+        }
+      }
+
+      // Paso 2: Inicializar Agora
       await _videoCallService.initializeAgora();
 
-      // Configurar event handler personalizado para esta pantalla
+      // Paso 3: Configurar event handlers
       _videoCallService.engine?.registerEventHandler(
         RtcEngineEventHandler(
           onJoinChannelSuccess: (RtcConnection connection, int elapsed) {
@@ -61,15 +129,19 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
             print('✅ UID local asignado: ${connection.localUid}');
             setState(() {
               _isJoined = true;
-              _localUid = connection.localUid; // Guardar UID real
-              _isConnecting = false;
+              _localUid = connection.localUid;
+              if (widget.isCaller) {
+                _connectionStatus = 'Llamando...';
+              } else {
+                _connectionStatus = 'Conectado';
+              }
             });
           },
           onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
             print('👤 Usuario remoto unido: $remoteUid');
             setState(() {
               _remoteUids.add(remoteUid);
-              _isConnecting = false;
+              _connectionStatus = 'Conectado';
             });
           },
           onUserOffline: (RtcConnection connection, int remoteUid, UserOfflineReasonType reason) {
@@ -78,31 +150,35 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
               _remoteUids.remove(remoteUid);
             });
 
-            // Si todos los usuarios remotos se desconectaron, terminar la llamada
             if (_remoteUids.isEmpty) {
               _endCall();
             }
           },
           onError: (ErrorCodeType err, String msg) {
             print('❌ Error de Agora: $err - $msg');
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Error en la videollamada: $msg'),
-                backgroundColor: Colors.red,
-              ),
-            );
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Error en la llamada: $msg'),
+                  backgroundColor: Colors.red,
+                ),
+              );
+            }
           },
         ),
       );
 
-      // Unirse al canal
-      await _videoCallService.joinChannel(
-        channelName: widget.channelName,
-        token: widget.token,
-        uid: widget.uid,
-      );
-
-      print('🚀 Llamada inicializada exitosamente');
+      // Paso 4: Unirse al canal (esperar a tener todos los datos)
+      if (_channelName != null && _token != null && _uid != null) {
+        await _videoCallService.joinChannel(
+          channelName: _channelName!,
+          token: _token!,
+          uid: _uid!,
+        );
+        print('🚀 Llamada inicializada exitosamente');
+      } else {
+        throw Exception('Faltan datos de llamada (channel, token, o uid)');
+      }
     } catch (e) {
       print('❌ Error inicializando llamada: $e');
       if (mounted) {
@@ -120,13 +196,23 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   /// Escuchar cambios en el estado de la llamada
   void _listenToCallStatus() {
     _videoCallService.watchCallStatus(widget.callId).listen((snapshot) {
-      if (!snapshot.exists) return;
+      print('🔍 [VideoCallScreen] Snapshot recibido para callId: ${widget.callId}');
+      print('🔍 [VideoCallScreen] Snapshot existe: ${snapshot.exists}');
+
+      if (!snapshot.exists) {
+        print('⚠️ [VideoCallScreen] Snapshot no existe, ignorando');
+        return;
+      }
 
       final data = snapshot.data() as Map<String, dynamic>;
       final status = data['status'];
 
+      print('🔍 [VideoCallScreen] Status detectado: $status');
+      print('🔍 [VideoCallScreen] Datos completos: $data');
+
       if ((status == 'ended' || status == 'rejected') && !_isEnding) {
         // La llamada terminó o fue rechazada
+        print('⚠️ [VideoCallScreen] Status es ended/rejected, llamando a _endCall()');
         _endCall();
       }
     });
@@ -287,7 +373,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       // Usar VideoCallService para enviar la invitación
       final result = await _videoCallService.inviteToOngoingCall(
         callId: widget.callId,
-        channelName: widget.channelName,
+        channelName: _channelName ?? widget.callId, // Usar state local o fallback a callId
         invitedUserId: userId,
         invitedUserName: userName,
       );
@@ -365,8 +451,8 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
           else
             _oneToOneCallLayout(),
 
-          // Indicador de conexión
-          if (_isConnecting)
+          // Indicador de conexión optimista
+          if (_connectionStatus != 'Conectado')
             Center(
               child: Container(
                 padding: const EdgeInsets.all(24),
@@ -382,7 +468,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                     ),
                     const SizedBox(height: 16),
                     Text(
-                      widget.isCaller ? 'Llamando...' : 'Conectando...',
+                      _connectionStatus, // 'Conectando...' o 'Llamando...'
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 18,

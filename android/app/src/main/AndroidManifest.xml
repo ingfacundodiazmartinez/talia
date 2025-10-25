@@ -89,9 +89,9 @@
              FIREBASE CLOUD MESSAGING SERVICE
              ═══════════════════════════════════════════════════════════════ -->
 
-        <!-- Servicio para recibir notificaciones FCM en background -->
+        <!-- Servicio personalizado para FCM -->
         <service
-            android:name="io.flutter.plugins.firebase.messaging.FlutterFirebaseMessagingService"
+            android:name=".MyFirebaseMessagingService"
             android:exported="false">
             <intent-filter>
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />

@@ -38,6 +38,10 @@ class ForegroundMessageListener {
   /// Timestamp de inicio del listener para ignorar mensajes antiguos
   DateTime? _startTime;
 
+  /// Map de chats que fueron abiertos desde notificaciones background
+  /// Key: chatId, Value: timestamp cuando se ignoró
+  final Map<String, DateTime> _ignoredChatsFromNotifications = {};
+
   /// Inicializar el listener con el navigatorKey global de la app
   void initialize(GlobalKey<NavigatorState> navigatorKey) {
     appLogger.log('══════════════════════════════════════════════════════════════', level: 'INFO');
@@ -73,6 +77,19 @@ class ForegroundMessageListener {
   void setCurrentOpenChat(String? chatId) {
     _currentOpenChatId = chatId;
     appLogger.log('📖 Chat abierto: ${chatId ?? "ninguno"}', level: 'INFO');
+  }
+
+  /// Marcar un chat como abierto desde una notificación background
+  /// Esto evita que se muestre un banner custom inmediatamente después
+  void markChatOpenedFromNotification(String chatId) {
+    _ignoredChatsFromNotifications[chatId] = DateTime.now();
+    appLogger.log('🔕 Chat $chatId marcado como ignorado (abierto desde notificación)', level: 'INFO');
+
+    // Limpiar después de 10 segundos
+    Future.delayed(Duration(seconds: 10), () {
+      _ignoredChatsFromNotifications.remove(chatId);
+      appLogger.log('✅ Chat $chatId ya no está ignorado', level: 'INFO');
+    });
   }
 
   /// Comenzar a escuchar chats y notificaciones del usuario
@@ -299,6 +316,14 @@ class ForegroundMessageListener {
       return;
     }
 
+    // Ignorar si el grupo fue abierto recientemente desde una notificación background
+    if (_ignoredChatsFromNotifications.containsKey(groupId)) {
+      final ignoredAt = _ignoredChatsFromNotifications[groupId]!;
+      final secondsSinceIgnored = DateTime.now().difference(ignoredAt).inSeconds;
+      appLogger.log('🔕 Mensaje ignorado: grupo abierto desde notificación hace $secondsSinceIgnored segundos', level: 'INFO');
+      return;
+    }
+
     // Verificar si el grupo está silenciado para el usuario actual
     final isMuted = groupData['muted_${user.uid}'] as bool? ?? false;
     if (isMuted) {
@@ -388,6 +413,14 @@ class ForegroundMessageListener {
     // Ignorar si el usuario está viendo este chat
     if (_currentOpenChatId == chatId) {
       appLogger.log('📖 Mensaje ignorado: usuario está viendo el chat', level: 'INFO');
+      return;
+    }
+
+    // Ignorar si el chat fue abierto recientemente desde una notificación background
+    if (_ignoredChatsFromNotifications.containsKey(chatId)) {
+      final ignoredAt = _ignoredChatsFromNotifications[chatId]!;
+      final secondsSinceIgnored = DateTime.now().difference(ignoredAt).inSeconds;
+      appLogger.log('🔕 Mensaje ignorado: chat abierto desde notificación hace $secondsSinceIgnored segundos', level: 'INFO');
       return;
     }
 

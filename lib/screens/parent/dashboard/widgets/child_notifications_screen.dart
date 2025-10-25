@@ -186,18 +186,25 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
           print('🔍 Total documentos: ${allDocs.length}, Buscando notificaciones para childId: ${widget.childId}');
 
           // Filtrar solo las notificaciones relacionadas a este hijo
+          // Y EXCLUIR notificaciones de mensajes de chat
           // Ya vienen ordenadas por timestamp desde Firestore
           final childNotifications = allDocs.where((doc) {
             final data = doc.data() as Map<String, dynamic>;
             final notifData = data['data'] as Map<String, dynamic>?;
             final senderId = data['senderId'] as String?;
+            final type = data['type'] as String?;
+
+            // Filtrar notificaciones de chat
+            if (type == 'chat_message') {
+              return false; // Skip chat notifications
+            }
 
             // Debug: mostrar datos de cada notificación
             print('  📧 Notificación ${doc.id.substring(0, 8)}: '
                 'senderId=$senderId, '
                 'data.childId=${notifData?['childId']}, '
                 'data.senderId=${notifData?['senderId']}, '
-                'type=${data['type']}');
+                'type=$type');
 
             // Verificar si la notificación está relacionada con este hijo
             final isRelated = notifData?['childId'] == widget.childId ||
@@ -521,6 +528,11 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
         final data = doc.data();
         final notifData = data['data'] as Map<String, dynamic>?;
 
+        // Filtrar notificaciones de chat
+        if (data['type'] == 'chat_message') {
+          continue; // Skip chat notifications
+        }
+
         // Verificar si está relacionada con este hijo
         final isRelatedToChild = notifData?['childId'] == widget.childId ||
             notifData?['senderId'] == widget.childId ||
@@ -625,11 +637,16 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
           .where('read', isEqualTo: false)
           .get();
 
-      // Filtrar solo las relacionadas a este hijo
+      // Filtrar solo las relacionadas a este hijo y excluir notificaciones de chat
       int markedCount = 0;
       for (final doc in notificationsSnapshot.docs) {
         final data = doc.data();
         final notifData = data['data'] as Map<String, dynamic>?;
+
+        // Filtrar notificaciones de chat
+        if (data['type'] == 'chat_message') {
+          continue; // Skip chat notifications
+        }
 
         // Verificar si la notificación está relacionada con este hijo
         if (notifData?['childId'] == widget.childId ||

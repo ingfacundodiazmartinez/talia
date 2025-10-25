@@ -17,6 +17,8 @@ import '../services/user_profile_cache_service.dart';
 import '../services/read_receipts_service.dart';
 import '../services/delivery_receipts_service.dart';
 import '../services/audio_processing_service.dart';
+import '../services/offline_queue_service.dart';
+import '../services/network_status_service.dart';
 
 /// Controller optimista para chat individual
 ///
@@ -219,8 +221,20 @@ class ChatControllerOptimistic extends ChangeNotifier {
           .where((message) {
             // Filtrar mensajes anteriores al clearedAt
             if (clearedAt != null && message.timestamp != null) {
-              return message.timestamp!.compareTo(clearedAt) > 0;
+              if (message.timestamp!.compareTo(clearedAt) <= 0) {
+                return false;
+              }
             }
+
+            // ✅ SEGURIDAD: Filtrar mensajes del contacto sin moderación aprobada/bloqueada
+            if (message.senderId != currentUserId) {
+              if (message.moderationStatus != ModerationStatus.approved &&
+                  message.moderationStatus != ModerationStatus.blocked) {
+                print('🔒 [Seguridad] Ignorando mensaje pendiente en carga inicial: ${message.id}');
+                return false;
+              }
+            }
+
             return true;
           })
           .toList();
@@ -336,8 +350,20 @@ class ChatControllerOptimistic extends ChangeNotifier {
           .where((message) {
             // Filtrar mensajes anteriores al clearedAt
             if (_clearedAtTimestamp != null && message.timestamp != null) {
-              return message.timestamp!.compareTo(_clearedAtTimestamp!) > 0;
+              if (message.timestamp!.compareTo(_clearedAtTimestamp!) <= 0) {
+                return false;
+              }
             }
+
+            // ✅ SEGURIDAD: Filtrar mensajes del contacto sin moderación aprobada/bloqueada
+            if (message.senderId != currentUserId) {
+              if (message.moderationStatus != ModerationStatus.approved &&
+                  message.moderationStatus != ModerationStatus.blocked) {
+                print('🔒 [Seguridad] Ignorando mensaje pendiente en paginación: ${message.id}');
+                return false;
+              }
+            }
+
             return true;
           })
           .toList();
@@ -389,6 +415,16 @@ class ChatControllerOptimistic extends ChangeNotifier {
         for (final change in snapshot.docChanges) {
           if (change.type == DocumentChangeType.added) {
             final newMessage = ChatMessage.fromFirestore(change.doc, currentUserId: currentUserId);
+
+            // ✅ SEGURIDAD: Si el mensaje NO es propio, verificar moderationStatus
+            // Solo mostrar mensajes APPROVED o BLOCKED (nunca PENDING o null)
+            if (newMessage.senderId != currentUserId) {
+              if (newMessage.moderationStatus != ModerationStatus.approved &&
+                  newMessage.moderationStatus != ModerationStatus.blocked) {
+                print('🔒 [Seguridad] Ignorando mensaje pendiente de moderación: ${newMessage.id} (status: ${newMessage.moderationStatus})');
+                continue; // No agregar a la lista hasta que esté aprobado o bloqueado
+              }
+            }
 
             // ✅ CASO ESPECIAL: Mensajes bloqueados propios (deben reemplazar el optimista)
             if (newMessage.senderId == currentUserId &&
@@ -456,6 +492,9 @@ class ChatControllerOptimistic extends ChangeNotifier {
                 // Reproducir sonido de recepción
                 _soundService.playReceiveSound();
 
+                // Marcar mensajes como leídos inmediatamente
+                _readReceiptsService.markMessagesAsSeen(chatId: chatId);
+
                 notifyListeners();
               } else {
                 print('🚫 [Realtime] Ignorando duplicado del contacto: ${newMessage.id}');
@@ -469,24 +508,29 @@ class ChatControllerOptimistic extends ChangeNotifier {
             final index = _messages.indexWhere((m) => m.id == updatedMessage.id);
 
             if (index != -1) {
-              // Si es mensaje propio, actualizar status y reacciones
+              // Actualizar mensaje completamente (tanto propios como del contacto)
+              // Esto asegura que cambios en readBy, isRead, status, reacciones, etc. se reflejen
               if (updatedMessage.senderId == currentUserId) {
-                print('🔄 [Realtime] Actualizando mensaje propio: ${updatedMessage.id}');
-                final currentMessage = _messages[index];
-                final updatedWithStatus = currentMessage.copyWith(
-                  status: updatedMessage.status,
-                  timestamp: updatedMessage.timestamp ?? currentMessage.timestamp,
-                  reactions: updatedMessage.reactions, // ✅ Actualizar reacciones también
-                );
-                _messages[index] = updatedWithStatus;
-                _cacheService.saveMessage(chatId, updatedWithStatus);
+                print('🔄 [Realtime] Actualizando mensaje propio: ${updatedMessage.id} (status: ${updatedMessage.status})');
               } else {
-                // Para mensajes del contacto, actualizar completamente
                 print('🔄 [Realtime] Mensaje del contacto actualizado: ${updatedMessage.id}');
-                _messages[index] = updatedMessage;
-                _cacheService.saveMessage(chatId, updatedMessage);
               }
+
+              _messages[index] = updatedMessage;
+              _cacheService.saveMessage(chatId, updatedMessage);
               notifyListeners();
+            } else {
+              // ✅ SEGURIDAD: El mensaje no existe en la lista (fue filtrado por pending)
+              // Ahora se actualizó a approved/blocked, agregarlo a la lista
+              if (updatedMessage.senderId != currentUserId) {
+                if (updatedMessage.moderationStatus == ModerationStatus.approved ||
+                    updatedMessage.moderationStatus == ModerationStatus.blocked) {
+                  print('✅ [Realtime] Agregando mensaje bloqueado/aprobado que estaba pendiente: ${updatedMessage.id}');
+                  _messages.insert(0, updatedMessage);
+                  _cacheService.saveMessage(chatId, updatedMessage);
+                  notifyListeners();
+                }
+              }
             }
           }
         }
@@ -610,11 +654,11 @@ class ChatControllerOptimistic extends ChangeNotifier {
           final moderationSettings = contactDoc.data()['moderationSettings'] as Map<String, dynamic>?;
 
           if (moderationSettings != null) {
-            // Verificar si el RECEPTOR tiene moderación activada
-            final receiverSettings = moderationSettings[contactId] as Map<String, dynamic>?;
-            if (receiverSettings != null && receiverSettings['enabled'] == true) {
+            // Verificar si el EMISOR (usuario actual) tiene moderación activada para este contacto
+            final senderSettings = moderationSettings[currentUserId] as Map<String, dynamic>?;
+            if (senderSettings != null && senderSettings['enabled'] == true) {
               moderationEnabled = true;
-              print('🔒 Contacto receptor tiene moderación activa');
+              print('🔒 Usuario emisor tiene moderación activa');
             }
           }
         }
@@ -697,21 +741,48 @@ class ChatControllerOptimistic extends ChangeNotifier {
       // Actualizar documento del chat
       await _updateChatDocument(text);
 
-      // Enviar notificación
-      await _sendNotification(text);
+      // ✅ SEGURIDAD: La Cloud Function enviará la notificación SOLO si el mensaje es aprobado
+      // No enviar notificación desde cliente para evitar leak de contenido ofensivo
 
       print('✅ [ChatController] Mensaje enviado: $text');
     } catch (e) {
       print('❌ [ChatController] Error enviando mensaje: $e');
 
-      // Marcar como error
-      final errorMessage = optimisticMessage.copyWith(
-        status: MessageStatus.error,
-        retryCount: (optimisticMessage.retryCount ?? 0) + 1,
-      );
+      // Si no hay conexión, encolar el mensaje
+      if (!NetworkStatusService().isConnected) {
+        print('📴 Sin conexión - encolando mensaje para envío posterior');
 
-      _updateMessage(tempId, errorMessage);
-      await _cacheService.updateMessageStatus(chatId, tempId, MessageStatus.error);
+        await OfflineQueueService().enqueueOperation(
+          type: OfflineQueueService.OP_SEND_MESSAGE,
+          data: {
+            'chatId': chatId,
+            'message': {
+              'senderId': currentUserId,
+              'text': text,
+              'timestamp': FieldValue.serverTimestamp(),
+              'isRead': false,
+              if (replyTo != null) 'replyTo': replyTo,
+            },
+            'tempId': tempId, // Para actualizar el mensaje optimista cuando se envíe
+          },
+          priority: 2, // Alta prioridad para mensajes
+        );
+
+        // Marcar como pending (en cola para envío)
+        final pendingMessage = optimisticMessage.copyWith(
+          status: MessageStatus.sending, // Mostrar como "enviando"
+        );
+        _updateMessage(tempId, pendingMessage);
+        await _cacheService.updateMessageStatus(chatId, tempId, MessageStatus.sending);
+      } else {
+        // Error de red u otro, marcar como error
+        final errorMessage = optimisticMessage.copyWith(
+          status: MessageStatus.error,
+          retryCount: (optimisticMessage.retryCount ?? 0) + 1,
+        );
+        _updateMessage(tempId, errorMessage);
+        await _cacheService.updateMessageStatus(chatId, tempId, MessageStatus.error);
+      }
     }
   }
 
@@ -787,50 +858,30 @@ class ChatControllerOptimistic extends ChangeNotifier {
       // Commit batch
       await batch.commit();
 
-      print('✅ [ChatController] Mensajes marcados como leídos (batch)');
+      // Marcar mensajes individuales como leídos (con read receipts)
+      await _readReceiptsService.markMessagesAsSeen(chatId: chatId);
+
+      print('✅ [ChatController] Mensajes marcados como leídos (batch + read receipts)');
     } catch (e) {
       print('❌ [ChatController] Error en batch update: $e');
     }
   }
 
   /// Actualizar documento del chat
+  /// ⚠️ SEGURIDAD: NO actualizar lastMessage ni unreadCount desde cliente (solo Cloud Function después de moderar)
   Future<void> _updateChatDocument(String lastMessage) async {
-    print('📊 [ChatController] Incrementando unreadCount_$contactId para chat: $chatId');
+    print('📊 [ChatController] Actualizando chat $chatId (sin lastMessage ni unreadCount - lo hará Cloud Function)');
     await _firestore.collection('chats').doc(chatId).set({
       'participants': [currentUserId, contactId],
-      'lastMessage': lastMessage,
-      'lastMessageTime': FieldValue.serverTimestamp(),
-      'lastMessageSender': currentUserId,
       'deletedBy': [],
-      // Incrementar contador de no leídos del destinatario
-      'unreadCount_$contactId': FieldValue.increment(1),
+      // ❌ NO actualizar lastMessage ni unreadCount - Cloud Function lo hace después de moderar
     }, SetOptions(merge: true));
   }
 
-  /// Enviar notificación al contacto
-  Future<void> _sendNotification(String messageText) async {
-    try {
-      final currentUserDoc =
-          await _firestore.collection('users').doc(currentUserId).get();
-      final userData = currentUserDoc.data();
-      final senderName = userData?['name'] ?? 'Usuario';
-      final senderPhotoUrl = userData?['photoURL'];
-
-      await _notificationService.sendChatMessageNotification(
-        recipientId: contactId,
-        senderId: currentUserId,
-        senderName: senderName,
-        senderPhotoUrl: senderPhotoUrl,
-        messageText: messageText,
-        chatId: chatId,
-        isGroup: false,
-      );
-
-      print('✅ [ChatController] Notificación creada en Firestore');
-    } catch (e) {
-      print('⚠️ [ChatController] Error enviando notificación: $e');
-    }
-  }
+  /// ⚠️ FUNCIÓN ELIMINADA POR SEGURIDAD
+  /// Las notificaciones ahora solo se envían desde Cloud Functions DESPUÉS de moderar
+  /// Esto previene que el receptor vea contenido ofensivo antes de que sea bloqueado
+  /// Ver: functions/index.js -> moderateMessage (línea 3949)
 
   /// Stream del estado online del contacto
   Stream<DocumentSnapshot> watchContactStatus() {
@@ -921,7 +972,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
       _pendingMessages.removeWhere((m) => m.id == tempId);
 
       await _updateChatDocument('📷 Imagen');
-      await _sendNotification('📷 Imagen');
+      // ✅ SEGURIDAD: La Cloud Function enviará la notificación
       print('✅ [ChatController] Imagen enviada');
     } catch (e) {
       print('❌ [ChatController] Error enviando imagen: $e');
@@ -1009,7 +1060,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
       _pendingMessages.removeWhere((m) => m.id == tempId);
 
       await _updateChatDocument('🎥 Video');
-      await _sendNotification('🎥 Video');
+      // ✅ SEGURIDAD: La Cloud Function enviará la notificación
       print('✅ [ChatController] Video enviado');
     } catch (e) {
       print('❌ [ChatController] Error enviando video: $e');
@@ -1097,7 +1148,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
       _pendingMessages.removeWhere((m) => m.id == tempId);
 
       await _updateChatDocument('🎤 Audio');
-      await _sendNotification('🎤 Audio');
+      // ✅ SEGURIDAD: La Cloud Function enviará la notificación
       print('✅ [ChatController] Audio enviado con waveform');
     } catch (e) {
       print('❌ [ChatController] Error enviando audio: $e');
@@ -1126,7 +1177,44 @@ class ChatControllerOptimistic extends ChangeNotifier {
     _typingService.stopTyping();
   }
 
-  /// Eliminar mensaje (con límite de 5 minutos)
+  /// Actualizar mensaje bloqueado con nuevo texto (para editar y re-moderar)
+  Future<void> updateBlockedMessage(String messageId, String newText) async {
+    if (currentUserId.isEmpty) return;
+
+    try {
+      print('🔄 Actualizando mensaje bloqueado ${messageId.substring(0, 8)}... con nuevo texto');
+
+      // ✅ NO actualizar optimísticamente - evita race condition donde el receptor ve el texto ofensivo
+      // La Cloud Function actualizará el mensaje después de moderarlo
+
+      // ✅ Llamar a checkMessageBeforeSending - la Cloud Function actualiza el mensaje
+      print('🔒 Re-verificando mensaje con moderación...');
+
+      final functions = FirebaseFunctions.instance;
+      final result = await functions.httpsCallable('checkMessageBeforeSending').call({
+        'chatId': chatId,
+        'text': newText,
+        'type': 'text',
+        'messageId': messageId, // Pasar messageId para actualizar en lugar de crear
+      });
+
+      final approved = result.data['approved'] as bool;
+
+      if (!approved) {
+        final reason = result.data['reason'] as String? ?? 'Contenido inapropiado detectado';
+        print('🚫 Mensaje re-bloqueado: $reason');
+        // ✅ La Cloud Function ya actualizó el mensaje - no hacemos nada más
+        return;
+      }
+
+      // ✅ Mensaje aprobado - la Cloud Function ya lo actualizó
+      print('✅ Mensaje actualizado y aprobado por Cloud Function');
+    } catch (e) {
+      print('❌ Error actualizando mensaje bloqueado: $e');
+      rethrow;
+    }
+  }
+
   Future<bool> deleteMessage(String messageId, Timestamp? timestamp) async {
     if (currentUserId.isEmpty) return false;
 

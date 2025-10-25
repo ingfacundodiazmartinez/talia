@@ -66,13 +66,11 @@ class _ParentMainShellState extends State<ParentMainShell> {
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
   // GlobalKeys para mantener el estado de navegación de cada tab
-  final List<GlobalKey<NavigatorState>> _navigatorKeys = [
-    GlobalKey<NavigatorState>(), // Dashboard
-    GlobalKey<NavigatorState>(), // Chats
-    GlobalKey<NavigatorState>(), // Contactos
-    GlobalKey<NavigatorState>(), // Lista Blanca
-    GlobalKey<NavigatorState>(), // Perfil
-  ];
+  final GlobalKey<NavigatorState> _dashboardNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'ParentDashboard');
+  final GlobalKey<NavigatorState> _chatsNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'ParentChats');
+  final GlobalKey<NavigatorState> _contactsNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'ParentContacts');
+  final GlobalKey<NavigatorState> _whitelistNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'ParentWhitelist');
+  final GlobalKey<NavigatorState> _profileNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'ParentProfile');
 
   @override
   void initState() {
@@ -98,20 +96,23 @@ class _ParentMainShellState extends State<ParentMainShell> {
     try {
       final groupId = data['groupId'] as String?;
       final chatId = data['chatId'] as String?;
+      final isGroup = data['isGroup'] == true || data['isGroup'] == 'true';
 
       // Primero cambiar al tab de chats
       setState(() => _selectedIndex = 1);
 
       // Determinar si es un chat grupal o 1-on-1
-      if (groupId != null) {
+      // Si isGroup es true, el chatId es en realidad el groupId
+      if (groupId != null || (isGroup && chatId != null)) {
         // Notificación de mensaje grupal
+        final effectiveGroupId = groupId ?? chatId!;
         final groupName = data['groupName'] as String? ?? 'Grupo';
-        print('✅ [ParentMainShell] Navigating to group chat: $groupName (groupId: $groupId)');
+        print('✅ [ParentMainShell] Navigating to group chat: $groupName (groupId: $effectiveGroupId)');
 
         await Navigator.of(context).push(
           MaterialPageRoute(
             builder: (context) => GroupChatScreen(
-              groupId: groupId,
+              groupId: effectiveGroupId,
               groupName: groupName,
             ),
           ),
@@ -162,11 +163,10 @@ class _ParentMainShellState extends State<ParentMainShell> {
     }
   }
 
-  /// Construye un Navigator para cada tab, permitiendo mantener
-  /// el estado de navegación independiente en cada uno
-  Widget _buildNavigator(int index, Widget child) {
+  /// Construye un Navigator para un tab específico
+  Widget _buildNavigator(GlobalKey<NavigatorState> key, Widget child) {
     return Navigator(
-      key: _navigatorKeys[index],
+      key: key,
       onGenerateRoute: (RouteSettings settings) {
         return MaterialPageRoute(
           builder: (BuildContext context) => child,
@@ -178,14 +178,39 @@ class _ParentMainShellState extends State<ParentMainShell> {
 
   /// Callback cuando cambia la navegación en cualquier tab
   void _onNavigationChanged() {
-    setState(() {
-      // Rebuild para actualizar visibilidad del bottom nav bar
+    // Usar addPostFrameCallback para evitar llamar setState durante build
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        setState(() {
+          // Rebuild para actualizar visibilidad del bottom nav bar
+        });
+      }
     });
   }
 
   /// Verifica si el tab actual tiene rutas push (para ocultar bottom nav bar)
   bool get _hasNestedRoute {
-    final navigator = _navigatorKeys[_selectedIndex].currentState;
+    GlobalKey<NavigatorState> currentKey;
+    switch (_selectedIndex) {
+      case 0:
+        currentKey = _dashboardNavigatorKey;
+        break;
+      case 1:
+        currentKey = _chatsNavigatorKey;
+        break;
+      case 2:
+        currentKey = _contactsNavigatorKey;
+        break;
+      case 3:
+        currentKey = _whitelistNavigatorKey;
+        break;
+      case 4:
+        currentKey = _profileNavigatorKey;
+        break;
+      default:
+        return false;
+    }
+    final navigator = currentKey.currentState;
     if (navigator == null) return false;
     // Si el navigator puede hacer pop, significa que hay rutas anidadas
     return navigator.canPop();
@@ -196,14 +221,28 @@ class _ParentMainShellState extends State<ParentMainShell> {
     final currentUserId = _auth.currentUser?.uid;
 
     return Scaffold(
-      body: IndexedStack(
-        index: _selectedIndex,
+      body: Stack(
         children: [
-          _buildNavigator(0, ParentDashboardScreen()),
-          _buildNavigator(1, ParentChatsScreen()),
-          _buildNavigator(2, ParentContactsScreen()),
-          _buildNavigator(3, WhitelistScreen()),
-          _buildNavigator(4, ParentProfileScreen()),
+          Offstage(
+            offstage: _selectedIndex != 0,
+            child: _buildNavigator(_dashboardNavigatorKey, ParentDashboardScreen()),
+          ),
+          Offstage(
+            offstage: _selectedIndex != 1,
+            child: _buildNavigator(_chatsNavigatorKey, ParentChatsScreen()),
+          ),
+          Offstage(
+            offstage: _selectedIndex != 2,
+            child: _buildNavigator(_contactsNavigatorKey, ParentContactsScreen()),
+          ),
+          Offstage(
+            offstage: _selectedIndex != 3,
+            child: _buildNavigator(_whitelistNavigatorKey, WhitelistScreen()),
+          ),
+          Offstage(
+            offstage: _selectedIndex != 4,
+            child: _buildNavigator(_profileNavigatorKey, ParentProfileScreen()),
+          ),
         ],
       ),
       // Ocultar bottom nav bar cuando hay rutas anidadas (ej: chat abierto)
@@ -281,97 +320,214 @@ class _ParentMainShellState extends State<ParentMainShell> {
       return Container(); // Usuario no autenticado
     }
 
+    // Obtener IDs de hijos vinculados
     return StreamBuilder<QuerySnapshot>(
       stream: _firestore
-          .collection('notifications')
-          .where('userId', isEqualTo: currentUserId)
-          .where('read', isEqualTo: false)
+          .collection('parentChildLinks')
+          .where('parentId', isEqualTo: currentUserId)
+          .where('status', isEqualTo: 'approved')
           .snapshots(),
-      builder: (context, notificationSnapshot) {
-        final unreadNotifications = notificationSnapshot.hasData
-            ? notificationSnapshot.data!.docs.length
-            : 0;
+      builder: (context, linksSnapshot) {
+        List<String> childrenIds = [];
+        if (linksSnapshot.hasData) {
+          childrenIds = linksSnapshot.data!.docs
+              .map((doc) => doc.data() as Map<String, dynamic>)
+              .map((data) => data['childId'] as String)
+              .toList();
+        }
 
+        // Si no hay hijos, contar directamente como 0
+        if (childrenIds.isEmpty) {
+          // Sin hijos vinculados, ambos contadores son 0
+          final dashboardBadgeCount = 0;
+
+          // Contar solicitudes de contacto pendientes (whitelist badge)
+          return StreamBuilder<QuerySnapshot>(
+            stream: _firestore
+                .collection('notifications')
+                .where('userId', isEqualTo: currentUserId)
+                .where('read', isEqualTo: false)
+                .where('type', isEqualTo: 'contact_request')
+                .snapshots(),
+            builder: (context, contactRequestsSnapshot) {
+              final whitelistBadgeCount = contactRequestsSnapshot.data?.docs.length ?? 0;
+
+              // Contar chats no leídos
+              return StreamBuilder<QuerySnapshot>(
+                stream: _firestore
+                    .collection('chats')
+                    .where('participants', arrayContains: currentUserId)
+                    .snapshots(),
+                builder: (context, chatSnapshot) {
+                  int totalUnreadMessages = 0;
+
+                  if (chatSnapshot.hasData) {
+                    for (var doc in chatSnapshot.data!.docs) {
+                      final data = doc.data() as Map<String, dynamic>?;
+                      if (data != null) {
+                        final unreadCount = data['unreadCount_$currentUserId'] as int? ?? 0;
+                        totalUnreadMessages += unreadCount;
+                      }
+                    }
+                  }
+
+                  return _buildBottomNavBar(
+                    colorScheme,
+                    showLabels,
+                    dashboardBadgeCount,
+                    totalUnreadMessages,
+                    whitelistBadgeCount,
+                  );
+                },
+              );
+            },
+          );
+        }
+
+        // Contar historias pendientes de los hijos
         return StreamBuilder<QuerySnapshot>(
           stream: _firestore
-              .collection('chats')
-              .where('participants', arrayContains: currentUserId)
+              .collection('stories')
+              .where('userId', whereIn: childrenIds)
+              .where('status', isEqualTo: 'pending')
               .snapshots(),
-          builder: (context, chatSnapshot) {
-            int totalUnreadMessages = 0;
+          builder: (context, storiesSnapshot) {
+            final pendingStoriesCount = storiesSnapshot.data?.docs.length ?? 0;
 
-            if (chatSnapshot.hasData) {
-              for (var doc in chatSnapshot.data!.docs) {
-                final data = doc.data() as Map<String, dynamic>?;
-                if (data != null) {
-                  final unreadCount = data['unreadCount_$currentUserId'] as int? ?? 0;
-                  totalUnreadMessages += unreadCount;
-                }
-              }
-            }
+            // Contar emergencias no resueltas de los hijos
+            return StreamBuilder<QuerySnapshot>(
+              stream: _firestore
+                  .collection('emergencies')
+                  .where('childId', whereIn: childrenIds)
+                  .where('status', whereNotIn: ['resolved'])
+                  .snapshots(),
+              builder: (context, emergenciesSnapshot) {
+                final unresolvedEmergenciesCount = emergenciesSnapshot.data?.docs.length ?? 0;
 
-            return Container(
-              decoration: BoxDecoration(
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.1),
-                    blurRadius: 10,
-                    offset: Offset(0, -5),
-                  ),
-                ],
-              ),
-              child: BottomNavigationBar(
-                currentIndex: _selectedIndex,
-                onTap: (index) => setState(() => _selectedIndex = index),
-                type: BottomNavigationBarType.fixed,
-                selectedItemColor: colorScheme.primary,
-                unselectedItemColor: colorScheme.onSurfaceVariant,
-                showSelectedLabels: showLabels,
-                showUnselectedLabels: showLabels,
-                items: [
-                  BottomNavigationBarItem(
-                    icon: _buildIconWithBadge(
-                      Icons.dashboard_outlined,
-                      unreadNotifications,
-                    ),
-                    activeIcon: _buildIconWithBadge(
-                      Icons.dashboard,
-                      unreadNotifications,
-                    ),
-                    label: 'Dashboard',
-                  ),
-                  BottomNavigationBarItem(
-                    icon: _buildIconWithBadge(
-                      Icons.chat_bubble_outline,
-                      totalUnreadMessages,
-                    ),
-                    activeIcon: _buildIconWithBadge(
-                      Icons.chat_bubble,
-                      totalUnreadMessages,
-                    ),
-                    label: 'Chats',
-                  ),
-                  BottomNavigationBarItem(
-                    icon: Icon(Icons.people_outline),
-                    activeIcon: Icon(Icons.people),
-                    label: 'Contactos',
-                  ),
-                  BottomNavigationBarItem(
-                    icon: Icon(Icons.shield_outlined),
-                    activeIcon: Icon(Icons.shield),
-                    label: 'Lista Blanca',
-                  ),
-                  BottomNavigationBarItem(
-                    icon: Icon(Icons.person_outline),
-                    activeIcon: Icon(Icons.person),
-                    label: 'Perfil',
-                  ),
-                ],
-              ),
+                // ✅ DASHBOARD: Historias pendientes + emergencias no resueltas
+                final dashboardBadgeCount = pendingStoriesCount + unresolvedEmergenciesCount;
+
+                // Contar solicitudes de contacto pendientes (whitelist badge)
+                return StreamBuilder<QuerySnapshot>(
+                  stream: _firestore
+                      .collection('notifications')
+                      .where('userId', isEqualTo: currentUserId)
+                      .where('read', isEqualTo: false)
+                      .where('type', isEqualTo: 'contact_request')
+                      .snapshots(),
+                  builder: (context, contactRequestsSnapshot) {
+                    final whitelistBadgeCount = contactRequestsSnapshot.data?.docs.length ?? 0;
+
+                    // Contar chats no leídos
+                    return StreamBuilder<QuerySnapshot>(
+                      stream: _firestore
+                          .collection('chats')
+                          .where('participants', arrayContains: currentUserId)
+                          .snapshots(),
+                      builder: (context, chatSnapshot) {
+                        int totalUnreadMessages = 0;
+
+                        if (chatSnapshot.hasData) {
+                          for (var doc in chatSnapshot.data!.docs) {
+                            final data = doc.data() as Map<String, dynamic>?;
+                            if (data != null) {
+                              final unreadCount = data['unreadCount_$currentUserId'] as int? ?? 0;
+                              totalUnreadMessages += unreadCount;
+                            }
+                          }
+                        }
+
+                        return _buildBottomNavBar(
+                          colorScheme,
+                          showLabels,
+                          dashboardBadgeCount,
+                          totalUnreadMessages,
+                          whitelistBadgeCount,
+                        );
+                      },
+                    );
+                  },
+                );
+              },
             );
           },
         );
       },
+    );
+  }
+
+  /// Construye el widget del BottomNavigationBar
+  Widget _buildBottomNavBar(
+    ColorScheme colorScheme,
+    bool showLabels,
+    int dashboardBadgeCount,
+    int totalUnreadMessages,
+    int whitelistBadgeCount,
+  ) {
+    return Container(
+      decoration: BoxDecoration(
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.1),
+            blurRadius: 10,
+            offset: Offset(0, -5),
+          ),
+        ],
+      ),
+      child: BottomNavigationBar(
+        currentIndex: _selectedIndex,
+        onTap: (index) => setState(() => _selectedIndex = index),
+        type: BottomNavigationBarType.fixed,
+        selectedItemColor: colorScheme.primary,
+        unselectedItemColor: colorScheme.onSurfaceVariant,
+        showSelectedLabels: showLabels,
+        showUnselectedLabels: showLabels,
+        items: [
+          BottomNavigationBarItem(
+            icon: _buildIconWithBadge(
+              Icons.dashboard_outlined,
+              dashboardBadgeCount, // ✅ Historias pendientes + emergencias no resueltas
+            ),
+            activeIcon: _buildIconWithBadge(
+              Icons.dashboard,
+              dashboardBadgeCount,
+            ),
+            label: 'Dashboard',
+          ),
+          BottomNavigationBarItem(
+            icon: _buildIconWithBadge(
+              Icons.chat_bubble_outline,
+              totalUnreadMessages, // ✅ Chats no leídos
+            ),
+            activeIcon: _buildIconWithBadge(
+              Icons.chat_bubble,
+              totalUnreadMessages,
+            ),
+            label: 'Chats',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.people_outline),
+            activeIcon: Icon(Icons.people),
+            label: 'Contactos',
+          ),
+          BottomNavigationBarItem(
+            icon: _buildIconWithBadge(
+              Icons.shield_outlined,
+              whitelistBadgeCount, // ✅ Solicitudes de contacto pendientes
+            ),
+            activeIcon: _buildIconWithBadge(
+              Icons.shield,
+              whitelistBadgeCount,
+            ),
+            label: 'Lista Blanca',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.person_outline),
+            activeIcon: Icon(Icons.person),
+            label: 'Perfil',
+          ),
+        ],
+      ),
     );
   }
 

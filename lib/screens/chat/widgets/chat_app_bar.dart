@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../../widgets/profile_photo_viewer.dart';
 import '../../../services/block_service.dart';
+import '../../chat_moderation_settings_screen.dart';
 
 /// AppBar personalizado para pantallas de chat
 class ChatAppBar extends StatefulWidget implements PreferredSizeWidget {
@@ -175,13 +176,14 @@ class _ChatAppBarState extends State<ChatAppBar> {
               icon: const Icon(Icons.more_vert),
               onSelected: (value) async {
                 if (value == 'moderation') {
-                  Navigator.pushNamed(
+                  Navigator.push(
                     context,
-                    '/chat_moderation_settings',
-                    arguments: {
-                      'chatId': widget.chatId,
-                      'contactName': widget.contactName,
-                    },
+                    MaterialPageRoute(
+                      builder: (context) => ChatModerationSettingsScreen(
+                        chatId: widget.chatId,
+                        contactName: widget.contactName,
+                      ),
+                    ),
                   );
                 } else if (value == 'clear_chat') {
                   if (widget.onClearChat != null) {

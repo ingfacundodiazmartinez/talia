@@ -663,7 +663,6 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
     QueryDocumentSnapshot? chatDoc,
   }) {
     final realName = childData['name'] ?? 'Hijo/a';
-    final isOnline = childData['isOnline'] ?? false;
     final photoURL = childData['photoURL'];
     final parentId = _auth.currentUser?.uid ?? '';
 
@@ -752,7 +751,6 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                             : (chatData['lastMessage'] ?? '')),
                     time: isChatCleared ? '' : ChatUtils.formatChatTime(chatData['lastMessageTime']),
                     unreadCount: isBlocked ? 0 : unreadCount,
-                    isOnline: isOnline,
                     photoURL: photoURL,
                     isEmpty: isChatCleared,
                     isBlocked: isBlocked,
@@ -771,7 +769,6 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                 lastMessage: isBlocked ? '🔒 Contacto bloqueado' : 'Toca para iniciar conversación',
                 time: '',
                 unreadCount: 0,
-                isOnline: isOnline,
                 photoURL: photoURL,
                 isEmpty: true,
                 isBlocked: isBlocked,

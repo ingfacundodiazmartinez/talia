@@ -54,16 +54,78 @@ import flutter_callkit_incoming
       return
     }
 
-    let channel = FlutterMethodChannel(name: "com.talia.chat/voip", binaryMessenger: controller.binaryMessenger)
+    // VoIP channel para tokens
+    let voipChannel = FlutterMethodChannel(name: "com.talia.chat/voip", binaryMessenger: controller.binaryMessenger)
+
+    // CallKit channel para mostrar llamadas desde Flutter
+    let callKitChannel = FlutterMethodChannel(name: "com.talia.chat/callkit", binaryMessenger: controller.binaryMessenger)
 
     // ✅ REENVIAR token VoIP guardado si existe
     if let pendingToken = self.pendingVoIPToken {
       NSLog("🔄 [VoIP] Reenviando token guardado a Flutter")
-      channel.invokeMethod("onVoipToken", arguments: pendingToken)
+      voipChannel.invokeMethod("onVoipToken", arguments: pendingToken)
       NSLog("✅ [VoIP] Token reenviado exitosamente")
     }
 
-    channel.setMethodCallHandler { [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) in
+    // Manejar llamadas entrantes desde Flutter (fallback cuando VoIP push no funciona)
+    callKitChannel.setMethodCallHandler { [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) in
+      guard let self = self else { return }
+
+      if call.method == "showIncomingCall" {
+        NSLog("📱 [CallKit] Recibido showIncomingCall desde Flutter")
+
+        guard let args = call.arguments as? [String: Any],
+              let callId = args["callId"] as? String,
+              let callerId = args["callerId"] as? String,
+              let callerName = args["callerName"] as? String else {
+          NSLog("❌ [CallKit] Args inválidos")
+          result(FlutterError(code: "INVALID_ARGS", message: "Missing required args", details: nil))
+          return
+        }
+
+        let callType = args["callType"] as? String ?? "video"
+        let channelName = args["channelName"] as? String ?? callId
+        let isEmergency = args["isEmergency"] as? Bool ?? false
+
+        NSLog("📞 [CallKit] Mostrando llamada: \(callerName) (\(callType))")
+
+        // ✅ PROTECCIÓN: Verificar si ya existe una llamada con este callId
+        for (existingUUID, existingCallId) in self.callUUIDToFirestoreID {
+          if existingCallId == callId {
+            NSLog("⚠️ [CallKit] Ya existe una llamada con callId \(callId), ignorando duplicado")
+            result(FlutterError(code: "DUPLICATE_CALL", message: "Call already exists", details: nil))
+            return
+          }
+        }
+
+        // Crear UUID para CallKit
+        let uuid = UUID()
+
+        // Guardar mapping
+        self.callUUIDToFirestoreID[uuid] = callId
+
+        // Crear update de llamada
+        let update = CXCallUpdate()
+        update.remoteHandle = CXHandle(type: .generic, value: callerName)
+        update.localizedCallerName = callerName
+        update.hasVideo = (callType == "video")
+
+        // Reportar llamada entrante a CallKit
+        self.callProvider.reportNewIncomingCall(with: uuid, update: update) { error in
+          if let error = error {
+            NSLog("❌ [CallKit] Error mostrando llamada: \(error.localizedDescription)")
+            result(FlutterError(code: "CALLKIT_ERROR", message: error.localizedDescription, details: nil))
+          } else {
+            NSLog("✅ [CallKit] Llamada mostrada exitosamente")
+            result(true)
+          }
+        }
+      } else {
+        result(FlutterMethodNotImplemented)
+      }
+    }
+
+    voipChannel.setMethodCallHandler { [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) in
       guard let self = self else { return }
 
       if call.method == "endCallKit" {
@@ -214,6 +276,15 @@ import flutter_callkit_incoming
     NSLog("🚨 TALIA_DEBUG: Showing CallKit for caller: \(callerName)")
     NSLog("🚨 TALIA_DEBUG: Firestore callId: \(callId)")
     NSLog("🚨 TALIA_DEBUG: Call type: \(callType)")
+
+    // ✅ PROTECCIÓN: Verificar si ya existe una llamada con este callId
+    for (existingUUID, existingCallId) in self.callUUIDToFirestoreID {
+      if existingCallId == callId {
+        NSLog("⚠️ [VoIP] Ya existe una llamada con callId \(callId), ignorando VoIP push duplicado")
+        completion()
+        return
+      }
+    }
 
     // Create CallKit call update
     let update = CXCallUpdate()

@@ -148,6 +148,10 @@ class ArFiltersPlugin : FlutterPlugin, MethodCallHandler, StreamHandler, Activit
             deepAR?.initialize(activityContext, null)
             Log.d(TAG, "✅ DeepAR initialize() llamado con ${if (activity != null) "Activity" else "Application"} context")
 
+            // Ocultar logo/watermark de DeepAR
+            deepAR?.showStats(false)
+            Log.d(TAG, "✅ Logo de DeepAR ocultado")
+
             // Configurar listeners usando helper de Java
             DeepARHelper.setAREventListener(deepAR) { event, data ->
                 when (event) {
@@ -508,19 +512,20 @@ class DeepARPlatformView(
     private var surfaceView: SurfaceView? = null
 
     private var retryCount = 0
-    private val maxRetries = 3
+    private val maxRetries = 10  // Aumentado de 3 a 10 para dispositivos lentos
     private var initializationHandler: Handler? = null
 
     init {
         Log.d(TAG, "🎯 Configurando DeepAR view (viewId: $viewId)")
         Log.i("flutter", "📱 [ANDROID] DeepARPlatformView init - viewId: $viewId")
         container = FrameLayout(context)
+        container.setBackgroundColor(android.graphics.Color.BLACK)  // Fondo negro mientras carga
 
         val deepAR = plugin.deepAR
         if (deepAR == null) {
             Log.e(TAG, "❌ DeepAR no está disponible")
             Log.e("flutter", "📱 [ANDROID] ERROR: DeepAR no disponible")
-            showErrorView("DeepAR no disponible")
+            showErrorView("DeepAR no disponible.\nReintentando...")
         } else {
             // En Android, siempre crear nuevo SurfaceView para evitar problemas con surfaces inválidos
             // (iOS puede reutilizar porque UIView funciona diferente)
@@ -638,20 +643,26 @@ class DeepARPlatformView(
 
                 val activity = plugin.activity
                 if (activity == null) {
-                    Log.e("flutter", "📱 [ANDROID] ❌ Activity es null (intento ${retryCount + 1})")
+                    Log.e("flutter", "📱 [ANDROID] ❌ Activity es null (intento ${retryCount + 1}/$maxRetries)")
 
                     if (retryCount < maxRetries) {
                         retryCount++
-                        Log.i("flutter", "📱 [ANDROID] 🔄 Reintentando inicialización de cámara...")
+                        Log.i("flutter", "📱 [ANDROID] 🔄 Reintentando inicialización de cámara en ${500L + (retryCount * 500L)}ms...")
                         initializeCameraWithRetry(deepAR)
                     } else {
                         Log.e("flutter", "📱 [ANDROID] ❌ Máximo de reintentos alcanzado - Activity sigue null")
+                        Handler(Looper.getMainLooper()).post {
+                            showErrorView("Error: No se pudo acceder a la cámara.\nPor favor, reinicia la aplicación.\n\n(Activity no disponible)")
+                        }
                     }
                     return@postDelayed
                 }
 
                 if (activity !is androidx.lifecycle.LifecycleOwner) {
                     Log.e("flutter", "📱 [ANDROID] ❌ Activity no implementa LifecycleOwner")
+                    Handler(Looper.getMainLooper()).post {
+                        showErrorView("Error: Activity no compatible.\nPor favor, reinicia la aplicación.")
+                    }
                     return@postDelayed
                 }
 
@@ -688,14 +699,23 @@ class DeepARPlatformView(
     }
 
     private fun showErrorView(message: String) {
+        // Limpiar contenedor primero
+        container.removeAllViews()
+
         val textView = android.widget.TextView(context)
         textView.text = message
-        textView.setTextColor(android.graphics.Color.RED)
+        textView.setTextColor(android.graphics.Color.WHITE)
+        textView.setBackgroundColor(android.graphics.Color.parseColor("#CC000000"))  // Fondo negro semi-transparente
         textView.gravity = android.view.Gravity.CENTER
+        textView.textSize = 16f
+        textView.setPadding(40, 40, 40, 40)
+
         container.addView(textView, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
         ))
+
+        Log.e(TAG, "💥 Error mostrado al usuario: $message")
     }
 
     override fun getView(): android.view.View = container

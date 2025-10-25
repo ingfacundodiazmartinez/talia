@@ -242,12 +242,19 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
   }
 
   void _startResendCountdown() {
+    if (!mounted) return;
+
     setState(() {
       _resendCountdown = 30;
     });
 
     _countdownTimer?.cancel();
     _countdownTimer = Timer.periodic(Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+
       setState(() {
         _resendCountdown--;
       });
@@ -259,6 +266,8 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
   }
 
   void _setLoading(bool loading) {
+    if (!mounted) return;
+
     setState(() {
       _isLoading = loading;
     });
@@ -273,6 +282,8 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
   }
 
   void _setError(String error) {
+    if (!mounted) return;
+
     setState(() {
       _errorMessage = error;
     });
@@ -282,6 +293,8 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
   }
 
   void _clearError() {
+    if (!mounted) return;
+
     setState(() {
       _errorMessage = null;
     });

@@ -11,9 +11,11 @@ import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:image/image.dart' as img;
 import 'constants/notification_types.dart';
 import 'services/notification_filter.dart';
 import 'services/callkit_service.dart';
+import 'services/foreground_message_listener.dart';
 
 // Manejador de mensajes en segundo plano (debe estar fuera de la clase)
 @pragma('vm:entry-point')
@@ -137,9 +139,15 @@ class NotificationService {
 
     try {
       // 1. Configurar manejador de mensajes en segundo plano
-      FirebaseMessaging.onBackgroundMessage(
-        _firebaseMessagingBackgroundHandler,
-      );
+      // SOLO en iOS - en Android el servicio nativo MyFirebaseMessagingService lo maneja
+      if (Platform.isIOS) {
+        FirebaseMessaging.onBackgroundMessage(
+          _firebaseMessagingBackgroundHandler,
+        );
+        print('✅ Background handler de Flutter registrado (iOS)');
+      } else {
+        print('✅ Background handler nativo se usará en Android (MyFirebaseMessagingService)');
+      }
 
       // 2. Solicitar permisos
       await _requestPermissions();
@@ -420,49 +428,84 @@ class NotificationService {
       // Preparar la foto del remitente para Android
       String? largeIconPath;
 
-      // Solo para Android: descargar foto del remitente como largeIcon
+      // Solo para Android: descargar y procesar foto del remitente como largeIcon
       if (Platform.isAndroid && senderPhotoUrl != null && senderPhotoUrl.isNotEmpty && senderPhotoUrl != 'null') {
         try {
           print('📥 [Android] Descargando foto del remitente: $senderPhotoUrl');
           final response = await http.get(Uri.parse(senderPhotoUrl)).timeout(Duration(seconds: 5));
 
           if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
-            // Guardar directamente sin procesamiento
-            final directory = await getTemporaryDirectory();
-            final filePath = '${directory.path}/sender_photo_${DateTime.now().millisecondsSinceEpoch}.jpg';
-            final file = File(filePath);
-            await file.writeAsBytes(response.bodyBytes);
+            // Decodificar la imagen
+            final originalImage = img.decodeImage(response.bodyBytes);
 
-            if (await file.exists()) {
-              largeIconPath = filePath;
-              print('✅ [Android] Foto del remitente guardada: $largeIconPath');
+            if (originalImage != null) {
+              // Redimensionar a 192x192 (tamaño óptimo para largeIcon en Android)
+              final resizedImage = img.copyResize(
+                originalImage,
+                width: 192,
+                height: 192,
+                interpolation: img.Interpolation.linear,
+              );
+
+              // Convertir a PNG para asegurar compatibilidad
+              final pngBytes = img.encodePng(resizedImage);
+
+              // Guardar la imagen procesada
+              final directory = await getTemporaryDirectory();
+              final filePath = '${directory.path}/sender_photo_${DateTime.now().millisecondsSinceEpoch}.png';
+              final file = File(filePath);
+              await file.writeAsBytes(pngBytes);
+
+              if (await file.exists()) {
+                largeIconPath = filePath;
+                print('✅ [Android] Foto del remitente procesada y guardada: $largeIconPath');
+              }
+            } else {
+              print('⚠️ [Android] No se pudo decodificar la imagen');
             }
           } else {
             print('⚠️ [Android] Respuesta inválida: ${response.statusCode}, bytes: ${response.bodyBytes.length}');
           }
         } catch (e) {
-          print('⚠️ [Android] Error descargando foto de perfil: $e');
+          print('⚠️ [Android] Error descargando/procesando foto de perfil: $e');
         }
       }
 
       // Si no hay foto del remitente en Android, usar logo de la app
       if (Platform.isAndroid && largeIconPath == null) {
         try {
-          print('📥 [Android] Cargando logo de fallback...');
+          print('📥 [Android] Cargando y procesando logo de fallback...');
           final ByteData logoData = await rootBundle.load('assets/images/logo.png');
+          final logoBytes = logoData.buffer.asUint8List();
 
-          // Guardar directamente sin procesamiento
-          final directory = await getTemporaryDirectory();
-          final filePath = '${directory.path}/app_logo.png';
-          final file = File(filePath);
-          await file.writeAsBytes(logoData.buffer.asUint8List());
+          // Decodificar y procesar el logo igual que la foto de perfil
+          final logoImage = img.decodeImage(logoBytes);
 
-          if (await file.exists()) {
-            largeIconPath = filePath;
-            print('✅ [Android] Logo guardado: $largeIconPath');
+          if (logoImage != null) {
+            // Redimensionar a 192x192
+            final resizedLogo = img.copyResize(
+              logoImage,
+              width: 192,
+              height: 192,
+              interpolation: img.Interpolation.linear,
+            );
+
+            // Convertir a PNG
+            final pngBytes = img.encodePng(resizedLogo);
+
+            // Guardar
+            final directory = await getTemporaryDirectory();
+            final filePath = '${directory.path}/app_logo_processed.png';
+            final file = File(filePath);
+            await file.writeAsBytes(pngBytes);
+
+            if (await file.exists()) {
+              largeIconPath = filePath;
+              print('✅ [Android] Logo procesado y guardado: $largeIconPath');
+            }
           }
         } catch (e) {
-          print('⚠️ [Android] Error cargando logo de la app: $e');
+          print('⚠️ [Android] Error cargando/procesando logo de la app: $e');
         }
       }
 
@@ -543,6 +586,15 @@ class NotificationService {
       _incomingCallController.add(data);
     } else if (data['type'] == 'chat_message' || data['type'] == 'group_message') {
       print('💬 Notificación de ${data['type'] == 'group_message' ? 'mensaje grupal' : 'chat'} tocada, navegando');
+
+      // Marcar el chat como ignorado en el ForegroundMessageListener
+      // para evitar que se muestre un banner custom inmediatamente
+      final chatId = data['chatId'] as String?;
+      if (chatId != null) {
+        print('🔕 Marcando chat $chatId como ignorado en ForegroundMessageListener');
+        ForegroundMessageListener().markChatOpenedFromNotification(chatId);
+      }
+
       _chatNotificationTapController.add(data);
     } else if (data['type'] == 'emergency') {
       print('🆘 Notificación de emergencia tocada, navegando a detalles');

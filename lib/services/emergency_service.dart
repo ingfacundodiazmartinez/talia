@@ -349,75 +349,18 @@ class EmergencyService {
 
       print('🆘 Creando videollamada de emergencia grupal para ${parentIds.length} padres...');
 
-      // IMPORTANTE: Usar emergencyId como callId para que VoIPService pueda encontrarlo
-      // Crear la llamada grupal usando el nuevo método del VideoCallService
-      // Pero primero crear el documento con el emergencyId específico
+      // ✅ El documento de video_calls ya fue creado por la Cloud Function
+      // No necesitamos crearlo de nuevo aquí para evitar race conditions
+      // La Cloud Function ya incluye:
+      // - callId, callerId, callerName, channelName
+      // - isGroupCall, isEmergency, participants, participantIds
+      // - status: 'ringing', createdAt, callType
 
-      // Construir array de participantes
-      List<Map<String, dynamic>> participants = [];
+      // ✅ La Cloud Function también ya envió las notificaciones a los padres
+      // incluyendo los datos de la llamada (callId, channelName, etc.)
 
-      // Agregar niño como caller (ya unido)
-      participants.add({
-        'userId': user.uid,
-        'userName': childName,
-        'status': 'joined',
-        'joinedAt': FieldValue.serverTimestamp(),
-        'leftAt': null,
-      });
-
-      // Agregar padres (en estado ringing)
-      for (String parentId in parentIds) {
-        participants.add({
-          'userId': parentId,
-          'userName': parentNames[parentId] ?? 'Padre',
-          'status': 'ringing',
-          'joinedAt': null,
-          'leftAt': null,
-        });
-      }
-
-      // Crear documento de llamada grupal de emergencia con ID específico
-      await _firestore.collection('video_calls').doc(emergencyId).set({
-        'callId': emergencyId,
-        'callerId': user.uid,
-        'callerName': childName,
-        'channelName': 'emergency_$emergencyId',
-        'isGroupCall': true,
-        'isEmergency': true,
-        'groupId': null, // null para emergencias
-        'participants': participants,
-        'status': 'ringing',
-        'createdAt': FieldValue.serverTimestamp(),
-        'endedAt': null,
-        'token': '',
-        'callType': 'video',
-      });
-
-      // Enviar notificaciones a todos los padres
-      for (String parentId in parentIds) {
-        await _firestore.collection('notifications').add({
-          'userId': parentId,
-          'type': 'emergency_call',
-          'title': '🚨 Llamada de emergencia',
-          'body': '$childName necesita ayuda urgente',
-          'priority': 'high',
-          'data': {
-            'callId': emergencyId,
-            'callerId': user.uid,
-            'callerName': childName,
-            'channelName': 'emergency_$emergencyId',
-            'callType': 'video',
-            'isGroupCall': 'true',
-            'isEmergency': 'true',
-            'groupId': '',
-          },
-          'createdAt': FieldValue.serverTimestamp(),
-          'read': false,
-        });
-      }
-
-      print('✅ Videollamada de emergencia grupal creada con ID: $emergencyId');
-      print('✅ Notificaciones enviadas a ${parentIds.length} padres');
+      print('✅ Videollamada de emergencia creada por Cloud Function: $emergencyId');
+      print('✅ Padres notificados por Cloud Function');
     } catch (e) {
       print('❌ Error creando llamada de emergencia grupal: $e');
     }

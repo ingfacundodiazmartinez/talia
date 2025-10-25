@@ -4,6 +4,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../../link_parent_child.dart';
 import '../../common/child_settings_screen.dart';
+import '../../common/help_support_screen.dart';
+import '../../common/privacy_security_screen.dart';
 import '../../../screens/my_code_screen.dart';
 import '../../parent/profile/edit_profile_screen.dart';
 import '../../../controllers/child_profile_controller.dart';
@@ -215,23 +217,27 @@ class _ChildProfileScreenState extends State<ChildProfileScreen> {
               ),
 
               ProfileOptionItem(
-                icon: Icons.emoji_emotions,
-                title: 'Emojis Favoritos',
-                subtitle: 'Personaliza tu chat',
+                icon: Icons.security,
+                title: 'Privacidad y Seguridad',
+                subtitle: 'Gestiona tu privacidad y exporta/importa datos',
                 onTap: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Función próximamente')),
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => const PrivacySecurityScreen(),
+                    ),
                   );
                 },
               ),
 
               ProfileOptionItem(
                 icon: Icons.help,
-                title: 'Ayuda',
-                subtitle: 'Aprende a usar la app',
+                title: 'Ayuda y Soporte',
+                subtitle: 'Aprende a usar la app y obtén ayuda',
                 onTap: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Función próximamente')),
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => const HelpSupportScreen(),
+                    ),
                   );
                 },
               ),

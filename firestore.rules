@@ -470,25 +470,36 @@ service cloud.firestore {
                 participants.size() > 9 && participants[9].userId == request.auth.uid);
       }
 
+      // Función auxiliar para verificar si el usuario está en el array participantIds
+      // Este array se usa para queries eficientes (array-contains)
+      function isInParticipantIds() {
+        return resource.data.participantIds != null &&
+               request.auth.uid in resource.data.participantIds;
+      }
+
       // Permitir leer si:
       // 1. Eres el caller o receiver (llamadas 1:1), O
       // 2. Es una llamada grupal Y estás en la lista de participantes, O
-      // 3. Es una emergencia (isEmergency) Y eres padre del caller
+      // 3. Estás en el array participantIds (para queries eficientes), O
+      // 4. Es una emergencia (isEmergency) Y eres padre del caller
       allow read: if request.auth != null && (
         request.auth.uid == resource.data.callerId ||
         request.auth.uid == resource.data.receiverId ||
         isGroupCallParticipant() ||
+        isInParticipantIds() ||
         (resource.data.isEmergency == true && isParentOfCaller())
       );
 
       // Permitir escribir si:
       // 1. Eres el caller o receiver (para crear/actualizar llamadas 1:1), O
       // 2. Es una llamada grupal Y estás en la lista de participantes (para actualizar estado), O
-      // 3. Es una emergencia Y eres padre del caller (para actualizar participant status)
+      // 3. Estás en el array participantIds (para actualizar estado), O
+      // 4. Es una emergencia Y eres padre del caller (para actualizar participant status)
       allow write: if request.auth != null && (
         request.auth.uid == request.resource.data.callerId ||
         request.auth.uid == request.resource.data.receiverId ||
         (resource != null && isGroupCallParticipant()) ||
+        (resource != null && isInParticipantIds()) ||
         (resource != null && resource.data.isEmergency == true && isParentOfCaller())
       );
     }
