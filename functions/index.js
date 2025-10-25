@@ -3549,6 +3549,34 @@ exports.checkMessageBeforeSending = onCall(
 
       if (!shouldBlock) {
         console.log(`✅ [Pre-moderación] Mensaje aprobado (severity: ${analysis.severity}, level: ${moderationLevel})`);
+
+        // Si es una actualización de mensaje bloqueado, actualizar en Firestore
+        if (isUpdate) {
+          try {
+            const approvedMessageData = {
+              text: text,
+              moderationStatus: "approved",
+              timestamp: FieldValue.serverTimestamp(),
+            };
+
+            // Eliminar campos de bloqueo si existían
+            const deleteFields = {
+              originalText: FieldValue.delete(),
+              moderationReason: FieldValue.delete(),
+              moderationSeverity: FieldValue.delete(),
+              isInappropriate: FieldValue.delete(),
+            };
+
+            await db.collection("chats").doc(chatId).collection("messages").doc(messageId).update({
+              ...approvedMessageData,
+              ...deleteFields,
+            });
+            console.log(`✅ [Pre-moderación] Mensaje ${messageId} actualizado como APROBADO`);
+          } catch (e) {
+            console.error("Error actualizando mensaje aprobado:", e);
+          }
+        }
+
         return { approved: true };
       }
 

@@ -18,6 +18,7 @@ import 'chat/widgets/chat_app_bar.dart';
 import 'chat/widgets/message_bubble.dart';
 import 'chat/widgets/chat_input_bar.dart';
 import 'chat/widgets/reply_bar.dart';
+import 'chat/widgets/editing_bar.dart';
 import 'chat/widgets/typing_indicator.dart';
 import 'chat/widgets/attachment_options.dart';
 import 'chat/widgets/recording_indicator.dart';
@@ -81,7 +82,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   bool _hasScrolledToMessage = false;
 
   // Editing blocked message state
-  String? _editingBlockedMessageId;
+  Map<String, dynamic>? _editingBlockedMessage; // {id, originalText}
 
   @override
   void initState() {
@@ -325,15 +326,15 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     final replyToCapture = _replyingTo;
 
     // Verificar si estamos editando un mensaje bloqueado
-    final editingMessageId = _editingBlockedMessageId;
+    final editingMessageId = _editingBlockedMessage?['id'];
 
     _messageController.clear();
 
-    // Limpiar el reply optimísticamente (ANTES de enviar)
+    // Limpiar el reply y edición optimísticamente (ANTES de enviar)
     if (mounted) {
       setState(() {
         _replyingTo = null;
-        _editingBlockedMessageId = null; // Limpiar estado de edición
+        _editingBlockedMessage = null; // Limpiar estado de edición
       });
     }
 
@@ -669,7 +670,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     // Poner el texto original en el campo de input del chat
     setState(() {
       _messageController.text = originalText;
-      _editingBlockedMessageId = messageId; // Guardar ID para actualizar en lugar de crear nuevo
+      _editingBlockedMessage = {
+        'id': messageId,
+        'originalText': originalText,
+      };
     });
 
     // Enfocar el campo de texto
@@ -812,6 +816,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
               ),
               if (_isBlocked || _isBlockedBy) _buildBlockedBar(),
               if (_replyingTo != null) _buildReplyBar(),
+              if (_editingBlockedMessage != null) _buildEditingBar(),
               _buildInputBar(),
               if (_showEmojiPicker) _buildEmojiPicker(),
             ],
@@ -1092,6 +1097,18 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
       senderName: _replyingTo!['senderName'] ?? 'Usuario',
       text: _replyingTo!['text'] ?? '',
       onClose: () => setState(() => _replyingTo = null),
+    );
+  }
+
+  Widget _buildEditingBar() {
+    return EditingBar(
+      originalText: _editingBlockedMessage!['originalText'] ?? '',
+      onClose: () {
+        setState(() {
+          _editingBlockedMessage = null;
+          _messageController.clear();
+        });
+      },
     );
   }
 
