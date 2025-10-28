@@ -1,26 +1,31 @@
 import 'package:flutter/material.dart';
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'dart:io';
+import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../services/video_call_service.dart';
 import '../services/voip_service.dart';
 import '../services/callkit_service.dart';
 
 class AudioCallScreen extends StatefulWidget {
   final String callId;
-  final String channelName;
-  final String token;
-  final int uid;
+  final String? channelName;  // Opcional para lógica optimista
+  final String? token;  // Opcional para lógica optimista
+  final int? uid;  // Opcional para lógica optimista
   final bool isCaller;
   final String remoteName;
+  final String? receiverId;  // Para iniciar llamada en background
 
   const AudioCallScreen({
     super.key,
     required this.callId,
-    required this.channelName,
-    required this.token,
-    required this.uid,
+    this.channelName,
+    this.token,
+    this.uid,
     required this.isCaller,
     required this.remoteName,
+    this.receiverId,
   });
 
   @override
@@ -31,15 +36,27 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
   final VideoCallService _callService = VideoCallService();
 
   bool _isMuted = false;
-  bool _isJoined = false;
   int? _remoteUid;
   bool _isConnecting = true;
   bool _isEnding = false;
-  bool _isSpeakerOn = true;
+  bool _isSpeakerOn = false; // Por defecto usar auricular, no altavoz
+
+  // Credenciales de Agora (pueden ser obtenidas en background)
+  String? _channelName;
+  String? _token;
+  int? _uid;
+
+  // Subscription para el listener de estado de llamada
+  StreamSubscription<DocumentSnapshot>? _callStatusSubscription;
 
   @override
   void initState() {
     super.initState();
+    // Inicializar credenciales desde los parámetros del widget
+    _channelName = widget.channelName;
+    _token = widget.token;
+    _uid = widget.uid;
+
     _initializeCall();
     _listenToCallStatus();
   }
@@ -47,24 +64,56 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
   /// Inicializar la llamada de audio
   Future<void> _initializeCall() async {
     try {
-      // Inicializar Agora para audio
+      // Paso 0: Solo solicitar permisos si somos el CALLER
+      // El receiver (que viene de background/CallKit) ya tiene permisos o los pedirá al aceptar
+      if (widget.isCaller) {
+        await _requestMicrophonePermission();
+      } else {
+        print('📱 [Receiver] Saltando verificación de permisos (viene de CallKit/background)');
+      }
+
+      // Paso 1: Si es caller y no hay token/uid, obtener credenciales
+      if (widget.isCaller && (_token == null || _uid == null)) {
+        print('📱 [Optimistic] Iniciando llamada de audio en background...');
+
+        // Iniciar llamada completa para obtener credenciales
+        final result = await _callService.initiateCall(
+          receiverId: widget.receiverId!,
+          receiverName: widget.remoteName,
+          isVideo: false, // Audio call
+        );
+
+        if (result['success'] != true) {
+          throw Exception(result['error'] ?? 'Error iniciando llamada');
+        }
+
+        // Actualizar datos de llamada
+        setState(() {
+          _channelName = result['channelName'];
+          _token = result['token'];
+          _uid = result['uid'];
+        });
+
+        print('✅ [Optimistic] Datos de llamada de audio obtenidos: channel=$_channelName, uid=$_uid');
+      }
+
+      // Paso 2: Inicializar Agora para audio
       await _callService.initializeAgoraAudio();
 
-      // Configurar event handler personalizado
+      // Paso 3: Configurar event handler personalizado
       _callService.engine?.registerEventHandler(
         RtcEngineEventHandler(
           onJoinChannelSuccess: (RtcConnection connection, int elapsed) {
             print('✅ Unido al canal de audio: ${connection.channelId}');
 
-            // Configurar altavoz AQUÍ, cuando ya estamos realmente unidos
-            _callService.engine?.setEnableSpeakerphone(true).then((_) {
-              print('🔊 Altavoz activado');
+            // Configurar auricular por defecto (NO altavoz)
+            _callService.engine?.setEnableSpeakerphone(false).then((_) {
+              print('📱 Auricular activado (modo normal de llamada)');
             }).catchError((e) {
-              print('⚠️ Error activando altavoz: $e');
+              print('⚠️ Error configurando auricular: $e');
             });
 
             setState(() {
-              _isJoined = true;
               _isConnecting = false;
             });
           },
@@ -94,12 +143,22 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
         ),
       );
 
-      // Unirse al canal
+      // Paso 4: Verificar que tenemos todas las credenciales
+      if (_channelName == null || _token == null || _uid == null) {
+        throw Exception('Faltan credenciales para unirse al canal');
+      }
+
+      // Paso 5: Unirse al canal con las credenciales
       await _callService.joinChannel(
-        channelName: widget.channelName,
-        token: widget.token,
-        uid: widget.uid,
+        channelName: _channelName!,
+        token: _token!,
+        uid: _uid!,
+        isVideo: false, // ✅ Es llamada de audio, no publicar video
       );
+
+      // Paso 6: Asegurar que el micrófono esté habilitado (no silenciado)
+      await _callService.engine?.muteLocalAudioStream(false);
+      print('🎤 Micrófono habilitado');
 
       print('🚀 Llamada de audio inicializada');
     } catch (e) {
@@ -118,16 +177,89 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
 
   /// Escuchar cambios en el estado de la llamada
   void _listenToCallStatus() {
-    _callService.watchCallStatus(widget.callId).listen((snapshot) {
-      if (!snapshot.exists) return;
+    _callStatusSubscription = _callService.watchCallStatus(widget.callId).listen((snapshot) {
+      // Si el documento fue eliminado, significa que la llamada fue cancelada
+      if (!snapshot.exists) {
+        print('📵 [AudioCall] Documento eliminado, llamada cancelada por el caller');
+        if (!_isEnding) {
+          _endCall();
+        }
+        return;
+      }
 
-      final data = snapshot.data() as Map<String, dynamic>;
+      final data = snapshot.data() as Map<String, dynamic>?;
+      if (data == null) return;
+
       final status = data['status'];
+      print('📞 [AudioCall] Estado de llamada cambió: $status');
 
       if ((status == 'ended' || status == 'rejected') && !_isEnding) {
+        print('📵 [AudioCall] Llamada terminada remotamente, cerrando pantalla...');
         _endCall();
       }
     });
+  }
+
+  /// Solicitar permiso de micrófono
+  Future<void> _requestMicrophonePermission() async {
+    try {
+      print('🔐 Solicitando permiso de micrófono...');
+
+      final status = await Permission.microphone.request();
+      print('🎤 Permiso de micrófono: $status');
+
+      if (status == PermissionStatus.permanentlyDenied) {
+        if (mounted) {
+          final shouldOpenSettings = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Permiso Requerido'),
+              content: const Text(
+                'Esta app necesita acceso al micrófono para realizar llamadas. '
+                'Por favor, habilita el permiso en la configuración.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Cancelar'),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('Abrir Configuración'),
+                ),
+              ],
+            ),
+          );
+
+          if (shouldOpenSettings == true) {
+            await openAppSettings();
+          }
+
+          if (mounted) {
+            Navigator.pop(context);
+          }
+        }
+        throw Exception('Permiso de micrófono denegado');
+      }
+
+      if (status != PermissionStatus.granted) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Se requiere permiso de micrófono'),
+              backgroundColor: Colors.red,
+            ),
+          );
+          Navigator.pop(context);
+        }
+        throw Exception('Permiso de micrófono no concedido');
+      }
+
+      print('✅ Permiso de micrófono concedido');
+    } catch (e) {
+      print('❌ Error solicitando permiso: $e');
+      rethrow;
+    }
   }
 
   /// Toggle micrófono
@@ -178,6 +310,7 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
 
   @override
   void dispose() {
+    _callStatusSubscription?.cancel();
     _callService.leaveChannel();
     super.dispose();
   }

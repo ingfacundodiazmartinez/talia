@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../services/video_call_service.dart';
 import '../services/voip_service.dart';
 import '../services/callkit_service.dart';
@@ -70,6 +71,14 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   /// Inicializar la llamada con lógica optimista
   Future<void> _initializeCall() async {
     try {
+      // Paso 0: Solo solicitar permisos si somos el CALLER
+      // El receiver (que viene de background/CallKit) ya tiene permisos o los pedirá al aceptar
+      if (widget.isCaller) {
+        await _requestPermissions();
+      } else {
+        print('📱 [Receiver] Saltando verificación de permisos (viene de CallKit/background)');
+      }
+
       // Paso 1: Si es caller y no hay token/uid, obtener credenciales
       if (widget.isCaller && (_token == null || _uid == null)) {
         print('📱 [Optimistic] Iniciando llamada en background...');
@@ -124,7 +133,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       // Paso 3: Configurar event handlers
       _videoCallService.engine?.registerEventHandler(
         RtcEngineEventHandler(
-          onJoinChannelSuccess: (RtcConnection connection, int elapsed) {
+          onJoinChannelSuccess: (RtcConnection connection, int elapsed) async {
             print('✅ Unido al canal: ${connection.channelId}');
             print('✅ UID local asignado: ${connection.localUid}');
             setState(() {
@@ -136,6 +145,16 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                 _connectionStatus = 'Conectado';
               }
             });
+
+            // ✅ Iniciar preview DESPUÉS de unirse al canal (crítico para Android)
+            if (widget.isVideo) {
+              try {
+                await _videoCallService.engine?.startPreview();
+                print('✅ Preview iniciado después de joinChannel');
+              } catch (e) {
+                print('⚠️ Error iniciando preview: $e');
+              }
+            }
           },
           onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
             print('👤 Usuario remoto unido: $remoteUid');
@@ -174,6 +193,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
           channelName: _channelName!,
           token: _token!,
           uid: _uid!,
+          isVideo: widget.isVideo, // ✅ Pasar tipo de llamada (video o audio)
         );
         print('🚀 Llamada inicializada exitosamente');
       } else {
@@ -199,8 +219,12 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       print('🔍 [VideoCallScreen] Snapshot recibido para callId: ${widget.callId}');
       print('🔍 [VideoCallScreen] Snapshot existe: ${snapshot.exists}');
 
+      // Si el documento fue eliminado, significa que la llamada fue cancelada
       if (!snapshot.exists) {
-        print('⚠️ [VideoCallScreen] Snapshot no existe, ignorando');
+        print('📵 [VideoCallScreen] Documento eliminado, llamada cancelada por el caller');
+        if (!_isEnding) {
+          _endCall();
+        }
         return;
       }
 
@@ -216,6 +240,105 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
         _endCall();
       }
     });
+  }
+
+  /// Solicitar permisos de cámara y micrófono
+  Future<void> _requestPermissions() async {
+    try {
+      print('🔐 Solicitando permisos de cámara y micrófono...');
+
+      // Verificar estado actual de los permisos
+      final cameraStatus = await Permission.camera.status;
+      final micStatus = await Permission.microphone.status;
+
+      print('📷 Estado inicial cámara: $cameraStatus');
+      print('🎤 Estado inicial micrófono: $micStatus');
+
+      // Si ya están concedidos, no hacer nada
+      if (cameraStatus.isGranted && micStatus.isGranted) {
+        print('✅ Permisos ya concedidos');
+        return;
+      }
+
+      // Si están denegados permanentemente, mostrar diálogo para ir a configuración
+      if (cameraStatus.isPermanentlyDenied || micStatus.isPermanentlyDenied) {
+        await _showPermissionSettingsDialog();
+        throw Exception('Permisos denegados permanentemente');
+      }
+
+      // Solicitar permisos al sistema operativo
+      print('📱 Solicitando permisos al sistema...');
+      final statuses = await [
+        Permission.camera,
+        Permission.microphone,
+      ].request();
+
+      final newCameraStatus = statuses[Permission.camera]!;
+      final newMicStatus = statuses[Permission.microphone]!;
+
+      print('📷 Permiso de cámara después de solicitar: $newCameraStatus');
+      print('🎤 Permiso de micrófono después de solicitar: $newMicStatus');
+
+      // Verificar si se concedieron los permisos
+      if (!newCameraStatus.isGranted || !newMicStatus.isGranted) {
+        if (newCameraStatus.isPermanentlyDenied || newMicStatus.isPermanentlyDenied) {
+          await _showPermissionSettingsDialog();
+          throw Exception('Permisos denegados permanentemente');
+        }
+
+        // Usuario rechazó el diálogo de permisos
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Se requieren permisos de cámara y micrófono para videollamadas'),
+              backgroundColor: Colors.red,
+            ),
+          );
+          Navigator.pop(context);
+        }
+        throw Exception('Permisos no concedidos');
+      }
+
+      print('✅ Permisos concedidos correctamente');
+    } catch (e) {
+      print('❌ Error solicitando permisos: $e');
+      rethrow;
+    }
+  }
+
+  /// Mostrar diálogo para abrir configuración de permisos
+  Future<void> _showPermissionSettingsDialog() async {
+    if (!mounted) return;
+
+    final shouldOpenSettings = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Permisos Requeridos'),
+        content: const Text(
+          'Esta app necesita acceso a la cámara y micrófono para realizar videollamadas. '
+          'Por favor, habilita los permisos en la configuración del dispositivo.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Abrir Configuración'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldOpenSettings == true) {
+      await openAppSettings();
+    }
+
+    if (mounted) {
+      Navigator.pop(context);
+    }
   }
 
   /// Toggle micrófono
@@ -596,7 +719,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
             child: Stack(
               children: [
                 // Video del participante
-                if (uid != null)
+                if (uid != null && _videoCallService.engine != null)
                   isLocal
                       ? (_isCameraOff
                           ? const Center(
@@ -609,14 +732,23 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                                 canvas: const VideoCanvas(uid: 0),
                               ),
                             ))
-                      : AgoraVideoView(
-                          controller: VideoViewController.remote(
-                            rtcEngine: _videoCallService.engine!,
-                            canvas: VideoCanvas(uid: uid),
-                            connection:
-                                RtcConnection(channelId: widget.channelName),
-                          ),
-                        ),
+                      : (_channelName == null || _channelName!.isEmpty
+                          ? const Center(
+                              child: Icon(Icons.videocam_off,
+                                  color: Colors.white, size: 40),
+                            )
+                          : AgoraVideoView(
+                              controller: VideoViewController.remote(
+                                rtcEngine: _videoCallService.engine!,
+                                canvas: VideoCanvas(uid: uid),
+                                connection:
+                                    RtcConnection(channelId: _channelName),
+                              ),
+                            ))
+                else
+                  const Center(
+                    child: CircularProgressIndicator(color: Colors.white),
+                  ),
 
                 // Etiqueta
                 Positioned(
@@ -678,18 +810,42 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     // Para llamadas 1:1, mostrar el primer (y único) UID remoto
     final remoteUid = _remoteUids.first;
 
+    // Validar que channelName esté disponible antes de crear el video view
+    if (_channelName == null || _channelName!.isEmpty) {
+      return Container(
+        color: Colors.black,
+        child: const Center(
+          child: Icon(
+            Icons.videocam_off,
+            size: 100,
+            color: Colors.white,
+          ),
+        ),
+      );
+    }
+
+    // Verificar que el engine esté inicializado
+    if (_videoCallService.engine == null) {
+      return Container(
+        color: Colors.black,
+        child: const Center(
+          child: CircularProgressIndicator(color: Colors.white),
+        ),
+      );
+    }
+
     return AgoraVideoView(
       controller: VideoViewController.remote(
         rtcEngine: _videoCallService.engine!,
         canvas: VideoCanvas(uid: remoteUid),
-        connection: RtcConnection(channelId: widget.channelName),
+        connection: RtcConnection(channelId: _channelName),
       ),
     );
   }
 
   /// Widget de preview de video local
   Widget _localVideoPreview() {
-    if (_isCameraOff) {
+    if (_isCameraOff || _videoCallService.engine == null) {
       return Container(
         width: 120,
         height: 160,
@@ -698,9 +854,9 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: Colors.white, width: 2),
         ),
-        child: const Center(
+        child: Center(
           child: Icon(
-            Icons.videocam_off,
+            _isCameraOff ? Icons.videocam_off : Icons.person,
             color: Colors.white,
             size: 40,
           ),

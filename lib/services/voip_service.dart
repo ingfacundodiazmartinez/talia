@@ -130,9 +130,11 @@ class VoIPService {
         'uid': uid,
         'callType': callType,
         'callerName': callerName,
+        'callerId': callerId, // Agregar callerId para la navegación
       };
 
       print('✅ [VoIP] Datos de llamada guardados para navegación');
+      print('   - Caller ID: $callerId');
 
       // Notificar inmediatamente que hay datos pendientes
       _pendingCallNotifier.add(_pendingCallData!);
@@ -243,9 +245,11 @@ class VoIPService {
         'uid': uid,
         'callType': callType,
         'callerName': callerName,
+        'callerId': callerId, // Agregar callerId para la navegación
       };
 
       print('✅ [CallKit] Datos de llamada guardados para navegación');
+      print('   - Caller ID: $callerId');
 
       // Notificar inmediatamente que hay datos pendientes
       _pendingCallNotifier.add(_pendingCallData!);

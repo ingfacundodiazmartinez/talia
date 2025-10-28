@@ -30,7 +30,9 @@ class VideoCallService {
   Future<void> initializeAgora() async {
     // Si ya está inicializado, liberar primero para reiniciar en modo video
     if (_isInitialized && _engine != null) {
-      print('⚠️ Agora ya está inicializado, liberando para reiniciar en modo video...');
+      print(
+        '⚠️ Agora ya está inicializado, liberando para reiniciar en modo video...',
+      );
       try {
         // Detener preview y deshabilitar video/audio ANTES de liberar
         await _engine!.stopPreview();
@@ -93,12 +95,17 @@ class VideoCallService {
       // Habilitar video
       await _engine!.enableVideo();
 
+      // Habilitar captura y renderizado de video local
+      await _engine!.enableLocalVideo(true);
+
       // Habilitar audio
       await _engine!.enableAudio();
 
-      // Iniciar preview para solicitar permisos de iOS
-      // Esto hará que iOS muestre el diálogo de permisos automáticamente
-      await _engine!.startPreview();
+      // ✅ NO llamar setupLocalVideo() aquí
+      // El widget AgoraVideoView lo llamará automáticamente cuando se monte
+      // Si lo llamamos aquí, sobreescribimos el binding del widget y el video no se muestra
+
+      print('✅ Agora engine listo (setupLocalVideo y startPreview serán manejados por los widgets)');
 
       _isInitialized = true;
       print('✅ Agora inicializado correctamente');
@@ -112,7 +119,9 @@ class VideoCallService {
   Future<void> initializeAgoraAudio() async {
     // Si ya está inicializado, liberar primero para reiniciar en modo audio
     if (_isInitialized && _engine != null) {
-      print('⚠️ Agora ya está inicializado, liberando para reiniciar en modo audio...');
+      print(
+        '⚠️ Agora ya está inicializado, liberando para reiniciar en modo audio...',
+      );
       try {
         // Detener todo ANTES de liberar
         await _engine!.stopPreview();
@@ -200,34 +209,24 @@ class VideoCallService {
 
       if (allGranted) {
         print('✅ Permisos concedidos');
-        return {
-          'granted': true,
-          'permanentlyDenied': false,
-        };
+        return {'granted': true, 'permanentlyDenied': false};
       }
 
       // Verificar si fueron permanentemente denegados
-      bool isPermanentlyDenied = cameraStatus.isPermanentlyDenied || microphoneStatus.isPermanentlyDenied;
+      bool isPermanentlyDenied =
+          cameraStatus.isPermanentlyDenied ||
+          microphoneStatus.isPermanentlyDenied;
 
       if (isPermanentlyDenied) {
         print('⚠️ Permisos permanentemente denegados');
-        return {
-          'granted': false,
-          'permanentlyDenied': true,
-        };
+        return {'granted': false, 'permanentlyDenied': true};
       }
 
       print('❌ Permisos denegados');
-      return {
-        'granted': false,
-        'permanentlyDenied': false,
-      };
+      return {'granted': false, 'permanentlyDenied': false};
     } catch (e) {
       print('❌ Error solicitando permisos: $e');
-      return {
-        'granted': false,
-        'permanentlyDenied': false,
-      };
+      return {'granted': false, 'permanentlyDenied': false};
     }
   }
 
@@ -236,18 +235,25 @@ class VideoCallService {
     required String channelName,
     required String token,
     required int uid,
+    bool isVideo = true, // Por defecto video para compatibilidad
   }) async {
     if (!_isInitialized) {
       await initializeAgora();
     }
 
     try {
-      print('🚀 Uniéndose al canal: $channelName con UID: $uid');
+      print(
+        '🚀 Uniéndose al canal: $channelName con UID: $uid (isVideo: $isVideo)',
+      );
 
-      // Configurar opciones del canal
-      ChannelMediaOptions options = const ChannelMediaOptions(
+      // Configurar opciones del canal según tipo de llamada
+      ChannelMediaOptions options = ChannelMediaOptions(
         clientRoleType: ClientRoleType.clientRoleBroadcaster,
         channelProfile: ChannelProfileType.channelProfileCommunication,
+        publishCameraTrack: isVideo, // ✅ Solo publicar cámara si es video
+        publishMicrophoneTrack: true,
+        autoSubscribeVideo: isVideo, // ✅ Solo suscribirse a video si es video
+        autoSubscribeAudio: true,
       );
 
       // Unirse al canal
@@ -259,6 +265,9 @@ class VideoCallService {
       );
 
       print('✅ Unido al canal exitosamente');
+
+      // NO iniciar preview aquí - se hará en el callback onJoinChannelSuccess
+      // después de que el UI se haya actualizado y los widgets de video estén creados
     } catch (e) {
       print('❌ Error uniéndose al canal: $e');
       rethrow;
@@ -357,7 +366,10 @@ class VideoCallService {
       final channelName = docRef.id;
 
       // Obtener photoURL del caller
-      final callerDoc = await _firestore.collection('users').doc(callerId).get();
+      final callerDoc = await _firestore
+          .collection('users')
+          .doc(callerId)
+          .get();
       final callerPhotoURL = callerDoc.data()?['photoURL'] ?? '';
 
       // Crear documento con TODOS los campos de una vez (incluyendo channelName)
@@ -379,9 +391,7 @@ class VideoCallService {
       try {
         final callable = FirebaseFunctions.instance.httpsCallable(
           'sendInstantPushNotification',
-          options: HttpsCallableOptions(
-            timeout: const Duration(seconds: 10),
-          ),
+          options: HttpsCallableOptions(timeout: const Duration(seconds: 10)),
         );
 
         final result = await callable.call({
@@ -403,7 +413,9 @@ class VideoCallService {
         print('✅ Push notification enviada: ${result.data}');
 
         if (result.data['sentViaVoIP'] == true) {
-          print('✅ Enviado via VoIP push - CallKit se mostrará automáticamente');
+          print(
+            '✅ Enviado via VoIP push - CallKit se mostrará automáticamente',
+          );
         } else {
           print('✅ Enviado via FCM push');
         }
@@ -434,7 +446,10 @@ class VideoCallService {
       final channelName = docRef.id;
 
       // Obtener photoURL del caller
-      final callerDoc = await _firestore.collection('users').doc(callerId).get();
+      final callerDoc = await _firestore
+          .collection('users')
+          .doc(callerId)
+          .get();
       final callerPhotoURL = callerDoc.data()?['photoURL'] ?? '';
 
       // Crear documento con TODOS los campos de una vez (incluyendo channelName)
@@ -456,9 +471,7 @@ class VideoCallService {
       try {
         final callable = FirebaseFunctions.instance.httpsCallable(
           'sendInstantPushNotification',
-          options: HttpsCallableOptions(
-            timeout: const Duration(seconds: 10),
-          ),
+          options: HttpsCallableOptions(timeout: const Duration(seconds: 10)),
         );
 
         final result = await callable.call({
@@ -480,7 +493,9 @@ class VideoCallService {
         print('✅ Push notification enviada: ${result.data}');
 
         if (result.data['sentViaVoIP'] == true) {
-          print('✅ Enviado via VoIP push - CallKit se mostrará automáticamente');
+          print(
+            '✅ Enviado via VoIP push - CallKit se mostrará automáticamente',
+          );
         } else {
           print('✅ Enviado via FCM push');
         }
@@ -569,7 +584,10 @@ class VideoCallService {
       print('✅ Videollamada grupal creada: $channelName');
 
       // Obtener photoURL del caller
-      final callerDoc = await _firestore.collection('users').doc(callerId).get();
+      final callerDoc = await _firestore
+          .collection('users')
+          .doc(callerId)
+          .get();
       final callerPhotoURL = callerDoc.data()?['photoURL'] ?? '';
 
       // ✅ Enviar VoIP push a todos los participantes usando Cloud Function
@@ -578,12 +596,12 @@ class VideoCallService {
         try {
           final callable = FirebaseFunctions.instance.httpsCallable(
             'sendInstantPushNotification',
-            options: HttpsCallableOptions(
-              timeout: const Duration(seconds: 10),
-            ),
+            options: HttpsCallableOptions(timeout: const Duration(seconds: 10)),
           );
 
-          final title = isEmergency ? '🚨 Llamada de emergencia' : 'Videollamada grupal';
+          final title = isEmergency
+              ? '🚨 Llamada de emergencia'
+              : 'Videollamada grupal';
           final body = isEmergency
               ? '$callerName necesita ayuda urgente'
               : '$callerName te invitó a una videollamada grupal';
@@ -616,12 +634,16 @@ class VideoCallService {
             }
           }
         } catch (pushError) {
-          print('⚠️ Error enviando push a participante $participantId: $pushError');
+          print(
+            '⚠️ Error enviando push a participante $participantId: $pushError',
+          );
           // Continuar con los demás participantes
         }
       }
 
-      print('✅ Notificaciones enviadas a $successCount/${participantIds.length} participantes');
+      print(
+        '✅ Notificaciones enviadas a $successCount/${participantIds.length} participantes',
+      );
       return channelName;
     } catch (e) {
       print('❌ Error iniciando videollamada grupal: $e');
@@ -689,7 +711,10 @@ class VideoCallService {
       print('✅ Llamada de audio grupal creada: $channelName');
 
       // Obtener photoURL del caller
-      final callerDoc = await _firestore.collection('users').doc(callerId).get();
+      final callerDoc = await _firestore
+          .collection('users')
+          .doc(callerId)
+          .get();
       final callerPhotoURL = callerDoc.data()?['photoURL'] ?? '';
 
       // ✅ Enviar VoIP push a todos los participantes usando Cloud Function
@@ -698,12 +723,12 @@ class VideoCallService {
         try {
           final callable = FirebaseFunctions.instance.httpsCallable(
             'sendInstantPushNotification',
-            options: HttpsCallableOptions(
-              timeout: const Duration(seconds: 10),
-            ),
+            options: HttpsCallableOptions(timeout: const Duration(seconds: 10)),
           );
 
-          final title = isEmergency ? '🚨 Llamada de emergencia' : 'Llamada grupal';
+          final title = isEmergency
+              ? '🚨 Llamada de emergencia'
+              : 'Llamada grupal';
           final body = isEmergency
               ? '$callerName necesita ayuda urgente'
               : '$callerName te invitó a una llamada grupal';
@@ -736,12 +761,16 @@ class VideoCallService {
             }
           }
         } catch (pushError) {
-          print('⚠️ Error enviando push a participante $participantId: $pushError');
+          print(
+            '⚠️ Error enviando push a participante $participantId: $pushError',
+          );
           // Continuar con los demás participantes
         }
       }
 
-      print('✅ Notificaciones enviadas a $successCount/${participantIds.length} participantes');
+      print(
+        '✅ Notificaciones enviadas a $successCount/${participantIds.length} participantes',
+      );
       return channelName;
     } catch (e) {
       print('❌ Error iniciando llamada de audio grupal: $e');
@@ -758,7 +787,10 @@ class VideoCallService {
     try {
       print('📝 Actualizando estado de participante $userId a: $status');
 
-      final callDoc = await _firestore.collection('video_calls').doc(callId).get();
+      final callDoc = await _firestore
+          .collection('video_calls')
+          .doc(callId)
+          .get();
       if (!callDoc.exists) {
         print('⚠️ Llamada no encontrada: $callId');
         return;
@@ -802,7 +834,9 @@ class VideoCallService {
       }
 
       // Si todos salieron, terminar la llamada
-      bool allLeft = participants.every((p) => p['status'] == 'left' || p['status'] == 'declined');
+      bool allLeft = participants.every(
+        (p) => p['status'] == 'left' || p['status'] == 'declined',
+      );
       if (allLeft) {
         await _firestore.collection('video_calls').doc(callId).update({
           'status': 'ended',
@@ -832,19 +866,16 @@ class VideoCallService {
 
       final currentUser = _auth.currentUser;
       if (currentUser == null) {
-        return {
-          'success': false,
-          'error': 'Usuario no autenticado',
-        };
+        return {'success': false, 'error': 'Usuario no autenticado'};
       }
 
       // 1. Obtener documento de la llamada actual
-      final callDoc = await _firestore.collection('video_calls').doc(callId).get();
+      final callDoc = await _firestore
+          .collection('video_calls')
+          .doc(callId)
+          .get();
       if (!callDoc.exists) {
-        return {
-          'success': false,
-          'error': 'Llamada no encontrada',
-        };
+        return {'success': false, 'error': 'Llamada no encontrada'};
       }
 
       final callData = callDoc.data()!;
@@ -902,7 +933,9 @@ class VideoCallService {
         List<dynamic> participants = callData['participants'] ?? [];
 
         // Verificar que no esté ya en la llamada
-        bool alreadyInCall = participants.any((p) => p['userId'] == invitedUserId);
+        bool alreadyInCall = participants.any(
+          (p) => p['userId'] == invitedUserId,
+        );
         if (alreadyInCall) {
           return {
             'success': false,
@@ -930,12 +963,12 @@ class VideoCallService {
       try {
         final callable = FirebaseFunctions.instance.httpsCallable(
           'sendInstantPushNotification',
-          options: HttpsCallableOptions(
-            timeout: const Duration(seconds: 10),
-          ),
+          options: HttpsCallableOptions(timeout: const Duration(seconds: 10)),
         );
 
-        final title = callType == 'video' ? 'Videollamada grupal' : 'Llamada grupal';
+        final title = callType == 'video'
+            ? 'Videollamada grupal'
+            : 'Llamada grupal';
         final body = '$inviterName te invitó a unirte a la llamada';
 
         final result = await callable.call({
@@ -944,7 +977,9 @@ class VideoCallService {
           'body': body,
           'isCall': true,
           'data': {
-            'type': callType == 'video' ? 'group_video_call' : 'group_audio_call',
+            'type': callType == 'video'
+                ? 'group_video_call'
+                : 'group_audio_call',
             'callId': callId,
             'callerId': currentUser.uid,
             'callerName': inviterName,
@@ -967,15 +1002,10 @@ class VideoCallService {
 
       print('✅ Usuario invitado exitosamente a la llamada');
 
-      return {
-        'success': true,
-      };
+      return {'success': true};
     } catch (e) {
       print('❌ Error invitando a usuario a la llamada: $e');
-      return {
-        'success': false,
-        'error': e.toString(),
-      };
+      return {'success': false, 'error': e.toString()};
     }
   }
 
@@ -983,10 +1013,10 @@ class VideoCallService {
   Stream<QuerySnapshot> watchIncomingGroupCalls(String userId) {
     return _firestore
         .collection('video_calls')
-        .where('participants', arrayContains: {
-          'userId': userId,
-          'status': 'ringing',
-        })
+        .where(
+          'participants',
+          arrayContains: {'userId': userId, 'status': 'ringing'},
+        )
         .snapshots();
   }
 
@@ -1026,39 +1056,46 @@ class VideoCallService {
       print('📵 Terminando llamada: $callId');
 
       // Obtener datos de la llamada antes de terminarla
-      final callDoc = await _firestore.collection('video_calls').doc(callId).get();
+      final callDoc = await _firestore
+          .collection('video_calls')
+          .doc(callId)
+          .get();
       final callData = callDoc.data();
 
       if (callData != null) {
         final startedAt = callData['startedAt'] as Timestamp?;
         final status = callData['status'] as String?;
 
-        // Actualizar status a ended
-        await _firestore.collection('video_calls').doc(callId).update({
-          'status': 'ended',
-          'endedAt': FieldValue.serverTimestamp(),
-        });
+        // Si la llamada nunca fue contestada (status: ringing), eliminar el documento
+        // Esto permite que el listener del receiver detecte la eliminación y cierre la llamada
+        if (status == 'ringing') {
+          print('📞 Llamada nunca fue contestada, eliminando documento...');
+          await _firestore.collection('video_calls').doc(callId).delete();
+          print('✅ Documento de llamada eliminado');
+        } else {
+          // Si fue contestada o está activa, actualizar status a ended
+          await _firestore.collection('video_calls').doc(callId).update({
+            'status': 'ended',
+            'endedAt': FieldValue.serverTimestamp(),
+          });
 
-        // Si la llamada fue contestada (tiene startedAt), crear mensaje de historial
-        if (startedAt != null && status == 'active') {
-          final endedAt = DateTime.now();
-          final startTime = startedAt.toDate();
-          final durationSeconds = endedAt.difference(startTime).inSeconds;
+          // Si la llamada fue contestada (tiene startedAt), crear mensaje de historial
+          if (startedAt != null && status == 'active') {
+            final endedAt = DateTime.now();
+            final startTime = startedAt.toDate();
+            final durationSeconds = endedAt.difference(startTime).inSeconds;
 
-          await _createAnsweredCallMessage(
-            callerId: callData['callerId'] ?? '',
-            receiverId: callData['receiverId'] ?? '',
-            callType: callData['callType'] ?? 'video',
-            callId: callId,
-            durationSeconds: durationSeconds,
-          );
+            await _createAnsweredCallMessage(
+              callerId: callData['callerId'] ?? '',
+              receiverId: callData['receiverId'] ?? '',
+              callType: callData['callType'] ?? 'video',
+              callId: callId,
+              durationSeconds: durationSeconds,
+            );
+          }
         }
       } else {
-        // Si no hay datos, solo actualizar status
-        await _firestore.collection('video_calls').doc(callId).update({
-          'status': 'ended',
-          'endedAt': FieldValue.serverTimestamp(),
-        });
+        print('⚠️ No se encontró documento de llamada');
       }
 
       await leaveChannel();
@@ -1076,7 +1113,9 @@ class VideoCallService {
     final controller = StreamController<QuerySnapshot>.broadcast();
 
     // Stream para llamadas directas (1-a-1)
-    print('🔍 [watchIncomingCalls] Configurando stream de llamadas directas...');
+    print(
+      '🔍 [watchIncomingCalls] Configurando stream de llamadas directas...',
+    );
     final directCallsStream = _firestore
         .collection('video_calls')
         .where('receiverId', isEqualTo: userId)
@@ -1084,7 +1123,9 @@ class VideoCallService {
         .snapshots();
 
     // Stream para llamadas grupales (emergencias, grupos)
-    print('🔍 [watchIncomingCalls] Configurando stream de llamadas grupales...');
+    print(
+      '🔍 [watchIncomingCalls] Configurando stream de llamadas grupales...',
+    );
     final groupCallsStream = _firestore
         .collection('video_calls')
         .where('participantIds', arrayContains: userId)
@@ -1092,10 +1133,14 @@ class VideoCallService {
         .snapshots();
 
     // Escuchar ambos streams y emitir cuando cualquiera cambie
-    print('🔍 [watchIncomingCalls] Iniciando listen() para directCallsStream...');
+    print(
+      '🔍 [watchIncomingCalls] Iniciando listen() para directCallsStream...',
+    );
     directCallsStream.listen(
       (snapshot) {
-        print('📞 [watchIncomingCalls] Llamadas directas: ${snapshot.docs.length}');
+        print(
+          '📞 [watchIncomingCalls] Llamadas directas: ${snapshot.docs.length}',
+        );
         if (snapshot.docs.isNotEmpty) {
           print('📞 [watchIncomingCalls] Documentos directos:');
           for (var doc in snapshot.docs) {
@@ -1110,10 +1155,14 @@ class VideoCallService {
       },
     );
 
-    print('🔍 [watchIncomingCalls] Iniciando listen() para groupCallsStream...');
+    print(
+      '🔍 [watchIncomingCalls] Iniciando listen() para groupCallsStream...',
+    );
     groupCallsStream.listen(
       (snapshot) {
-        print('📞 [watchIncomingCalls] Llamadas grupales: ${snapshot.docs.length}');
+        print(
+          '📞 [watchIncomingCalls] Llamadas grupales: ${snapshot.docs.length}',
+        );
         if (snapshot.docs.isNotEmpty) {
           print('📞 [watchIncomingCalls] Documentos grupales:');
           for (var doc in snapshot.docs) {
@@ -1132,7 +1181,9 @@ class VideoCallService {
       },
     );
 
-    print('🔍 [watchIncomingCalls] Listeners configurados, retornando controller.stream');
+    print(
+      '🔍 [watchIncomingCalls] Listeners configurados, retornando controller.stream',
+    );
     return controller.stream;
   }
 
@@ -1164,14 +1215,17 @@ class VideoCallService {
       if (currentUser == null) {
         return {
           'success': false,
-          'error': 'Usuario no autenticado. Por favor, vuelve a iniciar sesión.',
+          'error':
+              'Usuario no autenticado. Por favor, vuelve a iniciar sesión.',
         };
       }
 
       final currentUserId = currentUser.uid;
       final callType = isVideo ? 'videollamada' : 'llamada de audio';
       print('🚀 Iniciando $callType desde caller: $currentUserId');
-      print('🔐 Usuario autenticado: ${currentUser.email ?? currentUser.phoneNumber}');
+      print(
+        '🔐 Usuario autenticado: ${currentUser.email ?? currentUser.phoneNumber}',
+      );
 
       // 2. Verificar token de Firebase Auth
       try {
@@ -1181,7 +1235,8 @@ class VideoCallService {
         print('⚠️ Error obteniendo Firebase Auth token: $tokenError');
         return {
           'success': false,
-          'error': 'Error de autenticación. Por favor, vuelve a iniciar sesión.',
+          'error':
+              'Error de autenticación. Por favor, vuelve a iniciar sesión.',
         };
       }
 
@@ -1194,7 +1249,8 @@ class VideoCallService {
           print('🚫 El usuario ha bloqueado a $receiverName');
           return {
             'success': false,
-            'error': 'No puedes llamar a este contacto porque lo has bloqueado.',
+            'error':
+                'No puedes llamar a este contacto porque lo has bloqueado.',
           };
         }
 
@@ -1243,7 +1299,9 @@ class VideoCallService {
       try {
         final appCheckToken = await FirebaseAppCheck.instance.getToken();
         appCheckTokenValue = appCheckToken;
-        print('🔐 App Check token obtenido: ${appCheckTokenValue?.substring(0, 20)}...');
+        print(
+          '🔐 App Check token obtenido: ${appCheckTokenValue?.substring(0, 20)}...',
+        );
       } catch (appCheckError) {
         print('⚠️ Error obteniendo App Check token: $appCheckError');
         print('⚠️ Tipo de error: ${appCheckError.runtimeType}');
@@ -1282,27 +1340,25 @@ class VideoCallService {
 
         String errorMessage;
         if (cloudFunctionError.toString().contains('unauthenticated')) {
-          errorMessage = 'Error de autenticación. Por favor, vuelve a iniciar sesión.';
+          errorMessage =
+              'Error de autenticación. Por favor, vuelve a iniciar sesión.';
         } else if (cloudFunctionError.toString().contains('App Check')) {
-          errorMessage = 'Error de verificación de App Check. Asegúrate de que la app esté correctamente configurada.';
+          errorMessage =
+              'Error de verificación de App Check. Asegúrate de que la app esté correctamente configurada.';
         } else {
           errorMessage = 'Error generando token de Agora: $cloudFunctionError';
         }
 
-        return {
-          'success': false,
-          'error': errorMessage,
-        };
+        return {'success': false, 'error': errorMessage};
       }
     } catch (e) {
-      print('❌ Error general iniciando ${ isVideo ? 'videollamada' : 'llamada de audio'}:');
+      print(
+        '❌ Error general iniciando ${isVideo ? 'videollamada' : 'llamada de audio'}:',
+      );
       print('   Tipo: ${e.runtimeType}');
       print('   Mensaje: $e');
 
-      return {
-        'success': false,
-        'error': e.toString(),
-      };
+      return {'success': false, 'error': e.toString()};
     }
   }
 
@@ -1333,16 +1389,16 @@ class VideoCallService {
           .doc(chatId)
           .collection('messages')
           .add({
-        'senderId': callerId,
-        'type': 'missed_call',
-        'callType': callType,
-        'callId': callId,
-        'text': callType == 'video'
-            ? '📹 Llamada de video perdida'
-            : '📞 Llamada de audio perdida',
-        'timestamp': FieldValue.serverTimestamp(),
-        'isRead': false,
-      });
+            'senderId': callerId,
+            'type': 'missed_call',
+            'callType': callType,
+            'callId': callId,
+            'text': callType == 'video'
+                ? '📹 Llamada de video perdida'
+                : '📞 Llamada de audio perdida',
+            'timestamp': FieldValue.serverTimestamp(),
+            'isRead': false,
+          });
 
       // Actualizar último mensaje del chat
       await _firestore.collection('chats').doc(chatId).set({
@@ -1370,7 +1426,9 @@ class VideoCallService {
     required int durationSeconds,
   }) async {
     try {
-      print('📞 Creando mensaje de llamada contestada en el chat (${durationSeconds}s)');
+      print(
+        '📞 Creando mensaje de llamada contestada en el chat (${durationSeconds}s)',
+      );
 
       // Obtener información del chat entre los dos usuarios
       final chatService = await import_chatService();
@@ -1385,17 +1443,17 @@ class VideoCallService {
           .doc(chatId)
           .collection('messages')
           .add({
-        'senderId': callerId,
-        'type': 'answered_call',
-        'callType': callType,
-        'callId': callId,
-        'callDuration': durationSeconds,
-        'text': callType == 'video'
-            ? '📹 Videollamada • $duration'
-            : '📞 Llamada • $duration',
-        'timestamp': FieldValue.serverTimestamp(),
-        'isRead': false,
-      });
+            'senderId': callerId,
+            'type': 'answered_call',
+            'callType': callType,
+            'callId': callId,
+            'callDuration': durationSeconds,
+            'text': callType == 'video'
+                ? '📹 Videollamada • $duration'
+                : '📞 Llamada • $duration',
+            'timestamp': FieldValue.serverTimestamp(),
+            'isRead': false,
+          });
 
       // Actualizar último mensaje del chat
       await _firestore.collection('chats').doc(chatId).set({
