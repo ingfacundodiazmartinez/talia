@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
 import 'dart:async';
 import 'package:firebase_app_check/firebase_app_check.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/phone_verification_service.dart';
 
 class PhoneVerificationWidget extends StatefulWidget {
@@ -70,6 +71,22 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
     _selectedCountryCode = widget.initialCountryCode ?? '+54';
     if (widget.initialPhoneNumber != null) {
       _phoneController.text = widget.initialPhoneNumber!;
+    }
+
+    // Limpiar cache de Firestore para evitar datos de usuarios previos
+    _clearFirestoreCache();
+  }
+
+  /// Limpia el cache de Firestore para evitar que un nuevo usuario
+  /// vea datos del usuario anterior
+  Future<void> _clearFirestoreCache() async {
+    try {
+      print('🧹 Limpiando cache de Firestore...');
+      await FirebaseFirestore.instance.clearPersistence();
+      print('✅ Cache de Firestore limpiado exitosamente');
+    } catch (e) {
+      print('⚠️ No se pudo limpiar cache de Firestore (puede ser normal si hay conexiones activas): $e');
+      // Este error es normal si hay listeners activos, no es crítico
     }
   }
 
@@ -303,7 +320,7 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: EdgeInsets.all(24),
+      padding: EdgeInsets.all(20), // Reducido para más espacio
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(20),
@@ -315,30 +332,37 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
           ),
         ],
       ),
-      child: SingleChildScrollView(
-        // Asegurar que el teclado no tape los elementos
-        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.manual,
-        physics: BouncingScrollPhysics(),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _buildHeader(),
-            SizedBox(height: 24),
-            _buildProgressIndicator(),
-            SizedBox(height: 32),
-            _buildContent(),
-            if (_errorMessage != null) ...[
-              SizedBox(height: 16),
-              _buildErrorMessage(),
-            ],
-            SizedBox(height: 24),
-            _buildActionButton(),
-            SizedBox(height: 16),
-            _buildSecondaryActions(),
-            // Espacio adicional para evitar que el teclado tape el contenido
-            SizedBox(height: MediaQuery.of(context).viewInsets.bottom > 0 ? 20 : 0),
-          ],
-        ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Contenido scrolleable
+          Flexible(
+            child: SingleChildScrollView(
+              // Asegurar que el teclado no tape los elementos
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.manual,
+              physics: BouncingScrollPhysics(),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _buildHeader(),
+                  SizedBox(height: 20),
+                  _buildProgressIndicator(),
+                  SizedBox(height: 24),
+                  _buildContent(),
+                  if (_errorMessage != null) ...[
+                    SizedBox(height: 12),
+                    _buildErrorMessage(),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          // Botones siempre visibles fuera del scroll
+          SizedBox(height: 16),
+          _buildActionButton(),
+          SizedBox(height: 12),
+          _buildSecondaryActions(),
+        ],
       ),
     );
   }
@@ -443,7 +467,7 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
 
   Widget _buildContent() {
     return SizedBox(
-      height: 120,
+      height: 80, // Reducido para dar más espacio a los botones
       child: PageView(
         controller: _pageController,
         physics: NeverScrollableScrollPhysics(),
@@ -475,21 +499,24 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
     return GestureDetector(
       onTap: _showCountrySelector,
       child: Container(
-        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+        width: 100, // Ancho fijo más compacto
+        padding: EdgeInsets.symmetric(horizontal: 8, vertical: 16),
         decoration: BoxDecoration(
           border: Border.all(color: Colors.grey[300]!),
           borderRadius: BorderRadius.circular(12),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text(selectedCountry['flag']!, style: TextStyle(fontSize: 20)),
-            SizedBox(width: 8),
+            Text(selectedCountry['flag']!, style: TextStyle(fontSize: 18)),
+            SizedBox(width: 4),
             Text(
               selectedCountry['code']!,
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
             ),
-            Icon(Icons.arrow_drop_down, color: Colors.grey[600]),
+            SizedBox(width: 2),
+            Icon(Icons.arrow_drop_down, color: Colors.grey[600], size: 18),
           ],
         ),
       ),

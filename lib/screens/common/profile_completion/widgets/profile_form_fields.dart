@@ -1,4 +1,6 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 
 class ProfileFormFields extends StatelessWidget {
   final TextEditingController nameController;
@@ -55,11 +57,9 @@ class ProfileFormFields extends StatelessWidget {
         // Birth Date Field
         InkWell(
           onTap: () async {
-            final DateTime? picked = await showDatePicker(
-              context: context,
+            final DateTime? picked = await _showPlatformDatePicker(
+              context,
               initialDate: selectedBirthDate ?? DateTime(2000, 1, 1),
-              firstDate: DateTime(1924),
-              lastDate: DateTime.now(),
             );
             if (picked != null) {
               onBirthDateSelected(picked);
@@ -140,5 +140,74 @@ class ProfileFormFields extends StatelessWidget {
         ),
       ],
     );
+  }
+
+  /// Muestra el date picker nativo de cada plataforma
+  Future<DateTime?> _showPlatformDatePicker(
+    BuildContext context, {
+    required DateTime initialDate,
+  }) async {
+    if (Platform.isIOS) {
+      // iOS: Usar Cupertino date picker nativo
+      DateTime selectedDate = initialDate;
+
+      await showCupertinoModalPopup<void>(
+        context: context,
+        builder: (BuildContext context) {
+          return Container(
+            height: 300,
+            color: CupertinoColors.systemBackground.resolveFrom(context),
+            child: Column(
+              children: [
+                // Header con botón Done
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      CupertinoButton(
+                        padding: EdgeInsets.zero,
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: Text('Cancelar'),
+                      ),
+                      CupertinoButton(
+                        padding: EdgeInsets.zero,
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: Text(
+                          'Listo',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // Date picker
+                Expanded(
+                  child: CupertinoDatePicker(
+                    mode: CupertinoDatePickerMode.date,
+                    initialDateTime: initialDate,
+                    minimumDate: DateTime(1924),
+                    maximumDate: DateTime.now(),
+                    onDateTimeChanged: (DateTime newDate) {
+                      selectedDate = newDate;
+                    },
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      );
+
+      return selectedDate;
+    } else {
+      // Android: Usar Material date picker
+      return await showDatePicker(
+        context: context,
+        initialDate: initialDate,
+        firstDate: DateTime(1924),
+        lastDate: DateTime.now(),
+      );
+    }
   }
 }

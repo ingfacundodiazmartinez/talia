@@ -33,6 +33,7 @@ class _ProfileCompletionScreenState extends State<ProfileCompletionScreen>
   String? _existingPhotoURL;
   DateTime? _selectedBirthDate;
   bool _isLoading = false;
+  bool _isLoadingData = true; // Nuevo: estado de carga inicial
   bool _isEditMode = false;
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
@@ -52,16 +53,56 @@ class _ProfileCompletionScreenState extends State<ProfileCompletionScreen>
   }
 
   Future<void> _loadExistingUserData() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        print('❌ No hay usuario autenticado');
+        return;
+      }
+
+      print('📋 Cargando datos del usuario: ${user.uid}');
+      print('   Email: ${user.email}');
+      print('   Phone: ${user.phoneNumber}');
+
       final userData = await _profileService.loadExistingUserData(user.uid);
+
       if (userData != null && mounted) {
+        print('✅ Datos del usuario cargados exitosamente:');
+        print('   Nombre: ${userData['name']}');
+        print('   Fecha nacimiento: ${userData['birthDate']}');
+        print('   Foto: ${userData['photoURL'] != null ? "Sí" : "No"}');
+
         setState(() {
           _nameController.text = userData['name'] ?? '';
           _selectedBirthDate = userData['birthDate'];
           _existingPhotoURL = userData['photoURL'];
           _isEditMode = true;
         });
+      } else {
+        print('ℹ️ No hay datos previos del usuario en Firestore (primera vez o documento vacío)');
+        print('   userData == null: ${userData == null}');
+      }
+    } catch (e, stackTrace) {
+      print('❌ ERROR cargando datos del usuario: $e');
+      print('   Stack trace: $stackTrace');
+
+      // Mostrar un mensaje al usuario sobre el error
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al cargar datos del perfil. Verifica tu conexión.'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 4),
+          ),
+        );
+      }
+    } finally {
+      // Siempre marcar como cargado, incluso si hubo error
+      if (mounted) {
+        setState(() {
+          _isLoadingData = false;
+        });
+        print('✅ Pantalla de completar perfil lista para mostrar (isEditMode: $_isEditMode)');
       }
     }
   }
@@ -241,23 +282,48 @@ class _ProfileCompletionScreenState extends State<ProfileCompletionScreen>
           ),
         ),
         child: SafeArea(
-          child: FadeTransition(
-            opacity: _fadeAnimation,
-            child: Center(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(24.0),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    ProfileHeader(isEditMode: _isEditMode),
-                    SizedBox(height: 32),
-                    _buildFormCard(colorScheme),
-                  ],
+          child: _isLoadingData
+              ? _buildLoadingView(colorScheme)
+              : FadeTransition(
+                  opacity: _fadeAnimation,
+                  child: Center(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(24.0),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          ProfileHeader(isEditMode: _isEditMode),
+                          SizedBox(height: 32),
+                          _buildFormCard(colorScheme),
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
-              ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLoadingView(ColorScheme colorScheme) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          CircularProgressIndicator(
+            color: colorScheme.onPrimary,
+            strokeWidth: 3,
+          ),
+          SizedBox(height: 24),
+          Text(
+            'Preparando tu perfil...',
+            style: TextStyle(
+              color: colorScheme.onPrimary,
+              fontSize: 16,
+              fontWeight: FontWeight.w500,
             ),
           ),
-        ),
+        ],
       ),
     );
   }
