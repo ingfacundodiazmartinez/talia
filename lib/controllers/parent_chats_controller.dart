@@ -34,12 +34,46 @@ class ParentChatsController {
   }
 
   /// Stream de relaciones padre-hijo aprobadas
-  Stream<QuerySnapshot> getParentChildLinksStream() {
+  /// ⚠️ CORREGIDO: Lee desde /users/{userId}.linkedChildrenIds por seguridad
+  Stream<List<String>> getParentChildLinksStream() {
     return _firestore
-        .collection('parent_children')
-        .where('parentId', isEqualTo: userId)
-        .where('status', isEqualTo: 'approved')
-        .snapshots();
+        .collection('users')
+        .doc(userId)
+        .snapshots()
+        .map((snapshot) {
+      if (!snapshot.exists) {
+        print('⚠️ [ParentChatsController] Usuario $userId no existe');
+        return <String>[];
+      }
+
+      final userData = snapshot.data() as Map<String, dynamic>?;
+      if (userData == null) {
+        print('⚠️ [ParentChatsController] userData es null para $userId');
+        return <String>[];
+      }
+
+      // Verificar que el usuario tenga rol 'parent' o 'adult'
+      // 'adult' es un padre sin hijos vinculados
+      final role = userData['role'] as String?;
+      if (role != 'parent' && role != 'adult') {
+        print('⚠️ [ParentChatsController] Usuario $userId tiene rol "$role" (esperado: "parent" o "adult")');
+        return <String>[];
+      }
+
+      // Si es 'adult', no tiene hijos vinculados, retornar lista vacía
+      if (role == 'adult') {
+        print('ℹ️ [ParentChatsController] Usuario $userId es "adult" (padre sin hijos vinculados)');
+        return <String>[];
+      }
+
+      final linkedChildren = userData['linkedChildrenIds'];
+      if (linkedChildren == null) {
+        print('ℹ️ [ParentChatsController] Usuario $userId no tiene linkedChildrenIds');
+        return <String>[];
+      }
+
+      return List<String>.from(linkedChildren);
+    });
   }
 
   /// Stream de grupos donde el usuario es miembro
@@ -55,6 +89,19 @@ class ParentChatsController {
   /// Stream de datos de un usuario específico
   Stream<DocumentSnapshot> getUserDataStream(String targetUserId) {
     return _firestore.collection('users').doc(targetUserId).snapshots();
+  }
+
+  /// Forzar reconexión de Firestore (útil para pull-to-refresh)
+  Future<void> forceReconnect() async {
+    try {
+      print('🔄 Forzando reconexión de Firestore...');
+      await _firestore.disableNetwork();
+      await Future.delayed(Duration(milliseconds: 300));
+      await _firestore.enableNetwork();
+      print('✅ Firestore reconectado');
+    } catch (e) {
+      print('❌ Error forzando reconexión: $e');
+    }
   }
 
   /// Filtra chats eliminados
@@ -86,8 +133,7 @@ class ParentChatsController {
 
   /// Construye la lista de items para mostrar en la UI (sin historias ni buscador)
   List<ChatListItemType> buildListItems({
-    required List<QueryDocumentSnapshot> childrenLinks,
-    required Set<String> childrenIds,
+    required List<String> childrenIds,
     required List<QueryDocumentSnapshot> chatDocs,
     required List<QueryDocumentSnapshot> otherChats,
     required List<QueryDocumentSnapshot> groups,
@@ -95,14 +141,13 @@ class ParentChatsController {
     final List<ChatListItemType> items = [];
 
     // Add child chats section
-    if (childrenLinks.isNotEmpty) {
+    if (childrenIds.isNotEmpty) {
       items.add(const HeaderItem(title: 'Mis Hijos', isChildrenHeader: true));
 
       // Crear lista de chats con hijos y ordenar por última actividad
       final childChatItems = <({String childId, QueryDocumentSnapshot? chatDoc, Timestamp? lastActivity})>[];
 
-      for (final linkDoc in childrenLinks) {
-        final childId = linkDoc['childId'] as String;
+      for (final childId in childrenIds) {
         final chatDoc = _findChatForChild(childId, chatDocs);
 
         // Obtener timestamp de última actividad
@@ -139,7 +184,7 @@ class ParentChatsController {
     // Add other chats section
     if (otherChats.isNotEmpty) {
       items.add(
-        HeaderItem(title: childrenLinks.isEmpty ? 'Chats' : 'Otros Chats'),
+        HeaderItem(title: childrenIds.isEmpty ? 'Chats' : 'Otros Chats'),
       );
 
       // Ordenar otros chats por última actividad
@@ -267,8 +312,8 @@ class ParentChatsController {
     await _groupChatService.leaveGroup(groupId, userId);
   }
 
-  /// Extrae IDs de hijos desde los links
-  Set<String> extractChildrenIds(List<QueryDocumentSnapshot> childrenLinks) {
-    return childrenLinks.map((doc) => doc['childId'] as String).toSet();
+  /// Convierte lista de IDs a Set
+  Set<String> convertToSet(List<String> childrenIds) {
+    return childrenIds.toSet();
   }
 }

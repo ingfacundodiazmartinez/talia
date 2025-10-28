@@ -15,6 +15,7 @@ import '../../../services/chat_clear_service.dart';
 import '../../../services/message_cache_service.dart';
 import '../../../services/typing_indicator_service.dart';
 import '../../../services/message_status_helper.dart';
+import '../../../services/group_chat_service.dart';
 import '../../../screens/group_chat_screen.dart';
 import '../../../models/chat_message.dart';
 import '../../chat_detail_screen.dart';
@@ -414,34 +415,11 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
 
   Future<void> _leaveGroup(String groupId, String groupName) async {
     try {
-      final groupRef = _firestore.collection('groups').doc(groupId);
-      final groupDoc = await groupRef.get();
+      // Usar el servicio que maneja correctamente los permisos con arrayRemove
+      await GroupChatService().leaveGroup(groupId, widget.childId);
 
-      if (!groupDoc.exists) {
-        throw Exception('El grupo no existe');
-      }
-
-      final groupData = groupDoc.data() as Map<String, dynamic>;
-      final members = List<String>.from(groupData['members'] ?? []);
-
-      // Eliminar al usuario de la lista de miembros
-      members.remove(widget.childId);
-
-      if (members.isEmpty) {
-        // Si no quedan miembros, eliminar el grupo
-        await groupRef.delete();
-      } else {
-        // Actualizar la lista de miembros
-        await groupRef.update({'members': members});
-
-        // Enviar mensaje de sistema que el usuario salió
-        await groupRef.collection('messages').add({
-          'type': 'system',
-          'text': 'Ha salido del grupo',
-          'senderId': widget.childId,
-          'timestamp': FieldValue.serverTimestamp(),
-        });
-      }
+      // ℹ️ Firestore listeners se actualizarán automáticamente cuando cambie el documento.
+      // NO forzar disableNetwork/enableNetwork porque puede causar loading infinito.
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -494,7 +472,9 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
         final lastMessageTime = currentChatData['lastMessageTime'] as Timestamp?;
         final isChatCleared = clearedAt != null &&
             (lastMessageTime == null || clearedAt.compareTo(lastMessageTime) >= 0);
-        final lastMessage = currentChatData['lastMessage'] ?? '';
+        final lastMessage = isChatCleared
+            ? 'Inicia una conversación...'
+            : (currentChatData['lastMessage'] ?? '');
         final timeString = isChatCleared ? '' : _chatsController.formatTime(currentChatData['lastMessageTime']);
 
         // OPTIMIZACIÓN: Cachear información del usuario para evitar consultas repetidas

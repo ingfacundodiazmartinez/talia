@@ -57,8 +57,9 @@ class ChildMainShell extends StatefulWidget {
 
 class _ChildMainShellState extends State<ChildMainShell> {
   int _selectedIndex = 0;
-  late ChildHomeController _controller;
+  ChildHomeController? _controller; // Nullable porque se inicializa async
   StreamSubscription? _chatNotificationSubscription;
+  StreamSubscription? _roleChangeSubscription;
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
@@ -72,20 +73,61 @@ class _ChildMainShellState extends State<ChildMainShell> {
     super.initState();
     final currentUserId = _auth.currentUser?.uid;
     if (currentUserId != null) {
-      _controller = ChildHomeController(
-        childId: currentUserId,
-        context: context,
-      );
-      _controller.initialize();
+      // Verificar que el usuario tenga rol 'child' antes de inicializar el controller
+      // Esto es una verificación de seguridad adicional
+      _verifyUserRoleAndInitialize(currentUserId);
+      _setupRoleChangeListener(currentUserId);
     }
     _setupNotificationListeners();
   }
 
+  /// Verificar el rol del usuario antes de inicializar el controller
+  Future<void> _verifyUserRoleAndInitialize(String userId) async {
+    try {
+      final userDoc = await _firestore.collection('users').doc(userId).get();
+      final userData = userDoc.data();
+      final userRole = userData?['role'] ?? 'child';
+
+      print('🔐 [ChildMainShell] Verificando rol de usuario: $userRole');
+
+      // Inicializar el controller si el usuario NO es 'parent'
+      // Los roles 'child' y 'adult' usan el mismo shell
+      if (userRole != 'parent') {
+        print('✅ [ChildMainShell] Usuario es $userRole - inicializando controller');
+        final controller = ChildHomeController(
+          childId: userId,
+          context: context,
+        );
+        await controller.initialize();
+
+        // Asignar después de inicializar para evitar race conditions
+        if (mounted) {
+          setState(() {
+            _controller = controller;
+          });
+        }
+      } else {
+        print('⚠️ [ChildMainShell] Usuario es parent (role: $userRole) - NO inicializando controller');
+        print('⚠️ [ChildMainShell] Este usuario debería estar en ParentMainShell, no en ChildMainShell');
+      }
+    } catch (e) {
+      print('❌ [ChildMainShell] Error verificando rol: $e');
+    }
+  }
+
   @override
   void dispose() {
-    _controller.dispose();
+    _controller?.dispose(); // Usar ?. porque puede ser null
     _chatNotificationSubscription?.cancel();
+    _roleChangeSubscription?.cancel();
     super.dispose();
+  }
+
+  void _setupRoleChangeListener(String userId) {
+    // ⚠️ DESHABILITADO: No cerrar sesión automáticamente por cambios de rol
+    // El AuthWrapper en main.dart manejará los cambios de shell si es necesario
+    // Los usuarios NUNCA deben ser deslogueados automáticamente
+    print('ℹ️ [ChildMainShell] Listener de cambio de rol deshabilitado - no se cerrará sesión automáticamente');
   }
 
   void _setupNotificationListeners() {
@@ -231,16 +273,57 @@ class _ChildMainShellState extends State<ChildMainShell> {
     // Con 3 tabs necesitamos menos espacio que con 5, pero aún aumentamos el umbral
     final showLabels = screenWidth >= 380;
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvoked: (bool didPop) async {
+        if (didPop) return;
+
+        // Si hay navegación anidada, hacer pop en el navegador del tab actual
+        if (_hasNestedRoute) {
+          GlobalKey<NavigatorState> currentKey;
+          switch (_selectedIndex) {
+            case 0:
+              currentKey = _chatsNavigatorKey;
+              break;
+            case 1:
+              currentKey = _contactsNavigatorKey;
+              break;
+            case 2:
+              currentKey = _profileNavigatorKey;
+              break;
+            default:
+              currentKey = _chatsNavigatorKey;
+          }
+
+          if (currentKey.currentState?.canPop() ?? false) {
+            currentKey.currentState!.pop();
+            return;
+          }
+        }
+
+        // Si estamos en otro tab que no sea Chats (0), volver al tab de Chats
+        if (_selectedIndex != 0) {
+          setState(() => _selectedIndex = 0);
+          return;
+        }
+
+        // Si estamos en el tab de Chats y no hay navegación anidada, salir de la app
+        // (El sistema Android manejará la salida)
+      },
+      child: Scaffold(
       body: Stack(
         children: [
           Offstage(
             offstage: _selectedIndex != 0,
-            child: _buildNavigator(_chatsNavigatorKey, ChildChatsScreen(childId: currentUserId, controller: _controller)),
+            child: _controller != null
+                ? _buildNavigator(_chatsNavigatorKey, ChildChatsScreen(childId: currentUserId, controller: _controller!))
+                : Center(child: CircularProgressIndicator()),
           ),
           Offstage(
             offstage: _selectedIndex != 1,
-            child: _buildNavigator(_contactsNavigatorKey, ChildContactsScreen(childId: currentUserId, controller: _controller)),
+            child: _controller != null
+                ? _buildNavigator(_contactsNavigatorKey, ChildContactsScreen(childId: currentUserId, controller: _controller!))
+                : Center(child: CircularProgressIndicator()),
           ),
           Offstage(
             offstage: _selectedIndex != 2,
@@ -250,6 +333,7 @@ class _ChildMainShellState extends State<ChildMainShell> {
       ),
       // Ocultar bottom nav bar cuando hay rutas anidadas (ej: chat abierto)
       bottomNavigationBar: _hasNestedRoute ? null : _buildBottomNavigationBar(colorScheme, showLabels),
+      ),
     );
   }
 

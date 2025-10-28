@@ -13,20 +13,26 @@ class ChildrenListWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<QuerySnapshot>(
+    // ⚠️ CORREGIDO: Lee desde /users/{parentId}.linkedChildrenIds por seguridad
+    return StreamBuilder<DocumentSnapshot>(
       stream: FirebaseFirestore.instance
-          .collection('parent_children')
-          .where('parentId', isEqualTo: parentId)
+          .collection('users')
+          .doc(parentId)
           .snapshots(),
       builder: (context, snapshot) {
-        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+        if (!snapshot.hasData || !snapshot.data!.exists) {
+          return _buildEmptyState(context);
+        }
+
+        final userData = snapshot.data!.data() as Map<String, dynamic>?;
+        final linkedChildrenIds = List<String>.from(userData?['linkedChildrenIds'] ?? []);
+
+        if (linkedChildrenIds.isEmpty) {
           return _buildEmptyState(context);
         }
 
         return Column(
-          children: snapshot.data!.docs.map((doc) {
-            final childId = doc['childId'];
-            final linkDocId = doc.id;
+          children: linkedChildrenIds.map((childId) {
             return FutureBuilder<DocumentSnapshot>(
               future: FirebaseFirestore.instance
                   .collection('users')
@@ -43,7 +49,6 @@ class ChildrenListWidget extends StatelessWidget {
                   context,
                   childId: childId,
                   name: name,
-                  linkDocId: linkDocId,
                 );
               },
             );
@@ -75,7 +80,6 @@ class ChildrenListWidget extends StatelessWidget {
     BuildContext context, {
     required String childId,
     required String name,
-    required String linkDocId,
   }) {
     final colorScheme = Theme.of(context).colorScheme;
 

@@ -272,38 +272,29 @@ class _ChildProfileScreenState extends State<ChildProfileScreen> {
   Future<void> _pickImage(ImageSource source) async {
     Navigator.pop(context); // Cerrar bottom sheet
 
+    // Guardar referencia al contexto de la pantalla antes de mostrar cualquier diálogo
+    final scaffoldContext = context;
+
     try {
-      // Mostrar loading
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => const AlertDialog(
-          content: Row(
-            children: [
-              CircularProgressIndicator(),
-              SizedBox(width: 20),
-              Text('Procesando imagen...'),
-            ],
-          ),
-        ),
+      // Primero, permitir al usuario seleccionar la imagen
+      // El ImageService maneja la selección y LUEGO procesa
+      // NO mostrar loading todavía - esperar a que el usuario seleccione
+
+      final String? downloadUrl = await _controller.pickAndUploadImage(
+        source,
+        scaffoldContext,
       );
 
-      final String? downloadUrl = await _controller.pickAndUploadImage(source, context);
-
-      if (mounted) {
-        Navigator.pop(context); // Cerrar loading
-      }
+      // Si llegamos aquí, la imagen se procesó exitosamente
+      // El diálogo de loading se maneja dentro de ImageService
 
       // Image uploaded successfully
     } catch (e) {
-      if (mounted) {
-        Navigator.pop(context); // Cerrar loading
-      }
-
+      // Si hay error, mostrar mensaje
       final errorMessage = ChildProfileController.getErrorMessage(e, source);
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        ScaffoldMessenger.of(scaffoldContext).showSnackBar(
           SnackBar(
             content: Text(errorMessage),
             backgroundColor: Colors.red,
@@ -379,17 +370,22 @@ class _ChildProfileScreenState extends State<ChildProfileScreen> {
 
     if (confirm == true) {
       try {
+        print('🚪 Cerrando sesión...');
         await _controller.logout();
+        print('✅ Sesión cerrada - AuthWrapper detectará el cambio automáticamente');
 
-        // Limpiar stack de navegación
+        // NO hacer navegación manual - AuthWrapper detectará el signOut
+        // y mostrará AuthScreen automáticamente
+      } catch (e) {
+        print('❌ Error cerrando sesión: $e');
         if (mounted) {
-          Navigator.of(context).pushNamedAndRemoveUntil(
-            '/',
-            (route) => false,
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Error al cerrar sesión: $e'),
+              backgroundColor: Colors.red,
+            ),
           );
         }
-      } catch (e) {
-        print('Error al cerrar sesión: $e');
       }
     }
   }

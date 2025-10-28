@@ -47,6 +47,17 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
   @override
   Widget build(BuildContext context) {
     super.build(context); // Necesario para AutomaticKeepAliveClientMixin
+
+    // Verificar si el usuario sigue autenticado
+    final currentUser = _auth.currentUser;
+    if (currentUser == null) {
+      return Scaffold(
+        body: Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: Text('Mi Perfil'),
@@ -60,8 +71,8 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
             children: [
               // Header de perfil
               ProfileHeaderWidget(
-                parentId: _auth.currentUser!.uid,
-                email: _auth.currentUser?.email,
+                parentId: currentUser.uid,
+                email: currentUser.email,
                 controller: _controller,
                 onImageChanged: () => setState(() {}),
               ),
@@ -70,13 +81,13 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
               // Sección de Hijos
               _buildSectionTitle('Mis Hijos'),
               SizedBox(height: 12),
-              ChildrenListWidget(parentId: _auth.currentUser!.uid),
+              ChildrenListWidget(parentId: currentUser.uid),
               SizedBox(height: 32),
 
               // Estadísticas
               _buildSectionTitle('Estadísticas'),
               SizedBox(height: 12),
-              ProfileStatisticsWidget(parentId: _auth.currentUser!.uid),
+              ProfileStatisticsWidget(parentId: currentUser.uid),
               SizedBox(height: 32),
 
               // Configuración
@@ -364,15 +375,14 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
 
     if (confirm == true) {
       try {
+        print('🚪 Cerrando sesión...');
         await _controller.logout();
+        print('✅ Sesión cerrada - AuthWrapper detectará el cambio automáticamente');
 
-        if (mounted) {
-          Navigator.of(context).pushNamedAndRemoveUntil(
-            '/',
-            (route) => false,
-          );
-        }
+        // NO hacer navegación manual - AuthWrapper detectará el signOut
+        // y mostrará AuthScreen automáticamente
       } catch (e) {
+        print('❌ Error cerrando sesión: $e');
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(

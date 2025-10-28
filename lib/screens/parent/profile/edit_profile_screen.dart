@@ -73,18 +73,26 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   }
 
   Future<void> _changeProfilePhoto() async {
+    print('📸 [EditProfile] Iniciando cambio de foto de perfil...');
+
     try {
       setState(() => _isUploadingImage = true);
+      print('📸 [EditProfile] Loading state activado');
 
       // Mostrar selector de fuente de imagen
+      print('📸 [EditProfile] Mostrando selector de fuente...');
       final ImageSource? source = await _imageService.showImageSourceSelection(
         context,
       );
+      print('📸 [EditProfile] Selector cerrado. Source seleccionado: $source');
 
       if (source == null) {
+        print('⚠️ [EditProfile] Usuario canceló la selección');
         setState(() => _isUploadingImage = false);
         return;
       }
+
+      print('📸 [EditProfile] Iniciando selección y subida de imagen desde ${source == ImageSource.camera ? 'cámara' : 'galería'}...');
 
       // Seleccionar imagen
       final String? imageUrl = await _imageService.pickAndUploadProfileImage(
@@ -92,20 +100,28 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         context: context,
       );
 
+      print('📸 [EditProfile] Resultado de pickAndUploadProfileImage: ${imageUrl != null ? 'URL obtenida' : 'null'}');
+
       // Si la imagen fue subida exitosamente, actualizar en Firestore via controller
       if (imageUrl != null && mounted) {
+        print('📸 [EditProfile] Actualizando foto de perfil en Firestore...');
         await _controller.uploadProfilePhoto(imageUrl);
         setState(() {
           _profileImageUrl = imageUrl;
         });
+        print('✅ [EditProfile] Foto de perfil actualizada exitosamente');
+      } else {
+        print('⚠️ [EditProfile] No se obtuvo URL de imagen');
       }
     } catch (e) {
+      print('❌ [EditProfile] Error al cambiar foto: $e');
       if (mounted) {
         _showErrorSnackBar('Error al cambiar foto: ${EditProfileController.getErrorMessage(e)}');
       }
     } finally {
       if (mounted) {
         setState(() => _isUploadingImage = false);
+        print('📸 [EditProfile] Loading state desactivado');
       }
     }
   }

@@ -33,18 +33,27 @@ class _ChatModerationManagementScreenState
     try {
       final currentUserId = _auth.currentUser!.uid;
 
-      // Obtener hijos vinculados
-      final childrenSnapshot = await _firestore
-          .collection('parent_children')
-          .where('parentId', isEqualTo: currentUserId)
+      // ⚠️ CORREGIDO: Lee desde /users/{userId}.linkedChildrenIds por seguridad
+      final userDoc = await _firestore
+          .collection('users')
+          .doc(currentUserId)
           .get();
 
       if (mounted) {
-        setState(() {
-          _childrenIds =
-              childrenSnapshot.docs.map((doc) => doc['childId'] as String).toList();
-          _isLoading = false;
-        });
+        if (userDoc.exists) {
+          final userData = userDoc.data() as Map<String, dynamic>?;
+          final linkedChildrenIds = List<String>.from(userData?['linkedChildrenIds'] ?? []);
+
+          setState(() {
+            _childrenIds = linkedChildrenIds;
+            _isLoading = false;
+          });
+        } else {
+          setState(() {
+            _childrenIds = [];
+            _isLoading = false;
+          });
+        }
       }
     } catch (e) {
       print('❌ Error cargando hijos vinculados: $e');

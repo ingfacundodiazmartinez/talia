@@ -1,4 +1,5 @@
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import '../models/parent.dart';
 import '../models/user.dart' as user_model;
 import '../services/image_service.dart';
@@ -112,21 +113,25 @@ class EditProfileController {
       // Actualizar nombre en Firebase Auth
       await _auth.currentUser?.updateDisplayName(name);
 
-      // Calcular edad
-      final age = calculateAge(birthDate);
+      // Llamar a Cloud Function para actualizar perfil y rol
+      // La función calcula automáticamente el rol correcto basado en edad y vínculos
+      final callable = FirebaseFunctions.instance.httpsCallable('updateUserProfile');
+      final result = await callable.call<Map<String, dynamic>>({
+        'name': name,
+        'phone': phone,
+        'birthDate': birthDate.toIso8601String(),
+      });
 
-      // Determinar rol basado en edad
-      final newRole = await _roleService.determineUserRole(userId, age);
+      final response = result.data;
+      final success = response['success'] as bool? ?? false;
+      final newRole = response['role'] as String?;
+      final age = response['age'] as int?;
 
-      // Actualizar perfil en Firestore
-      await _parent!.updateProfile(
-        name: name,
-        phone: phone,
-        birthDate: birthDate,
-        role: newRole,
-      );
-
-      print('✅ Perfil actualizado con rol: $newRole (edad: $age)');
+      if (success) {
+        print('✅ Perfil actualizado con rol: $newRole (edad: $age)');
+      } else {
+        throw Exception('Error al actualizar perfil');
+      }
     } catch (e) {
       print('❌ Error guardando perfil: $e');
       rethrow;

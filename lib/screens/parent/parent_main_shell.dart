@@ -62,6 +62,7 @@ class ParentMainShell extends StatefulWidget {
 class _ParentMainShellState extends State<ParentMainShell> {
   int _selectedIndex = 0;
   StreamSubscription? _chatNotificationSubscription;
+  StreamSubscription? _roleChangeSubscription;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
@@ -76,12 +77,21 @@ class _ParentMainShellState extends State<ParentMainShell> {
   void initState() {
     super.initState();
     _setupNotificationListeners();
+    _setupRoleChangeListener();
   }
 
   @override
   void dispose() {
     _chatNotificationSubscription?.cancel();
+    _roleChangeSubscription?.cancel();
     super.dispose();
+  }
+
+  void _setupRoleChangeListener() {
+    // ⚠️ DESHABILITADO: No cerrar sesión automáticamente por cambios de rol
+    // El AuthWrapper en main.dart manejará los cambios de shell si es necesario
+    // Los usuarios NUNCA deben ser deslogueados automáticamente
+    print('ℹ️ [ParentMainShell] Listener de cambio de rol deshabilitado - no se cerrará sesión automáticamente');
   }
 
   void _setupNotificationListeners() {
@@ -220,7 +230,50 @@ class _ParentMainShellState extends State<ParentMainShell> {
   Widget build(BuildContext context) {
     final currentUserId = _auth.currentUser?.uid;
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvoked: (bool didPop) async {
+        if (didPop) return;
+
+        // Si hay navegación anidada, hacer pop en el navegador del tab actual
+        if (_hasNestedRoute) {
+          GlobalKey<NavigatorState> currentKey;
+          switch (_selectedIndex) {
+            case 0:
+              currentKey = _dashboardNavigatorKey;
+              break;
+            case 1:
+              currentKey = _chatsNavigatorKey;
+              break;
+            case 2:
+              currentKey = _contactsNavigatorKey;
+              break;
+            case 3:
+              currentKey = _whitelistNavigatorKey;
+              break;
+            case 4:
+              currentKey = _profileNavigatorKey;
+              break;
+            default:
+              currentKey = _dashboardNavigatorKey;
+          }
+
+          if (currentKey.currentState?.canPop() ?? false) {
+            currentKey.currentState!.pop();
+            return;
+          }
+        }
+
+        // Si estamos en otro tab que no sea Dashboard (0), volver al tab de Dashboard
+        if (_selectedIndex != 0) {
+          setState(() => _selectedIndex = 0);
+          return;
+        }
+
+        // Si estamos en el tab de Dashboard y no hay navegación anidada, salir de la app
+        // (El sistema Android manejará la salida)
+      },
+      child: Scaffold(
       body: Stack(
         children: [
           Offstage(
@@ -305,6 +358,7 @@ class _ParentMainShellState extends State<ParentMainShell> {
               },
             )
           : null,
+      ),
     );
   }
 
@@ -320,20 +374,28 @@ class _ParentMainShellState extends State<ParentMainShell> {
       return Container(); // Usuario no autenticado
     }
 
-    // Obtener IDs de hijos vinculados
-    return StreamBuilder<QuerySnapshot>(
+    // Obtener IDs de hijos vinculados desde el documento del usuario
+    return StreamBuilder<DocumentSnapshot>(
       stream: _firestore
-          .collection('parentChildLinks')
-          .where('parentId', isEqualTo: currentUserId)
-          .where('status', isEqualTo: 'approved')
+          .collection('users')
+          .doc(currentUserId)
           .snapshots(),
-      builder: (context, linksSnapshot) {
+      builder: (context, userSnapshot) {
+        print('🔍 [ParentMainShell] user document snapshot:');
+        print('   - hasData: ${userSnapshot.hasData}');
+        print('   - hasError: ${userSnapshot.hasError}');
+        print('   - connectionState: ${userSnapshot.connectionState}');
+        if (userSnapshot.hasError) {
+          print('   - error: ${userSnapshot.error}');
+        }
+
         List<String> childrenIds = [];
-        if (linksSnapshot.hasData) {
-          childrenIds = linksSnapshot.data!.docs
-              .map((doc) => doc.data() as Map<String, dynamic>)
-              .map((data) => data['childId'] as String)
-              .toList();
+        if (userSnapshot.hasData && userSnapshot.data != null) {
+          final userData = userSnapshot.data!.data() as Map<String, dynamic>?;
+          if (userData != null) {
+            childrenIds = List<String>.from(userData['linkedChildrenIds'] ?? []);
+            print('   - linkedChildrenIds: $childrenIds');
+          }
         }
 
         // Si no hay hijos, contar directamente como 0
@@ -385,24 +447,57 @@ class _ParentMainShellState extends State<ParentMainShell> {
         }
 
         // Contar historias pendientes de los hijos
+        print('🔍 [ParentMainShell] Iniciando query de story_approval_requests');
+        print('   - parentId: $currentUserId');
+        print('   - childrenIds disponibles: $childrenIds');
+
         return StreamBuilder<QuerySnapshot>(
           stream: _firestore
-              .collection('stories')
-              .where('userId', whereIn: childrenIds)
+              .collection('story_approval_requests')
+              .where('parentId', isEqualTo: currentUserId)
               .where('status', isEqualTo: 'pending')
               .snapshots(),
           builder: (context, storiesSnapshot) {
+            print('🔍 [ParentMainShell] Story snapshot recibido:');
+            print('   - hasData: ${storiesSnapshot.hasData}');
+            print('   - hasError: ${storiesSnapshot.hasError}');
+            print('   - connectionState: ${storiesSnapshot.connectionState}');
+
+            // Log para debug
+            if (storiesSnapshot.hasError) {
+              print('❌ [ParentMainShell] Error en story query: ${storiesSnapshot.error}');
+            } else if (storiesSnapshot.hasData) {
+              print('✅ [ParentMainShell] Story requests loaded: ${storiesSnapshot.data!.docs.length}');
+              if (storiesSnapshot.data!.docs.isNotEmpty) {
+                print('📋 [ParentMainShell] Story requests:');
+                for (var doc in storiesSnapshot.data!.docs) {
+                  final data = doc.data() as Map<String, dynamic>;
+                  print('   - storyId: ${data['storyId']}, childId: ${data['childId']}');
+                }
+              } else {
+                print('⚠️ [ParentMainShell] No hay story requests pendientes');
+              }
+            } else {
+              print('⏳ [ParentMainShell] Story requests loading...');
+            }
+
             final pendingStoriesCount = storiesSnapshot.data?.docs.length ?? 0;
 
             // Contar emergencias no resueltas de los hijos
+            // NOTA: No podemos usar whereIn + whereNotIn juntos, así que filtramos en cliente
             return StreamBuilder<QuerySnapshot>(
               stream: _firestore
                   .collection('emergencies')
                   .where('childId', whereIn: childrenIds)
-                  .where('status', whereNotIn: ['resolved'])
                   .snapshots(),
               builder: (context, emergenciesSnapshot) {
-                final unresolvedEmergenciesCount = emergenciesSnapshot.data?.docs.length ?? 0;
+                // Filtrar emergencias no resueltas en el cliente
+                int unresolvedEmergenciesCount = 0;
+                if (emergenciesSnapshot.hasData) {
+                  unresolvedEmergenciesCount = emergenciesSnapshot.data!.docs
+                      .where((doc) => (doc.data() as Map<String, dynamic>)['status'] != 'resolved')
+                      .length;
+                }
 
                 // ✅ DASHBOARD: Historias pendientes + emergencias no resueltas
                 final dashboardBadgeCount = pendingStoriesCount + unresolvedEmergenciesCount;

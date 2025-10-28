@@ -57,6 +57,34 @@ class ChildHomeController {
     // Esperar un poco para que la app se cargue completamente
     await Future.delayed(Duration(seconds: 2));
 
+    // IMPORTANTE: Solo iniciar tracking si el usuario es un niño con padres vinculados
+    // Esto evita solicitar permisos innecesarios a usuarios parent o adult
+    print('🔍 Verificando si debe iniciar tracking de ubicación...');
+
+    // Verificar el rol del usuario desde Firestore
+    final userDoc = await _firestore.collection('users').doc(childId).get();
+    final userData = userDoc.data();
+    final userRole = userData?['role'] ?? 'child';
+
+    print('   Role del usuario: $userRole');
+
+    // Solo continuar si el usuario es 'child'
+    if (userRole != 'child') {
+      print('⏭️ Usuario no es child (role: $userRole) - omitiendo tracking de ubicación');
+      return;
+    }
+
+    // Verificar si tiene padres vinculados
+    final hasParents = await hasLinkedParents();
+    print('   Tiene padres vinculados: $hasParents');
+
+    if (!hasParents) {
+      print('⏭️ Usuario child sin padres vinculados - omitiendo tracking de ubicación');
+      return;
+    }
+
+    print('✅ Usuario child con padres vinculados - iniciando tracking de ubicación');
+
     // Habilitar tracking en background
     await _locationService.enableBackgroundTracking();
 

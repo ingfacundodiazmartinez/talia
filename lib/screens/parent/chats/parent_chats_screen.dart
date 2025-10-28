@@ -67,7 +67,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
   Future<SearchResults> _performMessageSearch({
     required String query,
     required List<QueryDocumentSnapshot> chatDocs,
-    required List<QueryDocumentSnapshot> childrenLinks,
+    required List<String> childrenIds,
     required List<QueryDocumentSnapshot> groups,
   }) async {
     if (query.isEmpty) {
@@ -119,7 +119,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
         if (_searchService.matchesQuery(displayName, query) ||
             _searchService.matchesQuery(userName, query)) {
           // Determinar tipo de chat
-          final isChildChat = childrenLinks.any((doc) => doc['childId'] == otherUserId);
+          final isChildChat = childrenIds.contains(otherUserId);
           chatResults.add(ChatSearchResult(
             chatId: chatId,
             chatName: displayName,
@@ -129,7 +129,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
         }
 
         // Buscar en mensajes del chat
-        final isChildChat = childrenLinks.any((doc) => doc['childId'] == otherUserId);
+        final isChildChat = childrenIds.contains(otherUserId);
         final chatMessageResults = await _searchService.searchInChatMessages(
           chatId: chatId,
           query: query,
@@ -290,29 +290,38 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                           onChanged: (value) => _searchQuery.value = value,
                         ),
                       ),
-                      // Lista de chats (filtrable)
+                      // Lista de chats (filtrable) con pull-to-refresh
                       Expanded(
-                        child: StreamBuilder<List<String>>(
-                          stream: _blockService.getBlockedContactsStream(),
-                          builder: (context, blockedSnapshot) {
-                            final blockedContacts = blockedSnapshot.data ?? [];
+                        child: RefreshIndicator(
+                          onRefresh: () async {
+                            print('🔄 Pull-to-refresh activado');
+                            await _controller.forceReconnect();
+                            // Pequeño delay para dar feedback visual
+                            await Future.delayed(Duration(milliseconds: 500));
+                          },
+                          child: StreamBuilder<List<String>>(
+                            stream: _blockService.getBlockedContactsStream(),
+                            builder: (context, blockedSnapshot) {
+                              final blockedContacts = blockedSnapshot.data ?? [];
 
                             return StreamBuilder<QuerySnapshot>(
                               stream: _controller.getChatsStream(),
                               builder: (context, snapshot) {
-                                // En caso de error, continuar con lista vacía de chats pero buscar grupos
+                                // SIEMPRE usar datos cacheados si están disponibles
+                                // Esto evita pantallas en blanco y parpadeos
                                 if (snapshot.hasError) {
                                   debugPrint(
-                                    '⚠️ Error en stream de chats (continuando con grupos): ${snapshot.error}',
+                                    '⚠️ Error en stream de chats: ${snapshot.error}',
                                   );
+                                  // Continuar con lista vacía pero no bloquear la UI
                                 }
 
-                                // Solo mostrar spinner si está esperando Y no hay datos
+                                // Solo mostrar spinner en la primera carga SIN cache
                                 if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
                                   return Center(child: CircularProgressIndicator());
                                 }
 
-                                return StreamBuilder<QuerySnapshot>(
+                                return StreamBuilder<List<String>>(
                                   stream: _controller.getParentChildLinksStream(),
                                   builder: (context, linksSnapshot) {
                                     // Solo mostrar spinner si está esperando Y no hay datos
@@ -320,8 +329,8 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                                       return Center(child: CircularProgressIndicator());
                                     }
 
-                                    final childrenLinks = linksSnapshot.data?.docs ?? [];
-                                    final childrenIds = _controller.extractChildrenIds(childrenLinks);
+                                    final childrenIds = linksSnapshot.data ?? [];
+                                    final childrenIdsSet = _controller.convertToSet(childrenIds);
 
                                     // Filtrar chats eliminados y archivados (NO filtrar bloqueados)
                                     var chatDocs = snapshot.data != null
@@ -334,7 +343,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                                     // Separar chats en: con hijos y con otros
                                     final separated = _controller.separateChats(
                                       chatDocs: chatDocs,
-                                      childrenIds: childrenIds,
+                                      childrenIds: childrenIdsSet,
                                     );
                                     final otherChats = separated['otherChats']!;
 
@@ -348,7 +357,6 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
 
                                         // Build the list items using controller
                                         final listItems = _controller.buildListItems(
-                                          childrenLinks: childrenLinks,
                                           childrenIds: childrenIds,
                                           chatDocs: chatDocs,
                                           otherChats: otherChats,
@@ -367,9 +375,8 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                                                   final item = listItems[index];
                                                   return _buildItemWidget(
                                                     item,
-                                                    childrenLinks,
                                                     chatDocs,
-                                                    childrenIds,
+                                                    childrenIdsSet,
                                                     query.toLowerCase(),
                                                   );
                                                 },
@@ -381,7 +388,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                                               future: _performMessageSearch(
                                                 query: query,
                                                 chatDocs: chatDocs,
-                                                childrenLinks: childrenLinks,
+                                                childrenIds: childrenIds,
                                                 groups: groups,
                                               ),
                                               builder: (context, snapshot) {
@@ -460,6 +467,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                             );
                           },
                         ),
+                        ),
                       ),
                     ],
                   ),
@@ -475,7 +483,6 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
   /// Construye el widget correspondiente a cada tipo de item
   Widget _buildItemWidget(
     ChatListItemType item,
-    List<QueryDocumentSnapshot> childrenLinks,
     List<QueryDocumentSnapshot> chatDocs,
     Set<String> childrenIds,
     String searchQuery,
@@ -499,9 +506,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
 
       case ChatItem(:final userId, :final chatDoc):
         // Check if this is a child chat to use proper data stream
-        final isChildChat = childrenLinks.any(
-          (doc) => doc['childId'] == userId,
-        );
+        final isChildChat = childrenIds.contains(userId);
 
         if (isChildChat) {
           // For child chats, we need to get user data via stream
@@ -818,6 +823,9 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
 
     try {
       await _controller.leaveGroup(groupId);
+
+      // Forzar reconexión de Firestore para limpiar caché y remover el grupo inmediatamente
+      await _controller.forceReconnect();
 
       if (!mounted) return;
       Navigator.pop(context); // Cerrar loading
