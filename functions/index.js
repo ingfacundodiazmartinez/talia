@@ -8182,3 +8182,662 @@ exports.changeUserRole = onCall(
       }
     },
 );
+
+/**
+ * Cloud Function para crear/actualizar contacto
+ * Migrada desde contact.dart y firebase_service.dart
+ */
+exports.createOrUpdateContact = onCall(
+    { region: "us-central1", consumeAppCheckToken: true },
+    async (request) => {
+      if (!request.auth) {
+        throw new HttpsError("unauthenticated", "Usuario no autenticado");
+      }
+
+      const { contactId, otherUserId, status, action } = request.data;
+      const userId = request.auth.uid;
+
+      if (!otherUserId) {
+        throw new HttpsError("invalid-argument", "otherUserId es requerido");
+      }
+
+      try {
+        console.log(`📇 [createOrUpdateContact] Usuario ${userId} ${action || 'creando'} contacto con ${otherUserId}`);
+
+        const db = getFirestore();
+
+        if (action === "approve" && contactId) {
+          // Aprobar solicitud de contacto
+          const requestRef = db.collection("contact_requests").doc(contactId);
+          const requestDoc = await requestRef.get();
+
+          if (!requestDoc.exists) {
+            throw new HttpsError("not-found", "Solicitud no encontrada");
+          }
+
+          const requestData = requestDoc.data();
+
+          // Verificar que el usuario es el receptor
+          if (requestData.receiverId !== userId) {
+            throw new HttpsError("permission-denied", "Solo el receptor puede aprobar");
+          }
+
+          // Actualizar solicitud
+          await requestRef.update({
+            status: "accepted",
+            acceptedAt: FieldValue.serverTimestamp(),
+          });
+
+          // Crear contacto para ambos usuarios
+          const contactData = {
+            users: [userId, otherUserId],
+            status: "active",
+            createdAt: FieldValue.serverTimestamp(),
+          };
+
+          await db.collection("contacts").add(contactData);
+
+          // Crear notificación para el solicitante
+          await db.collection("notifications").add({
+            userId: otherUserId,
+            type: "contact_accepted",
+            title: "Solicitud aceptada",
+            body: "Tu solicitud de contacto fue aceptada",
+            data: { contactUserId: userId },
+            read: false,
+            createdAt: FieldValue.serverTimestamp(),
+          });
+
+          console.log(`✅ [createOrUpdateContact] Contacto aprobado entre ${userId} y ${otherUserId}`);
+
+          return {
+            success: true,
+            message: "Contacto aprobado",
+          };
+        } else if (action === "reject" && contactId) {
+          // Rechazar solicitud
+          const requestRef = db.collection("contact_requests").doc(contactId);
+          const requestDoc = await requestRef.get();
+
+          if (!requestDoc.exists) {
+            throw new HttpsError("not-found", "Solicitud no encontrada");
+          }
+
+          const requestData = requestDoc.data();
+
+          if (requestData.receiverId !== userId) {
+            throw new HttpsError("permission-denied", "Solo el receptor puede rechazar");
+          }
+
+          await requestRef.update({
+            status: "rejected",
+            rejectedAt: FieldValue.serverTimestamp(),
+          });
+
+          console.log(`✅ [createOrUpdateContact] Solicitud rechazada`);
+
+          return {
+            success: true,
+            message: "Solicitud rechazada",
+          };
+        } else if (action === "delete" && contactId) {
+          // Eliminar contacto
+          const contactRef = db.collection("contacts").doc(contactId);
+          const contactDoc = await contactRef.get();
+
+          if (!contactDoc.exists) {
+            throw new HttpsError("not-found", "Contacto no encontrado");
+          }
+
+          const contactData = contactDoc.data();
+
+          // Verificar que el usuario es parte del contacto
+          if (!contactData.users.includes(userId)) {
+            throw new HttpsError("permission-denied", "No tienes permiso para eliminar este contacto");
+          }
+
+          await contactRef.delete();
+
+          console.log(`✅ [createOrUpdateContact] Contacto eliminado`);
+
+          return {
+            success: true,
+            message: "Contacto eliminado",
+          };
+        } else {
+          throw new HttpsError("invalid-argument", "Acción no válida");
+        }
+      } catch (error) {
+        console.error("❌ [createOrUpdateContact] Error:", error);
+        throw new HttpsError("internal", error.message);
+      }
+    },
+);
+
+/**
+ * Cloud Function para crear historia
+ * Migrada desde story_service.dart
+ */
+exports.createStory = onCall(
+    { region: "us-central1", consumeAppCheckToken: true },
+    async (request) => {
+      if (!request.auth) {
+        throw new HttpsError("unauthenticated", "Usuario no autenticado");
+      }
+
+      const {
+        mediaUrl,
+        mediaType,
+        duration,
+        filter,
+        allowedViewers,
+        caption,
+        transformationData,
+      } = request.data;
+      const userId = request.auth.uid;
+
+      if (!mediaUrl || !mediaType) {
+        throw new HttpsError("invalid-argument", "mediaUrl y mediaType son requeridos");
+      }
+
+      try {
+        console.log(`📸 [createStory] Usuario ${userId} creando historia`);
+
+        const db = getFirestore();
+        const userDoc = await db.collection("users").doc(userId).get();
+
+        if (!userDoc.exists) {
+          throw new HttpsError("not-found", "Usuario no encontrado");
+        }
+
+        const userData = userDoc.data();
+        const role = userData.role;
+
+        // Determinar si necesita aprobación
+        let status = "approved";
+        let requiresApproval = false;
+
+        if (role === "child") {
+          // Verificar si el child tiene padres vinculados
+          const parentLinksQuery = await db
+              .collection("parent_children")
+              .where("childId", "==", userId)
+              .get();
+
+          if (!parentLinksQuery.empty) {
+            // Si tiene padres, requiere aprobación
+            requiresApproval = true;
+            status = "pending";
+          }
+        }
+
+        // Crear historia
+        const storyData = {
+          userId,
+          userName: userData.displayName || "Usuario",
+          userPhotoURL: userData.photoURL || "",
+          mediaUrl,
+          mediaType,
+          timestamp: FieldValue.serverTimestamp(),
+          expiresAt: Timestamp.fromMillis(Date.now() + 24 * 60 * 60 * 1000), // 24 horas
+          viewedBy: [],
+          status,
+          visibility: "temporary",
+          replies: [],
+        };
+
+        if (duration) storyData.duration = duration;
+        if (filter) storyData.filter = filter;
+        if (allowedViewers) storyData.allowedViewers = allowedViewers;
+        if (caption) storyData.caption = caption;
+        if (transformationData) storyData.transformationData = transformationData;
+
+        const storyRef = await db.collection("stories").add(storyData);
+
+        // Si requiere aprobación, crear solicitud
+        if (requiresApproval) {
+          const parentLinksQuery = await db
+              .collection("parent_children")
+              .where("childId", "==", userId)
+              .get();
+
+          for (const parentLink of parentLinksQuery.docs) {
+            const parentId = parentLink.data().parentId;
+
+            // Crear solicitud de aprobación
+            await db.collection("story_approval_requests").add({
+              storyId: storyRef.id,
+              childId: userId,
+              parentId,
+              status: "pending",
+              createdAt: FieldValue.serverTimestamp(),
+            });
+
+            // Crear notificación para el padre
+            await db.collection("notifications").add({
+              userId: parentId,
+              type: "story_approval_request",
+              title: "Nueva historia para aprobar",
+              body: `${userData.displayName || "Tu hijo/a"} ha publicado una historia`,
+              data: { storyId: storyRef.id },
+              read: false,
+              createdAt: FieldValue.serverTimestamp(),
+            });
+          }
+        }
+
+        console.log(`✅ [createStory] Historia creada: ${storyRef.id}, status: ${status}`);
+
+        return {
+          success: true,
+          storyId: storyRef.id,
+          requiresApproval,
+          message: requiresApproval ? "Historia enviada para aprobación" : "Historia publicada",
+        };
+      } catch (error) {
+        console.error("❌ [createStory] Error:", error);
+        throw new HttpsError("internal", error.message);
+      }
+    },
+);
+
+/**
+ * Cloud Function para responder a una historia
+ * Migrada desde story_service.dart
+ */
+exports.replyToStory = onCall(
+    { region: "us-central1", consumeAppCheckToken: true },
+    async (request) => {
+      if (!request.auth) {
+        throw new HttpsError("unauthenticated", "Usuario no autenticado");
+      }
+
+      const { storyId, text } = request.data;
+      const userId = request.auth.uid;
+
+      if (!storyId || !text) {
+        throw new HttpsError("invalid-argument", "storyId y text son requeridos");
+      }
+
+      try {
+        console.log(`💬 [replyToStory] Usuario ${userId} respondiendo a historia ${storyId}`);
+
+        const db = getFirestore();
+        const storyRef = db.collection("stories").doc(storyId);
+        const storyDoc = await storyRef.get();
+
+        if (!storyDoc.exists) {
+          throw new HttpsError("not-found", "Historia no encontrada");
+        }
+
+        const storyData = storyDoc.data();
+        const storyOwnerId = storyData.userId;
+
+        // Obtener info del usuario que responde
+        const userDoc = await db.collection("users").doc(userId).get();
+        const userData = userDoc.data();
+
+        // Crear respuesta
+        const reply = {
+          userId,
+          userName: userData.displayName || "Usuario",
+          userPhotoURL: userData.photoURL || "",
+          text,
+          timestamp: FieldValue.serverTimestamp(),
+        };
+
+        await storyRef.update({
+          replies: FieldValue.arrayUnion(reply),
+        });
+
+        // Crear notificación para el dueño de la historia
+        if (storyOwnerId !== userId) {
+          await db.collection("notifications").add({
+            userId: storyOwnerId,
+            type: "story_reply",
+            title: "Nueva respuesta a tu historia",
+            body: `${userData.displayName || "Alguien"} respondió a tu historia`,
+            data: { storyId, reply },
+            read: false,
+            createdAt: FieldValue.serverTimestamp(),
+          });
+        }
+
+        console.log(`✅ [replyToStory] Respuesta agregada a historia ${storyId}`);
+
+        return {
+          success: true,
+          message: "Respuesta enviada",
+        };
+      } catch (error) {
+        console.error("❌ [replyToStory] Error:", error);
+        throw new HttpsError("internal", error.message);
+      }
+    },
+);
+
+/**
+ * Cloud Function para eliminar historia
+ * Migrada desde story_service.dart
+ */
+exports.deleteStory = onCall(
+    { region: "us-central1", consumeAppCheckToken: true },
+    async (request) => {
+      if (!request.auth) {
+        throw new HttpsError("unauthenticated", "Usuario no autenticado");
+      }
+
+      const { storyId } = request.data;
+      const userId = request.auth.uid;
+
+      if (!storyId) {
+        throw new HttpsError("invalid-argument", "storyId es requerido");
+      }
+
+      try {
+        console.log(`🗑️ [deleteStory] Usuario ${userId} eliminando historia ${storyId}`);
+
+        const db = getFirestore();
+        const storyRef = db.collection("stories").doc(storyId);
+        const storyDoc = await storyRef.get();
+
+        if (!storyDoc.exists) {
+          throw new HttpsError("not-found", "Historia no encontrada");
+        }
+
+        const storyData = storyDoc.data();
+
+        // Verificar ownership
+        if (storyData.userId !== userId) {
+          throw new HttpsError("permission-denied", "No tienes permiso para eliminar esta historia");
+        }
+
+        await storyRef.delete();
+
+        console.log(`✅ [deleteStory] Historia eliminada: ${storyId}`);
+
+        return {
+          success: true,
+          message: "Historia eliminada",
+        };
+      } catch (error) {
+        console.error("❌ [deleteStory] Error:", error);
+        throw new HttpsError("internal", error.message);
+      }
+    },
+);
+
+/**
+ * Cloud Function para agregar miembro a grupo
+ * Migrada desde whitelist_controller.dart
+ */
+exports.addGroupMember = onCall(
+    { region: "us-central1", consumeAppCheckToken: true },
+    async (request) => {
+      if (!request.auth) {
+        throw new HttpsError("unauthenticated", "Usuario no autenticado");
+      }
+
+      const { groupId, memberId } = request.data;
+      const userId = request.auth.uid;
+
+      if (!groupId || !memberId) {
+        throw new HttpsError("invalid-argument", "groupId y memberId son requeridos");
+      }
+
+      try {
+        console.log(`👥 [addGroupMember] Usuario ${userId} agregando ${memberId} al grupo ${groupId}`);
+
+        const db = getFirestore();
+        const groupRef = db.collection("groups").doc(groupId);
+        const groupDoc = await groupRef.get();
+
+        if (!groupDoc.exists) {
+          throw new HttpsError("not-found", "Grupo no encontrado");
+        }
+
+        const groupData = groupDoc.data();
+
+        // Verificar que el usuario es miembro del grupo (y potencialmente admin)
+        if (!groupData.members.includes(userId)) {
+          throw new HttpsError("permission-denied", "No eres miembro del grupo");
+        }
+
+        // Verificar que el nuevo miembro no está ya en el grupo
+        if (groupData.members.includes(memberId)) {
+          throw new HttpsError("already-exists", "El usuario ya es miembro del grupo");
+        }
+
+        // Agregar miembro
+        await groupRef.update({
+          members: FieldValue.arrayUnion(memberId),
+          [`unreadCount_${memberId}`]: 0,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+
+        // Crear notificación para el nuevo miembro
+        await db.collection("notifications").add({
+          userId: memberId,
+          type: "group_added",
+          title: "Te agregaron a un grupo",
+          body: `Te agregaron al grupo ${groupData.name || "sin nombre"}`,
+          data: { groupId },
+          read: false,
+          createdAt: FieldValue.serverTimestamp(),
+        });
+
+        console.log(`✅ [addGroupMember] Miembro ${memberId} agregado al grupo ${groupId}`);
+
+        return {
+          success: true,
+          message: "Miembro agregado al grupo",
+        };
+      } catch (error) {
+        console.error("❌ [addGroupMember] Error:", error);
+        throw new HttpsError("internal", error.message);
+      }
+    },
+);
+
+/**
+ * Cloud Function para remover miembro de grupo
+ * Migrada desde whitelist_controller.dart
+ */
+exports.removeGroupMember = onCall(
+    { region: "us-central1", consumeAppCheckToken: true },
+    async (request) => {
+      if (!request.auth) {
+        throw new HttpsError("unauthenticated", "Usuario no autenticado");
+      }
+
+      const { groupId, memberId } = request.data;
+      const userId = request.auth.uid;
+
+      if (!groupId || !memberId) {
+        throw new HttpsError("invalid-argument", "groupId y memberId son requeridos");
+      }
+
+      try {
+        console.log(`👥 [removeGroupMember] Usuario ${userId} removiendo ${memberId} del grupo ${groupId}`);
+
+        const db = getFirestore();
+        const groupRef = db.collection("groups").doc(groupId);
+        const groupDoc = await groupRef.get();
+
+        if (!groupDoc.exists) {
+          throw new HttpsError("not-found", "Grupo no encontrado");
+        }
+
+        const groupData = groupDoc.data();
+
+        // Verificar permisos: o eres el admin, o te estás removiendo a ti mismo
+        const isAdmin = groupData.createdBy === userId;
+        const isSelfRemoval = userId === memberId;
+
+        if (!isAdmin && !isSelfRemoval) {
+          throw new HttpsError("permission-denied", "No tienes permiso para remover miembros");
+        }
+
+        // Remover miembro
+        await groupRef.update({
+          members: FieldValue.arrayRemove(memberId),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+
+        console.log(`✅ [removeGroupMember] Miembro ${memberId} removido del grupo ${groupId}`);
+
+        return {
+          success: true,
+          message: "Miembro removido del grupo",
+        };
+      } catch (error) {
+        console.error("❌ [removeGroupMember] Error:", error);
+        throw new HttpsError("internal", error.message);
+      }
+    },
+);
+
+/**
+ * Cloud Function para marcar notificación como leída
+ * Migrada desde notification_service.dart
+ */
+exports.markNotificationAsRead = onCall(
+    { region: "us-central1", consumeAppCheckToken: true },
+    async (request) => {
+      if (!request.auth) {
+        throw new HttpsError("unauthenticated", "Usuario no autenticado");
+      }
+
+      const { notificationId, markAll } = request.data;
+      const userId = request.auth.uid;
+
+      try {
+        console.log(`🔔 [markNotificationAsRead] Usuario ${userId} marcando notificación como leída`);
+
+        const db = getFirestore();
+
+        if (markAll) {
+          // Marcar todas las notificaciones como leídas
+          const notificationsQuery = await db
+              .collection("notifications")
+              .where("userId", "==", userId)
+              .where("read", "==", false)
+              .get();
+
+          const batch = db.batch();
+          notificationsQuery.docs.forEach((doc) => {
+            batch.update(doc.ref, {
+              read: true,
+              readAt: FieldValue.serverTimestamp(),
+            });
+          });
+
+          await batch.commit();
+
+          console.log(`✅ [markNotificationAsRead] Todas las notificaciones marcadas como leídas`);
+
+          return {
+            success: true,
+            count: notificationsQuery.docs.length,
+            message: "Todas las notificaciones marcadas como leídas",
+          };
+        } else if (notificationId) {
+          // Marcar una notificación específica
+          const notifRef = db.collection("notifications").doc(notificationId);
+          const notifDoc = await notifRef.get();
+
+          if (!notifDoc.exists) {
+            throw new HttpsError("not-found", "Notificación no encontrada");
+          }
+
+          const notifData = notifDoc.data();
+
+          // Verificar ownership
+          if (notifData.userId !== userId) {
+            throw new HttpsError("permission-denied", "No tienes permiso para modificar esta notificación");
+          }
+
+          await notifRef.update({
+            read: true,
+            readAt: FieldValue.serverTimestamp(),
+          });
+
+          console.log(`✅ [markNotificationAsRead] Notificación ${notificationId} marcada como leída`);
+
+          return {
+            success: true,
+            message: "Notificación marcada como leída",
+          };
+        } else {
+          throw new HttpsError("invalid-argument", "notificationId o markAll es requerido");
+        }
+      } catch (error) {
+        console.error("❌ [markNotificationAsRead] Error:", error);
+        throw new HttpsError("internal", error.message);
+      }
+    },
+);
+
+/**
+ * Cloud Function para archivar/desarchivar chat
+ * Migrada desde data_management_service.dart
+ */
+exports.archiveChat = onCall(
+    { region: "us-central1", consumeAppCheckToken: true },
+    async (request) => {
+      if (!request.auth) {
+        throw new HttpsError("unauthenticated", "Usuario no autenticado");
+      }
+
+      const { chatId, archive } = request.data;
+      const userId = request.auth.uid;
+
+      if (!chatId || archive === undefined) {
+        throw new HttpsError("invalid-argument", "chatId y archive son requeridos");
+      }
+
+      try {
+        console.log(`📁 [archiveChat] Usuario ${userId} ${archive ? "archivando" : "desarchivando"} chat ${chatId}`);
+
+        const db = getFirestore();
+        const chatRef = db.collection("chats").doc(chatId);
+        const chatDoc = await chatRef.get();
+
+        if (!chatDoc.exists) {
+          throw new HttpsError("not-found", "Chat no encontrado");
+        }
+
+        const chatData = chatDoc.data();
+
+        // Verificar que el usuario es participante
+        if (!chatData.participants.includes(userId)) {
+          throw new HttpsError("permission-denied", "No eres participante del chat");
+        }
+
+        const archiveField = `archived_${userId}`;
+        const archivedAtField = `archivedAt_${userId}`;
+
+        if (archive) {
+          await chatRef.update({
+            [archiveField]: true,
+            [archivedAtField]: FieldValue.serverTimestamp(),
+          });
+        } else {
+          await chatRef.update({
+            [archiveField]: FieldValue.delete(),
+            [archivedAtField]: FieldValue.delete(),
+          });
+        }
+
+        console.log(`✅ [archiveChat] Chat ${archive ? "archivado" : "desarchivado"}`);
+
+        return {
+          success: true,
+          message: `Chat ${archive ? "archivado" : "desarchivado"}`,
+        };
+      } catch (error) {
+        console.error("❌ [archiveChat] Error:", error);
+        throw new HttpsError("internal", error.message);
+      }
+    },
+);
