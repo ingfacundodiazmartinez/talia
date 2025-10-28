@@ -1,10 +1,13 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
 import '../notification_service.dart';
 import '../services/typing_indicator_service.dart';
 import '../services/media_service.dart';
+import '../services/media_compression_service.dart';
 
 /// Controller que maneja la lógica de un chat grupal
 class GroupChatController {
@@ -211,18 +214,50 @@ class GroupChatController {
     }
   }
 
-  /// Enviar video
-  Future<bool> sendVideo() async {
+  /// Enviar video desde un archivo ya seleccionado con compresión
+  Future<bool> sendVideoFromFile({
+    required String videoPath,
+    Function(String)? onShowMessage,
+    VoidCallback? onHideMessage,
+  }) async {
     if (currentUserId.isEmpty) return false;
 
     try {
-      final videoUrl = await _mediaService.uploadVideo(
+      print('🎥 Procesando video: $videoPath');
+      final File videoFile = File(videoPath);
+
+      // 1. Comprimir y validar video
+      final MediaCompressionService compressionService = MediaCompressionService();
+
+      // Notificar que se está comprimiendo
+      onShowMessage?.call('Comprimiendo video...');
+
+      final File? validatedVideo = await compressionService.validateVideo(
+        videoFile,
+        onProgress: (progress) {
+          print('🗜️ Progreso de compresión: ${progress.toStringAsFixed(0)}%');
+        },
+      );
+
+      // Ocultar mensaje de compresión
+      onHideMessage?.call();
+
+      if (validatedVideo == null) {
+        print('❌ No se pudo comprimir el video bajo 10 MB');
+        onShowMessage?.call('El video es muy grande y no se pudo comprimir bajo el límite de 10 MB. Intenta con un video más corto.');
+        throw Exception('El video no se pudo comprimir bajo el límite de 10 MB');
+      }
+
+      // 2. Subir video comprimido
+      final videoUrl = await _mediaService.uploadVideoFile(
+        videoFile: validatedVideo,
         chatId: groupId,
         userId: currentUserId,
       );
 
       if (videoUrl == null) return false;
 
+      // 3. Enviar a Firestore
       await _firestore
           .collection('groups')
           .doc(groupId)

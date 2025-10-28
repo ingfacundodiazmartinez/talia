@@ -32,95 +32,44 @@ class GroupChatService {
         return GroupCreationResult.error('Usuario no autenticado');
       }
 
-      print('🎯 Creando grupo: $name con ${initialMembers.length} miembros');
+      print('🎯 Creando grupo via Cloud Function: $name con ${initialMembers.length} miembros');
 
-      // Verificar permisos con el creador para cada miembro
-      final approvedMembers = <String>[currentUserId]; // El creador siempre está aprobado
-      final pendingMembers = <String>[];
+      // ✅ Llamar a Cloud Function en lugar de crear directamente
+      final callable = FirebaseFunctions.instance.httpsCallable(
+        'createGroup',
+        options: HttpsCallableOptions(timeout: const Duration(seconds: 30)),
+      );
 
-      for (final memberId in initialMembers) {
-        final result = await _permissionService.canUsersChat(currentUserId, memberId);
-        if (result.isAllowed) {
-          approvedMembers.add(memberId);
+      final result = await callable.call({
+        'name': name,
+        'description': description,
+        'avatar': avatar,
+        'initialMembers': initialMembers,
+      });
+
+      final data = result.data as Map<String, dynamic>;
+
+      if (data['success'] == true) {
+        final groupId = data['groupId'] as String;
+        final approvedMembers = List<String>.from(data['approvedMembers'] ?? []);
+        final pendingMembers = List<String>.from(data['pendingMembers'] ?? []);
+
+        print('✅ Grupo creado exitosamente: $groupId');
+        print('✅ Miembros aprobados: ${approvedMembers.length}');
+        print('⏳ Miembros pendientes: ${pendingMembers.length}');
+
+        if (pendingMembers.isEmpty) {
+          return GroupCreationResult.success(groupId, approvedMembers);
         } else {
-          pendingMembers.add(memberId);
-        }
-      }
-
-      print('✅ Miembros aprobados: ${approvedMembers.length}, Pendientes: ${pendingMembers.length}');
-
-      if (pendingMembers.isEmpty) {
-        // Todos los permisos están otorgados
-        final groupId = await _createGroupDocument(
-          name: name,
-          description: description,
-          avatar: avatar,
-          members: approvedMembers,
-          createdBy: currentUserId,
-        );
-
-        return GroupCreationResult.success(groupId, approvedMembers);
-      } else {
-        // Hay miembros pendientes - crear el grupo con los miembros aprobados
-        final groupId = await _createGroupDocument(
-          name: name,
-          description: description,
-          avatar: avatar,
-          members: approvedMembers,
-          createdBy: currentUserId,
-        );
-
-        print('🔔 Creando invitaciones y solicitudes de permiso para ${pendingMembers.length} miembros pendientes');
-
-        // Obtener nombre del creador para las notificaciones
-        final creatorDoc = await _firestore.collection('users').doc(currentUserId).get();
-        final creatorName = creatorDoc.data()?['name'] ?? 'Usuario';
-
-        // Crear invitaciones pendientes para miembros sin permisos
-        for (final pendingMemberId in pendingMembers) {
-          // Solo necesitamos la aprobación entre el creador y este miembro pendiente
-          final result = await _permissionService.canUsersChat(currentUserId, pendingMemberId);
-
-          // Crear invitación pendiente
-          await _createPendingInvitation(
+          return GroupCreationResult.partialSuccess(
             groupId: groupId,
-            invitedUserId: pendingMemberId,
-            missingPermissions: [
-              MissingPermission(
-                fromUserId: currentUserId,
-                toUserId: pendingMemberId,
-                direction: 'between_creator_and_member',
-              ),
-            ],
-            invitedBy: currentUserId,
+            approvedMembers: approvedMembers,
+            pendingMembers: pendingMembers,
+            pendingCount: pendingMembers.length,
           );
-
-          // Solicitar permiso al padre del niño si es necesario
-          if (result.missingApprovals != null && result.missingApprovals!.isNotEmpty) {
-            final approval = result.missingApprovals!.first;
-            await _sendPermissionRequestToParent(
-              childId: approval.childId,
-              groupId: groupId,
-              groupName: name,
-              inviterName: creatorName,
-              invitedUserId: approval.contactId,
-              missingPermissions: [
-                MissingPermission(
-                  fromUserId: approval.childId,
-                  toUserId: approval.contactId,
-                  direction: 'needs_approval',
-                ),
-              ],
-            );
-          }
         }
-
-        return GroupCreationResult.partialSuccess(
-          groupId: groupId,
-          approvedMembers: approvedMembers,
-          pendingMembers: pendingMembers,
-          pendingCount: pendingMembers.length,
-        );
+      } else {
+        return GroupCreationResult.error(data['message'] ?? 'Error desconocido');
       }
     } catch (e) {
       print('❌ Error creando grupo: $e');

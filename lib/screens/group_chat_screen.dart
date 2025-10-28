@@ -311,15 +311,56 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   Future<void> _handleSendVideo() async {
     Navigator.pop(context); // Cerrar bottom sheet
 
-    final success = await _controller.sendVideo();
-
-    if (!success && mounted) {
+    // 1. Mostrar indicador de "Seleccionando video..." ANTES de abrir picker
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Error al enviar video'),
-          backgroundColor: Colors.red,
+          content: Text('Seleccionando video...'),
+          duration: Duration(seconds: 30),
         ),
       );
+    }
+
+    // 2. Abrir picker (esto puede tardar varios segundos en iOS)
+    final ImagePicker picker = ImagePicker();
+    final XFile? video = await picker.pickVideo(
+      source: ImageSource.gallery,
+      maxDuration: const Duration(minutes: 5),
+    );
+
+    // Ocultar el mensaje de "Seleccionando..."
+    if (mounted) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    }
+
+    if (video == null) return; // Usuario canceló
+
+    // 2. Procesar y enviar video (la compresión ocurre antes de subir)
+    try {
+      await _controller.sendVideoFromFile(
+        videoPath: video.path,
+        onShowMessage: (message) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(message)),
+            );
+          }
+        },
+        onHideMessage: () {
+          if (mounted) {
+            ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          }
+        },
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al enviar video: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -683,23 +724,66 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
                       final displayName = aliasSnapshot.data ?? realName;
                       final isHighlighted = _highlightedMessageId == messageDoc.id;
 
-                      Widget messageBubble = MessageBubble(
-                        key: ValueKey('msg_${messageDoc.id}'),
-                        messageId: messageDoc.id,
-                        chatId: widget.groupId,
-                        text: messageData['text'],
-                        imageUrl: messageData['imageUrl'],
-                        videoUrl: messageData['videoUrl'],
-                        audioUrl: messageData['audioUrl'],
-                        localPath: messageData['localPath'],
-                        waveformData: messageData['waveformData'] != null
-                            ? List<double>.from(messageData['waveformData'] as List)
-                            : null,
-                        status: MessageStatusHelper.calculateStatus(
-                          data: messageData,
-                          senderId: senderId,
-                          hasServerTimestamp: timestamp != null,
-                        ),
+                      // Obtener información del grupo para calcular estado correcto
+                      return StreamBuilder<DocumentSnapshot>(
+                        stream: FirebaseFirestore.instance.collection('groups').doc(widget.groupId).snapshots(),
+                        builder: (context, groupSnapshot) {
+                          // Calcular estado del mensaje
+                          MessageStatus messageStatus;
+
+                          if (groupSnapshot.hasData && groupSnapshot.data!.exists) {
+                            final groupData = groupSnapshot.data!.data() as Map<String, dynamic>?;
+                            if (groupData != null) {
+                              // Obtener miembros activos (no pendientes)
+                              final members = List<String>.from(groupData['members'] ?? []);
+                              final pendingMembers = List<String>.from(groupData['pendingMembers'] ?? []);
+                              final activeMembers = members.where((id) => !pendingMembers.contains(id)).toList();
+
+                              // Obtener miembros con confirmación de lectura activada
+                              final memberSettings = groupData['memberSettings'] as Map<String, dynamic>? ?? {};
+                              final membersWithReadReceipts = activeMembers.where((memberId) {
+                                final settings = memberSettings[memberId] as Map<String, dynamic>? ?? {};
+                                return settings['showReadReceipts'] ?? true; // Por defecto true
+                              }).toList();
+
+                              // Usar calculateGroupStatus
+                              messageStatus = MessageStatusHelper.calculateGroupStatus(
+                                data: messageData,
+                                senderId: senderId,
+                                hasServerTimestamp: timestamp != null,
+                                activeMembers: activeMembers,
+                                membersWithReadReceipts: membersWithReadReceipts,
+                              );
+                            } else {
+                              // Fallback a cálculo normal si no hay datos del grupo
+                              messageStatus = MessageStatusHelper.calculateStatus(
+                                data: messageData,
+                                senderId: senderId,
+                                hasServerTimestamp: timestamp != null,
+                              );
+                            }
+                          } else {
+                            // Fallback a cálculo normal si no hay snapshot
+                            messageStatus = MessageStatusHelper.calculateStatus(
+                              data: messageData,
+                              senderId: senderId,
+                              hasServerTimestamp: timestamp != null,
+                            );
+                          }
+
+                          Widget messageBubble = MessageBubble(
+                            key: ValueKey('msg_${messageDoc.id}'),
+                            messageId: messageDoc.id,
+                            chatId: widget.groupId,
+                            text: messageData['text'],
+                            imageUrl: messageData['imageUrl'],
+                            videoUrl: messageData['videoUrl'],
+                            audioUrl: messageData['audioUrl'],
+                            localPath: messageData['localPath'],
+                            waveformData: messageData['waveformData'] != null
+                                ? List<double>.from(messageData['waveformData'] as List)
+                                : null,
+                            status: messageStatus,
                         replyTo: messageData['replyTo'],
                         reactions: messageData['reactions'],
                         isMe: isMe,
@@ -763,6 +847,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
                       }
 
                       return messageBubble;
+                        },
+                      );
                     },
                   );
                 },
