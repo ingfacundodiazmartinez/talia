@@ -48,6 +48,16 @@
 					<string>com.googleusercontent.apps.858375352661-0morutqllasdk8bu6ij06t7n3q412gbq</string>
 				</array>
 			</dict>
+			<dict>
+				<key>CFBundleTypeRole</key>
+				<string>Editor</string>
+				<key>CFBundleURLName</key>
+				<string>com.talia.chat</string>
+				<key>CFBundleURLSchemes</key>
+				<array>
+					<string>talia</string>
+				</array>
+			</dict>
 		</array>
 		<key>CFBundleVersion</key>
 		<string>$(FLUTTER_BUILD_NUMBER)</string>
@@ -137,5 +147,7 @@
 		<true/>
 		<key>UIViewControllerBasedStatusBarAppearance</key>
 		<false/>
+		<key>GADApplicationIdentifier</key>
+		<string>ca-app-pub-5189779496074211~3119716452</string>
 	</dict>
 </plist>

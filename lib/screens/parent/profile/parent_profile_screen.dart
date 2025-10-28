@@ -6,9 +6,11 @@ import '../../common/privacy_security_screen.dart';
 import '../../common/help_support_screen.dart';
 import '../../common/privacy_policy_screen.dart';
 import '../../common/settings_screen.dart';
+import '../../premium/premium_screen.dart';
 import '../../../theme_service.dart';
 import '../../../controllers/profile_controller.dart';
 import '../../../models/parent.dart';
+import '../../../services/subscription_service.dart';
 import '../../../widgets/profile/profile_header_widget.dart';
 import '../../../widgets/profile/children_list_widget.dart';
 import '../../../widgets/profile/profile_statistics_widget.dart';
@@ -94,6 +96,10 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
               _buildSectionTitle('Configuración'),
               SizedBox(height: 12),
 
+              // Premium Badge - Destacado
+              _buildPremiumCard(),
+              SizedBox(height: 8),
+
               _buildProfileOption(
                 icon: Icons.edit,
                 title: 'Editar Perfil',
@@ -134,6 +140,97 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildPremiumCard() {
+    final colorScheme = Theme.of(context).colorScheme;
+    final subscriptionService = SubscriptionService();
+
+    return StreamBuilder<PremiumStatus>(
+      stream: subscriptionService.premiumStatusStream(),
+      builder: (context, snapshot) {
+        final status = snapshot.data ?? PremiumStatus.free();
+        final isPremium = status.isPremium;
+
+        return Container(
+          margin: EdgeInsets.only(bottom: 8),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: isPremium
+                  ? [Color(0xFF6A1B9A), Color(0xFF8E24AA)]
+                  : [Color(0xFF6A1B9A).withOpacity(0.8), Color(0xFF8E24AA).withOpacity(0.8)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              BoxShadow(
+                color: Color(0xFF6A1B9A).withOpacity(0.3),
+                blurRadius: 8,
+                offset: Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () => _navigateToPremium(),
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        isPremium ? Icons.workspace_premium : Icons.star,
+                        color: isPremium ? Colors.amber : Colors.white,
+                        size: 28,
+                      ),
+                    ),
+                    SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            isPremium ? 'Talia ${status.tier.displayName}' : 'Obtén Talia Premium',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          SizedBox(height: 4),
+                          Text(
+                            isPremium
+                                ? 'Gestiona tu suscripción'
+                                : '7 días GRATIS - Filtros HD y efectos especiales',
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.9),
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Icon(
+                      Icons.arrow_forward_ios,
+                      color: Colors.white,
+                      size: 18,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -271,6 +368,12 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
   }
 
   // Navigation methods
+  void _navigateToPremium() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (context) => PremiumScreen()),
+    );
+  }
+
   void _navigateToEditProfile() {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (context) => EditProfileScreen()),

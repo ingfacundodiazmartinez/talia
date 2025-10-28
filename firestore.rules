@@ -16,9 +16,34 @@ service cloud.firestore {
       allow create: if request.auth.uid == userId &&
         !request.resource.data.keys().hasAny(['isAdmin']);
 
+      // Función auxiliar para verificar si solo se actualizan campos premium
+      function isUpdatingOnlyPremiumFields() {
+        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+        // Campos premium que solo Cloud Functions pueden modificar
+        return changedKeys.hasOnly([
+          'isPremium',
+          'subscriptionTier',
+          'premiumExpiresAt',
+          'subscriptionType',
+          'subscriptionId',
+          'subscriptionAutoRenew',
+          'updatedAt'
+        ]);
+      }
+
       // ACTUALIZAR: Solo puede actualizar SU PROPIO usuario Y sin tocar campos sensibles
+      // NOTA: Los campos premium (isPremium, subscriptionTier, etc.) están protegidos
       allow update: if request.auth.uid == userId &&
-        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isAdmin', 'role']);
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'isAdmin',
+          'role',
+          'isPremium',
+          'subscriptionTier',
+          'premiumExpiresAt',
+          'subscriptionType',
+          'subscriptionId',
+          'subscriptionAutoRenew'
+        ]);
 
       // Solo ADMINS pueden modificar isAdmin
       allow update: if isAdmin() &&
@@ -121,14 +146,14 @@ service cloud.firestore {
       );
 
       match /messages/{messageId} {
-        // Función auxiliar para verificar si el chat existe y si eres participante
-        function isParticipantIfChatExists() {
-          return exists(/databases/$(database)/documents/chats/$(chatId)) &&
-                 request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+        // Función auxiliar optimizada para verificar si eres participante del chat
+        function isParticipant() {
+          let chatDoc = get(/databases/$(database)/documents/chats/$(chatId));
+          return request.auth.uid in chatDoc.data.participants;
         }
 
-        // Función auxiliar para verificar si el usuario es padre de alguno de los participantes del chat
-        function isParentOfChatParticipant() {
+        // Función auxiliar para verificar si eres padre de algún participante
+        function isParentOfParticipant() {
           let chatDoc = get(/databases/$(database)/documents/chats/$(chatId));
           let participants = chatDoc.data.participants;
           return exists(/databases/$(database)/documents/parent_children/$(request.auth.uid + '_' + participants[0])) ||
@@ -137,22 +162,11 @@ service cloud.firestore {
                  exists(/databases/$(database)/documents/parent_children/$(participants[1] + '_' + request.auth.uid));
         }
 
-        // Permitir leer mensaje individual SOLO si eres participante del chat o padre
-        // ⚠️ CORREGIDO: Ya no permite "if request.auth != null" (cualquiera)
-        allow get: if request.auth != null && (
-          isParticipantIfChatExists() ||
-          (exists(/databases/$(database)/documents/chats/$(chatId)) && isParentOfChatParticipant())
-        );
+        // Permitir leer mensaje individual si eres participante del chat o padre
+        allow get: if request.auth != null && (isParticipant() || isParentOfParticipant());
 
-        // Permitir listar mensajes si:
-        // 1. El chat existe y eres participante,
-        // 2. El chat no existe aún (permitir query vacía sin error), O
-        // 3. Eres padre de alguno de los participantes del chat
-        allow list: if request.auth != null && (
-          isParticipantIfChatExists() ||
-          !exists(/databases/$(database)/documents/chats/$(chatId)) ||
-          (exists(/databases/$(database)/documents/chats/$(chatId)) && isParentOfChatParticipant())
-        );
+        // Permitir listar mensajes si eres participante o padre
+        allow list: if request.auth != null && (isParticipant() || isParentOfParticipant());
 
         // Permitir crear mensaje si eres el sender y el texto no excede 5000 caracteres
         allow create: if request.auth != null &&
@@ -180,14 +194,13 @@ service cloud.firestore {
                   changedKeys.hasAny(['deliveredTo', 'readBy', 'reactions', 'status', 'isRead']));
         }
 
-        // ⚠️ CORREGIDO: Ya no permite "if request.auth != null" (cualquiera puede editar)
         // Permitir actualizar SI:
         // 1. Eres el sender Y solo editas tu mensaje (text, edited, editedAt), O
         // 2. Eres participante Y solo actualizas estado/reacciones (reactions, status, readBy, deliveredTo)
         allow update: if request.auth != null && (
           (request.auth.uid == resource.data.senderId &&
            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'edited', 'editedAt'])) ||
-          (isParticipantIfChatExists() && isUpdatingOnlyMetadata())
+          (isParticipant() && isUpdatingOnlyMetadata())
         );
 
         // Permitir eliminar si eres el sender
@@ -412,6 +425,14 @@ service cloud.firestore {
                changedKeys.hasOnly(['status', 'approvedBy', 'approvedAt', 'rejectionReason', 'updatedAt']);
       }
 
+      // Función auxiliar para verificar si solo se están actualizando campos de visibilidad/archivado
+      function isOnlyUpdatingVisibilityFields() {
+        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+        // Permitir actualizar visibility y savedToPermanentAt (para guardar/archivar historias)
+        return changedKeys.size() > 0 &&
+               changedKeys.hasOnly(['visibility', 'savedToPermanentAt', 'status']);
+      }
+
       // ⚠️ CORREGIDO: Reglas más restrictivas para historias
       // Permitir leer historia individual si:
       // 1. Eres el creador (puedes ver tus propias historias pending), O
@@ -438,12 +459,14 @@ service cloud.firestore {
       // 2. Solo estás agregando tu UID al array viewedBy, O
       // 3. Solo estás agregando una respuesta (reply), O
       // 4. La historia está pendiente Y solo actualizas campos de aprobación
-      //    (confiamos en que la app solo permite esto a padres autorizados)
+      //    (confiamos en que la app solo permite esto a padres autorizados), O
+      // 5. Eres el creador Y solo actualizas campos de visibilidad (archivar/guardar permanente)
       allow update: if request.auth != null && (
         request.auth.uid == resource.data.userId ||
         isOnlyUpdatingViewedBy() ||
         isOnlyUpdatingReplies() ||
-        (resource.data.status == 'pending' && isOnlyUpdatingApprovalFields())
+        (resource.data.status == 'pending' && isOnlyUpdatingApprovalFields()) ||
+        (request.auth.uid == resource.data.userId && isOnlyUpdatingVisibilityFields())
       );
 
       // Solo el creador puede eliminar su historia
@@ -950,6 +973,78 @@ service cloud.firestore {
       allow create: if false;
 
       // No permitir modificar o eliminar transformaciones
+      allow update, delete: if false;
+    }
+
+    // ============================================================================
+    // SUBSCRIPTIONS & PREMIUM (Sistema de suscripciones premium)
+    // ============================================================================
+
+    // Subscriptions - Registro de suscripciones activas/canceladas
+    match /subscriptions/{subscriptionId} {
+      // Función auxiliar para verificar si el usuario es padre del userId de la suscripción
+      function isParentOfSubscriptionUser() {
+        let userId = resource.data.userId;
+        return exists(/databases/$(database)/documents/parent_children/$(request.auth.uid + '_' + userId)) ||
+               exists(/databases/$(database)/documents/parent_children/$(userId + '_' + request.auth.uid));
+      }
+
+      // Permitir leer si:
+      // 1. Eres el usuario de la suscripción, O
+      // 2. Eres padre del usuario (para ver suscripciones de hijos), O
+      // 3. Eres admin
+      allow read: if request.auth != null && (
+        resource.data.userId == request.auth.uid ||
+        isParentOfSubscriptionUser() ||
+        isAdmin()
+      );
+
+      // Solo Cloud Functions pueden crear/modificar suscripciones
+      // Esto garantiza que los pagos sean verificados por el backend
+      allow create, update, delete: if false;
+    }
+
+    // Checkout Sessions - Sesiones de pago web temporales (Stripe/MercadoPago)
+    match /checkout_sessions/{sessionId} {
+      // Solo puedes leer tus propias sesiones de checkout
+      allow read: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+
+      // Solo Cloud Functions pueden crear/modificar sesiones
+      allow create, update, delete: if false;
+    }
+
+    // Payment History - Historial de pagos (opcional para auditoría)
+    match /payment_history/{paymentId} {
+      // Solo puedes leer tu propio historial de pagos
+      allow read: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+
+      // Solo Cloud Functions pueden crear pagos
+      allow create, update, delete: if false;
+    }
+
+    // Promo Codes - Códigos promocionales para premium gratis/descuento
+    match /promo_codes/{codeId} {
+      // Todos pueden leer códigos promocionales (para validar al aplicar)
+      allow read: if request.auth != null;
+
+      // Solo admins pueden crear/modificar códigos
+      allow write: if isAdmin();
+    }
+
+    // Promo Code Redemptions - Registro de canje de códigos promo
+    match /promo_code_redemptions/{redemptionId} {
+      // Solo puedes ver tus propios canjes
+      allow read: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+
+      // Los usuarios pueden crear sus propios canjes
+      // (la validación de duplicados se hace en Cloud Functions)
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid;
+
+      // Solo Cloud Functions pueden actualizar/eliminar
       allow update, delete: if false;
     }
   }

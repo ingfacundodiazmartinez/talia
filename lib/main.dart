@@ -44,6 +44,7 @@ import 'services/accessibility_service.dart';
 import 'services/foreground_message_listener.dart';
 import 'services/stickers_service.dart';
 import 'services/unread_messages_service.dart';
+import 'services/ad_service.dart';
 import 'dart:async';
 
 // IMPORTANTE: Después de ejecutar 'flutterfire configure',
@@ -165,6 +166,14 @@ void main() async {
     print('✅ Accessibility Service inicializado');
   } catch (e) {
     print('⚠️ Error inicializando Accessibility: $e (continuando...)');
+  }
+
+  // Inicializar AdMob (Google Mobile Ads) para monetización
+  try {
+    await AdService().initialize();
+    print('✅ AdMob inicializado con cumplimiento COPPA');
+  } catch (e) {
+    print('⚠️ Error inicializando AdMob: $e (continuando...)');
   }
 
   // Pre-cargar stickers en segundo plano (sin bloquear la app)

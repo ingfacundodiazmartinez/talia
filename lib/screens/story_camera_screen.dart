@@ -15,11 +15,14 @@ import '../services/story_service.dart';
 import '../services/stickers_service.dart';
 import '../services/character_service.dart';
 import '../services/usage_limits_service.dart';
+import '../services/subscription_service.dart';
 import '../models/character.dart';
 import '../widgets/permission_dialog.dart';
 import '../widgets/camera/flutter_camera_view.dart';
 import '../widgets/camera/deepar_camera_view.dart';
 import '../widgets/character_selector_dialog.dart';
+import '../widgets/premium_paywall_dialog.dart';
+import 'premium/premium_screen.dart';
 import 'package:flutter_story_editor/flutter_story_editor.dart';
 import 'package:flutter_story_editor/src/controller/controller.dart';
 
@@ -53,6 +56,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   final ImagePicker _imagePicker = ImagePicker();
   final CharacterService _characterService = CharacterService();
   final UsageLimitsService _usageLimitsService = UsageLimitsService();
+  final SubscriptionService _subscriptionService = SubscriptionService();
 
   // Stickers service and cache
   List<StickerMetadata> _stickerMetadata = [];
@@ -410,13 +414,24 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     try {
       print('🎭 Iniciando flujo de transformación de personaje...');
 
-      // 1. Verificar límite de uso
+      // 1. Verificar estado Premium para determinar límites
+      print('🔍 Verificando estado Premium...');
+      final premiumStatus = await _subscriptionService.checkPremiumStatus();
+      print('✅ Usuario: ${premiumStatus.tier.displayName}');
+
+      // 2. Verificar límite de uso según el tier del usuario
+      // FREE: 5 usos/mes (límite gratuito de Replicate)
+      // Premium: 20 usos/mes
+      // Premium+: 50 usos/mes
       final canUse = await _usageLimitsService.canUseCharacterTransform();
       final usage = await _usageLimitsService.getCharacterTransformUsage();
 
       if (!canUse) {
-        // Mostrar mensaje de límite alcanzado
+        // Mostrar mensaje de límite alcanzado con opción de upgrade
         if (mounted) {
+          // Si es usuario FREE, mostrar opción de upgrade a Premium
+          final bool isFreeUser = !premiumStatus.isPremium;
+
           showDialog(
             context: context,
             builder: (context) => AlertDialog(
@@ -424,19 +439,71 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 children: [
                   Icon(Icons.info_outline, color: Color(0xFF9D7FE8)),
                   SizedBox(width: 8),
-                  Text('Límite mensual alcanzado'),
+                  Expanded(child: Text('Límite mensual alcanzado')),
                 ],
               ),
-              content: Text(
-                'Has alcanzado el límite de ${usage['limit']} transformaciones con personajes IA este mes.\n\n'
-                'El límite se restablecerá el próximo mes.',
-                style: TextStyle(fontSize: 14),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Has alcanzado el límite de ${usage['limit']} transformaciones con personajes IA este mes.',
+                    style: TextStyle(fontSize: 14),
+                  ),
+                  if (isFreeUser) ...[
+                    SizedBox(height: 12),
+                    Container(
+                      padding: EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Color(0xFF9D7FE8).withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Color(0xFF9D7FE8)),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.star, color: Color(0xFF9D7FE8), size: 20),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Con Premium obtienes 20 transformaciones/mes',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF9D7FE8),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ] else ...[
+                    SizedBox(height: 8),
+                    Text(
+                      'El límite se restablecerá el próximo mes.',
+                      style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+                    ),
+                  ],
+                ],
               ),
               actions: [
                 TextButton(
                   onPressed: () => Navigator.pop(context),
                   child: Text('Entendido', style: TextStyle(color: Color(0xFF9D7FE8))),
                 ),
+                if (isFreeUser)
+                  ElevatedButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (context) => PremiumScreen()),
+                      );
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Color(0xFF9D7FE8),
+                    ),
+                    child: Text('Ver Premium', style: TextStyle(color: Colors.white)),
+                  ),
               ],
             ),
           );
@@ -447,7 +514,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       // Mostrar contador de usos restantes
       print('ℹ️ Transformaciones restantes este mes: ${usage['remaining']}');
 
-      // 2. Mostrar selector de personajes
+      // 3. Mostrar selector de personajes
       final Character? selectedCharacter = await showDialog<Character>(
         context: context,
         barrierDismissible: true,
@@ -463,7 +530,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
       print('✅ Personaje seleccionado: ${selectedCharacter.name}');
 
-      // 2. Mostrar dialog de carga
+      // 4. Mostrar dialog de carga
       if (mounted) {
         showDialog(
           context: context,
@@ -492,7 +559,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         );
       }
 
-      // 3. Subir imagen a Firebase Storage
+      // 5. Subir imagen a Firebase Storage
       print('☁️ Subiendo imagen a Firebase Storage...');
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) {
@@ -509,7 +576,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       final imageUrl = await uploadTask.ref.getDownloadURL();
       print('✅ Imagen subida: $imageUrl');
 
-      // 4. Transformar imagen con IA
+      // 6. Transformar imagen con IA
       print('🤖 Llamando a Cloud Function para transformar...');
       final transformedUrl = await _characterService.transformImage(
         imageUrl: imageUrl,
@@ -517,7 +584,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       );
       print('✅ Imagen transformada: $transformedUrl');
 
-      // 5. Descargar imagen transformada
+      // 7. Descargar imagen transformada
       print('📥 Descargando imagen transformada...');
       final directory = await getTemporaryDirectory();
       final transformedPath =
@@ -532,17 +599,17 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
       print('✅ Imagen transformada descargada: $transformedPath');
 
-      // 6. Incrementar contador de uso (transformación exitosa)
+      // 8. Incrementar contador de uso (transformación exitosa)
       await _usageLimitsService.incrementCharacterTransformUsage();
       final updatedUsage = await _usageLimitsService.getCharacterTransformUsage();
       print('ℹ️ Transformaciones usadas este mes: ${updatedUsage['count']}/${updatedUsage['limit']}');
 
-      // 7. Cerrar dialog de carga
+      // 9. Cerrar dialog de carga
       if (mounted) {
         Navigator.of(context, rootNavigator: true).pop();
       }
 
-      // 8. Abrir editor con imagen transformada
+      // 10. Abrir editor con imagen transformada
       if (mounted) {
         await _openStoryEditor(transformedPath, isVideo: false);
       }

@@ -6,16 +6,19 @@ import '../../../link_parent_child.dart';
 import '../../common/child_settings_screen.dart';
 import '../../common/help_support_screen.dart';
 import '../../common/privacy_security_screen.dart';
+import '../../premium/premium_screen.dart';
 import '../../../screens/my_code_screen.dart';
 import '../../parent/profile/edit_profile_screen.dart';
 import '../../../controllers/child_profile_controller.dart';
 import '../../../services/child_profile_service.dart';
+import '../../../services/subscription_service.dart';
 import 'widgets/profile_header_widget.dart';
 import 'widgets/link_status_widget.dart';
 import 'widgets/activity_stats_widget.dart';
 import 'widgets/profile_option_item.dart';
 import 'widgets/theme_setting_widget.dart';
 import 'widgets/image_picker_dialog.dart';
+import 'widgets/permanent_stories_gallery.dart';
 
 class ChildProfileScreen extends StatefulWidget {
   const ChildProfileScreen({super.key});
@@ -77,7 +80,15 @@ class _ChildProfileScreenState extends State<ChildProfileScreen> {
                 onEditPhoto: _showImageOptions,
               ),
 
-              const SizedBox(height: 32),
+              const SizedBox(height: 24),
+
+              // Galería de historias permanentes
+              PermanentStoriesGallery(
+                userId: user.uid,
+                isOwnProfile: true,
+              ),
+
+              const SizedBox(height: 24),
 
               // Estado de vinculación
               LinkStatusWidget(
@@ -117,6 +128,28 @@ class _ChildProfileScreenState extends State<ChildProfileScreen> {
                       setState(() {});
                     }
                   });
+                },
+              ),
+
+              // Botón Premium - Para 'adult' o info para 'child'
+              StreamBuilder<DocumentSnapshot>(
+                stream: _service.getUserDataStream(user.uid),
+                builder: (context, snapshot) {
+                  if (!snapshot.hasData || !snapshot.data!.exists) {
+                    return const SizedBox.shrink();
+                  }
+
+                  final userData =
+                      snapshot.data!.data() as Map<String, dynamic>?;
+                  final role = userData?['role'] ?? 'child';
+
+                  // Si es adult, mostrar botón premium completo
+                  if (role == 'adult') {
+                    return _buildPremiumCard();
+                  }
+
+                  // Si es child, mostrar info sobre premium
+                  return _buildPremiumInfoCard();
                 },
               ),
 
@@ -254,6 +287,195 @@ class _ChildProfileScreenState extends State<ChildProfileScreen> {
 
               const SizedBox(height: 40),
             ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildPremiumCard() {
+    final subscriptionService = SubscriptionService();
+
+    return StreamBuilder<PremiumStatus>(
+      stream: subscriptionService.premiumStatusStream(),
+      builder: (context, snapshot) {
+        final status = snapshot.data ?? PremiumStatus.free();
+        final isPremium = status.isPremium;
+
+        return Container(
+          margin: const EdgeInsets.only(bottom: 8),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: isPremium
+                  ? [const Color(0xFF6A1B9A), const Color(0xFF8E24AA)]
+                  : [const Color(0xFF6A1B9A).withOpacity(0.8), const Color(0xFF8E24AA).withOpacity(0.8)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF6A1B9A).withOpacity(0.3),
+                blurRadius: 8,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => const PremiumScreen(),
+                  ),
+                );
+              },
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        isPremium ? Icons.workspace_premium : Icons.star,
+                        color: isPremium ? Colors.amber : Colors.white,
+                        size: 28,
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            isPremium ? 'Talia ${status.tier.displayName}' : 'Obtén Talia Premium',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            isPremium
+                                ? 'Gestiona tu suscripción'
+                                : '7 días GRATIS - Filtros HD y efectos especiales',
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.9),
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(
+                      Icons.arrow_forward_ios,
+                      color: Colors.white,
+                      size: 18,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildPremiumInfoCard() {
+    final subscriptionService = SubscriptionService();
+
+    return StreamBuilder<PremiumStatus>(
+      stream: subscriptionService.premiumStatusStream(),
+      builder: (context, snapshot) {
+        final status = snapshot.data ?? PremiumStatus.free();
+        final isPremium = status.isPremium;
+
+        return Container(
+          margin: const EdgeInsets.only(bottom: 8),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: isPremium
+                  ? [const Color(0xFF6A1B9A).withOpacity(0.5), const Color(0xFF8E24AA).withOpacity(0.5)]
+                  : [Colors.grey.shade300, Colors.grey.shade200],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isPremium ? const Color(0xFF6A1B9A) : Colors.grey.shade400,
+              width: 1,
+            ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: isPremium
+                        ? Colors.white.withOpacity(0.3)
+                        : Colors.grey.shade400,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    isPremium ? Icons.workspace_premium : Icons.family_restroom,
+                    color: isPremium ? Colors.amber : Colors.grey.shade700,
+                    size: 28,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        isPremium
+                            ? 'Talia ${status.tier.displayName}'
+                            : 'Funciones Premium',
+                        style: TextStyle(
+                          color: isPremium ? Colors.white : Colors.grey.shade800,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        isPremium
+                            ? 'Premium activo gracias a tu familia'
+                            : 'Solo un padre vinculado puede darte acceso a funciones premium',
+                        style: TextStyle(
+                          color: isPremium
+                              ? Colors.white.withOpacity(0.9)
+                              : Colors.grey.shade600,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (isPremium)
+                  const Icon(
+                    Icons.check_circle,
+                    color: Colors.green,
+                    size: 24,
+                  )
+                else
+                  Icon(
+                    Icons.info_outline,
+                    color: Colors.grey.shade600,
+                    size: 24,
+                  ),
+              ],
+            ),
           ),
         );
       },

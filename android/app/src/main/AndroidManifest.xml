@@ -66,6 +66,15 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+
+            <!-- Deep Link para redirecciones (MercadoPago, etc) -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="talia"/>
+                <data android:scheme="https" android:host="talia.app"/>
+            </intent-filter>
         </activity>
         
         <meta-data
@@ -126,6 +135,11 @@
         <meta-data
             android:name="com.google.android.geo.API_KEY"
             android:value="AIzaSyBUa1UtB_nTPtnwKeoGgffMpfV_IVP_c1M" />
+
+        <!-- Google Mobile Ads (AdMob) App ID -->
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="ca-app-pub-5189779496074211~9690554730"/>
     </application>
     
     <queries>

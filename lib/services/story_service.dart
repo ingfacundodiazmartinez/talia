@@ -1,7 +1,9 @@
 import 'dart:io';
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:async/async.dart';
 import '../models/story.dart';
 import '../notification_service.dart';
 import '../firebase_service.dart';
@@ -92,6 +94,8 @@ class StoryService {
         'approvedBy': requiresApproval ? null : user.uid, // Auto-aprobada si no requiere aprobación
         'approvedAt': requiresApproval ? null : Timestamp.fromDate(now),
         'rejectionReason': null,
+        'visibility': 'temporary', // Todas las historias comienzan como temporales (24h)
+        'savedToPermanentAt': null,
       };
 
       print('💾 Guardando historia en Firestore...');
@@ -253,19 +257,42 @@ class StoryService {
       yield _cachedStories!;
     }
 
-    // ⚠️ CORREGIDO: En lugar de escuchar TODAS las historias globalmente,
-    // escuchamos solo las del usuario actual y hacemos polling para contactos
+    // Obtener lista de contactos (incluye el usuario actual)
+    final contactIdsSet = await _getContactIds();
 
-    // Escuchar cambios en las propias historias del usuario
-    await for (final _ in _firestore
-        .collection('stories')
-        .where('userId', isEqualTo: user.uid)
-        .snapshots()) {
+    if (contactIdsSet.isEmpty) {
+      yield [];
+      return;
+    }
 
+    // Convertir Set a List para poder usar sublist()
+    final contactIds = contactIdsSet.toList();
+
+    // ✅ SOLUCION OPTIMIZADA: Dividir contactos en chunks de 10 y crear streams múltiples
+    // Firestore whereIn permite máximo 10 items, así que creamos un stream por cada chunk
+    final chunks = <List<String>>[];
+    for (var i = 0; i < contactIds.length; i += 10) {
+      final end = (i + 10 < contactIds.length) ? i + 10 : contactIds.length;
+      chunks.add(contactIds.sublist(i, end));
+    }
+
+    print('📢 [StoryService] Escuchando historias de ${contactIds.length} contactos en ${chunks.length} chunk(s)');
+
+    // Crear un stream por cada chunk y combinarlos con StreamGroup
+    final List<Stream<QuerySnapshot>> chunkStreams = chunks.map((chunk) {
+      return _firestore
+          .collection('stories')
+          .where('userId', whereIn: chunk)
+          .snapshots();
+    }).toList();
+
+    // Combinar todos los streams en uno solo
+    // Cualquier cambio en cualquier chunk disparará el stream combinado
+    final mergedStream = StreamGroup.merge(chunkStreams);
+
+    // Escuchar cambios en TODOS los chunks de contactos
+    await for (final _ in mergedStream) {
       final List<UserStories> userStoriesList = [];
-
-      // Usar la lista de contactos cacheada (se recalcula cada 5 minutos automáticamente)
-      final contactIds = await _getContactIds();
 
       // Incluir historias del usuario actual (todas, sin filtro de aprobación)
       final currentUserStories = await getCurrentUserStories();
@@ -274,11 +301,9 @@ class StoryService {
       }
 
       // Obtener historias de contactos (excluir usuario actual para evitar duplicados)
-      // ⚠️ NOTA: Estas son consultas individuales por contacto, no una query global
       for (final contactId in contactIds) {
         // Skip si es el usuario actual (ya lo agregamos arriba)
         if (contactId == user.uid) {
-          print('⚠️ Saltando usuario actual en contactIds para evitar duplicado');
           continue;
         }
 
@@ -295,8 +320,6 @@ class StoryService {
         if (!seenUserIds.contains(userStories.userId)) {
           seenUserIds.add(userStories.userId);
           uniqueUserStoriesList.add(userStories);
-        } else {
-          print('⚠️ Duplicado detectado y eliminado: ${userStories.userName} (${userStories.userId})');
         }
       }
 
@@ -1032,6 +1055,175 @@ class StoryService {
     } catch (e) {
       print('❌ Error respondiendo a historia: $e');
       throw Exception('Error al responder historia: $e');
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // GESTIÓN DE HISTORIAS PERMANENTES
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /// Guardar historia como permanente (visible en perfil)
+  /// Automáticamente llamado cuando una historia expira y está aprobada
+  Future<void> saveToPermanent(String storyId) async {
+    try {
+      print('💾 Guardando historia $storyId como permanente...');
+
+      await _firestore.collection('stories').doc(storyId).update({
+        'visibility': 'permanent',
+        'savedToPermanentAt': FieldValue.serverTimestamp(),
+      });
+
+      print('✅ Historia guardada como permanente exitosamente');
+    } catch (e) {
+      print('❌ Error guardando historia como permanente: $e');
+      throw Exception('Error guardando historia: $e');
+    }
+  }
+
+  /// Archivar historia permanente (ocultar de perfil pero no eliminar)
+  Future<void> archiveStory(String storyId) async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) throw Exception('Usuario no autenticado');
+
+      // Verificar que la historia pertenece al usuario
+      final storyDoc = await _firestore.collection('stories').doc(storyId).get();
+      if (!storyDoc.exists) throw Exception('Historia no encontrada');
+
+      final storyData = storyDoc.data()!;
+      if (storyData['userId'] != user.uid) {
+        throw Exception('No tienes permiso para archivar esta historia');
+      }
+
+      print('📦 Archivando historia $storyId...');
+
+      await _firestore.collection('stories').doc(storyId).update({
+        'visibility': 'archived',
+      });
+
+      print('✅ Historia archivada exitosamente');
+    } catch (e) {
+      print('❌ Error archivando historia: $e');
+      throw Exception('Error archivando historia: $e');
+    }
+  }
+
+  /// Desarchivar historia (volver a mostrar en perfil)
+  Future<void> unarchiveStory(String storyId) async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) throw Exception('Usuario no autenticado');
+
+      // Verificar que la historia pertenece al usuario
+      final storyDoc = await _firestore.collection('stories').doc(storyId).get();
+      if (!storyDoc.exists) throw Exception('Historia no encontrada');
+
+      final storyData = storyDoc.data()!;
+      if (storyData['userId'] != user.uid) {
+        throw Exception('No tienes permiso para desarchivar esta historia');
+      }
+
+      print('📤 Desarchivando historia $storyId...');
+
+      await _firestore.collection('stories').doc(storyId).update({
+        'visibility': 'permanent',
+      });
+
+      print('✅ Historia desarchivada exitosamente');
+    } catch (e) {
+      print('❌ Error desarchivando historia: $e');
+      throw Exception('Error desarchivando historia: $e');
+    }
+  }
+
+  /// Obtener historias permanentes de un usuario (para mostrar en perfil)
+  Stream<List<Story>> getPermanentStories(String userId) {
+    return _firestore
+        .collection('stories')
+        .where('userId', isEqualTo: userId)
+        .where('visibility', isEqualTo: 'permanent')
+        .where('status', isEqualTo: 'approved')
+        .orderBy('savedToPermanentAt', descending: true)
+        .snapshots()
+        .map((snapshot) {
+      return snapshot.docs
+          .map((doc) => Story.fromFirestore(doc))
+          .toList();
+    });
+  }
+
+  /// Obtener historias archivadas de un usuario
+  Stream<List<Story>> getArchivedStories(String userId) {
+    return _firestore
+        .collection('stories')
+        .where('userId', isEqualTo: userId)
+        .where('visibility', isEqualTo: 'archived')
+        .orderBy('savedToPermanentAt', descending: true)
+        .snapshots()
+        .map((snapshot) {
+      return snapshot.docs
+          .map((doc) => Story.fromFirestore(doc))
+          .toList();
+    });
+  }
+
+  /// Obtener todas las historias permanentes y archivadas del usuario
+  /// (para la pantalla de gestión)
+  Stream<List<Story>> getAllPermanentAndArchivedStories(String userId) {
+    return _firestore
+        .collection('stories')
+        .where('userId', isEqualTo: userId)
+        .where('visibility', whereIn: ['permanent', 'archived'])
+        .orderBy('savedToPermanentAt', descending: true)
+        .snapshots()
+        .map((snapshot) {
+      return snapshot.docs
+          .map((doc) => Story.fromFirestore(doc))
+          .toList();
+    });
+  }
+
+  /// Proceso automático: Convertir historias expiradas en permanentes
+  /// Este método debería ser llamado por un Cloud Function o background task
+  Future<void> convertExpiredStoriesToPermanent() async {
+    try {
+      print('🔄 Iniciando conversión de historias expiradas a permanentes...');
+
+      final now = DateTime.now();
+      final snapshot = await _firestore
+          .collection('stories')
+          .where('visibility', isEqualTo: 'temporary')
+          .where('status', isEqualTo: 'approved')
+          .where('expiresAt', isLessThan: Timestamp.fromDate(now))
+          .get();
+
+      print('📊 Encontradas ${snapshot.docs.length} historias expiradas para convertir');
+
+      final batch = _firestore.batch();
+      int count = 0;
+
+      for (final doc in snapshot.docs) {
+        batch.update(doc.reference, {
+          'visibility': 'permanent',
+          'savedToPermanentAt': FieldValue.serverTimestamp(),
+          'status': 'expired', // Marcar como expirada
+        });
+        count++;
+
+        // Firestore batch limit is 500 operations
+        if (count >= 500) {
+          await batch.commit();
+          count = 0;
+        }
+      }
+
+      if (count > 0) {
+        await batch.commit();
+      }
+
+      print('✅ ${snapshot.docs.length} historias convertidas a permanentes');
+    } catch (e) {
+      print('❌ Error convirtiendo historias expiradas: $e');
     }
   }
 }

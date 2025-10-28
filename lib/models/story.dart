@@ -7,6 +7,12 @@ enum StoryStatus {
   expired,    // Expirada (24h)
 }
 
+enum StoryVisibility {
+  temporary,  // Historia temporal (24h en feed)
+  permanent,  // Historia permanente (visible en perfil)
+  archived,   // Historia archivada (no visible pero no eliminada)
+}
+
 class StoryReply {
   final String userId;
   final String userName;
@@ -60,6 +66,8 @@ class Story {
   final String? approvedBy; // ID del padre que aprobó
   final DateTime? approvedAt; // Cuándo fue aprobada
   final String? rejectionReason; // Razón del rechazo (opcional)
+  final StoryVisibility visibility; // Visibilidad de la historia (temporal/permanent/archived)
+  final DateTime? savedToPermanentAt; // Cuándo se guardó como permanente
 
   Story({
     required this.id,
@@ -78,6 +86,8 @@ class Story {
     this.approvedBy,
     this.approvedAt,
     this.rejectionReason,
+    this.visibility = StoryVisibility.temporary,
+    this.savedToPermanentAt,
   });
 
   // Factory constructor para crear desde Firestore
@@ -107,6 +117,8 @@ class Story {
       approvedBy: data['approvedBy'],
       approvedAt: data['approvedAt'] != null ? (data['approvedAt'] as Timestamp).toDate() : null,
       rejectionReason: data['rejectionReason'],
+      visibility: _parseStoryVisibility(data['visibility']),
+      savedToPermanentAt: data['savedToPermanentAt'] != null ? (data['savedToPermanentAt'] as Timestamp).toDate() : null,
     );
   }
 
@@ -123,6 +135,20 @@ class Story {
       case 'pending':
       default:
         return StoryStatus.pending;
+    }
+  }
+
+  static StoryVisibility _parseStoryVisibility(dynamic visibility) {
+    if (visibility == null) return StoryVisibility.temporary;
+
+    switch (visibility.toString()) {
+      case 'permanent':
+        return StoryVisibility.permanent;
+      case 'archived':
+        return StoryVisibility.archived;
+      case 'temporary':
+      default:
+        return StoryVisibility.temporary;
     }
   }
 
@@ -144,6 +170,8 @@ class Story {
       'approvedBy': approvedBy,
       'approvedAt': approvedAt != null ? Timestamp.fromDate(approvedAt!) : null,
       'rejectionReason': rejectionReason,
+      'visibility': visibility.toString().split('.').last,
+      'savedToPermanentAt': savedToPermanentAt != null ? Timestamp.fromDate(savedToPermanentAt!) : null,
     };
   }
 
@@ -153,14 +181,23 @@ class Story {
   // Verificar si el usuario actual ya vio la historia
   bool isViewedBy(String userId) => viewedBy.contains(userId);
 
-  // Verificar si la historia está visible para contactos
-  bool get isVisibleToContacts => status == StoryStatus.approved && !isExpired;
+  // Verificar si la historia está visible para contactos (temporales en feed)
+  bool get isVisibleToContacts => status == StoryStatus.approved && !isExpired && visibility == StoryVisibility.temporary;
+
+  // Verificar si la historia está visible en perfil (permanentes)
+  bool get isVisibleInProfile => status == StoryStatus.approved && visibility == StoryVisibility.permanent;
+
+  // Verificar si la historia está archivada
+  bool get isArchived => visibility == StoryVisibility.archived;
 
   // Verificar si la historia está pendiente de aprobación
   bool get isPending => status == StoryStatus.pending && !isExpired;
 
   // Verificar si la historia fue rechazada
   bool get isRejected => status == StoryStatus.rejected;
+
+  // Verificar si es permanente (guardada en perfil o archivada)
+  bool get isPermanent => visibility == StoryVisibility.permanent || visibility == StoryVisibility.archived;
 
   // Obtener texto descriptivo del estado
   String get statusText {
@@ -173,6 +210,18 @@ class Story {
         return 'Rechazada';
       case StoryStatus.expired:
         return 'Expirada';
+    }
+  }
+
+  // Obtener texto descriptivo de visibilidad
+  String get visibilityText {
+    switch (visibility) {
+      case StoryVisibility.temporary:
+        return 'Temporal (24h)';
+      case StoryVisibility.permanent:
+        return 'En perfil';
+      case StoryVisibility.archived:
+        return 'Archivada';
     }
   }
 
@@ -194,6 +243,8 @@ class Story {
     String? approvedBy,
     DateTime? approvedAt,
     String? rejectionReason,
+    StoryVisibility? visibility,
+    DateTime? savedToPermanentAt,
   }) {
     return Story(
       id: id ?? this.id,
@@ -212,6 +263,8 @@ class Story {
       approvedBy: approvedBy ?? this.approvedBy,
       approvedAt: approvedAt ?? this.approvedAt,
       rejectionReason: rejectionReason ?? this.rejectionReason,
+      visibility: visibility ?? this.visibility,
+      savedToPermanentAt: savedToPermanentAt ?? this.savedToPermanentAt,
     );
   }
 }

@@ -3,8 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:video_player/video_player.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:google_mobile_ads/google_mobile_ads.dart';
 import '../models/story.dart';
 import '../services/story_service.dart';
+import '../services/ad_service.dart';
+import '../widgets/story_native_ad_widget.dart';
 import 'story_viewer/widgets/story_progress_indicators.dart';
 import 'story_viewer/widgets/story_user_header.dart';
 import 'story_viewer/widgets/story_caption_widget.dart';
@@ -36,7 +39,15 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
   bool _isCurrentStoryLoaded = false;
 
   final StoryService _storyService = StoryService();
+  final AdService _adService = AdService();
   final Duration _storyDuration = Duration(seconds: 5);
+
+  // Contador de grupos de historias (por usuario) visualizados
+  int _storyGroupsViewed = 0;
+
+  // Native Ad pre-cargado para mostrar entre historias
+  NativeAd? _nativeAd;
+  bool _isNativeAdLoaded = false;
 
   // VideoPlayerController map para manejar múltiples videos
   final Map<String, VideoPlayerController> _videoControllers = {};
@@ -98,6 +109,9 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       duration: _storyDuration,
     );
 
+    // Inicializar y pre-cargar ads para monetización
+    _initializeAds();
+
     // Listener para pausar/reanudar historia cuando se escribe una respuesta
     _replyFocusNode.addListener(() {
       if (_replyFocusNode.hasFocus) {
@@ -109,6 +123,50 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
 
     _startStoryTimer();
     _markCurrentStoryAsViewed();
+  }
+
+  /// Inicializar AdMob y pre-cargar el primer anuncio
+  Future<void> _initializeAds() async {
+    try {
+      print('📢 [StoryViewer] Inicializando AdService...');
+      await _adService.initialize();
+      // Pre-cargar Native Ad para mostrar como historia
+      await _loadNativeAd();
+      print('✅ [StoryViewer] AdService inicializado y Native Ad pre-cargado');
+    } catch (e) {
+      print('❌ [StoryViewer] Error inicializando ads: $e');
+    }
+  }
+
+  /// Cargar un Native Ad para mostrar como historia
+  Future<void> _loadNativeAd() async {
+    final ad = await _adService.createStoryNativeAd(
+      onAdLoaded: (ad) {
+        if (mounted) {
+          setState(() {
+            _nativeAd = ad;
+            _isNativeAdLoaded = true;
+          });
+          print('✅ [StoryViewer] Native Ad listo para mostrar');
+        }
+      },
+      onAdFailedToLoad: (ad, error) {
+        print('❌ [StoryViewer] Error cargando Native Ad: ${error.message}');
+        if (mounted) {
+          setState(() {
+            _nativeAd = null;
+            _isNativeAdLoaded = false;
+          });
+        }
+      },
+    );
+
+    if (ad != null && mounted) {
+      setState(() {
+        _nativeAd = ad;
+        _isNativeAdLoaded = false; // Se marcará true en onAdLoaded
+      });
+    }
   }
 
   void _startStoryTimer() {
@@ -236,8 +294,50 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     }
   }
 
-  void _nextUser() {
+  void _nextUser() async {
     if (_currentUserIndex < widget.allUserStories.length - 1) {
+      // Incrementar contador de grupos de historias visualizados
+      _storyGroupsViewed++;
+      print('📊 [StoryViewer] Grupos vistos: $_storyGroupsViewed');
+
+      // Verificar si debemos mostrar un ad
+      // Estrategia: Mostrar después del 1er grupo, luego cada 3 grupos
+      // Patrón: 1, 4, 7, 10, 13... (fórmula: mostrar cuando _storyGroupsViewed == 1 || (_storyGroupsViewed - 1) % 3 == 0)
+      final shouldShowAd = _storyGroupsViewed == 1 || (_storyGroupsViewed - 1) % 3 == 0;
+
+      if (shouldShowAd && _isNativeAdLoaded && _nativeAd != null) {
+        print('📢 [StoryViewer] Mostrando Native Ad como historia...');
+        // Pausar el timer de historias mientras se muestra el ad
+        _pauseStoryTimer();
+
+        // Mostrar Native Ad como overlay fullscreen (como una historia más)
+        final adCompleted = await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          barrierColor: Colors.black,
+          builder: (context) => StoryNativeAdWidget(
+            nativeAd: _nativeAd!,
+            onAdCompleted: () {
+              Navigator.of(context).pop(true);
+            },
+          ),
+        );
+
+        if (adCompleted == true) {
+          print('✅ [StoryViewer] Native Ad completado');
+          // Cargar el siguiente ad para la próxima vez
+          _loadNativeAd();
+        }
+      } else if (shouldShowAd) {
+        print('⚠️ [StoryViewer] Ad no disponible o usuario no cumple COPPA');
+      }
+
+      // Verificar que el widget aún está montado antes de continuar
+      if (!mounted) {
+        print('⚠️ [StoryViewer] Widget desmontado, cancelando navegación');
+        return;
+      }
+
       setState(() {
         _currentUserIndex++;
         // Calcular índice inicial de la primera historia no vista del nuevo grupo
@@ -503,6 +603,9 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     _storyPageController.dispose();
     _replyController.dispose();
     _replyFocusNode.dispose();
+
+    // Limpiar Native Ad
+    _nativeAd?.dispose();
 
     // Limpiar todos los video controllers
     for (var controller in _videoControllers.values) {
