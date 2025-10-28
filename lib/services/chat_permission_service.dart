@@ -131,24 +131,17 @@ class ChatPermissionService {
   }
 
   /// Verificar si un usuario es padre de otro usuario
+  /// ⚠️ CORREGIDO: Lee desde /users/{potentialParentId}.linkedChildrenIds por seguridad
   Future<bool> _isParentOf(String potentialParentId, String potentialChildId) async {
     try {
-      // Verificar en la colección parent_children
-      final parentChildQuery = await _firestore
-          .collection('parent_children')
-          .where('parentId', isEqualTo: potentialParentId)
-          .where('childId', isEqualTo: potentialChildId)
-          .get();
-
-      if (parentChildQuery.docs.isNotEmpty) {
-        return true;
-      }
-
-      // También verificar si el hijo tiene el parentId en su documento
-      final childDoc = await _firestore.collection('users').doc(potentialChildId).get();
-      if (childDoc.exists) {
-        final childData = childDoc.data() as Map<String, dynamic>;
-        return childData['parentId'] == potentialParentId;
+      // Verificar si el padre tiene al hijo en su linkedChildrenIds
+      final parentDoc = await _firestore.collection('users').doc(potentialParentId).get();
+      if (parentDoc.exists) {
+        final parentData = parentDoc.data() as Map<String, dynamic>;
+        final linkedChildrenIds = List<String>.from(parentData['linkedChildrenIds'] ?? []);
+        if (linkedChildrenIds.contains(potentialChildId)) {
+          return true;
+        }
       }
 
       return false;

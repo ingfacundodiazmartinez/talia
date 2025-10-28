@@ -107,4 +107,81 @@ class MessageStatusHelper {
 
     return MessageStatus.sending;
   }
+
+  /// Calcula el MessageStatus para mensajes de GRUPO
+  ///
+  /// Lógica:
+  /// - seen: TODOS los participantes activos (no pendientes) CON confirmación de lectura activada lo leyeron
+  /// - delivered: TODOS los participantes activos (no pendientes) lo recibieron
+  /// - sent: Tiene timestamp del servidor
+  /// - sending: Aún no tiene timestamp
+  ///
+  /// [data] - Mapa de datos del mensaje desde Firestore
+  /// [senderId] - ID del remitente del mensaje
+  /// [hasServerTimestamp] - true si el mensaje tiene timestamp del servidor
+  /// [activeMembers] - Lista de IDs de participantes activos (excluye pendientes)
+  /// [membersWithReadReceipts] - Lista de IDs de participantes que tienen confirmación de lectura activada
+  static MessageStatus calculateGroupStatus({
+    required Map<String, dynamic> data,
+    required String senderId,
+    required bool hasServerTimestamp,
+    required List<String> activeMembers,
+    required List<String> membersWithReadReceipts,
+  }) {
+    final currentUserId = _auth.currentUser?.uid;
+    if (currentUserId == null) return MessageStatus.sent;
+
+    // Si no es mi mensaje, siempre es "sent"
+    if (senderId != currentUserId) {
+      return MessageStatus.sent;
+    }
+
+    // Filtrar participantes para excluir al emisor
+    final otherMembers = activeMembers.where((id) => id != currentUserId).toList();
+    if (otherMembers.isEmpty) {
+      // Si no hay otros participantes, usar lógica normal
+      return calculateStatus(
+        data: data,
+        senderId: senderId,
+        hasServerTimestamp: hasServerTimestamp,
+      );
+    }
+
+    // 1. Verificar si fue visto por TODOS los que tienen confirmación activada
+    try {
+      final readBy = data['readBy'] as List<dynamic>?;
+      if (readBy != null) {
+        // Filtrar miembros que tienen confirmación de lectura activada (y excluir emisor)
+        final membersToCheck = membersWithReadReceipts.where((id) => id != currentUserId).toList();
+
+        // Si todos los que deben tener confirmación lo leyeron
+        if (membersToCheck.isNotEmpty && membersToCheck.every((id) => readBy.contains(id))) {
+          return MessageStatus.seen;
+        }
+      }
+    } catch (e) {
+      appLogger.log('⚠️ Error al leer readBy en grupo: $e', level: 'ERROR');
+    }
+
+    // 2. Verificar si fue entregado a TODOS los participantes activos
+    try {
+      final deliveredTo = data['deliveredTo'] as List<dynamic>?;
+      if (deliveredTo != null) {
+        // Verificar si TODOS los otros miembros activos lo recibieron
+        if (otherMembers.every((id) => deliveredTo.contains(id))) {
+          return MessageStatus.delivered;
+        }
+      }
+    } catch (e) {
+      appLogger.log('⚠️ Error al leer deliveredTo en grupo: $e', level: 'ERROR');
+    }
+
+    // 3. Verificar si fue enviado al servidor (tiene timestamp)
+    if (hasServerTimestamp) {
+      return MessageStatus.sent;
+    }
+
+    // 4. Aún no se ha enviado (optimistic)
+    return MessageStatus.sending;
+  }
 }

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../../../services/reaction_service.dart';
+import '../../../../models/chat_message.dart';
 
 /// Widget que muestra el diálogo de opciones de un mensaje con diseño moderno
 class MessageOptionsDialog {
@@ -22,8 +23,15 @@ class MessageOptionsDialog {
     bool isGroupChat = false,
     VoidCallback? onViewInfo,
     Function(String)? onReact, // Nueva función para reaccionar directamente
+    ModerationStatus? moderationStatus, // Estado de moderación del mensaje
   }) {
     print('🔍 [MessageOptionsDialog] Mostrando diálogo moderno');
+
+    // Verificar si el mensaje está bloqueado por moderación
+    final isBlocked = moderationStatus == ModerationStatus.blocked;
+    if (isBlocked) {
+      print('🚫 [MessageOptionsDialog] Mensaje bloqueado - limitando opciones disponibles');
+    }
 
     // Verificar si puede eliminar el mensaje (propio y < 5 minutos)
     bool canDelete = false;
@@ -193,8 +201,8 @@ class MessageOptionsDialog {
                           },
                         ),
 
-                      // Forward
-                      if (onForward != null)
+                      // Forward - NO permitir reenviar mensajes bloqueados
+                      if (onForward != null && !isBlocked)
                         _buildOptionTile(
                           context: dialogContext,
                           icon: Icons.forward_rounded,
@@ -248,8 +256,8 @@ class MessageOptionsDialog {
                           },
                         ),
 
-                      // Report (solo para mensajes del contacto)
-                      if (!isMe)
+                      // Report (solo para mensajes del contacto) - NO permitir reportar mensajes ya bloqueados
+                      if (!isMe && !isBlocked)
                         _buildOptionTile(
                           context: dialogContext,
                           icon: Icons.flag_outlined,
@@ -359,6 +367,12 @@ class MessageOptionsDialog {
     bool isGroupChat,
   ) async {
     try {
+      print('🔍 [MessageOptions] Intentando reaccionar:');
+      print('   chatId: $chatId');
+      print('   messageId: $messageId');
+      print('   emoji: $emoji');
+      print('   isGroupChat: $isGroupChat');
+
       final reactionService = ReactionService();
       await reactionService.toggleReaction(
         chatId: chatId,
@@ -367,9 +381,10 @@ class MessageOptionsDialog {
         isGroup: isGroupChat,
       );
 
-      print('✅ Reacción agregada: $emoji');
+      print('✅ Reacción agregada exitosamente: $emoji');
     } catch (e) {
       print('❌ Error agregando reacción: $e');
+      print('   Stack trace: ${StackTrace.current}');
     }
   }
 

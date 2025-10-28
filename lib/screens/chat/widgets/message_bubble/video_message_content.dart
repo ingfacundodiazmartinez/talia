@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import '../../../../models/chat_message.dart';
 import '../media_viewer_screen.dart';
@@ -6,6 +7,7 @@ import '../media_viewer_screen.dart';
 class VideoMessageContent extends StatelessWidget {
   final String? videoUrl;
   final String? localPath;
+  final String? thumbnailPath;
   final MessageStatus status;
   final String? text;
   final List<MediaItem> mediaItems;
@@ -15,6 +17,7 @@ class VideoMessageContent extends StatelessWidget {
     super.key,
     required this.videoUrl,
     this.localPath,
+    this.thumbnailPath,
     required this.status,
     this.text,
     required this.mediaItems,
@@ -53,31 +56,47 @@ class VideoMessageContent extends StatelessWidget {
               child: Stack(
                 alignment: Alignment.center,
                 children: [
+                  // Mostrar thumbnail si está disponible
+                  if (thumbnailPath != null && thumbnailPath!.isNotEmpty)
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.file(
+                        File(thumbnailPath!),
+                        width: double.infinity,
+                        height: double.infinity,
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+
+                  // Icono de play
                   const Icon(
                     Icons.play_circle_outline,
                     size: 64,
                     color: Colors.white,
                   ),
-                  // Indicator de subiendo si está enviando
+
+                  // Indicator de subiendo si está enviando (ocupa todo el contenedor)
                   if (status == MessageStatus.sending)
-                    Container(
-                      color: Colors.black.withValues(alpha: 0.5),
-                      child: const Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          CircularProgressIndicator(
-                            color: Colors.white,
-                            strokeWidth: 2,
-                          ),
-                          SizedBox(height: 8),
-                          Text(
-                            'Subiendo video...',
-                            style: TextStyle(
+                    Positioned.fill(
+                      child: Container(
+                        color: Colors.black.withValues(alpha: 0.5),
+                        child: const Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            CircularProgressIndicator(
                               color: Colors.white,
-                              fontSize: 12,
+                              strokeWidth: 2,
                             ),
-                          ),
-                        ],
+                            SizedBox(height: 8),
+                            Text(
+                              'Subiendo video...',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     )
                   else

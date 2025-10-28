@@ -224,64 +224,171 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
       );
     }
 
-    return Stack(
-      alignment: Alignment.center,
-      children: [
-        AspectRatio(
-          aspectRatio: controller.value.aspectRatio,
-          child: VideoPlayer(controller),
-        ),
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          if (controller.value.isPlaying) {
+            controller.pause();
+          } else {
+            controller.play();
+          }
+        });
+      },
+      child: Container(
+        color: Colors.transparent,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            AspectRatio(
+              aspectRatio: controller.value.aspectRatio,
+              child: VideoPlayer(controller),
+            ),
 
-        // Controles de video
-        GestureDetector(
-          onTap: () {
-            setState(() {
-              if (controller.value.isPlaying) {
-                controller.pause();
-              } else {
-                controller.play();
-              }
-            });
-          },
-          child: Container(
-            color: Colors.transparent,
-            child: Center(
-              child: AnimatedOpacity(
-                opacity: controller.value.isPlaying ? 0.0 : 1.0,
-                duration: const Duration(milliseconds: 200),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.5),
-                    shape: BoxShape.circle,
-                  ),
-                  padding: const EdgeInsets.all(16),
-                  child: const Icon(
-                    Icons.play_arrow,
-                    color: Colors.white,
-                    size: 48,
-                  ),
+            // Icono de play cuando está pausado
+            AnimatedOpacity(
+              opacity: controller.value.isPlaying ? 0.0 : 1.0,
+              duration: const Duration(milliseconds: 200),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.5),
+                  shape: BoxShape.circle,
+                ),
+                padding: const EdgeInsets.all(16),
+                child: const Icon(
+                  Icons.play_arrow,
+                  color: Colors.white,
+                  size: 48,
                 ),
               ),
             ),
-          ),
-        ),
 
-        // Barra de progreso
-        Positioned(
-          bottom: 0,
-          left: 0,
-          right: 0,
-          child: VideoProgressIndicator(
-            controller,
-            allowScrubbing: true,
-            colors: const VideoProgressColors(
-              playedColor: Colors.white,
-              bufferedColor: Colors.white38,
-              backgroundColor: Colors.white24,
+            // Controles de video en la parte inferior
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.bottomCenter,
+                    end: Alignment.topCenter,
+                    colors: [
+                      Colors.black.withOpacity(0.8),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+                padding: const EdgeInsets.only(bottom: 16, left: 16, right: 16, top: 32),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Barra de progreso
+                    VideoProgressIndicator(
+                      controller,
+                      allowScrubbing: true,
+                      colors: const VideoProgressColors(
+                        playedColor: Colors.white,
+                        bufferedColor: Colors.white38,
+                        backgroundColor: Colors.white24,
+                      ),
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                    ),
+
+                    // Tiempo y controles
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        // Tiempo actual
+                        Text(
+                          _formatDuration(controller.value.position),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                          ),
+                        ),
+
+                        // Botones de control
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // Retroceder 10 segundos
+                            IconButton(
+                              onPressed: () {
+                                final newPosition = controller.value.position -
+                                    const Duration(seconds: 10);
+                                controller.seekTo(
+                                  newPosition < Duration.zero
+                                      ? Duration.zero
+                                      : newPosition,
+                                );
+                              },
+                              icon: const Icon(Icons.replay_10),
+                              color: Colors.white,
+                              iconSize: 28,
+                            ),
+
+                            // Play/Pause (más pequeño aquí)
+                            IconButton(
+                              onPressed: () {
+                                setState(() {
+                                  if (controller.value.isPlaying) {
+                                    controller.pause();
+                                  } else {
+                                    controller.play();
+                                  }
+                                });
+                              },
+                              icon: Icon(
+                                controller.value.isPlaying
+                                    ? Icons.pause
+                                    : Icons.play_arrow,
+                              ),
+                              color: Colors.white,
+                              iconSize: 32,
+                            ),
+
+                            // Adelantar 10 segundos
+                            IconButton(
+                              onPressed: () {
+                                final newPosition = controller.value.position +
+                                    const Duration(seconds: 10);
+                                controller.seekTo(
+                                  newPosition > controller.value.duration
+                                      ? controller.value.duration
+                                      : newPosition,
+                                );
+                              },
+                              icon: const Icon(Icons.forward_10),
+                              color: Colors.white,
+                              iconSize: 28,
+                            ),
+                          ],
+                        ),
+
+                        // Duración total
+                        Text(
+                          _formatDuration(controller.value.duration),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
             ),
-          ),
+          ],
         ),
-      ],
+      ),
     );
+  }
+
+  String _formatDuration(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    final minutes = twoDigits(duration.inMinutes.remainder(60));
+    final seconds = twoDigits(duration.inSeconds.remainder(60));
+    return '$minutes:$seconds';
   }
 }

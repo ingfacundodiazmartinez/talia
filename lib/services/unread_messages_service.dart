@@ -150,26 +150,20 @@ class UnreadMessagesService {
       final totalUnreadMessages = await getTotalUnreadCount();
 
       // 2. Obtener IDs de hijos vinculados (solo para padres)
-      final linksSnapshot = await _firestore
-          .collection('parentChildLinks')
-          .where('parentId', isEqualTo: user.uid)
-          .where('status', isEqualTo: 'approved')
-          .get();
-
-      final childrenIds = linksSnapshot.docs
-          .map((doc) => doc.data()['childId'] as String)
-          .toList();
+      // ⚠️ CORREGIDO: Lee desde /users/{parentId}.linkedChildrenIds por seguridad
+      final userDoc = await _firestore.collection('users').doc(user.uid).get();
+      final userData = userDoc.data() as Map<String, dynamic>?;
+      final childrenIds = List<String>.from(userData?['linkedChildrenIds'] ?? []);
 
       // 3. Contar historias pendientes de los hijos
+      // ACTUALIZADO: Usar story_approval_requests en lugar de stories
       int pendingStoriesCount = 0;
-      if (childrenIds.isNotEmpty) {
-        final storiesSnapshot = await _firestore
-            .collection('stories')
-            .where('userId', whereIn: childrenIds)
-            .where('status', isEqualTo: 'pending')
-            .get();
-        pendingStoriesCount = storiesSnapshot.docs.length;
-      }
+      final storiesSnapshot = await _firestore
+          .collection('story_approval_requests')
+          .where('parentId', isEqualTo: user.uid)
+          .where('status', isEqualTo: 'pending')
+          .get();
+      pendingStoriesCount = storiesSnapshot.docs.length;
 
       // 4. Contar emergencias no resueltas de los hijos
       int unresolvedEmergenciesCount = 0;

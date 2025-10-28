@@ -209,7 +209,13 @@ class OfflineQueueService {
 
   Future<void> _sendMessage(Map<String, dynamic> data) async {
     final chatId = data['chatId'] as String;
-    final message = data['message'] as Map<String, dynamic>;
+    final message = Map<String, dynamic>.from(data['message'] as Map<String, dynamic>);
+
+    // Convertir timestamp de milisegundos a Timestamp de Firestore
+    if (message['timestamp'] is int) {
+      final milliseconds = message['timestamp'] as int;
+      message['timestamp'] = Timestamp.fromMillisecondsSinceEpoch(milliseconds);
+    }
 
     await FirebaseFirestore.instance
         .collection('chats')

@@ -413,7 +413,8 @@ class ChatControllerOptimistic extends ChangeNotifier {
         }
 
         for (final change in snapshot.docChanges) {
-          if (change.type == DocumentChangeType.added) {
+          // Procesar tanto mensajes nuevos (added) como actualizados (modified para moderación)
+          if (change.type == DocumentChangeType.added || change.type == DocumentChangeType.modified) {
             final newMessage = ChatMessage.fromFirestore(change.doc, currentUserId: currentUserId);
 
             // ✅ SEGURIDAD: Si el mensaje NO es propio, verificar moderationStatus
@@ -455,82 +456,64 @@ class ChatControllerOptimistic extends ChangeNotifier {
               continue;
             }
 
-            // ✅ OPTIMIZACIÓN: Ignorar mensajes propios del listener (ya están en cache)
+            // ✅ OPTIMIZACIÓN: Ignorar mensajes propios nuevos del listener (ya están en cache)
             // Solo procesar mensajes del contacto
-            if (newMessage.senderId == currentUserId) {
-              print('⏭️ [Realtime] Ignorando mensaje propio del listener (ya en cache): ${newMessage.id}');
+            // PERO: Permitir actualizaciones (modified) de mensajes propios para read receipts
+            if (newMessage.senderId == currentUserId && change.type == DocumentChangeType.added) {
+              print('⏭️ [Realtime] Ignorando mensaje propio nuevo del listener (ya en cache): ${newMessage.id}');
               continue;
             }
 
-            // IMPORTANTE: Verificar que no exista ya (por ID)
+            // IMPORTANTE: Verificar si el mensaje ya existe (por ID)
             final existingIndex = _messages.indexWhere((m) => m.id == newMessage.id);
 
-            if (existingIndex == -1) {
-              // ✅ Filtrar mensajes anteriores al clearedAt
-              if (_clearedAtTimestamp != null && newMessage.timestamp != null) {
-                if (newMessage.timestamp!.compareTo(_clearedAtTimestamp!) <= 0) {
-                  print('🧹 [Realtime] Ignorando mensaje anterior a limpieza: ${newMessage.id}');
-                  continue;
-                }
-              }
-
-              // Es del CONTACTO: verificar que no sea duplicado antes de agregar
-              final isDuplicate = newMessage.timestamp != null &&
-                _messages.any((m) =>
-                  m.senderId == newMessage.senderId &&
-                  m.timestamp != null &&
-                  (m.timestamp!.seconds == newMessage.timestamp!.seconds) &&
-                  (m.text == newMessage.text || m.imageUrl == newMessage.imageUrl)
-                );
-
-              if (!isDuplicate) {
-                print('✅ [Realtime] Nuevo mensaje del contacto: ${newMessage.id}');
-                _messages.insert(0, newMessage);
-                _lastMessageTimestamp = newMessage.timestamp;
+            if (existingIndex != -1) {
+              // El mensaje ya existe - actualizar (moderación o read receipts)
+              if (change.type == DocumentChangeType.modified) {
+                print('🔄 [Realtime] Actualizando mensaje existente: ${newMessage.id} (moderación o read receipt)');
+                _messages[existingIndex] = newMessage;
                 _cacheService.saveMessages(chatId, _messages);
-
-                // Reproducir sonido de recepción
-                _soundService.playReceiveSound();
-
-                // Marcar mensajes como leídos inmediatamente
-                _readReceiptsService.markMessagesAsSeen(chatId: chatId);
-
                 notifyListeners();
-              } else {
-                print('🚫 [Realtime] Ignorando duplicado del contacto: ${newMessage.id}');
               }
-            } else {
-              // El mensaje ya existe por ID - no hacer nada
-              print('🚫 [Realtime] Mensaje ya existe (por ID): ${newMessage.id}');
+              continue; // No agregar duplicados
             }
-          } else if (change.type == DocumentChangeType.modified) {
-            final updatedMessage = ChatMessage.fromFirestore(change.doc, currentUserId: currentUserId);
-            final index = _messages.indexWhere((m) => m.id == updatedMessage.id);
 
-            if (index != -1) {
-              // Actualizar mensaje completamente (tanto propios como del contacto)
-              // Esto asegura que cambios en readBy, isRead, status, reacciones, etc. se reflejen
-              if (updatedMessage.senderId == currentUserId) {
-                print('🔄 [Realtime] Actualizando mensaje propio: ${updatedMessage.id} (status: ${updatedMessage.status})');
-              } else {
-                print('🔄 [Realtime] Mensaje del contacto actualizado: ${updatedMessage.id}');
+            // El mensaje no existe - agregarlo
+            // ✅ Filtrar mensajes anteriores al clearedAt
+            if (_clearedAtTimestamp != null && newMessage.timestamp != null) {
+              if (newMessage.timestamp!.compareTo(_clearedAtTimestamp!) <= 0) {
+                print('🧹 [Realtime] Ignorando mensaje anterior a limpieza: ${newMessage.id}');
+                continue;
               }
+            }
 
-              _messages[index] = updatedMessage;
-              _cacheService.saveMessage(chatId, updatedMessage);
+            // Es del CONTACTO: verificar que no sea duplicado antes de agregar
+            final isDuplicate = newMessage.timestamp != null &&
+              _messages.any((m) =>
+                m.senderId == newMessage.senderId &&
+                m.timestamp != null &&
+                (m.timestamp!.seconds == newMessage.timestamp!.seconds) &&
+                (m.text == newMessage.text || m.imageUrl == newMessage.imageUrl)
+              );
+
+            if (!isDuplicate) {
+              print('✅ [Realtime] Nuevo mensaje del contacto: ${newMessage.id}');
+              _messages.insert(0, newMessage);
+              _lastMessageTimestamp = newMessage.timestamp;
+              _cacheService.saveMessages(chatId, _messages);
+
+              // Reproducir sonido de recepción
+              _soundService.playReceiveSound();
+
+              // Marcar mensajes como entregados primero
+              _deliveryReceiptsService.markMessagesAsDelivered(chatId: chatId);
+
+              // Luego marcar como leídos
+              _readReceiptsService.markMessagesAsSeen(chatId: chatId);
+
               notifyListeners();
             } else {
-              // ✅ SEGURIDAD: El mensaje no existe en la lista (fue filtrado por pending)
-              // Ahora se actualizó a approved/blocked, agregarlo a la lista
-              if (updatedMessage.senderId != currentUserId) {
-                if (updatedMessage.moderationStatus == ModerationStatus.approved ||
-                    updatedMessage.moderationStatus == ModerationStatus.blocked) {
-                  print('✅ [Realtime] Agregando mensaje bloqueado/aprobado que estaba pendiente: ${updatedMessage.id}');
-                  _messages.insert(0, updatedMessage);
-                  _cacheService.saveMessage(chatId, updatedMessage);
-                  notifyListeners();
-                }
-              }
+              print('🚫 [Realtime] Ignorando duplicado del contacto: ${newMessage.id}');
             }
           }
         }
@@ -702,7 +685,11 @@ class ChatControllerOptimistic extends ChangeNotifier {
         rethrow;
       }
       // Error de red o similar, continuar con el envío
-      print('⚠️ Error en moderación background (continuando): $e');
+      // Solo imprimir error si no es problema de conexión
+      final errorString = e.toString().toLowerCase();
+      if (!errorString.contains('offline') && !errorString.contains('connection')) {
+        print('⚠️ Error en moderación background (continuando): $e');
+      }
     }
 
     // 3. Guardar en cache
@@ -759,7 +746,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
             'message': {
               'senderId': currentUserId,
               'text': text,
-              'timestamp': FieldValue.serverTimestamp(),
+              'timestamp': DateTime.now().millisecondsSinceEpoch, // Usar timestamp real para Hive
               'isRead': false,
               if (replyTo != null) 'replyTo': replyTo,
             },
@@ -858,10 +845,13 @@ class ChatControllerOptimistic extends ChangeNotifier {
       // Commit batch
       await batch.commit();
 
-      // Marcar mensajes individuales como leídos (con read receipts)
+      // Marcar mensajes como entregados primero
+      await _deliveryReceiptsService.markMessagesAsDelivered(chatId: chatId);
+
+      // Luego marcar como leídos (con read receipts)
       await _readReceiptsService.markMessagesAsSeen(chatId: chatId);
 
-      print('✅ [ChatController] Mensajes marcados como leídos (batch + read receipts)');
+      print('✅ [ChatController] Mensajes marcados como entregados y leídos (batch + delivery + read receipts)');
     } catch (e) {
       print('❌ [ChatController] Error en batch update: $e');
     }
@@ -986,46 +976,94 @@ class ChatControllerOptimistic extends ChangeNotifier {
     }
   }
 
-  /// Enviar video (OPTIMISTIC)
-  Future<void> sendVideo() async {
+  // Variable para trackear el video optimista actual
+  String? _currentOptimisticVideoId;
+
+  /// Crear mensaje optimista de video INMEDIATAMENTE con thumbnail
+  void createOptimisticVideoMessage({
+    required String videoPath,
+    String? thumbnailPath,
+  }) {
     if (currentUserId.isEmpty) return;
 
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    print('⚡ [$timestamp] Creando burbuja optimista para video: $videoPath (thumbnail: ${thumbnailPath != null ? "✅" : "❌"})');
+
+    // Crear mensaje optimista con path local y thumbnail
+    final tempId = const Uuid().v4();
+    _currentOptimisticVideoId = tempId; // Guardar para actualizar después
+
+    final optimisticMessage = ChatMessage.optimistic(
+      id: tempId,
+      senderId: currentUserId,
+      type: 'video',
+      localPath: videoPath, // Path del video original
+      imageUrl: thumbnailPath, // Thumbnail para mostrar mientras carga
+    );
+
+    _messages.insert(0, optimisticMessage);
+    _pendingMessages.add(optimisticMessage);
+    notifyListeners(); // ⚡ Muestra la burbuja INMEDIATAMENTE
+
+    final timestampAfter = DateTime.now().millisecondsSinceEpoch;
+    print('✅ [$timestampAfter] Burbuja optimista creada con ID: $tempId (demora: ${timestampAfter - timestamp}ms)');
+  }
+
+  /// Procesar y subir video (comprimir, validar, subir)
+  Future<void> processAndUploadVideo({
+    required String videoPath,
+    Function(String)? onShowMessage,
+    VoidCallback? onHideMessage,
+  }) async {
+    if (currentUserId.isEmpty) return;
+    if (_currentOptimisticVideoId == null) {
+      print('❌ No hay mensaje optimista para actualizar');
+      return;
+    }
+
+    final tempId = _currentOptimisticVideoId!;
+
     try {
-      // 1. Seleccionar video
-      final ImagePicker picker = ImagePicker();
-      final XFile? video = await picker.pickVideo(
-        source: ImageSource.gallery,
-        maxDuration: const Duration(minutes: 5),
+      final timestampStart = DateTime.now().millisecondsSinceEpoch;
+      print('🎥 [$timestampStart] Procesando video: $videoPath');
+      final File videoFile = File(videoPath);
+
+      // 1. Comprimir y validar video (con indicador de progreso)
+      final MediaCompressionService compressionService = MediaCompressionService();
+
+      // Notificar que se está comprimiendo
+      onShowMessage?.call('Comprimiendo video...');
+
+      final File? validatedVideo = await compressionService.validateVideo(
+        videoFile,
+        onProgress: (progress) {
+          print('🗜️ Progreso de compresión: ${progress.toStringAsFixed(0)}%');
+        },
       );
 
-      if (video == null) return; // Usuario canceló
-
-      print('🎥 Video seleccionado: ${video.path}');
-
-      // 2. Validar tamaño del video
-      final MediaCompressionService compressionService = MediaCompressionService();
-      final File videoFile = File(video.path);
-      final File? validatedVideo = await compressionService.validateVideo(videoFile);
+      // Ocultar mensaje de compresión
+      onHideMessage?.call();
 
       if (validatedVideo == null) {
-        print('❌ Video muy grande (máx 10 MB)');
-        throw Exception('El video excede el límite de 10 MB');
+        print('❌ No se pudo comprimir el video bajo 10 MB');
+        onShowMessage?.call('El video es muy grande y no se pudo comprimir bajo el límite de 10 MB. Intenta con un video más corto.');
+
+        // Buscar el mensaje optimista
+        final optimisticMsg = _messages.firstWhere(
+          (m) => m.id == tempId,
+          orElse: () => _messages.first,
+        );
+
+        // Marcar mensaje como error
+        final errorMessage = optimisticMsg.copyWith(status: MessageStatus.error);
+        _updateMessage(tempId, errorMessage);
+        _pendingMessages.removeWhere((m) => m.id == tempId);
+        _currentOptimisticVideoId = null; // Limpiar
+
+        throw Exception('El video no se pudo comprimir bajo el límite de 10 MB');
       }
 
-      // 3. Crear mensaje optimista CON localPath
-      final tempId = const Uuid().v4();
-      final optimisticMessage = ChatMessage.optimistic(
-        id: tempId,
-        senderId: currentUserId,
-        type: 'video',
-        localPath: validatedVideo.path, // Path local para placeholder
-      );
-
-      _messages.insert(0, optimisticMessage);
-      _pendingMessages.add(optimisticMessage);
-      notifyListeners();
-
-      // 4. Subir video
+      // 2. Subir video
       final videoUrl = await _mediaService.uploadVideoFile(
         videoFile: validatedVideo,
         chatId: chatId,
@@ -1034,7 +1072,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
 
       if (videoUrl == null) throw Exception('Error subiendo video');
 
-      // 5. Enviar a Firestore
+      // 3. Enviar a Firestore
       final docRef = await _firestore
           .collection('chats')
           .doc(chatId)
@@ -1048,8 +1086,13 @@ class ChatControllerOptimistic extends ChangeNotifier {
           })
           .timeout(_sendTimeout);
 
-      // 6. Actualizar mensaje
-      final sentMessage = optimisticMessage.copyWith(
+      // 4. Buscar y actualizar mensaje optimista
+      final optimisticMsg = _messages.firstWhere(
+        (m) => m.id == tempId,
+        orElse: () => _messages.first,
+      );
+
+      final sentMessage = optimisticMsg.copyWith(
         id: docRef.id,
         videoUrl: videoUrl,
         status: MessageStatus.sent,
@@ -1058,19 +1101,33 @@ class ChatControllerOptimistic extends ChangeNotifier {
 
       _updateMessage(tempId, sentMessage);
       _pendingMessages.removeWhere((m) => m.id == tempId);
+      _currentOptimisticVideoId = null; // Limpiar
 
       await _updateChatDocument('🎥 Video');
       // ✅ SEGURIDAD: La Cloud Function enviará la notificación
       print('✅ [ChatController] Video enviado');
     } catch (e) {
       print('❌ [ChatController] Error enviando video: $e');
-      // Buscar el mensaje pendiente
-      final pendingMsg = _pendingMessages.firstWhere(
-        (m) => m.senderId == currentUserId && m.type == 'video',
-        orElse: () => _messages.first,
+
+      // Ocultar mensaje de compresión si aún está visible
+      onHideMessage?.call();
+
+      // Mostrar error al usuario si no es el error de compresión (ya mostrado arriba)
+      if (!e.toString().contains('no se pudo comprimir')) {
+        onShowMessage?.call('Error enviando video: ${e.toString()}');
+      }
+
+      // Buscar el mensaje pendiente por tempId
+      final pendingMsg = _messages.firstWhere(
+        (m) => m.id == tempId,
+        orElse: () => _messages.firstWhere(
+          (m) => m.senderId == currentUserId && m.type == 'video',
+          orElse: () => _messages.first,
+        ),
       );
       final errorMessage = pendingMsg.copyWith(status: MessageStatus.error);
       _updateMessage(pendingMsg.id, errorMessage);
+      _currentOptimisticVideoId = null; // Limpiar
     }
   }
 

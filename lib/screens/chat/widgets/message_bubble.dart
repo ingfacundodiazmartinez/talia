@@ -196,7 +196,7 @@ class _MessageBubbleState extends State<MessageBubble>
               padding: EdgeInsets.only(
                 bottom:
                     (widget.reactions != null && widget.reactions!.isNotEmpty)
-                    ? 10
+                    ? 18 // Gap más grande para las reacciones más abajo
                     : 0,
               ),
               child: Column(
@@ -431,6 +431,7 @@ class _MessageBubbleState extends State<MessageBubble>
                                                   VideoMessageContent(
                                                     videoUrl: widget.videoUrl,
                                                     localPath: widget.localPath,
+                                                    thumbnailPath: widget.status == MessageStatus.sending ? widget.imageUrl : null,
                                                     status: widget.status,
                                                     text: widget.text,
                                                     mediaItems:
@@ -493,17 +494,20 @@ class _MessageBubbleState extends State<MessageBubble>
                       if (widget.reactions != null &&
                           widget.reactions!.isNotEmpty)
                         Positioned(
-                          bottom: -9,
-                          right: widget.isMe
+                          bottom: -22, // Más abajo para mejor separación
+                          // Si es mi mensaje: reacciones a la IZQUIERDA de la burbuja
+                          // Si es mensaje del otro: reacciones a la DERECHA de la burbuja
+                          left: widget.isMe
                               ? (widget.isGroupChat ? 48 : 8)
                               : null,
-                          left: !widget.isMe
+                          right: !widget.isMe
                               ? (widget.isGroupChat ? 48 : 8)
                               : null,
                           child: MessageReactions(
                             reactions: widget.reactions!,
                             chatId: widget.chatId,
                             messageId: widget.messageId,
+                            isGroupChat: widget.isGroupChat,
                           ),
                         ),
                     ],
@@ -519,6 +523,9 @@ class _MessageBubbleState extends State<MessageBubble>
 
   /// Determina si debe mostrar la imagen
   bool _shouldShowImage() {
+    // NO mostrar imagen si es un mensaje de video (el thumbnail se muestra dentro del video)
+    if (widget.type == 'video') return false;
+
     return widget.imageUrl != null ||
         (widget.status == MessageStatus.sending &&
             widget.localPath != null &&
@@ -583,6 +590,7 @@ class _MessageBubbleState extends State<MessageBubble>
       onSelectMessages: widget.onSelectMessages,
       isGroupChat: widget.isGroupChat,
       onViewInfo: widget.onViewMessageInfo, // Usar el callback del padre
+      moderationStatus: widget.moderationStatus, // Pasar estado de moderación
     );
   }
 

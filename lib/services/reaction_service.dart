@@ -16,15 +16,28 @@ class ReactionService {
     try {
       final currentUser = _auth.currentUser;
       if (currentUser == null) {
+        print('❌ [ReactionService] Usuario no autenticado');
         throw Exception('Usuario no autenticado');
       }
 
+      print('🔍 [ReactionService] Iniciando toggleReaction:');
+      print('   chatId: $chatId');
+      print('   messageId: $messageId');
+      print('   reaction: $reaction');
+      print('   isGroup: $isGroup');
+      print('   currentUser: ${currentUser.uid}');
+
+      final collection = isGroup ? 'groups' : 'chats';
+      final path = '$collection/$chatId/messages/$messageId';
+      print('   path: $path');
+
       final messageRef = _firestore
-          .collection(isGroup ? 'groups' : 'chats')
+          .collection(collection)
           .doc(chatId)
           .collection('messages')
           .doc(messageId);
 
+      print('🔄 [ReactionService] Iniciando transacción...');
       await _firestore.runTransaction((transaction) async {
         final snapshot = await transaction.get(messageRef);
 
@@ -71,12 +84,14 @@ class ReactionService {
           }
         }
 
+        print('💾 [ReactionService] Actualizando mensaje con reactions: $reactions');
         transaction.update(messageRef, {'reactions': reactions});
       });
 
-      print('✅ Reacción actualizada: $reaction');
+      print('✅ [ReactionService] Reacción actualizada exitosamente: $reaction');
     } catch (e) {
-      print('❌ Error actualizando reacción: $e');
+      print('❌ [ReactionService] Error actualizando reacción: $e');
+      print('   Stack trace: $e');
       rethrow;
     }
   }

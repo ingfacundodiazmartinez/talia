@@ -4,9 +4,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:video_thumbnail/video_thumbnail.dart';
 import '../controllers/chat_controller_optimistic.dart';
 import '../notification_service.dart';
 import '../services/foreground_message_listener.dart';
@@ -19,7 +21,6 @@ import 'chat/widgets/message_bubble.dart';
 import 'chat/widgets/chat_input_bar.dart';
 import 'chat/widgets/reply_bar.dart';
 import 'chat/widgets/editing_bar.dart';
-import 'chat/widgets/typing_indicator.dart';
 import 'chat/widgets/attachment_options.dart';
 import 'chat/widgets/recording_indicator.dart';
 import 'contact_profile_screen.dart';
@@ -151,7 +152,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
       });
       print('✅ Chat marcado como leído: ${widget.chatId}');
     } catch (e) {
-      print('⚠️ Error marcando chat como leído: $e');
+      // Solo imprimir error si no es problema de conexión
+      final errorString = e.toString().toLowerCase();
+      if (!errorString.contains('offline') && !errorString.contains('connection')) {
+        print('⚠️ Error marcando chat como leído: $e');
+      }
       // No mostrar error al usuario, es una operación secundaria
     }
   }
@@ -473,10 +478,12 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   }
 
   Future<void> _handleSendVideo() async {
-    Navigator.pop(context); // Cerrar bottom sheet
+    final timestampStart = DateTime.now().millisecondsSinceEpoch;
+    print('🎬 [$timestampStart] Iniciando _handleSendVideo');
 
     // Verificar bloqueo
     if (_isBlocked || _isBlockedBy) {
+      Navigator.pop(context); // Cerrar bottom sheet
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -492,8 +499,68 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
       return;
     }
 
-    // Envío optimista de video
-    await _controller.sendVideo();
+    // 1. Abrir picker INMEDIATAMENTE usando FilePicker (NO comprime en iOS = RÁPIDO)
+    final timestampBeforePicker = DateTime.now().millisecondsSinceEpoch;
+    print('🎥 [$timestampBeforePicker] ANTES de abrir picker (${timestampBeforePicker - timestampStart}ms desde inicio)');
+
+    // Cerrar bottom sheet Y abrir picker al mismo tiempo
+    Navigator.pop(context);
+
+    // Usar FilePicker con allowCompression: false para evitar el delay de iOS
+    final FilePickerResult? result = await FilePicker.platform.pickFiles(
+      type: FileType.video,
+      allowMultiple: false,
+      allowCompression: false, // ⚡ CLAVE: iOS no comprime = retorna INSTANTÁNEO
+    );
+
+    final timestampAfterPicker = DateTime.now().millisecondsSinceEpoch;
+    print('🎥 [$timestampAfterPicker] DESPUÉS de picker retornar (picker tardó: ${timestampAfterPicker - timestampBeforePicker}ms)');
+
+    if (result == null || result.files.isEmpty) return; // Usuario canceló
+
+    final String videoPath = result.files.single.path!;
+
+    final timestampBeforeThumbnail = DateTime.now().millisecondsSinceEpoch;
+    print('🖼️ [$timestampBeforeThumbnail] Generando thumbnail...');
+
+    // 2. Generar thumbnail INMEDIATAMENTE (muy rápido, ~50-200ms)
+    String? thumbnailPath;
+    try {
+      thumbnailPath = await VideoThumbnail.thumbnailFile(
+        video: videoPath,
+        thumbnailPath: (await getTemporaryDirectory()).path,
+        imageFormat: ImageFormat.JPEG,
+        maxWidth: 300,
+        quality: 75,
+      );
+    } catch (e) {
+      print('⚠️ Error generando thumbnail: $e');
+    }
+
+    final timestampAfterThumbnail = DateTime.now().millisecondsSinceEpoch;
+    print('🖼️ [$timestampAfterThumbnail] Thumbnail generado (tardó: ${timestampAfterThumbnail - timestampBeforeThumbnail}ms)');
+
+    final timestampBeforeBubble = DateTime.now().millisecondsSinceEpoch;
+    print('📍 [$timestampBeforeBubble] ANTES de crear burbuja optimista');
+
+    // 3. Crear burbuja optimista INMEDIATAMENTE con thumbnail
+    _controller.createOptimisticVideoMessage(
+      videoPath: videoPath,
+      thumbnailPath: thumbnailPath,
+    );
+
+    final timestampAfterBubble = DateTime.now().millisecondsSinceEpoch;
+    print('📍 [$timestampAfterBubble] DESPUÉS de crear burbuja optimista (demora: ${timestampAfterBubble - timestampBeforeBubble}ms)');
+
+    // 3. Procesar y subir video en segundo plano (SIN await - fire and forget)
+    // Sin toasts - la burbuja ya muestra el estado visualmente
+    // ignore: unawaited_futures
+    _controller.processAndUploadVideo(
+      videoPath: videoPath,
+    ).catchError((e) {
+      print('❌ Error al enviar video: $e');
+      // Error silencioso - la burbuja ya muestra el estado
+    });
   }
 
   Future<void> _startRecording() async {
@@ -804,14 +871,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
             children: [
               Expanded(
                 child: SafeArea(
-                  child: Stack(
-                    children: [
-                      // Lista de mensajes ocupa todo el espacio
-                      Column(children: [Expanded(child: _buildMessagesList())]),
-                      // Indicador flotante en la parte inferior
-                      _buildTypingIndicator(),
-                    ],
-                  ),
+                  // Lista de mensajes
+                  child: _buildMessagesList(),
                 ),
               ),
               if (_isBlocked || _isBlockedBy) _buildBlockedBar(),
@@ -939,6 +1000,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
           isForwarded: message.isForwarded,
           originalContactName: message.originalContactName,
           contactName: widget.contactName,
+          isGroupChat: false, // Chat individual
           onReply: () {
             setState(() {
               _replyingTo = {
@@ -1031,42 +1093,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
         }
 
         return finalWidget;
-      },
-    );
-  }
-
-  Widget _buildTypingIndicator() {
-    return StreamBuilder<bool>(
-      stream: _controller.watchTypingIndicator(),
-      builder: (context, snapshot) {
-        final isTyping = snapshot.data ?? false;
-
-        // Indicador flotante - solo se muestra cuando está escribiendo
-        if (!isTyping) return const SizedBox.shrink();
-
-        return Positioned(
-          bottom: 8, // Separación del borde inferior
-          left: 8,
-          child: AnimatedOpacity(
-            opacity: isTyping ? 1.0 : 0.0,
-            duration: const Duration(milliseconds: 200),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(20),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.1),
-                    blurRadius: 8,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: TypingIndicator(userName: widget.contactName),
-            ),
-          ),
-        );
       },
     );
   }

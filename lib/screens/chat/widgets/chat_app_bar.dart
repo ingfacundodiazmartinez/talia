@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../../widgets/profile_photo_viewer.dart';
 import '../../../services/block_service.dart';
+import '../../../services/typing_indicator_service.dart';
 import '../../chat_moderation_settings_screen.dart';
 
 /// AppBar personalizado para pantallas de chat
@@ -109,40 +110,38 @@ class _ChatAppBarState extends State<ChatAppBar> {
             final photoURL = userData?['photoURL'] as String? ?? '';
             final isOnline = userData?['isOnline'] ?? false;
 
-            return Row(
-              children: [
-                // Avatar del contacto (clickeable para ver ampliado)
-                ClickableAvatar(
-                  photoUrl: photoURL.isNotEmpty ? photoURL : null,
-                  name: widget.contactName,
-                  radius: 18,
-                ),
-                const SizedBox(width: 12),
-                // Nombre y estado
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        widget.contactName,
-                        style: const TextStyle(fontSize: 16),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      Row(
+            // Escuchar el estado de typing
+            return StreamBuilder<bool>(
+              stream: TypingIndicatorService().watchOtherUserTyping(
+                widget.chatId,
+                widget.contactId,
+              ),
+              initialData: false,
+              builder: (context, typingSnapshot) {
+                final isTyping = typingSnapshot.data ?? false;
+
+                return Row(
+                  children: [
+                    // Avatar del contacto (clickeable para ver ampliado)
+                    ClickableAvatar(
+                      photoUrl: photoURL.isNotEmpty ? photoURL : null,
+                      name: widget.contactName,
+                      radius: 18,
+                    ),
+                    const SizedBox(width: 12),
+                    // Nombre y estado
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          if (isOnline) ...[
-                            Container(
-                              width: 8,
-                              height: 8,
-                              decoration: const BoxDecoration(
-                                color: Colors.green,
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                          ],
                           Text(
-                            isOnline ? 'En línea' : 'Desconectado',
+                            widget.contactName,
+                            style: const TextStyle(fontSize: 16),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          // Mostrar "escribiendo..." si está escribiendo, sino el estado normal
+                          Text(
+                            isTyping ? 'escribiendo...' : (isOnline ? 'En línea' : 'Desconectado'),
                             style: TextStyle(
                               fontSize: 12,
                               color: isDarkMode
@@ -154,10 +153,10 @@ class _ChatAppBarState extends State<ChatAppBar> {
                           ),
                         ],
                       ),
-                    ],
-                  ),
-                ),
-              ],
+                    ),
+                  ],
+                );
+              },
             );
           },
         ),
