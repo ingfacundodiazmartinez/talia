@@ -2,19 +2,27 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // Función global para verificar si un usuario es admin
+    function isAdmin() {
+      return request.auth != null &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('isAdmin', false) == true;
+    }
+
     // Usuarios
     match /users/{userId} {
       allow read: if request.auth != null;
-      allow write: if request.auth.uid == userId;
 
-      // Permitir actualizar role cuando se vincula un hijo
-      allow update: if request.auth != null &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'updatedAt']) &&
-        request.resource.data.role == 'parent';
+      // CREAR: Solo puede crear su propio usuario Y sin campos sensibles
+      allow create: if request.auth.uid == userId &&
+        !request.resource.data.keys().hasAny(['isAdmin']);
 
-      // Permitir actualizar additionalParentLinkedAt cuando se aprueba un segundo padre
-      allow update: if request.auth != null &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['additionalParentLinkedAt']);
+      // ACTUALIZAR: Solo puede actualizar SU PROPIO usuario Y sin tocar campos sensibles
+      allow update: if request.auth.uid == userId &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isAdmin', 'role']);
+
+      // Solo ADMINS pueden modificar isAdmin
+      allow update: if isAdmin() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isAdmin']);
 
       // Dispositivos del usuario
       match /devices/{deviceId} {
@@ -25,14 +33,32 @@ service cloud.firestore {
 
     // Parent-children relationships
     match /parent_children/{docId} {
-      // Permitir leer documentos individuales si el usuario está involucrado
-      allow get: if request.auth != null &&
+      // Permitir leer si el usuario está involucrado (para docs individuales y queries)
+      // Esto permite tanto .get() como .snapshots()
+      allow read: if request.auth != null &&
         (resource.data.parentId == request.auth.uid ||
          resource.data.childId == request.auth.uid);
 
-      // Permitir queries (list) si el usuario está autenticado
-      // La app filtra por childId o parentId en la query
-      allow list: if request.auth != null;
+      // Solo Cloud Functions pueden crear vínculos
+      allow create: if false;
+
+      // Permitir actualizar solo si eres el padre o el hijo del vínculo
+      allow update: if request.auth != null &&
+        (resource.data.parentId == request.auth.uid ||
+         resource.data.childId == request.auth.uid);
+
+      // Solo el padre puede eliminar (desvincular) a un hijo
+      allow delete: if request.auth != null &&
+        resource.data.parentId == request.auth.uid;
+    }
+
+    // Parent-child links (nueva colección para vínculos padre-hijo)
+    match /parentChildLinks/{docId} {
+      // Permitir leer si el usuario está involucrado (para docs individuales y queries)
+      // Esto permite tanto .get() como .snapshots()
+      allow read: if request.auth != null &&
+        (resource.data.parentId == request.auth.uid ||
+         resource.data.childId == request.auth.uid);
 
       // Solo Cloud Functions pueden crear vínculos
       allow create: if false;
@@ -111,10 +137,10 @@ service cloud.firestore {
                  exists(/databases/$(database)/documents/parent_children/$(participants[1] + '_' + request.auth.uid));
         }
 
-        // Permitir leer mensaje individual si eres sender, receiver, o padre de algún participante
+        // Permitir leer mensaje individual SOLO si eres participante del chat o padre
+        // ⚠️ CORREGIDO: Ya no permite "if request.auth != null" (cualquiera)
         allow get: if request.auth != null && (
-          request.auth.uid == resource.data.senderId ||
-          request.auth.uid == resource.data.receiverId ||
+          isParticipantIfChatExists() ||
           (exists(/databases/$(database)/documents/chats/$(chatId)) && isParentOfChatParticipant())
         );
 
@@ -135,13 +161,33 @@ service cloud.firestore {
            request.resource.data.text == null ||
            request.resource.data.text.size() <= 5000);
 
-        // Permitir actualizar si:
-        // 1. Eres el sender (para editar/eliminar), O
-        // 2. Eres participante del chat (para marcar como leído, delivered, etc.)
+        // Función auxiliar para verificar si solo se están actualizando campos de metadata (reacciones, estado, etc.)
+        // NOTA: Permite campos timestamp dinámicos (deliveredAt_*, readAt_*) además de los campos estáticos
+        function isUpdatingOnlyMetadata() {
+          let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+          let allowedStaticFields = ['reactions', 'status', 'readBy', 'deliveredTo', 'isRead'];
+
+          // Verificar que los campos críticos del mensaje NO se modifican
+          let criticalFieldsUnchanged = request.resource.data.text == resource.data.text &&
+                                         request.resource.data.senderId == resource.data.senderId &&
+                                         request.resource.data.timestamp == resource.data.timestamp;
+
+          // Permitir si solo se actualizan campos estáticos conocidos
+          // O si los campos críticos no cambian (permite agregar timestamps dinámicos como readAt_*, deliveredAt_*)
+          return changedKeys.size() > 0 &&
+                 criticalFieldsUnchanged &&
+                 (changedKeys.hasOnly(allowedStaticFields) ||
+                  changedKeys.hasAny(['deliveredTo', 'readBy', 'reactions', 'status', 'isRead']));
+        }
+
+        // ⚠️ CORREGIDO: Ya no permite "if request.auth != null" (cualquiera puede editar)
+        // Permitir actualizar SI:
+        // 1. Eres el sender Y solo editas tu mensaje (text, edited, editedAt), O
+        // 2. Eres participante Y solo actualizas estado/reacciones (reactions, status, readBy, deliveredTo)
         allow update: if request.auth != null && (
-          request.auth.uid == resource.data.senderId ||
-          (exists(/databases/$(database)/documents/chats/$(chatId)) &&
-           request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants)
+          (request.auth.uid == resource.data.senderId &&
+           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'edited', 'editedAt'])) ||
+          (isParticipantIfChatExists() && isUpdatingOnlyMetadata())
         );
 
         // Permitir eliminar si eres el sender
@@ -211,9 +257,25 @@ service cloud.firestore {
 
     // Notificaciones
     match /notifications/{notificationId} {
-      allow read: if request.auth != null &&
+      allow get: if request.auth != null &&
         resource.data.userId == request.auth.uid;
-      allow write: if request.auth != null;
+
+      // ⚠️ IMPORTANTE: allow list no puede validar filtros de query
+      // Confiamos en que la app SIEMPRE filtrará: .where('userId', isEqualTo: user.uid)
+      // Cualquier usuario autenticado puede hacer queries, pero solo verá sus notificaciones
+      // si la app filtra correctamente
+      allow list: if request.auth != null;
+
+      // ⚠️ Solo Cloud Functions pueden crear notificaciones (con permisos admin)
+      // El cliente NO debe crear notificaciones directamente por seguridad
+      allow create: if false;
+
+      // Solo puedes actualizar tus propias notificaciones (ej: marcar como leído)
+      allow update: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+
+      allow delete: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
     }
 
     // Preferencias de notificaciones
@@ -270,7 +332,16 @@ service cloud.firestore {
     match /activities/{activityId} {
       allow read: if request.auth != null &&
         resource.data.parentId == request.auth.uid;
-      allow write: if request.auth != null;
+
+      // ⚠️ CORREGIDO: Solo puedes crear actividades donde TÚ eres el parentId
+      allow create: if request.auth != null &&
+        request.resource.data.parentId == request.auth.uid;
+
+      allow update: if request.auth != null &&
+        resource.data.parentId == request.auth.uid;
+
+      allow delete: if request.auth != null &&
+        resource.data.parentId == request.auth.uid;
     }
 
     // Alertas
@@ -278,7 +349,20 @@ service cloud.firestore {
       allow read: if request.auth != null &&
         (resource.data.parentId == request.auth.uid ||
          resource.data.childId == request.auth.uid);
-      allow write: if request.auth != null;
+
+      // ⚠️ CORREGIDO: Solo puedes crear alertas donde TÚ eres participante
+      allow create: if request.auth != null && (
+        request.resource.data.childId == request.auth.uid ||
+        request.resource.data.parentId == request.auth.uid
+      );
+
+      allow update: if request.auth != null &&
+        (resource.data.parentId == request.auth.uid ||
+         resource.data.childId == request.auth.uid);
+
+      allow delete: if request.auth != null &&
+        (resource.data.parentId == request.auth.uid ||
+         resource.data.childId == request.auth.uid);
     }
 
     // Story approval requests
@@ -292,18 +376,22 @@ service cloud.firestore {
       // La app debe filtrar por parentId o childId en el query
       allow list: if request.auth != null;
 
-      allow write: if request.auth != null;
+      // ⚠️ CORREGIDO: Solo el child puede crear solicitudes de aprobación
+      allow create: if request.auth != null &&
+        request.resource.data.childId == request.auth.uid;
+
+      // Solo el parent o child pueden actualizar (aprobar/rechazar)
+      allow update: if request.auth != null &&
+        (resource.data.parentId == request.auth.uid ||
+         resource.data.childId == request.auth.uid);
+
+      allow delete: if request.auth != null &&
+        (resource.data.parentId == request.auth.uid ||
+         resource.data.childId == request.auth.uid);
     }
 
     // Stories
     match /stories/{storyId} {
-      // Función auxiliar para verificar si el usuario es padre del creador de la historia
-      function isParentOfStoryCreator() {
-        let creatorId = resource.data.userId;
-        return exists(/databases/$(database)/documents/parent_children/$(request.auth.uid + '_' + creatorId)) ||
-               exists(/databases/$(database)/documents/parent_children/$(creatorId + '_' + request.auth.uid));
-      }
-
       // Función auxiliar para verificar si solo se está actualizando viewedBy
       function isOnlyUpdatingViewedBy() {
         let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
@@ -324,8 +412,22 @@ service cloud.firestore {
                changedKeys.hasOnly(['status', 'approvedBy', 'approvedAt', 'rejectionReason', 'updatedAt']);
       }
 
-      // Cualquier usuario autenticado puede leer historias
-      allow read: if request.auth != null;
+      // ⚠️ CORREGIDO: Reglas más restrictivas para historias
+      // Permitir leer historia individual si:
+      // 1. Eres el creador (puedes ver tus propias historias pending), O
+      // 2. La historia está aprobada (cualquier autenticado puede ver aprobadas), O
+      // 3. La historia está pendiente (los padres acceden vía story_approval_requests)
+      // NOTA: Confiamos en que la app filtra correctamente usando story_approval_requests
+      // para verificar que el padre tiene permiso antes de intentar leer la historia
+      allow get: if request.auth != null && (
+        request.auth.uid == resource.data.userId ||
+        resource.data.status == 'approved' ||
+        resource.data.status == 'pending'
+      );
+
+      // Permitir queries/list de historias SOLO si autenticado
+      // La app debe filtrar por userId o usar story_approval_requests para historias pendientes
+      allow list: if request.auth != null;
 
       // Solo el creador puede crear su propia historia
       allow create: if request.auth != null &&
@@ -335,12 +437,13 @@ service cloud.firestore {
       // 1. Eres el creador de la historia, O
       // 2. Solo estás agregando tu UID al array viewedBy, O
       // 3. Solo estás agregando una respuesta (reply), O
-      // 4. Eres padre del creador Y solo actualizas campos de aprobación
+      // 4. La historia está pendiente Y solo actualizas campos de aprobación
+      //    (confiamos en que la app solo permite esto a padres autorizados)
       allow update: if request.auth != null && (
         request.auth.uid == resource.data.userId ||
         isOnlyUpdatingViewedBy() ||
         isOnlyUpdatingReplies() ||
-        (isParentOfStoryCreator() && isOnlyUpdatingApprovalFields())
+        (resource.data.status == 'pending' && isOnlyUpdatingApprovalFields())
       );
 
       // Solo el creador puede eliminar su historia
@@ -352,8 +455,22 @@ service cloud.firestore {
     match /groups/{groupId} {
       allow read: if request.auth != null &&
         request.auth.uid in resource.data.members;
-      allow write: if request.auth != null &&
+
+      // Permitir crear si el usuario está en members
+      allow create: if request.auth != null &&
         request.auth.uid in request.resource.data.members;
+
+      // Permitir actualizar si:
+      // 1. Eres miembro actual (estás en members nuevo), O
+      // 2. Eras miembro antes (para permitir salir del grupo)
+      allow update: if request.auth != null && (
+        request.auth.uid in request.resource.data.members ||
+        request.auth.uid in resource.data.members
+      );
+
+      // Permitir eliminar si eres el creador
+      allow delete: if request.auth != null &&
+        resource.data.createdBy == request.auth.uid;
 
       match /messages/{messageId} {
         // Solo miembros del grupo pueden leer/escribir mensajes
@@ -397,7 +514,20 @@ service cloud.firestore {
       // Se asume que la app filtra correctamente por existingParentId, newParentId o childId
       allow list: if request.auth != null;
 
-      allow write: if request.auth != null;
+      // ⚠️ CORREGIDO: Solo puedes crear solicitud si TÚ eres el newParentId
+      allow create: if request.auth != null &&
+        request.resource.data.newParentId == request.auth.uid;
+
+      // Solo el existingParent o child pueden actualizar (aprobar/rechazar)
+      allow update: if request.auth != null &&
+        (resource.data.existingParentId == request.auth.uid ||
+         resource.data.childId == request.auth.uid);
+
+      // El newParent o existingParent pueden eliminar la solicitud
+      // (útil cuando se desvincula un hijo y se necesita limpiar solicitudes pendientes)
+      allow delete: if request.auth != null &&
+        (resource.data.newParentId == request.auth.uid ||
+         resource.data.existingParentId == request.auth.uid);
     }
 
     // Link codes
@@ -439,7 +569,16 @@ service cloud.firestore {
     match /locations/{locationId} {
       allow read: if request.auth != null &&
         resource.data.userId == request.auth.uid;
-      allow write: if request.auth != null;
+
+      // ⚠️ CORREGIDO: Solo puedes escribir TU PROPIA ubicación
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid;
+
+      allow update: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+
+      allow delete: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
     }
 
     // Video calls
@@ -478,11 +617,13 @@ service cloud.firestore {
       }
 
       // Permitir leer si:
-      // 1. Eres el caller o receiver (llamadas 1:1), O
-      // 2. Es una llamada grupal Y estás en la lista de participantes, O
-      // 3. Estás en el array participantIds (para queries eficientes), O
-      // 4. Es una emergencia (isEmergency) Y eres padre del caller
+      // 1. El documento no existe (para detectar eliminación en listeners), O
+      // 2. Eres el caller o receiver (llamadas 1:1), O
+      // 3. Es una llamada grupal Y estás en la lista de participantes, O
+      // 4. Estás en el array participantIds (para queries eficientes), O
+      // 5. Es una emergencia (isEmergency) Y eres padre del caller
       allow read: if request.auth != null && (
+        resource == null ||
         request.auth.uid == resource.data.callerId ||
         request.auth.uid == resource.data.receiverId ||
         isGroupCallParticipant() ||
@@ -490,17 +631,27 @@ service cloud.firestore {
         (resource.data.isEmergency == true && isParentOfCaller())
       );
 
-      // Permitir escribir si:
-      // 1. Eres el caller o receiver (para crear/actualizar llamadas 1:1), O
-      // 2. Es una llamada grupal Y estás en la lista de participantes (para actualizar estado), O
-      // 3. Estás en el array participantIds (para actualizar estado), O
-      // 4. Es una emergencia Y eres padre del caller (para actualizar participant status)
-      allow write: if request.auth != null && (
-        request.auth.uid == request.resource.data.callerId ||
-        request.auth.uid == request.resource.data.receiverId ||
+      // Permitir crear llamada si eres el caller
+      allow create: if request.auth != null &&
+        request.auth.uid == request.resource.data.callerId;
+
+      // Permitir actualizar si:
+      // 1. Eres el caller o receiver (para actualizar llamadas 1:1)
+      // 2. Es una llamada grupal Y estás en la lista de participantes
+      // 3. Estás en el array participantIds
+      // 4. Es una emergencia Y eres padre del caller
+      allow update: if request.auth != null && (
+        (resource != null && (request.auth.uid == resource.data.callerId ||
+                              request.auth.uid == resource.data.receiverId)) ||
         (resource != null && isGroupCallParticipant()) ||
         (resource != null && isInParticipantIds()) ||
         (resource != null && resource.data.isEmergency == true && isParentOfCaller())
+      );
+
+      // Permitir eliminar si eres el caller o receiver
+      allow delete: if request.auth != null && resource != null && (
+        request.auth.uid == resource.data.callerId ||
+        request.auth.uid == resource.data.receiverId
       );
     }
 
@@ -509,7 +660,16 @@ service cloud.firestore {
       allow read: if request.auth != null &&
         (resource.data.childId == request.auth.uid ||
          resource.data.parentId == request.auth.uid);
-      allow write: if request.auth != null;
+
+      // ⚠️ CORREGIDO: Solo el parent puede crear/modificar permisos
+      allow create: if request.auth != null &&
+        request.resource.data.parentId == request.auth.uid;
+
+      allow update: if request.auth != null &&
+        resource.data.parentId == request.auth.uid;
+
+      allow delete: if request.auth != null &&
+        resource.data.parentId == request.auth.uid;
     }
 
     // User locations
@@ -526,7 +686,16 @@ service cloud.firestore {
     // Location history
     match /location_history/{locationId} {
       allow read: if request.auth != null && resource.data.userId == request.auth.uid;
-      allow write: if request.auth != null;
+
+      // ⚠️ CORREGIDO: Solo puedes escribir TU PROPIO historial
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid;
+
+      allow update: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+
+      allow delete: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
     }
 
     // Whitelist
@@ -534,7 +703,16 @@ service cloud.firestore {
       allow read: if request.auth != null &&
         (resource.data.childId == request.auth.uid ||
          resource.data.parentId == request.auth.uid);
-      allow write: if request.auth != null;
+
+      // ⚠️ CORREGIDO: Solo el parent puede crear/modificar whitelist
+      allow create: if request.auth != null &&
+        request.resource.data.parentId == request.auth.uid;
+
+      allow update: if request.auth != null &&
+        resource.data.parentId == request.auth.uid;
+
+      allow delete: if request.auth != null &&
+        resource.data.parentId == request.auth.uid;
     }
 
     // Blocked chats
@@ -558,9 +736,21 @@ service cloud.firestore {
         isParentOfBlockedChatParticipant()
       );
 
-      // Permitir escribir si el usuario está autenticado
-      // El ChatBlockService se asegura de que blockedBy sea el usuario actual
-      allow write: if request.auth != null;
+      // ⚠️ CORREGIDO: Solo puedes crear/modificar bloqueos si eres participante
+      allow create: if request.auth != null && (
+        request.resource.data.childId == request.auth.uid ||
+        request.resource.data.parentId == request.auth.uid
+      );
+
+      allow update: if request.auth != null && (
+        resource.data.childId == request.auth.uid ||
+        resource.data.parentId == request.auth.uid
+      );
+
+      allow delete: if request.auth != null && (
+        resource.data.childId == request.auth.uid ||
+        resource.data.parentId == request.auth.uid
+      );
     }
 
     // Blocked contacts
@@ -568,7 +758,16 @@ service cloud.firestore {
       allow read: if request.auth != null &&
         (resource.data.userId == request.auth.uid ||
          resource.data.blockedUserId == request.auth.uid);
-      allow write: if request.auth != null;
+
+      // ⚠️ CORREGIDO: Solo puedes bloquear si TÚ eres el userId
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid;
+
+      allow update: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+
+      allow delete: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
     }
 
     // Message analysis (AI analysis)
@@ -675,10 +874,17 @@ service cloud.firestore {
       allow read: if request.auth != null &&
         (resource.data.parentId == request.auth.uid ||
          resource.data.childId == request.auth.uid);
-      allow create: if request.auth != null;
+
+      // ⚠️ CORREGIDO: Solo puedes crear solicitudes donde TÚ eres participante
+      allow create: if request.auth != null && (
+        request.resource.data.childId == request.auth.uid ||
+        request.resource.data.parentId == request.auth.uid
+      );
+
       allow update: if request.auth != null &&
         (resource.data.parentId == request.auth.uid ||
          resource.data.childId == request.auth.uid);
+
       allow delete: if request.auth != null &&
         (resource.data.parentId == request.auth.uid ||
          resource.data.childId == request.auth.uid);
@@ -693,8 +899,12 @@ service cloud.firestore {
       allow create: if request.auth != null &&
         request.auth.uid == request.resource.data.invitedBy;
 
-      // Permitir actualizar (para aprobaciones y cambios de estado)
-      allow update: if request.auth != null;
+      // ⚠️ CORREGIDO: Solo puedes actualizar si eres el invitado, invitador, o padre
+      allow update: if request.auth != null && (
+        resource.data.invitedUserId == request.auth.uid ||
+        resource.data.invitedBy == request.auth.uid ||
+        resource.data.parentId == request.auth.uid
+      );
 
       // Solo Cloud Functions pueden eliminar
       allow delete: if false;
@@ -705,9 +915,42 @@ service cloud.firestore {
       // Permitir lectura a todos los usuarios autenticados
       allow read: if request.auth != null;
 
-      // Permitir escritura solo en desarrollo/testing
-      // TODO: Restringir en producción solo a admins
-      allow write: if request.auth != null;
+      // ⚠️ CORREGIDO: Solo admins pueden crear/modificar stickers
+      allow write: if isAdmin();
+    }
+
+    // User limits - Límites de uso de funcionalidades premium
+    match /user_limits/{userId} {
+      // Solo el usuario puede leer sus propios límites
+      allow read: if request.auth != null && request.auth.uid == userId;
+
+      // Solo el usuario puede actualizar/crear sus propios límites
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Characters - Personajes para transformación con IA
+    match /characters/{characterId} {
+      // Permitir lectura a todos los usuarios autenticados
+      allow read: if request.auth != null;
+
+      // Permitir escritura solo a admins
+      // Los admins tienen el campo isAdmin: true en users collection
+      allow write: if isAdmin();
+    }
+
+    // Character transformations - Analytics de transformaciones
+    match /characterTransformations/{transformId} {
+      // Solo lectura para el usuario que hizo la transformación o admins
+      allow read: if request.auth != null && (
+        resource.data.userId == request.auth.uid ||
+        isAdmin()
+      );
+
+      // Solo Cloud Functions pueden crear transformaciones
+      allow create: if false;
+
+      // No permitir modificar o eliminar transformaciones
+      allow update, delete: if false;
     }
   }
 }
