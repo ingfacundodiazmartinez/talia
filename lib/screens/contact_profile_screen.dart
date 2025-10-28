@@ -285,16 +285,20 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
     // Cerrar el perfil
     Navigator.pop(context);
 
-    // LÓGICA OPTIMISTA: Abrir pantalla inmediatamente
+    // LÓGICA OPTIMISTA: Abrir pantalla de AUDIO inmediatamente
+    final callId = DateTime.now().millisecondsSinceEpoch.toString();
+
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (context) => VideoCallScreen(
-          callId: DateTime.now().millisecondsSinceEpoch.toString(),
-          receiverId: widget.contactId,
+        builder: (context) => AudioCallScreen(
+          callId: callId,
+          // No pasamos credenciales - se obtendrán en background
+          channelName: null,
+          token: null,
+          uid: null,
           remoteName: widget.contactName,
+          receiverId: widget.contactId, // Necesario para iniciar la llamada
           isCaller: true,
-          isVideo: false,  // Modo de audio
-          // Token y credenciales se obtienen en background
         ),
       ),
     );

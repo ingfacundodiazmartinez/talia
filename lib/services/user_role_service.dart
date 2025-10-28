@@ -86,15 +86,15 @@ class UserRoleService {
   }
 
   /// Obtiene todos los padres vinculados a un usuario
+  /// ⚠️ CORREGIDO: Busca en users donde linkedChildrenIds contenga userId
   Future<List<String>> getLinkedParents(String userId) async {
     try {
-      final links = await _firestore
-          .collection('parent_children')
-          .where('childId', isEqualTo: userId)
-          .where('status', isEqualTo: 'approved')
+      final usersSnapshot = await _firestore
+          .collection('users')
+          .where('linkedChildrenIds', arrayContains: userId)
           .get();
 
-      return links.docs.map((doc) => doc.data()['parentId'] as String).toList();
+      return usersSnapshot.docs.map((doc) => doc.id).toList();
     } catch (e) {
       print('❌ Error obteniendo padres vinculados para $userId: $e');
       return [];
@@ -102,26 +102,25 @@ class UserRoleService {
   }
 
   /// Obtiene todos los hijos vinculados a un padre
+  /// ⚠️ CORREGIDO: Lee desde /users/{parentId}.linkedChildrenIds en lugar de hacer query
+  /// por seguridad (evita permitir list queries en parent_children)
   Future<List<String>> getLinkedChildren(String parentId) async {
     try {
       print('🔍 Consultando hijos vinculados para padre: $parentId');
 
-      final links = await _firestore
-          .collection('parent_children')
-          .where('parentId', isEqualTo: parentId)
-          .where('status', isEqualTo: 'approved')
-          .get();
+      final userDoc = await _firestore.collection('users').doc(parentId).get();
 
-      print('📊 Encontrados ${links.docs.length} documentos en parent_children');
-
-      for (var doc in links.docs) {
-        print('   - Doc ID: ${doc.id}, childId: ${doc.data()['childId']}');
+      if (!userDoc.exists) {
+        print('⚠️ Usuario $parentId no existe');
+        return [];
       }
 
-      final childrenIds = links.docs.map((doc) => doc.data()['childId'] as String).toList();
-      print('✅ Retornando ${childrenIds.length} hijos: $childrenIds');
+      final userData = userDoc.data() as Map<String, dynamic>;
+      final linkedChildrenIds = List<String>.from(userData['linkedChildrenIds'] ?? []);
 
-      return childrenIds;
+      print('✅ Retornando ${linkedChildrenIds.length} hijos: $linkedChildrenIds');
+
+      return linkedChildrenIds;
     } catch (e) {
       print('❌ Error obteniendo hijos vinculados para $parentId: $e');
       return [];

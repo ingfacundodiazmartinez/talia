@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
+import 'package:video_compress/video_compress.dart';
 
 /// Servicio para comprimir y validar archivos multimedia
 ///
@@ -138,26 +139,98 @@ class MediaCompressionService {
     }
   }
 
-  /// Valida y prepara un video para envío
+  /// Comprime y valida un video para envío
   ///
-  /// Por ahora solo valida tamaño. En el futuro se puede agregar
-  /// compresión de video usando ffmpeg o similar.
-  Future<File?> validateVideo(File videoFile) async {
+  /// Si el video excede 10MB, lo comprime automáticamente.
+  /// Retorna el archivo comprimido si es exitoso, null si falla.
+  Future<File?> validateVideo(File videoFile, {Function(double)? onProgress}) async {
     try {
-      final isValid = await validateFileSize(videoFile);
+      // 1. Verificar tamaño original
+      final originalSizeMB = await getFileSizeMB(videoFile);
+      print('🎥 Video original: ${originalSizeMB.toStringAsFixed(2)} MB');
 
-      if (!isValid) {
-        final sizeMB = await getFileSizeMB(videoFile);
-        print('❌ Video muy grande: ${sizeMB.toStringAsFixed(2)} MB (máx 10 MB)');
+      // 2. Si ya está bajo el límite, retornar sin comprimir
+      if (originalSizeMB <= 10) {
+        print('✅ Video ya está bajo el límite (${originalSizeMB.toStringAsFixed(2)} MB)');
+        return videoFile;
+      }
+
+      // 3. Comprimir video
+      print('🗜️ Comprimiendo video de ${originalSizeMB.toStringAsFixed(2)} MB...');
+
+      // Comprimir con calidad media (sin escuchar progreso para evitar error de Stream)
+      // El progreso se imprime internamente por video_compress
+      final MediaInfo? compressedInfo = await VideoCompress.compressVideo(
+        videoFile.path,
+        quality: VideoQuality.MediumQuality,
+        deleteOrigin: false, // Mantener original por si falla
+        includeAudio: true,
+      );
+
+      // 4. Verificar si la compresión fue exitosa
+      if (compressedInfo == null || compressedInfo.file == null) {
+        print('❌ Error: La compresión no produjo un archivo');
         return null;
       }
 
-      final sizeMB = await getFileSizeMB(videoFile);
-      print('✅ Video válido: ${sizeMB.toStringAsFixed(2)} MB');
-      return videoFile;
-    } catch (e) {
-      print('❌ Error validando video: $e');
+      final compressedFile = compressedInfo.file!;
+      final compressedSizeMB = await getFileSizeMB(compressedFile);
+      print('✅ Video comprimido: ${compressedSizeMB.toStringAsFixed(2)} MB');
+
+      // 5. Verificar si el video comprimido está bajo el límite
+      if (compressedSizeMB <= 10) {
+        print('✅ Video comprimido exitosamente de ${originalSizeMB.toStringAsFixed(2)} MB a ${compressedSizeMB.toStringAsFixed(2)} MB');
+        return compressedFile;
+      }
+
+      // 6. Si aún es muy grande, intentar con calidad baja
+      print('⚠️ Video aún muy grande, intentando con calidad baja...');
+
+      final MediaInfo? lowQualityInfo = await VideoCompress.compressVideo(
+        videoFile.path,
+        quality: VideoQuality.LowQuality,
+        deleteOrigin: false,
+        includeAudio: true,
+      );
+
+      if (lowQualityInfo == null || lowQualityInfo.file == null) {
+        print('❌ Error en compresión de baja calidad');
+        return null;
+      }
+
+      final lowQualityFile = lowQualityInfo.file!;
+      final lowQualitySizeMB = await getFileSizeMB(lowQualityFile);
+      print('🗜️ Video calidad baja: ${lowQualitySizeMB.toStringAsFixed(2)} MB');
+
+      if (lowQualitySizeMB <= 10) {
+        print('✅ Video comprimido con calidad baja: ${lowQualitySizeMB.toStringAsFixed(2)} MB');
+        return lowQualityFile;
+      }
+
+      // 7. Si aún es muy grande, fallar
+      print('❌ No se pudo comprimir el video bajo 10 MB');
       return null;
+    } catch (e) {
+      print('❌ Error comprimiendo video: $e');
+      return null;
+    }
+  }
+
+  /// Cancela la compresión de video en curso
+  Future<void> cancelVideoCompression() async {
+    try {
+      await VideoCompress.cancelCompression();
+    } catch (e) {
+      print('⚠️ Error cancelando compresión: $e');
+    }
+  }
+
+  /// Limpia archivos temporales de video_compress
+  Future<void> cleanupVideoCompress() async {
+    try {
+      await VideoCompress.deleteAllCache();
+    } catch (e) {
+      print('⚠️ Error limpiando cache de videos: $e');
     }
   }
 

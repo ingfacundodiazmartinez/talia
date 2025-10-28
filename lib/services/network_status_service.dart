@@ -23,22 +23,39 @@ class NetworkStatusService {
   bool _isConnected = true;
   bool get isConnected => _isConnected;
 
+  bool _isInitialized = false;
+  bool get isInitialized => _isInitialized;
+
   // Callbacks para notificaciones
   final List<VoidCallback> _onConnectedCallbacks = [];
   final List<VoidCallback> _onDisconnectedCallbacks = [];
 
   /// Inicializa el servicio y empieza a monitorear la red
   Future<void> initialize() async {
-    // Verificar estado inicial
-    final result = await _connectivity.checkConnectivity();
-    _updateConnectionStatus(result);
+    if (_isInitialized) {
+      print('📡 [Network] Servicio ya estaba inicializado');
+      return;
+    }
+
+    // Verificar estado inicial INMEDIATAMENTE
+    try {
+      final result = await _connectivity.checkConnectivity();
+      _updateConnectionStatus(result);
+      print('📡 [Network] Estado inicial verificado: $_isConnected');
+    } catch (e) {
+      print('⚠️ [Network] Error verificando estado inicial: $e');
+      // En caso de error, asumir que no hay conexión por seguridad
+      _isConnected = false;
+      _connectionStatusController.add(false);
+    }
 
     // Escuchar cambios
     _subscription = _connectivity.onConnectivityChanged.listen((result) {
       _updateConnectionStatus(result);
     });
 
-    print('📡 [Network] Servicio de red inicializado');
+    _isInitialized = true;
+    print('📡 [Network] Servicio de red inicializado con estado: $_isConnected');
   }
 
   /// Registra callback para cuando se conecta
@@ -102,24 +119,29 @@ class NetworkStatusBanner extends StatelessWidget {
         return Column(
           children: [
             if (!isConnected)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(8),
-                color: Colors.red.shade600,
-                child: const Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.wifi_off, color: Colors.white, size: 16),
-                    SizedBox(width: 8),
-                    Text(
-                      'Sin conexión a internet',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                      ),
+              Directionality(
+                textDirection: TextDirection.ltr,
+                child: Material(
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(8),
+                    color: Colors.red.shade600,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.wifi_off, color: Colors.white, size: 16),
+                        SizedBox(width: 8),
+                        Text(
+                          'Sin conexión a internet',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
               ),
             Expanded(child: child),

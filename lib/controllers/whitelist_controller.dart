@@ -439,16 +439,16 @@ class WhitelistController {
   }
 
   /// Obtener IDs de hijos vinculados
+  /// ⚠️ CORREGIDO: Lee desde /users/{parentId}.linkedChildrenIds por seguridad
   Stream<List<String>> getLinkedChildrenIdsStream() {
     return _firestore
-        .collection('parent_children')
-        .where('parentId', isEqualTo: parentId)
+        .collection('users')
+        .doc(parentId)
         .snapshots()
         .map((snapshot) {
-      return snapshot.docs
-          .map((doc) => doc.data()['childId'] as String)
-          .where((id) => id.isNotEmpty)
-          .toList();
+      if (!snapshot.exists) return <String>[];
+      final userData = snapshot.data() as Map<String, dynamic>?;
+      return List<String>.from(userData?['linkedChildrenIds'] ?? []);
     });
   }
 

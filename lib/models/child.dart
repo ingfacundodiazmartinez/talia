@@ -66,18 +66,26 @@ class Child extends User {
   }
 
   /// Obtiene los hijos vinculados de un padre
+  /// ⚠️ CORREGIDO: Lee desde /users/{parentId}.linkedChildrenIds por seguridad
   static Future<List<Child>> getLinkedChildren(String parentId) async {
     try {
-      final linksSnapshot = await FirebaseFirestore.instance
-          .collection('parent_children')
-          .where('parentId', isEqualTo: parentId)
-          .where('status', isEqualTo: 'approved')
+      // Leer linkedChildrenIds desde el documento del usuario
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(parentId)
           .get();
+
+      if (!userDoc.exists) {
+        print('⚠️ Usuario $parentId no existe');
+        return [];
+      }
+
+      final userData = userDoc.data() as Map<String, dynamic>;
+      final linkedChildrenIds = List<String>.from(userData['linkedChildrenIds'] ?? []);
 
       final children = <Child>[];
 
-      for (final linkDoc in linksSnapshot.docs) {
-        final childId = linkDoc.data()['childId'] as String;
+      for (final childId in linkedChildrenIds) {
         final child = await getById(childId);
         if (child != null) {
           children.add(child);
@@ -92,16 +100,18 @@ class Child extends User {
   }
 
   /// Stream de hijos vinculados de un padre
+  /// ⚠️ CORREGIDO: Lee desde /users/{parentId}.linkedChildrenIds por seguridad
   static Stream<List<String>> getLinkedChildrenIdsStream(String parentId) {
     return FirebaseFirestore.instance
-        .collection('parent_children')
-        .where('parentId', isEqualTo: parentId)
-        .where('status', isEqualTo: 'approved')
+        .collection('users')
+        .doc(parentId)
         .snapshots()
         .map((snapshot) {
-      return snapshot.docs
-          .map((doc) => doc.data()['childId'] as String)
-          .toList();
+      if (!snapshot.exists) {
+        return <String>[];
+      }
+      final userData = snapshot.data() as Map<String, dynamic>;
+      return List<String>.from(userData['linkedChildrenIds'] ?? []);
     });
   }
 
@@ -175,28 +185,20 @@ class Child extends User {
   }
 
   /// Obtiene los padres vinculados del hijo
+  /// ⚠️ CORREGIDO: Busca en users donde linkedChildrenIds contenga este childId
   Future<List<Map<String, dynamic>>> getParents() async {
     try {
-      final linksSnapshot = await FirebaseFirestore.instance
-          .collection('parent_children')
-          .where('childId', isEqualTo: id)
-          .where('status', isEqualTo: 'approved')
+      final usersSnapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .where('linkedChildrenIds', arrayContains: id)
           .get();
 
       List<Map<String, dynamic>> parents = [];
 
-      for (var doc in linksSnapshot.docs) {
-        final parentId = doc.data()['parentId'];
-        final parentDoc = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(parentId)
-            .get();
-
-        if (parentDoc.exists) {
-          final parentData = parentDoc.data()!;
-          parentData['id'] = parentId;
-          parents.add(parentData);
-        }
+      for (var doc in usersSnapshot.docs) {
+        final parentData = doc.data();
+        parentData['id'] = doc.id;
+        parents.add(parentData);
       }
 
       return parents;

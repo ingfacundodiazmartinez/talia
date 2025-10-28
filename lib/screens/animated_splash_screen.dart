@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_native_splash/flutter_native_splash.dart';
 import 'dart:async';
 
 class AnimatedSplashScreen extends StatefulWidget {
@@ -22,6 +23,10 @@ class _AnimatedSplashScreenState extends State<AnimatedSplashScreen>
   @override
   void initState() {
     super.initState();
+
+    // Ocultar splash nativo al iniciar la animación
+    FlutterNativeSplash.remove();
+    print('🎬 Splash nativo ocultado - iniciando animación');
 
     _controller = AnimationController(
       duration: const Duration(milliseconds: 1500),

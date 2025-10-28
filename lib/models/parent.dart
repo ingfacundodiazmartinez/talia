@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'user.dart';
 import 'child.dart';
 import '../services/contact_service.dart';
@@ -220,118 +221,35 @@ class Parent extends User {
 
   /// Desvincula un hijo del padre
   ///
-  /// Limpia configuraciones específicas de este padre-hijo:
-  /// - Solicitudes de aprobación de historias de este padre específico
-  /// - Configuraciones de moderación de chats entre este padre e hijo
-  /// - Solicitudes de aprobación de padres donde este padre está involucrado
+  /// Llama a una Cloud Function que realiza todas las operaciones necesarias:
+  /// - Elimina el enlace padre-hijo
+  /// - Limpia solicitudes de aprobación de historias de este padre específico
+  /// - Desactiva configuraciones de moderación de chats entre este padre e hijo
+  /// - Elimina solicitudes de aprobación de padres donde este padre está involucrado
+  /// - Cambia el rol del padre a 'adult' si no le quedan hijos vinculados
   ///
   /// NO elimina solicitudes de contacto del hijo (pueden ser gestionadas por otro padre)
   Future<bool> unlinkChild(String childId) async {
     try {
       print('🔄 Iniciando desvinculación del hijo $childId del padre $id');
 
-      // 1. Eliminar el enlace padre-hijo
-      final querySnapshot = await FirebaseFirestore.instance
-          .collection('parent_children')
-          .where('parentId', isEqualTo: id)
-          .where('childId', isEqualTo: childId)
-          .get();
+      // Llamar a la Cloud Function para desvincular
+      final callable = FirebaseFunctions.instance.httpsCallable('unlinkChild');
+      final result = await callable.call<Map<String, dynamic>>({
+        'childId': childId,
+      });
 
-      for (var doc in querySnapshot.docs) {
-        await doc.reference.delete();
-        print('✅ Eliminado enlace padre-hijo: ${doc.id}');
-      }
+      final response = result.data;
+      final success = response['success'] as bool? ?? false;
+      final message = response['message'] as String? ?? '';
 
-      // 2. Verificar si el hijo tiene otros padres vinculados
-      final otherParentsSnapshot = await FirebaseFirestore.instance
-          .collection('parent_children')
-          .where('childId', isEqualTo: childId)
-          .where('status', isEqualTo: 'approved')
-          .get();
-
-      final hasOtherParents = otherParentsSnapshot.docs.isNotEmpty;
-      print('👨‍👩‍👧 Hijo tiene ${otherParentsSnapshot.docs.length} padre(s) adicional(es) vinculado(s)');
-
-      // 3. Limpiar solicitudes de aprobación de historias SOLO de este padre
-      final pendingStoryApprovals = await FirebaseFirestore.instance
-          .collection('story_approval_requests')
-          .where('childId', isEqualTo: childId)
-          .where('parentId', isEqualTo: id)
-          .where('status', isEqualTo: 'pending')
-          .get();
-
-      for (var doc in pendingStoryApprovals.docs) {
-        await doc.reference.delete();
-        print('✅ Eliminada solicitud de historia pendiente de este padre: ${doc.id}');
-      }
-
-      // 4. Desactivar configuraciones de moderación de chats entre este padre e hijo
-      final chats = await FirebaseFirestore.instance
-          .collection('chats')
-          .where('participants', arrayContains: id)
-          .get();
-
-      for (var chatDoc in chats.docs) {
-        final chatData = chatDoc.data();
-        final participants = List<String>.from(chatData['participants'] ?? []);
-
-        // Si el chat es entre este padre y el hijo desvinculado
-        if (participants.contains(childId) && participants.contains(id)) {
-          // Desactivar moderación solo para este padre
-          await chatDoc.reference.update({
-            'moderationEnabled_$id': false,
-            'moderationSettings_$id': FieldValue.delete(),
-            'updatedAt': FieldValue.serverTimestamp(),
-          });
-          print('✅ Desactivada moderación de este padre en chat: ${chatDoc.id}');
-        }
-      }
-
-      // 5. Limpiar solicitudes de aprobación de padres donde este padre está involucrado
-      final parentApprovalRequests = await FirebaseFirestore.instance
-          .collection('parent_approval_requests')
-          .where('childId', isEqualTo: childId)
-          .where('existingParentId', isEqualTo: id)
-          .where('status', isEqualTo: 'pending')
-          .get();
-
-      for (var doc in parentApprovalRequests.docs) {
-        await doc.reference.delete();
-        print('✅ Eliminada solicitud de aprobación donde este padre estaba involucrado: ${doc.id}');
-      }
-
-      // NOTA: NO eliminamos solicitudes de contacto del hijo porque:
-      // - El hijo puede tener otro padre vinculado que gestiona esas solicitudes
-      // - Las solicitudes de contacto son responsabilidad del hijo y sus padres actuales
-
-      // 6. Verificar si este padre tiene más hijos vinculados
-      final remainingLinksSnapshot = await FirebaseFirestore.instance
-          .collection('parent_children')
-          .where('parentId', isEqualTo: id)
-          .limit(1)
-          .get();
-
-      // 7. Si no quedan hijos, cambiar rol de vuelta a 'adult'
-      if (remainingLinksSnapshot.docs.isEmpty) {
-        print('👤 No quedan hijos vinculados, cambiando rol de este padre a "adult"');
-        await FirebaseFirestore.instance
-            .collection('users')
-            .doc(id)
-            .update({
-          'role': 'adult',
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
+      if (success) {
+        print('✅ $message');
+        return true;
       } else {
-        print('👤 Este padre tiene ${remainingLinksSnapshot.docs.length} hijo(s) adicional(es) vinculado(s)');
+        print('❌ Error en la Cloud Function: $message');
+        return false;
       }
-
-      if (hasOtherParents) {
-        print('✅ Hijo desvinculado de este padre (hijo mantiene vínculos con otros padres)');
-      } else {
-        print('✅ Hijo desvinculado de su último padre');
-      }
-
-      return true;
     } catch (e) {
       print('❌ Error desvinculando hijo: $e');
       return false;

@@ -32,15 +32,49 @@ class ImageService {
 
       print('✅ Imagen seleccionada: ${image.path}');
 
-      // Subir imagen a Firebase Storage con retry
-      final String? downloadUrl = await uploadImageWithRetry(image.path);
+      // ⏱️ Pequeño delay para dar tiempo a que el selector de imágenes se cierre visualmente
+      // Esto mejora la UX evitando que el diálogo aparezca mientras el selector aún está visible
+      await Future.delayed(const Duration(milliseconds: 300));
 
-      if (downloadUrl != null) {
-        // Actualizar URL en Firestore y Authentication
-        await _updateUserProfileImage(downloadUrl);
+      // ✅ AHORA que el selector se cerró, mostrar loading
+      if (context.mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (dialogContext) => const AlertDialog(
+            content: Row(
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(width: 20),
+                Text('Procesando imagen...'),
+              ],
+            ),
+          ),
+        );
       }
 
-      return downloadUrl;
+      try {
+        // Subir imagen a Firebase Storage con retry
+        final String? downloadUrl = await uploadImageWithRetry(image.path);
+
+        if (downloadUrl != null) {
+          // Actualizar URL en Firestore y Authentication
+          await _updateUserProfileImage(downloadUrl);
+        }
+
+        // Cerrar loading dialog
+        if (context.mounted) {
+          Navigator.of(context, rootNavigator: true).pop();
+        }
+
+        return downloadUrl;
+      } catch (uploadError) {
+        // Cerrar loading dialog en caso de error
+        if (context.mounted) {
+          Navigator.of(context, rootNavigator: true).pop();
+        }
+        rethrow;
+      }
     } on PlatformException catch (e) {
       print('❌ Error de permisos: ${e.code} - ${e.message}');
 
@@ -264,10 +298,12 @@ class ImageService {
   }
 
   Future<ImageSource?> showImageSourceSelection(BuildContext context) async {
-    return await showModalBottomSheet<ImageSource>(
+    print('📸 [ImageService] showImageSourceSelection llamado');
+    final result = await showModalBottomSheet<ImageSource>(
       context: context,
       backgroundColor: Colors.transparent,
       builder: (BuildContext context) {
+        print('📸 [ImageService] Builder del modal ejecutándose');
         return Container(
           decoration: BoxDecoration(
             color: Colors.white,
@@ -326,7 +362,10 @@ class ImageService {
                     SizedBox(
                       width: double.infinity,
                       child: TextButton(
-                        onPressed: () => Navigator.pop(context),
+                        onPressed: () {
+                          print('📸 [ImageService] Usuario canceló la selección');
+                          Navigator.pop(context);
+                        },
                         child: Text(
                           'Cancelar',
                           style: TextStyle(
@@ -344,6 +383,8 @@ class ImageService {
         );
       },
     );
+    print('📸 [ImageService] Modal cerrado, resultado: $result');
+    return result;
   }
 
   Widget _buildSourceOption({
@@ -355,7 +396,10 @@ class ImageService {
     required Color color,
   }) {
     return GestureDetector(
-      onTap: () => Navigator.pop(context, source),
+      onTap: () {
+        print('📸 [ImageService] Opción seleccionada: ${source == ImageSource.camera ? 'CÁMARA' : 'GALERÍA'}');
+        Navigator.pop(context, source);
+      },
       child: Container(
         width: 120,
         padding: EdgeInsets.all(16),

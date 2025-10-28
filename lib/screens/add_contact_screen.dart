@@ -197,6 +197,9 @@ class _AddContactScreenState extends State<AddContactScreen>
         ],
         bottom: TabBar(
           controller: _tabController,
+          labelColor: Colors.white,
+          unselectedLabelColor: Colors.white70,
+          indicatorColor: Colors.white,
           tabs: [
             Tab(icon: Icon(Icons.qr_code), text: 'Mi Codigo'),
             Tab(icon: Icon(Icons.qr_code_scanner), text: 'Escanear'),

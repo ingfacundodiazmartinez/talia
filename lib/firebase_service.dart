@@ -71,11 +71,19 @@ class FirebaseService {
   }
 
   // Obtener hijos de un padre
-  Stream<QuerySnapshot> getChildren(String parentId) {
+  // ⚠️ DEPRECATED: Usar Child.getLinkedChildrenIdsStream(parentId) en su lugar
+  // ⚠️ CORREGIDO: Lee desde /users/{parentId}.linkedChildrenIds por seguridad
+  @Deprecated('Use Child.getLinkedChildrenIdsStream() instead')
+  Stream<List<String>> getChildren(String parentId) {
     return _firestore
-        .collection('parent_children')
-        .where('parentId', isEqualTo: parentId)
-        .snapshots();
+        .collection('users')
+        .doc(parentId)
+        .snapshots()
+        .map((snapshot) {
+      if (!snapshot.exists) return <String>[];
+      final userData = snapshot.data() as Map<String, dynamic>?;
+      return List<String>.from(userData?['linkedChildrenIds'] ?? []);
+    });
   }
 
   // ==================== LISTA BLANCA ====================

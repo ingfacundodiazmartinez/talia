@@ -99,14 +99,8 @@ class EmergencyService {
       // Obtener padres/tutores
       final parents = await _getParents(user.uid);
 
-      // Enviar notificaciones a padres
-      await _notifyParents(
-        parents: parents,
-        childName: childData['name'] ?? 'Tu hijo',
-        emergencyId: emergencyId,
-        position: position,
-        customMessage: customMessage,
-      );
+      // ✅ Las notificaciones ya fueron enviadas por la Cloud Function 'createEmergency'
+      // No necesitamos enviarlas de nuevo desde el cliente
 
       // Iniciar llamada de emergencia con Agora al primer padre
       await _makeEmergencyVideoCall(parents, emergencyId);
@@ -236,37 +230,21 @@ class EmergencyService {
   }
 
   // Obtener lista de padres/tutores
+  // ⚠️ CORREGIDO: Busca padres en TODOS los documentos users que tengan al childId en linkedChildrenIds
   Future<List<Map<String, dynamic>>> _getParents(String childId) async {
     try {
-      // Buscar relaciones padre-hijo en parent_children (nuevo)
-      var querySnapshot = await _firestore
-          .collection('parent_children')
-          .where('childId', isEqualTo: childId)
-          .where('status', isEqualTo: 'approved')
+      // Buscar todos los usuarios que tengan este childId en su array linkedChildrenIds
+      final usersSnapshot = await _firestore
+          .collection('users')
+          .where('linkedChildrenIds', arrayContains: childId)
           .get();
-
-      // Si no se encontraron, buscar en parent_children (legacy)
-      if (querySnapshot.docs.isEmpty) {
-        print('🔍 No se encontraron padres en parent_children, buscando en parent_children...');
-        querySnapshot = await _firestore
-            .collection('parent_children')
-            .where('childId', isEqualTo: childId)
-            .get();
-      }
 
       List<Map<String, dynamic>> parents = [];
 
-      for (var doc in querySnapshot.docs) {
-        final linkData = doc.data();
-        final parentId = linkData['parentId'];
-
-        // Obtener datos del padre
-        final parentDoc = await _firestore.collection('users').doc(parentId).get();
-        if (parentDoc.exists) {
-          final parentData = parentDoc.data()!;
-          parentData['id'] = parentId;
-          parents.add(parentData);
-        }
+      for (var userDoc in usersSnapshot.docs) {
+        final parentData = userDoc.data();
+        parentData['id'] = userDoc.id;
+        parents.add(parentData);
       }
 
       print('✅ Encontrados ${parents.length} padres para notificar');
@@ -507,51 +485,29 @@ class EmergencyService {
   }
 
   // Obtener emergencias activas para TODOS los hijos de un padre
+  // ⚠️ CORREGIDO: Lee desde /users/{parentId}.linkedChildrenIds por seguridad
   Stream<QuerySnapshot> getActiveEmergenciesForParent(String parentId) async* {
     try {
       print('🚨 [EmergencyService] Buscando emergencias para padre: $parentId');
 
-      // Obtener IDs de todos los hijos del padre
-      // Intentar primero con parent_children (nuevo)
-      var linksSnapshot = await _firestore
-          .collection('parent_children')
-          .where('parentId', isEqualTo: parentId)
-          .where('status', isEqualTo: 'approved')
-          .get();
+      // Obtener IDs de todos los hijos del padre desde linkedChildrenIds
+      final parentDoc = await _firestore.collection('users').doc(parentId).get();
 
-      print('🔍 [EmergencyService] parent_children docs: ${linksSnapshot.docs.length}');
-
-      var childrenIds = linksSnapshot.docs
-          .map((doc) {
-            final data = doc.data();
-            print('🔍 [EmergencyService] Link data: $data');
-            return data['childId'] as String;
-          })
-          .toList();
-
-      // Si no se encontraron hijos, intentar con parent_children (legacy)
-      if (childrenIds.isEmpty) {
-        print('🔍 [EmergencyService] No se encontraron hijos en parent_children, buscando en parent_children...');
-        final legacySnapshot = await _firestore
-            .collection('parent_children')
-            .where('parentId', isEqualTo: parentId)
-            .get();
-
-        print('🔍 [EmergencyService] parent_children docs: ${legacySnapshot.docs.length}');
-
-        childrenIds = legacySnapshot.docs
-            .map((doc) {
-              final data = doc.data();
-              print('🔍 [EmergencyService] Legacy link data: $data');
-              return data['childId'] as String;
-            })
-            .toList();
-
-        print('✅ [EmergencyService] Encontrados ${childrenIds.length} hijos en parent_children');
+      if (!parentDoc.exists) {
+        print('⚠️ [EmergencyService] Usuario padre $parentId no existe');
+        yield* Stream.value(
+          await _firestore.collection('emergencies').where('childId', isEqualTo: 'no_parent').get(),
+        );
+        return;
       }
 
+      final parentData = parentDoc.data() as Map<String, dynamic>?;
+      final childrenIds = List<String>.from(parentData?['linkedChildrenIds'] ?? []);
+
+      print('🔍 [EmergencyService] linkedChildrenIds: ${childrenIds.length} hijos');
+
       if (childrenIds.isEmpty) {
-        // Si no tiene hijos en ninguna colección, emitir stream vacío
+        // Si no tiene hijos, emitir stream vacío
         print('⚠️ [EmergencyService] No se encontraron hijos para el padre $parentId');
         yield* Stream.value(
           await _firestore.collection('emergencies').where('childId', isEqualTo: 'no_children').get(),

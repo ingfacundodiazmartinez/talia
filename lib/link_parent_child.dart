@@ -3,8 +3,10 @@ import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'dart:math';
 import 'services/user_role_service.dart';
+import 'widgets/location_permission_dialog.dart';
 
 // ================ PANTALLA PARA PADRES ================
 class GenerateLinkCodeScreen extends StatefulWidget {
@@ -603,7 +605,23 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
         'isActive': false,
       });
 
-      Navigator.of(context).pop(true);
+      // Mostrar diálogo de permisos de ubicación para niños que vinculan su primer padre
+      // Solo si es el primer padre (no tiene otros padres vinculados) Y no tiene permisos ya concedidos
+      if (existingParents.isEmpty && mounted) {
+        // Verificar si los permisos ya fueron concedidos
+        final locationAlwaysStatus = await Permission.locationAlways.status;
+
+        if (!locationAlwaysStatus.isGranted) {
+          print('📍 Mostrando diálogo de permisos de ubicación para el niño (permisos no concedidos)');
+          await LocationPermissionDialog.show(context);
+        } else {
+          print('✅ Permisos de ubicación ya concedidos, omitiendo diálogo');
+        }
+      }
+
+      if (mounted) {
+        Navigator.of(context).pop(true);
+      }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('❌ Error: $e'), backgroundColor: Colors.red),

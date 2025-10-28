@@ -9,6 +9,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 // Importa tus pantallas
 import 'auth_screen.dart';
@@ -21,6 +22,7 @@ import 'screens/parent/chat_moderation_management_screen.dart';
 import 'screens/audio_call_screen.dart';
 import 'screens/video_call_screen.dart';
 import 'screens/animated_splash_screen.dart';
+import 'screens/splash_wrapper.dart';
 import 'notification_service.dart';
 import 'widgets/incoming_call_dialog.dart';
 import 'theme_service.dart';
@@ -316,8 +318,15 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      print('📱 App resumed from background');
+
       // App regresó de background, verificar llamadas pendientes
       _checkPendingCall();
+
+      // ℹ️ Firestore maneja automáticamente la reconexión cuando la app se reanuda.
+      // NO forzar disableNetwork/enableNetwork porque cancela todos los StreamBuilders
+      // activos y causa que la UI se quede en loading infinito.
+      print('✅ Firestore se reconectará automáticamente');
     }
   }
 
@@ -356,28 +365,49 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
     final callerName = callData['callerName'] as String;
     final callerId = callData['callerId'] as String? ?? '';
 
+    final isAudioCall = callType == 'audio';
+
     print('🚀 [Main] Navegando a pantalla de llamada:');
     print('   - Call ID: $callId');
     print('   - Channel: $channelName');
     print('   - Type: $callType');
+    print('   - Is Audio: $isAudioCall');
     print('   - UID: $uid');
 
     if (_navigatorKey.currentContext != null) {
-      // Usar VideoCallScreen tanto para video como audio
-      Navigator.of(_navigatorKey.currentContext!).push(
-        MaterialPageRoute(
-          builder: (context) => VideoCallScreen(
-            callId: callId,
-            channelName: channelName,
-            token: token,
-            uid: uid,
-            isCaller: false, // Estamos recibiendo la llamada
-            remoteName: callerName,
-            receiverId: callerId, // ID del que llama
-            isVideo: callType != 'audio', // false si es audio, true en cualquier otro caso
+      if (isAudioCall) {
+        // Navegar a AudioCallScreen para llamadas de audio
+        print('📞 [Main] Navegando a AudioCallScreen');
+        Navigator.of(_navigatorKey.currentContext!).push(
+          MaterialPageRoute(
+            builder: (context) => AudioCallScreen(
+              callId: callId,
+              channelName: channelName,
+              token: token,
+              uid: uid,
+              isCaller: false, // Estamos recibiendo la llamada
+              remoteName: callerName,
+            ),
           ),
-        ),
-      );
+        );
+      } else {
+        // Navegar a VideoCallScreen para llamadas de video
+        print('📹 [Main] Navegando a VideoCallScreen');
+        Navigator.of(_navigatorKey.currentContext!).push(
+          MaterialPageRoute(
+            builder: (context) => VideoCallScreen(
+              callId: callId,
+              channelName: channelName,
+              token: token,
+              uid: uid,
+              isCaller: false, // Estamos recibiendo la llamada
+              remoteName: callerName,
+              receiverId: callerId, // ID del que llama
+              isVideo: true,
+            ),
+          ),
+        );
+      }
     }
   }
 
@@ -419,6 +449,8 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
               if (snapshot.exists) {
                 final userData = snapshot.data();
                 final newRole = userData?['role'] ?? 'child';
+                print('🔍 Role actual en Firestore: $newRole');
+                print('🔍 Role guardado en memoria: $_currentUserRole');
 
                 if (_currentUserRole != null && _currentUserRole != newRole) {
                   print(
@@ -426,21 +458,47 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
                   );
 
                   // Actualizar role primero
-                  setState(() {
-                    _currentUserRole = newRole;
-                  });
+                  _currentUserRole = newRole;
 
-                  // Forzar navegación completa al home con el nuevo role
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    final navigator = _navigatorKey.currentState;
-                    if (navigator != null) {
-                      navigator.pushAndRemoveUntil(
-                        MaterialPageRoute(builder: (_) => AuthWrapper()),
-                        (route) => false,
-                      );
-                    }
+                  // Forzar reconexión de Firestore para obtener datos frescos sin cache
+                  print('🔄 Forzando reconexión de Firestore para limpiar cache...');
+                  FirebaseFirestore.instance.disableNetwork().then((_) {
+                    print('✅ Firestore desconectado');
+                    return Future.delayed(Duration(milliseconds: 200));
+                  }).then((_) {
+                    return FirebaseFirestore.instance.enableNetwork();
+                  }).then((_) {
+                    print('✅ Firestore reconectado con datos frescos');
+
+                    // Navegar después de que Firestore esté listo
+                    Future.delayed(Duration(milliseconds: 100), () {
+                      final navigator = _navigatorKey.currentState;
+                      if (navigator != null && navigator.mounted) {
+                        print('✅ Navegando a AuthWrapper con nuevo rol: $newRole');
+                        navigator.pushAndRemoveUntil(
+                          MaterialPageRoute(builder: (_) => const AuthWrapper()),
+                          (route) => false,
+                        );
+                      } else {
+                        print('⚠️ Navigator no disponible para navegación');
+                      }
+                    });
+                  }).catchError((error) {
+                    print('⚠️ Error reconectando Firestore: $error');
+                    // Intentar navegar de todos modos
+                    Future.delayed(Duration(milliseconds: 100), () {
+                      final navigator = _navigatorKey.currentState;
+                      if (navigator != null && navigator.mounted) {
+                        print('⚠️ Navegando a AuthWrapper a pesar del error');
+                        navigator.pushAndRemoveUntil(
+                          MaterialPageRoute(builder: (_) => const AuthWrapper()),
+                          (route) => false,
+                        );
+                      }
+                    });
                   });
                 } else if (_currentUserRole == null) {
+                  print('ℹ️ Inicializando role por primera vez: $newRole');
                   _currentUserRole = newRole;
                 }
               }
@@ -552,6 +610,20 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
           title: 'Talia',
           debugShowCheckedModeBanner: false,
           theme: accessibleTheme,
+          // Configuración de localización para date pickers nativos
+          localizationsDelegates: const [
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          supportedLocales: const [
+            Locale('es', 'ES'), // Español España
+            Locale('es', 'AR'), // Español Argentina
+            Locale('es', 'MX'), // Español México
+            Locale('es', ''), // Español genérico
+            Locale('en', 'US'), // Inglés como fallback
+          ],
+          locale: const Locale('es', 'ES'), // Idioma por defecto
           builder: (context, child) {
             // Obtener el brightness del tema actual
             final brightness = Theme.of(context).brightness;
@@ -590,7 +662,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
               ),
             );
           },
-          home: const AnimatedSplashScreen(nextScreen: AuthWrapper()),
+          home: const SplashWrapper(nextScreen: AuthWrapper()),
           onGenerateRoute: (settings) {
             if (settings.name == '/chat_moderation_settings') {
               final args = settings.arguments as Map<String, dynamic>;
@@ -693,7 +765,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
                   print('⚠️ Error de red detectado, usando datos cacheados');
                   // Continuar con los datos cacheados (no hacer return aquí)
                 } else {
-                  // Sin cache disponible, mostrar pantalla de autenticación
+                  // Sin cache disponible, volver a AuthScreen
                   print(
                     '❌ Sin datos cacheados disponibles, mostrando AuthScreen',
                   );
@@ -705,6 +777,10 @@ class _AuthWrapperState extends State<AuthWrapper> {
                 print(
                   '❌ Usuario no existe en Firestore: ${snapshot.data!.uid}',
                 );
+                print('   hasData: ${userSnapshot.hasData}');
+                print('   exists: ${userSnapshot.data?.exists}');
+                print('   connectionState: ${userSnapshot.connectionState}');
+
                 // Usuario autenticado pero no existe en Firestore - ir a completar perfil
                 print(
                   '📝 Mostrando ProfileCompletionScreen para completar registro',
@@ -716,9 +792,15 @@ class _AuthWrapperState extends State<AuthWrapper> {
 
               final userData =
                   userSnapshot.data!.data() as Map<String, dynamic>?;
-              final role =
-                  userData?['role'] ??
-                  'child'; // Por defecto 'child' si no existe
+
+              // Verificar que userData no sea null
+              if (userData == null) {
+                print('❌ userData es null');
+                return ProfileCompletionScreen(
+                  phoneNumber: snapshot.data!.phoneNumber ?? 'Sin teléfono',
+                );
+              }
+              final role = userData['role'] ?? 'child';
               final userEmail = snapshot.data!.email;
               final userPhone = snapshot.data!.phoneNumber;
               final userId = snapshot.data!.uid;
@@ -776,7 +858,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
                       print('👔 Redirigiendo a ParentMainShell');
                       return ParentMainShell();
                     } else {
-                      print('👶 Redirigiendo a ChildMainShell');
+                      print('👶 Redirigiendo a ChildMainShell (role: $role)');
                       return ChildMainShell();
                     }
                   },
