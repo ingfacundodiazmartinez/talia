@@ -1,4 +1,4 @@
-const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/firestore");
 const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { initializeApp } = require("firebase-admin/app");
@@ -82,19 +82,13 @@ async function sendVoIPPush(voipToken, payload) {
       console.error(`❌ [VoIP] Status: ${failure.status}`);
       console.error(`❌ [VoIP] Response: ${JSON.stringify(failure.response)}`);
 
-      // Si el token es inválido, eliminarlo de Firestore
+      // Si el token es inválido, retornar "invalid_token" para que la función llamadora lo elimine
       if (failure.response?.reason === "BadDeviceToken" ||
           failure.response?.reason === "Unregistered" ||
           failure.status === 410) {
-        console.warn(`🧹 [VoIP] Token inválido detectado - eliminando de Firestore`);
-        try {
-          // Aquí necesitaríamos el userId, pero no lo tenemos en este contexto
-          // Por ahora solo logueamos
-          console.warn(`⚠️ [VoIP] Token VoIP inválido para dispositivo: ${failure.device.substring(0, 20)}...`);
-          console.warn(`💡 [VoIP] Solución: Usuario debe abrir la app para regenerar token VoIP`);
-        } catch (cleanupError) {
-          console.error(`❌ Error limpiando token: ${cleanupError}`);
-        }
+        console.warn(`⚠️ [VoIP] Token VoIP inválido para dispositivo: ${failure.device.substring(0, 20)}...`);
+        console.warn(`💡 [VoIP] Retornando 'invalid_token' para que sea eliminado de Firestore`);
+        return "invalid_token";
       }
 
       return false;
@@ -153,48 +147,6 @@ if (!AGORA_APP_ID || !AGORA_APP_CERTIFICATE) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// APP CHECK - Verificación manual de tokens
-// ═══════════════════════════════════════════════════════════════
-
-/**
- * Verifica el token de App Check de forma manual
- * @param {Object} request - Request object de Cloud Function
- * @return {Promise<boolean>} true si el token es válido o si estamos en modo desarrollo
- */
-async function verifyAppCheckToken(request) {
-  // En desarrollo, permitir solicitudes sin App Check
-  const isDevelopment = process.env.FUNCTIONS_EMULATOR === "true";
-
-  if (isDevelopment) {
-    console.log("🔓 Modo desarrollo - App Check deshabilitado");
-    return true;
-  }
-
-  // Verificar si hay un token de App Check
-  const appCheckToken = request.app?.token;
-
-  if (!appCheckToken) {
-    console.error("❌ Solicitud sin token de App Check - RECHAZADA");
-    // ⚠️ MODO ESTRICTO ACTIVADO: Rechazar solicitudes sin App Check
-    return false;
-  }
-
-  try {
-    // El token ya fue verificado por Firebase si llegó hasta aquí
-    // request.app.alreadyConsumed indica si el token ya fue consumido
-    if (request.app.alreadyConsumed) {
-      console.warn("⚠️ Token de App Check ya fue consumido");
-      return true; // Aún permitir, pero loguear
-    }
-
-    console.log("✅ Token de App Check válido");
-    return true;
-  } catch (error) {
-    console.error("❌ Error verificando App Check:", error);
-    return false;
-  }
-}
-
 // ═══════════════════════════════════════════════════════════════
 // VALIDACIÓN DE INPUTS - Prevención de inyecciones y ataques
 // ═══════════════════════════════════════════════════════════════
@@ -419,7 +371,13 @@ const RATE_LIMITS = {
 // y envía una notificación push al dispositivo del usuario
 // ⚠️ THROTTLING INTELIGENTE: Limita notificaciones de chat no leídas
 exports.sendNotificationOnCreate = onDocumentCreated(
-  "notifications/{notificationId}",
+  {
+    document: "notifications/{notificationId}",
+    region: "us-central1",
+    // ⚡ OPTIMIZACIÓN: Mantener instancia caliente para reducir latencia
+    minInstances: 1,
+    maxInstances: 100,
+  },
   async (event) => {
     console.log("🔔 FUNCIÓN EJECUTADA - Inicio");
 
@@ -709,6 +667,7 @@ exports.sendInstantPushNotification = onCall(
     // ⚡ OPTIMIZACIÓN: Mantener la función caliente para eliminar cold starts
     minInstances: 1, // Mantiene 1 instancia siempre activa
     maxInstances: 10, // Escala hasta 10 instancias si hay mucha carga
+    consumeAppCheckToken: true,
   },
   async (request) => {
     const startTime = Date.now();
@@ -775,13 +734,26 @@ exports.sendInstantPushNotification = onCall(
           callerPhotoURL: data.senderPhotoUrl || "",
         };
 
-        const voipSent = await sendVoIPPush(voipToken, voipPayload);
+        const voipResult = await sendVoIPPush(voipToken, voipPayload);
 
-        if (voipSent) {
+        // Si el token es inválido, eliminarlo de Firestore
+        if (voipResult === "invalid_token") {
+          console.warn(`🧹 [VoIP] Token inválido - eliminando de Firestore para usuario ${receiverId}`);
+          try {
+            await db.collection("users").doc(receiverId).update({
+              voipToken: FieldValue.delete(),
+            });
+            console.log(`✅ [VoIP] Token inválido eliminado - usuario debe abrir app para regenerar`);
+          } catch (cleanupError) {
+            console.error(`❌ [VoIP] Error eliminando token inválido:`, cleanupError);
+          }
+          // Continuar con FCM como fallback
+        } else if (voipResult === true) {
           const totalTime = Date.now() - startTime;
           console.log(`✅ [INSTANT PUSH] VoIP enviado en ${totalTime}ms`);
           return { success: true, sentViaVoIP: true, latency: totalTime };
         }
+        // Si voipResult === false (otro error), continuar con FCM
       }
 
       // Preparar mensaje FCM
@@ -862,6 +834,7 @@ exports.sendInstantPushNotification = onCall(
 exports.generateAgoraToken = onCall(
   {
     cors: true,
+    consumeAppCheckToken: true,
   },
   async (request) => {
     console.log("🎥 ===== GENERANDO TOKEN DE AGORA =====");
@@ -1275,17 +1248,10 @@ IMPORTANTE:
 exports.generateChildReport = onCall(
   {
     cors: true,
-    // App Check se verifica manualmente dentro de la función
+    consumeAppCheckToken: true,
   },
   async (request) => {
     console.log("📊 Generando reporte de análisis");
-
-    // ✅ APP CHECK: Verificar token
-    const appCheckValid = await verifyAppCheckToken(request);
-    if (!appCheckValid) {
-      console.error("❌ Token de App Check inválido");
-      throw new HttpsError("unauthenticated", "Solicitud no autorizada - App Check inválido");
-    }
 
     // Verificar que el usuario esté autenticado
     if (!request.auth) {
@@ -1444,7 +1410,45 @@ exports.generateChildReport = onCall(
 
       console.log(`📊 Estadísticas multimedia: ${multimediaStats.totalImages} imágenes, ${multimediaStats.totalVideos} videos, ${multimediaStats.totalAudios} audios`);
 
-      // 5. Construir reporte completo usando los resultados de Gemini
+      // 5. Buscar reporte anterior para calcular variación
+      let percentageChange = 0;
+      let previousReport = null;
+
+      try {
+        const previousReportsSnapshot = await db
+          .collection("weekly_reports")
+          .where("childId", "==", childId)
+          .where("parentId", "==", parentId)
+          .orderBy("generatedAt", "desc")
+          .limit(1)
+          .get();
+
+        if (!previousReportsSnapshot.empty) {
+          previousReport = previousReportsSnapshot.docs[0].data();
+          const previousAvgSentiment = previousReport.avgSentiment || 0.5;
+          const currentAvgSentiment = aiAnalysis.weighted_sentiment_score || aiAnalysis.sentiment_score || 0.5;
+
+          // Calcular cambio porcentual
+          // Convertir sentimientos de escala 0-1 a escala -100 a +100 para mejor interpretación
+          const previousScore = (previousAvgSentiment - 0.5) * 200; // -100 a +100
+          const currentScore = (currentAvgSentiment - 0.5) * 200; // -100 a +100
+
+          // Calcular diferencia absoluta (no porcentaje para evitar divisiones por cero)
+          percentageChange = Math.round(currentScore - previousScore);
+
+          console.log(`📈 Comparación con reporte anterior:`);
+          console.log(`   Sentimiento anterior: ${previousAvgSentiment.toFixed(2)} (${previousScore.toFixed(1)})`);
+          console.log(`   Sentimiento actual: ${currentAvgSentiment.toFixed(2)} (${currentScore.toFixed(1)})`);
+          console.log(`   Cambio: ${percentageChange > 0 ? '+' : ''}${percentageChange} puntos`);
+        } else {
+          console.log(`ℹ️ No hay reportes anteriores para comparar`);
+        }
+      } catch (error) {
+        console.warn(`⚠️ Error calculando variación con reporte anterior: ${error.message}`);
+        // No fallar la función por esto, simplemente dejar percentageChange en 0
+      }
+
+      // 6. Construir reporte completo usando los resultados de Gemini
       const report = {
         childId: childId,
         parentId: parentId,
@@ -1494,15 +1498,16 @@ exports.generateChildReport = onCall(
         aiGenerated: true,
         aiModel: "gemini-pro",
         generatedAt: new Date(),
-        percentageChange: 0, // TODO: calcular comparando con reporte anterior
+        percentageChange: percentageChange,
+        hasPreviousReport: previousReport !== null,
       };
 
-      // 6. Guardar reporte en Firestore
+      // 7. Guardar reporte en Firestore
       const reportRef = await db.collection("weekly_reports").add(report);
 
       console.log(`✅ Reporte guardado: ${reportRef.id}`);
 
-      // 7. Guardar también el análisis en ai_batch_analysis para compatibilidad
+      // 8. Guardar también el análisis en ai_batch_analysis para compatibilidad
       await db.collection("ai_batch_analysis").add({
         childId: childId,
         messagesAnalyzed: allChildMessages.length,
@@ -1696,18 +1701,11 @@ function detectBullying(message) {
 // Reemplaza la escritura directa bloqueada en Firestore rules
 exports.createParentChildLink = onCall({
   cors: true,
-  // App Check se verifica manualmente dentro de la función
+  consumeAppCheckToken: true,
 }, async (request) => {
   const db = getFirestore();
 
   try {
-    // ✅ APP CHECK: Verificar token
-    const appCheckValid = await verifyAppCheckToken(request);
-    if (!appCheckValid) {
-      console.error("❌ Token de App Check inválido");
-      throw new HttpsError("unauthenticated", "Solicitud no autorizada - App Check inválido");
-    }
-
     // 1. Validar autenticación
     if (!request.auth) {
       console.error("❌ Usuario no autenticado");
@@ -1869,6 +1867,31 @@ exports.createParentChildLink = onCall({
     });
 
     console.log(`✅ Preparando entradas en whitelist`);
+
+    // ✅ NUEVO: Crear contacto bidireccional entre padre e hijo en la colección 'contacts'
+    // Esto permite que aparezcan mutuamente en la lista de chats
+    const contactRef = db.collection("contacts").doc();
+    batch.set(contactRef, {
+      users: [parentId, childId],
+      userNames: {
+        [parentId]: parentData.name || "Usuario",
+        [childId]: childData.name || "Usuario",
+      },
+      userPhotoURLs: {
+        [parentId]: parentData.photoURL || null,
+        [childId]: childData.photoURL || null,
+      },
+      createdAt: now,
+      createdBy: callerId,
+      approvedBy: parentId,
+      approvedAt: now,
+      approvedParentIds: [parentId],
+      status: "approved",
+      type: "parent_child_link",
+      reason: "Vínculo padre-hijo automático",
+    });
+
+    console.log(`✅ Preparando contacto bidireccional en 'contacts' para chat mutuo`);
 
     // Actualizar user_locations del hijo para agregar el padre a approvedParents
     const childLocationRef = db.collection("user_locations").doc(childId);
@@ -2375,7 +2398,7 @@ async function getLinkedParents(userId) {
  * Solo esta función puede crear contact_requests
  */
 exports.createContactRequest = onCall(
-  { cors: true },
+  { cors: true, consumeAppCheckToken: true },
   async (request) => {
     const db = getFirestore();
     const auth = request.auth;
@@ -2720,7 +2743,7 @@ exports.createContactRequest = onCall(
  * Solo esta función puede actualizar contact_requests
  */
 exports.updateContactRequestStatus = onCall(
-  { cors: true },
+  { cors: true, consumeAppCheckToken: true },
   async (request) => {
     const db = getFirestore();
     const auth = request.auth;
@@ -2862,7 +2885,7 @@ exports.updateContactRequestStatus = onCall(
  * Solo esta función puede crear/actualizar contacts para permisos de grupo
  */
 exports.approveGroupPermission = onCall(
-  { cors: true },
+  { cors: true, consumeAppCheckToken: true },
   async (request) => {
     const db = getFirestore();
     const auth = request.auth;
@@ -2993,7 +3016,7 @@ exports.approveGroupPermission = onCall(
  * Maneja tanto aprobación como rechazo
  */
 exports.updateGroupPermissionStatus = onCall(
-  { cors: true },
+  { cors: true, consumeAppCheckToken: true },
   async (request) => {
     const db = getFirestore();
     const auth = request.auth;
@@ -3336,7 +3359,7 @@ Nivel LOW (permisivo en tono, estricto en insultos):
  * @returns {Object} { approved: boolean, reason?: string, severity?: string }
  */
 exports.checkMessageBeforeSending = onCall(
-  { region: "us-central1" },
+  { region: "us-central1", consumeAppCheckToken: true },
   async (request) => {
     const { chatId, text, type = "text", localId, messageId } = request.data;
     const userId = request.auth?.uid;
@@ -3645,14 +3668,13 @@ exports.checkMessageBeforeSending = onCall(
           });
           console.log(`✅ [Pre-moderación] Notificación creada para ${receiverId}`);
 
-          // ✅ SINCRONIZACIÓN: Actualizar lastMessage y unreadCount inmediatamente después de notificación
+          // ✅ SINCRONIZACIÓN: Actualizar lastMessage inmediatamente después de notificación
           await db.collection("chats").doc(chatId).update({
             lastMessage: "🚫 Mensaje bloqueado",
             lastMessageTime: FieldValue.serverTimestamp(),
             lastMessageSender: userId,
-            [`unreadCount_${receiverId}`]: FieldValue.increment(1),
           });
-          console.log(`📝 [Pre-moderación] Chat sincronizado: lastMessage="🚫 Mensaje bloqueado", unreadCount+1`);
+          console.log(`📝 [Pre-moderación] Chat sincronizado: lastMessage="🚫 Mensaje bloqueado"`);
         } catch (e) {
           console.error("Error creando notificación o actualizando chat:", e);
         }
@@ -3685,6 +3707,9 @@ exports.moderateMessage = onDocumentCreated(
   {
     document: "chats/{chatId}/messages/{messageId}",
     region: "us-central1",
+    // ⚡ OPTIMIZACIÓN: Mantener instancia caliente para reducir latencia de moderación
+    minInstances: 1,
+    maxInstances: 100,
   },
   async (event) => {
     const messageId = event.params.messageId;
@@ -4042,15 +4067,14 @@ exports.moderateMessage = onDocumentCreated(
 
         console.log(`✅ Notificación creada (mensaje aprobado) para ${receiverId}`);
 
-        // ✅ SINCRONIZACIÓN: Actualizar lastMessage y unreadCount inmediatamente después de notificación
+        // ✅ SINCRONIZACIÓN: Actualizar lastMessage inmediatamente después de notificación
         try {
           await db.collection("chats").doc(chatId).update({
             lastMessage: messagePreview,
             lastMessageTime: FieldValue.serverTimestamp(),
             lastMessageSender: senderId,
-            [`unreadCount_${receiverId}`]: FieldValue.increment(1),
           });
-          console.log(`📝 Chat sincronizado: lastMessage="${messagePreview.substring(0, 30)}...", unreadCount+1`);
+          console.log(`📝 Chat sincronizado: lastMessage="${messagePreview.substring(0, 30)}..."`);
         } catch (updateError) {
           console.error("Error actualizando chat:", updateError);
         }
@@ -4093,17 +4117,16 @@ exports.moderateMessage = onDocumentCreated(
 
         // ✅ SINCRONIZACIÓN: Actualizar unreadCount y lastMessage inmediatamente después de notificación
         try {
-          // 1. Incrementar unreadCount (el receptor verá la burbuja de "mensaje bloqueado")
-          // 2. Actualizar lastMessage a "🚫 Mensaje bloqueado" para que el receptor sepa que recibió un mensaje bloqueado
+          // Actualizar lastMessage a "🚫 Mensaje bloqueado" para que el receptor sepa que recibió un mensaje bloqueado
+          // (El contador se incrementará automáticamente en incrementUnreadCount)
 
           await db.collection("chats").doc(chatId).update({
-            [`unreadCount_${receiverId}`]: FieldValue.increment(1),
             lastMessage: "🚫 Mensaje bloqueado",
             lastMessageTime: FieldValue.serverTimestamp(),
             lastMessageSender: senderId,
           });
 
-          console.log(`📝 Chat sincronizado: unreadCount+1, lastMessage="🚫 Mensaje bloqueado"`);
+          console.log(`📝 Chat sincronizado: lastMessage="🚫 Mensaje bloqueado"`);
         } catch (e) {
           console.error(`⚠️ Error sincronizando chat después de bloqueo: ${e}`);
         }
@@ -4773,7 +4796,7 @@ exports.checkExpiredInvitations = onSchedule(
  * Bloquear un chat entre dos usuarios
  * Usado cuando un padre revoca un contacto aprobado
  */
-exports.blockChat = onCall(async (request) => {
+exports.blockChat = onCall({ consumeAppCheckToken: true }, async (request) => {
   const db = getFirestore();
   const { childId, contactId, reason, blockedBy } = request.data;
 
@@ -4863,7 +4886,7 @@ exports.blockChat = onCall(async (request) => {
  * Desbloquear un chat entre dos usuarios
  * Usado cuando un padre re-aprueba un contacto previamente revocado
  */
-exports.unblockChat = onCall(async (request) => {
+exports.unblockChat = onCall({ consumeAppCheckToken: true }, async (request) => {
   const db = getFirestore();
   const { childId, contactId } = request.data;
 
@@ -5107,7 +5130,7 @@ exports.incrementUnreadCount = onDocumentCreated(
  * Callable function para marcar mensajes como leídos
  */
 exports.markChatAsRead = onCall(
-  { region: "us-central1" },
+  { region: "us-central1", consumeAppCheckToken: true },
   async (request) => {
     // Validar autenticación
     if (!request.auth) {
@@ -5153,7 +5176,7 @@ exports.markChatAsRead = onCall(
  * Reemplaza la creación directa desde el cliente
  */
 exports.createEmergency = onCall(
-  { region: "us-central1" },
+  { region: "us-central1", consumeAppCheckToken: true },
   async (request) => {
     const db = getFirestore();
     const userId = request.auth?.uid;
@@ -5467,7 +5490,7 @@ exports.createEmergency = onCall(
  * firebase functions:shell
  * diagnoseModerationIssues({chatId: 'xxx'})
  */
-exports.diagnoseModerationIssues = onCall(async (request) => {
+exports.diagnoseModerationIssues = onCall({ consumeAppCheckToken: true }, async (request) => {
   const { chatId } = request.data;
   const db = getFirestore();
 
@@ -5754,3 +5777,929 @@ exports.syncStickersScheduled = stickerFunctions.syncStickersScheduled;
 exports.syncStickersManual = stickerFunctions.syncStickersManual;
 exports.cleanupOldStickers = stickerFunctions.cleanupOldStickers;
 
+// ═══════════════════════════════════════════════════════════════
+// AI CHARACTER TRANSFORMATION
+// ═══════════════════════════════════════════════════════════════
+
+const Replicate = require("replicate");
+
+/**
+ * Transformar imagen usando un personaje específico con IA
+ *
+ * Usa Replicate API con modelo InstantID para face swap
+ *
+ * @param {Object} data - Datos de la transformación
+ * @param {string} data.imageUrl - URL de la imagen del usuario
+ * @param {string} data.characterId - ID del personaje
+ * @returns {Object} { transformedImageUrl: string }
+ */
+exports.transformCharacter = onCall(
+  {
+    region: "us-central1",
+    timeoutSeconds: 300, // 5 minutos para transformaciones con IA
+    memory: "1GiB", // Más memoria para procesamiento de imágenes
+    consumeAppCheckToken: true,
+  },
+  async (request) => {
+    const {imageUrl, characterId} = request.data;
+    const userId = request.auth?.uid;
+
+    console.log(`🎭 [TransformCharacter] Iniciando transformación`);
+    console.log(`   Usuario: ${userId}`);
+    console.log(`   Imagen: ${imageUrl}`);
+    console.log(`   Personaje: ${characterId}`);
+
+    if (!userId) {
+      throw new HttpsError("unauthenticated", "Usuario no autenticado");
+    }
+
+    if (!imageUrl || !characterId) {
+      throw new HttpsError("invalid-argument", "imageUrl y characterId son requeridos");
+    }
+
+    const db = getFirestore();
+
+    try {
+      // 1. Obtener datos del personaje
+      const characterDoc = await db.collection("characters").doc(characterId).get();
+
+      if (!characterDoc.exists) {
+        throw new HttpsError("not-found", "Personaje no encontrado");
+      }
+
+      const characterData = characterDoc.data();
+
+      if (!characterData.enabled) {
+        throw new HttpsError("failed-precondition", "Personaje deshabilitado");
+      }
+
+      console.log(`✅ [TransformCharacter] Personaje encontrado: ${characterData.name}`);
+
+      // 2. Verificar que existe el API token de Replicate
+      const replicateToken = process.env.REPLICATE_API_TOKEN;
+
+      if (!replicateToken) {
+        console.error("❌ [TransformCharacter] REPLICATE_API_TOKEN no configurado");
+        throw new HttpsError("failed-precondition", "Servicio de transformación no configurado");
+      }
+
+      // 3. Inicializar Replicate client
+      const replicate = new Replicate({
+        auth: replicateToken,
+      });
+
+      console.log(`🤖 [TransformCharacter] Llamando a Replicate API...`);
+      console.log(`   input_image (personaje): ${characterData.referenceImageUrl}`);
+      console.log(`   swap_image (usuario): ${imageUrl}`);
+
+      // 4. Llamar a codeplugtech Face Swap model (82% más barato)
+      // Model: codeplugtech/face-swap
+      // Costo: ~$0.0025 por transformación (400 runs por $1) - 82% ahorro vs cdingram
+      // Corre en GPU A100, tarda ~10-12 segundos
+      let output;
+      try {
+        output = await replicate.run(
+          "codeplugtech/face-swap:278a81e7ebb22db98bcba54de985d22cc1abeead2754eb1f2af717247be69b34",
+          {
+            input: {
+              input_image: characterData.referenceImageUrl, // Imagen del personaje (objetivo)
+              swap_image: imageUrl, // Imagen del usuario (cara a intercambiar)
+            },
+          },
+        );
+      } catch (replicateError) {
+        console.error(`❌ Error de Replicate API: ${replicateError.message}`);
+        console.error(`   Stack: ${replicateError.stack}`);
+        throw replicateError;
+      }
+
+      console.log(`✅ [TransformCharacter] Transformación completada`);
+      console.log(`   Output type: ${typeof output}`);
+      console.log(`   Output constructor: ${output?.constructor?.name}`);
+      console.log(`   Output is null: ${output === null}`);
+      console.log(`   Output is undefined: ${output === undefined}`);
+      console.log(`   Output toString: ${output}`);
+      console.log(`   Output keys: ${Object.keys(output || {})}`);
+
+      if (output && typeof output.url === "function") {
+        console.log(`   Output tiene método url()`);
+      }
+
+      // Intentar obtener la URL de diferentes formas
+      let transformedImageUrl;
+
+      // Esperar a que el output se complete si es un FileOutput
+      if (output && typeof output.url === "function") {
+        transformedImageUrl = await output.url();
+        console.log(`   URL desde output.url(): ${transformedImageUrl}`);
+      } else if (Array.isArray(output)) {
+        transformedImageUrl = output[0];
+        console.log(`   URL desde array[0]: ${transformedImageUrl}`);
+      } else if (typeof output === "string") {
+        transformedImageUrl = output;
+        console.log(`   URL directa string: ${transformedImageUrl}`);
+      } else {
+        transformedImageUrl = output;
+        console.log(`   URL directa: ${transformedImageUrl}`);
+      }
+
+      console.log(`   URL final transformada: ${transformedImageUrl}`);
+
+      if (!transformedImageUrl) {
+        throw new HttpsError("internal", "No se generó imagen de salida");
+      }
+
+      // 5. Registrar analytics (opcional)
+      await db.collection("characterTransformations").add({
+        userId: userId,
+        characterId: characterId,
+        characterName: characterData.name,
+        originalImageUrl: imageUrl,
+        transformedImageUrl: transformedImageUrl,
+        timestamp: new Date(),
+      });
+
+      console.log(`📊 [TransformCharacter] Analytics guardado`);
+
+      return {
+        transformedImageUrl: transformedImageUrl,
+        characterName: characterData.name,
+      };
+    } catch (error) {
+      console.error("❌ [TransformCharacter] Error:", error);
+
+      // Si es un HttpsError, lanzarlo directamente
+      if (error.code) {
+        throw error;
+      }
+
+      // Error de Replicate API
+      if (error.message && error.message.includes("Replicate")) {
+        throw new HttpsError("unavailable", `Error en servicio de IA: ${error.message}`);
+      }
+
+      // Error genérico
+      throw new HttpsError("internal", `Error transformando imagen: ${error.message}`);
+    }
+  },
+);
+
+// ═══════════════════════════════════════════════════════════════
+// MIGRACIÓN Y SINCRONIZACIÓN DE linkedChildrenIds
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Función de migración para poblar linkedChildrenIds en usuarios existentes
+ * EJECUTAR UNA SOLA VEZ después del deploy
+ */
+exports.migrateLinkedChildrenIds = onCall(
+  {
+    region: "us-central1",
+    timeoutSeconds: 540, // 9 minutos
+    memory: "512MiB",
+    consumeAppCheckToken: true,
+  },
+  async (request) => {
+    const userId = request.auth?.uid;
+
+    if (!userId) {
+      throw new HttpsError("unauthenticated", "Usuario no autenticado");
+    }
+
+    const db = getFirestore();
+
+    try {
+      console.log("🔄 [MigrateLinkedChildren] Iniciando migración...");
+
+      // Obtener TODOS los vínculos padre-hijo
+      const linksSnapshot = await db
+        .collection("parent_children")
+        .where("status", "==", "approved")
+        .get();
+
+      console.log(`📊 [MigrateLinkedChildren] Encontrados ${linksSnapshot.docs.length} vínculos`);
+
+      // Agrupar por parentId
+      const parentToChildren = {};
+
+      for (const doc of linksSnapshot.docs) {
+        const data = doc.data();
+        const parentId = data.parentId;
+        const childId = data.childId;
+
+        if (!parentToChildren[parentId]) {
+          parentToChildren[parentId] = [];
+        }
+        parentToChildren[parentId].push(childId);
+      }
+
+      console.log(`👥 [MigrateLinkedChildren] ${Object.keys(parentToChildren).length} padres con hijos`);
+
+      // Actualizar cada padre
+      let updatedCount = 0;
+      const batch = db.batch();
+      let batchCount = 0;
+
+      for (const [parentId, childrenIds] of Object.entries(parentToChildren)) {
+        const userRef = db.collection("users").doc(parentId);
+        batch.update(userRef, {
+          linkedChildrenIds: childrenIds,
+          linkedChildrenIdsUpdatedAt: FieldValue.serverTimestamp(),
+        });
+
+        batchCount++;
+        updatedCount++;
+
+        // Firestore batch limit es 500 operaciones
+        if (batchCount >= 500) {
+          await batch.commit();
+          console.log(`✅ [MigrateLinkedChildren] Commit batch de 500 operaciones`);
+          batchCount = 0;
+        }
+      }
+
+      // Commit final
+      if (batchCount > 0) {
+        await batch.commit();
+      }
+
+      console.log(`✅ [MigrateLinkedChildren] Migración completada: ${updatedCount} usuarios actualizados`);
+
+      return {
+        success: true,
+        usersUpdated: updatedCount,
+        totalLinks: linksSnapshot.docs.length,
+      };
+    } catch (error) {
+      console.error("❌ [MigrateLinkedChildren] Error:", error);
+      throw new HttpsError("internal", `Error en migración: ${error.message}`);
+    }
+  },
+);
+
+/**
+ * Trigger cuando se crea un vínculo padre-hijo
+ * Actualiza linkedChildrenIds del padre
+ */
+exports.onParentChildLinkCreated = onDocumentCreated(
+  {
+    document: "parent_children/{linkId}",
+    region: "us-central1",
+  },
+  async (event) => {
+    const snapshot = event.data;
+    if (!snapshot) return;
+
+    const data = snapshot.data();
+    const parentId = data.parentId;
+    const childId = data.childId;
+    const status = data.status;
+
+    console.log(`🔗 [OnLinkCreated] Nuevo vínculo: ${parentId} -> ${childId}, status: ${status}`);
+
+    // Solo actualizar si está aprobado
+    if (status !== "approved") {
+      console.log(`⏭️ [OnLinkCreated] Vínculo no aprobado, saltando...`);
+      return;
+    }
+
+    const db = getFirestore();
+
+    try {
+      const userRef = db.collection("users").doc(parentId);
+      const userDoc = await userRef.get();
+
+      if (!userDoc.exists) {
+        console.warn(`⚠️ [OnLinkCreated] Usuario ${parentId} no existe`);
+        return;
+      }
+
+      const userData = userDoc.data();
+      const currentLinkedChildren = userData.linkedChildrenIds || [];
+
+      // Agregar childId si no existe
+      if (!currentLinkedChildren.includes(childId)) {
+        await userRef.update({
+          linkedChildrenIds: FieldValue.arrayUnion(childId),
+          linkedChildrenIdsUpdatedAt: FieldValue.serverTimestamp(),
+        });
+
+        console.log(`✅ [OnLinkCreated] Agregado ${childId} a linkedChildrenIds de ${parentId}`);
+      } else {
+        console.log(`ℹ️ [OnLinkCreated] ${childId} ya estaba en linkedChildrenIds`);
+      }
+    } catch (error) {
+      console.error("❌ [OnLinkCreated] Error:", error);
+    }
+  },
+);
+
+/**
+ * Trigger cuando se elimina un vínculo padre-hijo
+ * Actualiza linkedChildrenIds del padre
+ */
+exports.onParentChildLinkDeleted = onDocumentDeleted(
+  {
+    document: "parent_children/{linkId}",
+    region: "us-central1",
+  },
+  async (event) => {
+    const snapshot = event.data;
+    if (!snapshot) return;
+
+    const data = snapshot.data();
+    const parentId = data.parentId;
+    const childId = data.childId;
+
+    console.log(`🔗 [OnLinkDeleted] Vínculo eliminado: ${parentId} -> ${childId}`);
+
+    const db = getFirestore();
+
+    try {
+      const userRef = db.collection("users").doc(parentId);
+
+      await userRef.update({
+        linkedChildrenIds: FieldValue.arrayRemove(childId),
+        linkedChildrenIdsUpdatedAt: FieldValue.serverTimestamp(),
+      });
+
+      console.log(`✅ [OnLinkDeleted] Removido ${childId} de linkedChildrenIds de ${parentId}`);
+    } catch (error) {
+      console.error("❌ [OnLinkDeleted] Error:", error);
+    }
+  },
+);
+
+/**
+ * Cloud Function para desvincular un hijo de un padre
+ * Esta función maneja todas las operaciones necesarias con permisos admin:
+ * - Elimina el enlace parent_children
+ * - Limpia solicitudes pendientes (historias, parent_approval_requests)
+ * - Desactiva moderación en chats
+ * - Cambia el rol del padre si no le quedan hijos vinculados
+ */
+exports.unlinkChild = onCall(
+  {
+    region: "us-central1",
+    consumeAppCheckToken: true,
+  },
+  async (request) => {
+    // Verificar que el usuario esté autenticado
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Usuario no autenticado");
+    }
+
+    const { childId } = request.data;
+    const parentId = request.auth.uid;
+
+    if (!childId) {
+      throw new HttpsError("invalid-argument", "childId es requerido");
+    }
+
+    console.log(`🔄 [unlinkChild] Iniciando desvinculación: padre=${parentId}, hijo=${childId}`);
+
+    const db = getFirestore();
+
+    try {
+      // 1. Verificar que el vínculo existe y que el usuario es el padre
+      const linkQuery = await db.collection("parent_children")
+        .where("parentId", "==", parentId)
+        .where("childId", "==", childId)
+        .get();
+
+      if (linkQuery.empty) {
+        throw new HttpsError("not-found", "Vínculo padre-hijo no encontrado");
+      }
+
+      // 2. Eliminar el enlace padre-hijo
+      const batch = db.batch();
+      for (const doc of linkQuery.docs) {
+        batch.delete(doc.ref);
+        console.log(`✅ [unlinkChild] Marcado para eliminar enlace: ${doc.id}`);
+      }
+
+      // 3. Limpiar solicitudes de aprobación de historias pendientes de este padre
+      const storyApprovalQuery = await db.collection("story_approval_requests")
+        .where("childId", "==", childId)
+        .where("parentId", "==", parentId)
+        .where("status", "==", "pending")
+        .get();
+
+      for (const doc of storyApprovalQuery.docs) {
+        batch.delete(doc.ref);
+        console.log(`✅ [unlinkChild] Marcado para eliminar solicitud de historia: ${doc.id}`);
+      }
+
+      // 4. Limpiar solicitudes de aprobación de padres donde este padre está involucrado
+      const parentApprovalQuery = await db.collection("parent_approval_requests")
+        .where("childId", "==", childId)
+        .where("existingParentId", "==", parentId)
+        .where("status", "==", "pending")
+        .get();
+
+      for (const doc of parentApprovalQuery.docs) {
+        batch.delete(doc.ref);
+        console.log(`✅ [unlinkChild] Marcado para eliminar solicitud de aprobación de padre: ${doc.id}`);
+      }
+
+      // Ejecutar el batch de eliminaciones
+      await batch.commit();
+      console.log(`✅ [unlinkChild] Batch de eliminaciones completado`);
+
+      // 5. Desactivar configuraciones de moderación en chats entre este padre e hijo
+      const chatsQuery = await db.collection("chats")
+        .where("participants", "array-contains", parentId)
+        .get();
+
+      for (const chatDoc of chatsQuery.docs) {
+        const chatData = chatDoc.data();
+        const participants = chatData.participants || [];
+
+        // Si el chat es entre este padre y el hijo desvinculado
+        if (participants.includes(childId) && participants.includes(parentId)) {
+          await chatDoc.ref.update({
+            [`moderationEnabled_${parentId}`]: false,
+            [`moderationSettings_${parentId}`]: FieldValue.delete(),
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+          console.log(`✅ [unlinkChild] Desactivada moderación en chat: ${chatDoc.id}`);
+        }
+      }
+
+      // 6. Verificar si este padre tiene más hijos vinculados
+      const remainingLinksQuery = await db.collection("parent_children")
+        .where("parentId", "==", parentId)
+        .where("status", "==", "approved")
+        .limit(1)
+        .get();
+
+      // 7. Si el padre no tiene más hijos, cambiar su rol a 'adult'
+      if (remainingLinksQuery.empty) {
+        console.log(`👤 [unlinkChild] No quedan hijos vinculados - cambiando rol de 'parent' a 'adult'`);
+        await db.collection("users").doc(parentId).update({
+          role: "adult",
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        console.log(`✅ [unlinkChild] Rol del padre cambiado a 'adult'`);
+      } else {
+        console.log(`👤 [unlinkChild] Padre tiene ${remainingLinksQuery.size} hijo(s) adicional(es) - mantiene rol 'parent'`);
+      }
+
+      // 8. Verificar si el hijo tiene otros padres
+      const otherParentsQuery = await db.collection("parent_children")
+        .where("childId", "==", childId)
+        .where("status", "==", "approved")
+        .get();
+
+      const hasOtherParents = !otherParentsQuery.empty;
+      console.log(`👨‍👩‍👧 [unlinkChild] Hijo tiene ${otherParentsQuery.size} padre(s) adicional(es)`);
+
+      console.log(`✅ [unlinkChild] Desvinculación completada exitosamente`);
+
+      return {
+        success: true,
+        hasOtherParents,
+        message: hasOtherParents ?
+          "Hijo desvinculado de este padre (hijo mantiene vínculos con otros padres)" :
+          "Hijo desvinculado de su último padre",
+      };
+    } catch (error) {
+      console.error(`❌ [unlinkChild] Error:`, error);
+      throw new HttpsError("internal", `Error desvinculando hijo: ${error.message}`);
+    }
+  },
+);
+
+/**
+ * Cloud Function para actualizar el perfil del usuario
+ * Maneja el cambio automático de rol basado en la edad
+ */
+exports.updateUserProfile = onCall(
+  {
+    region: "us-central1",
+    timeoutSeconds: 60,
+    memory: "256MiB",
+    consumeAppCheckToken: true,
+  },
+  async (request) => {
+    const {auth, data} = request;
+    const db = getFirestore();
+
+    try {
+      console.log("📝 [updateUserProfile] Iniciando actualización de perfil");
+
+      // 1. Verificar autenticación
+      if (!auth) {
+        console.log("❌ [updateUserProfile] Usuario no autenticado");
+        throw new HttpsError("unauthenticated", "Debe iniciar sesión");
+      }
+
+      const userId = auth.uid;
+      console.log(`👤 [updateUserProfile] Usuario: ${userId}`);
+
+      // 2. Validar parámetros
+      const {name, phone, birthDate} = data;
+
+      if (!name || typeof name !== "string") {
+        throw new HttpsError("invalid-argument", "El nombre es requerido");
+      }
+
+      if (!phone || typeof phone !== "string") {
+        throw new HttpsError("invalid-argument", "El teléfono es requerido");
+      }
+
+      if (!birthDate) {
+        throw new HttpsError("invalid-argument", "La fecha de nacimiento es requerida");
+      }
+
+      console.log(`📋 [updateUserProfile] Datos recibidos: name=${name}, phone=${phone}, birthDate=${birthDate}`);
+
+      // 3. Calcular edad
+      const birthDateObj = Timestamp.fromDate(new Date(birthDate));
+      const age = Math.floor((Date.now() - birthDateObj.toDate().getTime()) / (1000 * 60 * 60 * 24 * 365.25));
+      console.log(`📅 [updateUserProfile] Edad calculada: ${age} años`);
+
+      // 4. Verificar si el usuario tiene hijos vinculados (para determinar si debe ser 'parent')
+      const parentChildrenQuery = await db.collection("parent_children")
+        .where("parentId", "==", userId)
+        .where("status", "==", "approved")
+        .limit(1)
+        .get();
+
+      const hasChildren = !parentChildrenQuery.empty;
+      console.log(`👨‍👧‍👦 [updateUserProfile] Usuario tiene hijos vinculados: ${hasChildren}`);
+
+      // 5. Determinar rol basado en edad y vínculos
+      let newRole;
+      if (hasChildren) {
+        // Si tiene hijos vinculados, es 'parent' independientemente de la edad
+        newRole = "parent";
+        console.log(`👔 [updateUserProfile] Usuario tiene hijos → rol 'parent'`);
+      } else if (age >= 18) {
+        // Mayor de edad sin hijos → 'adult'
+        newRole = "adult";
+        console.log(`🧑 [updateUserProfile] Usuario >= 18 años sin hijos → rol 'adult'`);
+      } else {
+        // Menor de edad → 'child'
+        newRole = "child";
+        console.log(`👶 [updateUserProfile] Usuario < 18 años → rol 'child'`);
+      }
+
+      // 6. Actualizar perfil en Firestore (con privilegios de admin)
+      const updateData = {
+        name,
+        phone,
+        birthDate: birthDateObj,
+        role: newRole,
+        updatedAt: FieldValue.serverTimestamp(),
+      };
+
+      await db.collection("users").doc(userId).update(updateData);
+
+      console.log(`✅ [updateUserProfile] Perfil actualizado exitosamente - rol: ${newRole}`);
+
+      // 7. Retornar resultado
+      return {
+        success: true,
+        role: newRole,
+        age,
+        message: "Perfil actualizado exitosamente",
+      };
+    } catch (error) {
+      console.error(`❌ [updateUserProfile] Error:`, error);
+      if (error instanceof HttpsError) {
+        throw error;
+      }
+      throw new HttpsError("internal", `Error actualizando perfil: ${error.message}`);
+    }
+  },
+);
+
+/**
+ * Cloud Function para crear grupos con validaciones completas
+ * Maneja permisos, invitaciones pendientes y notificaciones
+ */
+exports.createGroup = onCall(
+  { consumeAppCheckToken: true },
+  async (request) => {
+    const db = admin.firestore();
+    const { name, description, avatar, initialMembers } = request.data;
+    const creatorId = request.auth.uid;
+
+    console.log(`🎯 [createGroup] Creando grupo "${name}" por usuario: ${creatorId}`);
+    console.log(`🎯 [createGroup] Miembros iniciales:`, initialMembers);
+
+    try {
+      // 1. Validaciones básicas
+      if (!name || name.trim().length === 0) {
+        throw new HttpsError("invalid-argument", "El nombre del grupo es requerido");
+      }
+
+      if (!Array.isArray(initialMembers) || initialMembers.length === 0) {
+        throw new HttpsError("invalid-argument", "Debes seleccionar al menos un miembro");
+      }
+
+      // 2. Obtener información del creador
+      const creatorDoc = await db.collection("users").doc(creatorId).get();
+      if (!creatorDoc.exists) {
+        throw new HttpsError("not-found", "Usuario creador no encontrado");
+      }
+      const creatorData = creatorDoc.data();
+      const creatorName = creatorData.name || "Usuario";
+
+      // 3. Verificar que todos los miembros sean contactos del creador
+      const invalidMembers = [];
+      for (const memberId of initialMembers) {
+        const isContact = await isUserContact(creatorId, memberId, db);
+        if (!isContact) {
+          const memberDoc = await db.collection("users").doc(memberId).get();
+          const memberName = memberDoc.exists ? memberDoc.data().name : "Usuario";
+          invalidMembers.push(memberName || memberId);
+        }
+      }
+
+      if (invalidMembers.length > 0) {
+        throw new HttpsError(
+          "permission-denied",
+          `No puedes invitar a usuarios que no son tus contactos: ${invalidMembers.join(", ")}`,
+        );
+      }
+
+      // 4. Verificar permisos con cada miembro
+      const approvedMembers = [creatorId]; // El creador siempre está aprobado
+      const pendingMembers = [];
+      const permissionChecks = [];
+
+      for (const memberId of initialMembers) {
+        // Obtener rol del miembro
+        const memberDoc = await db.collection("users").doc(memberId).get();
+        if (!memberDoc.exists) {
+          console.warn(`⚠️ [createGroup] Miembro ${memberId} no existe, saltando`);
+          continue;
+        }
+
+        const memberData = memberDoc.data();
+        const memberRole = memberData.role || "child";
+
+        // Verificar si hay permiso de chat
+        const canChat = await checkChatPermission(creatorId, memberId, db);
+
+        if (canChat) {
+          approvedMembers.push(memberId);
+          console.log(`✅ [createGroup] Miembro ${memberId} aprobado`);
+        } else {
+          pendingMembers.push({
+            userId: memberId,
+            name: memberData.name || "Usuario",
+            role: memberRole,
+          });
+          console.log(`⏳ [createGroup] Miembro ${memberId} pendiente de aprobación`);
+        }
+      }
+
+      console.log(`📊 [createGroup] Aprobados: ${approvedMembers.length}, Pendientes: ${pendingMembers.length}`);
+
+      // 4. Crear el grupo con los miembros aprobados
+      const groupRef = await db.collection("groups").add({
+        name: name.trim(),
+        description: description?.trim() || "",
+        avatar: avatar || null,
+        createdBy: creatorId,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        isActive: true,
+        members: approvedMembers,
+        admins: [creatorId],
+        settings: {
+          maxMembers: 10,
+          allowMemberInvites: true,
+          requireAdminApproval: false,
+        },
+        lastActivity: admin.firestore.FieldValue.serverTimestamp(),
+        messageCount: 0,
+      });
+
+      const groupId = groupRef.id;
+      console.log(`✅ [createGroup] Grupo creado con ID: ${groupId}`);
+
+      // 5. Crear invitaciones y solicitudes de permiso para miembros pendientes
+      const invitationsCreated = [];
+
+      for (const pendingMember of pendingMembers) {
+        try {
+          // Crear invitación pendiente
+          const invitationRef = await db.collection("groupInvitations").add({
+            groupId,
+            invitedUserId: pendingMember.userId,
+            invitedBy: creatorId,
+            status: "pending",
+            missingPermissions: [{
+              fromUserId: creatorId,
+              toUserId: pendingMember.userId,
+              direction: "between_creator_and_member",
+              status: "pending",
+            }],
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            expiresAt: admin.firestore.Timestamp.fromDate(
+              new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+            ), // 7 días
+          });
+
+          console.log(`📨 [createGroup] Invitación creada para ${pendingMember.userId}: ${invitationRef.id}`);
+
+          // Si el miembro pendiente es un child, notificar a sus padres
+          if (pendingMember.role === "child") {
+            await createPermissionRequestsForChild({
+              childId: pendingMember.userId,
+              childName: pendingMember.name,
+              groupId,
+              groupName: name.trim(),
+              creatorId,
+              creatorName,
+              db,
+            });
+          }
+
+          invitationsCreated.push({
+            userId: pendingMember.userId,
+            invitationId: invitationRef.id,
+          });
+        } catch (error) {
+          console.error(`❌ [createGroup] Error creando invitación para ${pendingMember.userId}:`, error);
+        }
+      }
+
+      // 6. Retornar resultado
+      return {
+        success: true,
+        groupId,
+        approvedMembers,
+        pendingMembers: pendingMembers.map((pm) => pm.userId),
+        invitationsCreated,
+        message: pendingMembers.length > 0 ?
+          `Grupo creado. ${pendingMembers.length} miembro(s) pendiente(s) de aprobación` :
+          "Grupo creado exitosamente",
+      };
+    } catch (error) {
+      console.error(`❌ [createGroup] Error:`, error);
+      if (error instanceof HttpsError) {
+        throw error;
+      }
+      throw new HttpsError("internal", `Error creando grupo: ${error.message}`);
+    }
+  },
+);
+
+/**
+ * Verificar si dos usuarios pueden chatear
+ */
+async function checkChatPermission(userId1, userId2, db) {
+  try {
+    // Obtener roles de ambos usuarios
+    const [user1Doc, user2Doc] = await Promise.all([
+      db.collection("users").doc(userId1).get(),
+      db.collection("users").doc(userId2).get(),
+    ]);
+
+    if (!user1Doc.exists || !user2Doc.exists) {
+      return false;
+    }
+
+    const user1Role = user1Doc.data().role || "child";
+    const user2Role = user2Doc.data().role || "child";
+
+    // Si ambos son padres, pueden chatear libremente
+    if (user1Role === "parent" && user2Role === "parent") {
+      return true;
+    }
+
+    // Si hay al menos un child, verificar permisos
+    const childId = user1Role === "child" ? userId1 : userId2;
+    const contactId = user1Role === "child" ? userId2 : userId1;
+
+    // Verificar si existe permiso en chat_permissions
+    const permissionsQuery = await db
+      .collection("chat_permissions")
+      .where("childId", "==", childId)
+      .get();
+
+    for (const doc of permissionsQuery.docs) {
+      const data = doc.data();
+      if (data.allowedContacts && data.allowedContacts.includes(contactId)) {
+        return true;
+      }
+    }
+
+    // Verificar si son contactos directos
+    const contactsQuery = await db
+      .collection("contacts")
+      .where("users", "array-contains", childId)
+      .get();
+
+    for (const doc of contactsQuery.docs) {
+      const data = doc.data();
+      if (data.users && data.users.includes(contactId) && data.status === "accepted") {
+        return true;
+      }
+    }
+
+    return false;
+  } catch (error) {
+    console.error("❌ [checkChatPermission] Error:", error);
+    return false;
+  }
+}
+
+/**
+ * Crear solicitudes de permiso para los padres de un child
+ */
+async function createPermissionRequestsForChild({
+  childId,
+  childName,
+  groupId,
+  groupName,
+  creatorId,
+  creatorName,
+  db,
+}) {
+  try {
+    // Obtener padres vinculados al child
+    const linksQuery = await db
+      .collection("parent_children")
+      .where("childId", "==", childId)
+      .where("status", "==", "approved")
+      .get();
+
+    const parentIds = linksQuery.docs.map((doc) => doc.data().parentId);
+
+    if (parentIds.length === 0) {
+      console.log(`⚠️ [createPermissionRequestsForChild] No se encontraron padres para ${childId}`);
+      return;
+    }
+
+    // Obtener información del contacto a aprobar (el creador del grupo)
+    const creatorDoc = await db.collection("users").doc(creatorId).get();
+    const creatorData = creatorDoc.data() || {};
+
+    // Crear solicitud de permiso para cada padre
+    for (const parentId of parentIds) {
+      await db.collection("permission_requests").add({
+        type: "group_invitation",
+        childId,
+        parentId,
+        createdBy: creatorId, // ✅ Quien crea la solicitud
+        groupInfo: {
+          groupId,
+          groupName,
+          invitedBy: creatorName,
+        },
+        contactToApprove: {
+          userId: creatorId,
+          name: creatorName,
+          email: creatorData.email || "",
+        },
+        missingPermissions: [{
+          fromUserId: childId,
+          toUserId: creatorId,
+          direction: "needs_approval",
+        }],
+        status: "pending",
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      console.log(`✅ [createPermissionRequestsForChild] Solicitud creada para padre ${parentId}`);
+    }
+  } catch (error) {
+    console.error("❌ [createPermissionRequestsForChild] Error:", error);
+  }
+}
+
+/**
+ * Verificar si un usuario es contacto de otro
+ */
+async function isUserContact(userId1, userId2, db) {
+  try {
+    // Buscar en la colección contacts
+    const contactsQuery = await db
+      .collection("contacts")
+      .where("users", "array-contains", userId1)
+      .get();
+
+    for (const doc of contactsQuery.docs) {
+      const data = doc.data();
+      // Verificar que:
+      // 1. El otro usuario esté en el array users
+      // 2. El contacto esté aceptado (no eliminado ni pendiente)
+      if (data.users &&
+          data.users.includes(userId2) &&
+          data.status === "accepted" &&
+          !data.deleted) {
+        return true;
+      }
+    }
+
+    return false;
+  } catch (error) {
+    console.error("❌ [isUserContact] Error:", error);
+    return false;
+  }
+}
