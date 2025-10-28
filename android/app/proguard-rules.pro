@@ -6,3 +6,7 @@
 # Keep CameraX
 -keep class androidx.camera.** { *; }
 -keepclassmembers class androidx.camera.** { *; }
+
+# Keep Agora RTC SDK
+-keep class io.agora.**{*;}
+-dontwarn io.agora.**

@@ -37,9 +37,16 @@ class DeepARCameraController(
     private var lensFacing = CameraSelector.LENS_FACING_FRONT
     private var hasDetectedCameras = false
 
+    // Bandera para controlar si debemos procesar frames
+    @Volatile
+    private var isProcessing = false
+
     fun startCamera() {
         Log.d(TAG, "📷 Iniciando CameraX...")
         Log.i("flutter", "📱 [ANDROID] 📷 DeepARCameraController.startCamera() llamado")
+
+        // Activar procesamiento de frames
+        isProcessing = true
 
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
 
@@ -94,11 +101,12 @@ class DeepARCameraController(
             hasDetectedCameras = true
         }
 
-        // Configurar análisis de imagen para procesar frames con mayor resolución
+        // Configurar análisis de imagen para procesar frames
+        // Usar AspectRatio 4:3 que es más común en cámaras móviles y evita crop/zoom excesivo
         imageAnalyzer = ImageAnalysis.Builder()
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
-            .setTargetResolution(android.util.Size(1280, 720))  // 720p para mejor calidad
+            .setTargetAspectRatio(AspectRatio.RATIO_4_3)
             .build()
             .also { analysis ->
                 analysis.setAnalyzer(cameraExecutor) { imageProxy ->
@@ -144,6 +152,12 @@ class DeepARCameraController(
     @SuppressLint("UnsafeOptInUsageError")
     private fun processImageProxy(imageProxy: ImageProxy) {
         try {
+            // Si no estamos procesando, cerrar el frame y salir
+            if (!isProcessing) {
+                imageProxy.close()
+                return
+            }
+
             val image = imageProxy.image ?: run {
                 imageProxy.close()
                 return
@@ -197,19 +211,13 @@ class DeepARCameraController(
             val uvWidth = (width + 1) / 2
             val uvHeight = (height + 1) / 2
 
-            if (uvPixelStride == 2 && uvRowStride == width) {
-                // Caso optimizado: UV ya está entrelazado
-                vBuffer.position(0)
-                vBuffer.get(nv21, pos, uvWidth * uvHeight * 2)
-            } else {
-                // Copiar manualmente intercalando V y U
-                for (row in 0 until uvHeight) {
-                    for (col in 0 until uvWidth) {
-                        val vIndex = row * uvRowStride + col * uvPixelStride
-                        val uIndex = row * uvRowStride + col * uvPixelStride
-                        nv21[pos++] = vBuffer.get(vIndex)
-                        nv21[pos++] = uBuffer.get(uIndex)
-                    }
+            // Copiar manualmente intercalando V y U para garantizar formato correcto
+            for (row in 0 until uvHeight) {
+                for (col in 0 until uvWidth) {
+                    val uvIndex = row * uvRowStride + col * uvPixelStride
+                    // NV21 es VUVUVU...
+                    nv21[pos++] = vBuffer.get(uvIndex)
+                    nv21[pos++] = uBuffer.get(uvIndex)
                 }
             }
 
@@ -292,8 +300,16 @@ class DeepARCameraController(
 
     fun stopCamera() {
         try {
+            // Desactivar procesamiento de frames PRIMERO para evitar race conditions
+            isProcessing = false
+            Log.d(TAG, "🛑 Procesamiento de frames desactivado")
+
+            // Limpiar callbacks pendientes del mainHandler
+            mainHandler.removeCallbacksAndMessages(null)
+            Log.d(TAG, "🧹 Callbacks de mainHandler limpiados")
+
+            // Desvincular todos los use cases
             cameraProvider?.unbindAll()
-            // NO cerrar el executor, solo desvincular para poder reabrir
             Log.d(TAG, "⏹️ Cámara desvinculada (listo para reabrir)")
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error deteniendo cámara", e)

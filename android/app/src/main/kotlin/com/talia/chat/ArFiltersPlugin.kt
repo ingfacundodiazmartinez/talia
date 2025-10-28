@@ -422,11 +422,18 @@ class ArFiltersPlugin : FlutterPlugin, MethodCallHandler, StreamHandler, Activit
                 deepAR?.stopVideoRecording()
             }
 
+            // CRÍTICO: Detener la cámara ANTES de liberar DeepAR
+            // para evitar que siga enviando frames a un DeepAR ya liberado
+            cameraController?.stopCamera()
+            cameraController = null
+            Log.d(TAG, "⏹️ Camera controller detenido y limpiado")
+
             deepAR?.release()
             deepAR = null
             currentARView = null
             isInitialized = false
             currentFilter = null
+            isCaptureStarted = false
 
             result.success(null)
         } catch (e: Exception) {
@@ -722,6 +729,15 @@ class DeepARPlatformView(
 
     override fun dispose() {
         Log.d(TAG, "🗑️ DeepARPlatformView dispose")
-        // NO limpiar el SurfaceView aquí, lo reutilizaremos
+        try {
+            // Remover SurfaceView del contenedor para evitar race conditions con Flutter
+            surfaceView?.let { sv ->
+                container.removeView(sv)
+                Log.d(TAG, "✅ SurfaceView removido del contenedor")
+            }
+            surfaceView = null
+        } catch (e: Exception) {
+            Log.e(TAG, "⚠️ Error en dispose: ${e.message}", e)
+        }
     }
 }
