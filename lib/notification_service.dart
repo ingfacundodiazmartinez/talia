@@ -105,6 +105,10 @@ class NotificationService {
   final _emergencyNotificationTapController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get emergencyNotificationTapStream => _emergencyNotificationTapController.stream;
 
+  // Stream para notificar cuando se toca una notificación de solicitud de contacto
+  final _contactRequestNotificationTapController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get contactRequestNotificationTapStream => _contactRequestNotificationTapController.stream;
+
   // Método público para emitir llamadas entrantes al stream
   void emitIncomingCall(Map<String, dynamic> callData) {
     _incomingCallController.add(callData);
@@ -348,17 +352,9 @@ class NotificationService {
       // Verificar si es una videollamada o llamada de audio
       if (message.data['type'] == 'video_call' || message.data['type'] == 'audio_call') {
         print('📞 ${message.data['type'] == 'video_call' ? 'Videollamada' : 'Llamada de audio'} entrante detectada');
-
-        // Mostrar CallKit en pantalla completa
-        _callKit.showIncomingCall(
-          callId: message.data['callId'] ?? message.messageId ?? '',
-          callerName: message.data['callerName'] ?? 'Usuario',
-          callerId: message.data['callerId'] ?? message.data['senderId'] ?? '',
-          callerPhotoUrl: message.data['callerPhotoURL'],
-          callType: message.data['type'] == 'audio_call' ? 'audio' : 'video',
-          isEmergency: message.data['isEmergency'] == 'true',
-          extraData: message.data,
-        );
+        print('✅ App en foreground - NO mostrar CallKit (el listener de Firestore en child_home_controller ya muestra el diálogo de Flutter)');
+        // NO hacer nada - el listener de Firestore ya maneja esto mostrando IncomingCallDialog
+        return;
       } else {
         // ✅ NO mostrar notificaciones push cuando la app está en foreground
         // Las custom notifications (ForegroundMessageListener) se encargan de mostrar los mensajes
@@ -596,6 +592,9 @@ class NotificationService {
       }
 
       _chatNotificationTapController.add(data);
+    } else if (data['type'] == 'contact_request') {
+      print('👥 Notificación de solicitud de contacto tocada, navegando a contactos');
+      _contactRequestNotificationTapController.add(data);
     } else if (data['type'] == 'emergency') {
       print('🆘 Notificación de emergencia tocada, navegando a detalles');
       _emergencyNotificationTapController.add(data);
@@ -629,23 +628,26 @@ class NotificationService {
         return false;
       }
 
-      // Crear notificación en Firestore
-      final priority = NotificationTypes.getPriority(notificationType);
+      // ⚠️ NOTA: Las notificaciones son creadas por Cloud Functions, no por el cliente
+      // Las Cloud Functions tienen permisos de administrador y pueden crear notificaciones de forma segura
+      // El cliente solo envía mensajes, y las Cloud Functions detectan esos mensajes y crean las notificaciones
 
-      await _firestore.collection('notifications').add({
-        'userId': userId,
-        'senderId': senderId,
-        'type': notificationType,
-        'title': title,
-        'body': body,
-        'imageUrl': imageUrl,
-        'data': data,
-        'timestamp': FieldValue.serverTimestamp(),
-        'read': false,
-        'priority': priority,
-      });
+      // CÓDIGO COMENTADO - Las Cloud Functions se encargan de crear las notificaciones
+      // final priority = NotificationTypes.getPriority(notificationType);
+      // await _firestore.collection('notifications').add({
+      //   'userId': userId,
+      //   'senderId': senderId,
+      //   'type': notificationType,
+      //   'title': title,
+      //   'body': body,
+      //   'imageUrl': imageUrl,
+      //   'data': data,
+      //   'timestamp': FieldValue.serverTimestamp(),
+      //   'read': false,
+      //   'priority': priority,
+      // });
 
-      print('✅ Notificación creada para usuario ${userId.substring(0, 8)}... (tipo: $notificationType)');
+      print('✅ Notificación delegada a Cloud Functions para usuario ${userId.substring(0, 8)}... (tipo: $notificationType)');
       return true;
     } catch (e) {
       print('❌ Error creando notificación: $e');

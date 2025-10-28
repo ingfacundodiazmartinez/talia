@@ -7,6 +7,7 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/video_call_service.dart';
+import '../services/callkit_service.dart';
 import '../screens/video_call_screen.dart';
 import '../screens/audio_call_screen.dart';
 
@@ -379,6 +380,16 @@ class _IncomingCallDialogState extends State<IncomingCallDialog> with SingleTick
 
       // Detener sonido inmediatamente para mejor UX
       await _audioPlayer.stop();
+
+      // ✅ IMPORTANTE: Cancelar CallKit notification (si existe) para evitar duplicación
+      print('🔕 Cancelando CallKit notification...');
+      try {
+        await CallKitService().endCall(widget.callId);
+        print('✅ CallKit notification cancelada exitosamente');
+      } catch (callKitError) {
+        print('⚠️ Error cancelando CallKit (puede que no haya estado activo): $callKitError');
+        // Continuar de todos modos - no es crítico
+      }
 
       // Aceptar la llamada en Firestore
       print('📝 Actualizando estado de llamada en Firestore...');
