@@ -212,32 +212,23 @@ class StoryService {
       }
     }
 
-    // 2. Si es padre: obtener hijos vinculados desde parent_children
-    final parentLinksSnapshot = await _firestore
-        .collection('parent_children')
-        .where('parentId', isEqualTo: user.uid)
-        .where('status', isEqualTo: 'approved')
-        .get();
-
-    for (final linkDoc in parentLinksSnapshot.docs) {
-      final childId = linkDoc.data()['childId'] as String?;
-      if (childId != null) {
-        contactIds.add(childId);
-      }
+    // 2. Si es padre: obtener hijos vinculados desde linkedChildrenIds
+    // ⚠️ CORREGIDO: Lee desde /users/{userId}.linkedChildrenIds por seguridad
+    final userDoc = await _firestore.collection('users').doc(user.uid).get();
+    if (userDoc.exists) {
+      final userData = userDoc.data() as Map<String, dynamic>?;
+      final linkedChildrenIds = List<String>.from(userData?['linkedChildrenIds'] ?? []);
+      contactIds.addAll(linkedChildrenIds);
     }
 
-    // 3. Si es hijo: obtener padres vinculados desde parent_children
-    final childLinksSnapshot = await _firestore
-        .collection('parent_children')
-        .where('childId', isEqualTo: user.uid)
-        .where('status', isEqualTo: 'approved')
+    // 3. Si es hijo: obtener padres vinculados (buscar en users donde linkedChildrenIds contenga user.uid)
+    final parentsSnapshot = await _firestore
+        .collection('users')
+        .where('linkedChildrenIds', arrayContains: user.uid)
         .get();
 
-    for (final linkDoc in childLinksSnapshot.docs) {
-      final parentId = linkDoc.data()['parentId'] as String?;
-      if (parentId != null) {
-        contactIds.add(parentId);
-      }
+    for (final parentDoc in parentsSnapshot.docs) {
+      contactIds.add(parentDoc.id);
     }
 
     print('✅ Contactos recalculados: ${contactIds.length}');
@@ -262,10 +253,13 @@ class StoryService {
       yield _cachedStories!;
     }
 
-    // Escuchar cambios en historias (incluye updates a viewedBy)
+    // ⚠️ CORREGIDO: En lugar de escuchar TODAS las historias globalmente,
+    // escuchamos solo las del usuario actual y hacemos polling para contactos
+
+    // Escuchar cambios en las propias historias del usuario
     await for (final _ in _firestore
         .collection('stories')
-        .where('status', whereIn: ['approved', 'pending'])
+        .where('userId', isEqualTo: user.uid)
         .snapshots()) {
 
       final List<UserStories> userStoriesList = [];
@@ -280,6 +274,7 @@ class StoryService {
       }
 
       // Obtener historias de contactos (excluir usuario actual para evitar duplicados)
+      // ⚠️ NOTA: Estas son consultas individuales por contacto, no una query global
       for (final contactId in contactIds) {
         // Skip si es el usuario actual (ya lo agregamos arriba)
         if (contactId == user.uid) {
@@ -363,11 +358,51 @@ class StoryService {
         return expiresAt != null && expiresAt.isAfter(now);
       }).toList();
 
-      if (validDocs.isEmpty) {
-        return null;
+      // Crear lista de stories combinando aprobadas y pendientes
+      final List<Story> stories = validDocs.map((doc) => Story.fromFirestore(doc)).toList();
+
+      // ✅ NUEVO: Si el usuario actual es padre, también buscar historias pendientes en story_approval_requests
+      final currentUser = _auth.currentUser;
+      if (currentUser != null) {
+        try {
+          final approvalRequestsQuery = await _firestore
+              .collection('story_approval_requests')
+              .where('childId', isEqualTo: userId)
+              .where('parentId', isEqualTo: currentUser.uid)
+              .where('status', isEqualTo: 'pending')
+              .get(const GetOptions(source: Source.server));
+
+          // Agregar las historias pendientes a la lista
+          for (final requestDoc in approvalRequestsQuery.docs) {
+            final requestData = requestDoc.data();
+            final storyId = requestData['storyId'] as String?;
+
+            if (storyId != null) {
+              // Obtener la historia completa desde la colección stories
+              final storyDoc = await _firestore
+                  .collection('stories')
+                  .doc(storyId)
+                  .get(const GetOptions(source: Source.server));
+
+              if (storyDoc.exists) {
+                final storyData = storyDoc.data() as Map<String, dynamic>;
+                final expiresAt = (storyData['expiresAt'] as Timestamp?)?.toDate();
+                // Solo agregar si no ha expirado
+                if (expiresAt != null && expiresAt.isAfter(now)) {
+                  stories.add(Story.fromFirestore(storyDoc as dynamic));
+                }
+              }
+            }
+          }
+        } catch (e) {
+          print('⚠️ Error obteniendo historias pendientes de $userId: $e');
+          // No es crítico, continuar con las historias aprobadas
+        }
       }
 
-      final stories = validDocs.map((doc) => Story.fromFirestore(doc)).toList();
+      if (stories.isEmpty) {
+        return null;
+      }
 
       // Verificar si hay historias no vistas por el usuario actual
       final currentUserId = _auth.currentUser?.uid;
@@ -990,17 +1025,9 @@ class StoryService {
           print('⚠️ Error enviando mensaje al chat: $chatError');
         }
 
-        // Enviar notificación
-        try {
-          await _notificationService.sendStoryReplyNotification(
-            userId: storyOwnerId,
-            replierName: userData?['name'] ?? 'Usuario',
-            replyText: text,
-          );
-          print('📬 Notificación enviada al creador de la historia');
-        } catch (notifError) {
-          print('⚠️ Error enviando notificación de respuesta: $notifError');
-        }
+        // ✅ NO enviar notificación aquí - la Cloud Function la enviará después de moderar
+        // Esto evita notificaciones duplicadas (una de historia + una del chat)
+        print('✅ Mensaje enviado al chat - Cloud Function enviará la notificación tras moderar');
       }
     } catch (e) {
       print('❌ Error respondiendo a historia: $e');

@@ -1,11 +1,14 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../models/story.dart';
 import '../services/story_service.dart';
 import '../screens/story_camera_screen.dart';
 import '../screens/story_viewer_screen.dart';
 import '../theme_service.dart';
+import '../widgets/permission_dialog.dart';
 
 class StoriesSection extends StatefulWidget {
   const StoriesSection({super.key});
@@ -93,10 +96,63 @@ class _StoriesSectionState extends State<StoriesSection> {
 
   Widget _buildAddStoryButton(BuildContext context) {
     return GestureDetector(
-      onTap: () {
-        Navigator.of(context).push(
-          MaterialPageRoute(builder: (context) => StoryCameraScreen()),
-        );
+      onTap: () async {
+        final currentStatus = await Permission.camera.status;
+
+        // Si ya está permanentemente denegado, mostrar diálogo para ir a Settings
+        if (currentStatus.isPermanentlyDenied) {
+          if (context.mounted) {
+            PermissionDialog.showPermissionDeniedDialog(
+              context: context,
+              title: 'Permiso de Cámara Requerido',
+              message: 'Para crear historias necesitas habilitar el acceso a la cámara en la configuración de la aplicación.',
+            );
+          }
+          return;
+        }
+
+        // Si el permiso ya está concedido, ir directo a la cámara
+        if (currentStatus.isGranted) {
+          if (context.mounted) {
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (context) => const StoryCameraScreen()),
+            );
+          }
+          return;
+        }
+
+        // ANDROID: permission_handler funciona correctamente, solicitar permiso
+        if (Platform.isAndroid) {
+          final status = await Permission.camera.request();
+
+          if (status.isGranted) {
+            if (context.mounted) {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (context) => const StoryCameraScreen()),
+              );
+            }
+          } else if (status.isPermanentlyDenied) {
+            if (context.mounted) {
+              PermissionDialog.showPermissionDeniedDialog(
+                context: context,
+                title: 'Permiso de Cámara Requerido',
+                message: 'Para crear historias necesitas habilitar el acceso a la cámara en la configuración de la aplicación.',
+              );
+            }
+          }
+          // Si es denied pero no permanentemente, no hacer nada (usuario canceló)
+          return;
+        }
+
+        // iOS: Workaround por bug en permission_handler donde request()
+        // retorna permanentlyDenied sin mostrar el diálogo del sistema.
+        // Navegamos directamente a la cámara y dejamos que el camera package
+        // maneje los permisos automáticamente cuando intente abrir la cámara.
+        if (context.mounted) {
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (context) => const StoryCameraScreen()),
+          );
+        }
       },
       child: Container(
         width: 70,

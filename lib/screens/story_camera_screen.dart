@@ -2,17 +2,24 @@ import 'dart:io';
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:camera/camera.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../services/deepar_service.dart';
 import '../services/story_service.dart';
 import '../services/stickers_service.dart';
+import '../services/character_service.dart';
+import '../services/usage_limits_service.dart';
+import '../models/character.dart';
 import '../widgets/permission_dialog.dart';
 import '../widgets/camera/flutter_camera_view.dart';
 import '../widgets/camera/deepar_camera_view.dart';
+import '../widgets/character_selector_dialog.dart';
 import 'package:flutter_story_editor/flutter_story_editor.dart';
 import 'package:flutter_story_editor/src/controller/controller.dart';
 
@@ -44,6 +51,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   final DeepARService _deepARService = DeepARService();
   final ImagePicker _imagePicker = ImagePicker();
+  final CharacterService _characterService = CharacterService();
+  final UsageLimitsService _usageLimitsService = UsageLimitsService();
 
   // Stickers service and cache
   List<StickerMetadata> _stickerMetadata = [];
@@ -363,7 +372,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         throw Exception('El archivo de imagen no existe: $finalImagePath');
       }
 
-      print('✅ Navegando al editor de stories con: $finalImagePath');
+      print('✅ Foto capturada: $finalImagePath');
 
       // Navegar a pantalla de edición
       if (mounted) {
@@ -392,6 +401,182 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         setState(() {
           _isLoading = false;
         });
+      }
+    }
+  }
+
+  /// Manejar transformación de personaje
+  Future<void> _handleCharacterTransformation(String imagePath) async {
+    try {
+      print('🎭 Iniciando flujo de transformación de personaje...');
+
+      // 1. Verificar límite de uso
+      final canUse = await _usageLimitsService.canUseCharacterTransform();
+      final usage = await _usageLimitsService.getCharacterTransformUsage();
+
+      if (!canUse) {
+        // Mostrar mensaje de límite alcanzado
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: Row(
+                children: [
+                  Icon(Icons.info_outline, color: Color(0xFF9D7FE8)),
+                  SizedBox(width: 8),
+                  Text('Límite mensual alcanzado'),
+                ],
+              ),
+              content: Text(
+                'Has alcanzado el límite de ${usage['limit']} transformaciones con personajes IA este mes.\n\n'
+                'El límite se restablecerá el próximo mes.',
+                style: TextStyle(fontSize: 14),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: Text('Entendido', style: TextStyle(color: Color(0xFF9D7FE8))),
+                ),
+              ],
+            ),
+          );
+        }
+        return;
+      }
+
+      // Mostrar contador de usos restantes
+      print('ℹ️ Transformaciones restantes este mes: ${usage['remaining']}');
+
+      // 2. Mostrar selector de personajes
+      final Character? selectedCharacter = await showDialog<Character>(
+        context: context,
+        barrierDismissible: true,
+        builder: (context) => CharacterSelectorDialog(
+          remainingTransforms: usage['remaining'] as int,
+        ),
+      );
+
+      if (selectedCharacter == null) {
+        print('❌ Usuario canceló selección de personaje');
+        return;
+      }
+
+      print('✅ Personaje seleccionado: ${selectedCharacter.name}');
+
+      // 2. Mostrar dialog de carga
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => PopScope(
+            canPop: false,
+            child: AlertDialog(
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircularProgressIndicator(color: Color(0xFF9D7FE8)),
+                  SizedBox(height: 16),
+                  Text(
+                    'Transformando tu foto...',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'Esto puede tomar unos segundos',
+                    style: TextStyle(color: Colors.grey, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      }
+
+      // 3. Subir imagen a Firebase Storage
+      print('☁️ Subiendo imagen a Firebase Storage...');
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        throw Exception('Usuario no autenticado');
+      }
+
+      final storageRef = FirebaseStorage.instance
+          .ref()
+          .child('character_transformations')
+          .child(user.uid)
+          .child('${DateTime.now().millisecondsSinceEpoch}.jpg');
+
+      final uploadTask = await storageRef.putFile(File(imagePath));
+      final imageUrl = await uploadTask.ref.getDownloadURL();
+      print('✅ Imagen subida: $imageUrl');
+
+      // 4. Transformar imagen con IA
+      print('🤖 Llamando a Cloud Function para transformar...');
+      final transformedUrl = await _characterService.transformImage(
+        imageUrl: imageUrl,
+        characterId: selectedCharacter.id,
+      );
+      print('✅ Imagen transformada: $transformedUrl');
+
+      // 5. Descargar imagen transformada
+      print('📥 Descargando imagen transformada...');
+      final directory = await getTemporaryDirectory();
+      final transformedPath =
+          '${directory.path}/transformed_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final transformedFile = File(transformedPath);
+
+      // Descargar desde URL
+      final response = await HttpClient().getUrl(Uri.parse(transformedUrl));
+      final httpResponse = await response.close();
+      final bytes = await consolidateHttpClientResponseBytes(httpResponse);
+      await transformedFile.writeAsBytes(bytes);
+
+      print('✅ Imagen transformada descargada: $transformedPath');
+
+      // 6. Incrementar contador de uso (transformación exitosa)
+      await _usageLimitsService.incrementCharacterTransformUsage();
+      final updatedUsage = await _usageLimitsService.getCharacterTransformUsage();
+      print('ℹ️ Transformaciones usadas este mes: ${updatedUsage['count']}/${updatedUsage['limit']}');
+
+      // 7. Cerrar dialog de carga
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+
+      // 8. Abrir editor con imagen transformada
+      if (mounted) {
+        await _openStoryEditor(transformedPath, isVideo: false);
+      }
+    } catch (e, stackTrace) {
+      print('❌ Error en transformación: $e');
+      print('Stack trace: $stackTrace');
+
+      // Cerrar dialog de carga si está abierto
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Row(
+              children: [
+                Icon(Icons.error_outline, color: Colors.red),
+                SizedBox(width: 8),
+                Text('Error'),
+              ],
+            ),
+            content: Text(
+              'No se pudo transformar la imagen. Por favor intenta de nuevo.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text('OK'),
+              ),
+            ],
+          ),
+        );
       }
     }
   }
@@ -644,17 +829,23 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           await _openStoryEditor(videoPath, isVideo: true);
         }
 
-          // Reinicializar DeepAR si es necesario
-          if (_filterType == 'deepar' && mounted) {
-            print('🔄 Reinicializando DeepAR...');
-            await _deepARService.dispose();
+        // Reinicializar DeepAR si es necesario
+        if (_filterType == 'deepar' && mounted) {
+          print('🔄 Reinicializando DeepAR...');
+          await _deepARService.dispose();
+
+          // Esperar un poco para que el dispose termine completamente
+          await Future.delayed(Duration(milliseconds: 500));
+
+          if (mounted) {
             setState(() {
               _isDeepARInitialized = false;
               _deepARReinitCounter++;
             });
+            print('✅ DeepAR reinicialización preparada (contador: $_deepARReinitCounter)');
           }
         }
-      else {
+      } else {
         throw Exception('El archivo de video no existe');
       }
     } catch (e) {
@@ -745,34 +936,70 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       await Navigator.of(context).push(
         MaterialPageRoute(
           builder: (context) => Scaffold(
-            body: FlutterStoryEditor(
-              controller: controller,
-              captionController: captionController,
-              selectedFiles: [File(mediaPath)],
-              stickerMetadata: _stickerMetadata.isNotEmpty ? _stickerMetadata.cast<dynamic>() : null,
-              useCustomStickersOnly: _stickerMetadata.isNotEmpty, // Use only custom stickers if available
-              onSaveClickListener: (List<File> editedFiles) async {
-                print('✅ Archivos editados: ${editedFiles.length}');
+            body: Stack(
+              children: [
+                FlutterStoryEditor(
+                  controller: controller,
+                  captionController: captionController,
+                  selectedFiles: [File(mediaPath)],
+                  stickerMetadata: _stickerMetadata.isNotEmpty ? _stickerMetadata.cast<dynamic>() : null,
+                  useCustomStickersOnly: _stickerMetadata.isNotEmpty, // Use only custom stickers if available
+                  onSaveClickListener: (List<File> editedFiles) async {
+                    print('✅ Archivos editados: ${editedFiles.length}');
 
-                if (editedFiles.isNotEmpty && mounted) {
-                  final editedPath = editedFiles.first.path;
-                  print('📝 Publicando historia directamente...');
+                    if (editedFiles.isNotEmpty && mounted) {
+                      final editedPath = editedFiles.first.path;
+                      print('📝 Publicando historia directamente...');
 
-                  // Publicar historia primero (ANTES de cerrar el editor)
-                  await _publishStory(
-                    mediaPath: editedPath,
-                    isVideo: isVideo,
-                    caption: captionController.text.trim().isEmpty
-                        ? null
-                        : captionController.text.trim(),
-                  );
+                      // Publicar historia primero (ANTES de cerrar el editor)
+                      await _publishStory(
+                        mediaPath: editedPath,
+                        isVideo: isVideo,
+                        caption: captionController.text.trim().isEmpty
+                            ? null
+                            : captionController.text.trim(),
+                      );
 
-                  // Cerrar el editor DESPUÉS de publicar
-                  if (mounted) {
-                    Navigator.pop(context);
-                  }
-                }
-              },
+                      // Cerrar el editor DESPUÉS de publicar
+                      if (mounted) {
+                        Navigator.pop(context);
+                      }
+                    }
+                  },
+                ),
+                // Botón de transformación de personajes (solo para imágenes)
+                if (!isVideo)
+                  Positioned(
+                    top: MediaQuery.of(context).padding.top + 60,
+                    right: 20,
+                    child: Tooltip(
+                      message: 'Transformar con personaje',
+                      child: Material(
+                        color: Color(0xFF9D7FE8),
+                        shape: CircleBorder(),
+                        elevation: 4,
+                        child: InkWell(
+                          customBorder: CircleBorder(),
+                          onTap: () async {
+                            // Cerrar editor temporalmente
+                            Navigator.pop(context);
+
+                            // Mostrar selector y transformar
+                            await _handleCharacterTransformation(mediaPath);
+                          },
+                          child: Container(
+                            padding: EdgeInsets.all(10),
+                            child: Icon(
+                              Icons.face,
+                              color: Colors.white,
+                              size: 28,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
         ),
@@ -1226,7 +1453,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                           ),
                         ),
                         Spacer(),
-                        SizedBox(width: 44), // Balancear el layout
                       ],
                     ),
                   ),
@@ -1358,11 +1584,9 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       );
     }
 
-    // Forzar recreación completa con GlobalKey única
+    // Usar ValueKey en lugar de GlobalKey para evitar recreación constante
     return Container(
-      key: GlobalKey(
-        debugLabel: 'camera_container_stable_${_filterType}',
-      ),
+      key: ValueKey('camera_container_${_filterType}'),
       child: _filterType == 'color'
           ? _buildFlutterCameraView()
           : _buildDeepARCameraView(),
@@ -1371,7 +1595,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   Widget _buildFlutterCameraView() {
     return FlutterCameraView(
-      key: GlobalKey(debugLabel: 'flutter_camera_stable'),
+      key: ValueKey('flutter_camera_${_selectedCameraIndex}'),
       cameras: _cameras,
       selectedCameraIndex: _selectedCameraIndex,
       onCameraInitialized: (controller) {
@@ -1389,12 +1613,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
-  // GlobalKey para mantener el widget DeepARCameraView vivo entre rebuilds
-  final GlobalKey _deepARCameraKey = GlobalKey(debugLabel: 'deepar_camera_view');
-
   Widget _buildDeepARCameraView() {
+    // Usar el contador para forzar recreación del widget después de dispose
     return DeepARCameraView(
-      key: _deepARCameraKey,
+      key: ValueKey('deepar_camera_view_$_deepARReinitCounter'),
       isDeepARInitialized: _isDeepARInitialized,
       deepARService: _deepARService,
       onInitialized: () {
