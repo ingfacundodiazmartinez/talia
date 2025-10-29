@@ -610,6 +610,22 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
       stream: _controller.watchRecentMessages(),
       builder: (context, snapshot) {
         if (snapshot.hasError) {
+          // Si es un error de permisos (usuario ya no es miembro), cerrar la pantalla
+          final error = snapshot.error.toString();
+          if (error.contains('PERMISSION_DENIED') || error.contains('Missing or insufficient permissions')) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) {
+                Navigator.of(context).pop();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Ya no eres miembro de este grupo'),
+                    duration: Duration(seconds: 2),
+                  ),
+                );
+              }
+            });
+            return Center(child: CircularProgressIndicator());
+          }
           return Center(child: Text('Error: ${snapshot.error}'));
         }
 
@@ -875,6 +891,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     return StreamBuilder<List<String>>(
       stream: _controller.watchTypingUsers(),
       builder: (context, snapshot) {
+        // Si hay error de permisos, simplemente no mostrar nada
+        if (snapshot.hasError) {
+          return const SizedBox.shrink();
+        }
+
         final typingUserIds = snapshot.data ?? [];
 
         // Indicador flotante - solo se muestra cuando alguien está escribiendo

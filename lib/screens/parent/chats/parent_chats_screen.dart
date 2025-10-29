@@ -825,11 +825,16 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
     try {
       await _controller.leaveGroup(groupId);
 
-      // Forzar reconexión de Firestore para limpiar caché y remover el grupo inmediatamente
-      await _controller.forceReconnect();
-
       if (!mounted) return;
       Navigator.pop(context); // Cerrar loading
+
+      // Mostrar mensaje de éxito
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Has salido de "$groupName"'),
+          duration: Duration(seconds: 2),
+        ),
+      );
 
       // Refrescar la UI
       setState(() {});

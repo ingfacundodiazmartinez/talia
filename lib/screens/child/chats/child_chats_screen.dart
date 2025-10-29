@@ -334,8 +334,18 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
   }
 
   Future<void> _leaveGroup(String groupId, String groupName) async {
+    // Mostrar loading
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Center(child: CircularProgressIndicator()),
+    );
+
     try {
       await GroupChatService().leaveGroup(groupId, widget.childId);
+
+      if (!mounted) return;
+      Navigator.pop(context); // Cerrar loading
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -346,6 +356,9 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
         );
       }
     } catch (e) {
+      if (!mounted) return;
+      Navigator.pop(context); // Cerrar loading
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

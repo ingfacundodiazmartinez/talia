@@ -159,6 +159,37 @@ class GroupChatListItem extends StatelessWidget {
                           .collection('typing')
                           .snapshots(),
                       builder: (context, typingSnapshot) {
+                        // Si hay error de permisos, mostrar el último mensaje
+                        if (typingSnapshot.hasError) {
+                          final currentUserId = auth.currentUser?.uid ?? '';
+                          final isOwnMessage = lastMessageSenderId == currentUserId;
+
+                          return Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (isOwnMessage && lastMessageStatus != null) ...[
+                                MessageStatusIndicator(
+                                  status: lastMessageStatus!,
+                                  moderationStatus: lastMessageModerationStatus,
+                                  size: 12,
+                                ),
+                                const SizedBox(width: 4),
+                              ],
+                              Flexible(
+                                child: Text(
+                                  lastMessage,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          );
+                        }
+
                         if (typingSnapshot.hasData && typingSnapshot.data!.docs.isNotEmpty) {
                           final currentUserId = auth.currentUser!.uid;
                           final now = DateTime.now();
