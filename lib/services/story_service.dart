@@ -1152,6 +1152,46 @@ class StoryService {
     });
   }
 
+  /// Obtener TODAS las historias de un usuario para mostrar en su perfil
+  /// Incluye historias activas (temporales < 24h) y permanentes (guardadas)
+  Stream<List<Story>> getAllUserStoriesForProfile(String userId) async* {
+    try {
+      // 1. Obtener historias temporales activas (menos de 24h)
+      final temporarySnapshot = await _firestore
+          .collection('stories')
+          .where('userId', isEqualTo: userId)
+          .where('visibility', isEqualTo: 'temporary')
+          .where('status', isEqualTo: 'approved')
+          .where('expiresAt', isGreaterThan: Timestamp.fromDate(DateTime.now()))
+          .get();
+
+      // 2. Obtener historias permanentes
+      final permanentSnapshot = await _firestore
+          .collection('stories')
+          .where('userId', isEqualTo: userId)
+          .where('visibility', isEqualTo: 'permanent')
+          .where('status', isEqualTo: 'approved')
+          .get();
+
+      // 3. Combinar ambas listas
+      final allStories = <Story>[];
+      allStories.addAll(
+        temporarySnapshot.docs.map((doc) => Story.fromFirestore(doc))
+      );
+      allStories.addAll(
+        permanentSnapshot.docs.map((doc) => Story.fromFirestore(doc))
+      );
+
+      // 4. Ordenar por fecha de creación (más recientes primero)
+      allStories.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+      yield allStories;
+    } catch (e) {
+      print('Error obteniendo historias del usuario: $e');
+      yield [];
+    }
+  }
+
   /// Obtener historias archivadas de un usuario
   Stream<List<Story>> getArchivedStories(String userId) {
     return _firestore
