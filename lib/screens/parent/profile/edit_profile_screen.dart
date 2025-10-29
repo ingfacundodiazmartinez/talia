@@ -241,19 +241,31 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           Positioned(
             bottom: 0,
             right: 0,
-            child: GestureDetector(
-              onTap: _isUploadingImage ? null : _changeProfilePhoto,
-              child: Container(
-                padding: EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: colorScheme.primary,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: colorScheme.surface, width: 3),
-                ),
-                child: Icon(
-                  Icons.camera_alt,
-                  size: 20,
-                  color: Colors.white,
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: () {
+                  print('📸 [EditProfile] Botón de cámara tocado');
+                  print('📸 [EditProfile] _isUploadingImage: $_isUploadingImage');
+                  if (!_isUploadingImage) {
+                    _changeProfilePhoto();
+                  } else {
+                    print('⚠️ [EditProfile] Bloqueado porque _isUploadingImage es true');
+                  }
+                },
+                customBorder: CircleBorder(),
+                child: Container(
+                  padding: EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: colorScheme.primary,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: colorScheme.surface, width: 3),
+                  ),
+                  child: Icon(
+                    Icons.camera_alt,
+                    size: 20,
+                    color: Colors.white,
+                  ),
                 ),
               ),
             ),

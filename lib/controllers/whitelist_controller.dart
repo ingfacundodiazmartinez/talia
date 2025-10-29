@@ -87,15 +87,23 @@ class WhitelistController {
 
     print('✅ Contacto aprobado: ${result.data}');
 
-    // Procesar invitaciones de grupo pendientes solo si existe la función
-    try {
-      await _processGroupInvitations(
-        childId: childId,
-        contactPhone: contactPhone,
-      );
-    } catch (e) {
-      print('⚠️ No se pudieron procesar invitaciones de grupo: $e');
-      // No lanzar error, es opcional
+    // Procesar invitaciones de grupo pendientes solo si tenemos los datos necesarios
+    if (childId.isNotEmpty && contactPhone.isNotEmpty) {
+      try {
+        print('📨 Procesando invitaciones de grupo para el contacto aprobado...');
+        print('   childId: $childId');
+        print('   contactPhone: $contactPhone');
+        await _functions.httpsCallable('processGroupInvitationsAfterContactApproval').call({
+          'childId': childId,
+          'contactPhone': contactPhone,
+        });
+        print('✅ Invitaciones de grupo procesadas');
+      } catch (e) {
+        print('⚠️ Error procesando invitaciones de grupo: $e');
+        // No lanzar error, es opcional
+      }
+    } else {
+      print('⚠️ No se pueden procesar invitaciones: datos faltantes (childId: ${childId.isEmpty ? 'vacío' : 'ok'}, contactPhone: ${contactPhone.isEmpty ? 'vacío' : 'ok'})');
     }
   }
 
@@ -116,26 +124,6 @@ class WhitelistController {
     });
 
     print('✅ Permiso de grupo aprobado');
-  }
-
-  /// Procesar invitaciones de grupo pendientes después de aprobar un contacto
-  Future<void> _processGroupInvitations({
-    required String childId,
-    required String contactPhone,
-  }) async {
-    try {
-      print('🔄 Procesando invitaciones de grupo pendientes...');
-
-      await _functions.httpsCallable('processGroupInvitationsAfterContactApproval').call({
-        'childId': childId,
-        'contactPhone': contactPhone,
-      });
-
-      print('✅ Invitaciones de grupo procesadas');
-    } catch (e) {
-      print('❌ Error procesando invitaciones pendientes: $e');
-      rethrow;
-    }
   }
 
   /// Rechazar una solicitud individual

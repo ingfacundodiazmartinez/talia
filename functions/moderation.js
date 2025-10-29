@@ -1,0 +1,814 @@
+const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/firestore");
+const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
+const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
+const { getMessaging } = require("firebase-admin/messaging");
+const { getStorage } = require("firebase-admin/storage");
+
+// ═══════════════════════════════════════════════════════════════
+// MODERATION
+// ═══════════════════════════════════════════════════════════════
+
+exports.checkMessageBeforeSending = onCall(
+  { region: "us-central1", consumeAppCheckToken: true },
+  async (request) => {
+    const { chatId, text, type = "text", localId, messageId } = request.data;
+    const userId = request.auth?.uid;
+
+    const isUpdate = messageId != null;
+    console.log(`🔍 [Pre-moderación] ${isUpdate ? 'Re-verificando' : 'Verificando'} mensaje para chat ${chatId}`);
+
+    if (!userId) {
+      throw new HttpsError("unauthenticated", "Usuario no autenticado");
+    }
+
+    if (!chatId) {
+      throw new HttpsError("invalid-argument", "chatId es requerido");
+    }
+
+    const db = getFirestore();
+
+    try {
+      // 1. Verificar si el chat tiene moderación activa
+      const chatDoc = await db.collection("chats").doc(chatId).get();
+
+      if (!chatDoc.exists) {
+        console.log(`⚠️ Chat ${chatId} no existe, aprobando automáticamente`);
+        return { approved: true };
+      }
+
+      // 1. Determinar quién es el RECEPTOR del mensaje
+      // En un chat 1-1, el receptor es el participante que NO es el sender
+      const chatData = chatDoc.data();
+      const participants = chatData.participants || [];
+      const receiverId = participants.find((p) => p !== userId);
+
+      if (!receiverId) {
+        console.log(`⚠️ [Pre-moderación] No se pudo determinar el receptor`);
+        return { approved: true };
+      }
+
+      console.log(`👤 [Pre-moderación] Receptor del mensaje: ${receiverId}`);
+
+      // 2. Verificar moderación en este orden:
+      // 2.1. Primero verificar moderación POR CHAT (activada por padre)
+      let moderationEnabled = chatData.moderationEnabled || false;
+      let moderationLevel = chatData.moderationLevel || "high"; // Leer nivel del chat
+      let moderationType = "none";
+
+      if (moderationEnabled) {
+        moderationType = "parent_chat";
+        console.log(`🔒 [Pre-moderación] Moderación POR CHAT (padre) activa (nivel: ${moderationLevel})`);
+      } else {
+        // 2.2. Si no hay moderación por chat, verificar moderación POR CONTACTO (activada por receptor)
+        // Buscar el contacto entre sender y receiver
+        const sortedUsers = [userId, receiverId].sort();
+        console.log(`🔍 [Pre-moderación] Buscando contacto con users: ${sortedUsers}`);
+
+        const contactQuery = await db
+          .collection("contacts")
+          .where("users", "==", sortedUsers)
+          .limit(1)
+          .get();
+
+        console.log(`📊 [Pre-moderación] Contactos encontrados: ${contactQuery.size}`);
+
+        if (!contactQuery.empty) {
+          const contactDoc = contactQuery.docs[0];
+          const contactData = contactDoc.data();
+          console.log(`📄 [Pre-moderación] Contact ID: ${contactDoc.id}`);
+
+          // Verificar moderación del RECEPTOR en el contacto
+          const moderationSettings = contactData.moderationSettings || {};
+          console.log(`📋 [Pre-moderación] moderationSettings:`, moderationSettings);
+
+          const receiverSettings = moderationSettings[receiverId] || {};
+          console.log(`👤 [Pre-moderación] receiverSettings for ${receiverId}:`, receiverSettings);
+
+          moderationEnabled = receiverSettings.enabled || false;
+          if (moderationEnabled) {
+            moderationLevel = receiverSettings.level || "high";
+            moderationType = "user_contact";
+            console.log(`🔒 [Pre-moderación] Moderación POR CONTACTO del receptor activa (nivel: ${moderationLevel})`);
+          } else {
+            console.log(`✅ [Pre-moderación] Moderación POR CONTACTO NO está activa para el receptor`);
+          }
+        } else {
+          console.log(`⚠️ [Pre-moderación] No se encontró documento de contacto`);
+        }
+      }
+
+      if (!moderationEnabled) {
+        console.log(`✅ [Pre-moderación] Moderación desactivada (tipo: ${moderationType})`);
+        return { approved: true };
+      }
+
+      console.log(`🔒 [Pre-moderación] Moderación activa (tipo: ${moderationType}, nivel: ${moderationLevel})`);
+
+      // 4. Obtener información de los participantes (edades y ubicaciones)
+      const participantsAges = [];
+      const participantsLocations = [];
+
+      console.log(`👥 [Pre-moderación] Obteniendo info de ${participants.length} participantes...`);
+      for (const participantId of participants) {
+        try {
+          const userDoc = await db.collection("users").doc(participantId).get();
+          if (userDoc.exists) {
+            const userData = userDoc.data();
+            // Calcular edad si existe birthDate
+            if (userData.birthDate) {
+              const birthDate = userData.birthDate.toDate ? userData.birthDate.toDate() : new Date(userData.birthDate);
+              const age = Math.floor((new Date() - birthDate) / (365.25 * 24 * 60 * 60 * 1000));
+              participantsAges.push(age);
+              console.log(`  - Usuario ${participantId}: ${age} años`);
+            }
+            // Obtener ubicación si existe
+            if (userData.location || userData.country) {
+              const location = userData.location || userData.country;
+              participantsLocations.push(location);
+              console.log(`  - Ubicación: ${location}`);
+            }
+          }
+        } catch (e) {
+          console.error(`Error obteniendo info de participante ${participantId}:`, e);
+        }
+      }
+
+      // 4. Verificar tipo de contenido
+      if (type === "image" && (!text || text.trim().length === 0)) {
+        console.log(`📷 [Pre-moderación] Imagen sin texto, aprobando`);
+        return { approved: true };
+      }
+
+      if (type === "video") {
+        console.log(`🎥 [Pre-moderación] Video, aprobando`);
+        return { approved: true };
+      }
+
+      if (type === "audio") {
+        console.log(`🎤 [Pre-moderación] Audio, aprobando`);
+        return { approved: true };
+      }
+
+      if (!text || text.trim().length === 0) {
+        console.log(`✅ [Pre-moderación] Mensaje sin texto, aprobando`);
+        return { approved: true };
+      }
+
+      // 5. Obtener contexto (últimos 20 mensajes)
+      console.log(`📚 [Pre-moderación] Obteniendo contexto de conversación...`);
+      const contextMessages = await db
+        .collection("chats")
+        .doc(chatId)
+        .collection("messages")
+        .orderBy("timestamp", "desc")
+        .limit(20)
+        .get();
+
+      // Construir contexto en orden cronológico
+      const conversationContext = contextMessages.docs
+        .reverse()
+        .map((doc) => {
+          const data = doc.data();
+          const sender = data.senderId === userId ? "USUARIO" : "OTRO";
+          const content = data.text || "[media]";
+          return `${sender}: ${content}`;
+        })
+        .join("\n");
+
+      console.log(`📝 [Pre-moderación] Contexto: ${contextMessages.size} mensajes`);
+
+      // 5.5. Obtener mensajes reportados por el usuario (para aprendizaje contextual)
+      let reportedMessagesContext = "";
+      try {
+        const reportedMessages = await db
+          .collection("chats")
+          .doc(chatId)
+          .collection("reported_messages")
+          .orderBy("reportedAt", "desc")
+          .limit(10) // Últimos 10 mensajes reportados
+          .get();
+
+        if (!reportedMessages.empty) {
+          const reportedTexts = reportedMessages.docs
+            .map((doc) => `"${doc.data().messageText || "[sin texto]"}"`)
+            .join(", ");
+          reportedMessagesContext = `\n\nMENSAJES PREVIAMENTE REPORTADOS POR EL USUARIO COMO OFENSIVOS:\nEl usuario marcó estos mensajes como inapropiados: ${reportedTexts}\nUsa estos ejemplos para entender mejor las preferencias del usuario sobre qué considera ofensivo.\n`;
+          console.log(`🚩 [Pre-moderación] ${reportedMessages.size} mensajes reportados encontrados`);
+        }
+      } catch (e) {
+        console.error("Error obteniendo mensajes reportados:", e);
+      }
+
+      // 6. Analizar mensaje con Gemini (con nuevos parámetros + mensajes reportados)
+      console.log(`🤖 [Pre-moderación] Analizando con Gemini...`);
+      const analysis = await analyzeMessageWithGemini(
+        text,
+        type,
+        conversationContext + reportedMessagesContext,
+        moderationLevel,
+        participantsAges,
+        participantsLocations
+      );
+
+      // 7. Determinar si se aprueba o bloquea según el nivel de moderación
+      let shouldBlock = false;
+      if (moderationLevel === "high") {
+        // HIGH: Bloquear severity 'low', 'medium', 'high'
+        shouldBlock = analysis.isInappropriate && ["low", "medium", "high"].includes(analysis.severity);
+      } else {
+        // LOW: Solo bloquear severity 'high'
+        shouldBlock = analysis.isInappropriate && analysis.severity === "high";
+      }
+
+      if (!shouldBlock) {
+        console.log(`✅ [Pre-moderación] Mensaje aprobado (severity: ${analysis.severity}, level: ${moderationLevel})`);
+
+        // Si es una actualización de mensaje bloqueado, actualizar en Firestore
+        if (isUpdate) {
+          try {
+            const approvedMessageData = {
+              text: text,
+              moderationStatus: "approved",
+              timestamp: FieldValue.serverTimestamp(),
+            };
+
+            // Eliminar campos de bloqueo si existían
+            const deleteFields = {
+              originalText: FieldValue.delete(),
+              moderationReason: FieldValue.delete(),
+              moderationSeverity: FieldValue.delete(),
+              isInappropriate: FieldValue.delete(),
+            };
+
+            await db.collection("chats").doc(chatId).collection("messages").doc(messageId).update({
+              ...approvedMessageData,
+              ...deleteFields,
+            });
+            console.log(`✅ [Pre-moderación] Mensaje ${messageId} actualizado como APROBADO`);
+          } catch (e) {
+            console.error("Error actualizando mensaje aprobado:", e);
+          }
+        }
+
+        return { approved: true };
+      }
+
+      // Mensaje bloqueado
+      console.log(`🚫 [Pre-moderación] Mensaje bloqueado: ${analysis.reason} (severity: ${analysis.severity})`);
+
+      // Obtener nombre del sender
+      let senderName = "Usuario";
+      try {
+        const senderDoc = await db.collection("users").doc(userId).get();
+        if (senderDoc.exists) {
+          senderName = senderDoc.data().name || senderName;
+        }
+      } catch (e) {
+        console.error("Error obteniendo sender:", e);
+      }
+
+      // 1. Guardar/Actualizar mensaje bloqueado en Firestore
+      // IMPORTANTE: NO incluir la razón específica en el campo 'text' para que ambos usuarios vean el mismo mensaje genérico
+      try {
+        const blockedMessageData = {
+          text: "", // Texto vacío - el widget BlockedMessageContent mostrará el mensaje genérico
+          originalText: text, // ✅ Guardar texto original para poder editarlo después
+          moderationStatus: "blocked",
+          isInappropriate: true,
+          moderationReason: analysis.reason, // Razón guardada en campo separado
+          moderationSeverity: analysis.severity,
+          timestamp: FieldValue.serverTimestamp(),
+        };
+
+        if (isUpdate) {
+          // Actualizar mensaje existente
+          await db.collection("chats").doc(chatId).collection("messages").doc(messageId).update(blockedMessageData);
+          console.log(`🔄 [Pre-moderación] Mensaje ${messageId} RE-BLOQUEADO y actualizado`);
+        } else {
+          // Crear nuevo mensaje bloqueado
+          blockedMessageData.senderId = userId;
+          blockedMessageData.type = "text";
+          blockedMessageData.isRead = false;
+          blockedMessageData.localId = localId; // ✅ UUID local para rastrear desde creación optimista
+
+          await db.collection("chats").doc(chatId).collection("messages").add(blockedMessageData);
+          console.log(`💾 [Pre-moderación] Mensaje bloqueado guardado en Firestore`);
+        }
+      } catch (e) {
+        console.error("Error guardando mensaje bloqueado:", e);
+      }
+
+      // 2. Notificar al receptor (SIN incluir la razón específica - privacidad)
+      if (receiverId) {
+        try {
+          await db.collection("notifications").add({
+            userId: receiverId,
+            type: "message_blocked_pre",
+            title: "🚫 Mensaje bloqueado",
+            body: `${senderName} intentó enviar un mensaje bloqueado`,
+            priority: "normal", // Siempre normal para el receptor
+            read: false,
+            createdAt: new Date(),
+            data: {
+              chatId: chatId,
+              senderId: userId,
+              senderName: senderName,
+              // NO incluir severity ni reason para el receptor (privacidad)
+            },
+          });
+          console.log(`✅ [Pre-moderación] Notificación creada para ${receiverId}`);
+
+          // ✅ SINCRONIZACIÓN: Actualizar lastMessage inmediatamente después de notificación
+          await db.collection("chats").doc(chatId).update({
+            lastMessage: "🚫 Mensaje bloqueado",
+            lastMessageTime: FieldValue.serverTimestamp(),
+            lastMessageSender: userId,
+          });
+          console.log(`📝 [Pre-moderación] Chat sincronizado: lastMessage="🚫 Mensaje bloqueado"`);
+        } catch (e) {
+          console.error("Error creando notificación o actualizando chat:", e);
+        }
+      }
+
+      return {
+        approved: false,
+        reason: analysis.reason,
+        severity: analysis.severity,
+      };
+    } catch (error) {
+      console.error(`❌ [Pre-moderación] Error:`, error);
+      // En caso de error, aprobar para no bloquear la comunicación
+      return { approved: true };
+    }
+  }
+);
+
+/**
+ * ✅ FLUJO UNIFICADO - Trigger que se ejecuta para TODOS los mensajes
+ *
+ * Procesa todos los mensajes (con o sin moderación):
+ * - Si NO hay moderación → aprueba automáticamente y crea notificación
+ * - Si hay moderación → analiza con IA, aprueba/bloquea y crea notificación si approved
+ * - Si ya fue bloqueado por pre-moderación (checkMessageBeforeSending) → skip
+ *
+ * La notificación creada aquí dispara sendNotificationOnCreate para enviar el push
+ */
+
+exports.moderateMessage = onDocumentCreated(
+  {
+    document: "chats/{chatId}/messages/{messageId}",
+    region: "us-central1",
+    // ⚡ OPTIMIZACIÓN: Mantener instancia caliente para reducir latencia de moderación
+    minInstances: 1,
+    maxInstances: 100,
+  },
+  async (event) => {
+    const messageId = event.params.messageId;
+    const chatId = event.params.chatId;
+    const messageData = event.data.data();
+
+    console.log(`🔍 Nuevo mensaje para moderar: ${messageId} en chat ${chatId}`);
+
+    const db = getFirestore();
+
+    try {
+      // ✅ IMPORTANTE: Si el mensaje ya está bloqueado (pre-moderación), no hacer nada
+      if (messageData.moderationStatus === "blocked") {
+        console.log(`⏭️ Mensaje ya bloqueado por pre-moderación, saltando análisis`);
+        return;
+      }
+
+      // ⚡ MÁXIMA OPTIMIZACIÓN: Obtener TODO en paralelo
+      const senderId = messageData.senderId;
+      const chatDoc = await db.collection("chats").doc(chatId).get();
+
+      if (!chatDoc.exists) {
+        console.log(`⚠️ Chat ${chatId} no existe`);
+        return;
+      }
+
+      const chatData = chatDoc.data();
+      const participants = chatData.participants || [];
+      const receiverId = participants.find((p) => p !== senderId);
+
+      if (!receiverId) {
+        console.log(`⚠️ [Moderación] No se pudo determinar el receptor`);
+        await event.data.ref.update({
+          moderationStatus: "approved",
+          moderatedAt: new Date(),
+        });
+        return;
+      }
+
+      // Obtener sender y receiver en paralelo
+      const [senderDoc, receiverDoc] = await Promise.all([
+        db.collection("users").doc(senderId).get(),
+        db.collection("users").doc(receiverId).get(),
+      ]);
+
+      if (!receiverDoc.exists) {
+        console.log(`⚠️ [Moderación] Usuario receptor no encontrado`);
+        await event.data.ref.update({
+          moderationStatus: "approved",
+          moderatedAt: new Date(),
+        });
+        return;
+      }
+
+      console.log(`👤 [Moderación] Receptor del mensaje: ${receiverId}`);
+
+      const receiverData = receiverDoc.data();
+
+      // Obtener datos del sender
+      let senderName = "Usuario";
+      let senderPhotoUrl = null;
+      if (senderDoc.exists) {
+        const senderData = senderDoc.data();
+        senderName = senderData.name || senderName;
+        senderPhotoUrl = senderData.photoURL || null;
+      }
+
+      // ✅ Verificar moderación en este orden (igual que checkMessageBeforeSending):
+      // 1. Moderación POR CHAT (activada por padre)
+      let moderationEnabled = chatData.moderationEnabled || false;
+      let moderationLevel = chatData.moderationLevel || "high"; // Leer nivel del chat
+      let moderationType = "none";
+
+      if (moderationEnabled) {
+        moderationType = "parent_chat";
+        console.log(`🔒 [Moderación] Moderación POR CHAT (padre) activa (nivel: ${moderationLevel})`);
+      } else {
+        // 2. Moderación POR CONTACTO (activada por receptor)
+        const sortedUsers = [senderId, receiverId].sort();
+        console.log(`🔍 [Moderación] Buscando contacto con users: ${sortedUsers}`);
+
+        const contactQuery = await db
+          .collection("contacts")
+          .where("users", "==", sortedUsers)
+          .limit(1)
+          .get();
+
+        if (!contactQuery.empty) {
+          const contactDoc = contactQuery.docs[0];
+          const contactData = contactDoc.data();
+          console.log(`📄 [Moderación] Contact ID: ${contactDoc.id}`);
+
+          const moderationSettings = contactData.moderationSettings || {};
+          const receiverSettings = moderationSettings[receiverId] || {};
+
+          moderationEnabled = receiverSettings.enabled || false;
+          if (moderationEnabled) {
+            moderationLevel = receiverSettings.level || "high"; // Leer nivel del contacto
+            moderationType = "user_contact";
+            console.log(`🔒 [Moderación] Moderación POR CONTACTO del receptor activa (nivel: ${moderationLevel})`);
+          } else {
+            console.log(`✅ [Moderación] Moderación POR CONTACTO NO está activa para el receptor`);
+          }
+        } else {
+          console.log(`⚠️ [Moderación] No se encontró documento de contacto`);
+        }
+      }
+
+      // ✅ FLUJO UNIFICADO: Extraer contenido del mensaje (SIEMPRE)
+      const messageText = messageData.text || "";
+      let messageType = "text";
+      if (messageData.imageUrl) messageType = "image";
+      else if (messageData.videoUrl) messageType = "video";
+      else if (messageData.audioUrl) messageType = "audio";
+
+      // Variables para resultado de moderación
+      let moderationStatus = "approved";
+      let moderationReason = null;
+      let moderationSeverity = null;
+      let notificationTitle = null;
+      let notificationBody = null;
+
+      // Determinar si necesitamos análisis de IA
+      if (!moderationEnabled) {
+        console.log(`✅ Moderación desactivada (tipo: ${moderationType}) - aprobando automáticamente`);
+        moderationReason = "Sin moderación activa";
+
+        // Actualizar mensaje como aprobado
+        await event.data.ref.update({
+          moderationStatus: "approved",
+          moderatedAt: new Date(),
+          moderationReason: moderationReason,
+        });
+
+        // Continuar al flujo de notificación (no hacer return)
+      } else {
+        console.log(`🔒 Moderación activa (tipo: ${moderationType}, nivel: ${moderationLevel})`);
+
+      // 4. Obtener información de los participantes (edades y ubicaciones)
+      const participantsAges = [];
+      const participantsLocations = [];
+
+      console.log(`👥 [Moderación] Obteniendo info de ${participants.length} participantes...`);
+      for (const participantId of participants) {
+        try {
+          const userDoc = await db.collection("users").doc(participantId).get();
+          if (userDoc.exists) {
+            const userData = userDoc.data();
+            // Calcular edad si existe birthDate
+            if (userData.birthDate) {
+              const birthDate = userData.birthDate.toDate ? userData.birthDate.toDate() : new Date(userData.birthDate);
+              const age = Math.floor((new Date() - birthDate) / (365.25 * 24 * 60 * 60 * 1000));
+              participantsAges.push(age);
+              console.log(`  - Usuario ${participantId}: ${age} años`);
+            }
+            // Obtener ubicación si existe
+            if (userData.location || userData.country) {
+              const location = userData.location || userData.country;
+              participantsLocations.push(location);
+              console.log(`  - Ubicación: ${location}`);
+            }
+          }
+        } catch (e) {
+          console.error(`Error obteniendo info de participante ${participantId}:`, e);
+        }
+      }
+
+        // 4. Extraer contenido del mensaje y determinar si necesita análisis de IA
+        let skipAIAnalysis = false;
+
+        if (messageData.imageUrl && !messageText) {
+          // Para imágenes sin texto, aprobar sin análisis
+          console.log(`📷 Mensaje es imagen sin texto, aprobando (análisis de imágenes requiere Gemini Vision)`);
+          moderationReason = "Imagen sin texto";
+          skipAIAnalysis = true;
+        } else if (messageData.videoUrl) {
+          console.log(`🎥 Mensaje es video, aprobando (análisis de videos no implementado)`);
+          moderationReason = "Video";
+          skipAIAnalysis = true;
+        } else if (messageData.audioUrl) {
+          console.log(`🎤 Mensaje es audio, aprobando (análisis de audio no implementado)`);
+          moderationReason = "Audio";
+          skipAIAnalysis = true;
+        }
+
+        if (!skipAIAnalysis && (!messageText || messageText.trim().length === 0)) {
+          console.log(`✅ Mensaje sin texto, aprobando`);
+          moderationReason = "Sin texto";
+          skipAIAnalysis = true;
+        }
+
+        // Solo analizar con IA si tiene texto y moderación activa
+        if (!skipAIAnalysis) {
+
+      // 3. Obtener contexto (últimos 20 mensajes) para análisis más preciso
+      console.log(`📚 Obteniendo contexto de conversación...`);
+      const contextMessages = await db
+        .collection("chats")
+        .doc(chatId)
+        .collection("messages")
+        .orderBy("timestamp", "desc")
+        .limit(20)
+        .get();
+
+      // Construir contexto en orden cronológico
+      const conversationContext = contextMessages.docs
+        .reverse() // Orden cronológico (más antiguo primero)
+        .map((doc) => {
+          const data = doc.data();
+          const sender = data.senderId === messageData.senderId ? "USUARIO" : "OTRO";
+          const content = data.text || "[media]";
+          return `${sender}: ${content}`;
+        })
+        .join("\n");
+
+      console.log(`📝 Contexto obtenido: ${contextMessages.size} mensajes`);
+
+      // 4.5. Obtener mensajes reportados por el usuario (para aprendizaje contextual)
+      let reportedMessagesContext = "";
+      try {
+        const reportedMessages = await db
+          .collection("chats")
+          .doc(chatId)
+          .collection("reported_messages")
+          .orderBy("reportedAt", "desc")
+          .limit(10) // Últimos 10 mensajes reportados
+          .get();
+
+        if (!reportedMessages.empty) {
+          const reportedTexts = reportedMessages.docs
+            .map((doc) => `"${doc.data().messageText || "[sin texto]"}"`)
+            .join(", ");
+          reportedMessagesContext = `\n\nMENSAJES PREVIAMENTE REPORTADOS POR EL USUARIO COMO OFENSIVOS:\nEl usuario marcó estos mensajes como inapropiados: ${reportedTexts}\nUsa estos ejemplos para entender mejor las preferencias del usuario sobre qué considera ofensivo.\n`;
+          console.log(`🚩 [Moderación] ${reportedMessages.size} mensajes reportados encontrados`);
+        }
+      } catch (e) {
+        console.error("Error obteniendo mensajes reportados:", e);
+      }
+
+      // 5. Analizar mensaje con Gemini (con contexto y nuevos parámetros + mensajes reportados)
+      console.log(`🤖 Analizando mensaje con Gemini (con contexto)...`);
+      const analysis = await analyzeMessageWithGemini(
+        messageText,
+        messageType,
+        conversationContext + reportedMessagesContext,
+        moderationLevel,
+        participantsAges,
+        participantsLocations
+      );
+
+          // 6. Determinar acción basada en análisis y nivel de moderación
+          let shouldBlock = false;
+
+          if (moderationLevel === "high") {
+            // HIGH: Bloquear severity 'low', 'medium', 'high'
+            shouldBlock = analysis.isInappropriate && ["low", "medium", "high"].includes(analysis.severity);
+          } else {
+            // LOW: Solo bloquear severity 'high'
+            shouldBlock = analysis.isInappropriate && analysis.severity === "high";
+          }
+
+          if (!shouldBlock) {
+            moderationStatus = "approved";
+            moderationReason = analysis.reason;
+            moderationSeverity = analysis.severity;
+            console.log(`✅ Mensaje aprobado (severity: ${analysis.severity}, level: ${moderationLevel})`);
+          } else {
+            // Mensaje bloqueado
+            moderationStatus = "blocked";
+            moderationReason = analysis.reason;
+            moderationSeverity = analysis.severity;
+
+            if (analysis.severity === "low") {
+              notificationTitle = "⚠️ Contenido cuestionable bloqueado";
+              notificationBody = `Contenido inapropiado detectado (severidad baja): ${analysis.reason}`;
+              console.log(`⚠️ Mensaje bloqueado (severidad baja): ${analysis.reason}`);
+            } else if (analysis.severity === "medium") {
+              notificationTitle = "🚫 Mensaje bloqueado";
+              notificationBody = `Contenido inapropiado detectado (severidad media): ${analysis.reason}`;
+              console.log(`🚫 Mensaje bloqueado (severidad media): ${analysis.reason}`);
+            } else {
+              // high severity
+              notificationTitle = "🚨 Alerta de seguridad";
+              notificationBody = `Contenido grave detectado: ${analysis.reason}`;
+              console.log(`🚨 Mensaje bloqueado (severidad alta): ${analysis.reason}`);
+            }
+          }
+        } // Cierre del if (!skipAIAnalysis)
+      } // Cierre del else (moderación activa)
+
+      // 5. Actualizar mensaje con resultado (SIEMPRE, con o sin moderación)
+      const updateData = {
+        moderationStatus: moderationStatus,
+        moderatedAt: new Date(),
+      };
+      if (moderationReason) {
+        updateData.moderationReason = moderationReason;
+      }
+      if (moderationSeverity) {
+        updateData.moderationSeverity = moderationSeverity;
+      }
+
+      // ✅ Si el mensaje fue BLOQUEADO, guardar originalText y limpiar text
+      if (moderationStatus === "blocked" && messageText) {
+        updateData.originalText = messageText; // Guardar texto original para poder editarlo
+        updateData.text = ""; // Limpiar texto para que no se muestre contenido ofensivo
+        console.log(`💾 Mensaje bloqueado - guardando originalText para edición`);
+      }
+
+      await event.data.ref.update(updateData);
+
+      // 6. Crear notificación de chat si el mensaje fue APROBADO
+      if (receiverId && moderationStatus === "approved") {
+        // Ya tenemos senderName y senderPhotoUrl del inicio (no volver a consultar)
+
+        // Crear preview del mensaje (truncar si es muy largo)
+        let messagePreview = messageText;
+        if (messageData.imageUrl) {
+          messagePreview = "📷 Foto";
+        } else if (messageData.videoUrl) {
+          messagePreview = "🎥 Video";
+        } else if (messageData.audioUrl) {
+          messagePreview = "🎤 Audio";
+        } else if (messageText.length > 100) {
+          messagePreview = messageText.substring(0, 100) + "...";
+        }
+
+        // ⚡ IMPORTANTE: Con moderación activa, dejamos que sendNotificationOnCreate envíe el push
+        // El mensaje fue aprobado DESPUÉS de la creación, por lo que necesita notificación
+        // pushSent: false hará que sendNotificationOnCreate se active automáticamente
+
+        // Crear notificación de chat con formato consistente (para historial)
+        await db.collection("notifications").add({
+          userId: receiverId,
+          senderId: senderId,
+          type: "chat_message",
+          title: `💬 ${senderName}`,
+          body: messagePreview,
+          imageUrl: senderPhotoUrl,
+          priority: "normal",
+          read: false,
+          pushSent: false, // FALSE para que sendNotificationOnCreate envíe el push
+          timestamp: FieldValue.serverTimestamp(),
+          data: {
+            type: "chat_message",
+            chatId: chatId,
+            messageId: messageId,
+            senderId: senderId,
+            senderName: senderName,
+            senderPhotoUrl: senderPhotoUrl || "",
+            messagePreview: messagePreview,
+            messageType: messageData.imageUrl ? "image" : messageData.videoUrl ? "video" : messageData.audioUrl ? "audio" : "text",
+          },
+        });
+
+        console.log(`✅ Notificación creada (mensaje aprobado) para ${receiverId}`);
+
+        // ✅ SINCRONIZACIÓN: Actualizar lastMessage inmediatamente después de notificación
+        try {
+          await db.collection("chats").doc(chatId).update({
+            lastMessage: messagePreview,
+            lastMessageTime: FieldValue.serverTimestamp(),
+            lastMessageSender: senderId,
+          });
+          console.log(`📝 Chat sincronizado: lastMessage="${messagePreview.substring(0, 30)}..."`);
+        } catch (updateError) {
+          console.error("Error actualizando chat:", updateError);
+        }
+      }
+
+      // 7. Notificar al receptor si el mensaje fue BLOQUEADO
+      if (receiverId && notificationTitle) {
+        // Obtener nombre del remitente
+        const senderId = messageData.senderId;
+        let senderName = "Usuario";
+        try {
+          const senderDoc = await db.collection("users").doc(senderId).get();
+          if (senderDoc.exists) {
+            senderName = senderDoc.data().name || senderName;
+          }
+        } catch (e) {
+          console.error("Error obteniendo sender:", e);
+        }
+
+        // Crear notificación
+        await db.collection("notifications").add({
+          userId: receiverId,
+          type: moderationStatus === "blocked" ? "message_blocked" : "message_flagged",
+          title: notificationTitle,
+          body: notificationBody,
+          priority: analysis.severity === "high" ? "high" : "normal",
+          read: false,
+          createdAt: new Date(),
+          data: {
+            chatId: chatId,
+            messageId: messageId,
+            senderId: senderId,
+            senderName: senderName,
+            severity: analysis.severity,
+            reason: analysis.reason,
+          },
+        });
+
+        console.log(`✅ Notificación creada (mensaje bloqueado) para ${receiverId}`);
+
+        // ✅ SINCRONIZACIÓN: Actualizar unreadCount y lastMessage inmediatamente después de notificación
+        try {
+          // Actualizar lastMessage a "🚫 Mensaje bloqueado" para que el receptor sepa que recibió un mensaje bloqueado
+          // (El contador se incrementará automáticamente en incrementUnreadCount)
+
+          await db.collection("chats").doc(chatId).update({
+            lastMessage: "🚫 Mensaje bloqueado",
+            lastMessageTime: FieldValue.serverTimestamp(),
+            lastMessageSender: senderId,
+          });
+
+          console.log(`📝 Chat sincronizado: lastMessage="🚫 Mensaje bloqueado"`);
+        } catch (e) {
+          console.error(`⚠️ Error sincronizando chat después de bloqueo: ${e}`);
+        }
+      }
+
+      console.log(`✅ Moderación completada para mensaje ${messageId}`);
+    } catch (error) {
+      console.error(`❌ Error en moderación de mensaje:`, error);
+
+      // En caso de error, aprobar el mensaje para no interrumpir la conversación
+      try {
+        await event.data.ref.update({
+          moderationStatus: "approved",
+          moderatedAt: new Date(),
+          moderationReason: "Error en análisis",
+          moderationError: error.message,
+        });
+      } catch (updateError) {
+        console.error(`❌ Error actualizando mensaje después de fallo:`, updateError);
+      }
+    }
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
+// EXPORTACIÓN DE DATOS PERSONALES (GDPR/CCPA)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Procesa solicitudes de export completo de datos de usuario
+ * Triggered cuando se crea un documento en data_export_requests
+ */
+

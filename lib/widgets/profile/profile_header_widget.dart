@@ -4,7 +4,7 @@ import 'package:image_picker/image_picker.dart';
 import '../../controllers/profile_controller.dart';
 
 /// Widget que muestra el header del perfil con foto, nombre y email
-class ProfileHeaderWidget extends StatelessWidget {
+class ProfileHeaderWidget extends StatefulWidget {
   final String parentId;
   final String? email;
   final ProfileController controller;
@@ -19,13 +19,20 @@ class ProfileHeaderWidget extends StatelessWidget {
   });
 
   @override
+  State<ProfileHeaderWidget> createState() => _ProfileHeaderWidgetState();
+}
+
+class _ProfileHeaderWidgetState extends State<ProfileHeaderWidget> {
+  bool _isUploadingImage = false;
+
+  @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
 
     return StreamBuilder<DocumentSnapshot>(
       stream: FirebaseFirestore.instance
           .collection('users')
-          .doc(parentId)
+          .doc(widget.parentId)
           .snapshots(),
       builder: (context, snapshot) {
         String? photoURL;
@@ -51,11 +58,26 @@ class ProfileHeaderWidget extends StatelessWidget {
                         ? Icon(Icons.person, size: 60, color: Colors.white)
                         : null,
                   ),
+                  if (_isUploadingImage)
+                    Positioned.fill(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.6),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Center(
+                          child: CircularProgressIndicator(
+                            strokeWidth: 3,
+                            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                          ),
+                        ),
+                      ),
+                    ),
                   Positioned(
                     bottom: 0,
                     right: 0,
                     child: GestureDetector(
-                      onTap: () => _showImageOptions(context, photoURL),
+                      onTap: _isUploadingImage ? null : () => _showImageOptions(context, photoURL),
                       child: Container(
                         padding: EdgeInsets.all(8),
                         decoration: BoxDecoration(
@@ -69,7 +91,9 @@ class ProfileHeaderWidget extends StatelessWidget {
                         child: Icon(
                           Icons.camera_alt,
                           size: 20,
-                          color: colorScheme.primary,
+                          color: _isUploadingImage
+                              ? colorScheme.primary.withValues(alpha: 0.5)
+                              : colorScheme.primary,
                         ),
                       ),
                     ),
@@ -87,7 +111,7 @@ class ProfileHeaderWidget extends StatelessWidget {
               ),
               SizedBox(height: 4),
               Text(
-                email ?? '',
+                widget.email ?? '',
                 style: TextStyle(
                   fontSize: 14,
                   color: colorScheme.onSurfaceVariant,
@@ -117,6 +141,7 @@ class ProfileHeaderWidget extends StatelessWidget {
   }
 
   void _showImageOptions(BuildContext context, String? photoURL) {
+    print('📸 [ProfileHeader] _showImageOptions llamado');
     final colorScheme = Theme.of(context).colorScheme;
 
     showModalBottomSheet(
@@ -125,11 +150,13 @@ class ProfileHeaderWidget extends StatelessWidget {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (context) => Container(
-        padding: EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
+      builder: (context) {
+        print('📸 [ProfileHeader] Builder del modal ejecutándose');
+        return Container(
+          padding: EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
             Text(
               'Cambiar foto de perfil',
               style: TextStyle(
@@ -146,13 +173,19 @@ class ProfileHeaderWidget extends StatelessWidget {
                   context: context,
                   icon: Icons.camera_alt,
                   label: 'Cámara',
-                  onTap: () => _pickImage(context, ImageSource.camera),
+                  onTap: () {
+                    print('📸 [ProfileHeader] Opción CÁMARA seleccionada');
+                    _pickImage(context, ImageSource.camera);
+                  },
                 ),
                 _buildImageOption(
                   context: context,
                   icon: Icons.photo_library,
                   label: 'Galería',
-                  onTap: () => _pickImage(context, ImageSource.gallery),
+                  onTap: () {
+                    print('📸 [ProfileHeader] Opción GALERÍA seleccionada');
+                    _pickImage(context, ImageSource.gallery);
+                  },
                 ),
                 if (photoURL != null)
                   _buildImageOption(
@@ -167,7 +200,8 @@ class ProfileHeaderWidget extends StatelessWidget {
             SizedBox(height: 20),
           ],
         ),
-      ),
+      );
+      },
     );
   }
 
@@ -212,42 +246,33 @@ class ProfileHeaderWidget extends StatelessWidget {
   }
 
   Future<void> _pickImage(BuildContext context, ImageSource source) async {
-    Navigator.pop(context); // Cerrar bottom sheet
-    await Future.delayed(Duration(milliseconds: 300));
+    print('📸 [ProfileHeader] _pickImage llamado con source: ${source == ImageSource.camera ? 'CÁMARA' : 'GALERÍA'}');
 
-    if (!context.mounted) return;
+    // Cerrar el modal inmediatamente
+    Navigator.pop(context);
+    print('📸 [ProfileHeader] Bottom sheet cerrado');
+
+    // Pequeña espera para que el modal se cierre visualmente
+    await Future.delayed(Duration(milliseconds: 100));
+
+    // Activar el estado de carga para mostrar el spinner sobre la foto
+    setState(() {
+      _isUploadingImage = true;
+    });
+    print('📸 [ProfileHeader] Estado de carga activado');
 
     try {
-      // Mostrar loading
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => AlertDialog(
-          content: Row(
-            children: [
-              CircularProgressIndicator(),
-              SizedBox(width: 20),
-              Text('Subiendo imagen...'),
-            ],
-          ),
-        ),
-      );
+      print('📸 [ProfileHeader] Llamando a widget.controller.pickAndUploadImage...');
+      final downloadUrl = await widget.controller.pickAndUploadImage(source);
+      print('📸 [ProfileHeader] Resultado: ${downloadUrl != null ? 'URL obtenida' : 'null'}');
 
-      final downloadUrl = await controller.pickAndUploadImage(source);
-
-      if (context.mounted) {
-        Navigator.pop(context); // Cerrar loading
-      }
-
-      if (downloadUrl != null && context.mounted) {
-        onImageChanged();
+      if (downloadUrl != null && mounted) {
+        widget.onImageChanged();
+        print('✅ [ProfileHeader] Foto actualizada exitosamente');
       }
     } catch (e) {
-      if (context.mounted) {
-        try {
-          Navigator.pop(context); // Cerrar loading
-        } catch (_) {}
-
+      print('❌ [ProfileHeader] Error al subir imagen: $e');
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(ProfileController.getErrorMessage(e)),
@@ -255,6 +280,14 @@ class ProfileHeaderWidget extends StatelessWidget {
             duration: Duration(seconds: 4),
           ),
         );
+      }
+    } finally {
+      // Desactivar el estado de carga
+      if (mounted) {
+        setState(() {
+          _isUploadingImage = false;
+        });
+        print('📸 [ProfileHeader] Estado de carga desactivado');
       }
     }
   }
@@ -283,13 +316,13 @@ class ProfileHeaderWidget extends StatelessWidget {
 
     if (confirm == true) {
       try {
-        await controller.deleteProfileImage();
+        await widget.controller.deleteProfileImage();
 
-        if (context.mounted) {
-          onImageChanged();
+        if (mounted) {
+          widget.onImageChanged();
         }
       } catch (e) {
-        if (context.mounted) {
+        if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('Error al eliminar la foto'),

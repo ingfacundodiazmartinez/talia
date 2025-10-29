@@ -67,7 +67,6 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
   Future<SearchResults> _performMessageSearch({
     required String query,
     required List<QueryDocumentSnapshot> chatDocs,
-    required List<String> childrenIds,
     required List<QueryDocumentSnapshot> groups,
   }) async {
     if (query.isEmpty) {
@@ -77,7 +76,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
     final chatResults = <ChatSearchResult>[];
     final messageResults = <MessageSearchResult>[];
 
-    // Buscar en chats directos (hijos y otros contactos)
+    // Buscar en chats directos
     for (final chatDoc in chatDocs) {
       final chatData = chatDoc.data() as Map<String, dynamic>;
       final chatId = chatDoc.id;
@@ -101,7 +100,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
 
         if (!userDoc.exists) continue;
 
-        final userData = userDoc.data() as Map<String, dynamic>?;
+        final userData = userDoc.data();
         if (userData == null) continue;
 
         final userName = userData['name'] ?? 'Usuario';
@@ -110,7 +109,9 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
         // Obtener alias si existe
         String displayName = userName;
         try {
-          displayName = await _aliasService.watchDisplayName(otherUserId, userName).first;
+          displayName = await _aliasService
+              .watchDisplayName(otherUserId, userName)
+              .first;
         } catch (e) {
           // Si falla, usar el nombre original
         }
@@ -118,28 +119,27 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
         // Verificar si coincide por nombre (usar SearchService para normalizar)
         if (_searchService.matchesQuery(displayName, query) ||
             _searchService.matchesQuery(userName, query)) {
-          // Determinar tipo de chat
-          final isChildChat = childrenIds.contains(otherUserId);
-          chatResults.add(ChatSearchResult(
-            chatId: chatId,
-            chatName: displayName,
-            chatPhotoUrl: photoURL,
-            chatType: isChildChat ? ChatType.child : ChatType.direct,
-          ));
+          chatResults.add(
+            ChatSearchResult(
+              chatId: chatId,
+              chatName: displayName,
+              chatPhotoUrl: photoURL,
+              chatType: ChatType.direct,
+            ),
+          );
         }
 
         // Buscar en mensajes del chat
-        final isChildChat = childrenIds.contains(otherUserId);
         final chatMessageResults = await _searchService.searchInChatMessages(
           chatId: chatId,
           query: query,
           chatName: displayName,
           chatPhotoUrl: photoURL,
-          chatType: isChildChat ? ChatType.child : ChatType.direct,
+          chatType: ChatType.direct,
         );
         messageResults.addAll(chatMessageResults);
       } catch (e) {
-        print('❌ Error buscando en chat $chatId: $e');
+        debugPrint('❌ Error buscando en chat $chatId: $e');
       }
     }
 
@@ -152,12 +152,14 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
 
       // Verificar si coincide por nombre
       if (_searchService.matchesQuery(groupName, query)) {
-        chatResults.add(ChatSearchResult(
-          chatId: groupId,
-          chatName: groupName,
-          chatPhotoUrl: avatar,
-          chatType: ChatType.group,
-        ));
+        chatResults.add(
+          ChatSearchResult(
+            chatId: groupId,
+            chatName: groupName,
+            chatPhotoUrl: avatar,
+            chatType: ChatType.group,
+          ),
+        );
       }
 
       // Buscar en mensajes del grupo
@@ -171,7 +173,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
         );
         messageResults.addAll(groupMessageResults);
       } catch (e) {
-        print('❌ Error buscando en grupo $groupId: $e');
+        debugPrint('❌ Error buscando en grupo $groupId: $e');
       }
     }
 
@@ -226,11 +228,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                       ],
                     ),
                     IconButton(
-                      icon: Icon(
-                        Icons.archive,
-                        color: Colors.white,
-                        size: 26,
-                      ),
+                      icon: Icon(Icons.archive, color: Colors.white, size: 26),
                       onPressed: () {
                         Navigator.of(context).push(
                           MaterialPageRoute(
@@ -294,179 +292,201 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                       Expanded(
                         child: RefreshIndicator(
                           onRefresh: () async {
-                            print('🔄 Pull-to-refresh activado');
                             await _controller.forceReconnect();
                             // Pequeño delay para dar feedback visual
                             await Future.delayed(Duration(milliseconds: 500));
                           },
-                          child: StreamBuilder<List<String>>(
-                            stream: _blockService.getBlockedContactsStream(),
-                            builder: (context, blockedSnapshot) {
-                              final blockedContacts = blockedSnapshot.data ?? [];
+                          child: StreamBuilder<QuerySnapshot>(
+                            stream: _controller.getChatsStream(),
+                            builder: (context, snapshot) {
+                              // SIEMPRE usar datos cacheados si están disponibles
+                              // Esto evita pantallas en blanco y parpadeos
+                              if (snapshot.hasError) {
+                                debugPrint(
+                                  '⚠️ Error en stream de chats: ${snapshot.error}',
+                                );
+                                // Continuar con lista vacía pero no bloquear la UI
+                              }
 
-                            return StreamBuilder<QuerySnapshot>(
-                              stream: _controller.getChatsStream(),
-                              builder: (context, snapshot) {
-                                // SIEMPRE usar datos cacheados si están disponibles
-                                // Esto evita pantallas en blanco y parpadeos
-                                if (snapshot.hasError) {
-                                  debugPrint(
-                                    '⚠️ Error en stream de chats: ${snapshot.error}',
-                                  );
-                                  // Continuar con lista vacía pero no bloquear la UI
-                                }
+                              // Solo mostrar spinner en la primera carga SIN cache
+                              if (snapshot.connectionState ==
+                                      ConnectionState.waiting &&
+                                  !snapshot.hasData) {
+                                return Center(
+                                  child: CircularProgressIndicator(),
+                                );
+                              }
 
-                                // Solo mostrar spinner en la primera carga SIN cache
-                                if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
-                                  return Center(child: CircularProgressIndicator());
-                                }
+                              // Filtrar chats eliminados y archivados (NO filtrar bloqueados)
+                              var chatDocs = snapshot.data != null
+                                  ? _controller.filterDeletedChats(
+                                      snapshot.data!,
+                                    )
+                                  : <QueryDocumentSnapshot>[];
 
-                                return StreamBuilder<List<String>>(
-                                  stream: _controller.getParentChildLinksStream(),
-                                  builder: (context, linksSnapshot) {
-                                    // Solo mostrar spinner si está esperando Y no hay datos
-                                    if (linksSnapshot.connectionState == ConnectionState.waiting && !linksSnapshot.hasData) {
-                                      return Center(child: CircularProgressIndicator());
-                                    }
+                              // Filtrar chats archivados
+                              chatDocs = _controller.filterArchivedChats(
+                                chatDocs,
+                              );
 
-                                    final childrenIds = linksSnapshot.data ?? [];
-                                    final childrenIdsSet = _controller.convertToSet(childrenIds);
+                              // Obtener grupos del parent
+                              return StreamBuilder<QuerySnapshot>(
+                                    stream: _controller.getGroupsStream(),
+                                    builder: (context, groupsSnapshot) {
+                                      // Filtrar grupos archivados
+                                      final allGroups =
+                                          groupsSnapshot.data?.docs ?? [];
+                                      final groups = _controller
+                                          .filterArchivedGroups(allGroups);
 
-                                    // Filtrar chats eliminados y archivados (NO filtrar bloqueados)
-                                    var chatDocs = snapshot.data != null
-                                        ? _controller.filterDeletedChats(snapshot.data!)
-                                        : <QueryDocumentSnapshot>[];
+                                      // Build the list items using controller
+                                      final listItems = _controller
+                                          .buildListItems(
+                                            chatDocs: chatDocs,
+                                            groups: groups,
+                                          );
 
-                                    // Filtrar chats archivados
-                                    chatDocs = _controller.filterArchivedChats(chatDocs);
-
-                                    // Separar chats en: con hijos y con otros
-                                    final separated = _controller.separateChats(
-                                      chatDocs: chatDocs,
-                                      childrenIds: childrenIdsSet,
-                                    );
-                                    final otherChats = separated['otherChats']!;
-
-                                    // Obtener grupos del parent
-                                    return StreamBuilder<QuerySnapshot>(
-                                      stream: _controller.getGroupsStream(),
-                                      builder: (context, groupsSnapshot) {
-                                        // Filtrar grupos archivados
-                                        final allGroups = groupsSnapshot.data?.docs ?? [];
-                                        final groups = _controller.filterArchivedGroups(allGroups);
-
-                                        // Build the list items using controller
-                                        final listItems = _controller.buildListItems(
-                                          childrenIds: childrenIds,
-                                          chatDocs: chatDocs,
-                                          otherChats: otherChats,
-                                          groups: groups,
-                                        );
-
-                                        return ValueListenableBuilder<String>(
-                                          valueListenable: _searchQuery,
-                                          builder: (context, query, _) {
-                                            // Si no hay query, mostrar lista normal
-                                            if (query.trim().isEmpty) {
-                                              return ListView.builder(
-                                                padding: EdgeInsets.all(16),
-                                                itemCount: listItems.length,
-                                                itemBuilder: (context, index) {
-                                                  final item = listItems[index];
-                                                  return _buildItemWidget(
-                                                    item,
-                                                    chatDocs,
-                                                    childrenIdsSet,
-                                                    query.toLowerCase(),
-                                                  );
-                                                },
-                                              );
-                                            }
-
-                                            // Si hay query, mostrar resultados de búsqueda
-                                            return FutureBuilder<SearchResults>(
-                                              future: _performMessageSearch(
-                                                query: query,
-                                                chatDocs: chatDocs,
-                                                childrenIds: childrenIds,
-                                                groups: groups,
-                                              ),
-                                              builder: (context, snapshot) {
-                                                if (snapshot.connectionState == ConnectionState.waiting) {
-                                                  return Center(
-                                                    child: CircularProgressIndicator(),
-                                                  );
-                                                }
-
-                                                if (snapshot.hasError) {
-                                                  return Center(
-                                                    child: Text('Error en la búsqueda: ${snapshot.error}'),
-                                                  );
-                                                }
-
-                                                final results = snapshot.data;
-                                                if (results == null || results.isEmpty) {
-                                                  return SearchEmptyState(query: query);
-                                                }
-
-                                                return ListView.builder(
-                                                  padding: EdgeInsets.all(16),
-                                                  itemCount: results.chatResults.length +
-                                                             results.messageResults.length +
-                                                             2, // +2 para las cabeceras
-                                                  itemBuilder: (context, index) {
-                                                    // Cabecera de chats
-                                                    if (index == 0 && results.chatResults.isNotEmpty) {
-                                                      return SearchResultsHeader(
-                                                        title: 'CHATS',
-                                                        count: results.chatResults.length,
-                                                      );
-                                                    }
-
-                                                    // Resultados de chats
-                                                    if (index > 0 && index <= results.chatResults.length) {
-                                                      final chatResult = results.chatResults[index - 1];
-                                                      return ChatSearchResultCard(
-                                                        result: chatResult,
-                                                        onTap: () => _navigateToChat(chatResult),
-                                                      );
-                                                    }
-
-                                                    // Cabecera de mensajes
-                                                    if (index == results.chatResults.length + 1 &&
-                                                        results.messageResults.isNotEmpty) {
-                                                      return SearchResultsHeader(
-                                                        title: 'MENSAJES',
-                                                        count: results.messageResults.length,
-                                                      );
-                                                    }
-
-                                                    // Resultados de mensajes
-                                                    final messageIndex = index - results.chatResults.length - 2;
-                                                    if (messageIndex >= 0 &&
-                                                        messageIndex < results.messageResults.length) {
-                                                      final messageResult = results.messageResults[messageIndex];
-                                                      return MessageSearchResultCard(
-                                                        result: messageResult,
-                                                        onTap: () => _navigateToMessage(messageResult),
-                                                      );
-                                                    }
-
-                                                    return SizedBox.shrink();
-                                                  },
+                                      return ValueListenableBuilder<String>(
+                                        valueListenable: _searchQuery,
+                                        builder: (context, query, _) {
+                                          // Si no hay query, mostrar lista normal
+                                          if (query.trim().isEmpty) {
+                                            return ListView.builder(
+                                              padding: EdgeInsets.all(16),
+                                              itemCount: listItems.length,
+                                              itemBuilder: (context, index) {
+                                                final item = listItems[index];
+                                                return _buildItemWidget(
+                                                  item,
+                                                  chatDocs,
+                                                  query.toLowerCase(),
                                                 );
                                               },
                                             );
-                                          },
-                                        );
-                                      },
-                                    );
-                                  },
-                                );
-                              },
-                            );
-                          },
-                        ),
+                                          }
+
+                                          // Si hay query, mostrar resultados de búsqueda
+                                          return FutureBuilder<SearchResults>(
+                                            future: _performMessageSearch(
+                                              query: query,
+                                              chatDocs: chatDocs,
+                                              groups: groups,
+                                            ),
+                                            builder: (context, snapshot) {
+                                              if (snapshot.connectionState ==
+                                                  ConnectionState.waiting) {
+                                                return Center(
+                                                  child:
+                                                      CircularProgressIndicator(),
+                                                );
+                                              }
+
+                                              if (snapshot.hasError) {
+                                                return Center(
+                                                  child: Text(
+                                                    'Error en la búsqueda: ${snapshot.error}',
+                                                  ),
+                                                );
+                                              }
+
+                                              final results = snapshot.data;
+                                              if (results == null ||
+                                                  results.isEmpty) {
+                                                return SearchEmptyState(
+                                                  query: query,
+                                                );
+                                              }
+
+                                              return ListView.builder(
+                                                padding: EdgeInsets.all(16),
+                                                itemCount:
+                                                    results.chatResults.length +
+                                                    results
+                                                        .messageResults
+                                                        .length +
+                                                    2, // +2 para las cabeceras
+                                                itemBuilder: (context, index) {
+                                                  // Cabecera de chats
+                                                  if (index == 0 &&
+                                                      results
+                                                          .chatResults
+                                                          .isNotEmpty) {
+                                                    return SearchResultsHeader(
+                                                      title: 'CHATS',
+                                                      count: results
+                                                          .chatResults
+                                                          .length,
+                                                    );
+                                                  }
+
+                                                  // Resultados de chats
+                                                  if (index > 0 &&
+                                                      index <=
+                                                          results
+                                                              .chatResults
+                                                              .length) {
+                                                    final chatResult = results
+                                                        .chatResults[index - 1];
+                                                    return ChatSearchResultCard(
+                                                      result: chatResult,
+                                                      onTap: () =>
+                                                          _navigateToChat(
+                                                            chatResult,
+                                                          ),
+                                                    );
+                                                  }
+
+                                                  // Cabecera de mensajes
+                                                  if (index ==
+                                                          results
+                                                                  .chatResults
+                                                                  .length +
+                                                              1 &&
+                                                      results
+                                                          .messageResults
+                                                          .isNotEmpty) {
+                                                    return SearchResultsHeader(
+                                                      title: 'MENSAJES',
+                                                      count: results
+                                                          .messageResults
+                                                          .length,
+                                                    );
+                                                  }
+
+                                                  // Resultados de mensajes
+                                                  final messageIndex =
+                                                      index -
+                                                      results
+                                                          .chatResults
+                                                          .length -
+                                                      2;
+                                                  if (messageIndex >= 0 &&
+                                                      messageIndex <
+                                                          results
+                                                              .messageResults
+                                                              .length) {
+                                                    final messageResult = results
+                                                        .messageResults[messageIndex];
+                                                    return MessageSearchResultCard(
+                                                      result: messageResult,
+                                                      onTap: () =>
+                                                          _navigateToMessage(
+                                                            messageResult,
+                                                          ),
+                                                    );
+                                                  }
+
+                                                  return SizedBox.shrink();
+                                                },
+                                              );
+                                            },
+                                          );
+                                        },
+                                      );
+                                    },
+                                  );
+                            },
+                          ),
                         ),
                       ),
                     ],
@@ -484,7 +504,6 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
   Widget _buildItemWidget(
     ChatListItemType item,
     List<QueryDocumentSnapshot> chatDocs,
-    Set<String> childrenIds,
     String searchQuery,
   ) {
     switch (item) {
@@ -505,79 +524,46 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
         );
 
       case ChatItem(:final userId, :final chatDoc):
-        // Check if this is a child chat to use proper data stream
-        final isChildChat = childrenIds.contains(userId);
+        // Todos los chats se manejan igual (sin agrupación)
+        return StreamBuilder<DocumentSnapshot>(
+          stream: _controller.getUserDataStream(userId),
+          builder: (context, userSnapshot) {
+            if (!userSnapshot.hasData) return SizedBox.shrink();
 
-        if (isChildChat) {
-          // For child chats, we need to get user data via stream
-          return StreamBuilder<DocumentSnapshot>(
-            stream: _controller.getUserDataStream(userId),
-            builder: (context, childSnapshot) {
-              if (!childSnapshot.hasData) {
-                return SizedBox.shrink();
-              }
+            final fetchedUserData =
+                userSnapshot.data!.data() as Map<String, dynamic>?;
+            if (fetchedUserData == null) return SizedBox.shrink();
 
-              final childData =
-                  childSnapshot.data!.data() as Map<String, dynamic>?;
-              if (childData == null) return SizedBox.shrink();
+            final userName = fetchedUserData['name'] ?? 'Usuario';
 
-              final childName = childData['name'] ?? 'Usuario';
+            return StreamBuilder<String>(
+              stream: _aliasService.watchDisplayName(userId, userName),
+              initialData: userName,
+              builder: (context, aliasSnapshot) {
+                final displayName = aliasSnapshot.data ?? userName;
 
-              // Filter by search
-              if (searchQuery.isNotEmpty &&
-                  !childName.toLowerCase().contains(searchQuery)) {
-                return SizedBox.shrink();
-              }
-
-              return _buildChatItem(
-                childId: userId,
-                childData: childData,
-                chatDoc: chatDoc,
-              );
-            },
-          );
-        } else {
-          // For other chats and contacts
-          return StreamBuilder<DocumentSnapshot>(
-            stream: _controller.getUserDataStream(userId),
-            builder: (context, userSnapshot) {
-              if (!userSnapshot.hasData) return SizedBox.shrink();
-
-              final fetchedUserData =
-                  userSnapshot.data!.data() as Map<String, dynamic>?;
-              if (fetchedUserData == null) return SizedBox.shrink();
-
-              final userName = fetchedUserData['name'] ?? 'Usuario';
-
-              return StreamBuilder<String>(
-                stream: _aliasService.watchDisplayName(userId, userName),
-                initialData: userName,
-                builder: (context, aliasSnapshot) {
-                  final displayName = aliasSnapshot.data ?? userName;
-
-                  // Filter by search (search in both real name and alias)
-                  if (searchQuery.isNotEmpty) {
-                    final matchesRealName = userName.toLowerCase().contains(
-                      searchQuery,
-                    );
-                    final matchesAlias = displayName.toLowerCase().contains(
-                      searchQuery,
-                    );
-                    if (!matchesRealName && !matchesAlias) {
-                      return SizedBox.shrink();
-                    }
-                  }
-
-                  return _buildChatItem(
-                    childId: userId,
-                    childData: fetchedUserData,
-                    chatDoc: chatDoc,
+                // Filter by search (search in both real name and alias)
+                if (searchQuery.isNotEmpty) {
+                  final matchesRealName = userName.toLowerCase().contains(
+                    searchQuery,
                   );
-                },
-              );
-            },
-          );
-        }
+                  final matchesAlias = displayName.toLowerCase().contains(
+                    searchQuery,
+                  );
+                  if (!matchesRealName && !matchesAlias) {
+                    return SizedBox.shrink();
+                  }
+                }
+
+                return _buildChatItem(
+                  childId: userId,
+                  childData: fetchedUserData,
+                  chatDoc: chatDoc,
+                );
+              },
+            );
+          },
+        );
 
       case GroupItem(:final groupId, :final groupData):
         final groupName = groupData['name'] ?? 'Grupo';
@@ -591,10 +577,6 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
 
         // Leer contador de mensajes no leídos para este usuario
         final unreadCount = groupData['unreadCount_$parentId'] ?? 0;
-
-        if (unreadCount > 0) {
-          print('💬 [ChatList] Grupo $groupId tiene $unreadCount mensajes no leídos');
-        }
 
         // Obtener el último mensaje para mostrar su estado
         return StreamBuilder<QuerySnapshot>(
@@ -610,9 +592,11 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
             MessageStatus? lastMessageStatus;
             ModerationStatus? lastMessageModerationStatus;
 
-            if (messageSnapshot.hasData && messageSnapshot.data!.docs.isNotEmpty) {
+            if (messageSnapshot.hasData &&
+                messageSnapshot.data!.docs.isNotEmpty) {
               final lastMessageDoc = messageSnapshot.data!.docs.first;
-              final lastMessageData = lastMessageDoc.data() as Map<String, dynamic>;
+              final lastMessageData =
+                  lastMessageDoc.data() as Map<String, dynamic>;
 
               final senderId = lastMessageData['senderId'] as String? ?? '';
               lastMessageSenderId = senderId;
@@ -625,7 +609,8 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
               );
 
               // Obtener estado de moderación
-              final modStatusString = lastMessageData['moderationStatus'] as String?;
+              final modStatusString =
+                  lastMessageData['moderationStatus'] as String?;
               if (modStatusString != null) {
                 switch (modStatusString) {
                   case 'approved':
@@ -647,7 +632,8 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
               memberCount: (groupData['members'] as List?)?.length ?? 0,
               lastMessage: groupData['lastMessage'] ?? 'Toca para abrir',
               messageCount: groupData['messageCount'] ?? 0,
-              groupImageUrl: groupData['avatar'], // Campo correcto es 'avatar' no 'imageUrl'
+              groupImageUrl:
+                  groupData['avatar'], // Campo correcto es 'avatar' no 'imageUrl'
               unreadCount: unreadCount,
               onLeaveGroup: () => _confirmLeaveGroup(groupId, groupName),
               lastMessageSenderId: lastMessageSenderId,
@@ -690,10 +676,6 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
               // Leer contador de mensajes no leídos para este usuario
               final unreadCount = chatData['unreadCount_$parentId'] ?? 0;
 
-              if (unreadCount > 0) {
-                print('💬 [ChatList] Chat ${chatDoc.id} tiene $unreadCount mensajes no leídos');
-              }
-
               // Obtener el último mensaje para mostrar su estado
               return StreamBuilder<QuerySnapshot>(
                 stream: FirebaseFirestore.instance
@@ -708,11 +690,14 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                   MessageStatus? lastMessageStatus;
                   ModerationStatus? lastMessageModerationStatus;
 
-                  if (messageSnapshot.hasData && messageSnapshot.data!.docs.isNotEmpty) {
+                  if (messageSnapshot.hasData &&
+                      messageSnapshot.data!.docs.isNotEmpty) {
                     final lastMessageDoc = messageSnapshot.data!.docs.first;
-                    final lastMessageData = lastMessageDoc.data() as Map<String, dynamic>;
+                    final lastMessageData =
+                        lastMessageDoc.data() as Map<String, dynamic>;
 
-                    final senderId = lastMessageData['senderId'] as String? ?? '';
+                    final senderId =
+                        lastMessageData['senderId'] as String? ?? '';
                     lastMessageSenderId = senderId;
 
                     // Calcular el estado del mensaje
@@ -723,27 +708,35 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                     );
 
                     // Obtener estado de moderación
-                    final modStatusString = lastMessageData['moderationStatus'] as String?;
+                    final modStatusString =
+                        lastMessageData['moderationStatus'] as String?;
                     if (modStatusString != null) {
                       switch (modStatusString) {
                         case 'approved':
-                          lastMessageModerationStatus = ModerationStatus.approved;
+                          lastMessageModerationStatus =
+                              ModerationStatus.approved;
                           break;
                         case 'blocked':
-                          lastMessageModerationStatus = ModerationStatus.blocked;
+                          lastMessageModerationStatus =
+                              ModerationStatus.blocked;
                           break;
                         case 'pending':
-                          lastMessageModerationStatus = ModerationStatus.pending;
+                          lastMessageModerationStatus =
+                              ModerationStatus.pending;
                           break;
                       }
                     }
                   }
 
                   // Verificar si el chat fue limpiado y no hay mensajes nuevos
-                  final clearedAt = chatData['clearedAt_$parentId'] as Timestamp?;
-                  final lastMessageTime = chatData['lastMessageTime'] as Timestamp?;
-                  final isChatCleared = clearedAt != null &&
-                      (lastMessageTime == null || clearedAt.compareTo(lastMessageTime) >= 0);
+                  final clearedAt =
+                      chatData['clearedAt_$parentId'] as Timestamp?;
+                  final lastMessageTime =
+                      chatData['lastMessageTime'] as Timestamp?;
+                  final isChatCleared =
+                      clearedAt != null &&
+                      (lastMessageTime == null ||
+                          clearedAt.compareTo(lastMessageTime) >= 0);
 
                   return ChatListItem(
                     chatId: chatDoc.id,
@@ -752,16 +745,22 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                     lastMessage: isBlocked
                         ? '🔒 Contacto bloqueado'
                         : (isChatCleared
-                            ? 'Inicia una conversación...'
-                            : (chatData['lastMessage'] ?? '')),
-                    time: isChatCleared ? '' : ChatUtils.formatChatTime(chatData['lastMessageTime']),
+                              ? 'Inicia una conversación...'
+                              : (chatData['lastMessage'] ?? '')),
+                    time: isChatCleared
+                        ? ''
+                        : ChatUtils.formatChatTime(chatData['lastMessageTime']),
                     unreadCount: isBlocked ? 0 : unreadCount,
                     photoURL: photoURL,
                     isEmpty: isChatCleared,
                     isBlocked: isBlocked,
-                    lastMessageSenderId: isChatCleared ? null : lastMessageSenderId,
+                    lastMessageSenderId: isChatCleared
+                        ? null
+                        : lastMessageSenderId,
                     lastMessageStatus: isChatCleared ? null : lastMessageStatus,
-                    lastMessageModerationStatus: isChatCleared ? null : lastMessageModerationStatus,
+                    lastMessageModerationStatus: isChatCleared
+                        ? null
+                        : lastMessageModerationStatus,
                   );
                 },
               );
@@ -771,7 +770,9 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                 chatId: ChatUtils.getChatId(parentId, childId),
                 userId: childId,
                 name: displayName,
-                lastMessage: isBlocked ? '🔒 Contacto bloqueado' : 'Toca para iniciar conversación',
+                lastMessage: isBlocked
+                    ? '🔒 Contacto bloqueado'
+                    : 'Toca para iniciar conversación',
                 time: '',
                 unreadCount: 0,
                 photoURL: photoURL,
@@ -894,10 +895,17 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
   }
 
   /// Helper para navegar a chat directo obteniendo el contactId
-  Future<void> _navigateToDirectChat(String chatId, String contactName, [String? scrollToMessageId]) async {
+  Future<void> _navigateToDirectChat(
+    String chatId,
+    String contactName, [
+    String? scrollToMessageId,
+  ]) async {
     try {
       // Obtener el chat doc para sacar el contactId
-      final chatDoc = await FirebaseFirestore.instance.collection('chats').doc(chatId).get();
+      final chatDoc = await FirebaseFirestore.instance
+          .collection('chats')
+          .doc(chatId)
+          .get();
       if (!chatDoc.exists) return;
 
       final participants = chatDoc.data()?['participants'] as List<dynamic>?;
@@ -921,7 +929,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
         ),
       );
     } catch (e) {
-      print('Error navegando a chat directo: $e');
+      debugPrint('Error navegando a chat directo: $e');
     }
   }
 }

@@ -8,7 +8,6 @@ import '../../../widgets/stories_section.dart';
 import '../../../widgets/emergency_button.dart';
 import '../../../widgets/create_group_widget.dart';
 import '../../../services/chat_service.dart';
-import '../../../services/block_service.dart';
 import '../../../services/chat_archive_service.dart';
 import '../../../services/chat_mute_service.dart';
 import '../../../services/chat_clear_service.dart';
@@ -16,10 +15,12 @@ import '../../../services/message_cache_service.dart';
 import '../../../services/typing_indicator_service.dart';
 import '../../../services/message_status_helper.dart';
 import '../../../services/group_chat_service.dart';
-import '../../../screens/group_chat_screen.dart';
 import '../../../models/chat_message.dart';
 import '../../chat_detail_screen.dart';
 import '../../parent/chats/widgets/group_chat_list_item.dart';
+import '../../common/chats/chat_header_widget.dart';
+import '../../common/chats/chat_section_header_widget.dart';
+import '../../common/chats/chat_empty_state_widget.dart';
 import 'child_archived_chats_screen.dart';
 
 /// Pantalla completa de chats para niños
@@ -47,7 +48,6 @@ class ChildChatsScreen extends StatefulWidget {
 class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepAliveClientMixin {
   late ChildChatsController _chatsController;
   final ChatService _chatService = ChatService();
-  final BlockService _blockService = BlockService();
   final ChatArchiveService _archiveService = ChatArchiveService();
   final ChatMuteService _muteService = ChatMuteService();
   final ChatClearService _clearService = ChatClearService();
@@ -60,7 +60,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
   @override
   void initState() {
     super.initState();
-    _chatsController = ChildChatsController(childId: widget.childId);
+    _chatsController = ChildChatsController(userId: widget.childId);
     _chatsController.initialize();
   }
 
@@ -72,7 +72,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
 
   @override
   Widget build(BuildContext context) {
-    super.build(context); // Required for AutomaticKeepAliveClientMixin
+    super.build(context);
 
     final colorScheme = Theme.of(context).colorScheme;
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
@@ -113,100 +113,42 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
   }
 
   Widget _buildHeader(bool isDarkMode, ColorScheme colorScheme) {
-    return Padding(
-      padding: const EdgeInsets.all(20.0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '¡Hola! 👋',
-                  style: TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.bold,
-                    color: isDarkMode ? colorScheme.onSurface : Colors.white,
-                  ),
-                ),
-                SizedBox(height: 4),
-                Text(
-                  'Tus conversaciones seguras',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: isDarkMode
-                        ? colorScheme.onSurface.withValues(alpha: 0.7)
-                        : Colors.white.withValues(alpha: 0.9),
-                  ),
-                ),
-              ],
+    return ChatHeaderWidget(
+      title: '¡Hola! 👋',
+      subtitle: 'Tus conversaciones seguras',
+      isDarkMode: isDarkMode,
+      onArchivedTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => ChildArchivedChatsScreen(
+              childId: widget.childId,
             ),
           ),
-          SizedBox(width: 8),
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              GestureDetector(
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => ChildArchivedChatsScreen(
-                        childId: widget.childId,
-                      ),
-                    ),
-                  );
-                },
-                child: Icon(
-                  Icons.archive,
-                  color: isDarkMode ? colorScheme.onSurface : Colors.white,
-                  size: 22,
-                ),
-              ),
-              SizedBox(width: 8),
-              GestureDetector(
-                onTap: () {
-                  showModalBottomSheet(
-                    context: context,
-                    isScrollControlled: true,
-                    backgroundColor: Colors.transparent,
-                    builder: (context) => CreateGroupWidget(
-                      onGroupCreated: () {
-                        setState(() {});
-                      },
-                    ),
-                  );
-                },
-                child: Icon(
-                  Icons.group_add,
-                  color: isDarkMode ? colorScheme.onSurface : Colors.white,
-                  size: 22,
-                ),
-              ),
-              SizedBox(width: 8),
-              FutureBuilder<bool>(
-                future: widget.controller.hasLinkedParents(),
-                builder: (context, snapshot) {
-                  if (snapshot.data == true) {
-                    return Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        HeaderEmergencyButton(
-                          onEmergencyActivated: () {
-                            print('🆘 Emergencia activada desde el header');
-                          },
-                        ),
-                        SizedBox(width: 8),
-                      ],
-                    );
-                  }
-                  return SizedBox.shrink();
-                },
-              ),
-            ],
+        );
+      },
+      onCreateGroupTap: () {
+        showModalBottomSheet(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: Colors.transparent,
+          builder: (context) => CreateGroupWidget(
+            onGroupCreated: () {
+              setState(() {});
+            },
           ),
-        ],
+        );
+      },
+      additionalAction: FutureBuilder<bool>(
+        future: widget.controller.hasLinkedParents(),
+        builder: (context, snapshot) {
+          if (snapshot.data == true) {
+            return HeaderEmergencyButton(
+              onEmergencyActivated: () {},
+            );
+          }
+          return SizedBox.shrink();
+        },
       ),
     );
   }
@@ -231,29 +173,16 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
             : <QueryDocumentSnapshot>[];
 
         // Filtrar chats archivados
-        chatDocs = chatDocs.where((chatDoc) {
-          final chatData = chatDoc.data() as Map<String, dynamic>;
-          final archived = chatData['archived_${widget.childId}'] as bool? ?? false;
-          return !archived;
-        }).toList();
+        chatDocs = _chatsController.filterArchivedChats(chatDocs);
 
         // Obtener grupos del niño
         return StreamBuilder<QuerySnapshot>(
-          stream: _firestore
-              .collection('groups')
-              .where('members', arrayContains: widget.childId)
-              .snapshots(),
+          stream: _chatsController.getGroupsStream(),
           builder: (context, groupsSnapshot) {
-            final groups = groupsSnapshot.data?.docs ?? [];
+            final allGroups = groupsSnapshot.data?.docs ?? [];
+            final groups = _chatsController.filterArchivedGroups(allGroups);
 
-            // Filtrar grupos archivados
-            final activeGroups = groups.where((groupDoc) {
-              final groupData = groupDoc.data() as Map<String, dynamic>;
-              final archived = groupData['archived_${widget.childId}'] as bool? ?? false;
-              return !archived;
-            }).toList();
-
-            if (chatDocs.isEmpty && activeGroups.isEmpty) {
+            if (chatDocs.isEmpty && groups.isEmpty) {
               return _buildEmptyState(colorScheme);
             }
 
@@ -263,7 +192,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
                 StoriesHeader(),
                 StoriesSection(),
                 SizedBox(height: 16),
-                ..._buildChatItems(chatDocs, activeGroups, colorScheme),
+                ..._buildChatItems(chatDocs, groups, colorScheme),
               ],
             );
           },
@@ -279,13 +208,15 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
   ) {
     final widgets = <Widget>[];
 
-    // Por ahora, todos los chats se muestran en la sección "Otros Chats"
-    // OPTIMIZACIÓN: No separar por categoría para evitar StreamBuilders innecesarios
-    final otherChats = chatDocs;
-
     // Build groups section
     if (groups.isNotEmpty) {
-      widgets.add(_buildGroupsHeader(colorScheme));
+      widgets.add(ChatSectionHeaderWidget(
+        title: 'Grupos',
+        icon: Icons.group,
+        iconColor: colorScheme.primary,
+        iconBackgroundColor: colorScheme.primaryContainer,
+        padding: EdgeInsets.only(bottom: 12, left: 4, top: 8),
+      ));
       for (final groupDoc in groups) {
         widgets.add(_buildGroupItem(groupDoc, colorScheme));
       }
@@ -293,28 +224,20 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
     }
 
     // Build other chats section
-    if (otherChats.isNotEmpty) {
-      widgets.add(_buildOtherChatsHeader(colorScheme));
-      for (final chatDoc in otherChats) {
+    if (chatDocs.isNotEmpty) {
+      widgets.add(ChatSectionHeaderWidget(
+        title: 'Contactos',
+        icon: Icons.people,
+        iconColor: colorScheme.primary,
+        iconBackgroundColor: colorScheme.primaryContainer,
+        padding: EdgeInsets.only(bottom: 12, left: 4),
+      ));
+      for (final chatDoc in chatDocs) {
         widgets.add(_buildSingleChatItem(chatDoc, false, colorScheme));
       }
     }
 
     return widgets;
-  }
-
-  Widget _buildGroupsHeader(ColorScheme colorScheme) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: 12, left: 4, top: 8),
-      child: Text(
-        'Grupos',
-        style: TextStyle(
-          fontSize: 16,
-          fontWeight: FontWeight.bold,
-          color: colorScheme.onSurface,
-        ),
-      ),
-    );
   }
 
   Widget _buildGroupItem(QueryDocumentSnapshot groupDoc, ColorScheme colorScheme) {
@@ -323,7 +246,6 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
     final groupName = groupData['name'] ?? 'Grupo';
     final unreadCount = groupData['unreadCount_${widget.childId}'] ?? 0;
 
-    // Obtener el último mensaje para mostrar su estado
     return StreamBuilder<QuerySnapshot>(
       stream: _firestore
           .collection('groups')
@@ -344,14 +266,12 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
           final senderId = lastMessageData['senderId'] as String? ?? '';
           lastMessageSenderId = senderId;
 
-          // Calcular el estado del mensaje
           lastMessageStatus = MessageStatusHelper.calculateStatus(
             data: lastMessageData,
             senderId: senderId,
             hasServerTimestamp: lastMessageData['timestamp'] != null,
           );
 
-          // Obtener estado de moderación
           final modStatusString = lastMessageData['moderationStatus'] as String?;
           if (modStatusString != null) {
             switch (modStatusString) {
@@ -415,11 +335,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
 
   Future<void> _leaveGroup(String groupId, String groupName) async {
     try {
-      // Usar el servicio que maneja correctamente los permisos con arrayRemove
       await GroupChatService().leaveGroup(groupId, widget.childId);
-
-      // ℹ️ Firestore listeners se actualizarán automáticamente cuando cambie el documento.
-      // NO forzar disableNetwork/enableNetwork porque puede causar loading infinito.
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -457,11 +373,9 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
 
     if (otherUserId.isEmpty) return SizedBox.shrink();
 
-    // OPTIMIZACIÓN: Usar un solo StreamBuilder combinado para chat
-    // Los datos del usuario y alias se cargarán solo cuando sea necesario
     return StreamBuilder<DocumentSnapshot>(
       stream: _firestore.collection('chats').doc(chatId).snapshots(),
-      initialData: chatDoc,  // CRÍTICO: usar initialData para evitar flicker
+      initialData: chatDoc,
       builder: (context, chatSnapshot) {
         final currentChatData = chatSnapshot.hasData
             ? (chatSnapshot.data!.data() as Map<String, dynamic>?) ?? chatData
@@ -477,12 +391,10 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
             : (currentChatData['lastMessage'] ?? '');
         final timeString = isChatCleared ? '' : _chatsController.formatTime(currentChatData['lastMessageTime']);
 
-        // OPTIMIZACIÓN: Cachear información del usuario para evitar consultas repetidas
-        return FutureBuilder<DocumentSnapshot>(
-          future: _firestore.collection('users').doc(otherUserId).get(),
+        return FutureBuilder<Map<String, dynamic>?>(
+          future: _chatsController.getUserData(otherUserId),
           builder: (context, userSnapshot) {
             if (!userSnapshot.hasData) {
-              // Mostrar placeholder mientras carga
               return _buildChatItem(
                 chatId: chatId,
                 userId: otherUserId,
@@ -498,19 +410,17 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
               );
             }
 
-            final userData = userSnapshot.data!.data() as Map<String, dynamic>?;
+            final userData = userSnapshot.data;
             if (userData == null) return SizedBox.shrink();
 
             final realName = userData['name'] ?? 'Usuario';
             final isOnline = userData['isOnline'] ?? false;
             final photoURL = userData['photoURL'] as String?;
 
-            // OPTIMIZACIÓN: Solo usar StreamBuilder para cosas que cambian frecuentemente
-            // Alias y bloqueos no cambian tan seguido, usar FutureBuilder
             return _buildChatItem(
               chatId: chatId,
               userId: otherUserId,
-              name: realName,  // Usar nombre real, no alias por ahora para simplificar
+              name: realName,
               lastMessage: lastMessage,
               time: timeString,
               unreadCount: unreadCount is int ? unreadCount : 0,
@@ -518,7 +428,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
               photoURL: photoURL,
               isParent: isParent,
               isEmpty: isChatCleared,
-              isBlocked: false,  // Simplificar por ahora
+              isBlocked: false,
               colorScheme: colorScheme,
             );
           },
@@ -555,7 +465,13 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
                         return Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            _buildParentChatHeader(colorScheme),
+                            ChatSectionHeaderWidget(
+                              title: 'Familia',
+                              icon: Icons.shield,
+                              iconColor: Colors.green,
+                              iconBackgroundColor: Colors.green.withValues(alpha: 0.1),
+                              padding: EdgeInsets.only(bottom: 12, left: 4),
+                            ),
                             _buildChatItem(
                               chatId: _chatsController.getChatId(widget.childId, parentId),
                               userId: parentId,
@@ -578,152 +494,10 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
                 },
               ),
             if (parentSnapshot.data == null)
-              Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.chat_bubble_outline, size: 64, color: colorScheme.outlineVariant),
-                    SizedBox(height: 16),
-                    Text(
-                      'No tienes conversaciones aún',
-                      style: TextStyle(fontSize: 16, color: colorScheme.onSurfaceVariant),
-                    ),
-                  ],
-                ),
-              ),
+              ChatEmptyStateWidget(),
           ],
         );
       },
-    );
-  }
-
-
-  Widget _buildParentChatHeader(ColorScheme colorScheme) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: 12, left: 4),
-      child: Row(
-        children: [
-          Container(
-            padding: EdgeInsets.all(6),
-            decoration: BoxDecoration(
-              color: Colors.green.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(Icons.shield, size: 16, color: Colors.green),
-          ),
-          SizedBox(width: 8),
-          Text(
-            'Familia',
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              color: colorScheme.onSurface,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildOtherChatsHeader(ColorScheme colorScheme) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: 12, left: 4),
-      child: Row(
-        children: [
-          Container(
-            padding: EdgeInsets.all(6),
-            decoration: BoxDecoration(
-              color: colorScheme.primaryContainer,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(Icons.people, size: 16, color: colorScheme.primary),
-          ),
-          SizedBox(width: 8),
-          Text(
-            'Contactos',
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              color: colorScheme.onSurface,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildGroupChatItem({
-    required String groupId,
-    required String groupName,
-    required int memberCount,
-    required String lastMessage,
-    required int messageCount,
-    required ColorScheme colorScheme,
-  }) {
-    return GestureDetector(
-      onTap: () {
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (context) => GroupChatScreen(
-              groupId: groupId,
-              groupName: groupName,
-            ),
-          ),
-        );
-      },
-      child: Container(
-        margin: EdgeInsets.only(bottom: 8),
-        padding: EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: Colors.transparent,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 50,
-              height: 50,
-              decoration: BoxDecoration(
-                color: colorScheme.primaryContainer,
-                shape: BoxShape.circle,
-              ),
-              child: Icon(Icons.group, color: colorScheme.primary, size: 24),
-            ),
-            SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          groupName,
-                          style: TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontSize: 15,
-                            color: colorScheme.onSurface,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
-                  SizedBox(height: 4),
-                  Text(
-                    '$memberCount miembros',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Icon(Icons.chevron_right, color: colorScheme.outlineVariant),
-          ],
-        ),
-      ),
     );
   }
 
@@ -760,7 +534,6 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
             motion: const ScrollMotion(),
             extentRatio: 0.5,
             children: [
-              // Botón Archivar
               CustomSlidableAction(
                 onPressed: (context) async {
                   final success = await _archiveService.archiveChat(
@@ -783,7 +556,6 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
                 foregroundColor: Colors.white,
                 child: Icon(Icons.archive_outlined, size: 32, color: Colors.white),
               ),
-              // Botón Silenciar/Desilenciar
               CustomSlidableAction(
                 onPressed: (context) async {
                   final success = isMuted
@@ -811,7 +583,6 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
                   color: Colors.white,
                 ),
               ),
-              // Botón Limpiar
               CustomSlidableAction(
                 onPressed: (buttonContext) async {
                   final confirmed = await showDialog<bool>(
@@ -866,7 +637,6 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
           ),
           child: GestureDetector(
             onTap: isRevoked ? null : () {
-              print('Navegando al chat: $chatId con usuario: $userId');
               Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (context) => ChatDetailScreen(
@@ -952,7 +722,6 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
                                   overflow: TextOverflow.ellipsis,
                                 ),
                               ),
-                              // Indicador de chat silenciado
                               if (isMuted)
                                 Padding(
                                   padding: EdgeInsets.only(right: 4),
@@ -1060,5 +829,4 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
       },
     );
   }
-
 }

@@ -302,7 +302,10 @@ class ImageService {
     final result = await showModalBottomSheet<ImageSource>(
       context: context,
       backgroundColor: Colors.transparent,
-      builder: (BuildContext context) {
+      isDismissible: true,
+      enableDrag: true,
+      isScrollControlled: false,
+      builder: (BuildContext modalContext) {
         print('📸 [ImageService] Builder del modal ejecutándose');
         return Container(
           decoration: BoxDecoration(
@@ -312,73 +315,75 @@ class ImageService {
               topRight: Radius.circular(20),
             ),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 40,
-                height: 4,
-                margin: EdgeInsets.only(top: 12),
-                decoration: BoxDecoration(
-                  color: Colors.grey[300],
-                  borderRadius: BorderRadius.circular(2),
+          child: SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 40,
+                  height: 4,
+                  margin: EdgeInsets.only(top: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(2),
+                  ),
                 ),
-              ),
-              Padding(
-                padding: EdgeInsets.all(20),
-                child: Column(
-                  children: [
-                    Text(
-                      'Seleccionar foto de perfil',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF2D3142),
+                Padding(
+                  padding: EdgeInsets.all(20),
+                  child: Column(
+                    children: [
+                      Text(
+                        'Seleccionar foto de perfil',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF2D3142),
+                        ),
                       ),
-                    ),
-                    SizedBox(height: 20),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      children: [
-                        _buildSourceOption(
-                          context: context,
-                          icon: Icons.camera_alt,
-                          title: 'Cámara',
-                          subtitle: 'Tomar foto',
-                          source: ImageSource.camera,
-                          color: Colors.blue,
-                        ),
-                        _buildSourceOption(
-                          context: context,
-                          icon: Icons.photo_library,
-                          title: 'Galería',
-                          subtitle: 'Elegir foto',
-                          source: ImageSource.gallery,
-                          color: Color(0xFF9D7FE8),
-                        ),
-                      ],
-                    ),
-                    SizedBox(height: 20),
-                    SizedBox(
-                      width: double.infinity,
-                      child: TextButton(
-                        onPressed: () {
-                          print('📸 [ImageService] Usuario canceló la selección');
-                          Navigator.pop(context);
-                        },
-                        child: Text(
-                          'Cancelar',
-                          style: TextStyle(
-                            color: Colors.grey[600],
-                            fontSize: 16,
+                      SizedBox(height: 20),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        children: [
+                          _buildSourceOption(
+                            context: modalContext,
+                            icon: Icons.camera_alt,
+                            title: 'Cámara',
+                            subtitle: 'Tomar foto',
+                            source: ImageSource.camera,
+                            color: Colors.blue,
+                          ),
+                          _buildSourceOption(
+                            context: modalContext,
+                            icon: Icons.photo_library,
+                            title: 'Galería',
+                            subtitle: 'Elegir foto',
+                            source: ImageSource.gallery,
+                            color: Color(0xFF9D7FE8),
+                          ),
+                        ],
+                      ),
+                      SizedBox(height: 20),
+                      SizedBox(
+                        width: double.infinity,
+                        child: TextButton(
+                          onPressed: () {
+                            print('📸 [ImageService] Usuario canceló la selección');
+                            Navigator.pop(modalContext, null);
+                          },
+                          child: Text(
+                            'Cancelar',
+                            style: TextStyle(
+                              color: Colors.grey[600],
+                              fontSize: 16,
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         );
       },
@@ -395,54 +400,60 @@ class ImageService {
     required ImageSource source,
     required Color color,
   }) {
-    return GestureDetector(
-      onTap: () {
-        print('📸 [ImageService] Opción seleccionada: ${source == ImageSource.camera ? 'CÁMARA' : 'GALERÍA'}');
-        Navigator.pop(context, source);
-      },
-      child: Container(
-        width: 120,
-        padding: EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: color.withOpacity(0.3),
-            width: 1,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () {
+          print('📸 [ImageService] Opción seleccionada: ${source == ImageSource.camera ? 'CÁMARA' : 'GALERÍA'}');
+          print('📸 [ImageService] Llamando Navigator.pop con source: $source');
+          Navigator.of(context).pop(source);
+          print('📸 [ImageService] Navigator.pop ejecutado');
+        },
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          width: 120,
+          padding: EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: color.withOpacity(0.3),
+              width: 1,
+            ),
           ),
-        ),
-        child: Column(
-          children: [
-            Container(
-              padding: EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: color,
-                shape: BoxShape.circle,
+          child: Column(
+            children: [
+              Container(
+                padding: EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: color,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  icon,
+                  color: Colors.white,
+                  size: 24,
+                ),
               ),
-              child: Icon(
-                icon,
-                color: Colors.white,
-                size: 24,
+              SizedBox(height: 8),
+              Text(
+                title,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF2D3142),
+                ),
               ),
-            ),
-            SizedBox(height: 8),
-            Text(
-              title,
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF2D3142),
+              SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey[600],
+                ),
               ),
-            ),
-            SizedBox(height: 2),
-            Text(
-              subtitle,
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey[600],
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
