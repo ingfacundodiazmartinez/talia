@@ -173,12 +173,20 @@ class ProfileCompletionService {
             print('✅ [CompleteProfile] Foto de perfil actualizada');
           }
 
+          // Normalizar fecha a UTC mediodía para evitar problemas de timezone
+          final normalizedDate = DateTime.utc(
+            birthDate.year,
+            birthDate.month,
+            birthDate.day,
+            12, // Mediodía UTC
+          );
+
           // Luego usar Cloud Function para actualizar nombre, teléfono, fecha de nacimiento y role
           final callable = FirebaseFunctions.instance.httpsCallable('updateUserProfile');
           final result = await callable.call<Map<String, dynamic>>({
             'name': name,
             'phone': phoneNumber,
-            'birthDate': birthDate.toIso8601String(),
+            'birthDate': normalizedDate.toIso8601String(),
           });
 
           final response = result.data;
@@ -198,9 +206,17 @@ class ProfileCompletionService {
         // Create new user
         print('📝 [CompleteProfile] Creando nuevo usuario con todos los campos...');
         try {
+          // Normalizar fecha a UTC mediodía para evitar problemas de timezone
+          final normalizedDate = DateTime.utc(
+            birthDate.year,
+            birthDate.month,
+            birthDate.day,
+            12, // Mediodía UTC
+          );
+
           await FirebaseFirestore.instance.collection('users').doc(userId).set({
             'name': name,
-            'birthDate': Timestamp.fromDate(birthDate),
+            'birthDate': Timestamp.fromDate(normalizedDate),
             'phone': phoneNumber,
             'phoneVerified': true,
             'photoURL': profileImageUrl,
@@ -375,10 +391,20 @@ class ProfileCompletionService {
 
           DateTime? birthDate;
           if (data['birthDate'] != null) {
+            DateTime? parsedDate;
             if (data['birthDate'] is Timestamp) {
-              birthDate = (data['birthDate'] as Timestamp).toDate();
+              parsedDate = (data['birthDate'] as Timestamp).toDate();
             } else if (data['birthDate'] is String) {
-              birthDate = DateTime.tryParse(data['birthDate']);
+              parsedDate = DateTime.tryParse(data['birthDate']);
+            }
+
+            // Normalizar a fecha local sin hora para mostrar correctamente
+            if (parsedDate != null) {
+              birthDate = DateTime(
+                parsedDate.year,
+                parsedDate.month,
+                parsedDate.day,
+              );
             }
           }
 

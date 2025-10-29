@@ -113,13 +113,22 @@ class EditProfileController {
       // Actualizar nombre en Firebase Auth
       await _auth.currentUser?.updateDisplayName(name);
 
+      // Normalizar fecha a UTC mediodía (12:00) para evitar problemas de timezone
+      // Solo nos importa año-mes-día, no la hora
+      final normalizedDate = DateTime.utc(
+        birthDate.year,
+        birthDate.month,
+        birthDate.day,
+        12, // Mediodía UTC evita problemas de cambio de día
+      );
+
       // Llamar a Cloud Function para actualizar perfil y rol
       // La función calcula automáticamente el rol correcto basado en edad y vínculos
       final callable = FirebaseFunctions.instance.httpsCallable('updateUserProfile');
       final result = await callable.call<Map<String, dynamic>>({
         'name': name,
         'phone': phone,
-        'birthDate': birthDate.toIso8601String(),
+        'birthDate': normalizedDate.toIso8601String(),
       });
 
       final response = result.data;

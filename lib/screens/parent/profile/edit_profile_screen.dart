@@ -54,11 +54,21 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
           // Cargar fecha de nacimiento
           if (userData['birthDate'] != null) {
+            DateTime? parsedDate;
+
             if (userData['birthDate'] is Timestamp) {
-              _selectedBirthDate =
-                  (userData['birthDate'] as Timestamp).toDate();
+              parsedDate = (userData['birthDate'] as Timestamp).toDate();
             } else if (userData['birthDate'] is String) {
-              _selectedBirthDate = DateTime.tryParse(userData['birthDate']);
+              parsedDate = DateTime.tryParse(userData['birthDate']);
+            }
+
+            // Normalizar a fecha local sin hora para mostrar correctamente
+            if (parsedDate != null) {
+              _selectedBirthDate = DateTime(
+                parsedDate.year,
+                parsedDate.month,
+                parsedDate.day,
+              );
             }
           }
 
