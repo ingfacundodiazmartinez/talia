@@ -176,11 +176,22 @@ async function checkChatPermission(userId1, userId2, db) {
       return false;
     }
 
-    const user1Role = user1Doc.data().role || "child";
-    const user2Role = user2Doc.data().role || "child";
+    const user1Data = user1Doc.data();
+    const user2Data = user2Doc.data();
+    const user1Role = user1Data.role || "child";
+    const user2Role = user2Data.role || "child";
 
     // Si ambos son padres, pueden chatear libremente
     if (user1Role === "parent" && user2Role === "parent") {
+      return true;
+    }
+
+    // Verificar relación padre-hijo directa
+    const user1LinkedChildren = user1Data.linkedChildrenIds || [];
+    const user2LinkedChildren = user2Data.linkedChildrenIds || [];
+
+    if (user1LinkedChildren.includes(userId2) || user2LinkedChildren.includes(userId1)) {
+      console.log(`✅ [checkChatPermission] Relación padre-hijo detectada entre ${userId1} y ${userId2}`);
       return true;
     }
 
@@ -538,6 +549,62 @@ exports.updateGroupPermissionStatus = onCall(
       await permissionDoc.ref.update(updateData);
 
       console.log(`✅ Solicitud de permiso ${requestId} actualizada a ${status}`);
+
+      // 5. Si se aprobó, verificar si hay invitaciones de grupo pendientes que ahora puedan completarse
+      if (status === "approved" && permissionData.groupId) {
+        console.log(`🔍 [updateGroupPermissionStatus] Verificando invitaciones para grupo ${permissionData.groupId}`);
+
+        try {
+          // Buscar invitaciones pendientes para este grupo relacionadas con este child
+          const invitationsQuery = await db
+            .collection("groupInvitations")
+            .where("groupId", "==", permissionData.groupId)
+            .where("status", "==", "pending")
+            .get();
+
+          for (const invitationDoc of invitationsQuery.docs) {
+            const invitation = invitationDoc.data();
+            const invitedUserId = invitation.invitedUserId;
+
+            // Verificar si todos los permisos necesarios están aprobados
+            const missingPermissions = invitation.missingPermissions || [];
+            const allApproved = await Promise.all(
+              missingPermissions.map(async (perm) => {
+                // Verificar si el permiso fue aprobado
+                const permQuery = await db
+                  .collection("permission_requests")
+                  .where("groupId", "==", permissionData.groupId)
+                  .where("childId", "==", perm.toUserId)
+                  .where("status", "==", "approved")
+                  .get();
+
+                return !permQuery.empty;
+              })
+            );
+
+            // Si todos los permisos están aprobados, agregar al usuario al grupo
+            if (allApproved.every(approved => approved)) {
+              console.log(`✅ [updateGroupPermissionStatus] Todos los permisos aprobados, agregando ${invitedUserId} al grupo`);
+
+              const groupRef = db.collection("groups").doc(permissionData.groupId);
+              await groupRef.update({
+                members: FieldValue.arrayUnion(invitedUserId),
+              });
+
+              // Marcar la invitación como accepted
+              await invitationDoc.ref.update({
+                status: "accepted",
+                acceptedAt: FieldValue.serverTimestamp(),
+              });
+
+              console.log(`✅ [updateGroupPermissionStatus] Usuario ${invitedUserId} agregado al grupo ${permissionData.groupId}`);
+            }
+          }
+        } catch (invError) {
+          console.error("⚠️ Error procesando invitaciones:", invError);
+          // No lanzar error, ya se aprobó la solicitud exitosamente
+        }
+      }
 
       return {
         success: true,
