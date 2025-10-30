@@ -37,25 +37,7 @@ exports.createGroup = onCall(
       const creatorData = creatorDoc.data();
       const creatorName = creatorData.name || "Usuario";
 
-      // 3. Verificar que todos los miembros sean contactos del creador
-      const invalidMembers = [];
-      for (const memberId of initialMembers) {
-        const isContact = await isUserContact(creatorId, memberId, db);
-        if (!isContact) {
-          const memberDoc = await db.collection("users").doc(memberId).get();
-          const memberName = memberDoc.exists ? memberDoc.data().name : "Usuario";
-          invalidMembers.push(memberName || memberId);
-        }
-      }
-
-      if (invalidMembers.length > 0) {
-        throw new HttpsError(
-          "permission-denied",
-          `No puedes invitar a usuarios que no son tus contactos: ${invalidMembers.join(", ")}`,
-        );
-      }
-
-      // 4. Verificar permisos con cada miembro
+      // 3. Verificar permisos con cada miembro
       const approvedMembers = [creatorId]; // El creador siempre está aprobado
       const pendingMembers = [];
       const permissionChecks = [];
