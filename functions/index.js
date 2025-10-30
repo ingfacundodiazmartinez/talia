@@ -121,7 +121,6 @@ exports.moderateMessage = moderation.moderateMessage;
 
 // Chats
 exports.incrementUnreadCount = chats.incrementUnreadCount;
-exports.markChatAsRead = chats.markChatAsRead;
 
 // Emergencias
 exports.createEmergency = emergency.createEmergency;

@@ -24,6 +24,8 @@ class MessageOptionsDialog {
     VoidCallback? onViewInfo,
     Function(String)? onReact, // Nueva función para reaccionar directamente
     ModerationStatus? moderationStatus, // Estado de moderación del mensaje
+    bool isFavorite = false, // Si el mensaje está marcado como favorito
+    VoidCallback? onToggleFavorite, // Callback para marcar/desmarcar favorito
   }) {
     print('🔍 [MessageOptionsDialog] Mostrando diálogo moderno');
 
@@ -201,6 +203,19 @@ class MessageOptionsDialog {
                           },
                         ),
 
+                      // Favorite / Unfavorite
+                      if (onToggleFavorite != null)
+                        _buildOptionTile(
+                          context: dialogContext,
+                          icon: isFavorite ? Icons.star : Icons.star_border_rounded,
+                          label: isFavorite ? 'Quitar de favoritos' : 'Marcar como favorito',
+                          isFavorite: isFavorite,
+                          onTap: () {
+                            Navigator.pop(dialogContext);
+                            onToggleFavorite();
+                          },
+                        ),
+
                       // Forward - NO permitir reenviar mensajes bloqueados
                       if (onForward != null && !isBlocked)
                         _buildOptionTile(
@@ -318,6 +333,7 @@ class MessageOptionsDialog {
     required VoidCallback onTap,
     bool isDestructive = false,
     bool isWarning = false,
+    bool isFavorite = false,
   }) {
     final colorScheme = Theme.of(context).colorScheme;
 
@@ -330,6 +346,9 @@ class MessageOptionsDialog {
     } else if (isWarning) {
       iconColor = Colors.orange.shade400;
       textColor = Colors.orange.shade400;
+    } else if (isFavorite) {
+      iconColor = Colors.amber.shade600;
+      textColor = colorScheme.onSurface;
     } else {
       iconColor = colorScheme.onSurface;
       textColor = colorScheme.onSurface;

@@ -164,9 +164,11 @@ exports.incrementUnreadCount = onDocumentCreated(
         return null;
       }
 
-      console.log(`✅ Contacto válido. Incrementando unreadCount para ${receiverId}`);
+      console.log(`✅ Contacto válido. Incrementando contador para ${receiverId}...`);
 
       // Incrementar contador de mensajes sin leer para el receptor
+      // NOTA: Si el receptor tiene el chat abierto, el contador se resetea
+      // automáticamente cuando el cliente marca los mensajes como leídos
       const unreadField = `unreadCount_${receiverId}`;
       await chatRef.update({
         [unreadField]: FieldValue.increment(1),
@@ -178,58 +180,6 @@ exports.incrementUnreadCount = onDocumentCreated(
     } catch (error) {
       console.error("❌ Error incrementando unreadCount:", error);
       return null;
-    }
-  },
-);
-
-/**
- * Resetear contador de mensajes sin leer
- * Callable function para marcar mensajes como leídos
- */
-
-exports.markChatAsRead = onCall(
-  { region: "us-central1", consumeAppCheckToken: true },
-  async (request) => {
-    // Validar autenticación
-    if (!request.auth) {
-      throw new HttpsError("unauthenticated", "Usuario no autenticado");
-    }
-
-    const { chatId } = request.data;
-    const userId = request.auth.uid;
-
-    if (!chatId) {
-      throw new HttpsError("invalid-argument", "chatId es requerido");
-    }
-
-    try {
-      console.log(`📖 Marcando chat ${chatId} como leído para ${userId}`);
-
-      const chatRef = getFirestore().collection("chats").doc(chatId);
-      const unreadField = `unreadCount_${userId}`;
-      const messagesCount = await chatRef.collection("messages").count().get();
-
-      if (messagesCount.data().count === 0) {
-        console.log(`ℹ️ Chat ${chatId} no tiene mensajes. No se requiere resetear contador.`);
-        return {
-          success: true,
-          message: "Chat marcado como leído (sin mensajes)",
-        };
-      }
-      // Usar set con merge para evitar error si el documento no existe aún
-      await chatRef.set({
-        [unreadField]: 0,
-      }, { merge: true });
-
-      console.log(`✅ Contador reseteado: ${unreadField} = 0`);
-
-      return {
-        success: true,
-        message: "Chat marcado como leído",
-      };
-    } catch (error) {
-      console.error("❌ Error marcando chat como leído:", error);
-      throw new HttpsError("internal", `Error: ${error.message}`);
     }
   },
 );

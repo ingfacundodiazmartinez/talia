@@ -158,6 +158,35 @@ class ChatControllerOptimistic extends ChangeNotifier {
     );
   }
 
+  /// Marcar un solo mensaje como leído inmediatamente (sin verificar configuración)
+  Future<void> _markSingleMessageAsRead(String messageId) async {
+    try {
+      final messageRef = _firestore
+          .collection('chats')
+          .doc(chatId)
+          .collection('messages')
+          .doc(messageId);
+
+      final messageDoc = await messageRef.get();
+      if (!messageDoc.exists) return;
+
+      final data = messageDoc.data() as Map<String, dynamic>;
+      final readBy = List<String>.from(data['readBy'] ?? []);
+
+      if (!readBy.contains(currentUserId)) {
+        readBy.add(currentUserId);
+        await messageRef.update({
+          'isRead': true,
+          'readBy': readBy,
+          'readAt_$currentUserId': FieldValue.serverTimestamp(),
+        });
+        print('✅ [AutoRead] Mensaje $messageId marcado como leído');
+      }
+    } catch (e) {
+      print('❌ [AutoRead] Error marcando mensaje como leído: $e');
+    }
+  }
+
   /// Cargar información del contacto
   Future<void> _loadContactInfo() async {
     try {
@@ -290,6 +319,14 @@ class ChatControllerOptimistic extends ChangeNotifier {
     ChatMessage newMessage,
     DocumentChangeType changeType,
   ) {
+    // Marcar inmediatamente como leído si es un mensaje nuevo del contacto
+    if (changeType == DocumentChangeType.added &&
+        newMessage.senderId != currentUserId &&
+        !newMessage.isRead) {
+      print('👁️ [AutoRead] Marcando mensaje ${newMessage.id} como leído inmediatamente');
+      _markSingleMessageAsRead(newMessage.id);
+    }
+
     // Filtrar mensajes del contacto sin moderación
     if (newMessage.senderId != currentUserId) {
       if (newMessage.moderationStatus != ModerationStatus.approved &&

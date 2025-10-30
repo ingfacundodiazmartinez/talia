@@ -106,6 +106,17 @@ class MessageActionsService {
         return;
       }
 
+      // Verificar si realmente hay mensajes en el chat
+      final messagesSnapshot = await chatRef
+          .collection('messages')
+          .limit(1)
+          .get();
+
+      if (messagesSnapshot.docs.isEmpty) {
+        print('💬 No hay mensajes en el chat, nada que marcar como leído');
+        return;
+      }
+
       // Marcar contador de no leídos en 0
       await chatRef.update({'unreadCount_$currentUserId': 0});
 

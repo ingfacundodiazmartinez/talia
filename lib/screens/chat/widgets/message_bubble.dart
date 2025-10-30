@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../models/chat_message.dart';
+import '../../../services/favorite_service.dart';
 import 'media_viewer_screen.dart';
 import 'message_bubble/blocked_message_content.dart';
 import 'message_bubble/reply_preview_widget.dart';
@@ -572,9 +573,19 @@ class _MessageBubbleState extends State<MessageBubble>
   }
 
   /// Mostrar opciones del mensaje (reaccionar, eliminar, reenviar)
-  void _showMessageOptions(BuildContext context) {
+  void _showMessageOptions(BuildContext context) async {
     // Cerrar el teclado ANTES de mostrar el diálogo para evitar conflictos
     FocusScope.of(context).unfocus();
+
+    // Verificar si el mensaje está marcado como favorito
+    final favoriteService = FavoriteService();
+    final isFavorite = await favoriteService.isFavorite(
+      chatId: widget.chatId,
+      messageId: widget.messageId,
+      isGroupChat: widget.isGroupChat,
+    );
+
+    if (!mounted) return;
 
     MessageOptionsDialog.show(
       context: context,
@@ -591,7 +602,54 @@ class _MessageBubbleState extends State<MessageBubble>
       isGroupChat: widget.isGroupChat,
       onViewInfo: widget.onViewMessageInfo, // Usar el callback del padre
       moderationStatus: widget.moderationStatus, // Pasar estado de moderación
+      isFavorite: isFavorite,
+      onToggleFavorite: () => _toggleFavorite(context),
     );
+  }
+
+  /// Marcar/desmarcar mensaje como favorito
+  Future<void> _toggleFavorite(BuildContext context) async {
+    try {
+      final favoriteService = FavoriteService();
+      await favoriteService.toggleFavorite(
+        chatId: widget.chatId,
+        messageId: widget.messageId,
+        isGroupChat: widget.isGroupChat,
+      );
+
+      if (mounted) {
+        // Verificar si ahora está marcado o desmarcado
+        final isFavorite = await favoriteService.isFavorite(
+          chatId: widget.chatId,
+          messageId: widget.messageId,
+          isGroupChat: widget.isGroupChat,
+        );
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              isFavorite
+                  ? 'Mensaje marcado como favorito'
+                  : 'Mensaje eliminado de favoritos',
+            ),
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      print('❌ Error al cambiar favorito: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al cambiar favorito'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
   }
 
   /// Navegar a la pantalla de información del mensaje (solo grupos)

@@ -128,6 +128,13 @@ service cloud.firestore {
         return changedKeys.hasOnly(['archived_' + request.auth.uid, 'archivedAt_' + request.auth.uid]);
       }
 
+      // Función auxiliar para verificar si solo se está actualizando el contador de no leídos
+      function isUpdatingOnlyUnreadCount() {
+        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+        // Permitir unreadCount_userId donde userId es el usuario actual
+        return changedKeys.hasOnly(['unreadCount_' + request.auth.uid]);
+      }
+
       // Función auxiliar para verificar si se están actualizando campos de moderación
       function isUpdatingModerationFields() {
         let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
@@ -137,12 +144,14 @@ service cloud.firestore {
       // Permitir actualizar si:
       // 1. El usuario es participante Y NO está tocando campos de moderación, O
       // 2. El usuario es padre de uno de los participantes Y solo está actualizando campos de moderación, O
-      // 3. El usuario es participante Y solo está actualizando sus propios campos de archivado
+      // 3. El usuario es participante Y solo está actualizando sus propios campos de archivado, O
+      // 4. El usuario es participante Y solo está actualizando su propio contador de no leídos
       allow update: if request.auth != null && (
         (request.auth.uid in resource.data.participants && !isUpdatingModerationFields()) ||
         (isParentOfParticipant() &&
          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['moderationEnabled', 'moderationParentId', 'moderationEnabledAt', 'moderationLevel', 'updatedAt', 'participants'])) ||
-        (request.auth.uid in resource.data.participants && isUpdatingOnlyArchiveFields())
+        (request.auth.uid in resource.data.participants && isUpdatingOnlyArchiveFields()) ||
+        (request.auth.uid in resource.data.participants && isUpdatingOnlyUnreadCount())
       );
 
       match /messages/{messageId} {
@@ -179,19 +188,25 @@ service cloud.firestore {
         // NOTA: Permite campos timestamp dinámicos (deliveredAt_*, readAt_*) además de los campos estáticos
         function isUpdatingOnlyMetadata() {
           let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
-          let allowedStaticFields = ['reactions', 'status', 'readBy', 'deliveredTo', 'isRead'];
 
-          // Verificar que los campos críticos del mensaje NO se modifican
-          let criticalFieldsUnchanged = request.resource.data.text == resource.data.text &&
-                                         request.resource.data.senderId == resource.data.senderId &&
-                                         request.resource.data.timestamp == resource.data.timestamp;
+          // Campos críticos que NO deben cambiar
+          let criticalFields = ['text', 'senderId', 'timestamp', 'imageUrl', 'videoUrl', 'audioUrl', 'type'];
 
-          // Permitir si solo se actualizan campos estáticos conocidos
-          // O si los campos críticos no cambian (permite agregar timestamps dinámicos como readAt_*, deliveredAt_*)
+          // Verificar si algún campo crítico está siendo modificado
+          let criticalFieldsModified = changedKeys.hasAny(criticalFields);
+
+          // Campos de metadata permitidos (estáticos)
+          let allowedMetadataFields = ['reactions', 'status', 'readBy', 'deliveredTo', 'isRead'];
+
+          // Verificar si TODOS los cambios son de metadata permitida o campos dinámicos (readAt_*, deliveredAt_*)
+          let allChangesAreMetadata = changedKeys.hasOnly(allowedMetadataFields);
+
+          // Permitir si:
+          // 1. NO se modifican campos críticos Y
+          // 2. (Solo se modifican campos de metadata conocidos O hay algún campo de metadata en los cambios)
           return changedKeys.size() > 0 &&
-                 criticalFieldsUnchanged &&
-                 (changedKeys.hasOnly(allowedStaticFields) ||
-                  changedKeys.hasAny(['deliveredTo', 'readBy', 'reactions', 'status', 'isRead']));
+                 !criticalFieldsModified &&
+                 (allChangesAreMetadata || changedKeys.hasAny(allowedMetadataFields));
         }
 
         // Permitir actualizar SI:
@@ -206,6 +221,18 @@ service cloud.firestore {
         // Permitir eliminar si eres el sender
         allow delete: if request.auth != null &&
           request.auth.uid == resource.data.senderId;
+
+        // Favorites - Favoritos de mensajes
+        match /favorites/{userId} {
+          // Permitir leer solo tu propio favorito
+          allow read: if request.auth != null && request.auth.uid == userId;
+
+          // Permitir crear/eliminar solo tu propio favorito
+          allow create, delete: if request.auth != null && request.auth.uid == userId;
+
+          // No permitir actualizar (solo crear/eliminar)
+          allow update: if false;
+        }
       }
 
       // Typing indicators
@@ -513,6 +540,18 @@ service cloud.firestore {
         // Permitir eliminar si eres el sender
         allow delete: if request.auth != null &&
           request.auth.uid == resource.data.senderId;
+
+        // Favorites - Favoritos de mensajes de grupo
+        match /favorites/{userId} {
+          // Permitir leer solo tu propio favorito
+          allow read: if request.auth != null && request.auth.uid == userId;
+
+          // Permitir crear/eliminar solo tu propio favorito
+          allow create, delete: if request.auth != null && request.auth.uid == userId;
+
+          // No permitir actualizar (solo crear/eliminar)
+          allow update: if false;
+        }
       }
 
       // Typing indicators
