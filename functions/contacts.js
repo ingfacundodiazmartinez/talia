@@ -7,6 +7,24 @@ const { getStorage } = require("firebase-admin/storage");
 const { checkRateLimit, RATE_LIMITS } = require("./helpers");
 
 // ═══════════════════════════════════════════════════════════════
+// HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Helper: Obtiene padres vinculados de un usuario
+ */
+async function getLinkedParents(userId) {
+  const db = getFirestore();
+  const links = await db
+    .collection("parent_children")
+    .where("childId", "==", userId)
+    .where("status", "==", "approved")
+    .get();
+
+  return links.docs.map((doc) => doc.data().parentId);
+}
+
+// ═══════════════════════════════════════════════════════════════
 // CONTACTS
 // ═══════════════════════════════════════════════════════════════
 
