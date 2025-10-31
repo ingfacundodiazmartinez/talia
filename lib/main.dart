@@ -27,7 +27,9 @@ import 'notification_service.dart';
 import 'widgets/incoming_call_dialog.dart';
 import 'theme_service.dart';
 import 'services/callkit_service.dart';
+import 'services/video_call_service.dart';
 import 'services/two_factor_session_service.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'services/app_config_service.dart';
 import 'services/message_cache_service.dart';
 import 'services/dashboard_cache_service.dart';
@@ -568,26 +570,151 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
         return; // No continuar con el diálogo de Flutter
       }
 
-      // ANDROID: Mostrar diálogo de Flutter
-      final context = _navigatorKey.currentContext;
-      if (context != null) {
-        // Navegar a pantalla completa de llamada entrante
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            fullscreenDialog: true,
-            builder: (context) => IncomingCallDialog(
-              callId: callData['callId'] ?? '',
-              callerId: callData['callerId'] ?? '',
-              callerName: callData['callerName'] ?? 'Usuario desconocido',
-              callerPhotoURL: callData['callerPhotoURL'],
-              channelName: callData['channelName'] ?? '',
-              callType: callType,
-              isEmergency: isEmergency,
-            ),
+      // ANDROID: Determinar si la llamada fue aceptada desde CallKit en background
+      // o si es una llamada entrante en foreground que debe mostrar el diálogo
+
+      // Si la llamada viene de CallKit acceptance (background), debe incluir 'id' en lugar de 'callId'
+      // porque flutter_callkit_incoming usa 'id' como key
+      final hasId = callData.containsKey('id');
+      final hasFromFirestore = callData.containsKey('fromFirestore');
+      final hasFromNotificationTap = callData.containsKey('fromNotificationTap');
+      final isFromCallKitAcceptance = hasId && !hasFromFirestore && !hasFromNotificationTap;
+
+      print('🔍 Detectando origen del evento:');
+      print('   hasId: $hasId');
+      print('   hasFromFirestore: $hasFromFirestore');
+      print('   hasFromNotificationTap: $hasFromNotificationTap');
+      print('   isFromCallKitAcceptance: $isFromCallKitAcceptance');
+
+      if (isFromCallKitAcceptance) {
+        // Usuario aceptó desde CallKit en background - navegar directamente a VideoCallScreen
+        print('✅ Llamada aceptada desde CallKit en background - generando token y navegando a videollamada');
+
+        final context = _navigatorKey.currentContext;
+        if (context == null) {
+          print('❌ No se pudo obtener el contexto del navegador');
+          return;
+        }
+
+        // Extraer datos del callData (que vienen del extraData de CallKit)
+        final callId = callData['id'] as String?;
+
+        // channelName está en extra, no en el root
+        // Convertir extra de Map<Object?, Object?> a Map<String, dynamic>
+        final extraRaw = callData['extra'];
+        final extra = extraRaw != null ? Map<String, dynamic>.from(extraRaw as Map) : null;
+        final channelName = extra?['channelName'] as String? ?? callData['channelName'] as String?;
+        final callerId = extra?['callerId'] as String? ?? callData['number'] as String? ?? callData['callerId'] as String?;
+        final callerName = callData['nameCaller'] as String? ?? extra?['callerName'] as String? ?? 'Usuario desconocido';
+
+        if (callId == null || channelName == null || callerId == null) {
+          print('❌ Datos incompletos en callData de CallKit:');
+          print('   callId=$callId');
+          print('   channelName=$channelName');
+          print('   callerId=$callerId');
+          print('   extra=$extra');
+          return;
+        }
+
+        print('📞 Procesando aceptación de CallKit:');
+        print('   callId: $callId');
+        print('   channelName: $channelName');
+        print('   callerId: $callerId');
+        print('   callerName: $callerName');
+
+        // Mostrar indicador de carga mientras se genera el token
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => const Center(
+            child: CircularProgressIndicator(),
           ),
         );
+
+        try {
+          // 1. Actualizar estado de llamada en Firestore
+          print('📝 Actualizando estado de llamada en Firestore...');
+          await VideoCallService().acceptCall(callId);
+          print('✅ Llamada aceptada en Firestore');
+
+          // 2. Finalizar CallKit notification
+          print('🔕 Finalizando CallKit notification...');
+          await CallKitService().endCall(callId);
+
+          // 3. Generar token de Agora
+          print('🎫 Generando token de Agora...');
+          final functions = FirebaseFunctions.instance;
+          final callable = functions.httpsCallable('generateAgoraToken');
+
+          final result = await callable.call({
+            'channelName': channelName.toString().trim(),
+            'uid': 0,
+          });
+
+          final token = result.data['token'] as String;
+          final uid = result.data['uid'] as int;
+
+          print('✅ Token generado - UID: $uid');
+
+          // 4. Cerrar indicador de carga y navegar a videollamada
+          if (context.mounted) {
+            Navigator.of(context).pop(); // Cerrar loading indicator
+
+            Navigator.of(context, rootNavigator: true).push(
+              MaterialPageRoute(
+                builder: (context) => VideoCallScreen(
+                  callId: callId,
+                  channelName: channelName,
+                  token: token,
+                  uid: uid,
+                  isCaller: false,
+                  remoteName: callerName,
+                  receiverId: callerId,
+                  isVideo: callType != 'audio',
+                ),
+              ),
+            );
+          }
+        } catch (e) {
+          print('❌ Error procesando aceptación de CallKit: $e');
+
+          if (context.mounted) {
+            // Cerrar loading indicator
+            Navigator.of(context).pop();
+
+            // Mostrar error
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Error al conectar la llamada: ${e.toString().length > 60 ? e.toString().substring(0, 60) + '...' : e}'),
+                backgroundColor: Colors.red,
+                duration: const Duration(seconds: 5),
+              ),
+            );
+          }
+        }
       } else {
-        print('❌ No se pudo obtener el contexto del navegador');
+        // Llamada entrante en foreground desde Firestore - mostrar IncomingCallDialog
+        print('✅ Mostrando IncomingCallDialog desde listener de Firestore');
+
+        final context = _navigatorKey.currentContext;
+        if (context != null) {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              fullscreenDialog: true,
+              builder: (context) => IncomingCallDialog(
+                callId: callData['callId'] ?? '',
+                callerId: callData['callerId'] ?? '',
+                callerName: callData['callerName'] ?? 'Usuario desconocido',
+                callerPhotoURL: callData['callerPhotoURL'],
+                channelName: callData['channelName'] ?? '',
+                callType: callType,
+                isEmergency: isEmergency,
+              ),
+            ),
+          );
+        } else {
+          print('❌ No se pudo obtener el contexto del navegador');
+        }
       }
     });
   }

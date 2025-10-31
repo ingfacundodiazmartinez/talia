@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:video_player/video_player.dart';
@@ -176,12 +177,16 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       return;
     }
 
-    _progressController.reset();
-    _progressController.forward();
+    // Esperar un frame para asegurar que el reset visual se complete
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _isCurrentStoryLoaded) {
+        _progressController.forward();
 
-    _storyTimer?.cancel();
-    _storyTimer = Timer(_storyDuration, () {
-      _nextStory();
+        _storyTimer?.cancel();
+        _storyTimer = Timer(_storyDuration, () {
+          _nextStory();
+        });
+      }
     });
   }
 
@@ -684,7 +689,16 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
                       width: double.infinity,
                       height: double.infinity,
                       child: story.mediaType == 'image'
-                          ? CachedNetworkImage(
+                          ? (story.localMediaPath != null && story.localMediaPath!.isNotEmpty)
+                              // ✅ Mostrar imagen local mientras se sube
+                              ? Image.file(
+                                  File(story.localMediaPath!),
+                                  fit: BoxFit.contain,
+                                  width: double.infinity,
+                                  height: double.infinity,
+                                )
+                              // Mostrar imagen de red (ya subida)
+                              : CachedNetworkImage(
                               imageUrl: story.mediaUrl,
                               fit: BoxFit.contain,
                               width: double.infinity,
