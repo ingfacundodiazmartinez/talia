@@ -37,11 +37,11 @@ class ChatController {
     NotificationService? notificationService,
     TypingIndicatorService? typingService,
     MediaService? mediaService,
-  })  : _firestore = firestore ?? FirebaseFirestore.instance,
-        _auth = auth ?? FirebaseAuth.instance,
-        _notificationService = notificationService ?? NotificationService(),
-        _typingService = typingService ?? TypingIndicatorService(),
-        _mediaService = mediaService ?? MediaService();
+  }) : _firestore = firestore ?? FirebaseFirestore.instance,
+       _auth = auth ?? FirebaseAuth.instance,
+       _notificationService = notificationService ?? NotificationService(),
+       _typingService = typingService ?? TypingIndicatorService(),
+       _mediaService = mediaService ?? MediaService();
 
   // Getters
   String get currentUserId => _auth.currentUser?.uid ?? '';
@@ -112,7 +112,9 @@ class ChatController {
       _lastDocument = snapshot.docs.last;
       _hasMoreMessages = snapshot.docs.length == messagesPerPage;
 
-      print('📥 Cargados ${snapshot.docs.length} mensajes más antiguos del chat');
+      print(
+        '📥 Cargados ${snapshot.docs.length} mensajes más antiguos del chat',
+      );
       return snapshot.docs;
     } catch (e) {
       print('❌ Error cargando más mensajes: $e');
@@ -155,7 +157,7 @@ class ChatController {
       print('✅ Mensaje enviado exitosamente');
       return true;
     } catch (e) {
-      print('❌ Error enviando mensaje: $e');
+      print('❌ Error enviando mensaje 2: $e');
       return false;
     }
   }
@@ -278,8 +280,10 @@ class ChatController {
   /// Enviar notificación al contacto
   Future<void> _sendNotification(String messageText) async {
     try {
-      final currentUserDoc =
-          await _firestore.collection('users').doc(currentUserId).get();
+      final currentUserDoc = await _firestore
+          .collection('users')
+          .doc(currentUserId)
+          .get();
       final userData = currentUserDoc.data();
       final senderName = userData?['name'] ?? 'Usuario';
       final senderPhotoUrl = userData?['photoURL'];

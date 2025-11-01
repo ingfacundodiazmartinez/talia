@@ -562,6 +562,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
                     builder: (context) => ContactProfileScreen(
                       contactId: widget.contactId,
                       contactName: widget.contactName,
+                      chatId: widget.chatId,
                     ),
                   ),
                 );

@@ -309,6 +309,9 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
         int unreadCount = 0;
         if (snapshot.hasData) {
           final notifications = snapshot.data!.docs;
+
+          print('🔔 [NotificationsBadge] Total notificaciones no leídas: ${notifications.length}');
+
           for (final doc in notifications) {
             final data = doc.data() as Map<String, dynamic>;
             final notifData = data['data'] as Map<String, dynamic>?;
@@ -319,12 +322,17 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
             }
 
             // Verificar si la notificación está relacionada con este hijo
-            if (notifData?['childId'] == child.id ||
+            final isRelated = notifData?['childId'] == child.id ||
                 notifData?['senderId'] == child.id ||
-                data['senderId'] == child.id) {
+                data['senderId'] == child.id;
+
+            if (isRelated) {
               unreadCount++;
+              print('🔔 [NotificationsBadge] Notificación relacionada con ${child.name}: tipo=${data['type']}, childId=${notifData?['childId']}, senderId=${data['senderId']}');
             }
           }
+
+          print('🔔 [NotificationsBadge] Total para ${child.name}: $unreadCount');
         }
 
         return Material(

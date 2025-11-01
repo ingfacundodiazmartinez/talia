@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:cloud_functions/cloud_functions.dart';
 import '../services/emergency_service.dart';
 import '../screens/video_call_screen.dart';
 
@@ -99,32 +98,66 @@ class _EmergencyButtonState extends State<EmergencyButton>
     final confirmed = await _showConfirmationDialog();
 
     if (confirmed) {
-      // Activar emergencia
-      final result = await _emergencyService.activateEmergency(
-        context: context,
-      );
-
-      if (result != null && result['success'] == true) {
-        widget.onEmergencyActivated?.call();
-
-        // Actualizar estado de cooldown
+      // ✅ NUEVO: Activar emergencia PRIMERO para obtener el ID real
+      if (mounted) {
+        // Mostrar loading mientras se activa
         setState(() {
-          _isInCooldown = true;
+          _isActivating = true;
         });
 
-        // Programar verificación de cooldown
-        Future.delayed(Duration(minutes: 2), () {
-          if (mounted) {
-            _checkCooldownStatus();
+        // Activar emergencia y esperar resultado
+        final result = await _emergencyService.activateEmergency(context: context);
+
+        if (result != null && result['success'] == true) {
+          widget.onEmergencyActivated?.call();
+
+          final isReactivation = result['isReactivation'] ?? false;
+          final emergencyId = result['emergencyId'];
+          final channelName = result['channelName'];
+
+          if (isReactivation) {
+            print('📞 Emergencia reactivada: $emergencyId');
+          } else {
+            print('✅ Nueva emergencia creada: $emergencyId');
+
+            // Solo aplicar cooldown si es una NUEVA emergencia
+            if (mounted) {
+              setState(() {
+                _isInCooldown = true;
+              });
+
+              // Programar verificación de cooldown
+              Future.delayed(Duration(minutes: 2), () {
+                if (mounted) {
+                  _checkCooldownStatus();
+                }
+              });
+            }
           }
-        });
 
-        // Navegar a la pantalla de videollamada
+          // Ahora SÍ abrir la videollamada con el ID real
+          if (mounted) {
+            await _joinEmergencyCall(
+              emergencyId: emergencyId,
+              channelName: channelName,
+            );
+          }
+        } else {
+          print('❌ Error activando emergencia');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Error al activar emergencia. Intenta de nuevo.'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+        }
+
         if (mounted) {
-          await _joinEmergencyCall(
-            emergencyId: result['emergencyId'],
-            channelName: result['channelName'],
-          );
+          setState(() {
+            _isActivating = false;
+          });
         }
       }
     }
@@ -187,46 +220,51 @@ class _EmergencyButtonState extends State<EmergencyButton>
               ),
               title: Row(
                 children: [
-                  Icon(Icons.warning_amber, color: Colors.red, size: 28),
+                  Icon(Icons.warning_amber, color: Colors.red, size: 24),
                   SizedBox(width: 8),
-                  Text(
-                    'Confirmar Emergencia',
-                    style: TextStyle(
-                      color: Colors.red,
-                      fontWeight: FontWeight.bold,
+                  Flexible(
+                    child: Text(
+                      'Confirmar Emergencia',
+                      style: TextStyle(
+                        color: Colors.red,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 18,
+                      ),
                     ),
                   ),
                 ],
               ),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    '¿Estás seguro de que quieres activar el botón de emergencia?',
-                    style: TextStyle(fontSize: 16),
-                  ),
-                  SizedBox(height: 12),
-                  Container(
-                    padding: EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.red.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(8),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '¿Estás seguro de que quieres activar el botón de emergencia?',
+                      style: TextStyle(fontSize: 15),
                     ),
-                    child: Text(
-                      '• Se notificará a tus padres inmediatamente\n'
-                      '• Se enviará tu ubicación actual\n'
-                      '• Se realizará una llamada automática',
-                      style: TextStyle(fontSize: 14, color: Colors.red[700]),
+                    SizedBox(height: 12),
+                    Container(
+                      padding: EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.red.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        '• Se notificará a tus padres inmediatamente\n'
+                        '• Se enviará tu ubicación actual\n'
+                        '• Se realizará una llamada automática',
+                        style: TextStyle(fontSize: 13, color: Colors.red[700]),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
               actions: [
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(false),
                   child: Text(
                     'Cancelar',
-                    style: TextStyle(color: Colors.grey[600], fontSize: 16),
+                    style: TextStyle(color: Colors.grey[600], fontSize: 15),
                   ),
                 ),
                 ElevatedButton(
@@ -237,10 +275,11 @@ class _EmergencyButtonState extends State<EmergencyButton>
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(10),
                     ),
+                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   ),
                   child: Text(
                     'SÍ, ES EMERGENCIA',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                   ),
                 ),
               ],

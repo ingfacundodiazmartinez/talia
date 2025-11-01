@@ -323,7 +323,9 @@ class ChatControllerOptimistic extends ChangeNotifier {
     if (changeType == DocumentChangeType.added &&
         newMessage.senderId != currentUserId &&
         !newMessage.isRead) {
-      print('👁️ [AutoRead] Marcando mensaje ${newMessage.id} como leído inmediatamente');
+      print(
+        '👁️ [AutoRead] Marcando mensaje ${newMessage.id} como leído inmediatamente',
+      );
       _markSingleMessageAsRead(newMessage.id);
     }
 
@@ -462,24 +464,30 @@ class ChatControllerOptimistic extends ChangeNotifier {
         contactId: contactId,
         replyTo: replyTo,
       );
+      print('✅ Mensaje enviado');
 
       // 3. Actualizar mensaje optimista
       final sentMessage = optimisticMessage.copyWith(
         id: docId,
         status: MessageStatus.sent,
       );
+      print('✅ Mensaje optimista actualizado');
 
       await _stateService.updateMessage(
         chatId: chatId,
         oldId: tempId,
         newMessage: sentMessage,
       );
+
+      print('✅ Mensaje optimista reemplazado por enviado');
       _stateService.removePendingMessage(tempId);
+      print('✅ Mensaje optimista removido de pendientes');
       notifyListeners();
+      print('✅ UI notificada de actualización de mensaje');
 
       print('✅ Mensaje enviado: $text');
     } catch (e) {
-      print('❌ Error enviando mensaje: $e');
+      print('❌ Error enviando mensaje 1: $e');
       _handleSendError(tempId, optimisticMessage, e);
     }
   }

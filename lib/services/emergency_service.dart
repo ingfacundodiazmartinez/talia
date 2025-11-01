@@ -6,7 +6,6 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'video_call_service.dart';
 
 class EmergencyService {
   static final EmergencyService _instance = EmergencyService._internal();
@@ -16,7 +15,6 @@ class EmergencyService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseFunctions _functions = FirebaseFunctions.instance;
-  final VideoCallService _videoCallService = VideoCallService();
 
   // Tiempo de cooldown entre emergencias (en minutos)
   static const int _cooldownMinutes = 2;
@@ -55,7 +53,43 @@ class EmergencyService {
     try {
       print('🆘 Activando emergencia...');
 
-      // Verificar cooldown
+      final user = _auth.currentUser;
+      if (user == null) {
+        print('❌ Usuario no autenticado');
+        return null;
+      }
+
+      // ✅ NUEVO: Verificar si ya existe una emergencia activa (sin resolver)
+      final existingEmergency = await _getActiveEmergency(user.uid);
+
+      if (existingEmergency != null) {
+        final emergencyId = existingEmergency['id'] as String;
+        print('⚠️ Ya existe emergencia activa: $emergencyId');
+        print('📞 Reactivando llamada sin crear nueva emergencia...');
+
+        // Vibración de emergencia
+        await _triggerEmergencyVibration();
+
+        // Obtener padres para reiniciar llamada
+        final parents = await _getParents(user.uid);
+
+        // Reiniciar llamada de emergencia
+        await _makeEmergencyVideoCall(parents, emergencyId);
+
+        if (context != null) {
+          _showEmergencyConfirmation(context);
+        }
+
+        // Retornar información de la emergencia existente
+        return {
+          'emergencyId': emergencyId,
+          'channelName': 'emergency_$emergencyId',
+          'success': true,
+          'isReactivation': true,
+        };
+      }
+
+      // Verificar cooldown solo si no hay emergencia activa
       if (await isInCooldown()) {
         print('⏰ Emergencia en cooldown');
         if (context != null) {
@@ -64,20 +98,20 @@ class EmergencyService {
         return null;
       }
 
-      final user = _auth.currentUser;
-      if (user == null) {
-        print('❌ Usuario no autenticado');
-        return null;
-      }
-
       // Vibración de emergencia
       await _triggerEmergencyVibration();
 
-      // Obtener ubicación actual
-      final position = await _getCurrentLocation();
+      // ✅ OPTIMIZACIÓN: Ejecutar operaciones en paralelo (en background)
+      final results = await Future.wait([
+        _getCurrentLocation(),
+        _getChildData(user.uid),
+        _getParents(user.uid),
+      ]);
 
-      // Obtener información del niño
-      final childData = await _getChildData(user.uid);
+      final position = results[0] as Position?;
+      final childData = results[1] as Map<String, dynamic>?;
+      final parents = results[2] as List<Map<String, dynamic>>;
+
       if (childData == null) {
         print('❌ No se pudo obtener datos del niño');
         return null;
@@ -95,9 +129,6 @@ class EmergencyService {
         print('❌ Error creando registro de emergencia');
         return null;
       }
-
-      // Obtener padres/tutores
-      final parents = await _getParents(user.uid);
 
       // ✅ Las notificaciones ya fueron enviadas por la Cloud Function 'createEmergency'
       // No necesitamos enviarlas de nuevo desde el cliente
@@ -122,6 +153,7 @@ class EmergencyService {
         'emergencyId': emergencyId,
         'channelName': 'emergency_$emergencyId',
         'success': true,
+        'isReactivation': false,
       };
     } catch (e) {
       print('❌ Error activando emergencia: $e');
@@ -132,10 +164,35 @@ class EmergencyService {
     }
   }
 
-  // Obtener ubicación actual rápidamente
+  // Obtener emergencia activa (sin resolver) del niño
+  Future<Map<String, dynamic>?> _getActiveEmergency(String childId) async {
+    try {
+      final snapshot = await _firestore
+          .collection('emergencies')
+          .where('childId', isEqualTo: childId)
+          .where('resolved', isEqualTo: false)
+          .orderBy('timestamp', descending: true)
+          .limit(1)
+          .get();
+
+      if (snapshot.docs.isNotEmpty) {
+        final doc = snapshot.docs.first;
+        final data = doc.data();
+        data['id'] = doc.id;
+        return data;
+      }
+
+      return null;
+    } catch (e) {
+      print('❌ Error obteniendo emergencia activa: $e');
+      return null;
+    }
+  }
+
+  // Obtener ubicación actual (se ejecuta en background)
   Future<Position?> _getCurrentLocation() async {
     try {
-      print('📍 Obteniendo ubicación de emergencia...');
+      print('📍 Obteniendo ubicación de emergencia en background...');
 
       // Verificar permisos
       LocationPermission permission = await Geolocator.checkPermission();
@@ -145,10 +202,10 @@ class EmergencyService {
         return null;
       }
 
-      // Obtener ubicación con timeout corto para emergencias
+      // Obtener ubicación actual con alta precisión
       final position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
-        timeLimit: Duration(seconds: 10), // Timeout corto para emergencias
+        timeLimit: Duration(seconds: 10),
       );
 
       print('✅ Ubicación de emergencia obtenida: ${position.latitude}, ${position.longitude}');
@@ -448,35 +505,31 @@ class EmergencyService {
       final user = _auth.currentUser;
       if (user == null) return false;
 
-      // Actualizar emergencia como resuelta
-      await _firestore.collection('emergencies').doc(emergencyId).update({
-        'resolved': true,
-        'resolvedAt': FieldValue.serverTimestamp(),
-        'resolvedBy': user.uid,
-        'status': 'resolved',
-      });
+      print('🗑️ Resolviendo emergencia: eliminando documento y subcollección...');
 
       // Detener tracking de ubicación si es la emergencia actual
       if (_currentEmergencyId == emergencyId) {
         stopLocationTracking();
       }
 
-      // Eliminar el historial de ubicaciones de la emergencia
-      print('🗑️ Eliminando historial de ubicaciones de emergencia...');
+      // 1. Eliminar el historial de ubicaciones (subcollection)
       final trackingDocs = await _firestore
           .collection('emergencies')
           .doc(emergencyId)
           .collection('location_tracking')
           .get();
 
-      // Eliminar todos los documentos del historial en lote
       final batch = _firestore.batch();
       for (var doc in trackingDocs.docs) {
         batch.delete(doc.reference);
       }
       await batch.commit();
+      print('✅ Eliminados ${trackingDocs.docs.length} registros de ubicación');
 
-      print('✅ Emergencia resuelta y historial eliminado: $emergencyId (${trackingDocs.docs.length} ubicaciones)');
+      // 2. Eliminar el documento principal de emergencia
+      await _firestore.collection('emergencies').doc(emergencyId).delete();
+      print('✅ Emergencia eliminada completamente: $emergencyId');
+
       return true;
     } catch (e) {
       print('❌ Error resolviendo emergencia: $e');

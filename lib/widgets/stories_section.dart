@@ -5,6 +5,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../models/story.dart';
 import '../services/story_service.dart';
+import '../services/story_upload_progress_service.dart';
 import '../screens/story_camera_screen.dart';
 import '../screens/story_viewer_screen.dart';
 import '../theme_service.dart';
@@ -34,58 +35,66 @@ class _StoriesSectionState extends State<StoriesSection> {
     return Container(
       height: 90,
       margin: EdgeInsets.symmetric(vertical: 4),
-      child: StreamBuilder<List<UserStories>>(
-        stream: _storiesStream,
-        initialData: _cachedStories,
-        builder: (context, snapshot) {
-          // Actualizar cache cuando llegan datos nuevos
-          if (snapshot.hasData && snapshot.data != null) {
-            _cachedStories = snapshot.data;
-          }
+      child: StreamBuilder<Map<String, double>>(
+        stream: StoryUploadProgressService().progressStream,
+        builder: (context, progressSnapshot) {
+          final uploadProgress = progressSnapshot.data ?? {};
 
-          // Solo mostrar loading si NO hay cache y estamos esperando
-          if (snapshot.connectionState == ConnectionState.waiting && _cachedStories == null) {
-            return Center(
-              child: CircularProgressIndicator(
-                color: Theme.of(context).colorScheme.primary,
-              ),
-            );
-          }
-
-          if (snapshot.hasError && _cachedStories == null) {
-            return Center(
-              child: Text('Error: ${snapshot.error}'),
-            );
-          }
-
-          final userStoriesList = snapshot.data ?? _cachedStories ?? [];
-
-          // Ordenar grupos: primero los que tienen historias no vistas, luego los que tienen todas vistas
-          final sortedUserStoriesList = List<UserStories>.from(userStoriesList);
-          sortedUserStoriesList.sort((a, b) {
-            // Si ambos tienen o no tienen historias no vistas, mantener orden original
-            if (a.hasUnviewed == b.hasUnviewed) return 0;
-            // Grupos con historias no vistas van primero
-            return a.hasUnviewed ? -1 : 1;
-          });
-
-          return ListView.builder(
-            scrollDirection: Axis.horizontal,
-            padding: EdgeInsets.symmetric(horizontal: 16),
-            itemCount:
-                sortedUserStoriesList.length + 1, // +1 para el botón "Mi Historia"
-            itemBuilder: (context, index) {
-              if (index == 0) {
-                // Botón para crear historia
-                return _buildAddStoryButton(context);
+          return StreamBuilder<List<UserStories>>(
+            stream: _storiesStream,
+            initialData: _cachedStories,
+            builder: (context, snapshot) {
+              // Actualizar cache cuando llegan datos nuevos
+              if (snapshot.hasData && snapshot.data != null) {
+                _cachedStories = snapshot.data;
               }
 
-              final userStories = sortedUserStoriesList[index - 1];
-              return _buildStoryItem(
-                context: context,
-                userStories: userStories,
-                allUserStories: sortedUserStoriesList,
-                userIndex: index - 1,
+              // Solo mostrar loading si NO hay cache y estamos esperando
+              if (snapshot.connectionState == ConnectionState.waiting && _cachedStories == null) {
+                return Center(
+                  child: CircularProgressIndicator(
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                );
+              }
+
+              if (snapshot.hasError && _cachedStories == null) {
+                return Center(
+                  child: Text('Error: ${snapshot.error}'),
+                );
+              }
+
+              final userStoriesList = snapshot.data ?? _cachedStories ?? [];
+
+              // Ordenar grupos: primero los que tienen historias no vistas, luego los que tienen todas vistas
+              final sortedUserStoriesList = List<UserStories>.from(userStoriesList);
+              sortedUserStoriesList.sort((a, b) {
+                // Si ambos tienen o no tienen historias no vistas, mantener orden original
+                if (a.hasUnviewed == b.hasUnviewed) return 0;
+                // Grupos con historias no vistas van primero
+                return a.hasUnviewed ? -1 : 1;
+              });
+
+              return ListView.builder(
+                scrollDirection: Axis.horizontal,
+                padding: EdgeInsets.symmetric(horizontal: 16),
+                itemCount:
+                    sortedUserStoriesList.length + 1, // +1 para el botón "Mi Historia"
+                itemBuilder: (context, index) {
+                  if (index == 0) {
+                    // Botón para crear historia
+                    return _buildAddStoryButton(context);
+                  }
+
+                  final userStories = sortedUserStoriesList[index - 1];
+                  return _buildStoryItem(
+                    context: context,
+                    userStories: userStories,
+                    allUserStories: sortedUserStoriesList,
+                    userIndex: index - 1,
+                    uploadProgress: uploadProgress,
+                  );
+                },
               );
             },
           );
@@ -202,6 +211,7 @@ class _StoriesSectionState extends State<StoriesSection> {
     required UserStories userStories,
     required List<UserStories> allUserStories,
     required int userIndex,
+    required Map<String, double> uploadProgress,
   }) {
     final currentUser = FirebaseAuth.instance.currentUser;
     final isCurrentUser = currentUser?.uid == userStories.userId;
@@ -221,6 +231,9 @@ class _StoriesSectionState extends State<StoriesSection> {
     if (isCurrentUser) {
       // Para el usuario actual, mostrar estado de la historia
       switch (latestStory.status) {
+        case StoryStatus.uploading:
+          borderColor = Colors.blue;
+          break;
         case StoryStatus.pending:
           borderColor = Colors.orange;
           break;
@@ -256,6 +269,13 @@ class _StoriesSectionState extends State<StoriesSection> {
           : null;
       borderColor = userStories.hasUnviewed ? null : Colors.grey[300];
     }
+
+    // Check if there's upload progress for this user's latest story
+    final progress = isCurrentUser
+        ? uploadProgress[latestStory.id]
+        : null;
+    final hasUploadProgress = progress != null && progress >= 0.0 && progress < 1.0;
+    final hasUploadError = progress == -1.0;
 
     return GestureDetector(
       onTap: () {
@@ -307,55 +327,112 @@ class _StoriesSectionState extends State<StoriesSection> {
                   ),
                 ),
 
-                // Indicadores de estado
-                if (isCurrentUser && latestStory.status == StoryStatus.pending)
-                  Positioned(
-                    bottom: 2,
-                    right: 2,
+                // Upload progress overlay
+                if (hasUploadProgress)
+                  Positioned.fill(
                     child: Container(
-                      width: 14,
-                      height: 14,
                       decoration: BoxDecoration(
-                        color: Colors.orange,
                         shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 2),
+                        color: Colors.black.withOpacity(0.6),
                       ),
-                      child: Icon(
-                        Icons.access_time,
-                        size: 8,
-                        color: Colors.white,
+                      child: Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SizedBox(
+                              width: 28,
+                              height: 28,
+                              child: CircularProgressIndicator(
+                                value: progress,
+                                strokeWidth: 2.5,
+                                backgroundColor: Colors.white.withOpacity(0.3),
+                                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                              ),
+                            ),
+                            SizedBox(height: 2),
+                            Text(
+                              '${(progress * 100).toInt()}%',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 8,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
-                if (isCurrentUser && latestStory.status == StoryStatus.rejected)
-                  Positioned(
-                    bottom: 2,
-                    right: 2,
+
+                // Upload error overlay
+                if (hasUploadError)
+                  Positioned.fill(
                     child: Container(
-                      width: 14,
-                      height: 14,
                       decoration: BoxDecoration(
-                        color: Colors.red,
                         shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 2),
+                        color: Colors.black.withOpacity(0.6),
                       ),
-                      child: Icon(Icons.close, size: 8, color: Colors.white),
-                    ),
-                  ),
-                if (!isCurrentUser && userStories.hasUnviewed)
-                  Positioned(
-                    bottom: 2,
-                    right: 2,
-                    child: Container(
-                      width: 14,
-                      height: 14,
-                      decoration: BoxDecoration(
-                        color: Color(0xFF9D7FE8),
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 2),
+                      child: Center(
+                        child: Icon(
+                          Icons.error,
+                          color: Colors.red,
+                          size: 24,
+                        ),
                       ),
                     ),
                   ),
+
+                // Indicadores de estado (solo mostrar si no hay upload en progreso)
+                if (!hasUploadProgress && !hasUploadError) ...[
+                  if (isCurrentUser && latestStory.status == StoryStatus.pending)
+                    Positioned(
+                      bottom: 2,
+                      right: 2,
+                      child: Container(
+                        width: 14,
+                        height: 14,
+                        decoration: BoxDecoration(
+                          color: Colors.orange,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 2),
+                        ),
+                        child: Icon(
+                          Icons.access_time,
+                          size: 8,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  if (isCurrentUser && latestStory.status == StoryStatus.rejected)
+                    Positioned(
+                      bottom: 2,
+                      right: 2,
+                      child: Container(
+                        width: 14,
+                        height: 14,
+                        decoration: BoxDecoration(
+                          color: Colors.red,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 2),
+                        ),
+                        child: Icon(Icons.close, size: 8, color: Colors.white),
+                      ),
+                    ),
+                  if (!isCurrentUser && userStories.hasUnviewed)
+                    Positioned(
+                      bottom: 2,
+                      right: 2,
+                      child: Container(
+                        width: 14,
+                        height: 14,
+                        decoration: BoxDecoration(
+                          color: Color(0xFF9D7FE8),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 2),
+                        ),
+                      ),
+                    ),
+                ],
               ],
             ),
             SizedBox(height: 6),
@@ -376,21 +453,47 @@ class _StoriesSectionState extends State<StoriesSection> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                // Mostrar estado solo para el usuario actual
-                if (isCurrentUser && latestStory.status != StoryStatus.approved)
-                  Text(
-                    latestStory.statusText,
-                    style: TextStyle(
-                      fontSize: 9,
-                      color: latestStory.status == StoryStatus.pending
-                          ? Colors.orange[700]
-                          : Colors.red[700],
-                      fontWeight: FontWeight.w500,
+                // Mostrar estado de upload o estado de la historia
+                if (isCurrentUser) ...[
+                  if (hasUploadProgress)
+                    Text(
+                      'Subiendo...',
+                      style: TextStyle(
+                        fontSize: 9,
+                        color: Colors.blue[700],
+                        fontWeight: FontWeight.w500,
+                      ),
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    )
+                  else if (hasUploadError)
+                    Text(
+                      'Error',
+                      style: TextStyle(
+                        fontSize: 9,
+                        color: Colors.red[700],
+                        fontWeight: FontWeight.w500,
+                      ),
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    )
+                  else if (latestStory.status != StoryStatus.approved)
+                    Text(
+                      latestStory.statusText,
+                      style: TextStyle(
+                        fontSize: 9,
+                        color: latestStory.status == StoryStatus.pending
+                            ? Colors.orange[700]
+                            : Colors.red[700],
+                        fontWeight: FontWeight.w500,
+                      ),
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    textAlign: TextAlign.center,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                ],
               ],
             ),
           ],

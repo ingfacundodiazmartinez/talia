@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:async/async.dart';
+import 'package:uuid/uuid.dart';
 import '../models/story.dart';
 import '../notification_service.dart';
 import '../firebase_service.dart';
@@ -31,6 +32,12 @@ class StoryService {
   Set<String>? _cachedContactIds;
   DateTime? _lastContactsCacheUpdate;
   static const _contactsCacheDuration = Duration(minutes: 5);
+
+  // Cache para historias optimistas (en proceso de subida)
+  final Map<String, Story> _optimisticStories = {};
+
+  // StreamController para notificar cambios en el cache optimista
+  final StreamController<void> _optimisticStoriesController = StreamController<void>.broadcast();
 
   // Crear una nueva historia
   Future<String> createStory({
@@ -114,6 +121,270 @@ class StoryService {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // OPTIMISTIC STORY UPLOAD
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /// Crear una nueva historia con subida optimista (retorna inmediatamente)
+  /// Retorna el ID de la historia inmediatamente sin esperar a que se suba el media
+  /// El callback onProgressUpdate reporta el progreso de subida (0.0 - 1.0)
+  Future<String> createStoryOptimistic({
+    required String mediaPath,
+    required String mediaType,
+    String? caption,
+    Map<String, dynamic>? filter,
+    Function(String storyId, double progress)? onProgressUpdate,
+  }) async {
+    final user = _auth.currentUser;
+    if (user == null) throw Exception('Usuario no autenticado');
+
+    try {
+      print('🚀 [OPTIMISTIC] Iniciando creación optimista de historia para usuario: ${user.uid}');
+
+      // 1. Generar ID temporal único para la historia
+      final uuid = Uuid();
+      final tempStoryId = 'temp_${uuid.v4()}';
+      print('🆔 ID temporal generado: $tempStoryId');
+
+      // 2. Obtener datos del usuario (necesarios para crear el objeto Story)
+      final userDoc = await _firestore.collection('users').doc(user.uid).get();
+      final userData = userDoc.data();
+      final userName = userData?['name'] ?? user.displayName ?? 'Usuario';
+      final userPhotoURL = userData?['photoURL'] ?? user.photoURL;
+      final userRole = userData?['role'] ?? 'child';
+
+      // 3. Crear objeto Story temporal con estado "uploading"
+      final now = DateTime.now();
+      final expiresAt = now.add(Duration(hours: 24));
+
+      final tempStory = Story(
+        id: tempStoryId,
+        userId: user.uid,
+        userName: userName,
+        userPhotoURL: userPhotoURL,
+        mediaUrl: '', // Vacío mientras se sube
+        mediaType: mediaType,
+        caption: caption,
+        createdAt: now,
+        expiresAt: expiresAt,
+        viewedBy: [],
+        replies: [],
+        filter: filter,
+        status: StoryStatus.uploading,
+        localMediaPath: mediaPath,
+        uploadProgress: 0.0,
+      );
+
+      // 4. Guardar en cache local
+      _optimisticStories[tempStoryId] = tempStory;
+      print('💾 [OPTIMISTIC] Historia guardada en cache local: $tempStoryId');
+
+      // Notificar cambio en el cache para actualizar UI
+      _optimisticStoriesController.add(null);
+
+      // 5. Iniciar subida en background (no await)
+      _uploadStoryInBackground(
+        tempStoryId: tempStoryId,
+        mediaPath: mediaPath,
+        mediaType: mediaType,
+        caption: caption,
+        filter: filter,
+        userId: user.uid,
+        userName: userName,
+        userPhotoURL: userPhotoURL,
+        userRole: userRole,
+        createdAt: now,
+        expiresAt: expiresAt,
+        onProgressUpdate: onProgressUpdate,
+      );
+
+      print('✅ [OPTIMISTIC] Historia temporal creada con ID: $tempStoryId');
+      print('⏳ [OPTIMISTIC] Subida en progreso...');
+
+      // 6. Retornar ID inmediatamente
+      return tempStoryId;
+    } catch (e) {
+      print('❌ [OPTIMISTIC] Error creando historia optimista: $e');
+      throw Exception('Error creando historia optimista: $e');
+    }
+  }
+
+  /// Subir historia en background (llamada sin await desde createStoryOptimistic)
+  Future<void> _uploadStoryInBackground({
+    required String tempStoryId,
+    required String mediaPath,
+    required String mediaType,
+    String? caption,
+    Map<String, dynamic>? filter,
+    required String userId,
+    required String userName,
+    String? userPhotoURL,
+    required String userRole,
+    required DateTime createdAt,
+    required DateTime expiresAt,
+    Function(String storyId, double progress)? onProgressUpdate,
+  }) async {
+    try {
+      print('📤 [OPTIMISTIC] Iniciando subida en background para: $tempStoryId');
+
+      // 1. Subir media a Firebase Storage con tracking de progreso
+      String mediaUrl;
+      try {
+        mediaUrl = await _uploadStoryMediaWithProgress(
+          mediaPath,
+          userId,
+          (progress) {
+            print('📊 [OPTIMISTIC] Progreso de subida: ${(progress * 100).toStringAsFixed(1)}%');
+
+            // Actualizar progreso en el cache
+            final cachedStory = _optimisticStories[tempStoryId];
+            if (cachedStory != null) {
+              _optimisticStories[tempStoryId] = cachedStory.copyWith(
+                uploadProgress: progress,
+              );
+              // Notificar cambio en el cache para actualizar UI
+              _optimisticStoriesController.add(null);
+            }
+
+            // Reportar progreso al callback
+            onProgressUpdate?.call(tempStoryId, progress);
+          },
+        );
+        print('✅ [OPTIMISTIC] Media subida exitosamente: $mediaUrl');
+      } catch (uploadError) {
+        print('❌ [OPTIMISTIC] Error subiendo media: $uploadError');
+
+        // Actualizar estado de error en el cache
+        final cachedStory = _optimisticStories[tempStoryId];
+        if (cachedStory != null) {
+          _optimisticStories[tempStoryId] = cachedStory.copyWith(
+            uploadError: uploadError.toString(),
+            uploadProgress: -1.0,
+          );
+          // Notificar cambio en el cache para actualizar UI
+          _optimisticStoriesController.add(null);
+        }
+
+        // Reportar error a través del callback con progreso -1.0 para indicar error
+        onProgressUpdate?.call(tempStoryId, -1.0);
+        return;
+      }
+
+      // 2. Determinar si la historia requiere aprobación
+      String status = 'approved';
+      bool requiresApproval = false;
+
+      if (userRole == 'child') {
+        final userRoleService = UserRoleService();
+        final linkedParents = await userRoleService.getLinkedParents(userId);
+
+        if (linkedParents.isNotEmpty) {
+          status = 'pending';
+          requiresApproval = true;
+          print('👶 [OPTIMISTIC] Usuario es niño con padres vinculados - requiere aprobación');
+        } else {
+          print('👶 [OPTIMISTIC] Usuario es niño sin padres vinculados - auto-aprobada');
+        }
+      } else {
+        print('👔 [OPTIMISTIC] Usuario es $userRole - historia auto-aprobada');
+      }
+
+      // 3. Crear historia en Firestore
+      final storyData = {
+        'userId': userId,
+        'userName': userName,
+        'userPhotoURL': userPhotoURL,
+        'mediaUrl': mediaUrl,
+        'mediaType': mediaType,
+        'caption': caption,
+        'createdAt': Timestamp.fromDate(createdAt),
+        'expiresAt': Timestamp.fromDate(expiresAt),
+        'viewedBy': <String>[],
+        'replies': <Map<String, dynamic>>[],
+        'filter': filter,
+        'status': status,
+        'approvedBy': requiresApproval ? null : userId,
+        'approvedAt': requiresApproval ? null : Timestamp.fromDate(DateTime.now()),
+        'rejectionReason': null,
+        'visibility': 'temporary',
+        'savedToPermanentAt': null,
+        'tempStoryId': tempStoryId, // Guardar el ID temporal para referencia
+      };
+
+      print('💾 [OPTIMISTIC] Guardando historia en Firestore...');
+      final docRef = await _firestore.collection('stories').add(storyData);
+      print('✅ [OPTIMISTIC] Historia guardada con ID real: ${docRef.id}');
+
+      // 4. Crear solicitudes de aprobación si es necesario
+      if (requiresApproval) {
+        print('📬 [OPTIMISTIC] Creando solicitudes de aprobación...');
+        await _notifyParentOfPendingStory(userId, docRef.id);
+      }
+
+      // 5. Reportar progreso completo (1.0)
+      onProgressUpdate?.call(tempStoryId, 1.0);
+      print('✅ [OPTIMISTIC] Subida completada exitosamente');
+
+      // 6. Eliminar del cache de historias optimistas después de un delay
+      // (para que la UI tenga tiempo de mostrar el 100% antes de cambiar al documento real)
+      Future.delayed(Duration(seconds: 2), () {
+        _optimisticStories.remove(tempStoryId);
+        print('🗑️ [OPTIMISTIC] Historia temporal eliminada del cache: $tempStoryId');
+        // Notificar cambio para actualizar UI
+        _optimisticStoriesController.add(null);
+      });
+    } catch (e) {
+      print('❌ [OPTIMISTIC] Error en subida background: $e');
+      // Reportar error a través del callback con progreso -1.0
+      onProgressUpdate?.call(tempStoryId, -1.0);
+
+      // Mantener en cache por más tiempo en caso de error (para mostrar el estado de error)
+      Future.delayed(Duration(seconds: 5), () {
+        _optimisticStories.remove(tempStoryId);
+        print('🗑️ [OPTIMISTIC] Historia temporal con error eliminada del cache: $tempStoryId');
+        // Notificar cambio para actualizar UI
+        _optimisticStoriesController.add(null);
+      });
+    }
+  }
+
+  /// Subir media a Firebase Storage con tracking de progreso
+  Future<String> _uploadStoryMediaWithProgress(
+    String filePath,
+    String userId,
+    Function(double progress) onProgress,
+  ) async {
+    try {
+      print('📤 [OPTIMISTIC] Subiendo archivo con progreso: $filePath para usuario: $userId');
+      final file = File(filePath);
+      final fileName = 'story_${DateTime.now().millisecondsSinceEpoch}';
+      final storageRef = _storage.ref('stories/$userId/$fileName');
+
+      // Crear tarea de subida
+      final uploadTask = storageRef.putFile(file);
+
+      // Escuchar cambios de progreso
+      uploadTask.snapshotEvents.listen((TaskSnapshot snapshot) {
+        final progress = snapshot.bytesTransferred / snapshot.totalBytes;
+        onProgress(progress);
+      });
+
+      // Esperar a que se complete
+      final snapshot = await uploadTask;
+
+      if (snapshot.state == TaskState.success) {
+        final downloadURL = await snapshot.ref.getDownloadURL();
+        print('✅ [OPTIMISTIC] Subida exitosa. URL: $downloadURL');
+        return downloadURL;
+      } else {
+        throw Exception('Error en la subida del archivo: ${snapshot.state}');
+      }
+    } catch (e) {
+      print('❌ [OPTIMISTIC] Error subiendo media: $e');
+      throw Exception('Error subiendo media: $e');
+    }
+  }
+
   // Notificar a todos los padres vinculados sobre historia pendiente
   Future<void> _notifyParentOfPendingStory(String childId, String storyId) async {
     try {
@@ -143,10 +414,10 @@ class StoryService {
           'createdAt': FieldValue.serverTimestamp(),
         });
 
-        // NO enviamos notificación push para evitar duplicados
-        // La solicitud en story_approval_requests ya se muestra en el dashboard
-
+        // ✅ La notificación se creará automáticamente por Cloud Function
+        // cuando se cree el documento en story_approval_requests
         print('📱 Solicitud de aprobación creada para padre $parentId');
+        print('🔔 La notificación se creará automáticamente por Cloud Function');
       }
 
       print('✅ Notificaciones enviadas a ${linkedParents.length} padre(s)');
@@ -290,8 +561,19 @@ class StoryService {
     // Cualquier cambio en cualquier chunk disparará el stream combinado
     final mergedStream = StreamGroup.merge(chunkStreams);
 
-    // Escuchar cambios en TODOS los chunks de contactos
-    await for (final _ in mergedStream) {
+    // ✅ NUEVO: También escuchar cambios en el cache optimista
+    // Combinamos el stream de Firestore con el stream del cache local
+    final combinedStream = StreamGroup.merge([
+      mergedStream.map((_) => null),  // Convertir eventos de Firestore a null
+      _optimisticStoriesController.stream,  // Eventos del cache optimista
+    ]);
+
+    // Escuchar cambios en TODOS los chunks de contactos Y en el cache optimista
+    await for (final _ in combinedStream) {
+      // ✅ Invalidar cache al detectar cambios en Firestore
+      // Esto asegura que siempre leamos data fresca del servidor
+      print('🔄 [StoryService] Cambio detectado en Firestore o cache local, invalidando cache...');
+
       final List<UserStories> userStoriesList = [];
 
       // Incluir historias del usuario actual (todas, sin filtro de aprobación)
@@ -505,6 +787,20 @@ class StoryService {
       // Eliminar documento de Firestore
       await storyDoc.reference.delete();
 
+      // ✅ Limpiar cache local para forzar actualización
+      _cachedStories = null;
+      _lastCacheUpdate = null;
+
+      // Si es una historia optimista, eliminarla del cache
+      if (storyId.startsWith('temp_')) {
+        _optimisticStories.remove(storyId);
+      }
+
+      // ✅ IMPORTANTE: Notificar al stream para forzar recalculo
+      // Esto es necesario porque si eliminamos la última historia de un usuario,
+      // el stream de Firestore NO se dispara (el usuario ya no matchea el query)
+      _optimisticStoriesController.add(null);
+
       print('✅ Historia $storyId eliminada exitosamente');
     } catch (e) {
       throw Exception('Error eliminando historia: $e');
@@ -578,11 +874,23 @@ class StoryService {
           .where('expiresAt', isGreaterThan: Timestamp.fromDate(now))
           .orderBy('expiresAt')
           .orderBy('createdAt', descending: true)
-          .get();
-
-      if (storiesQuery.docs.isEmpty) return null;
+          .get(const GetOptions(source: Source.server)); // ✅ Forzar lectura del servidor
 
       final stories = storiesQuery.docs.map((doc) => Story.fromFirestore(doc)).toList();
+
+      // ✅ NUEVO: Agregar historias optimistas (en proceso de subida) del usuario actual
+      final optimisticUserStories = _optimisticStories.values
+          .where((story) => story.userId == user.uid)
+          .toList();
+
+      if (optimisticUserStories.isNotEmpty) {
+        print('📋 [OPTIMISTIC] Agregando ${optimisticUserStories.length} historia(s) optimista(s) al cache');
+        stories.addAll(optimisticUserStories);
+        // Ordenar por fecha de creación (más recientes primero)
+        stories.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      }
+
+      if (stories.isEmpty) return null;
 
       return UserStories(
         userId: user.uid,

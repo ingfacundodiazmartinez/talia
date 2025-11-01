@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../../../models/child.dart';
+import '../../../../reports_screen.dart';
 import 'metric_item.dart';
 
 class ChildMetricsRow extends StatelessWidget {
@@ -50,6 +51,14 @@ class ChildMetricsRow extends StatelessWidget {
                         label: 'Alertas',
                         value: alertsCount.toString(),
                         isAlert: alertsCount > 0,
+                        // ✅ Al hacer tap en alertas, navegar a ReportsScreen filtrado por este hijo
+                        onTap: alertsCount > 0 ? () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (context) => ReportsScreen(childId: childId),
+                            ),
+                          );
+                        } : null,
                       ),
                     ],
                   ),

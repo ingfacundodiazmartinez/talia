@@ -168,9 +168,10 @@ exports.sendNotificationOnCreate = onDocumentCreated(
                      notification.type === "video_call" ||
                      notification.type === "emergency_call";
 
-      // ✅ VOIP PUSH: Si es una llamada y tiene voipToken, enviar VoIP push
+      // ✅ VOIP PUSH: Si es una llamada y tiene voipToken, enviar VoIP push (solo iOS)
+      // IMPORTANTE: También enviamos FCM después para que Android reciba la notificación
       if (isCall && voipToken) {
-        console.log(`📱 [VoIP] Llamada detectada - enviando VoIP push`);
+        console.log(`📱 [VoIP] Llamada detectada - enviando VoIP push a iOS`);
 
         // Obtener datos de la llamada desde dataPayload
         const callId = dataPayload.callId;
@@ -194,18 +195,18 @@ exports.sendNotificationOnCreate = onDocumentCreated(
 
           const voipSent = await sendVoIPPush(voipToken, voipPayload);
 
-          if (voipSent) {
-            console.log(`✅ [VoIP] Push enviado - CallKit se mostrará automáticamente`);
-            // Si VoIP push se envió exitosamente, NO enviar notificación FCM normal
-            // para evitar duplicados
-            await snapshot.ref.update({
-              sentAt: new Date().toISOString(),
-              sent: true,
-              sentViaVoIP: true,
-            });
-            return; // Salir - no enviar FCM
+          if (voipSent === "invalid_token") {
+            // APNs reportó BadDeviceToken pero la notificación puede llegar igual
+            // Este es un comportamiento conocido de APNs con certificados de producción
+            // NO eliminamos el token porque puede ser un false positive
+            console.warn(`⚠️ [VoIP] APNs reportó BadDeviceToken pero intentaremos FCM fallback`);
+            console.warn(`ℹ️ [VoIP] NO eliminamos el token porque APNs a veces reporta error pero entrega igual`);
+            // Continuar con FCM
+          } else if (voipSent === true) {
+            console.log(`✅ [VoIP] Push enviado a iOS`);
+            // NO hacer return - continuar enviando FCM para Android
           } else {
-            console.warn(`⚠️ [VoIP] Fallo - enviando FCM como fallback`);
+            console.warn(`⚠️ [VoIP] Fallo - enviando FCM`);
           }
         } // Fin del else de validación callId/channelName
       } // Fin del if isCall
@@ -271,12 +272,13 @@ exports.sendNotificationOnCreate = onDocumentCreated(
       const messaging = getMessaging();
       const response = await messaging.send(message);
 
-      console.log(`✅ Notificación enviada exitosamente: ${response}`);
+      console.log(`✅ Notificación FCM enviada exitosamente: ${response}`);
 
       // Actualizar la notificación en Firestore para marcarla como enviada
       await snapshot.ref.update({
         sentAt: new Date().toISOString(),
         sent: true,
+        sentViaFCM: true,
       });
     } catch (error) {
       console.error(`❌ Error enviando notificación:`, error);
@@ -301,4 +303,178 @@ exports.sendNotificationOnCreate = onDocumentCreated(
  *
  * Reducción de latencia: ~200ms menos que sendNotificationOnCreate
  */
+
+exports.sendInstantPushNotification = onCall(
+  {
+    cors: true,
+    region: "us-central1",
+    // ⚡ OPTIMIZACIÓN: Mantener la función caliente para eliminar cold starts
+    minInstances: 1, // Mantiene 1 instancia siempre activa
+    maxInstances: 10, // Escala hasta 10 instancias si hay mucha carga
+    consumeAppCheckToken: true,
+  },
+  async (request) => {
+    const startTime = Date.now();
+    console.log("⚡ [INSTANT PUSH] Inicio");
+
+    const { receiverId, title, body, data, isCall } = request.data;
+
+    // Validaciones
+    if (!receiverId || !title || !body) {
+      throw new HttpsError("invalid-argument", "Missing required fields: receiverId, title, body");
+    }
+
+    try {
+      const db = getFirestore();
+
+      // ⚡ ÚNICA QUERY: Obtener tokens del receptor
+      const userDoc = await db.collection("users").doc(receiverId).get();
+
+      if (!userDoc.exists) {
+        throw new HttpsError("not-found", `User ${receiverId} not found`);
+      }
+
+      const userData = userDoc.data();
+      const fcmToken = userData.fcmToken;
+      const voipToken = userData.voipToken;
+
+      if (!fcmToken) {
+        throw new HttpsError("failed-precondition", `User ${receiverId} has no FCM token`);
+      }
+
+      console.log(`⚡ [INSTANT PUSH] FCM token found (${Date.now() - startTime}ms)`);
+      console.log(`⚡ [INSTANT PUSH] isCall: ${isCall}, voipToken exists: ${!!voipToken}`);
+      if (voipToken) {
+        console.log(`⚡ [INSTANT PUSH] voipToken: ${voipToken.substring(0, 20)}...`);
+      }
+
+      // ✅ VERIFICAR SI EL CHAT ESTÁ SILENCIADO (solo para mensajes, no para llamadas)
+      if (!isCall && data?.chatId) {
+        const chatId = data.chatId;
+        const chatDoc = await db.collection("chats").doc(chatId).get();
+
+        if (chatDoc.exists) {
+          const chatData = chatDoc.data();
+          const isMuted = chatData[`muted_${receiverId}`] || false;
+
+          if (isMuted) {
+            console.log(`🔕 [INSTANT PUSH] Chat ${chatId} está silenciado para ${receiverId} - NO se enviará notificación`);
+            return { success: true, muted: true, latency: Date.now() - startTime };
+          }
+        }
+      }
+
+      // ✅ VOIP PUSH: Si es una llamada Y tiene voipToken, enviar VoIP push (solo iOS)
+      // IMPORTANTE: También enviamos FCM después para que Android reciba la notificación
+      let sentViaVoIP = false;
+      if (isCall && voipToken) {
+        console.log(`📱 [VoIP] Llamada detectada - enviando VoIP push a iOS`);
+
+        const voipPayload = {
+          callId: data.callId,
+          callerId: data.callerId || data.senderId,
+          callerName: data.callerName || data.senderName,
+          channelName: data.channelName,
+          callType: data.callType || "video",
+          isEmergency: data.isEmergency || "false",
+          callerPhotoURL: data.senderPhotoUrl || "",
+        };
+
+        const voipResult = await sendVoIPPush(voipToken, voipPayload);
+
+        // Si el token es inválido, eliminarlo de Firestore
+        if (voipResult === "invalid_token") {
+          console.warn(`🧹 [VoIP] Token inválido - eliminando de Firestore para usuario ${receiverId}`);
+          try {
+            await db.collection("users").doc(receiverId).update({
+              voipToken: FieldValue.delete(),
+            });
+            console.log(`✅ [VoIP] Token inválido eliminado - usuario debe abrir app para regenerar`);
+          } catch (cleanupError) {
+            console.error(`❌ [VoIP] Error eliminando token inválido:`, cleanupError);
+          }
+          // Continuar con FCM
+        } else if (voipResult === true) {
+          console.log(`✅ [VoIP] Push enviado a iOS`);
+          sentViaVoIP = true;
+          // NO hacer return - continuar enviando FCM para Android
+        } else {
+          console.warn(`⚠️ [VoIP] Fallo - enviando FCM`);
+        }
+        // Si voipResult === false (otro error), continuar con FCM
+      }
+
+      // Preparar mensaje FCM
+      const messageData = {};
+      if (data) {
+        Object.keys(data).forEach((key) => {
+          messageData[key] = String(data[key]);
+        });
+      }
+
+      const isCallType = data?.type === "audio_call" || data?.type === "video_call" ||
+        data?.type === "group_video_call" || data?.type === "group_audio_call" ||
+        data?.type === "emergency_call";
+
+      // Validar imageUrl - solo incluir si es una URL válida
+      const hasValidImageUrl = data?.senderPhotoUrl &&
+        typeof data.senderPhotoUrl === "string" &&
+        data.senderPhotoUrl.trim().length > 0 &&
+        (data.senderPhotoUrl.startsWith("http://") || data.senderPhotoUrl.startsWith("https://"));
+
+      // ⚡ ANDROID: NO enviar notification en root - dejar que servicio nativo lo maneje
+      // iOS: Usar approach sofisticado con mutable-content para descargar imagen
+      const message = {
+        token: fcmToken,
+        // NO incluir notification en el root para Android - solo data
+        data: {
+          ...messageData,
+          // Agregar title y body en data (para servicio nativo Android)
+          title: title,
+          body: body,
+          channelId: isCallType ? "calls_channel" : "high_importance_channel",
+          isCallType: isCallType ? "true" : "false",
+          // Agregar senderPhotoUrl si existe
+          ...(hasValidImageUrl ? { senderPhotoUrl: data.senderPhotoUrl } : {}),
+        },
+        android: {
+          priority: "high",
+          // NO incluir android.notification - dejar que servicio nativo MyFirebaseMessagingService lo maneje
+        },
+        apns: {
+          headers: {
+            "apns-priority": "10",
+            "apns-push-type": "alert",
+          },
+          payload: {
+            aps: {
+              alert: {
+                title: title,
+                body: body,
+              },
+              "content-available": 1,
+              sound: "default",
+              badge: 1,
+              "mutable-content": 1,
+            },
+          },
+          // NO usar fcm_options.image - dejar que servicio nativo procese la imagen
+        },
+      };
+
+      // Enviar FCM
+      const messaging = getMessaging();
+      const response = await messaging.send(message);
+
+      const totalTime = Date.now() - startTime;
+      console.log(`✅ [INSTANT PUSH] FCM enviado en ${totalTime}ms - Response: ${response}`);
+
+      return { success: true, sentViaVoIP: sentViaVoIP, latency: totalTime, messageId: response };
+    } catch (error) {
+      const totalTime = Date.now() - startTime;
+      console.error(`❌ [INSTANT PUSH] Error (${totalTime}ms):`, error);
+      throw new HttpsError("internal", `Failed to send push: ${error.message}`);
+    }
+  }
+);
 

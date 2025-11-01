@@ -45,32 +45,45 @@ class MessageSendingService {
     required String contactId,
     Map<String, dynamic>? replyTo,
   }) async {
-    // 1. Verificar moderación a nivel de CHAT
-    final chatDoc = await _firestore.collection('chats').doc(chatId).get();
-    bool moderationEnabled = chatDoc.data()?['moderationEnabled'] ?? false;
+    // 1. Verificar moderación a nivel de CHAT (solo si el chat existe)
+    bool moderationEnabled = false;
+    try {
+      final chatDoc = await _firestore.collection('chats').doc(chatId).get();
+      if (chatDoc.exists) {
+        moderationEnabled = chatDoc.data()?['moderationEnabled'] ?? false;
+      }
+    } catch (e) {
+      print('⚠️ No se pudo verificar moderación del chat (probablemente no existe aún): $e');
+      // Continuar sin moderación del chat si hay error
+    }
 
     // 2. Verificar moderación a nivel de CONTACTO (del receptor)
     if (!moderationEnabled) {
-      final sortedUsers = [currentUserId, contactId]..sort();
-      final contactsQuery = await _firestore
-          .collection('contacts')
-          .where('users', isEqualTo: sortedUsers)
-          .limit(1)
-          .get();
+      try {
+        final sortedUsers = [currentUserId, contactId]..sort();
+        final contactsQuery = await _firestore
+            .collection('contacts')
+            .where('users', isEqualTo: sortedUsers)
+            .limit(1)
+            .get();
 
-      if (contactsQuery.docs.isNotEmpty) {
-        final contactDoc = contactsQuery.docs.first;
-        final moderationSettings =
-            contactDoc.data()['moderationSettings'] as Map<String, dynamic>?;
+        if (contactsQuery.docs.isNotEmpty) {
+          final contactDoc = contactsQuery.docs.first;
+          final moderationSettings =
+              contactDoc.data()['moderationSettings'] as Map<String, dynamic>?;
 
-        if (moderationSettings != null) {
-          final senderSettings =
-              moderationSettings[currentUserId] as Map<String, dynamic>?;
-          if (senderSettings != null && senderSettings['enabled'] == true) {
-            moderationEnabled = true;
-            print('🔒 Usuario emisor tiene moderación activa');
+          if (moderationSettings != null) {
+            final senderSettings =
+                moderationSettings[currentUserId] as Map<String, dynamic>?;
+            if (senderSettings != null && senderSettings['enabled'] == true) {
+              moderationEnabled = true;
+              print('🔒 Usuario emisor tiene moderación activa');
+            }
           }
         }
+      } catch (e) {
+        print('⚠️ No se pudo verificar moderación del contacto: $e');
+        // Continuar sin moderación del contacto si hay error
       }
     }
 
@@ -100,27 +113,37 @@ class MessageSendingService {
       print('✅ Mensaje aprobado por moderación');
     }
 
-    // 4. Enviar mensaje a Firestore
-    final messageData = {
-      'senderId': currentUserId,
-      'text': text,
-      'timestamp': FieldValue.serverTimestamp(),
-      'isRead': false,
-    };
-
-    if (replyTo != null) {
-      messageData['replyTo'] = replyTo;
+    // 4. Actualización optimista del lastMessage (solo para el sender)
+    try {
+      await _firestore.collection('chats').doc(chatId).update({
+        'lastMessage': text,
+        'lastMessageTime': FieldValue.serverTimestamp(),
+        'lastMessageSender': currentUserId,
+      });
+      print('✅ [Optimistic] lastMessage actualizado localmente');
+    } catch (e) {
+      print('⚠️ [Optimistic] Error actualizando lastMessage (probablemente chat no existe): $e');
+      // Continuar - la Cloud Function creará el chat
     }
 
-    final docRef = await _firestore
-        .collection('chats')
-        .doc(chatId)
-        .collection('messages')
-        .add(messageData)
-        .timeout(_sendTimeout);
+    // 5. Enviar mensaje via Cloud Function
+    print('📤 [MessageSendingService] Llamando Cloud Function sendChatMessage');
+    final functions = FirebaseFunctions.instance;
+    final result = await functions.httpsCallable('sendChatMessage').call({
+      'chatId': chatId,
+      'text': text,
+      if (replyTo != null) 'replyTo': replyTo,
+    }).timeout(_sendTimeout);
+    print('📥 [MessageSendingService] Respuesta de Cloud Function: ${result.data}');
 
+    final success = result.data['success'] as bool;
+    if (!success) {
+      throw Exception(result.data['error'] ?? 'Error enviando mensaje');
+    }
+
+    final messageId = result.data['messageId'] as String;
     print('✅ Mensaje enviado: $text');
-    return docRef.id;
+    return messageId;
   }
 
   /// Enviar imagen con compresión
@@ -165,22 +188,34 @@ class MessageSendingService {
 
     if (imageUrl == null) throw Exception('Error subiendo imagen');
 
-    // 4. Enviar a Firestore
-    final docRef = await _firestore
-        .collection('chats')
-        .doc(chatId)
-        .collection('messages')
-        .add({
-          'senderId': currentUserId,
-          'imageUrl': imageUrl,
-          'type': 'image',
-          'timestamp': FieldValue.serverTimestamp(),
-          'isRead': false,
-        })
-        .timeout(_sendTimeout);
+    // 4. Actualización optimista del lastMessage (solo para el sender)
+    try {
+      await _firestore.collection('chats').doc(chatId).update({
+        'lastMessage': '📷 Imagen',
+        'lastMessageTime': FieldValue.serverTimestamp(),
+        'lastMessageSender': currentUserId,
+      });
+      print('✅ [Optimistic] lastMessage actualizado localmente');
+    } catch (e) {
+      print('⚠️ [Optimistic] Error actualizando lastMessage (probablemente chat no existe): $e');
+      // Continuar - la Cloud Function creará el chat
+    }
 
+    // 5. Enviar via Cloud Function
+    final functions = FirebaseFunctions.instance;
+    final result = await functions.httpsCallable('sendChatMessage').call({
+      'chatId': chatId,
+      'imageUrl': imageUrl,
+    }).timeout(_sendTimeout);
+
+    final success = result.data['success'] as bool;
+    if (!success) {
+      throw Exception(result.data['error'] ?? 'Error enviando imagen');
+    }
+
+    final messageId = result.data['messageId'] as String;
     print('✅ Imagen enviada');
-    return docRef.id;
+    return messageId;
   }
 
   /// Enviar video con compresión
@@ -208,22 +243,34 @@ class MessageSendingService {
 
     if (videoUrl == null) throw Exception('Error subiendo video');
 
-    // 3. Enviar a Firestore
-    final docRef = await _firestore
-        .collection('chats')
-        .doc(chatId)
-        .collection('messages')
-        .add({
-          'senderId': currentUserId,
-          'videoUrl': videoUrl,
-          'type': 'video',
-          'timestamp': FieldValue.serverTimestamp(),
-          'isRead': false,
-        })
-        .timeout(_sendTimeout);
+    // 3. Actualización optimista del lastMessage (solo para el sender)
+    try {
+      await _firestore.collection('chats').doc(chatId).update({
+        'lastMessage': '🎥 Video',
+        'lastMessageTime': FieldValue.serverTimestamp(),
+        'lastMessageSender': currentUserId,
+      });
+      print('✅ [Optimistic] lastMessage actualizado localmente');
+    } catch (e) {
+      print('⚠️ [Optimistic] Error actualizando lastMessage (probablemente chat no existe): $e');
+      // Continuar - la Cloud Function creará el chat
+    }
 
+    // 4. Enviar via Cloud Function
+    final functions = FirebaseFunctions.instance;
+    final result = await functions.httpsCallable('sendChatMessage').call({
+      'chatId': chatId,
+      'videoUrl': videoUrl,
+    }).timeout(_sendTimeout);
+
+    final success = result.data['success'] as bool;
+    if (!success) {
+      throw Exception(result.data['error'] ?? 'Error enviando video');
+    }
+
+    final messageId = result.data['messageId'] as String;
     print('✅ Video enviado');
-    return docRef.id;
+    return messageId;
   }
 
   /// Enviar audio con waveform
@@ -258,23 +305,35 @@ class MessageSendingService {
 
     if (audioUrl == null) throw Exception('Error subiendo audio');
 
-    // 4. Enviar a Firestore con waveform
-    final docRef = await _firestore
-        .collection('chats')
-        .doc(chatId)
-        .collection('messages')
-        .add({
-          'senderId': currentUserId,
-          'audioUrl': audioUrl,
-          'type': 'audio',
-          'timestamp': FieldValue.serverTimestamp(),
-          'isRead': false,
-          'waveformData': waveformData,
-        })
-        .timeout(_sendTimeout);
+    // 4. Actualización optimista del lastMessage (solo para el sender)
+    try {
+      await _firestore.collection('chats').doc(chatId).update({
+        'lastMessage': '🎤 Audio',
+        'lastMessageTime': FieldValue.serverTimestamp(),
+        'lastMessageSender': currentUserId,
+      });
+      print('✅ [Optimistic] lastMessage actualizado localmente');
+    } catch (e) {
+      print('⚠️ [Optimistic] Error actualizando lastMessage (probablemente chat no existe): $e');
+      // Continuar - la Cloud Function creará el chat
+    }
 
+    // 5. Enviar via Cloud Function con waveform
+    final functions = FirebaseFunctions.instance;
+    final result = await functions.httpsCallable('sendChatMessage').call({
+      'chatId': chatId,
+      'audioUrl': audioUrl,
+      'waveformData': waveformData,
+    }).timeout(_sendTimeout);
+
+    final success = result.data['success'] as bool;
+    if (!success) {
+      throw Exception(result.data['error'] ?? 'Error enviando audio');
+    }
+
+    final messageId = result.data['messageId'] as String;
     print('✅ Audio enviado con waveform');
-    return docRef.id;
+    return messageId;
   }
 
   /// Forward mensaje a otro chat
@@ -284,43 +343,36 @@ class MessageSendingService {
     required ChatMessage originalMessage,
     required String originalContactName,
   }) async {
-    final messageData = {
-      'senderId': currentUserId,
-      'timestamp': FieldValue.serverTimestamp(),
-      'isRead': false,
-      'isForwarded': true,
-      'originalSenderId': originalMessage.senderId,
-      'originalChatId': originalMessage.id,
-      'originalContactName': originalContactName,
+    final Map<String, dynamic> callData = {
+      'chatId': targetChatId,
     };
 
     // Copiar contenido según tipo
     if (originalMessage.text != null) {
-      messageData['text'] = originalMessage.text!;
-      messageData['type'] = 'text';
+      callData['text'] = originalMessage.text!;
     } else if (originalMessage.imageUrl != null) {
-      messageData['imageUrl'] = originalMessage.imageUrl!;
-      messageData['type'] = 'image';
+      callData['imageUrl'] = originalMessage.imageUrl!;
     } else if (originalMessage.videoUrl != null) {
-      messageData['videoUrl'] = originalMessage.videoUrl!;
-      messageData['type'] = 'video';
+      callData['videoUrl'] = originalMessage.videoUrl!;
     } else if (originalMessage.audioUrl != null) {
-      messageData['audioUrl'] = originalMessage.audioUrl!;
-      messageData['type'] = 'audio';
+      callData['audioUrl'] = originalMessage.audioUrl!;
       if (originalMessage.waveformData != null) {
-        messageData['waveformData'] = originalMessage.waveformData!;
+        callData['waveformData'] = originalMessage.waveformData!;
       }
     }
 
-    final docRef = await _firestore
-        .collection('chats')
-        .doc(targetChatId)
-        .collection('messages')
-        .add(messageData)
-        .timeout(_sendTimeout);
+    // Enviar via Cloud Function
+    final functions = FirebaseFunctions.instance;
+    final result = await functions.httpsCallable('sendChatMessage').call(callData).timeout(_sendTimeout);
 
+    final success = result.data['success'] as bool;
+    if (!success) {
+      throw Exception(result.data['error'] ?? 'Error reenviando mensaje');
+    }
+
+    final messageId = result.data['messageId'] as String;
     print('✅ Mensaje reenviado');
-    return docRef.id;
+    return messageId;
   }
 
   /// Actualizar mensaje bloqueado (re-moderar)

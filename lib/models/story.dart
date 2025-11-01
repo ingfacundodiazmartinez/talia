@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 enum StoryStatus {
+  uploading,  // Subiendo media a Firebase Storage
   pending,    // Esperando aprobación del padre
   approved,   // Aprobada y visible para contactos
   rejected,   // Rechazada por el padre
@@ -68,6 +69,9 @@ class Story {
   final String? rejectionReason; // Razón del rechazo (opcional)
   final StoryVisibility visibility; // Visibilidad de la historia (temporal/permanent/archived)
   final DateTime? savedToPermanentAt; // Cuándo se guardó como permanente
+  final String? localMediaPath; // Path local del media (para subida optimista)
+  final double uploadProgress; // Progreso de subida (0.0 - 1.0)
+  final String? uploadError; // Error durante la subida (si lo hay)
 
   Story({
     required this.id,
@@ -88,6 +92,9 @@ class Story {
     this.rejectionReason,
     this.visibility = StoryVisibility.temporary,
     this.savedToPermanentAt,
+    this.localMediaPath,
+    this.uploadProgress = 0.0,
+    this.uploadError,
   });
 
   // Factory constructor para crear desde Firestore
@@ -126,6 +133,8 @@ class Story {
     if (status == null) return StoryStatus.pending;
 
     switch (status.toString()) {
+      case 'uploading':
+        return StoryStatus.uploading;
       case 'approved':
         return StoryStatus.approved;
       case 'rejected':
@@ -199,9 +208,14 @@ class Story {
   // Verificar si es permanente (guardada en perfil o archivada)
   bool get isPermanent => visibility == StoryVisibility.permanent || visibility == StoryVisibility.archived;
 
+  // Verificar si la historia está subiendo
+  bool get isUploading => status == StoryStatus.uploading;
+
   // Obtener texto descriptivo del estado
   String get statusText {
     switch (status) {
+      case StoryStatus.uploading:
+        return 'Subiendo...';
       case StoryStatus.pending:
         return 'Esperando aprobación';
       case StoryStatus.approved:
@@ -245,6 +259,9 @@ class Story {
     String? rejectionReason,
     StoryVisibility? visibility,
     DateTime? savedToPermanentAt,
+    String? localMediaPath,
+    double? uploadProgress,
+    String? uploadError,
   }) {
     return Story(
       id: id ?? this.id,
@@ -265,6 +282,9 @@ class Story {
       rejectionReason: rejectionReason ?? this.rejectionReason,
       visibility: visibility ?? this.visibility,
       savedToPermanentAt: savedToPermanentAt ?? this.savedToPermanentAt,
+      localMediaPath: localMediaPath ?? this.localMediaPath,
+      uploadProgress: uploadProgress ?? this.uploadProgress,
+      uploadError: uploadError ?? this.uploadError,
     );
   }
 }

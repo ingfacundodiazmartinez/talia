@@ -7,6 +7,7 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'app_config_service.dart';
 import 'block_service.dart';
+import 'callkit_service.dart';
 
 class VideoCallService {
   static final VideoCallService _instance = VideoCallService._internal();
@@ -1066,12 +1067,27 @@ class VideoCallService {
         final startedAt = callData['startedAt'] as Timestamp?;
         final status = callData['status'] as String?;
 
-        // Si la llamada nunca fue contestada (status: ringing), eliminar el documento
-        // Esto permite que el listener del receiver detecte la eliminación y cierre la llamada
+        // Si la llamada nunca fue contestada (status: ringing), cambiar a 'cancelled'
+        // El receptor detectará el cambio via listener y cerrará su CallKit
         if (status == 'ringing') {
-          print('📞 Llamada nunca fue contestada, eliminando documento...');
-          await _firestore.collection('video_calls').doc(callId).delete();
-          print('✅ Documento de llamada eliminado');
+          print('📞 Llamada nunca fue contestada, cancelando...');
+
+          // ✅ ESCRITURA DIRECTA desde el cliente (permitida por Firestore Rules)
+          // El receiver tiene un listener activo que detectará este cambio inmediatamente
+          await _firestore.collection('video_calls').doc(callId).update({
+            'status': 'cancelled',
+            'cancelledAt': FieldValue.serverTimestamp(),
+          });
+          print('✅ Llamada marcada como cancelada en Firestore');
+
+          // Cerrar CallKit del lado del caller
+          try {
+            final callKitService = await import_callKitService();
+            await callKitService.endCall(callId);
+            print('✅ CallKit del caller cerrado');
+          } catch (e) {
+            print('⚠️ Error cerrando CallKit del caller: $e');
+          }
         } else {
           // Si fue contestada o está activa, actualizar status a ended
           await _firestore.collection('video_calls').doc(callId).update({
@@ -1329,6 +1345,7 @@ class VideoCallService {
 
         return {
           'success': true,
+          'callId': channelName, // ✅ El channelName ES el callId (doc ID de Firestore)
           'channelName': channelName,
           'token': token,
           'uid': uid,
@@ -1492,6 +1509,13 @@ class VideoCallService {
   Future<dynamic> import_chatService() async {
     // Retornar una versión inline mínima del método getChatId
     return _ChatServiceStub();
+  }
+
+  // Helper privado para importar CallKitService
+  // (evita dependencia circular)
+  Future<dynamic> import_callKitService() async {
+    // Importar dinámicamente para evitar dependencia circular
+    return CallKitService();
   }
 }
 

@@ -16,6 +16,7 @@ import '../services/stickers_service.dart';
 import '../services/character_service.dart';
 import '../services/usage_limits_service.dart';
 import '../services/subscription_service.dart';
+import '../services/story_upload_progress_service.dart';
 import '../models/character.dart';
 import '../widgets/permission_dialog.dart';
 import '../widgets/camera/flutter_camera_view.dart';
@@ -1093,25 +1094,42 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     String? caption,
   }) async {
     try {
-      // NO mostrar dialog aquí - el loading se muestra en el CaptionView
+      // ✅ SUBIDA OPTIMISTA: Cerrar ventana inmediatamente
+      print('🚀 Iniciando subida optimista de historia...');
 
-      final storyId = await StoryService().createStory(
+      // Cerrar la pantalla de cámara INMEDIATAMENTE (sin esperar la subida)
+      if (mounted) {
+        Navigator.pop(context); // Cerrar cámara
+      }
+
+      // Subida en background con callback de progreso
+      final storyId = await StoryService().createStoryOptimistic(
         mediaPath: mediaPath,
         mediaType: isVideo ? 'video' : 'image',
         caption: caption,
         filter: _selectedFilter != null || _selectedARFilter != null
             ? {'type': _selectedFilter, 'arFilter': _selectedARFilter}
             : null,
+        onProgressUpdate: (tempId, progress) {
+          // Update global progress service
+          StoryUploadProgressService().updateProgress(tempId, progress);
+
+          if (progress == -1.0) {
+            print('❌ Error subiendo historia $tempId');
+            // Mostrar snackbar de error si el usuario todavía está en la app
+            // (no podemos usar context porque ya salimos de la pantalla)
+          } else if (progress == 1.0) {
+            print('✅ Historia $tempId subida exitosamente');
+          } else {
+            print('📊 Progreso de $tempId: ${(progress * 100).toStringAsFixed(1)}%');
+          }
+        },
       );
 
-      print('✅ Historia publicada: $storyId');
-
-      // Cerrar la pantalla de cámara DESPUÉS de publicar
-      if (mounted) {
-        Navigator.pop(context); // Cerrar cámara
-      }
+      print('✅ Historia creada con ID temporal: $storyId');
+      print('⏳ La historia aparecerá en la lista mientras se sube');
     } catch (e) {
-      print('❌ Error publicando historia: $e');
+      print('❌ Error iniciando subida de historia: $e');
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

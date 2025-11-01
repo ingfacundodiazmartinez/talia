@@ -4,7 +4,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 
 class ReportsScreen extends StatefulWidget {
-  const ReportsScreen({super.key});
+  /// Opcional: si se proporciona, filtra alertas y reportes solo de este hijo
+  final String? childId;
+
+  const ReportsScreen({super.key, this.childId});
 
   @override
   State<ReportsScreen> createState() => _ReportsScreenState();
@@ -15,13 +18,28 @@ class _ReportsScreenState extends State<ReportsScreen> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   /// Obtener alertas no leídas para un padre
+  /// Si widget.childId está presente, filtra solo alertas de ese hijo
   Stream<QuerySnapshot> _getUnreadAlerts(String parentId) {
-    return _firestore
+    print('📋 [ReportsScreen] Consultando alertas - parentId: $parentId, childId: ${widget.childId}');
+
+    var query = _firestore
         .collection('alerts')
         .where('parentId', isEqualTo: parentId)
-        .where('isRead', isEqualTo: false)
-        .orderBy('createdAt', descending: true)
-        .snapshots();
+        .where('isRead', isEqualTo: false);
+
+    // ✅ Si hay childId, filtrar solo alertas de ese hijo
+    if (widget.childId != null) {
+      query = query.where('childId', isEqualTo: widget.childId);
+      print('📋 [ReportsScreen] Filtrando por childId: ${widget.childId}');
+    }
+
+    return query.orderBy('createdAt', descending: true).snapshots().map((snapshot) {
+      print('📋 [ReportsScreen] Encontradas ${snapshot.docs.length} alertas');
+      if (snapshot.docs.isNotEmpty) {
+        print('📋 [ReportsScreen] Primera alerta: ${snapshot.docs.first.data()}');
+      }
+      return snapshot;
+    });
   }
 
   /// Marcar alerta como leída
@@ -78,13 +96,18 @@ class _ReportsScreenState extends State<ReportsScreen> {
             return _buildEmptyState(colorScheme, isDarkMode);
           }
 
-          // Obtener TODOS los reportes de TODOS los hijos, ordenados por fecha
+          // Obtener reportes del padre (filtrados por hijo si se especifica)
+          var reportsQuery = _firestore
+              .collection('weekly_reports')
+              .where('parentId', isEqualTo: _auth.currentUser!.uid);
+
+          // ✅ Si hay childId, filtrar solo reportes de ese hijo
+          if (widget.childId != null) {
+            reportsQuery = reportsQuery.where('childId', isEqualTo: widget.childId);
+          }
+
           return StreamBuilder<QuerySnapshot>(
-            stream: _firestore
-                .collection('weekly_reports')
-                .where('parentId', isEqualTo: _auth.currentUser!.uid)
-                .orderBy('generatedAt', descending: true)
-                .snapshots(),
+            stream: reportsQuery.orderBy('generatedAt', descending: true).snapshots(),
             builder: (context, reportsSnapshot) {
               // Manejo de errores
               if (reportsSnapshot.hasError) {

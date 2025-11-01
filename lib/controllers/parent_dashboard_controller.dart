@@ -5,6 +5,7 @@ import '../notification_service.dart';
 import '../services/video_call_service.dart';
 import '../services/auto_approval_service.dart';
 import '../services/user_role_service.dart';
+import '../services/callkit_service.dart';
 import '../models/parent.dart';
 import '../screens/emergency_detail_screen.dart';
 
@@ -119,6 +120,14 @@ class ParentDashboardController {
                 print('   - Tipo: $callType');
                 print('   - Canal: ${callData['channelName']}');
 
+                // Verificar el estado de la llamada antes de emitir
+                // Si ya fue aceptada, no emitir (la navegación se maneja por el listener de CallKit)
+                final status = callData['status'] ?? 'ringing';
+                if (status != 'ringing') {
+                  print('⏭️ [ParentDashboardController] Llamada ya no está en estado ringing (status: $status) - omitiendo');
+                  return;
+                }
+
                 // Enviar al stream de NotificationService para que main.dart lo maneje
                 _notificationService.emitIncomingCall({
                   'callId': change.doc.id,
@@ -127,7 +136,33 @@ class ParentDashboardController {
                   'channelName': callData['channelName'],
                   'callType': callType,
                   'isEmergency': callData['isEmergency'] ?? false,
+                  'fromFirestore': true, // Marcar como originado desde Firestore
                 });
+              } else if (change.type == DocumentChangeType.removed) {
+                // Llamada eliminada - cerrar CallKit si está abierto
+                final callId = change.doc.id;
+                print('📵 [ParentDashboardController] Llamada $callId fue eliminada - cerrando CallKit');
+
+                // Cerrar CallKit para esta llamada
+                CallKitService().endCall(callId).catchError((error) {
+                  print('⚠️ [ParentDashboardController] Error cerrando CallKit: $error');
+                });
+              } else if (change.type == DocumentChangeType.modified) {
+                // Verificar si la llamada fue cancelada o terminada explícitamente
+                final callData = change.doc.data() as Map<String, dynamic>?;
+                final status = callData?['status'] ?? '';
+                final callId = change.doc.id;
+
+                if (status == 'cancelled' || status == 'ended' || status == 'rejected') {
+                  print('📵 [ParentDashboardController] Llamada $callId cambió a status: $status - cerrando CallKit');
+
+                  // Cerrar CallKit para esta llamada
+                  CallKitService().endCall(callId).catchError((error) {
+                    print('⚠️ [ParentDashboardController] Error cerrando CallKit: $error');
+                  });
+                } else {
+                  print('ℹ️ [ParentDashboardController] Llamada $callId modificada (status: $status) - CallKit permanece abierto');
+                }
               }
             }
           },

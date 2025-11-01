@@ -66,14 +66,25 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             return
         }
 
-        Log.e(TAG, "✅ Mostrando notificación nativa con:")
+        Log.e(TAG, "✅ Datos del mensaje:")
         Log.e(TAG, "   Título: $title")
         Log.e(TAG, "   Cuerpo: $body")
         Log.e(TAG, "   Foto: $senderPhotoUrl")
         Log.e(TAG, "   ChatId: $chatId")
         Log.e(TAG, "   Type: $type")
 
-        // Mostrar notificación
+        // ✅ FILTRAR LLAMADAS: No mostrar notificación para llamadas
+        // Las llamadas son manejadas por el background handler de Flutter que muestra CallKit
+        val isCall = type == "audio_call" || type == "video_call" || type == "emergency_call"
+
+        if (isCall) {
+            Log.e(TAG, "📞 Llamada detectada - delegando a Flutter background handler")
+            Log.e(TAG, "   (El servicio nativo NO mostrará notificación)")
+            return
+        }
+
+        // Solo mostrar notificaciones para mensajes de chat
+        Log.e(TAG, "💬 Mensaje de chat - mostrando notificación nativa")
         showNotification(title, body, senderPhotoUrl, data)
     }
 

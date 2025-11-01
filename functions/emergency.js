@@ -164,49 +164,109 @@ exports.createEmergency = onCall(
 
       console.log(`✅ Videollamada de emergencia creada con ID: ${emergencyRef.id}`);
 
-      // Notificar a todos los padres con UNA SOLA notificación que incluye todo
+      // ⚡ OPTIMIZACIÓN: Enviar notificaciones VoIP usando helpers directamente
+      // Con fallback a FCM si VoIP falla (igual que llamadas normales)
+      const { sendVoIPPush } = require("./helpers");
       let notifiedCount = 0;
 
       for (const parentId of parentIds) {
         try {
-          // ✅ Una sola notificación que combina emergencia + llamada
-          // Esto evita duplicados y asegura que el channelName sea consistente
-          await db.collection("notifications").add({
-            userId: parentId,
-            senderId: userId,
-            type: "emergency_call",
-            title: `🆘 EMERGENCIA - ${childName}`,
-            body: customMessage || `${childName} ha activado el botón de emergencia y necesita ayuda urgente`,
-            priority: "high",
-            read: false,
-            createdAt: FieldValue.serverTimestamp(),
-            data: {
-              // Datos de la llamada
+          // Obtener tokens del padre
+          const parentDoc = await db.collection("users").doc(parentId).get();
+          if (!parentDoc.exists) {
+            console.warn(`⚠️ Padre ${parentId} no encontrado`);
+            continue;
+          }
+
+          const parentData = parentDoc.data();
+          const voipToken = parentData.voipToken;
+          const fcmToken = parentData.fcmToken;
+          const childPhotoURL = childData.photoURL || "";
+
+          let voipSent = false;
+
+          // 🎯 INTENTAR VoIP PRIMERO (si tiene token)
+          if (voipToken) {
+            const voipPayload = {
               callId: emergencyRef.id,
               callerId: userId,
               callerName: childName,
               channelName: `emergency_${emergencyRef.id}`,
               callType: "video",
-              isGroupCall: "true",
               isEmergency: "true",
-              groupId: "",
-              // Datos adicionales de la emergencia
-              emergencyId: emergencyRef.id,
-              childId: userId,
-              childName: childName,
-              location: location || null,
-              customMessage: customMessage || null,
-            },
-          });
+              callerPhotoURL: childPhotoURL,
+            };
 
-          notifiedCount++;
-          console.log(`✅ Padre ${parentId} notificado con emergencia combinada`);
+            console.log(`📱 [EMERGENCY VoIP] Enviando a ${parentNames[parentId]}...`);
+            const voipResult = await sendVoIPPush(voipToken, voipPayload);
+
+            if (voipResult === true) {
+              console.log(`✅ [EMERGENCY VoIP] Push enviado exitosamente a ${parentId}`);
+              voipSent = true;
+              notifiedCount++;
+            } else if (voipResult === "invalid_token") {
+              console.warn(`⚠️ [EMERGENCY VoIP] APNs reportó BadDeviceToken pero intentaremos FCM fallback`);
+              console.warn(`ℹ️ [EMERGENCY VoIP] NO eliminamos el token porque APNs a veces reporta error pero entrega igual`);
+              // NO eliminar el token - APNs a veces reporta BadDeviceToken pero la notificación llega igual
+            } else {
+              console.warn(`⚠️ [EMERGENCY VoIP] Fallo - usando FCM fallback`);
+            }
+          } else {
+            console.log(`ℹ️ [EMERGENCY] Padre ${parentId} no tiene VoIP token - usando FCM`);
+          }
+
+          // 📲 FALLBACK A FCM si VoIP falló o no hay token
+          if (!voipSent && fcmToken) {
+            console.log(`📲 [EMERGENCY FCM] Enviando fallback a ${parentNames[parentId]}...`);
+
+            const messaging = getMessaging();
+            const message = {
+              token: fcmToken,
+              data: {
+                callId: emergencyRef.id,
+                callerId: userId,
+                callerName: childName,
+                channelName: `emergency_${emergencyRef.id}`,
+                callType: "video",
+                isEmergency: "true",
+                type: "emergency_call",
+                title: `🆘 EMERGENCIA - ${childName}`,
+                body: customMessage || `${childName} ha activado el botón de emergencia y necesita ayuda urgente`,
+              },
+              apns: {
+                headers: {
+                  "apns-priority": "10",
+                  "apns-push-type": "alert",
+                },
+                payload: {
+                  aps: {
+                    alert: {
+                      title: `🆘 EMERGENCIA - ${childName}`,
+                      body: customMessage || `${childName} ha activado el botón de emergencia y necesita ayuda urgente`,
+                    },
+                    "content-available": 1,
+                    sound: "default",
+                    badge: 1,
+                  },
+                },
+              },
+              android: {
+                priority: "high",
+              },
+            };
+
+            await messaging.send(message);
+            console.log(`✅ [EMERGENCY FCM] Push enviado a ${parentId}`);
+            notifiedCount++;
+          } else if (!voipSent && !fcmToken) {
+            console.error(`❌ Padre ${parentId} no tiene VoIP ni FCM token`);
+          }
         } catch (notifError) {
           console.error(`❌ Error notificando a padre ${parentId}:`, notifError);
         }
       }
 
-      console.log(`✅ ${notifiedCount} padres notificados con emergencia y llamada`);
+      console.log(`✅ ${notifiedCount}/${parentIds.length} padres notificados (VoIP + FCM fallback)`);
 
       return {
         success: true,

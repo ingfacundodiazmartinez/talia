@@ -107,10 +107,8 @@ class _IncomingCallDialogState extends State<IncomingCallDialog> with SingleTick
     _callStatusSubscription = VideoCallService().watchCallStatus(widget.callId).listen((snapshot) {
       if (!snapshot.exists) {
         // La llamada fue eliminada
-        print('📵 Llamada eliminada - cerrando diálogo');
-        if (mounted) {
-          Navigator.of(context).pop();
-        }
+        print('📵 Llamada eliminada - cerrando diálogo y CallKit');
+        _closeDialogAndCallKit();
         return;
       }
 
@@ -119,18 +117,36 @@ class _IncomingCallDialogState extends State<IncomingCallDialog> with SingleTick
 
       // Si la llamada fue cancelada, rechazada o terminada, cerrar el diálogo
       if (status == 'ended' || status == 'rejected' || status == 'cancelled') {
-        print('📵 Llamada $status por el caller - cerrando diálogo');
-        if (mounted) {
-          Navigator.of(context).pop();
-        }
+        print('📵 Llamada $status por el caller - cerrando diálogo y CallKit');
+        _closeDialogAndCallKit();
       } else if (status == 'accepted') {
         // Si la llamada fue aceptada (puede ser desde otro dispositivo), también cerrar
-        print('📵 Llamada aceptada desde otro lugar - cerrando diálogo');
-        if (mounted) {
-          Navigator.of(context).pop();
-        }
+        print('📵 Llamada aceptada desde otro lugar - cerrando diálogo y CallKit');
+        _closeDialogAndCallKit();
       }
     });
+  }
+
+  /// Cerrar el diálogo y también la UI de CallKit
+  Future<void> _closeDialogAndCallKit() async {
+    if (!mounted) return;
+
+    // Detener sonido
+    await _audioPlayer.stop();
+
+    // Cerrar CallKit UI
+    try {
+      await CallKitService().endCall(widget.callId);
+      print('✅ CallKit cerrado para llamada cancelada');
+    } catch (e) {
+      print('⚠️ Error cerrando CallKit: $e');
+      // Continuar de todos modos
+    }
+
+    // Cerrar diálogo
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
   }
 
   @override
@@ -142,33 +158,51 @@ class _IncomingCallDialogState extends State<IncomingCallDialog> with SingleTick
       body: SafeArea(
         child: Column(
           children: [
-            // Banner de emergencia si aplica
+            // Banner de emergencia si aplica - MÁS PROMINENTE
             if (widget.isEmergency)
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 16),
+                padding: const EdgeInsets.symmetric(vertical: 20),
                 decoration: BoxDecoration(
-                  color: Colors.red,
+                  gradient: LinearGradient(
+                    colors: [Colors.red.shade700, Colors.red.shade900],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.red.withOpacity(0.5),
-                      blurRadius: 10,
-                      offset: const Offset(0, 2),
+                      color: Colors.red.withOpacity(0.6),
+                      blurRadius: 20,
+                      offset: const Offset(0, 4),
                     ),
                   ],
                 ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: const [
-                    Icon(Icons.warning, color: Colors.white, size: 24),
-                    SizedBox(width: 12),
+                child: Column(
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: const [
+                        Icon(Icons.warning_amber_rounded, color: Colors.white, size: 32),
+                        SizedBox(width: 12),
+                        Text(
+                          '🆘 EMERGENCIA SOS',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w900,
+                            fontSize: 24,
+                            letterSpacing: 2.0,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
                     Text(
-                      '🆘 LLAMADA DE EMERGENCIA',
+                      'Tu hijo necesita ayuda urgente',
                       style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 18,
-                        letterSpacing: 1.2,
+                        color: Colors.white.withOpacity(0.95),
+                        fontWeight: FontWeight.w600,
+                        fontSize: 15,
+                        letterSpacing: 0.5,
                       ),
                     ),
                   ],
@@ -178,7 +212,7 @@ class _IncomingCallDialogState extends State<IncomingCallDialog> with SingleTick
             // Espaciador
             const Spacer(flex: 2),
 
-            // Foto de perfil con animación de pulso
+            // Foto de perfil con animación de pulso - MÁS DRAMÁTICA para emergencias
             AnimatedBuilder(
               animation: _pulseController,
               builder: (context, child) {
@@ -188,28 +222,61 @@ class _IncomingCallDialogState extends State<IncomingCallDialog> with SingleTick
                     boxShadow: [
                       BoxShadow(
                         color: (widget.isEmergency ? Colors.red : Colors.white)
-                            .withOpacity(0.3 * _pulseController.value),
-                        blurRadius: 40 + (40 * _pulseController.value),
-                        spreadRadius: 10 + (20 * _pulseController.value),
+                            .withOpacity(widget.isEmergency ? 0.5 * _pulseController.value : 0.3 * _pulseController.value),
+                        blurRadius: widget.isEmergency ? 60 + (60 * _pulseController.value) : 40 + (40 * _pulseController.value),
+                        spreadRadius: widget.isEmergency ? 20 + (30 * _pulseController.value) : 10 + (20 * _pulseController.value),
                       ),
                     ],
                   ),
-                  child: CircleAvatar(
-                    radius: 80,
-                    backgroundColor: widget.isEmergency ? Colors.red : const Color(0xFF9D7FE8),
-                    backgroundImage: widget.callerPhotoURL != null && widget.callerPhotoURL!.isNotEmpty
-                        ? NetworkImage(widget.callerPhotoURL!)
-                        : null,
-                    child: widget.callerPhotoURL == null || widget.callerPhotoURL!.isEmpty
-                        ? Text(
-                            widget.callerName.isNotEmpty ? widget.callerName[0].toUpperCase() : 'U',
-                            style: const TextStyle(
-                              fontSize: 60,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white,
+                  child: Container(
+                    decoration: widget.isEmergency
+                        ? BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: Colors.red,
+                              width: 4,
                             ),
                           )
                         : null,
+                    child: CircleAvatar(
+                      radius: 80,
+                      backgroundColor: widget.isEmergency ? Colors.red.shade700 : const Color(0xFF9D7FE8),
+                      backgroundImage: widget.callerPhotoURL != null && widget.callerPhotoURL!.isNotEmpty
+                          ? NetworkImage(widget.callerPhotoURL!)
+                          : null,
+                      child: widget.callerPhotoURL == null || widget.callerPhotoURL!.isEmpty
+                          ? Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                if (widget.isEmergency)
+                                  const Icon(
+                                    Icons.warning_amber_rounded,
+                                    color: Colors.white,
+                                    size: 48,
+                                  )
+                                else
+                                  Text(
+                                    widget.callerName.isNotEmpty ? widget.callerName[0].toUpperCase() : 'U',
+                                    style: const TextStyle(
+                                      fontSize: 60,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                if (widget.isEmergency) const SizedBox(height: 4),
+                                if (widget.isEmergency)
+                                  Text(
+                                    widget.callerName.isNotEmpty ? widget.callerName[0].toUpperCase() : 'U',
+                                    style: const TextStyle(
+                                      fontSize: 40,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                              ],
+                            )
+                          : null,
+                    ),
                   ),
                 );
               },
@@ -266,32 +333,88 @@ class _IncomingCallDialogState extends State<IncomingCallDialog> with SingleTick
 
             const Spacer(flex: 3),
 
-            // Botones de acción
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 40),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  // Botón rechazar
-                  _buildActionButton(
-                    icon: Icons.call_end,
-                    label: 'Rechazar',
-                    color: Colors.red,
-                    onPressed: () => _rejectCall(context),
-                  ),
+            // Botones de acción - LAYOUT DIFERENTE para emergencias
+            if (widget.isEmergency)
+              // Emergencia: botón grande de aceptar + pequeño de rechazar
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 30),
+                child: Column(
+                  children: [
+                    // Botón ACEPTAR prominente
+                    SizedBox(
+                      width: double.infinity,
+                      height: 70,
+                      child: ElevatedButton(
+                        onPressed: () => _acceptCall(context),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          elevation: 8,
+                          shadowColor: Colors.green.withOpacity(0.5),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: const [
+                            Icon(Icons.call, color: Colors.white, size: 32),
+                            SizedBox(width: 16),
+                            Text(
+                              'RESPONDER EMERGENCIA',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    // Botón rechazar secundario
+                    TextButton(
+                      onPressed: () => _rejectCall(context),
+                      child: Text(
+                        'Rechazar',
+                        style: TextStyle(
+                          color: Colors.red[700],
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else
+              // Llamada normal: botones lado a lado
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 40),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    // Botón rechazar
+                    _buildActionButton(
+                      icon: Icons.call_end,
+                      label: 'Rechazar',
+                      color: Colors.red,
+                      onPressed: () => _rejectCall(context),
+                    ),
 
-                  const SizedBox(width: 60),
+                    const SizedBox(width: 60),
 
-                  // Botón aceptar
-                  _buildActionButton(
-                    icon: Icons.call,
-                    label: 'Aceptar',
-                    color: Colors.green,
-                    onPressed: () => _acceptCall(context),
-                  ),
-                ],
+                    // Botón aceptar
+                    _buildActionButton(
+                      icon: Icons.call,
+                      label: 'Aceptar',
+                      color: Colors.green,
+                      onPressed: () => _acceptCall(context),
+                    ),
+                  ],
+                ),
               ),
-            ),
 
             const SizedBox(height: 60),
           ],

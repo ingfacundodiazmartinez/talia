@@ -315,6 +315,110 @@ class MessageCacheService {
     }
   }
 
+  /// Obtener todos los medios (imágenes y videos) del usuario desde el cache
+  ///
+  /// Parámetros:
+  /// - userId: ID del usuario para filtrar solo sus mensajes
+  /// - limit: Número máximo de medios a retornar (default: 100)
+  ///
+  /// Retorna lista de ChatMessage que contienen imageUrl o videoUrl
+  Future<List<ChatMessage>> getAllUserMedia(String userId, {int limit = 100}) async {
+    if (_messagesBox == null) return [];
+
+    try {
+      final mediaMessages = <ChatMessage>[];
+
+      // Iterar sobre TODOS los mensajes en el cache
+      for (final key in _messagesBox!.keys) {
+        if (key.toString().startsWith('_')) continue; // Saltar keys de metadata
+
+        final data = _messagesBox!.get(key) as Map<dynamic, dynamic>?;
+        if (data == null) continue;
+
+        // Filtrar por userId
+        if (data['senderId'] != userId) continue;
+
+        // Solo incluir mensajes con media
+        final hasImage = data['imageUrl'] != null && data['imageUrl'].toString().isNotEmpty;
+        final hasVideo = data['videoUrl'] != null && data['videoUrl'].toString().isNotEmpty;
+
+        if (hasImage || hasVideo) {
+          mediaMessages.add(_messageFromCacheData(data));
+        }
+      }
+
+      // Ordenar por timestamp (más reciente primero)
+      mediaMessages.sort((a, b) {
+        final aTime = a.effectiveTimestamp;
+        final bTime = b.effectiveTimestamp;
+        return bTime.compareTo(aTime);
+      });
+
+      // Limitar resultados
+      final limitedMessages = mediaMessages.take(limit).toList();
+
+      print('📸 [MessageCacheService] Recuperados ${limitedMessages.length} medios del usuario $userId desde cache');
+      return limitedMessages;
+    } catch (e) {
+      print('❌ [MessageCacheService] Error recuperando medios del usuario: $e');
+      return [];
+    }
+  }
+
+  /// Obtener todos los medios (imágenes y videos) de un chat específico desde el cache
+  ///
+  /// Parámetros:
+  /// - chatId: ID del chat para filtrar mensajes
+  /// - limit: Número máximo de medios a retornar (default: 100)
+  ///
+  /// Retorna lista de ChatMessage que contienen imageUrl o videoUrl
+  Future<List<ChatMessage>> getChatMedia(String chatId, {int limit = 100}) async {
+    if (_messagesBox == null) return [];
+
+    try {
+      final mediaMessages = <ChatMessage>[];
+
+      // Iterar sobre los mensajes del chat específico
+      // Las keys tienen formato: chatId_messageId
+      for (final key in _messagesBox!.keys) {
+        final keyStr = key.toString();
+
+        // Saltar keys de metadata
+        if (keyStr.startsWith('_')) continue;
+
+        // Verificar si la key pertenece a este chat
+        if (!keyStr.startsWith('${chatId}_')) continue;
+
+        final data = _messagesBox!.get(key) as Map<dynamic, dynamic>?;
+        if (data == null) continue;
+
+        // Solo incluir mensajes con media (excluir audio)
+        final hasImage = data['imageUrl'] != null && data['imageUrl'].toString().isNotEmpty;
+        final hasVideo = data['videoUrl'] != null && data['videoUrl'].toString().isNotEmpty;
+
+        if (hasImage || hasVideo) {
+          mediaMessages.add(_messageFromCacheData(data));
+        }
+      }
+
+      // Ordenar por timestamp (más reciente primero)
+      mediaMessages.sort((a, b) {
+        final aTime = a.effectiveTimestamp;
+        final bTime = b.effectiveTimestamp;
+        return bTime.compareTo(aTime);
+      });
+
+      // Limitar resultados
+      final limitedMessages = mediaMessages.take(limit).toList();
+
+      print('📸 [MessageCacheService] Recuperados ${limitedMessages.length} medios del chat $chatId desde cache');
+      return limitedMessages;
+    } catch (e) {
+      print('❌ [MessageCacheService] Error recuperando medios del chat: $e');
+      return [];
+    }
+  }
+
   /// Cerrar la box al terminar
   Future<void> dispose() async {
     await _messagesBox?.close();

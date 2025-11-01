@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/story.dart';
 import '../services/story_service.dart';
+import '../services/story_upload_progress_service.dart';
 import '../services/unread_messages_service.dart';
 
 class StoryApprovalScreen extends StatefulWidget {
@@ -69,67 +70,78 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen> with SingleTi
   }
 
   Widget _buildPendingStoriesTab() {
-    return StreamBuilder<List<Story>>(
-      stream: widget.childId != null
-          ? _storyService.getPendingStoriesForParentByChild(widget.childId!)
-          : _storyService.getPendingStoriesForParent(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return Center(
-            child: CircularProgressIndicator(color: Color(0xFF9D7FE8)),
-          );
-        }
+    return StreamBuilder<Map<String, double>>(
+      stream: StoryUploadProgressService().progressStream,
+      builder: (context, progressSnapshot) {
+        final uploadProgress = progressSnapshot.data ?? {};
 
-        if (snapshot.hasError) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.error_outline, size: 48, color: Colors.red),
-                SizedBox(height: 16),
-                Text('Error: ${snapshot.error}'),
-              ],
-            ),
-          );
-        }
+        return StreamBuilder<List<Story>>(
+          stream: widget.childId != null
+              ? _storyService.getPendingStoriesForParentByChild(widget.childId!)
+              : _storyService.getPendingStoriesForParent(),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return Center(
+                child: CircularProgressIndicator(color: Color(0xFF9D7FE8)),
+              );
+            }
 
-        final pendingStories = snapshot.data ?? [];
-
-        if (pendingStories.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  Icons.check_circle_outline,
-                  size: 64,
-                  color: Colors.green,
+            if (snapshot.hasError) {
+              return Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.error_outline, size: 48, color: Colors.red),
+                    SizedBox(height: 16),
+                    Text('Error: ${snapshot.error}'),
+                  ],
                 ),
-                SizedBox(height: 16),
-                Text(
-                  'No hay historias pendientes',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF2D3142),
-                  ),
-                ),
-                SizedBox(height: 8),
-                Text(
-                  'Todas las historias han sido revisadas',
-                  style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-                ),
-              ],
-            ),
-          );
-        }
+              );
+            }
 
-        return ListView.builder(
-          padding: EdgeInsets.all(16),
-          itemCount: pendingStories.length,
-          itemBuilder: (context, index) {
-            final story = pendingStories[index];
-            return _buildStoryApprovalCard(story, status: 'pending');
+            final pendingStories = snapshot.data ?? [];
+
+            if (pendingStories.isEmpty) {
+              return Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.check_circle_outline,
+                      size: 64,
+                      color: Colors.green,
+                    ),
+                    SizedBox(height: 16),
+                    Text(
+                      'No hay historias pendientes',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF2D3142),
+                      ),
+                    ),
+                    SizedBox(height: 8),
+                    Text(
+                      'Todas las historias han sido revisadas',
+                      style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                    ),
+                  ],
+                ),
+              );
+            }
+
+            return ListView.builder(
+              padding: EdgeInsets.all(16),
+              itemCount: pendingStories.length,
+              itemBuilder: (context, index) {
+                final story = pendingStories[index];
+                return _buildStoryApprovalCard(
+                  story,
+                  status: 'pending',
+                  uploadProgress: uploadProgress,
+                );
+              },
+            );
           },
         );
       },
@@ -272,7 +284,15 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen> with SingleTi
     );
   }
 
-  Widget _buildStoryApprovalCard(Story story, {required String status}) {
+  Widget _buildStoryApprovalCard(
+    Story story, {
+    required String status,
+    Map<String, double>? uploadProgress,
+  }) {
+    // Check if there's upload progress for this story
+    final progress = uploadProgress?[story.id];
+    final hasUploadProgress = progress != null && progress >= 0.0 && progress < 1.0;
+    final hasUploadError = progress == -1.0;
     return Container(
       margin: EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
@@ -376,40 +396,114 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen> with SingleTi
                 borderRadius: BorderRadius.circular(12),
                 color: Colors.grey[200],
               ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: Image.network(
-                  story.mediaUrl,
-                  fit: BoxFit.cover,
-                  width: double.infinity,
-                  loadingBuilder: (context, child, loadingProgress) {
-                    if (loadingProgress == null) return child;
-                    return Center(
-                      child: CircularProgressIndicator(
-                        color: Color(0xFF9D7FE8),
-                        value: loadingProgress.expectedTotalBytes != null
-                            ? loadingProgress.cumulativeBytesLoaded /
-                                  loadingProgress.expectedTotalBytes!
-                            : null,
-                      ),
-                    );
-                  },
-                  errorBuilder: (context, error, stackTrace) {
-                    return Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.error, color: Colors.grey, size: 32),
-                          SizedBox(height: 8),
-                          Text(
-                            'Error cargando imagen',
-                            style: TextStyle(color: Colors.grey),
+              child: Stack(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Image.network(
+                      story.mediaUrl,
+                      fit: BoxFit.cover,
+                      width: double.infinity,
+                      height: double.infinity,
+                      loadingBuilder: (context, child, loadingProgress) {
+                        if (loadingProgress == null) return child;
+                        return Center(
+                          child: CircularProgressIndicator(
+                            color: Color(0xFF9D7FE8),
+                            value: loadingProgress.expectedTotalBytes != null
+                                ? loadingProgress.cumulativeBytesLoaded /
+                                      loadingProgress.expectedTotalBytes!
+                                : null,
                           ),
-                        ],
+                        );
+                      },
+                      errorBuilder: (context, error, stackTrace) {
+                        return Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.error, color: Colors.grey, size: 32),
+                              SizedBox(height: 8),
+                              Text(
+                                'Error cargando imagen',
+                                style: TextStyle(color: Colors.grey),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+
+                  // Upload progress overlay
+                  if (hasUploadProgress)
+                    Positioned.fill(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(12),
+                          color: Colors.black.withOpacity(0.7),
+                        ),
+                        child: Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SizedBox(
+                                width: 80,
+                                height: 80,
+                                child: CircularProgressIndicator(
+                                  value: progress,
+                                  strokeWidth: 6,
+                                  backgroundColor: Colors.white.withOpacity(0.3),
+                                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                ),
+                              ),
+                              SizedBox(height: 12),
+                              Text(
+                                'Subiendo... ${(progress * 100).toInt()}%',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
-                    );
-                  },
-                ),
+                    ),
+
+                  // Upload error overlay
+                  if (hasUploadError)
+                    Positioned.fill(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(12),
+                          color: Colors.black.withOpacity(0.7),
+                        ),
+                        child: Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.error_outline,
+                                color: Colors.red,
+                                size: 64,
+                              ),
+                              SizedBox(height: 12),
+                              Text(
+                                'Error',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
           ),

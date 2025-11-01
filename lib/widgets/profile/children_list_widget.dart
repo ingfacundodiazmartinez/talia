@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../models/parent.dart';
 
 /// Widget que muestra la lista de hijos vinculados al padre
@@ -44,11 +45,13 @@ class ChildrenListWidget extends StatelessWidget {
                 final userData =
                     userSnapshot.data!.data() as Map<String, dynamic>?;
                 final name = userData?['name'] ?? 'Usuario';
+                final photoURL = userData?['photoURL'] as String?;
 
                 return _buildChildCard(
                   context,
                   childId: childId,
                   name: name,
+                  photoURL: photoURL,
                 );
               },
             );
@@ -80,6 +83,7 @@ class ChildrenListWidget extends StatelessWidget {
     BuildContext context, {
     required String childId,
     required String name,
+    String? photoURL,
   }) {
     final colorScheme = Theme.of(context).colorScheme;
 
@@ -99,14 +103,19 @@ class ChildrenListWidget extends StatelessWidget {
           CircleAvatar(
             radius: 28,
             backgroundColor: colorScheme.primary.withValues(alpha: 0.2),
-            child: Text(
-              name[0].toUpperCase(),
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-                color: colorScheme.primary,
-              ),
-            ),
+            backgroundImage: photoURL != null && photoURL.isNotEmpty
+                ? CachedNetworkImageProvider(photoURL)
+                : null,
+            child: photoURL == null || photoURL.isEmpty
+                ? Text(
+                    name[0].toUpperCase(),
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: colorScheme.primary,
+                    ),
+                  )
+                : null,
           ),
           SizedBox(width: 16),
           Expanded(

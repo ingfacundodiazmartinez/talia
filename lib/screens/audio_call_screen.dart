@@ -45,6 +45,7 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
   String? _channelName;
   String? _token;
   int? _uid;
+  String? _realCallId; // CallId real una vez que se crea la llamada en Firestore
 
   // Subscription para el listener de estado de llamada
   StreamSubscription<DocumentSnapshot>? _callStatusSubscription;
@@ -58,23 +59,45 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
     _uid = widget.uid;
 
     _initializeCall();
-    _listenToCallStatus();
+
+    // Solo iniciar listener si NO somos caller optimista (sin channelName)
+    // Si somos caller optimista, el listener se iniciará después de obtener el channelName real
+    if (!widget.isCaller || widget.channelName != null) {
+      _listenToCallStatus();
+    }
   }
 
   /// Inicializar la llamada de audio
   Future<void> _initializeCall() async {
     try {
-      // Paso 0: Solo solicitar permisos si somos el CALLER
+      print('🎬 [AudioCall] Iniciando _initializeCall()');
+      print('   - isCaller: ${widget.isCaller}');
+      print('   - callId: ${widget.callId}');
+      print('   - channelName (widget): ${widget.channelName}');
+      print('   - channelName (local): $_channelName');
+      print('   - token (widget): ${widget.token?.substring(0, 20)}...');
+      print('   - token (local): ${_token?.substring(0, 20)}...');
+      print('   - uid (widget): ${widget.uid}');
+      print('   - uid (local): $_uid');
+      print('   - receiverId: ${widget.receiverId}');
+
+      // Paso 0: Solo solicitar permisos si somos el CALLER y estamos en Android
+      // En iOS, Agora pedirá los permisos automáticamente al acceder al micrófono
       // El receiver (que viene de background/CallKit) ya tiene permisos o los pedirá al aceptar
-      if (widget.isCaller) {
+      if (widget.isCaller && Platform.isAndroid) {
         await _requestMicrophonePermission();
       } else {
-        print('📱 [Receiver] Saltando verificación de permisos (viene de CallKit/background)');
+        print('📱 [AudioCall] Saltando verificación manual de permisos (iOS o receiver)');
       }
 
       // Paso 1: Si es caller y no hay token/uid, obtener credenciales
       if (widget.isCaller && (_token == null || _uid == null)) {
         print('📱 [Optimistic] Iniciando llamada de audio en background...');
+
+        // Validar que tenemos receiverId
+        if (widget.receiverId == null) {
+          throw Exception('receiverId es requerido para iniciar una llamada');
+        }
 
         // Iniciar llamada completa para obtener credenciales
         final result = await _callService.initiateCall(
@@ -92,19 +115,31 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
           _channelName = result['channelName'];
           _token = result['token'];
           _uid = result['uid'];
+          _realCallId = result['channelName']; // Guardar el callId real
         });
 
         print('✅ [Optimistic] Datos de llamada de audio obtenidos: channel=$_channelName, uid=$_uid');
+
+        // Ahora que tenemos el callId real, iniciar el listener
+        _listenToCallStatus();
       }
 
-      // Paso 2: Inicializar Agora para audio
+      // Paso 2: Verificar que tenemos todas las credenciales
+      if (_channelName == null || _token == null || _uid == null) {
+        throw Exception('Faltan credenciales para unirse al canal');
+      }
+
+      // Paso 3: Inicializar Agora para audio
       await _callService.initializeAgoraAudio();
 
-      // Paso 3: Configurar event handler personalizado
+      // Paso 4: Configurar event handler personalizado ANTES de unirse al canal
+      print('📡 [AudioCall] Registrando event handlers...');
       _callService.engine?.registerEventHandler(
         RtcEngineEventHandler(
           onJoinChannelSuccess: (RtcConnection connection, int elapsed) {
-            print('✅ Unido al canal de audio: ${connection.channelId}');
+            print('✅ [AudioCall] Unido al canal de audio: ${connection.channelId}');
+            print('   - Local UID: ${connection.localUid}');
+            print('   - Elapsed: ${elapsed}ms');
 
             // Configurar auricular por defecto (NO altavoz)
             _callService.engine?.setEnableSpeakerphone(false).then((_) {
@@ -113,50 +148,84 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
               print('⚠️ Error configurando auricular: $e');
             });
 
-            setState(() {
-              _isConnecting = false;
+            if (mounted) {
+              setState(() {
+                _isConnecting = false;
+              });
+            }
+
+            // Workaround: Si después de 2 segundos no hay remoteUid, verificar estado del canal
+            Future.delayed(Duration(seconds: 2), () {
+              if (mounted && _remoteUid == null) {
+                print('⚠️ [AudioCall] Después de 2s, aún no hay usuario remoto detectado');
+                print('   - Estado: isConnecting=$_isConnecting, remoteUid=$_remoteUid');
+              }
             });
           },
           onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
-            print('👤 Usuario remoto unido: $remoteUid');
-            setState(() {
-              _remoteUid = remoteUid;
-              _isConnecting = false;
-            });
+            print('👤 [AudioCall] Usuario remoto unido al canal: $remoteUid');
+            print('   - Connection: ${connection.channelId}');
+            print('   - Elapsed: ${elapsed}ms');
+            if (mounted) {
+              setState(() {
+                _remoteUid = remoteUid;
+                _isConnecting = false;
+              });
+              print('✅ [AudioCall] Estado actualizado: remoteUid=$_remoteUid, isConnecting=$_isConnecting');
+            }
           },
           onUserOffline: (RtcConnection connection, int remoteUid, UserOfflineReasonType reason) {
-            print('👋 Usuario remoto desconectado: $remoteUid');
-            setState(() {
-              _remoteUid = null;
-            });
+            print('👋 [AudioCall] Usuario remoto desconectado: $remoteUid (razón: $reason)');
+            if (mounted) {
+              setState(() {
+                _remoteUid = null;
+              });
+            }
             _endCall();
           },
           onError: (ErrorCodeType err, String msg) {
-            print('❌ Error de Agora: $err - $msg');
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Error en la llamada: $msg'),
-                backgroundColor: Colors.red,
-              ),
-            );
+            print('❌ [AudioCall] Error de Agora: $err - $msg');
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Error en la llamada: $msg'),
+                  backgroundColor: Colors.red,
+                ),
+              );
+            }
+          },
+          onConnectionStateChanged: (RtcConnection connection, ConnectionStateType state, ConnectionChangedReasonType reason) {
+            print('🔌 [AudioCall] Estado de conexión cambió:');
+            print('   - Nuevo estado: $state');
+            print('   - Razón: $reason');
+            print('   - Canal: ${connection.channelId}');
           },
         ),
       );
 
-      // Paso 4: Verificar que tenemos todas las credenciales
-      if (_channelName == null || _token == null || _uid == null) {
-        throw Exception('Faltan credenciales para unirse al canal');
-      }
-
       // Paso 5: Unirse al canal con las credenciales
+      print('🚀 [AudioCall] Uniéndose al canal $_channelName con UID $_uid...');
       await _callService.joinChannel(
         channelName: _channelName!,
         token: _token!,
         uid: _uid!,
         isVideo: false, // ✅ Es llamada de audio, no publicar video
       );
+      print('✅ [AudioCall] JoinChannel completado');
 
-      // Paso 6: Asegurar que el micrófono esté habilitado (no silenciado)
+      // Paso 6: Esperar un momento para que el canal se estabilice
+      await Future.delayed(Duration(milliseconds: 500));
+
+      // Paso 7: Consultar usuarios remotos en el canal
+      // Esto es un workaround para asegurar que detectamos usuarios que ya están en el canal
+      try {
+        final userInfo = await _callService.engine?.getUserInfoByUid(_uid!);
+        print('👤 [AudioCall] Info de usuario local: $userInfo');
+      } catch (e) {
+        print('⚠️ [AudioCall] Error obteniendo info de usuario: $e');
+      }
+
+      // Paso 8: Asegurar que el micrófono esté habilitado (no silenciado)
       await _callService.engine?.muteLocalAudioStream(false);
       print('🎤 Micrófono habilitado');
 
@@ -177,7 +246,9 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
 
   /// Escuchar cambios en el estado de la llamada
   void _listenToCallStatus() {
-    _callStatusSubscription = _callService.watchCallStatus(widget.callId).listen((snapshot) {
+    final callIdToWatch = _realCallId ?? widget.callId;
+    print('👂 [AudioCall] Iniciando listener para callId: $callIdToWatch');
+    _callStatusSubscription = _callService.watchCallStatus(callIdToWatch).listen((snapshot) {
       // Si el documento fue eliminado, significa que la llamada fue cancelada
       if (!snapshot.exists) {
         print('📵 [AudioCall] Documento eliminado, llamada cancelada por el caller');
@@ -285,16 +356,19 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
     _isEnding = true;
 
     try {
+      final callIdToEnd = _realCallId ?? widget.callId;
+      print('📵 [AudioCall] Terminando llamada con callId: $callIdToEnd');
+
       // Cerrar CallKit UI en ambas plataformas
       if (Platform.isIOS) {
         // En iOS usamos VoIPService para notificar a CallKit nativo
-        await VoIPService().notifyCallEnded(widget.callId);
+        await VoIPService().notifyCallEnded(callIdToEnd);
       } else if (Platform.isAndroid) {
         // En Android usamos flutter_callkit_incoming
-        await CallKitService().endCall(widget.callId);
+        await CallKitService().endCall(callIdToEnd);
       }
 
-      await _callService.endCall(widget.callId);
+      await _callService.endCall(callIdToEnd);
       await _callService.leaveChannel();
 
       if (mounted) {

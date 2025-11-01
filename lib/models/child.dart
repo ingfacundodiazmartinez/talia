@@ -181,7 +181,15 @@ class Child extends User {
         .where('parentId', isEqualTo: parentId)
         .where('isRead', isEqualTo: false)
         .snapshots()
-        .map((snapshot) => snapshot.docs.length);
+        .map((snapshot) {
+      print('🚨 [ALERTS BADGE] Query for childId=$id, parentId=$parentId');
+      print('🚨 [ALERTS BADGE] Found ${snapshot.docs.length} unread alerts');
+      if (snapshot.docs.isNotEmpty) {
+        print('🚨 [ALERTS BADGE] Alert IDs: ${snapshot.docs.map((d) => d.id).toList()}');
+        print('🚨 [ALERTS BADGE] First alert data: ${snapshot.docs.first.data()}');
+      }
+      return snapshot.docs.length;
+    });
   }
 
   /// Obtiene los padres vinculados del hijo

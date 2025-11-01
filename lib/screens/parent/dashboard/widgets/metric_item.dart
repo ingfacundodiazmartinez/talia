@@ -5,6 +5,7 @@ class MetricItem extends StatelessWidget {
   final String label;
   final String value;
   final bool isAlert;
+  final VoidCallback? onTap;
 
   const MetricItem({
     super.key,
@@ -12,34 +13,34 @@ class MetricItem extends StatelessWidget {
     required this.label,
     required this.value,
     this.isAlert = false,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Expanded(
-      child: Container(
-        margin: EdgeInsets.symmetric(horizontal: 4),
-        padding: EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.15),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: isAlert
-                ? Colors.red.withOpacity(0.3)
-                : Colors.white.withOpacity(0.2),
-            width: 1.5,
-          ),
-          boxShadow: isAlert
-              ? [
-                  BoxShadow(
-                    color: Colors.red.withOpacity(0.2),
-                    blurRadius: 8,
-                    offset: Offset(0, 2),
-                  ),
-                ]
-              : null,
+    final child = Container(
+      margin: EdgeInsets.symmetric(horizontal: 4),
+      padding: EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isAlert
+              ? Colors.red.withOpacity(0.3)
+              : Colors.white.withOpacity(0.2),
+          width: 1.5,
         ),
-        child: Column(
+        boxShadow: isAlert
+            ? [
+                BoxShadow(
+                  color: Colors.red.withOpacity(0.2),
+                  blurRadius: 8,
+                  offset: Offset(0, 2),
+                ),
+              ]
+            : null,
+      ),
+      child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
@@ -83,5 +84,17 @@ class MetricItem extends StatelessWidget {
         ),
       ),
     );
+
+    // Si hay onTap, hacer clickeable
+    if (onTap != null) {
+      return Expanded(
+        child: GestureDetector(
+          onTap: onTap,
+          child: child,
+        ),
+      );
+    }
+
+    return Expanded(child: child);
   }
 }

@@ -193,3 +193,280 @@ exports.incrementUnreadCount = onDocumentCreated(
  * Reemplaza la creación directa desde el cliente
  */
 
+
+// ═══════════════════════════════════════════════════════════════
+// ENVÍO DE MENSAJES - Cloud Functions
+// ═══════════════════════════════════════════════════════════════
+
+exports.sendChatMessage = onCall(
+    { region: "us-central1", consumeAppCheckToken: true },
+    async (request) => {
+      if (!request.auth) {
+        throw new HttpsError("unauthenticated", "Usuario no autenticado");
+      }
+
+      const { chatId, text, imageUrl, videoUrl, audioUrl, waveformData, replyTo } = request.data;
+      const senderId = request.auth.uid;
+
+      if (!chatId) {
+        throw new HttpsError("invalid-argument", "chatId es requerido");
+      }
+
+      try {
+        console.log(`📤 [sendChatMessage] Enviando mensaje de ${senderId} en chat ${chatId}`);
+
+        const db = getFirestore();
+        const chatRef = db.collection("chats").doc(chatId);
+        const chatDoc = await chatRef.get();
+
+        let participants = [];
+
+        if (!chatDoc.exists) {
+          // Crear chat si no existe - extraer participants del chatId (formato: userId1_userId2)
+          participants = chatId.split("_");
+
+          if (participants.length !== 2) {
+            throw new HttpsError("invalid-argument", "ChatId inválido - debe tener formato userId1_userId2");
+          }
+
+          // Verificar que el sender es uno de los participantes
+          if (!participants.includes(senderId)) {
+            throw new HttpsError("permission-denied", "No eres participante del chat");
+          }
+
+          console.log(`📝 [sendChatMessage] Creando chat ${chatId} con participants: [${participants.join(", ")}]`);
+
+          // Crear documento del chat
+          await chatRef.set({
+            participants: participants,
+            createdAt: FieldValue.serverTimestamp(),
+            lastMessageTime: FieldValue.serverTimestamp(),
+            lastMessage: "",
+            lastMessageSender: "",
+            deletedBy: [],
+            [`unreadCount_${participants[0]}`]: 0,
+            [`unreadCount_${participants[1]}`]: 0,
+          });
+        } else {
+          const chatData = chatDoc.data();
+          participants = chatData.participants || [];
+        }
+
+        // Verificar que el sender es participante
+        if (!participants.includes(senderId)) {
+          throw new HttpsError("permission-denied", "No eres participante del chat");
+        }
+
+        // Encontrar el receiver
+        const receiverId = participants.find((p) => p !== senderId);
+
+        // Determinar tipo de mensaje
+        let messageType = "text";
+        let contentUrl = null;
+
+        if (imageUrl) {
+          messageType = "image";
+          contentUrl = imageUrl;
+        } else if (videoUrl) {
+          messageType = "video";
+          contentUrl = videoUrl;
+        } else if (audioUrl) {
+          messageType = "audio";
+          contentUrl = audioUrl;
+        }
+
+        // Crear mensaje
+        const messageData = {
+          senderId,
+          receiverId,
+          text: text || "",
+          timestamp: FieldValue.serverTimestamp(),
+          type: messageType,
+          status: "sent",
+          deliveredTo: [],
+          readBy: [],
+          reactions: {},
+          edited: false,
+        };
+
+        if (contentUrl) {
+          if (messageType === "image") messageData.imageUrl = contentUrl;
+          if (messageType === "video") messageData.videoUrl = contentUrl;
+          if (messageType === "audio") {
+            messageData.audioUrl = contentUrl;
+            if (waveformData) messageData.waveformData = waveformData;
+          }
+        }
+
+        if (replyTo) {
+          messageData.replyTo = replyTo;
+        }
+
+        // Moderación si es necesario
+        if (text && text.trim()) {
+          try {
+            const moderationResult = await functions
+                .httpsCallable("checkMessageBeforeSending")
+                .call({
+                  chatId,
+                  senderId,
+                  receiverId,
+                  message: text,
+                });
+
+            if (!moderationResult.data.canSend) {
+              console.log(`🚫 [sendChatMessage] Mensaje bloqueado por moderación`);
+              return {
+                success: false,
+                blocked: true,
+                reason: "Message was blocked by moderation",
+              };
+            }
+          } catch (moderationError) {
+            console.error("❌ [sendChatMessage] Error en moderación:", moderationError);
+            // Continuar sin moderación si hay error
+          }
+        }
+
+        // Añadir mensaje
+        const messageRef = await chatRef.collection("messages").add(messageData);
+
+        // Actualizar lastMessage y timestamp del chat
+        const lastMessageData = {
+          lastMessage: text || (messageType === "image" ? "📷 Imagen" : messageType === "video" ? "🎥 Video" : messageType === "audio" ? "🎤 Audio" : ""),
+          lastMessageTime: FieldValue.serverTimestamp(),
+          lastMessageSender: senderId,
+          updatedAt: FieldValue.serverTimestamp(),
+        };
+
+        await chatRef.update(lastMessageData);
+
+        // Incrementar unreadCount para el receiver
+        const unreadField = `unreadCount_${receiverId}`;
+        await chatRef.update({
+          [unreadField]: FieldValue.increment(1),
+        });
+
+        console.log(`✅ [sendChatMessage] Mensaje enviado exitosamente: ${messageRef.id}`);
+
+        return {
+          success: true,
+          messageId: messageRef.id,
+        };
+      } catch (error) {
+        console.error("❌ [sendChatMessage] Error:", error);
+        throw new HttpsError("internal", error.message);
+      }
+    },
+);
+
+
+exports.sendGroupMessage = onCall(
+    { region: "us-central1", consumeAppCheckToken: true },
+    async (request) => {
+      if (!request.auth) {
+        throw new HttpsError("unauthenticated", "Usuario no autenticado");
+      }
+
+      const { groupId, text, imageUrl, videoUrl, audioUrl, waveformData, replyTo } = request.data;
+      const senderId = request.auth.uid;
+
+      if (!groupId) {
+        throw new HttpsError("invalid-argument", "groupId es requerido");
+      }
+
+      try {
+        console.log(`📤 [sendGroupMessage] Enviando mensaje de ${senderId} en grupo ${groupId}`);
+
+        const db = getFirestore();
+        const groupRef = db.collection("groups").doc(groupId);
+        const groupDoc = await groupRef.get();
+
+        if (!groupDoc.exists) {
+          throw new HttpsError("not-found", "Grupo no encontrado");
+        }
+
+        const groupData = groupDoc.data();
+        const members = groupData.members || [];
+
+        // Verificar que el sender es miembro
+        if (!members.includes(senderId)) {
+          throw new HttpsError("permission-denied", "No eres miembro del grupo");
+        }
+
+        // Determinar tipo de mensaje
+        let messageType = "text";
+        let contentUrl = null;
+
+        if (imageUrl) {
+          messageType = "image";
+          contentUrl = imageUrl;
+        } else if (videoUrl) {
+          messageType = "video";
+          contentUrl = videoUrl;
+        } else if (audioUrl) {
+          messageType = "audio";
+          contentUrl = audioUrl;
+        }
+
+        // Crear mensaje
+        const messageData = {
+          senderId,
+          text: text || "",
+          timestamp: FieldValue.serverTimestamp(),
+          type: messageType,
+          status: "sent",
+          deliveredTo: [],
+          readBy: [],
+          reactions: {},
+          edited: false,
+        };
+
+        if (contentUrl) {
+          if (messageType === "image") messageData.imageUrl = contentUrl;
+          if (messageType === "video") messageData.videoUrl = contentUrl;
+          if (messageType === "audio") {
+            messageData.audioUrl = contentUrl;
+            if (waveformData) messageData.waveformData = waveformData;
+          }
+        }
+
+        if (replyTo) {
+          messageData.replyTo = replyTo;
+        }
+
+        // Añadir mensaje al grupo
+        const messageRef = await groupRef.collection("messages").add(messageData);
+
+        // Actualizar lastMessage del grupo
+        const lastMessagePreview = text || (messageType === "image" ? "📷 Imagen" : messageType === "video" ? "🎥 Video" : messageType === "audio" ? "🎤 Audio" : "");
+
+        const groupUpdateData = {
+          lastMessage: lastMessagePreview,
+          lastMessageTime: FieldValue.serverTimestamp(),
+          lastMessageSender: senderId,
+          updatedAt: FieldValue.serverTimestamp(),
+        };
+
+        // Incrementar unreadCount para cada miembro excepto el sender
+        members.forEach((memberId) => {
+          if (memberId !== senderId) {
+            groupUpdateData[`unreadCount_${memberId}`] = FieldValue.increment(1);
+          }
+        });
+
+        await groupRef.update(groupUpdateData);
+
+        console.log(`✅ [sendGroupMessage] Mensaje enviado exitosamente: ${messageRef.id}`);
+
+        return {
+          success: true,
+          messageId: messageRef.id,
+        };
+      } catch (error) {
+        console.error("❌ [sendGroupMessage] Error:", error);
+        throw new HttpsError("internal", error.message);
+      }
+    },
+);
+

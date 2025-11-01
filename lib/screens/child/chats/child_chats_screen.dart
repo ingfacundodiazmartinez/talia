@@ -16,6 +16,7 @@ import '../../../services/typing_indicator_service.dart';
 import '../../../services/message_status_helper.dart';
 import '../../../services/group_chat_service.dart';
 import '../../../models/chat_message.dart';
+import '../../../widgets/message_status_indicator.dart';
 import '../../chat_detail_screen.dart';
 import '../../parent/chats/widgets/group_chat_list_item.dart';
 import '../../common/chats/chat_header_widget.dart';
@@ -430,19 +431,67 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
             final isOnline = userData['isOnline'] ?? false;
             final photoURL = userData['photoURL'] as String?;
 
-            return _buildChatItem(
-              chatId: chatId,
-              userId: otherUserId,
-              name: realName,
-              lastMessage: lastMessage,
-              time: timeString,
-              unreadCount: unreadCount is int ? unreadCount : 0,
-              isOnline: isOnline,
-              photoURL: photoURL,
-              isParent: isParent,
-              isEmpty: isChatCleared,
-              isBlocked: false,
-              colorScheme: colorScheme,
+            // StreamBuilder para obtener el estado del último mensaje
+            return StreamBuilder<QuerySnapshot>(
+              stream: _firestore
+                  .collection('chats')
+                  .doc(chatId)
+                  .collection('messages')
+                  .orderBy('timestamp', descending: true)
+                  .limit(1)
+                  .snapshots(),
+              builder: (context, messageSnapshot) {
+                String? lastMessageSenderId;
+                MessageStatus? lastMessageStatus;
+                ModerationStatus? lastMessageModerationStatus;
+
+                if (messageSnapshot.hasData && messageSnapshot.data!.docs.isNotEmpty) {
+                  final lastMessageDoc = messageSnapshot.data!.docs.first;
+                  final lastMessageData = lastMessageDoc.data() as Map<String, dynamic>;
+
+                  final senderId = lastMessageData['senderId'] as String? ?? '';
+                  lastMessageSenderId = senderId;
+
+                  lastMessageStatus = MessageStatusHelper.calculateStatus(
+                    data: lastMessageData,
+                    senderId: senderId,
+                    hasServerTimestamp: lastMessageData['timestamp'] != null,
+                  );
+
+                  final modStatusString = lastMessageData['moderationStatus'] as String?;
+                  if (modStatusString != null) {
+                    switch (modStatusString) {
+                      case 'approved':
+                        lastMessageModerationStatus = ModerationStatus.approved;
+                        break;
+                      case 'blocked':
+                        lastMessageModerationStatus = ModerationStatus.blocked;
+                        break;
+                      case 'pending':
+                        lastMessageModerationStatus = ModerationStatus.pending;
+                        break;
+                    }
+                  }
+                }
+
+                return _buildChatItem(
+                  chatId: chatId,
+                  userId: otherUserId,
+                  name: realName,
+                  lastMessage: lastMessage,
+                  time: timeString,
+                  unreadCount: unreadCount is int ? unreadCount : 0,
+                  isOnline: isOnline,
+                  photoURL: photoURL,
+                  isParent: isParent,
+                  isEmpty: isChatCleared,
+                  isBlocked: false,
+                  colorScheme: colorScheme,
+                  lastMessageSenderId: isChatCleared ? null : lastMessageSenderId,
+                  lastMessageStatus: isChatCleared ? null : lastMessageStatus,
+                  lastMessageModerationStatus: isChatCleared ? null : lastMessageModerationStatus,
+                );
+              },
             );
           },
         );
@@ -528,6 +577,9 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
     bool isRevoked = false,
     bool isBlocked = false,
     required ColorScheme colorScheme,
+    String? lastMessageSenderId,
+    MessageStatus? lastMessageStatus,
+    ModerationStatus? lastMessageModerationStatus,
   }) {
     final currentUserId = FirebaseAuth.instance.currentUser?.uid ?? '';
 
@@ -791,6 +843,18 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
 
                               return Row(
                                 children: [
+                                  // Status indicator (only for own messages)
+                                  if (lastMessageSenderId == currentUserId &&
+                                      lastMessageStatus != null &&
+                                      !isBlocked &&
+                                      !isRevoked) ...[
+                                    MessageStatusIndicator(
+                                      status: lastMessageStatus!,
+                                      moderationStatus: lastMessageModerationStatus,
+                                      size: 12,
+                                    ),
+                                    const SizedBox(width: 4),
+                                  ],
                                   Expanded(
                                     child: Text(
                                       isBlocked

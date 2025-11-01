@@ -84,12 +84,16 @@ const transformations = require("./transformations");
 // Stickers
 const stickerFunctions = require("./sticker-functions");
 
+// Stories
+const stories = require("./stories");
+
 // ═══════════════════════════════════════════════════════════════
 // RE-EXPORTS
 // ═══════════════════════════════════════════════════════════════
 
 // Notificaciones
 exports.sendNotificationOnCreate = notifications.sendNotificationOnCreate;
+exports.sendInstantPushNotification = notifications.sendInstantPushNotification;
 
 // Videollamadas
 exports.generateAgoraToken = videoCalls.generateAgoraToken;
@@ -121,6 +125,8 @@ exports.moderateMessage = moderation.moderateMessage;
 
 // Chats
 exports.incrementUnreadCount = chats.incrementUnreadCount;
+exports.sendChatMessage = chats.sendChatMessage;
+exports.sendGroupMessage = chats.sendGroupMessage;
 
 // Emergencias
 exports.createEmergency = emergency.createEmergency;
@@ -150,5 +156,8 @@ exports.transformCharacter = transformations.transformCharacter;
 exports.syncStickersScheduled = stickerFunctions.syncStickersScheduled;
 exports.syncStickersManual = stickerFunctions.syncStickersManual;
 exports.cleanupOldStickers = stickerFunctions.cleanupOldStickers;
+
+// Stories
+exports.onStoryApprovalRequestCreated = stories.onStoryApprovalRequestCreated;
 
 console.log("✅ Todas las funciones exportadas correctamente");

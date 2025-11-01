@@ -74,7 +74,11 @@ class VoIPService {
         final Map<dynamic, dynamic> data = call.arguments as Map<dynamic, dynamic>;
         final String callId = data['callId'] as String;
         print('📵 [VoIP] Llamada terminada desde CallKit nativo: $callId');
-        await VideoCallService().endCall(callId);
+
+        // NO llamar a endCall() - solo cerrar CallKit localmente
+        // Si la llamada fue cancelada por el caller, el listener ya cerró el CallKit
+        // Si el receptor presiona "rechazar", debe usar rejectCall() en lugar de endCall()
+        print('ℹ️ [VoIP] CallKit cerrado localmente, sin modificar Firestore');
         break;
 
       default:
@@ -288,8 +292,11 @@ class VoIPService {
       final extra = data['extra'] as Map<String, dynamic>;
       final callId = extra['callId'] as String;
 
-      await VideoCallService().endCall(callId);
-      print('✅ [CallKit] Llamada terminada en Firestore');
+      // NO llamar a endCall() - solo cerrar CallKit localmente
+      // El listener en incoming_call_dialog.dart ya maneja el cierre cuando detecta
+      // que el status cambió a 'cancelled'
+      print('ℹ️ [CallKit] CallKit cerrado localmente para: $callId');
+      print('ℹ️ [CallKit] Si la llamada fue cancelada, el listener ya lo detectó');
     } catch (e) {
       print('❌ [CallKit] Error manejando fin de llamada: $e');
     }

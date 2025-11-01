@@ -146,6 +146,7 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
         stream: _firestore
             .collection('notifications')
             .where('userId', isEqualTo: currentUserId)
+            // ✅ Ahora mostramos TODAS las notificaciones (leídas y no leídas)
             .orderBy('timestamp', descending: true)
             .limit(50) // Cargar las primeras 50 notificaciones
             .snapshots(),
@@ -184,27 +185,31 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
           })];
 
           print('🔍 Total documentos: ${allDocs.length}, Buscando notificaciones para childId: ${widget.childId}');
+          print('📋 IDs de documentos: ${allDocs.map((d) => d.id.substring(0, 8)).join(", ")}');
 
           // Filtrar solo las notificaciones relacionadas a este hijo
           // Y EXCLUIR notificaciones de mensajes de chat
-          // Ya vienen ordenadas por timestamp desde Firestore
-          final childNotifications = allDocs.where((doc) {
+          final allChildNotifications = allDocs.where((doc) {
             final data = doc.data() as Map<String, dynamic>;
             final notifData = data['data'] as Map<String, dynamic>?;
             final senderId = data['senderId'] as String?;
             final type = data['type'] as String?;
+            final read = data['read'] as bool?;
+
+            // Debug: mostrar TODAS las notificaciones primero
+            print('  📧 Notificación ${doc.id.substring(0, 8)}: '
+                'type=$type, '
+                'senderId=$senderId, '
+                'read=$read, '
+                'data.childId=${notifData?['childId']}, '
+                'data.senderId=${notifData?['senderId']}, '
+                'buscando=${widget.childId}');
 
             // Filtrar notificaciones de chat
             if (type == 'chat_message') {
+              print('    ⏭️  Saltando: es chat_message');
               return false; // Skip chat notifications
             }
-
-            // Debug: mostrar datos de cada notificación
-            print('  📧 Notificación ${doc.id.substring(0, 8)}: '
-                'senderId=$senderId, '
-                'data.childId=${notifData?['childId']}, '
-                'data.senderId=${notifData?['senderId']}, '
-                'type=$type');
 
             // Verificar si la notificación está relacionada con este hijo
             final isRelated = notifData?['childId'] == widget.childId ||
@@ -212,15 +217,41 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
                    senderId == widget.childId;
 
             if (isRelated) {
-              print('    ✅ Relacionada con ${widget.childName}');
+              print('    ✅ MATCH! Relacionada con ${widget.childName}');
             }
 
             return isRelated;
           }).toList();
 
-          print('🎯 Notificaciones filtradas para ${widget.childName}: ${childNotifications.length}');
+          // ✅ Separar notificaciones leídas y no leídas
+          final unreadNotifications = allChildNotifications.where((doc) {
+            final data = doc.data() as Map<String, dynamic>;
+            return !(data['read'] as bool? ?? false);
+          }).toList();
 
-          // Ya están ordenadas por timestamp desde Firestore, no necesitamos ordenar en Dart
+          final readNotifications = allChildNotifications.where((doc) {
+            final data = doc.data() as Map<String, dynamic>;
+            return data['read'] as bool? ?? false;
+          }).toList();
+
+          // ✅ Combinar: NO LEÍDAS primero, luego LEÍDAS
+          final childNotifications = [...unreadNotifications, ...readNotifications];
+
+          print('🎯 Notificaciones filtradas para ${widget.childName}: ${childNotifications.length} (${unreadNotifications.length} no leídas, ${readNotifications.length} leídas)');
+
+          // ✅ Actualizar _hasMoreData basado en el número de documentos recibidos
+          // Si recibimos menos de 50 documentos (el límite), no hay más datos
+          if (allDocs.length < 50) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted && _hasMoreData) {
+                setState(() {
+                  _hasMoreData = false;
+                });
+              }
+            });
+          }
+
+          // Ya vienen ordenadas por timestamp desde Firestore
 
           if (childNotifications.isEmpty) {
             return Center(
@@ -272,6 +303,39 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
                 );
               }
 
+              // ✅ Agregar separador entre notificaciones no leídas y leídas
+              if (index == unreadNotifications.length && unreadNotifications.isNotEmpty && readNotifications.isNotEmpty) {
+                return Column(
+                  children: [
+                    Padding(
+                      padding: EdgeInsets.symmetric(vertical: 16),
+                      child: Row(
+                        children: [
+                          Expanded(child: Divider(thickness: 1)),
+                          Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 12),
+                            child: Text(
+                              'LEÍDAS',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
+                                letterSpacing: 1.2,
+                              ),
+                            ),
+                          ),
+                          Expanded(child: Divider(thickness: 1)),
+                        ],
+                      ),
+                    ),
+                    _buildNotificationCard(
+                      childNotifications[index].id,
+                      childNotifications[index].data() as Map<String, dynamic>,
+                    ),
+                  ],
+                );
+              }
+
               final notification = childNotifications[index];
               final data = notification.data() as Map<String, dynamic>;
               return _buildNotificationCard(notification.id, data);
@@ -296,21 +360,23 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
     final colorScheme = Theme.of(context).colorScheme;
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
-    return Card(
-      margin: EdgeInsets.only(bottom: 12),
-      elevation: isRead ? 1 : 3,
-      color: isDarkMode
-          ? (isRead ? colorScheme.surfaceContainerHighest : colorScheme.surfaceContainer)
-          : (isRead ? colorScheme.surface : colorScheme.surfaceContainerHighest),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(
-          color: isRead
-              ? (isDarkMode ? colorScheme.outline.withValues(alpha: 0.3) : Colors.grey.shade300)
-              : notifStyle.color.withValues(alpha: isDarkMode ? 0.5 : 0.3),
-          width: isRead ? 1 : 2,
+    return Opacity(
+      opacity: isRead ? 0.6 : 1.0, // ✅ Notificaciones leídas con opacidad reducida
+      child: Card(
+        margin: EdgeInsets.only(bottom: 12),
+        elevation: isRead ? 0 : 3,
+        color: isDarkMode
+            ? (isRead ? colorScheme.surfaceContainerHighest.withValues(alpha: 0.5) : colorScheme.surfaceContainer)
+            : (isRead ? colorScheme.surface.withValues(alpha: 0.7) : colorScheme.surfaceContainerHighest),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(
+            color: isRead
+                ? (isDarkMode ? colorScheme.outline.withValues(alpha: 0.2) : Colors.grey.shade200)
+                : notifStyle.color.withValues(alpha: isDarkMode ? 0.5 : 0.3),
+            width: isRead ? 1 : 2,
+          ),
         ),
-      ),
       child: InkWell(
         onTap: () => _handleNotificationTap(notificationId, type, notifData, isRead),
         borderRadius: BorderRadius.circular(12),
@@ -416,6 +482,7 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
           ),
         ),
       ),
+      ), // Cierre del Opacity
     );
   }
 

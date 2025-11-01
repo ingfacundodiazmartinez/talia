@@ -16,7 +16,6 @@ import 'widgets/activity_stats_widget.dart';
 import 'widgets/profile_option_item.dart';
 import 'widgets/theme_setting_widget.dart';
 import 'widgets/image_picker_dialog.dart';
-import 'widgets/permanent_stories_gallery.dart';
 
 class ChildProfileScreen extends StatefulWidget {
   const ChildProfileScreen({super.key});
@@ -76,14 +75,6 @@ class _ChildProfileScreenState extends State<ChildProfileScreen> {
                 displayName: _auth.currentUser?.displayName ?? 'Usuario',
                 email: _auth.currentUser?.email ?? '',
                 onEditPhoto: _showImageOptions,
-              ),
-
-              const SizedBox(height: 24),
-
-              // Galería de historias permanentes
-              PermanentStoriesGallery(
-                userId: user.uid,
-                isOwnProfile: true,
               ),
 
               const SizedBox(height: 24),

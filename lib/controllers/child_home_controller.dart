@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/location_service.dart';
 import '../services/video_call_service.dart';
+import '../services/callkit_service.dart';
 import '../notification_service.dart';
 import '../services/user_role_service.dart';
 import '../widgets/incoming_call_dialog.dart';
@@ -141,6 +142,14 @@ class ChildHomeController {
             print('   - Tipo: $callType');
             print('   - Canal: $channelName');
 
+            // Verificar el estado de la llamada antes de mostrar diálogo
+            // Si ya fue aceptada, no mostrar el diálogo (la navegación a videollamada se maneja por el listener de CallKit)
+            final status = callData['status'] ?? 'ringing';
+            if (status != 'ringing') {
+              print('⏭️ Llamada ya no está en estado ringing (status: $status) - omitiendo IncomingCallDialog');
+              return;
+            }
+
             // Obtener foto de perfil del caller
             _firestore.collection('users').doc(callerId).get().then((callerDoc) {
               final callerData = callerDoc.data() as Map<String, dynamic>?;
@@ -155,6 +164,16 @@ class ChildHomeController {
                 channelName: channelName,
                 callType: callType,
               );
+            });
+          } else if (change.type == DocumentChangeType.removed ||
+                     change.type == DocumentChangeType.modified) {
+            // Llamada cancelada/eliminada/modificada - cerrar CallKit si está abierto
+            final callId = change.doc.id;
+            print('📵 [ChildHomeController] Llamada $callId fue ${change.type == DocumentChangeType.removed ? "eliminada" : "modificada"} - cerrando CallKit');
+
+            // Cerrar CallKit para esta llamada
+            CallKitService().endCall(callId).catchError((error) {
+              print('⚠️ [ChildHomeController] Error cerrando CallKit: $error');
             });
           }
         }

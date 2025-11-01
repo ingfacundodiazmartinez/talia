@@ -43,7 +43,7 @@ try {
   apnProvider = new apn.Provider({
     cert: pemData,
     key: pemData,
-    production: true, // Modo producción para App Store
+    production: false, // TestFlight/Debug mode - cambia a true para App Store release
   });
   console.log("✅ APNs VoIP provider inicializado");
 } catch (error) {

@@ -143,15 +143,11 @@ class NotificationService {
 
     try {
       // 1. Configurar manejador de mensajes en segundo plano
-      // SOLO en iOS - en Android el servicio nativo MyFirebaseMessagingService lo maneja
-      if (Platform.isIOS) {
-        FirebaseMessaging.onBackgroundMessage(
-          _firebaseMessagingBackgroundHandler,
-        );
-        print('✅ Background handler de Flutter registrado (iOS)');
-      } else {
-        print('✅ Background handler nativo se usará en Android (MyFirebaseMessagingService)');
-      }
+      // IMPORTANTE: Registrar en iOS Y Android para mostrar CallKit
+      FirebaseMessaging.onBackgroundMessage(
+        _firebaseMessagingBackgroundHandler,
+      );
+      print('✅ Background handler de Flutter registrado');
 
       // 2. Solicitar permisos
       await _requestPermissions();
@@ -579,6 +575,8 @@ class NotificationService {
     // Si es una videollamada o llamada de audio, emitir evento para mostrar el diálogo
     if (data['type'] == 'video_call' || data['type'] == 'audio_call') {
       print('📞 Notificación de ${data['type'] == 'video_call' ? 'videollamada' : 'llamada de audio'} tocada, mostrando diálogo');
+      // Marcar como originado desde tap de notificación (no CallKit acceptance)
+      data['fromNotificationTap'] = true;
       _incomingCallController.add(data);
     } else if (data['type'] == 'chat_message' || data['type'] == 'group_message') {
       print('💬 Notificación de ${data['type'] == 'group_message' ? 'mensaje grupal' : 'chat'} tocada, navegando');
