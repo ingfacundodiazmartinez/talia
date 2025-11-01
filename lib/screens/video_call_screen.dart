@@ -8,6 +8,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../services/video_call_service.dart';
 import '../services/voip_service.dart';
 import '../services/callkit_service.dart';
+import '../utils/release_logger.dart';
 
 class VideoCallScreen extends StatefulWidget {
   final String callId;
@@ -50,14 +51,19 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   String? _channelName;
   String? _token;
   int? _uid;
+  String? _realCallId; // ✅ El callId real de Firestore (puede diferir del widget.callId temporal)
 
   @override
   void initState() {
     super.initState();
+
+    ReleaseLogger.log('🎬 VideoCallScreen initState - callId: ${widget.callId}, isCaller: ${widget.isCaller}, isVideo: ${widget.isVideo}', tag: 'VideoCall');
+
     // Inicializar datos locales con los proporcionados
     _channelName = widget.channelName;
     _token = widget.token;
     _uid = widget.uid;
+    _realCallId = widget.callId; // ✅ Inicialmente usar el callId del widget
 
     // Si es llamada de audio, deshabilitar cámara automáticamente
     if (!widget.isVideo) {
@@ -65,30 +71,34 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     }
 
     _initializeCall();
-    _listenToCallStatus();
+    // ✅ NO llamar _listenToCallStatus() aquí - se llamará después de obtener el real callId
   }
 
   /// Inicializar la llamada con lógica optimista
   Future<void> _initializeCall() async {
     try {
-      // Paso 0: Solo solicitar permisos si somos el CALLER
+      ReleaseLogger.log('▶️ Iniciando _initializeCall - isCaller: ${widget.isCaller}, hasToken: ${_token != null}, hasChannelName: ${_channelName != null}', tag: 'VideoCall');
+
+      // Paso 0: Solo solicitar permisos si somos el CALLER y estamos en Android
+      // En iOS, Agora pedirá los permisos automáticamente al acceder a la cámara/micrófono
       // El receiver (que viene de background/CallKit) ya tiene permisos o los pedirá al aceptar
-      if (widget.isCaller) {
+      if (widget.isCaller && Platform.isAndroid) {
+        ReleaseLogger.log('📱 Solicitando permisos de cámara/micrófono...', tag: 'VideoCall');
         await _requestPermissions();
       } else {
-        print('📱 [Receiver] Saltando verificación de permisos (viene de CallKit/background)');
+        print('📱 [iOS/Receiver] Saltando verificación manual de permisos');
       }
 
       // Paso 1: Si es caller y no hay token/uid, obtener credenciales
       if (widget.isCaller && (_token == null || _uid == null)) {
-        print('📱 [Optimistic] Iniciando llamada en background...');
+        ReleaseLogger.log('📱 [Optimistic] Iniciando llamada en background...', tag: 'VideoCall');
         setState(() {
           _connectionStatus = 'Conectando...';
         });
 
         // Si ya tenemos channelName (ej: emergencia), solo generar token
         if (_channelName != null) {
-          print('📱 [Emergency] Channel ya existe: $_channelName, generando token...');
+          ReleaseLogger.log('📱 [Emergency] Channel ya existe: $_channelName, generando token...', tag: 'VideoCall');
 
           final functions = FirebaseFunctions.instance;
           final result = await functions.httpsCallable('generateAgoraToken').call({
@@ -102,29 +112,44 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
             _connectionStatus = 'Llamando...';
           });
 
-          print('✅ [Emergency] Token generado: uid=$_uid');
+          ReleaseLogger.success('[Emergency] Token generado: uid=$_uid', tag: 'VideoCall');
+
+          // ✅ Para emergencias, el callId ya está establecido, iniciar listener
+          _listenToCallStatus();
         } else {
           // Caso normal: iniciar llamada completa
+          ReleaseLogger.log('📞 Llamando a initiateCall...', tag: 'VideoCall');
           final result = await _videoCallService.initiateCall(
             receiverId: widget.receiverId,
             receiverName: widget.remoteName,
             isVideo: widget.isVideo,
           );
 
+          ReleaseLogger.log('📞 initiateCall result: ${result.toString()}', tag: 'VideoCall');
+
           if (result['success'] != true) {
+            ReleaseLogger.error('❌ initiateCall falló: ${result['error']}', tag: 'VideoCall');
             throw Exception(result['error'] ?? 'Error iniciando llamada');
           }
 
           // Actualizar datos de llamada
           setState(() {
+            _realCallId = result['callId']; // ✅ Actualizar con el callId real de Firestore
             _channelName = result['channelName'];
             _token = result['token'];
             _uid = result['uid'];
             _connectionStatus = 'Llamando...';
           });
 
-          print('✅ [Optimistic] Datos de llamada obtenidos: channel=$_channelName, uid=$_uid');
+          ReleaseLogger.success('[Optimistic] Datos de llamada obtenidos: callId=$_realCallId, channel=$_channelName, uid=$_uid', tag: 'VideoCall');
+
+          // ✅ Ahora que tenemos el callId real, iniciar el listener
+          _listenToCallStatus();
         }
+      } else {
+        // Si NO somos caller, el callId ya es correcto, iniciar listener
+        ReleaseLogger.log('📱 [Receiver] Usando callId del constructor: $_realCallId', tag: 'VideoCall');
+        _listenToCallStatus();
       }
 
       // Paso 2: Inicializar Agora
@@ -146,11 +171,23 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
               }
             });
 
-            // ✅ Iniciar preview DESPUÉS de unirse al canal (crítico para Android)
+            // ✅ Iniciar preview y forzar rebuild del widget de video local
             if (widget.isVideo) {
               try {
                 await _videoCallService.engine?.startPreview();
                 print('✅ Preview iniciado después de joinChannel');
+
+                // Pequeño delay para asegurar que la cámara esté capturando
+                await Future.delayed(const Duration(milliseconds: 100));
+
+                // Forzar setState para reconstruir el widget de video local
+                if (mounted) {
+                  setState(() {
+                    // Este setState fuerza al AgoraVideoView a re-montarse
+                    // después de que el preview ya está corriendo
+                  });
+                  print('✅ Widget de video local reconstruido');
+                }
               } catch (e) {
                 print('⚠️ Error iniciando preview: $e');
               }
@@ -199,8 +236,10 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       } else {
         throw Exception('Faltan datos de llamada (channel, token, o uid)');
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
       print('❌ Error inicializando llamada: $e');
+      ReleaseLogger.error('❌ Error en _initializeCall', error: e, stackTrace: stackTrace, tag: 'VideoCall');
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -215,8 +254,14 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
   /// Escuchar cambios en el estado de la llamada
   void _listenToCallStatus() {
-    _videoCallService.watchCallStatus(widget.callId).listen((snapshot) {
-      print('🔍 [VideoCallScreen] Snapshot recibido para callId: ${widget.callId}');
+    if (_realCallId == null) {
+      print('⚠️ [VideoCallScreen] No hay callId para escuchar');
+      return;
+    }
+
+    print('🔍 [VideoCallScreen] Iniciando listener para callId: $_realCallId');
+    _videoCallService.watchCallStatus(_realCallId!).listen((snapshot) {
+      print('🔍 [VideoCallScreen] Snapshot recibido para callId: $_realCallId');
       print('🔍 [VideoCallScreen] Snapshot existe: ${snapshot.exists}');
 
       // Si el documento fue eliminado, significa que la llamada fue cancelada
@@ -495,8 +540,8 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
       // Usar VideoCallService para enviar la invitación
       final result = await _videoCallService.inviteToOngoingCall(
-        callId: widget.callId,
-        channelName: _channelName ?? widget.callId, // Usar state local o fallback a callId
+        callId: _realCallId ?? widget.callId, // Usar callId real o fallback
+        channelName: _channelName ?? _realCallId ?? widget.callId, // Usar state local o fallback
         invitedUserId: userId,
         invitedUserName: userName,
       );
@@ -531,15 +576,16 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
     try {
       // Cerrar CallKit UI en ambas plataformas
+      final callIdToEnd = _realCallId ?? widget.callId;
       if (Platform.isIOS) {
         // En iOS usamos VoIPService para notificar a CallKit nativo
-        await VoIPService().notifyCallEnded(widget.callId);
+        await VoIPService().notifyCallEnded(callIdToEnd);
       } else if (Platform.isAndroid) {
         // En Android usamos flutter_callkit_incoming
-        await CallKitService().endCall(widget.callId);
+        await CallKitService().endCall(callIdToEnd);
       }
 
-      await _videoCallService.endCall(widget.callId);
+      await _videoCallService.endCall(callIdToEnd);
       await _videoCallService.leaveChannel();
 
       if (mounted) {

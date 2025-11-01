@@ -96,10 +96,6 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
               _buildSectionTitle('Configuración'),
               SizedBox(height: 12),
 
-              // Premium Badge - Destacado
-              _buildPremiumCard(),
-              SizedBox(height: 8),
-
               _buildProfileOption(
                 icon: Icons.edit,
                 title: 'Editar Perfil',

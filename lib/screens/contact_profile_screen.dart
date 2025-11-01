@@ -9,15 +9,18 @@ import '../models/child.dart';
 import 'video_call_screen.dart';
 import 'audio_call_screen.dart';
 import '../widgets/profile_photo_viewer.dart';
+import 'child/profile/widgets/media_gallery_widget.dart';
 
 class ContactProfileScreen extends StatefulWidget {
   final String contactId;
   final String contactName;
+  final String chatId;
 
   const ContactProfileScreen({
     super.key,
     required this.contactId,
     required this.contactName,
+    required this.chatId,
   });
 
   @override
@@ -160,11 +163,9 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
   Future<void> _startVideoCall() async {
     if (!mounted) return;
 
-    // Cerrar el perfil
-    Navigator.pop(context);
-
     // LÓGICA OPTIMISTA: Abrir pantalla inmediatamente
-    Navigator.of(context).push(
+    // El perfil se cierra automáticamente cuando se retorna de la videollamada
+    await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (context) => VideoCallScreen(
           callId: DateTime.now().millisecondsSinceEpoch.toString(),
@@ -176,6 +177,11 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
         ),
       ),
     );
+
+    // Cerrar el perfil después de que termine la videollamada
+    if (mounted) {
+      Navigator.pop(context);
+    }
   }
 
   Future<void> _showEditNameDialog(String currentName) async {
@@ -282,13 +288,11 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
   Future<void> _startAudioCall() async {
     if (!mounted) return;
 
-    // Cerrar el perfil
-    Navigator.pop(context);
-
     // LÓGICA OPTIMISTA: Abrir pantalla de AUDIO inmediatamente
+    // El perfil se cierra automáticamente cuando se retorna de la llamada
     final callId = DateTime.now().millisecondsSinceEpoch.toString();
 
-    Navigator.of(context).push(
+    await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (context) => AudioCallScreen(
           callId: callId,
@@ -302,6 +306,11 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
         ),
       ),
     );
+
+    // Cerrar el perfil después de que termine la llamada
+    if (mounted) {
+      Navigator.pop(context);
+    }
   }
 
   @override
@@ -491,7 +500,7 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
                           onPressed: _startVideoCall,
                           style: ElevatedButton.styleFrom(
                             backgroundColor: colorScheme.primary,
-                            foregroundColor: colorScheme.onPrimary,
+                            foregroundColor: Colors.white,
                             padding: EdgeInsets.symmetric(vertical: 16),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
@@ -650,6 +659,13 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
                     ),
                   ),
                 ],
+
+                // Galería de medios compartidos
+                SizedBox(height: 20),
+                MediaGalleryWidget(
+                  chatId: widget.chatId,
+                  isOwnProfile: false,
+                ),
 
                 SizedBox(height: 40),
               ],

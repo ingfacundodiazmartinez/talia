@@ -1,5 +1,7 @@
 package com.talia.chat
 
+import android.content.Context
+import android.os.Bundle
 import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -8,6 +10,25 @@ import io.flutter.plugin.common.EventChannel
 
 class MainActivity : FlutterActivity() {
     private val arFiltersPlugin = ArFiltersPlugin()
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        // Cambiar el tema ANTES de llamar a super.onCreate()
+        // Esto determina qué splash se muestra (con imagen o sin imagen)
+        val prefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+        val hasSeenSplash = prefs.getBoolean("flutter.has_seen_splash", false)
+
+        if (hasSeenSplash) {
+            // Ya vio el splash - usar tema sin splash
+            setTheme(R.style.LaunchThemeNoSplash)
+            Log.d("MainActivity", "🚫 Splash deshabilitado - no es primera vez")
+        } else {
+            // Primera vez - usar tema con splash
+            setTheme(R.style.LaunchTheme)
+            Log.d("MainActivity", "🎬 Splash habilitado - primera vez")
+        }
+
+        super.onCreate(savedInstanceState)
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
