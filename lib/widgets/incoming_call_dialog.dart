@@ -504,17 +504,8 @@ class _IncomingCallDialogState extends State<IncomingCallDialog> with SingleTick
       // Detener sonido inmediatamente para mejor UX
       await _audioPlayer.stop();
 
-      // ✅ IMPORTANTE: Cancelar CallKit notification (si existe) para evitar duplicación
-      print('🔕 Cancelando CallKit notification...');
-      try {
-        await CallKitService().endCall(widget.callId);
-        print('✅ CallKit notification cancelada exitosamente');
-      } catch (callKitError) {
-        print('⚠️ Error cancelando CallKit (puede que no haya estado activo): $callKitError');
-        // Continuar de todos modos - no es crítico
-      }
-
       // Aceptar la llamada en Firestore
+      // NOTA: NO cerramos CallKit aquí - debe permanecer activo durante toda la llamada
       print('📝 Actualizando estado de llamada en Firestore...');
       await VideoCallService().acceptCall(widget.callId);
       print('✅ Llamada aceptada en Firestore');

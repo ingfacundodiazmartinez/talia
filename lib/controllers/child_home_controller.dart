@@ -165,16 +165,31 @@ class ChildHomeController {
                 callType: callType,
               );
             });
-          } else if (change.type == DocumentChangeType.removed ||
-                     change.type == DocumentChangeType.modified) {
-            // Llamada cancelada/eliminada/modificada - cerrar CallKit si está abierto
+          } else if (change.type == DocumentChangeType.removed) {
+            // Llamada eliminada - cerrar CallKit si está abierto
             final callId = change.doc.id;
-            print('📵 [ChildHomeController] Llamada $callId fue ${change.type == DocumentChangeType.removed ? "eliminada" : "modificada"} - cerrando CallKit');
+            print('📵 [ChildHomeController] Llamada $callId fue eliminada - cerrando CallKit');
 
             // Cerrar CallKit para esta llamada
             CallKitService().endCall(callId).catchError((error) {
               print('⚠️ [ChildHomeController] Error cerrando CallKit: $error');
             });
+          } else if (change.type == DocumentChangeType.modified) {
+            // Verificar si la llamada fue cancelada o terminada explícitamente
+            final callData = change.doc.data() as Map<String, dynamic>?;
+            final status = callData?['status'] ?? '';
+            final callId = change.doc.id;
+
+            if (status == 'cancelled' || status == 'ended' || status == 'rejected') {
+              print('📵 [ChildHomeController] Llamada $callId cambió a status: $status - cerrando CallKit');
+
+              // Cerrar CallKit para esta llamada
+              CallKitService().endCall(callId).catchError((error) {
+                print('⚠️ [ChildHomeController] Error cerrando CallKit: $error');
+              });
+            } else {
+              print('ℹ️ [ChildHomeController] Llamada $callId modificada (status: $status) - CallKit permanece abierto');
+            }
           }
         }
       },

@@ -637,11 +637,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
           await VideoCallService().acceptCall(callId);
           print('✅ Llamada aceptada en Firestore');
 
-          // 2. Finalizar CallKit notification
-          print('🔕 Finalizando CallKit notification...');
-          await CallKitService().endCall(callId);
-
-          // 3. Generar token de Agora
+          // 2. Generar token de Agora
           print('🎫 Generando token de Agora...');
           final functions = FirebaseFunctions.instance;
           final callable = functions.httpsCallable('generateAgoraToken');
@@ -656,7 +652,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
 
           print('✅ Token generado - UID: $uid');
 
-          // 4. Cerrar indicador de carga y navegar a videollamada
+          // 3. Cerrar indicador de carga y navegar a videollamada
           if (context.mounted) {
             Navigator.of(context).pop(); // Cerrar loading indicator
 
