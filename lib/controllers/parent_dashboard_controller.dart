@@ -139,24 +139,27 @@ class ParentDashboardController {
                   'fromFirestore': true, // Marcar como originado desde Firestore
                 });
               } else if (change.type == DocumentChangeType.removed) {
-                // Llamada eliminada - cerrar CallKit si está abierto
-                final callId = change.doc.id;
-                print('📵 [ParentDashboardController] Llamada $callId fue eliminada - cerrando CallKit');
+                // IMPORTANTE: DocumentChangeType.removed NO significa que el documento fue eliminado
+                // Puede significar que ya no coincide con el filtro del query (status != 'ringing')
+                // Por ejemplo, cuando se acepta una llamada, cambia de 'ringing' a 'accepted'
+                // y sale del query que filtra por status='ringing'
 
-                // Cerrar CallKit para esta llamada
-                CallKitService().endCall(callId).catchError((error) {
-                  print('⚠️ [ParentDashboardController] Error cerrando CallKit: $error');
-                });
+                final callId = change.doc.id;
+                print('ℹ️ [ParentDashboardController] Llamada $callId removida del query (cambió status o fue eliminada)');
+
+                // NO cerramos CallKit aquí porque puede ser simplemente un cambio de status
+                // CallKit se cerrará cuando el usuario termine la llamada desde VideoCallScreen
+                print('ℹ️ [ParentDashboardController] CallKit permanece abierto - se cerrará desde VideoCallScreen');
               } else if (change.type == DocumentChangeType.modified) {
-                // Verificar si la llamada fue cancelada o terminada explícitamente
+                // Verificar si la llamada fue cancelada antes de ser aceptada
                 final callData = change.doc.data() as Map<String, dynamic>?;
                 final status = callData?['status'] ?? '';
                 final callId = change.doc.id;
 
-                if (status == 'cancelled' || status == 'ended' || status == 'rejected') {
-                  print('📵 [ParentDashboardController] Llamada $callId cambió a status: $status - cerrando CallKit');
+                if (status == 'cancelled') {
+                  print('📵 [ParentDashboardController] Llamada $callId fue cancelada antes de aceptar - cerrando CallKit');
 
-                  // Cerrar CallKit para esta llamada
+                  // Solo cerrar CallKit si la llamada fue cancelada (no aceptada)
                   CallKitService().endCall(callId).catchError((error) {
                     print('⚠️ [ParentDashboardController] Error cerrando CallKit: $error');
                   });

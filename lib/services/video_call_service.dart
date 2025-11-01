@@ -1026,12 +1026,24 @@ class VideoCallService {
     try {
       print('✅ Aceptando llamada: $callId');
 
+      // Primero verificar si el documento existe
+      final docSnapshot = await _firestore.collection('video_calls').doc(callId).get();
+      if (!docSnapshot.exists) {
+        print('❌ ERROR: El documento $callId NO EXISTE antes de aceptar');
+        throw 'El documento de la llamada no existe';
+      }
+
+      print('📄 Documento existe, status actual: ${docSnapshot.data()?['status']}');
+
       await _firestore.collection('video_calls').doc(callId).update({
         'status': 'accepted',
         'acceptedAt': FieldValue.serverTimestamp(),
       });
+
+      print('✅ Llamada actualizada a status: accepted');
     } catch (e) {
       print('❌ Error aceptando llamada: $e');
+      print('❌ Stack trace: ${StackTrace.current}');
       rethrow;
     }
   }
