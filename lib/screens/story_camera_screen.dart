@@ -52,6 +52,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   String? _recordedVideoPath;
   Timer? _recordingTimer; // Timer para límite de 10 segundos
   int _recordingSecondsRemaining = 10; // Segundos restantes de grabación
+  bool _hasCleanedUpDeepAR = false; // ✅ Flag para evitar limpiar DeepAR múltiples veces
 
   final DeepARService _deepARService = DeepARService();
   final ImagePicker _imagePicker = ImagePicker();
@@ -230,6 +231,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     // CRÍTICO: Usar dispose() en lugar de stopCamera() para limpiar el singleton
     await _deepARService.dispose();
     _isDeepARInitialized = false;
+    _hasCleanedUpDeepAR = true; // ✅ Marcar que ya limpiamos DeepAR
 
     print('✅ DeepAR limpiado completamente (singleton reseteado)');
 
@@ -410,7 +412,323 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
   }
 
-  /// Manejar transformación de personaje
+  /// Manejar transformación de personaje desde el editor (sin cerrar el editor)
+  Future<void> _handleCharacterTransformationFromEditor(
+    BuildContext editorContext,
+    String imagePath,
+  ) async {
+    try {
+      print('🎭 Iniciando flujo de transformación desde editor...');
+
+      // 1. Verificar estado Premium para determinar límites
+      print('🔍 Verificando estado Premium...');
+      final premiumStatus = await _subscriptionService.checkPremiumStatus();
+      print('✅ Usuario: ${premiumStatus.tier.displayName}');
+
+      // 2. Verificar límite de uso
+      final canUse = await _usageLimitsService.canUseCharacterTransform();
+      final usage = await _usageLimitsService.getCharacterTransformUsage();
+
+      if (!canUse) {
+        // Mostrar mensaje de límite alcanzado
+        if (editorContext.mounted) {
+          final bool isFreeUser = !premiumStatus.isPremium;
+
+          await showDialog(
+            context: editorContext,
+            builder: (context) => AlertDialog(
+              title: Row(
+                children: [
+                  Icon(Icons.info_outline, color: Color(0xFF9D7FE8)),
+                  SizedBox(width: 8),
+                  Expanded(child: Text('Límite mensual alcanzado')),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Has alcanzado el límite de ${usage['limit']} transformaciones con personajes IA este mes.',
+                    style: TextStyle(fontSize: 14),
+                  ),
+                  if (isFreeUser) ...[
+                    SizedBox(height: 12),
+                    Container(
+                      padding: EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Color(0xFF9D7FE8).withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Color(0xFF9D7FE8)),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.star, color: Color(0xFF9D7FE8), size: 20),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Con Premium obtienes 20 transformaciones/mes',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF9D7FE8),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ] else ...[
+                    SizedBox(height: 8),
+                    Text(
+                      'El límite se restablecerá el próximo mes.',
+                      style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+                    ),
+                  ],
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: Text('Entendido', style: TextStyle(color: Color(0xFF9D7FE8))),
+                ),
+                if (isFreeUser)
+                  ElevatedButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (context) => PremiumScreen()),
+                      );
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Color(0xFF9D7FE8),
+                    ),
+                    child: Text('Ver Premium', style: TextStyle(color: Colors.white)),
+                  ),
+              ],
+            ),
+          );
+        }
+        return;
+      }
+
+      // 3. Mostrar selector de personajes (aparece inmediatamente, carga en background)
+      print('ℹ️ Transformaciones restantes este mes: ${usage['remaining']}');
+
+      final Character? selectedCharacter = await showDialog<Character>(
+        context: editorContext,
+        barrierDismissible: true,
+        builder: (context) => CharacterSelectorDialog(
+          remainingTransforms: usage['remaining'] as int,
+        ),
+      );
+
+      if (selectedCharacter == null) {
+        print('❌ Usuario canceló selección de personaje');
+        return;
+      }
+
+      print('✅ Personaje seleccionado: ${selectedCharacter.name}');
+
+      // 4. Mostrar dialog de carga con progreso SOBRE EL EDITOR (no cerrar aún)
+      // Usar ValueNotifiers para reactivity
+      final progressNotifier = ValueNotifier<double>(0.0);
+      final statusNotifier = ValueNotifier<String>('Preparando...');
+
+      if (editorContext.mounted) {
+        showDialog(
+          context: editorContext,
+          barrierDismissible: false,
+          builder: (dialogContext) => PopScope(
+            canPop: false,
+            child: AlertDialog(
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Progress indicator circular con ValueListenableBuilder
+                  ValueListenableBuilder<double>(
+                    valueListenable: progressNotifier,
+                    builder: (context, progress, child) {
+                      return SizedBox(
+                        width: 80,
+                        height: 80,
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            CircularProgressIndicator(
+                              value: progress,
+                              color: Color(0xFF9D7FE8),
+                              strokeWidth: 6,
+                              backgroundColor: Color(0xFF9D7FE8).withOpacity(0.2),
+                            ),
+                            Text(
+                              '${(progress * 100).toInt()}%',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                                color: Color(0xFF9D7FE8),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                  SizedBox(height: 24),
+                  Text(
+                    'Transformando tu foto...',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 16,
+                    ),
+                  ),
+                  SizedBox(height: 12),
+                  ValueListenableBuilder<String>(
+                    valueListenable: statusNotifier,
+                    builder: (context, status, child) {
+                      return Column(
+                        children: [
+                          Text(
+                            status,
+                            style: TextStyle(
+                              color: Colors.grey[700],
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                          SizedBox(height: 8),
+                          Text(
+                            '⚠️ No cierres esta ventana',
+                            style: TextStyle(
+                              color: Colors.orange[700],
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      }
+
+      // 5. Esperar un frame para que el dialog se muestre
+      await Future.delayed(Duration(milliseconds: 150));
+
+      // 6. AHORA SI cerrar el editor (el loading dialog se mantiene encima)
+      if (editorContext.mounted) {
+        Navigator.pop(editorContext);
+      }
+
+      // 7. Subir imagen a Firebase Storage
+      print('☁️ Subiendo imagen a Firebase Storage...');
+      statusNotifier.value = 'Subiendo imagen...';
+      progressNotifier.value = 0.05;
+
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        throw Exception('Usuario no autenticado');
+      }
+
+      final storageRef = FirebaseStorage.instance
+          .ref()
+          .child('character_transformations')
+          .child(user.uid)
+          .child('${DateTime.now().millisecondsSinceEpoch}.jpg');
+
+      final uploadTask = await storageRef.putFile(File(imagePath));
+      final imageUrl = await uploadTask.ref.getDownloadURL();
+      print('✅ Imagen subida: $imageUrl');
+
+      // 8. Transformar imagen con IA con seguimiento de progreso
+      print('🤖 Llamando a Cloud Function para transformar...');
+      final transformedUrl = await _characterService.transformImageWithProgress(
+        imageUrl: imageUrl,
+        characterId: selectedCharacter.id,
+        onProgress: (progress) {
+          progressNotifier.value = progress;
+        },
+        onStatusUpdate: (status) {
+          statusNotifier.value = status;
+        },
+      );
+      print('✅ Imagen transformada: $transformedUrl');
+
+      // Limpiar listeners
+      progressNotifier.dispose();
+      statusNotifier.dispose();
+
+      // 9. Descargar imagen transformada
+      print('📥 Descargando imagen transformada...');
+      final directory = await getTemporaryDirectory();
+      final transformedPath =
+          '${directory.path}/transformed_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final transformedFile = File(transformedPath);
+
+      final response = await HttpClient().getUrl(Uri.parse(transformedUrl));
+      final httpResponse = await response.close();
+      final bytes = await consolidateHttpClientResponseBytes(httpResponse);
+      await transformedFile.writeAsBytes(bytes);
+
+      print('✅ Imagen transformada descargada: $transformedPath');
+
+      // 10. Incrementar contador de uso
+      await _usageLimitsService.incrementCharacterTransformUsage();
+      final updatedUsage = await _usageLimitsService.getCharacterTransformUsage();
+      print('ℹ️ Transformaciones usadas este mes: ${updatedUsage['count']}/${updatedUsage['limit']}');
+
+      // 11. Cerrar dialog de carga
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+
+      // 12. Abrir editor con imagen transformada
+      if (mounted) {
+        await _openStoryEditor(transformedPath, isVideo: false);
+      }
+    } catch (e, stackTrace) {
+      print('❌ Error en transformación desde editor: $e');
+      print('Stack trace: $stackTrace');
+
+      // Cerrar dialog de carga si está abierto
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Row(
+              children: [
+                Icon(Icons.error_outline, color: Colors.red),
+                SizedBox(width: 8),
+                Text('Error'),
+              ],
+            ),
+            content: Text(
+              'No se pudo transformar la imagen. Por favor intenta de nuevo.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
+    }
+  }
+
+  /// Manejar transformación de personaje (versión original - mantener por compatibilidad)
   Future<void> _handleCharacterTransformation(String imagePath) async {
     try {
       print('🎭 Iniciando flujo de transformación de personaje...');
@@ -531,7 +849,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
       print('✅ Personaje seleccionado: ${selectedCharacter.name}');
 
-      // 4. Mostrar dialog de carga
+      // 4. Mostrar dialog de carga con advertencia mejorada
       if (mounted) {
         showDialog(
           context: context,
@@ -546,12 +864,27 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                   SizedBox(height: 16),
                   Text(
                     'Transformando tu foto...',
-                    style: TextStyle(fontWeight: FontWeight.w600),
+                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+                  ),
+                  SizedBox(height: 12),
+                  Text(
+                    'Esto puede tomar hasta 2 minutos',
+                    style: TextStyle(
+                      color: Colors.grey[700],
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    textAlign: TextAlign.center,
                   ),
                   SizedBox(height: 8),
                   Text(
-                    'Esto puede tomar unos segundos',
-                    style: TextStyle(color: Colors.grey, fontSize: 12),
+                    '⚠️ No cierres esta ventana',
+                    style: TextStyle(
+                      color: Colors.orange[700],
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    textAlign: TextAlign.center,
                   ),
                 ],
               ),
@@ -715,16 +1048,20 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         final screenHeight = MediaQuery.of(context).size.height;
         final devicePixelRatio = MediaQuery.of(context).devicePixelRatio;
 
-        // Calcular dimensiones en píxeles
-        final widthPx = (screenWidth * devicePixelRatio).round();
-        final heightPx = (screenHeight * devicePixelRatio).round();
+        // Usar dimensiones de pantalla completas
+        final int recordingWidth = (screenWidth * devicePixelRatio).round();
+        final int recordingHeight = (screenHeight * devicePixelRatio).round();
 
-        print('📱 Dimensiones de pantalla: ${widthPx}x${heightPx}');
+        print('📱 Dimensiones de pantalla lógicas: ${screenWidth}x${screenHeight}');
+        print('📱 Device pixel ratio: $devicePixelRatio');
+        print('🎯 Dimensiones de grabación: ${recordingWidth}x${recordingHeight}');
+        print('📐 Recording aspect ratio: ${recordingWidth/recordingHeight}');
+        print('📝 Usando FittedBox.cover para mostrar correctamente');
 
         final success = await _deepARService.startRecording(
           outputPath: videoPath,
-          width: widthPx,
-          height: heightPx,
+          width: recordingWidth,
+          height: recordingHeight,
         );
 
         if (success) {
@@ -844,26 +1181,94 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             final directory = await getTemporaryDirectory();
             final tempDir = Directory(directory.path);
 
-            // Buscar archivos .mp4 recientes (últimos 30 segundos)
-            final now = DateTime.now();
-            final files = tempDir.listSync()
-                .where((file) => file.path.endsWith('.mp4'))
-                .map((file) => File(file.path))
-                .where((file) {
-                  final stat = file.statSync();
-                  final modified = stat.modified;
-                  return now.difference(modified).inSeconds < 30;
-                })
-                .toList();
+            try {
+              // Buscar archivos .mp4 recientes (últimos 60 segundos para dar más tiempo)
+              final now = DateTime.now();
+              final List<File> files = [];
 
-            files.sort((a, b) => b.statSync().modified.compareTo(a.statSync().modified));
+              // Usar listSync de forma más segura
+              final dirContents = tempDir.listSync();
+              print('📁 Explorando directorio: ${tempDir.path}');
+              print('📄 Archivos encontrados: ${dirContents.length}');
 
-            if (files.isNotEmpty) {
-              videoPath = files.first.path;
-              print('✅ Archivo encontrado en búsqueda: $videoPath');
-            } else {
-              print('❌ No se encontró ningún archivo de video reciente');
+              for (final entity in dirContents) {
+                if (entity is File && entity.path.endsWith('.mp4')) {
+                  try {
+                    final stat = await entity.stat();
+                    final modified = stat.modified;
+                    final diffSeconds = now.difference(modified).inSeconds;
+
+                    print('📹 Archivo encontrado: ${entity.path}');
+                    print('⏰ Modificado hace: ${diffSeconds} segundos');
+
+                    if (diffSeconds < 60) { // Aumentamos a 60 segundos
+                      files.add(entity);
+                      print('✅ Archivo válido añadido a la lista');
+                    } else {
+                      print('⏳ Archivo demasiado antiguo, ignorado');
+                    }
+                  } catch (e) {
+                    print('⚠️ Error obteniendo stat de ${entity.path}: $e');
+                  }
+                }
+              }
+
+              if (files.isNotEmpty) {
+                // Ordenar por fecha de modificación (más reciente primero)
+                files.sort((a, b) {
+                  try {
+                    final statA = a.statSync();
+                    final statB = b.statSync();
+                    return statB.modified.compareTo(statA.modified);
+                  } catch (e) {
+                    print('⚠️ Error ordenando archivos: $e');
+                    return 0;
+                  }
+                });
+
+                videoPath = files.first.path;
+                print('✅ Archivo encontrado en búsqueda: $videoPath');
+              } else {
+                print('❌ No se encontró ningún archivo de video reciente en ${tempDir.path}');
+                videoPath = null;
+              }
+            } catch (e) {
+              print('❌ Error buscando archivos en directorio temporal: $e');
               videoPath = null;
+            }
+
+            // Si aún no encontramos el archivo, buscar en otros directorios posibles
+            if (videoPath == null) {
+              print('🔍 Buscando en directorios adicionales...');
+              try {
+                // Buscar en Documents directory
+                final documentsDir = await getApplicationDocumentsDirectory();
+                final documentsPath = Directory(documentsDir.path);
+
+                print('📁 Buscando en Documents: ${documentsPath.path}');
+                await _searchForVideoInDirectory(documentsPath, DateTime.now()).then((foundPath) {
+                  if (foundPath != null) {
+                    videoPath = foundPath;
+                    print('✅ Video encontrado en Documents: $foundPath');
+                  }
+                });
+
+                // Si aún no encontramos, buscar en subdirectorios comunes
+                if (videoPath == null) {
+                  final cacheDir = Directory('${tempDir.path}/deepar');
+                  if (await cacheDir.exists()) {
+                    print('📁 Buscando en subdirectorio DeepAR: ${cacheDir.path}');
+                    await _searchForVideoInDirectory(cacheDir, DateTime.now()).then((foundPath) {
+                      if (foundPath != null) {
+                        videoPath = foundPath;
+                        print('✅ Video encontrado en subdirectorio DeepAR: $foundPath');
+                      }
+                    });
+                  }
+                }
+              } catch (e) {
+                print('❌ Error en búsqueda adicional: $e');
+              }
             }
           }
         } else {
@@ -886,15 +1291,15 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       });
 
       // Verificar que el archivo existe
-      if (videoPath != null && await File(videoPath).exists()) {
+      if (videoPath != null && await File(videoPath!).exists()) {
         // Verificar tamaño del archivo
-        final fileSize = await File(videoPath).length();
+        final fileSize = await File(videoPath!).length();
         print('📹 Video capturado - Tamaño: ${fileSize / 1024 / 1024} MB');
 
         print('✅ Navegando al editor de stories con video: $videoPath');
 
         if (mounted) {
-          await _openStoryEditor(videoPath, isVideo: true);
+          await _openStoryEditor(videoPath!, isVideo: true);
         }
 
         // Reinicializar DeepAR si es necesario
@@ -992,6 +1397,56 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
   }
 
+  /// Helper method to search for video files in a directory
+  Future<String?> _searchForVideoInDirectory(Directory directory, DateTime referenceTime) async {
+    try {
+      if (!await directory.exists()) {
+        return null;
+      }
+
+      final dirContents = directory.listSync();
+      final List<File> videoFiles = [];
+
+      for (final entity in dirContents) {
+        if (entity is File && entity.path.endsWith('.mp4')) {
+          try {
+            final stat = await entity.stat();
+            final modified = stat.modified;
+            final diffSeconds = referenceTime.difference(modified).inSeconds;
+
+            print('📹 Archivo encontrado: ${entity.path}');
+            print('⏰ Modificado hace: ${diffSeconds} segundos');
+
+            if (diffSeconds < 60) {
+              videoFiles.add(entity);
+            }
+          } catch (e) {
+            print('⚠️ Error obteniendo stat de ${entity.path}: $e');
+          }
+        }
+      }
+
+      if (videoFiles.isNotEmpty) {
+        // Ordenar por fecha de modificación (más reciente primero)
+        videoFiles.sort((a, b) {
+          try {
+            final statA = a.statSync();
+            final statB = b.statSync();
+            return statB.modified.compareTo(statA.modified);
+          } catch (e) {
+            return 0;
+          }
+        });
+
+        return videoFiles.first.path;
+      }
+    } catch (e) {
+      print('❌ Error buscando en directorio ${directory.path}: $e');
+    }
+
+    return null;
+  }
+
   /// Abrir editor de historias con FlutterStoryEditor
   Future<void> _openStoryEditor(String mediaPath, {required bool isVideo}) async {
     try {
@@ -1049,11 +1504,15 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                         child: InkWell(
                           customBorder: CircleBorder(),
                           onTap: () async {
-                            // Cerrar editor temporalmente
-                            Navigator.pop(context);
+                            // NO cerrar el editor - mostrar diálogo por encima
+                            // Obtener el contexto del editor actual
+                            final editorContext = context;
 
                             // Mostrar selector y transformar
-                            await _handleCharacterTransformation(mediaPath);
+                            await _handleCharacterTransformationFromEditor(
+                              editorContext,
+                              mediaPath,
+                            );
                           },
                           child: Container(
                             padding: EdgeInsets.all(10),
@@ -1196,7 +1655,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
         // Abrir editor con el archivo seleccionado
         await _openStoryEditor(
-          pickedFile!.path,
+          pickedFile.path,
           isVideo: mediaType == 'video',
         );
 
@@ -1447,17 +1906,18 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       });
     }
 
-    // CRÍTICO: Detener y limpiar DeepAR completamente cuando se cierra la pantalla
-    // Nota: dispose() no puede ser async, pero intentamos detener la cámara de todas formas
-    print('🗑️ [dispose] Deteniendo y limpiando DeepAR...');
-    _deepARService.stopCamera().then((_) {
-      print('✅ [dispose] Cámara DeepAR detenida');
-    }).catchError((error) {
-      print('❌ [dispose] Error deteniendo cámara: $error');
-    });
-
-    // También limpiar el estado de inicialización para la próxima vez
-    _isDeepARInitialized = false;
+    // ✅ Solo limpiar DeepAR si NO fue limpiado previamente por _closeScreen()
+    if (!_hasCleanedUpDeepAR) {
+      print('🗑️ [dispose] Limpiando DeepAR (no fue limpiado por _closeScreen)...');
+      _deepARService.stopCamera().then((_) {
+        print('✅ [dispose] Cámara DeepAR detenida');
+      }).catchError((error) {
+        print('❌ [dispose] Error deteniendo cámara: $error');
+      });
+      _isDeepARInitialized = false;
+    } else {
+      print('✅ [dispose] DeepAR ya fue limpiado por _closeScreen(), saltando limpieza');
+    }
 
     super.dispose();
   }
