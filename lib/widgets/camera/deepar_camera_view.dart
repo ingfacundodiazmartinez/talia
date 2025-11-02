@@ -123,10 +123,23 @@ class _DeepARCameraViewState extends State<DeepARCameraView> {
   @override
   Widget build(BuildContext context) {
     if (widget.isDeepARInitialized) {
-      return DeepARPreview(
-        width: MediaQuery.of(context).size.width,
-        height: MediaQuery.of(context).size.height,
-        onPlatformViewCreated: _onPlatformViewCreated,
+      // ✅ ARREGLADO: Usar aspecto ratio de cámara (4:3) en lugar de pantalla
+      // Esto evita la distorsión del preview de DeepAR
+      const double cameraAspectRatio = 4.0 / 3.0; // Ratio típico de cámara móvil
+      final screenWidth = MediaQuery.of(context).size.width;
+      final cameraHeight = screenWidth / cameraAspectRatio;
+
+      return FittedBox(
+        fit: BoxFit.cover,
+        child: SizedBox(
+          width: screenWidth,
+          height: cameraHeight,
+          child: DeepARPreview(
+            width: screenWidth,
+            height: cameraHeight,
+            onPlatformViewCreated: _onPlatformViewCreated,
+          ),
+        ),
       );
     }
 

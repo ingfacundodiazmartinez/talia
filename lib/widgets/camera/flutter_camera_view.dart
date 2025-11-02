@@ -175,9 +175,13 @@ class _FlutterCameraViewState extends State<FlutterCameraView> {
         throw Exception('Controller description mismatch');
       }
 
-      return Positioned.fill(
-        child: AspectRatio(
-          aspectRatio: value.aspectRatio,
+      // ✅ ARREGLADO: Usar FittedBox.cover para evitar distorsión
+      // Similar al fix exitoso en flutter_story_editor trimmer_view.dart
+      return FittedBox(
+        fit: BoxFit.cover,
+        child: SizedBox(
+          width: value.aspectRatio,
+          height: 1.0,
           child: CameraPreview(_controller!),
         ),
       );
