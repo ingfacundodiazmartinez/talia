@@ -43,7 +43,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   int _selectedCameraIndex = 0;
   String? _selectedFilter;
   String? _selectedARFilter = DeepARFilters.none; // Iniciar sin filtro
-  String _filterType = 'deepar'; // Solo DeepAR por defecto
+  String _filterType = 'color'; // Usar cámara nativa por defecto (solo DeepAR cuando hay filtros)
   bool _hasInitializationFailed = false;
   bool _isDeepARInitialized = false;
   bool _hasCameraPermissions = false; // CRÍTICO: Flag para saber si tenemos permisos
@@ -309,6 +309,58 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       }
     } catch (e) {
       print('❌ Excepción aplicando filtro DeepAR: $e');
+    }
+  }
+
+  /// Manejar la selección de filtros con switching inteligente entre cámara nativa y DeepAR
+  Future<void> _handleFilterSelection(String filterKey) async {
+    print('🎯 Seleccionando filtro: $filterKey');
+
+    // Determinar si necesitamos DeepAR o cámara nativa
+    final bool needsDeepAR = filterKey != DeepARFilters.none;
+    final String newFilterType = needsDeepAR ? 'deepar' : 'color';
+
+    // Actualizar estado del filtro seleccionado
+    setState(() {
+      _selectedARFilter = filterKey;
+    });
+
+    // Si no hay cambio de tipo de cámara, solo aplicar el filtro
+    if (_filterType == newFilterType) {
+      if (needsDeepAR && _isDeepARInitialized) {
+        await _applyDeepARFilter(filterKey);
+      }
+      print('✅ Filtro aplicado sin cambio de cámara');
+      return;
+    }
+
+    // Hay cambio de tipo de cámara - necesitamos hacer el switch
+    print('🔄 Cambiando de $_filterType a $newFilterType');
+
+    try {
+      // Si estamos saliendo de DeepAR, limpiarlo
+      if (_filterType == 'deepar' && _isDeepARInitialized) {
+        print('🧹 Limpiando DeepAR antes del switch...');
+        await _deepARService.dispose();
+        _isDeepARInitialized = false;
+      }
+
+      // Cambiar el tipo de filtro (esto activará el rebuild con el widget correcto)
+      setState(() {
+        _filterType = newFilterType;
+      });
+
+      // Si estamos yendo a DeepAR, esperar a que se inicialice y aplicar filtro
+      if (needsDeepAR) {
+        print('⏳ Esperando inicialización de DeepAR para aplicar filtro...');
+        // El filtro se aplicará automáticamente cuando DeepAR se inicialice
+        // gracias al callback onInitialized en _buildDeepARCameraView
+      } else {
+        print('✅ Cambiado a cámara nativa (modo Normal)');
+      }
+
+    } catch (e) {
+      print('❌ Error en switch de cámara: $e');
     }
   }
 
@@ -1095,15 +1147,63 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       }
     } catch (e) {
       print('❌ Error iniciando grabación: $e');
+
+      // ✅ CRÍTICO: Detectar errores de permisos de audio y usar fallback automático
+      final errorMessage = e.toString().toLowerCase();
+      final isAudioPermissionError = errorMessage.contains('audio_permission_denied') ||
+          errorMessage.contains('record_audio') ||
+          errorMessage.contains('permiso de micrófono');
+
+      if (isAudioPermissionError && _filterType == 'deepar') {
+        print('🔄 Error de permisos de audio detectado - cambiando automáticamente a Flutter Camera');
+
+        try {
+          // Cambiar a modo Flutter Camera automáticamente
+          await _handleFilterSelection(DeepARFilters.none);
+
+          // Reintentar grabación con Flutter Camera
+          print('🔄 Reintentando grabación con Flutter Camera (sin audio)...');
+
+          if (_controller != null && _controller!.value.isInitialized) {
+            await _controller!.startVideoRecording(enableAudio: false);
+            setState(() {
+              _isRecordingVideo = true;
+              _isLoading = false;
+            });
+            _startRecordingTimer();
+
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Grabando con cámara nativa (sin audio)'),
+                  backgroundColor: Colors.orange,
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            }
+            print('✅ Fallback exitoso - grabando con Flutter Camera sin audio');
+            return; // Exit early if fallback succeeded
+          }
+        } catch (fallbackError) {
+          print('❌ Error en fallback: $fallbackError');
+        }
+      }
+
+      // Error handling original para casos no relacionados con audio
       setState(() {
         _isLoading = false;
         _isRecordingVideo = false;
       });
+
       if (mounted) {
+        final displayMessage = isAudioPermissionError
+            ? 'Sin permisos de micrófono. Grabando sin audio.'
+            : 'Error al iniciar grabación';
+
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error al iniciar grabación'),
-            backgroundColor: Colors.red,
+            content: Text(displayMessage),
+            backgroundColor: isAudioPermissionError ? Colors.orange : Colors.red,
           ),
         );
       }
@@ -1696,14 +1796,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           onTap: () {
             // Evitar loops infinitos - solo cambiar si es diferente
             if (_selectedARFilter != filterKey) {
-              setState(() {
-                _selectedARFilter = filterKey;
-              });
-
-              // Si estamos en modo DeepAR, aplicar el filtro (una sola vez)
-              if (_filterType == 'deepar' && _isDeepARInitialized) {
-                _applyDeepARFilter(filterKey);
-              }
+              _handleFilterSelection(filterKey);
             }
           },
           child: Container(
@@ -2168,6 +2261,12 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         setState(() {
           _isDeepARInitialized = true;
         });
+
+        // Aplicar automáticamente el filtro seleccionado cuando DeepAR se inicializa
+        if (_selectedARFilter != null && _selectedARFilter != DeepARFilters.none) {
+          print('🎭 Aplicando filtro pendiente después de inicialización: $_selectedARFilter');
+          _applyDeepARFilter(_selectedARFilter!);
+        }
       },
     );
   }

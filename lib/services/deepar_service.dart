@@ -155,6 +155,7 @@ class DeepARService {
 
     try {
       print('🎬 Iniciando grabación: $outputPath');
+      print('📏 Dimensiones de grabación: ${width}x${height} (aspect ratio: ${width/height})');
 
       final result = await _channel.invokeMethod('startRecording', {
         'outputPath': outputPath,
@@ -171,7 +172,9 @@ class DeepARService {
       return result ?? false;
     } catch (e) {
       print('❌ Error iniciando grabación: $e');
-      return false;
+
+      // Re-throw el error para que story_camera_screen pueda manejarlo específicamente
+      rethrow;
     }
   }
 

@@ -13,6 +13,8 @@ import ai.deepar.ar.DeepARImageFormat
 import android.app.Activity
 import android.os.Handler
 import android.os.Looper
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -272,6 +274,23 @@ class ArFiltersPlugin : FlutterPlugin, MethodCallHandler, StreamHandler, Activit
 
         try {
             Log.d(TAG, "🎬 Iniciando grabación: $outputPath")
+
+            // ✅ CRÍTICO: Verificar permiso de audio antes de iniciar grabación
+            // DeepAR requiere RECORD_AUDIO para video recording y falla con AudioRecord errors si no está disponible
+            val hasAudioPermission = ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED
+
+            if (!hasAudioPermission) {
+                Log.e(TAG, "❌ Permiso RECORD_AUDIO no otorgado - DeepAR fallará con AudioRecord errors")
+                result.error("AUDIO_PERMISSION_DENIED",
+                    "Permiso de micrófono requerido para grabar video con DeepAR. " +
+                    "Por favor otorga el permiso en configuración de la app.", null)
+                return
+            }
+
+            Log.d(TAG, "✅ Permiso RECORD_AUDIO verificado - procediendo con grabación")
 
             val outputFile = File(outputPath)
             outputFile.parentFile?.mkdirs()
