@@ -1165,7 +1165,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           print('🔄 Reintentando grabación con Flutter Camera (sin audio)...');
 
           if (_controller != null && _controller!.value.isInitialized) {
-            await _controller!.startVideoRecording(enableAudio: false);
+            // ✅ FlutterCameraView ya está configurado con enableAudio: false en el constructor
+            await _controller!.startVideoRecording();
             setState(() {
               _isRecordingVideo = true;
               _isLoading = false;
