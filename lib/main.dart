@@ -2,7 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -428,7 +428,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
   }
 
   void _setupRoleListener() {
-    FirebaseAuth.instance.authStateChanges().listen((user) {
+    firebase_auth.FirebaseAuth.instance.authStateChanges().listen((user) {
       print(
         '🔐 AUTH STATE CHANGED - User: ${user?.uid ?? "null"}, Phone: ${user?.phoneNumber ?? "null"}',
       );
@@ -783,7 +783,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
             // Obtener el rol del usuario para navegar a la pantalla correcta
             if (context.mounted) {
               try {
-                final currentUser = FirebaseAuth.instance.currentUser;
+                final currentUser = firebase_auth.FirebaseAuth.instance.currentUser;
                 if (currentUser != null) {
                   final userDoc = await FirebaseFirestore.instance
                       .collection('users')
@@ -963,8 +963,8 @@ class _AuthWrapperState extends State<AuthWrapper> {
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<User?>(
-      stream: FirebaseAuth.instance.authStateChanges(),
+    return StreamBuilder<firebase_auth.User?>(
+      stream: firebase_auth.FirebaseAuth.instance.authStateChanges(),
       builder: (context, snapshot) {
         print('🔄 AuthWrapper - Connection state: ${snapshot.connectionState}');
         print('🔄 AuthWrapper - Has data: ${snapshot.hasData}');

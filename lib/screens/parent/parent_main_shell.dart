@@ -1,18 +1,15 @@
 import 'package:flutter/material.dart';
-import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import 'dashboard/parent_dashboard_screen.dart';
 import 'chats/parent_chats_screen.dart';
 import 'contacts/parent_contacts_screen.dart';
 import 'whitelist/whitelist_screen.dart';
 import 'profile/parent_profile_screen.dart';
 import 'group_invitations_screen.dart';
-import '../../notification_service.dart';
-import '../../utils/chat_utils.dart';
 import '../chat_detail_screen.dart';
 import '../group_chat_screen.dart';
-import '../../services/contacts_sync_service.dart';
+import '../../controllers/parent_main_shell_controller.dart';
 
 /// Observer para detectar cambios en la navegación anidada
 class _NavigatorObserver extends NavigatorObserver {
@@ -61,11 +58,9 @@ class ParentMainShell extends StatefulWidget {
 }
 
 class _ParentMainShellState extends State<ParentMainShell> {
+  // ✅ CORRECTO: Solo estado UI y controller
   int _selectedIndex = 0;
-  StreamSubscription? _chatNotificationSubscription;
-  StreamSubscription? _roleChangeSubscription;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final FirebaseAuth _auth = FirebaseAuth.instance;
+  late ParentMainShellController _controller;
 
   // GlobalKeys para mantener el estado de navegación de cada tab
   final GlobalKey<NavigatorState> _dashboardNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'ParentDashboard');
@@ -77,44 +72,26 @@ class _ParentMainShellState extends State<ParentMainShell> {
   @override
   void initState() {
     super.initState();
-    _setupNotificationListeners();
-    _setupRoleChangeListener();
-    _syncContactsInBackground();
+    // ✅ CORRECTO: Solo inicializar controller
+    _controller = ParentMainShellController(
+      parentId: firebase_auth.FirebaseAuth.instance.currentUser!.uid,
+    );
+
+    // Configurar callback para navegación desde notificaciones
+    _controller.onChatNotificationTap = _handleChatNotificationTap;
+
+    _controller.initialize();
   }
 
-  /// Sincronizar contactos en background (solo para parent/adult)
-  void _syncContactsInBackground() {
-    // Ejecutar después de que el widget esté construido
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      ContactsSyncService().syncContacts().then((_) {
-        print('✅ [ParentMainShell] Sincronización de contactos completada');
-      }).catchError((e) {
-        print('⚠️ [ParentMainShell] Error sincronizando contactos: $e');
-      });
-    });
-  }
 
   @override
   void dispose() {
-    _chatNotificationSubscription?.cancel();
-    _roleChangeSubscription?.cancel();
+    // ✅ CORRECTO: Solo disponer controller
+    _controller.dispose();
     super.dispose();
   }
 
-  void _setupRoleChangeListener() {
-    // ⚠️ DESHABILITADO: No cerrar sesión automáticamente por cambios de rol
-    // El AuthWrapper en main.dart manejará los cambios de shell si es necesario
-    // Los usuarios NUNCA deben ser deslogueados automáticamente
-    print('ℹ️ [ParentMainShell] Listener de cambio de rol deshabilitado - no se cerrará sesión automáticamente');
-  }
 
-  void _setupNotificationListeners() {
-    // Escuchar taps en notificaciones de chat
-    _chatNotificationSubscription = NotificationService().chatNotificationTapStream.listen((data) {
-      print('📲 [ParentMainShell] Chat notification tapped: $data');
-      _handleChatNotificationTap(data);
-    });
-  }
 
   Future<void> _handleChatNotificationTap(Map<String, dynamic> data) async {
     try {
@@ -152,21 +129,11 @@ class _ParentMainShellState extends State<ParentMainShell> {
 
         print('📂 [ParentMainShell] Fetching contact info for senderId: $senderId');
 
-        // Obtener información del contacto
-        final currentUserId = _auth.currentUser?.uid;
-        if (currentUserId == null) {
-          print('❌ [ParentMainShell] User not authenticated');
-          return;
-        }
+        // ✅ CORRECTO: Usar controller para obtener datos
+        final contactInfo = await _controller.getContactInfo(senderId);
+        final correctChatId = _controller.getChatId(senderId);
 
-        // Generar el chatId correcto usando la utilidad
-        final correctChatId = ChatUtils.getChatId(currentUserId, senderId);
-
-        // Buscar el contacto en la colección de usuarios
-        final contactDoc = await _firestore.collection('users').doc(senderId).get();
-        final contactName = contactDoc.data()?['name'] as String? ?? 'Usuario';
-
-        print('✅ [ParentMainShell] Navigating to 1-on-1 chat with $contactName');
+        print('✅ [ParentMainShell] Navigating to 1-on-1 chat with ${contactInfo.name}');
         print('   Notification chatId: $chatId');
         print('   Correct chatId: $correctChatId');
 
@@ -174,7 +141,7 @@ class _ParentMainShellState extends State<ParentMainShell> {
           MaterialPageRoute(
             builder: (context) => ChatDetailScreen(
               contactId: senderId,
-              contactName: contactName,
+              contactName: contactInfo.name,
               chatId: correctChatId,
             ),
           ),
@@ -242,7 +209,7 @@ class _ParentMainShellState extends State<ParentMainShell> {
 
   @override
   Widget build(BuildContext context) {
-    final currentUserId = _auth.currentUser?.uid;
+    final currentUserId = firebase_auth.FirebaseAuth.instance.currentUser?.uid;
 
     return PopScope(
       canPop: false,
@@ -314,44 +281,12 @@ class _ParentMainShellState extends State<ParentMainShell> {
       ),
       // Ocultar bottom nav bar cuando hay rutas anidadas (ej: chat abierto)
       bottomNavigationBar: _hasNestedRoute ? null : _buildBottomNavigationBar(),
+      // ✅ CORRECTO: Usar controller para datos de floating action button
       floatingActionButton: currentUserId != null
-          ? StreamBuilder<QuerySnapshot>(
-              stream: _firestore
-                  .collection('groupInvitations')
-                  .where('status', isEqualTo: 'pending_approvals')
-                  .snapshots(),
+          ? StreamBuilder<int>(
+              stream: _controller.getPendingGroupInvitationsStream(),
               builder: (context, snapshot) {
-                if (!snapshot.hasData) return const SizedBox.shrink();
-
-                // Filtrar invitaciones relevantes para este padre
-                final relevantInvitations = snapshot.data!.docs.where((doc) {
-                  final data = doc.data() as Map<String, dynamic>;
-                  final invitedParentApproval =
-                      data['invitedParentApproval'] as Map<String, dynamic>?;
-                  final requiredApprovals =
-                      data['requiredApprovals'] as Map<String, dynamic>?;
-
-                  // Es invitación para este padre si:
-                  // 1. Es padre del invitado
-                  if (invitedParentApproval?['parentId'] == currentUserId) {
-                    return true;
-                  }
-
-                  // 2. Es padre de algún miembro que necesita aprobar
-                  if (requiredApprovals != null) {
-                    for (final approval in requiredApprovals.values) {
-                      if ((approval as Map<String, dynamic>)['parentId'] ==
-                          currentUserId) {
-                        return true;
-                      }
-                    }
-                  }
-
-                  return false;
-                }).toList();
-
-                final count = relevantInvitations.length;
-
+                final count = snapshot.data ?? 0;
                 if (count == 0) return const SizedBox.shrink();
 
                 return Badge(
@@ -382,176 +317,54 @@ class _ParentMainShellState extends State<ParentMainShell> {
     final screenWidth = MediaQuery.of(context).size.width;
     // Con 5 tabs necesitamos más espacio - aumentar umbral para dispositivos pequeños
     final showLabels = screenWidth >= 430;
-    final currentUserId = _auth.currentUser?.uid;
+    final currentUserId = firebase_auth.FirebaseAuth.instance.currentUser?.uid;
 
     if (currentUserId == null) {
       return Container(); // Usuario no autenticado
     }
 
-    // Obtener IDs de hijos vinculados desde el documento del usuario
+    // ✅ CORRECTO: Usar controller streams en lugar de queries directas
     return StreamBuilder<DocumentSnapshot>(
-      stream: _firestore
-          .collection('users')
-          .doc(currentUserId)
-          .snapshots(),
+      stream: _controller.getCurrentUserStream(),
       builder: (context, userSnapshot) {
-        print('🔍 [ParentMainShell] user document snapshot:');
-        print('   - hasData: ${userSnapshot.hasData}');
-        print('   - hasError: ${userSnapshot.hasError}');
-        print('   - connectionState: ${userSnapshot.connectionState}');
-        if (userSnapshot.hasError) {
-          print('   - error: ${userSnapshot.error}');
-        }
-
         List<String> childrenIds = [];
         if (userSnapshot.hasData && userSnapshot.data != null) {
           final userData = userSnapshot.data!.data() as Map<String, dynamic>?;
           if (userData != null) {
             childrenIds = List<String>.from(userData['linkedChildrenIds'] ?? []);
-            print('   - linkedChildrenIds: $childrenIds');
           }
         }
 
-        // Si no hay hijos, contar directamente como 0
-        if (childrenIds.isEmpty) {
-          // Sin hijos vinculados, ambos contadores son 0
-          final dashboardBadgeCount = 0;
-
-          // Contar solicitudes de contacto pendientes (whitelist badge)
-          return StreamBuilder<QuerySnapshot>(
-            stream: _firestore
-                .collection('notifications')
-                .where('userId', isEqualTo: currentUserId)
-                .where('read', isEqualTo: false)
-                .where('type', isEqualTo: 'contact_request')
-                .snapshots(),
-            builder: (context, contactRequestsSnapshot) {
-              final whitelistBadgeCount = contactRequestsSnapshot.data?.docs.length ?? 0;
-
-              // Contar chats no leídos
-              return StreamBuilder<QuerySnapshot>(
-                stream: _firestore
-                    .collection('chats')
-                    .where('participants', arrayContains: currentUserId)
-                    .snapshots(),
-                builder: (context, chatSnapshot) {
-                  int totalUnreadMessages = 0;
-
-                  if (chatSnapshot.hasData) {
-                    for (var doc in chatSnapshot.data!.docs) {
-                      final data = doc.data() as Map<String, dynamic>?;
-                      if (data != null) {
-                        final unreadCount = data['unreadCount_$currentUserId'] as int? ?? 0;
-                        totalUnreadMessages += unreadCount;
-                      }
-                    }
-                  }
-
-                  return _buildBottomNavBar(
-                    colorScheme,
-                    showLabels,
-                    dashboardBadgeCount,
-                    totalUnreadMessages,
-                    whitelistBadgeCount,
-                  );
-                },
-              );
-            },
-          );
-        }
-
-        // Contar historias pendientes de los hijos
-        print('🔍 [ParentMainShell] Iniciando query de story_approval_requests');
-        print('   - parentId: $currentUserId');
-        print('   - childrenIds disponibles: $childrenIds');
-
-        return StreamBuilder<QuerySnapshot>(
-          stream: _firestore
-              .collection('story_approval_requests')
-              .where('parentId', isEqualTo: currentUserId)
-              .where('status', isEqualTo: 'pending')
-              .snapshots(),
+        // Dashboard badge: historias pendientes + emergencias activas
+        return StreamBuilder<int>(
+          stream: _controller.getPendingStoryRequestsStream(),
           builder: (context, storiesSnapshot) {
-            print('🔍 [ParentMainShell] Story snapshot recibido:');
-            print('   - hasData: ${storiesSnapshot.hasData}');
-            print('   - hasError: ${storiesSnapshot.hasError}');
-            print('   - connectionState: ${storiesSnapshot.connectionState}');
+            final pendingStoriesCount = storiesSnapshot.data ?? 0;
 
-            // Log para debug
-            if (storiesSnapshot.hasError) {
-              print('❌ [ParentMainShell] Error en story query: ${storiesSnapshot.error}');
-            } else if (storiesSnapshot.hasData) {
-              print('✅ [ParentMainShell] Story requests loaded: ${storiesSnapshot.data!.docs.length}');
-              if (storiesSnapshot.data!.docs.isNotEmpty) {
-                print('📋 [ParentMainShell] Story requests:');
-                for (var doc in storiesSnapshot.data!.docs) {
-                  final data = doc.data() as Map<String, dynamic>;
-                  print('   - storyId: ${data['storyId']}, childId: ${data['childId']}');
-                }
-              } else {
-                print('⚠️ [ParentMainShell] No hay story requests pendientes');
-              }
-            } else {
-              print('⏳ [ParentMainShell] Story requests loading...');
-            }
-
-            final pendingStoriesCount = storiesSnapshot.data?.docs.length ?? 0;
-
-            // Contar emergencias no resueltas de los hijos
-            // NOTA: No podemos usar whereIn + whereNotIn juntos, así que filtramos en cliente
-            return StreamBuilder<QuerySnapshot>(
-              stream: _firestore
-                  .collection('emergencies')
-                  .where('childId', whereIn: childrenIds)
-                  .snapshots(),
+            return StreamBuilder<int>(
+              stream: _controller.getActiveEmergenciesStream(childrenIds),
               builder: (context, emergenciesSnapshot) {
-                // Filtrar emergencias no resueltas en el cliente
-                int unresolvedEmergenciesCount = 0;
-                if (emergenciesSnapshot.hasData) {
-                  unresolvedEmergenciesCount = emergenciesSnapshot.data!.docs
-                      .where((doc) => (doc.data() as Map<String, dynamic>)['status'] != 'resolved')
-                      .length;
-                }
+                final emergenciesCount = emergenciesSnapshot.data ?? 0;
+                final dashboardBadgeCount = pendingStoriesCount + emergenciesCount;
 
-                // ✅ DASHBOARD: Historias pendientes + emergencias no resueltas
-                final dashboardBadgeCount = pendingStoriesCount + unresolvedEmergenciesCount;
+                // Chats badge: chats no leídos
+                return StreamBuilder<int>(
+                  stream: _controller.getUnreadChatsStream(),
+                  builder: (context, chatsSnapshot) {
+                    final unreadChatsCount = chatsSnapshot.data ?? 0;
 
-                // Contar solicitudes de contacto pendientes (whitelist badge)
-                return StreamBuilder<QuerySnapshot>(
-                  stream: _firestore
-                      .collection('notifications')
-                      .where('userId', isEqualTo: currentUserId)
-                      .where('read', isEqualTo: false)
-                      .where('type', isEqualTo: 'contact_request')
-                      .snapshots(),
-                  builder: (context, contactRequestsSnapshot) {
-                    final whitelistBadgeCount = contactRequestsSnapshot.data?.docs.length ?? 0;
-
-                    // Contar chats no leídos
-                    return StreamBuilder<QuerySnapshot>(
-                      stream: _firestore
-                          .collection('chats')
-                          .where('participants', arrayContains: currentUserId)
-                          .snapshots(),
-                      builder: (context, chatSnapshot) {
-                        int totalUnreadMessages = 0;
-
-                        if (chatSnapshot.hasData) {
-                          for (var doc in chatSnapshot.data!.docs) {
-                            final data = doc.data() as Map<String, dynamic>?;
-                            if (data != null) {
-                              final unreadCount = data['unreadCount_$currentUserId'] as int? ?? 0;
-                              totalUnreadMessages += unreadCount;
-                            }
-                          }
-                        }
+                    // Whitelist badge: notificaciones no leídas
+                    return StreamBuilder<int>(
+                      stream: _controller.getUnreadNotificationsStream(),
+                      builder: (context, notificationsSnapshot) {
+                        final unreadNotificationsCount = notificationsSnapshot.data ?? 0;
 
                         return _buildBottomNavBar(
                           colorScheme,
                           showLabels,
                           dashboardBadgeCount,
-                          totalUnreadMessages,
-                          whitelistBadgeCount,
+                          unreadChatsCount,
+                          unreadNotificationsCount,
                         );
                       },
                     );

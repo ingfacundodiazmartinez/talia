@@ -1,7 +1,7 @@
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import 'package:cloud_functions/cloud_functions.dart';
 import '../models/parent.dart';
-import '../models/user.dart' as user_model;
+import '../models/user.dart';
 import '../services/image_service.dart';
 import '../services/user_role_service.dart';
 
@@ -10,7 +10,7 @@ class EditProfileController {
   final String userId;
   final ImageService _imageService;
   final UserRoleService _roleService;
-  final FirebaseAuth _auth;
+  final firebase_auth.FirebaseAuth _auth;
 
   Parent? _parent;
   Map<String, dynamic>? _userData;
@@ -19,10 +19,10 @@ class EditProfileController {
     required this.userId,
     ImageService? imageService,
     UserRoleService? roleService,
-    FirebaseAuth? auth,
+    firebase_auth.FirebaseAuth? auth,
   }) : _imageService = imageService ?? ImageService(),
        _roleService = roleService ?? UserRoleService(),
-       _auth = auth ?? FirebaseAuth.instance;
+       _auth = auth ?? firebase_auth.FirebaseAuth.instance;
 
   /// Inicializa el controller cargando datos del usuario
   Future<void> initialize() async {
@@ -85,7 +85,7 @@ class EditProfileController {
 
   /// Calcula la edad desde una fecha de nacimiento
   int calculateAge(DateTime birthDate) {
-    return user_model.User.calculateAge(birthDate) ?? 0;
+    return User.calculateAge(birthDate) ?? 0;
   }
 
   /// Guarda el perfil actualizado
