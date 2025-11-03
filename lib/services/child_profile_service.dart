@@ -69,11 +69,12 @@ class ChildProfileService {
   /// Realiza el logout del usuario
   Future<void> logout(String userId) async {
     try {
-      // Actualizar estado offline y limpiar token FCM
+      // Actualizar estado offline y limpiar tokens FCM y VoIP
       await _firestore.collection('users').doc(userId).update({
         'isOnline': false,
         'lastSeen': FieldValue.serverTimestamp(),
         'fcmToken': null,
+        'voipToken': null, // Limpiar también el token VoIP
       }).catchError((e) => print('Error actualizando estado: $e'));
 
       // Cerrar sesión

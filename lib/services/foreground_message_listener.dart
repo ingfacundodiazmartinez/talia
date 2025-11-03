@@ -42,6 +42,9 @@ class ForegroundMessageListener {
   /// Key: chatId, Value: timestamp cuando se ignoró
   final Map<String, DateTime> _ignoredChatsFromNotifications = {};
 
+  /// Timestamp de cuando la app volvió del background (para suprimir banners temporalmente)
+  DateTime? _appResumedAt;
+
   /// Inicializar el listener con el navigatorKey global de la app
   void initialize(GlobalKey<NavigatorState> navigatorKey) {
     appLogger.log('══════════════════════════════════════════════════════════════', level: 'INFO');
@@ -90,6 +93,14 @@ class ForegroundMessageListener {
       _ignoredChatsFromNotifications.remove(chatId);
       appLogger.log('✅ Chat $chatId ya no está ignorado', level: 'INFO');
     });
+  }
+
+  /// Marcar que la app volvió del background
+  /// Esto suprime banners por un periodo corto para evitar mostrar notificaciones
+  /// cuando el usuario abre la app manualmente después de recibir notificaciones
+  void markAppResumedFromBackground() {
+    _appResumedAt = DateTime.now();
+    appLogger.log('📱 App vuelta del background - suprimiendo banners por 5 segundos', level: 'INFO');
   }
 
   /// Comenzar a escuchar chats y notificaciones del usuario
@@ -324,6 +335,15 @@ class ForegroundMessageListener {
       return;
     }
 
+    // Ignorar si la app acaba de volver del background (evita banners al abrir manualmente)
+    if (_appResumedAt != null) {
+      final secondsSinceResume = DateTime.now().difference(_appResumedAt!).inSeconds;
+      if (secondsSinceResume < 5) {
+        appLogger.log('🔕 Mensaje ignorado: app vuelta del background hace $secondsSinceResume segundos', level: 'INFO');
+        return;
+      }
+    }
+
     // Verificar si el grupo está silenciado para el usuario actual
     final isMuted = groupData['muted_${user.uid}'] as bool? ?? false;
     if (isMuted) {
@@ -422,6 +442,15 @@ class ForegroundMessageListener {
       final secondsSinceIgnored = DateTime.now().difference(ignoredAt).inSeconds;
       appLogger.log('🔕 Mensaje ignorado: chat abierto desde notificación hace $secondsSinceIgnored segundos', level: 'INFO');
       return;
+    }
+
+    // Ignorar si la app acaba de volver del background (evita banners al abrir manualmente)
+    if (_appResumedAt != null) {
+      final secondsSinceResume = DateTime.now().difference(_appResumedAt!).inSeconds;
+      if (secondsSinceResume < 5) {
+        appLogger.log('🔕 Mensaje ignorado: app vuelta del background hace $secondsSinceResume segundos', level: 'INFO');
+        return;
+      }
     }
 
     // Verificar si el chat está silenciado para el usuario actual

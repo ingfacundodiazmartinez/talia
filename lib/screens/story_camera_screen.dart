@@ -118,6 +118,19 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
         print('✅ Cámaras disponibles: ${_cameras!.length}');
 
+        // 🔍 Encontrar cámara frontal y establecerla como predeterminada
+        final frontCameraIndex = _cameras!.indexWhere(
+          (camera) => camera.lensDirection == CameraLensDirection.front,
+        );
+
+        if (frontCameraIndex != -1) {
+          _selectedCameraIndex = frontCameraIndex;
+          print('📷 Cámara frontal encontrada en índice: $frontCameraIndex');
+        } else {
+          _selectedCameraIndex = 0;
+          print('⚠️ No se encontró cámara frontal, usando índice 0');
+        }
+
         setState(() {
           _hasCameraPermissions = true;
           _hasInitializationFailed = false;
@@ -199,7 +212,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     _controller = CameraController(
       _cameras![_selectedCameraIndex],
       ResolutionPreset.high,
-      enableAudio: false,
+      enableAudio: true, // ✅ Habilitar audio para grabación de video
     );
 
     await _controller!.initialize();

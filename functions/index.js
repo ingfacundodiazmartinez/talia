@@ -125,6 +125,7 @@ exports.moderateMessage = moderation.moderateMessage;
 
 // Chats
 exports.incrementUnreadCount = chats.incrementUnreadCount;
+exports.incrementGroupUnreadCount = chats.incrementGroupUnreadCount;
 exports.sendChatMessage = chats.sendChatMessage;
 exports.sendGroupMessage = chats.sendGroupMessage;
 
@@ -151,6 +152,7 @@ exports.cleanupOldRateLimits = scheduledTasks.cleanupOldRateLimits;
 
 // Transformaciones de imágenes
 exports.transformCharacter = transformations.transformCharacter;
+exports.createCharacterTransformation = transformations.createCharacterTransformation;
 
 // Stickers
 exports.syncStickersScheduled = stickerFunctions.syncStickersScheduled;

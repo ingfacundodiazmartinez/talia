@@ -25,6 +25,13 @@ class _CharacterSelectorDialogState extends State<CharacterSelectorDialog> {
   @override
   void initState() {
     super.initState();
+    // Cargar personajes inmediatamente en background sin bloquear la UI
+    _loadCharactersAsync();
+  }
+
+  /// Cargar personajes de forma asíncrona sin bloquear la UI
+  /// El diálogo se muestra inmediatamente mientras se cargan los personajes
+  void _loadCharactersAsync() {
     _loadCharacters();
   }
 
@@ -35,19 +42,29 @@ class _CharacterSelectorDialogState extends State<CharacterSelectorDialog> {
         _errorMessage = null;
       });
 
-      final characters = await _characterService.getEnabledCharacters();
+      // OPTIMIZACIÓN: Cargar personajes con timeout para mostrar error rápido si falla
+      final characters = await _characterService.getEnabledCharacters().timeout(
+        Duration(seconds: 10),
+        onTimeout: () {
+          print('⚠️ Timeout cargando personajes');
+          throw Exception('La carga de personajes está tardando demasiado');
+        },
+      );
 
       if (mounted) {
         setState(() {
           _characters = characters;
           _isLoading = false;
         });
+        print('✅ ${characters.length} personajes cargados');
       }
     } catch (e) {
       print('❌ Error cargando personajes: $e');
       if (mounted) {
         setState(() {
-          _errorMessage = 'Error al cargar personajes';
+          _errorMessage = e.toString().contains('tardando')
+              ? 'La carga está tardando demasiado. Verifica tu conexión.'
+              : 'Error al cargar personajes';
           _isLoading = false;
         });
       }
@@ -217,11 +234,29 @@ class _CharacterSelectorDialogState extends State<CharacterSelectorDialog> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            CircularProgressIndicator(color: Color(0xFF9D7FE8)),
-            SizedBox(height: 16),
+            // Animación más atractiva
+            SizedBox(
+              width: 60,
+              height: 60,
+              child: CircularProgressIndicator(
+                color: Color(0xFF9D7FE8),
+                strokeWidth: 4,
+              ),
+            ),
+            SizedBox(height: 24),
             Text(
               'Cargando personajes...',
               style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: isDarkMode ? colorScheme.onSurface : Colors.black87,
+              ),
+            ),
+            SizedBox(height: 8),
+            Text(
+              'Esto solo tomará un momento',
+              style: TextStyle(
+                fontSize: 13,
                 color: isDarkMode ? colorScheme.onSurfaceVariant : Colors.grey[600],
               ),
             ),

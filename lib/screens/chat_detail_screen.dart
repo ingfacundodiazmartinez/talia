@@ -24,6 +24,7 @@ import 'chat/widgets/chat_selection_bar_widget.dart';
 import 'chat/widgets/media_handlers_mixin.dart';
 import 'contact_profile_screen.dart';
 import 'video_call_screen.dart';
+import 'audio_call_screen.dart';
 import 'forward_messages_screen.dart';
 
 /// Pantalla de chat individual (1 a 1) - REFACTORIZADA
@@ -66,6 +67,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   // Local UI state
   bool _showEmojiPicker = false;
   bool _isRecording = false;
+  bool _isSendingMessage = false;
   Map<String, dynamic>? _replyingTo;
   OverlayEntry? _reactionOverlay;
   bool _isSelectionMode = false;
@@ -85,6 +87,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     WidgetsBinding.instance.addObserver(this);
     NotificationService().setCurrentChat(widget.chatId);
     ForegroundMessageListener().setCurrentOpenChat(widget.chatId);
+
+    // 🗑️ Limpiar notificaciones de este chat al abrirlo
+    NotificationService().clearChatNotifications(widget.chatId);
 
     _controller = ChatControllerOptimistic(
       chatId: widget.chatId,
@@ -217,21 +222,24 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     }
 
     final text = _messageController.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty || _isSendingMessage) return;
 
-    final replyToCapture = _replyingTo;
-    final editingMessageId = _editingBlockedMessage?['id'];
-
-    _messageController.clear();
-
-    if (mounted) {
-      setState(() {
-        _replyingTo = null;
-        _editingBlockedMessage = null;
-      });
-    }
+    // Prevenir envíos duplicados
+    setState(() => _isSendingMessage = true);
 
     try {
+      final replyToCapture = _replyingTo;
+      final editingMessageId = _editingBlockedMessage?['id'];
+
+      _messageController.clear();
+
+      if (mounted) {
+        setState(() {
+          _replyingTo = null;
+          _editingBlockedMessage = null;
+        });
+      }
+
       if (editingMessageId != null) {
         await _controller.updateBlockedMessage(editingMessageId, text);
       } else {
@@ -239,6 +247,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
       }
     } catch (e) {
       _handleSendError(e, text);
+    } finally {
+      if (mounted) {
+        setState(() => _isSendingMessage = false);
+      }
     }
   }
 
@@ -365,7 +377,21 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
       setState(() => _isRecording = false);
 
       if (path != null && path.isNotEmpty) {
-        await _controller.sendAudio(path);
+        // 1. Crear burbuja optimista inmediatamente con waveform real
+        await _controller.createOptimisticAudioBubble(path);
+
+        // 2. Subir en background
+        _controller.processAndUploadAudio(path).catchError((e) {
+          print('❌ Error subiendo audio en background: $e');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Error enviando audio: $e'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+        });
       }
     } catch (e) {
       print('❌ Error deteniendo grabación: $e');
@@ -510,17 +536,30 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
       print('📞 Devolviendo llamada ($callType) a ${widget.contactName}');
 
       if (mounted) {
-        Navigator.of(context, rootNavigator: true).push(
-          MaterialPageRoute(
-            builder: (context) => VideoCallScreen(
-              callId: DateTime.now().millisecondsSinceEpoch.toString(),
-              receiverId: widget.contactId,
-              remoteName: widget.contactName,
-              isCaller: true,
-              isVideo: callType == 'video',
+        if (callType == 'audio') {
+          Navigator.of(context, rootNavigator: true).push(
+            MaterialPageRoute(
+              builder: (context) => AudioCallScreen(
+                callId: DateTime.now().millisecondsSinceEpoch.toString(),
+                receiverId: widget.contactId,
+                remoteName: widget.contactName,
+                isCaller: true,
+              ),
             ),
-          ),
-        );
+          );
+        } else {
+          Navigator.of(context, rootNavigator: true).push(
+            MaterialPageRoute(
+              builder: (context) => VideoCallScreen(
+                callId: DateTime.now().millisecondsSinceEpoch.toString(),
+                receiverId: widget.contactId,
+                remoteName: widget.contactName,
+                isCaller: true,
+                isVideo: true,
+              ),
+            ),
+          );
+        }
       }
     } catch (e) {
       print('❌ Error devolviendo llamada: $e');
@@ -626,14 +665,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
         });
       },
       onShowReactionPicker: _showReactionPicker,
-      onReply: (messageId, text) {
+      onReply: (messageId, messageData) {
         setState(() {
-          _replyingTo = {
-            'id': messageId,
-            'text': text,
-            'senderId': FirebaseAuth.instance.currentUser!.uid,
-            'senderName': widget.contactName,
-          };
+          _replyingTo = messageData;
         });
       },
       onReplyTap: _scrollToSpecificMessage,

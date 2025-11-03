@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -10,10 +11,10 @@ import '../controllers/group_chat_controller.dart';
 import '../notification_service.dart';
 import '../services/foreground_message_listener.dart';
 import '../services/reaction_service.dart';
-import '../services/contact_alias_service.dart';
 import '../services/message_status_helper.dart';
 import '../services/read_receipts_service.dart';
 import '../services/delivery_receipts_service.dart';
+import '../services/audio_processing_service.dart';
 import '../widgets/reaction_picker.dart';
 import '../models/chat_message.dart';
 import 'chat/widgets/group_chat_app_bar.dart';
@@ -58,13 +59,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   final ScrollController _scrollController = ScrollController();
   final AudioRecorder _audioRecorder = AudioRecorder();
   final ReactionService _reactionService = ReactionService();
-  final ContactAliasService _aliasService = ContactAliasService();
   final ReadReceiptsService _readReceiptsService = ReadReceiptsService();
   final DeliveryReceiptsService _deliveryReceiptsService = DeliveryReceiptsService();
 
   // Estado local de UI SOLAMENTE
   bool _showEmojiPicker = false;
   bool _isRecording = false;
+  bool _isSendingMessage = false;
   String? _audioPath;
   Map<String, dynamic>? _replyingTo;
   OverlayEntry? _reactionOverlay;
@@ -89,6 +90,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
 
     // Establecer el chat actual en ForegroundMessageListener para suprimir custom notifications
     ForegroundMessageListener().setCurrentOpenChat(widget.groupId);
+
+    // 🗑️ Limpiar notificaciones de este grupo al abrirlo
+    NotificationService().clearGroupNotifications(widget.groupId);
 
     _controller = GroupChatController(
       groupId: widget.groupId,
@@ -263,30 +267,39 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
 
   Future<void> _handleSendMessage() async {
     final text = _messageController.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty || _isSendingMessage) return;
 
-    // Capturar replyTo antes de limpiarlo (para el envío)
-    final replyToCapture = _replyingTo;
+    // Prevenir envíos duplicados
+    setState(() => _isSendingMessage = true);
 
-    _messageController.clear();
+    try {
+      // Capturar replyTo antes de limpiarlo (para el envío)
+      final replyToCapture = _replyingTo;
 
-    // Limpiar el reply optimísticamente (ANTES de enviar)
-    if (mounted) {
-      setState(() => _replyingTo = null);
-    }
+      _messageController.clear();
 
-    final success = await _controller.sendTextMessage(
-      text: text,
-      replyTo: replyToCapture,
-    );
+      // Limpiar el reply optimísticamente (ANTES de enviar)
+      if (mounted) {
+        setState(() => _replyingTo = null);
+      }
 
-    if (!success && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Error al enviar mensaje'),
-          backgroundColor: Colors.red,
-        ),
+      final success = await _controller.sendTextMessage(
+        text: text,
+        replyTo: replyToCapture,
       );
+
+      if (!success && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Error al enviar mensaje'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isSendingMessage = false);
+      }
     }
   }
 
@@ -413,8 +426,20 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
       setState(() => _isRecording = false);
 
       if (path != null && path.isNotEmpty) {
-        final success = await _controller.sendAudio(path);
-        if (!success && mounted) {
+        // 1. Procesar waveform inmediatamente
+        print('🎵 Procesando waveform del audio...');
+        final AudioProcessingService audioProcessing = AudioProcessingService();
+        final File audioFile = File(path);
+        final waveformData = await audioProcessing.extractWaveform(audioFile);
+        print('✅ Waveform procesado: ${waveformData.length} puntos');
+
+        // 2. Enviar con optimistic update (muestra inmediatamente)
+        final messageId = await _controller.sendAudioOptimistic(
+          audioPath: path,
+          waveformData: waveformData,
+        );
+
+        if (messageId == null && mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text('Error al enviar audio'),
@@ -613,18 +638,22 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
           // Si es un error de permisos (usuario ya no es miembro), cerrar la pantalla
           final error = snapshot.error.toString();
           if (error.contains('PERMISSION_DENIED') || error.contains('Missing or insufficient permissions')) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted) {
+            // Cerrar inmediatamente sin mostrar spinner
+            Future.microtask(() {
+              if (mounted && Navigator.of(context).canPop()) {
                 Navigator.of(context).pop();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Ya no eres miembro de este grupo'),
-                    duration: Duration(seconds: 2),
-                  ),
-                );
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Ya no eres miembro de este grupo'),
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+                }
               }
             });
-            return Center(child: CircularProgressIndicator());
+            // Retornar widget vacío en lugar de spinner
+            return SizedBox.shrink();
           }
           return Center(child: Text('Error: ${snapshot.error}'));
         }
@@ -720,72 +749,35 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
                 }
               }
 
-              // Obtener nombre real y alias en tiempo real
-              return StreamBuilder<DocumentSnapshot>(
-                stream: FirebaseFirestore.instance.collection('users').doc(senderId).snapshots(),
-                builder: (context, userSnapshot) {
-                  String realName = 'Usuario';
-                  String photoURL = '';
+              // ✅ Usar datos cacheados del controller (sin streams anidados)
+              final realName = _controller.getUserName(senderId);
+              final photoURL = _controller.getUserPhoto(senderId);
+              final displayName = realName; // Por ahora sin alias para evitar más streams
+              final isHighlighted = _highlightedMessageId == messageDoc.id;
 
-                  if (userSnapshot.hasData && userSnapshot.data!.exists) {
-                    final userData = userSnapshot.data!.data() as Map<String, dynamic>?;
-                    realName = userData?['name'] ?? 'Usuario';
-                    photoURL = userData?['photoURL'] ?? '';
-                  }
+              // ✅ Calcular estado del mensaje usando datos cacheados del controller
+              MessageStatus messageStatus;
+              final members = _controller.memberIds;
 
-                  // Obtener alias (si existe) o nombre real
-                  return StreamBuilder<String>(
-                    stream: _aliasService.watchDisplayName(senderId, realName),
-                    builder: (context, aliasSnapshot) {
-                      final displayName = aliasSnapshot.data ?? realName;
-                      final isHighlighted = _highlightedMessageId == messageDoc.id;
+              // Simplificar lógica de estado para evitar stream del grupo
+              if (members.isNotEmpty) {
+                final activeMembers = members; // Asumir todos activos para simplicidad
+                final membersWithReadReceipts = members; // Asumir todos con read receipts
 
-                      // Obtener información del grupo para calcular estado correcto
-                      return StreamBuilder<DocumentSnapshot>(
-                        stream: FirebaseFirestore.instance.collection('groups').doc(widget.groupId).snapshots(),
-                        builder: (context, groupSnapshot) {
-                          // Calcular estado del mensaje
-                          MessageStatus messageStatus;
-
-                          if (groupSnapshot.hasData && groupSnapshot.data!.exists) {
-                            final groupData = groupSnapshot.data!.data() as Map<String, dynamic>?;
-                            if (groupData != null) {
-                              // Obtener miembros activos (no pendientes)
-                              final members = List<String>.from(groupData['members'] ?? []);
-                              final pendingMembers = List<String>.from(groupData['pendingMembers'] ?? []);
-                              final activeMembers = members.where((id) => !pendingMembers.contains(id)).toList();
-
-                              // Obtener miembros con confirmación de lectura activada
-                              final memberSettings = groupData['memberSettings'] as Map<String, dynamic>? ?? {};
-                              final membersWithReadReceipts = activeMembers.where((memberId) {
-                                final settings = memberSettings[memberId] as Map<String, dynamic>? ?? {};
-                                return settings['showReadReceipts'] ?? true; // Por defecto true
-                              }).toList();
-
-                              // Usar calculateGroupStatus
-                              messageStatus = MessageStatusHelper.calculateGroupStatus(
-                                data: messageData,
-                                senderId: senderId,
-                                hasServerTimestamp: timestamp != null,
-                                activeMembers: activeMembers,
-                                membersWithReadReceipts: membersWithReadReceipts,
-                              );
-                            } else {
-                              // Fallback a cálculo normal si no hay datos del grupo
-                              messageStatus = MessageStatusHelper.calculateStatus(
-                                data: messageData,
-                                senderId: senderId,
-                                hasServerTimestamp: timestamp != null,
-                              );
-                            }
-                          } else {
-                            // Fallback a cálculo normal si no hay snapshot
-                            messageStatus = MessageStatusHelper.calculateStatus(
-                              data: messageData,
-                              senderId: senderId,
-                              hasServerTimestamp: timestamp != null,
-                            );
-                          }
+                messageStatus = MessageStatusHelper.calculateGroupStatus(
+                  data: messageData,
+                  senderId: senderId,
+                  hasServerTimestamp: timestamp != null,
+                  activeMembers: activeMembers,
+                  membersWithReadReceipts: membersWithReadReceipts,
+                );
+              } else {
+                messageStatus = MessageStatusHelper.calculateStatus(
+                  data: messageData,
+                  senderId: senderId,
+                  hasServerTimestamp: timestamp != null,
+                );
+              }
 
                           Widget messageBubble = MessageBubble(
                             key: ValueKey('msg_${messageDoc.id}'),
@@ -797,7 +789,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
                             audioUrl: messageData['audioUrl'],
                             localPath: messageData['localPath'],
                             waveformData: messageData['waveformData'] != null
-                                ? List<double>.from(messageData['waveformData'] as List)
+                                ? (messageData['waveformData'] as List).map((e) => (e as num).toDouble()).toList()
                                 : null,
                             status: messageStatus,
                         replyTo: messageData['replyTo'],
@@ -863,12 +855,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
                       }
 
                       return messageBubble;
-                        },
-                      );
-                    },
-                  );
-                },
-              );
             }
 
             return const Padding(

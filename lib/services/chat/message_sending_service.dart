@@ -44,6 +44,7 @@ class MessageSendingService {
     required String text,
     required String contactId,
     Map<String, dynamic>? replyTo,
+    String? localId, // ✅ Agregar parámetro localId
   }) async {
     // 1. Verificar moderación a nivel de CHAT (solo si el chat existe)
     bool moderationEnabled = false;
@@ -133,6 +134,7 @@ class MessageSendingService {
       'chatId': chatId,
       'text': text,
       if (replyTo != null) 'replyTo': replyTo,
+      if (localId != null) 'localId': localId, // ✅ Enviar localId a Cloud Function
     }).timeout(_sendTimeout);
     print('📥 [MessageSendingService] Respuesta de Cloud Function: ${result.data}');
 

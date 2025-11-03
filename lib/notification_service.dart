@@ -43,7 +43,11 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   }
 
   // Si es una llamada, mostrar CallKit en pantalla completa
-  if (message.data['type'] == 'video_call' || message.data['type'] == 'audio_call') {
+  if (message.data['type'] == 'video_call' ||
+      message.data['type'] == 'audio_call' ||
+      message.data['type'] == 'group_video_call' ||
+      message.data['type'] == 'group_audio_call' ||
+      message.data['type'] == 'emergency_call') {
     print('📞 LLAMADA ENTRANTE DETECTADA EN SEGUNDO PLANO');
     print('📞 Tipo de llamada: ${message.data['type']}');
     print('📞 Call ID: ${message.data['callId']}');
@@ -56,9 +60,9 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         callId: message.data['callId'] ?? message.messageId ?? '',
         callerName: message.data['callerName'] ?? 'Usuario',
         callerId: message.data['callerId'] ?? message.data['senderId'] ?? '',
-        callerPhotoUrl: message.data['callerPhotoURL'],
-        callType: message.data['type'] == 'audio_call' ? 'audio' : 'video',
-        isEmergency: message.data['isEmergency'] == 'true',
+        callerPhotoUrl: message.data['callerPhotoURL'] ?? message.data['senderPhotoUrl'],
+        callType: (message.data['type'] == 'audio_call' || message.data['type'] == 'group_audio_call') ? 'audio' : 'video',
+        isEmergency: message.data['isEmergency'] == 'true' || message.data['isEmergency'] == true,
         extraData: message.data,
       );
       print('✅ CallKit mostrado exitosamente');
@@ -134,6 +138,57 @@ class NotificationService {
         data,
         SetOptions(merge: true),
       );
+    }
+  }
+
+  /// Inicializar token FCM después del login exitoso
+  /// Debe llamarse desde el flujo de autenticación para asegurar que el token se guarde
+  Future<void> initializeFCMTokenAfterLogin() async {
+    print('🔄 Inicializando FCM token después del login...');
+    await _getFCMToken();
+  }
+
+  /// Limpiar tokens FCM duplicados de otros usuarios
+  /// Esto previene que las notificaciones lleguen a usuarios anteriores del mismo dispositivo
+  Future<void> _cleanupDuplicateTokens(String newToken) async {
+    try {
+      final currentUserId = _auth.currentUser?.uid;
+      if (currentUserId == null) return;
+
+      print('🧹 Verificando tokens FCM duplicados para: ${newToken.substring(0, 20)}...');
+
+      // Buscar otros usuarios que tengan el mismo token FCM
+      final duplicateUsersQuery = await _firestore
+          .collection('users')
+          .where('fcmToken', isEqualTo: newToken)
+          .get();
+
+      int cleanedCount = 0;
+      for (final doc in duplicateUsersQuery.docs) {
+        final userId = doc.id;
+
+        // No limpiar el token del usuario actual
+        if (userId == currentUserId) continue;
+
+        // Limpiar token del usuario anterior
+        await _firestore.collection('users').doc(userId).update({
+          'fcmToken': FieldValue.delete(),
+          'fcmTokenClearedAt': FieldValue.serverTimestamp(),
+          'fcmTokenClearedReason': 'duplicate_token_cleanup',
+        });
+
+        cleanedCount++;
+        print('🗑️ Token FCM limpiado del usuario anterior: $userId');
+      }
+
+      if (cleanedCount > 0) {
+        print('✅ Se limpiaron $cleanedCount tokens FCM duplicados');
+      } else {
+        print('✅ No se encontraron tokens FCM duplicados');
+      }
+    } catch (e) {
+      print('❌ Error limpiando tokens duplicados: $e');
+      // No hacer throw para no bloquear el flujo principal de registro
     }
   }
 
@@ -274,6 +329,12 @@ class NotificationService {
   // Obtener token FCM
   Future<void> _getFCMToken() async {
     try {
+      print('🔄 Verificando estado de autenticación...');
+      if (_auth.currentUser == null) {
+        print('⚠️ No hay usuario autenticado, FCM token se obtendrá después del login');
+        return;
+      }
+
       print('🔄 Obteniendo FCM token...');
       _fcmToken = await _fcm.getToken();
 
@@ -287,24 +348,26 @@ class NotificationService {
       }
 
       print('🔑 FCM Token obtenido: ${_fcmToken!.substring(0, 20)}...');
+      print('💾 Guardando FCM token en Firestore...');
 
-      if (_auth.currentUser != null) {
-        print('💾 Guardando FCM token en Firestore...');
-        // Guardar token en Firestore (upsert)
-        await _upsertUserData({
-          'fcmToken': _fcmToken,
-          'fcmTokenUpdatedAt': FieldValue.serverTimestamp(),
-        });
-        print('✅ FCM token guardado exitosamente');
-      } else {
-        print('⚠️ No hay usuario autenticado, no se guardó el FCM token');
-      }
+      // IMPORTANTE: Limpiar token duplicado de otros usuarios antes de registrar
+      await _cleanupDuplicateTokens(_fcmToken!);
+
+      // Guardar token en Firestore (upsert)
+      await _upsertUserData({
+        'fcmToken': _fcmToken,
+        'fcmTokenUpdatedAt': FieldValue.serverTimestamp(),
+      });
+      print('✅ FCM token guardado exitosamente');
 
       // Escuchar cambios de token
-      _fcm.onTokenRefresh.listen((newToken) {
+      _fcm.onTokenRefresh.listen((newToken) async {
         print('🔄 FCM token actualizado');
         _fcmToken = newToken;
         if (_auth.currentUser != null) {
+          // Limpiar token duplicado de otros usuarios antes de registrar el nuevo
+          await _cleanupDuplicateTokens(newToken);
+
           _upsertUserData({
             'fcmToken': newToken,
             'fcmTokenUpdatedAt': FieldValue.serverTimestamp(),
@@ -346,10 +409,36 @@ class NotificationService {
       );
 
       // Verificar si es una videollamada o llamada de audio
-      if (message.data['type'] == 'video_call' || message.data['type'] == 'audio_call') {
-        print('📞 ${message.data['type'] == 'video_call' ? 'Videollamada' : 'Llamada de audio'} entrante detectada');
-        print('✅ App en foreground - NO mostrar CallKit (el listener de Firestore en child_home_controller ya muestra el diálogo de Flutter)');
-        // NO hacer nada - el listener de Firestore ya maneja esto mostrando IncomingCallDialog
+      if (message.data['type'] == 'video_call' ||
+          message.data['type'] == 'audio_call' ||
+          message.data['type'] == 'group_video_call' ||
+          message.data['type'] == 'group_audio_call' ||
+          message.data['type'] == 'emergency_call') {
+        print('📞 ${message.data['type']} entrante detectada en FOREGROUND');
+        print('📞 Mostrando CallKit incluso en foreground para experiencia nativa');
+
+        try {
+          if (Platform.isAndroid) {
+            // Android usa CallKit
+            await _callKit.showIncomingCall(
+              callId: message.data['callId'] ?? message.messageId ?? '',
+              callerName: message.data['callerName'] ?? 'Usuario',
+              callerId: message.data['callerId'] ?? message.data['senderId'] ?? '',
+              callerPhotoUrl: message.data['callerPhotoURL'] ?? message.data['senderPhotoUrl'],
+              callType: (message.data['type'] == 'audio_call' || message.data['type'] == 'group_audio_call') ? 'audio' : 'video',
+              isEmergency: message.data['isEmergency'] == 'true' || message.data['isEmergency'] == true,
+              extraData: message.data,
+            );
+            print('✅ CallKit (Android) mostrado exitosamente en foreground');
+          } else if (Platform.isIOS) {
+            // iOS usa VoIP nativo - las notificaciones VoIP se manejan automáticamente por el sistema
+            print('✅ iOS VoIP - las llamadas se manejan automáticamente por el sistema');
+            // En iOS, las notificaciones VoIP push aparecen automáticamente como CallKit
+            // No necesitamos hacer nada adicional aquí
+          }
+        } catch (e) {
+          print('❌ ERROR mostrando notificación nativa en foreground: $e');
+        }
         return;
       } else {
         // ✅ NO mostrar notificaciones push cuando la app está en foreground
@@ -1136,5 +1225,51 @@ class NotificationService {
     } catch (e) {
       print('❌ Error limpiando token: $e');
     }
+  }
+
+  /// Limpia todas las notificaciones de un chat específico (1-1 o grupo)
+  Future<void> clearChatNotifications(String chatId, {bool isGroup = false}) async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) return;
+
+      print('🗑️ Limpiando notificaciones para chat: $chatId (isGroup: $isGroup)');
+
+      // Buscar todas las notificaciones del usuario para este chat
+      final query = await _firestore
+          .collection('notifications')
+          .where('userId', isEqualTo: user.uid)
+          .where('chatId', isEqualTo: chatId)
+          .get();
+
+      if (query.docs.isEmpty) {
+        print('ℹ️ No hay notificaciones para limpiar en chat: $chatId');
+        return;
+      }
+
+      // Borrar todas las notificaciones encontradas
+      final batch = _firestore.batch();
+      for (final doc in query.docs) {
+        batch.delete(doc.reference);
+      }
+
+      await batch.commit();
+      print('✅ Limpiadas ${query.docs.length} notificaciones para chat: $chatId');
+
+      // Opcional: También limpiar notificaciones locales del sistema
+      if (Platform.isAndroid || Platform.isIOS) {
+        // Nota: No hay forma directa de limpiar notificaciones específicas del sistema
+        // sin un ID específico, pero las nuevas notificaciones no aparecerán
+        await _localNotifications.cancelAll();
+        print('🗑️ Notificaciones locales limpiadas');
+      }
+    } catch (e) {
+      print('❌ Error limpiando notificaciones del chat $chatId: $e');
+    }
+  }
+
+  /// Limpia todas las notificaciones de un grupo específico (alias para claridad)
+  Future<void> clearGroupNotifications(String groupId) async {
+    return clearChatNotifications(groupId, isGroup: true);
   }
 }

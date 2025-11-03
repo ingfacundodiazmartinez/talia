@@ -27,13 +27,13 @@ class AudioProcessingService {
           return _generateDefaultWaveform();
         }
 
-        // Convertir a valores absolutos
-        final absValues = waveData.map((v) => v.abs()).toList();
+        // Convertir a valores absolutos y asegurar que sean double
+        final absValues = waveData.map((v) => v.abs().toDouble()).toList();
 
         // Encontrar min y max para normalización
         final maxVal = absValues.reduce((a, b) => a > b ? a : b);
         final minVal = absValues.reduce((a, b) => a < b ? a : b);
-        final range = maxVal - minVal;
+        final range = (maxVal - minVal).toDouble();
 
         if (range == 0) {
           print('⚠️ [AUDIO PROCESSING] Range es 0, usando datos por defecto');

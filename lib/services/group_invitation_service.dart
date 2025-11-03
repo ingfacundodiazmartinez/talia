@@ -97,10 +97,10 @@ class GroupInvitationService {
         };
       }
 
-      // Hay aprobaciones requeridas - crear invitación y agregar a pending_members
-      // Agregar a pending_members en el grupo
+      // Hay aprobaciones requeridas - crear invitación y agregar a pendingMembers
+      // Agregar a pendingMembers en el grupo
       await _firestore.collection('groups').doc(groupId).update({
-        'pending_members': FieldValue.arrayUnion([invitedChildId]),
+        'pendingMembers': FieldValue.arrayUnion([invitedChildId]),
       });
 
       // Calcular fecha de expiración (48 horas)

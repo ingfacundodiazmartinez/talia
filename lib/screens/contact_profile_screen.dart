@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import 'package:intl/intl.dart';
-import '../services/video_call_service.dart';
 import '../services/block_service.dart';
 import '../services/contact_alias_service.dart';
+import '../services/favorite_service.dart';
 import '../models/user.dart';
 import '../models/child.dart';
 import 'video_call_screen.dart';
@@ -27,19 +28,29 @@ class ContactProfileScreen extends StatefulWidget {
   State<ContactProfileScreen> createState() => _ContactProfileScreenState();
 }
 
-class _ContactProfileScreenState extends State<ContactProfileScreen> {
+class _ContactProfileScreenState extends State<ContactProfileScreen>
+    with TickerProviderStateMixin {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final VideoCallService _videoCallService = VideoCallService();
   final BlockService _blockService = BlockService();
   final ContactAliasService _aliasService = ContactAliasService();
 
   bool _isBlocked = false;
   bool _isLoadingBlockStatus = true;
 
+  // Tab controller para las pestañas
+  late TabController _tabController;
+
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 2, vsync: this);
     _checkBlockStatus();
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
   }
 
   Future<void> _checkBlockStatus() async {
@@ -319,7 +330,7 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
-      backgroundColor: colorScheme.background,
+      backgroundColor: colorScheme.surface,
       appBar: AppBar(
         title: Text('Perfil'),
         elevation: 0,
@@ -660,11 +671,71 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
                   ),
                 ],
 
-                // Galería de medios compartidos
+                // Tabs para Perfil y Favoritos
                 SizedBox(height: 20),
-                MediaGalleryWidget(
-                  chatId: widget.chatId,
-                  isOwnProfile: false,
+                Container(
+                  margin: EdgeInsets.symmetric(horizontal: 20),
+                  decoration: BoxDecoration(
+                    color: colorScheme.surface,
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.05),
+                        blurRadius: 10,
+                        offset: Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    children: [
+                      // Tab Bar
+                      Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.only(
+                            topLeft: Radius.circular(16),
+                            topRight: Radius.circular(16),
+                          ),
+                        ),
+                        child: TabBar(
+                          controller: _tabController,
+                          indicatorColor: colorScheme.primary,
+                          labelColor: colorScheme.primary,
+                          unselectedLabelColor: colorScheme.onSurfaceVariant,
+                          indicatorWeight: 3,
+                          dividerColor: Colors.transparent,
+                          tabs: [
+                            Tab(
+                              icon: Icon(Icons.info_outline),
+                              text: 'Perfil',
+                            ),
+                            Tab(
+                              icon: Icon(Icons.star_outline),
+                              text: 'Favoritos',
+                            ),
+                          ],
+                        ),
+                      ),
+                      // Tab View
+                      SizedBox(
+                        height: 400, // Fixed height for the tab content
+                        child: TabBarView(
+                          controller: _tabController,
+                          children: [
+                            // Tab 1: Galería de medios (como estaba antes)
+                            Padding(
+                              padding: EdgeInsets.all(16),
+                              child: MediaGalleryWidget(
+                                chatId: widget.chatId,
+                                isOwnProfile: false,
+                              ),
+                            ),
+                            // Tab 2: Mensajes favoritos
+                            _buildFavoritesTab(),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
 
                 SizedBox(height: 40),
@@ -673,6 +744,315 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
           );
         },
       ),
+    );
+  }
+
+  Widget _buildFavoritesTab() {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return StreamBuilder<List<Map<String, dynamic>>>(
+      stream: FavoriteService().getFavoriteMessagesStream(
+        chatId: widget.chatId,
+        isGroupChat: false, // Este es un chat 1-1 ya que es contact profile
+      ),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                SizedBox(
+                  width: 40,
+                  height: 40,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 3,
+                    valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
+                  ),
+                ),
+                SizedBox(height: 16),
+                Text(
+                  'Cargando favoritos...',
+                  style: TextStyle(
+                    color: colorScheme.onSurfaceVariant,
+                    fontSize: 14,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        if (snapshot.hasError) {
+          print('❌ Error cargando favoritos: ${snapshot.error}');
+          return Center(
+            child: Padding(
+              padding: EdgeInsets.all(32),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Icon(
+                      Icons.error_outline_rounded,
+                      color: Colors.red,
+                      size: 48,
+                    ),
+                  ),
+                  SizedBox(height: 20),
+                  Text(
+                    'Error al cargar favoritos',
+                    style: TextStyle(
+                      color: Colors.red,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    snapshot.error.toString(),
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.grey[600],
+                      fontSize: 12,
+                    ),
+                  ),
+                  SizedBox(height: 16),
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      // Trigger rebuild
+                      setState(() {});
+                    },
+                    icon: Icon(Icons.refresh, size: 18),
+                    label: Text('Reintentar'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: colorScheme.primary,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+
+        final favoriteMessages = snapshot.data ?? [];
+
+        if (favoriteMessages.isEmpty) {
+          return Center(
+            child: Padding(
+              padding: EdgeInsets.all(32),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(24),
+                    decoration: BoxDecoration(
+                      color: colorScheme.primary.withValues(alpha: 0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.star_border_rounded,
+                      color: colorScheme.primary,
+                      size: 48,
+                    ),
+                  ),
+                  SizedBox(height: 24),
+                  Text(
+                    'Sin mensajes favoritos',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      color: colorScheme.onSurface,
+                    ),
+                  ),
+                  SizedBox(height: 12),
+                  Text(
+                    'Los mensajes que marques como favoritos aparecerán aquí',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: colorScheme.onSurfaceVariant,
+                      fontSize: 14,
+                      height: 1.4,
+                    ),
+                  ),
+                  SizedBox(height: 20),
+                  Container(
+                    padding: EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: colorScheme.outline.withValues(alpha: 0.2),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.info_outline_rounded,
+                          color: colorScheme.primary,
+                          size: 20,
+                        ),
+                        SizedBox(width: 8),
+                        Flexible(
+                          child: Text(
+                            'Mantén presionado un mensaje para marcarlo como favorito',
+                            style: TextStyle(
+                              color: colorScheme.onSurfaceVariant,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+
+        return ListView.separated(
+          padding: EdgeInsets.all(16),
+          itemCount: favoriteMessages.length,
+          separatorBuilder: (context, index) => SizedBox(height: 12),
+          itemBuilder: (context, index) {
+            final messageData = favoriteMessages[index];
+
+            final text = messageData['text'] ?? '';
+            final timestamp = messageData['timestamp'] as Timestamp?;
+            final senderId = messageData['senderId'] ?? '';
+            final isMe = senderId == firebase_auth.FirebaseAuth.instance.currentUser?.uid;
+            final mediaType = messageData['mediaType'] as String?;
+            final mediaUrl = messageData['mediaUrl'] as String?;
+
+            final formattedTime = timestamp != null
+                ? DateFormat('dd/MM/yyyy HH:mm').format(timestamp.toDate())
+                : '';
+
+            return Container(
+              decoration: BoxDecoration(
+                color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: Colors.amber.withValues(alpha: 0.3),
+                  width: 1.5,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.amber.withValues(alpha: 0.1),
+                    blurRadius: 8,
+                    offset: Offset(0, 2),
+                  ),
+                ],
+              ),
+              padding: EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Header con info del remitente y fecha
+                  Row(
+                    children: [
+                      Container(
+                        padding: EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: Colors.amber.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(
+                          Icons.star,
+                          color: Colors.amber[600],
+                          size: 16,
+                        ),
+                      ),
+                      SizedBox(width: 8),
+                      Text(
+                        isMe ? 'Tú' : widget.contactName,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: colorScheme.primary,
+                          fontSize: 14,
+                        ),
+                      ),
+                      Spacer(),
+                      Text(
+                        formattedTime,
+                        style: TextStyle(
+                          color: colorScheme.onSurfaceVariant,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: 8),
+
+                  // Contenido del mensaje
+                  if (mediaType != null && mediaUrl != null) ...[
+                    // Mensaje con media
+                    Row(
+                      children: [
+                        Icon(
+                          mediaType == 'image'
+                              ? Icons.image
+                              : mediaType == 'video'
+                                  ? Icons.videocam
+                                  : Icons.audiotrack,
+                          color: colorScheme.onSurfaceVariant,
+                          size: 20,
+                        ),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            mediaType == 'image'
+                                ? 'Imagen'
+                                : mediaType == 'video'
+                                    ? 'Video'
+                                    : 'Audio',
+                            style: TextStyle(
+                              fontStyle: FontStyle.italic,
+                              color: colorScheme.onSurfaceVariant,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (text.isNotEmpty) ...[
+                      SizedBox(height: 4),
+                      Text(
+                        text,
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: colorScheme.onSurface,
+                          height: 1.4,
+                        ),
+                      ),
+                    ],
+                  ] else if (text.isNotEmpty) ...[
+                    // Solo texto
+                    Text(
+                      text,
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: colorScheme.onSurface,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
   }
 

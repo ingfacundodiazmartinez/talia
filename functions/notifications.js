@@ -112,27 +112,30 @@ exports.sendNotificationOnCreate = onDocumentCreated(
       }
 
       // ⚡ VERIFICAR SI EL CHAT ESTÁ SILENCIADO
-      if (notification.type === "chat_message" && notification.data?.chatId) {
+      if ((notification.type === "chat_message" || notification.type === "group_message") && notification.data?.chatId) {
         const chatId = notification.data.chatId;
-        console.log(`🔇 Verificando si chat ${chatId} está silenciado para usuario ${userId}`);
+        const isGroup = notification.type === "group_message";
+        console.log(`🔇 Verificando si ${isGroup ? 'grupo' : 'chat'} ${chatId} está silenciado para usuario ${userId}`);
 
-        const chatDoc = await db.collection("chats").doc(chatId).get();
+        // Para grupos, buscar en la colección 'groups', para chats 1-1 en 'chats'
+        const collectionName = isGroup ? "groups" : "chats";
+        const chatDoc = await db.collection(collectionName).doc(chatId).get();
         if (chatDoc.exists) {
           const chatData = chatDoc.data();
           const isMuted = chatData[`muted_${userId}`] || false;
 
           if (isMuted) {
-            console.log(`🔕 Chat ${chatId} está silenciado - NO se enviará notificación`);
+            console.log(`🔕 ${isGroup ? 'Grupo' : 'Chat'} ${chatId} está silenciado - NO se enviará notificación`);
             // Marcar como enviada pero silenciada
             await snapshot.ref.update({
               sentAt: new Date().toISOString(),
               sent: false,
               silenced: true,
-              reason: "chat_muted",
+              reason: isGroup ? "group_muted" : "chat_muted",
             });
             return; // Salir sin enviar notificación
           }
-          console.log(`🔔 Chat ${chatId} NO está silenciado - enviando notificación`);
+          console.log(`🔔 ${isGroup ? 'Grupo' : 'Chat'} ${chatId} NO está silenciado - enviando notificación`);
         }
       }
 
@@ -191,6 +194,8 @@ exports.sendNotificationOnCreate = onDocumentCreated(
             callType: notification.type === "audio_call" ? "audio" : "video",
             isEmergency: dataPayload.isEmergency || "false",
             callerPhotoURL: senderPhotoURL || "",
+            isGroupCall: dataPayload.isGroupCall || "false",
+            groupId: dataPayload.groupId || "",
           };
 
           const voipSent = await sendVoIPPush(voipToken, voipPayload);
@@ -378,6 +383,8 @@ exports.sendInstantPushNotification = onCall(
           callType: data.callType || "video",
           isEmergency: data.isEmergency || "false",
           callerPhotoURL: data.senderPhotoUrl || "",
+          isGroupCall: data.isGroupCall || "false",
+          groupId: data.groupId || "",
         };
 
         const voipResult = await sendVoIPPush(voipToken, voipPayload);

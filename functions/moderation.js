@@ -4,6 +4,7 @@ const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
 const { getMessaging } = require("firebase-admin/messaging");
 const { getStorage } = require("firebase-admin/storage");
+const { analyzeMessageWithGemini } = require("./groups");
 
 // ═══════════════════════════════════════════════════════════════
 // MODERATION
@@ -675,6 +676,14 @@ exports.moderateMessage = onDocumentCreated(
 
       // 6. Crear notificación de chat si el mensaje fue APROBADO
       if (receiverId && moderationStatus === "approved") {
+        // ✅ NO enviar notificaciones para mensajes de llamadas contestadas
+        // Solo enviar notificaciones para llamadas perdidas
+        const messageTypeFromData = messageData.type;
+        if (messageTypeFromData === "answered_call") {
+          console.log(`⏭️ Skipping notification for answered_call message`);
+          return;
+        }
+
         // Ya tenemos senderName y senderPhotoUrl del inicio (no volver a consultar)
 
         // Crear preview del mensaje (truncar si es muy largo)

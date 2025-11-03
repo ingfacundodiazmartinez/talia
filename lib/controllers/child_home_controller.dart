@@ -1,12 +1,13 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/location_service.dart';
 import '../services/video_call_service.dart';
 import '../services/callkit_service.dart';
+import '../services/voip_service.dart';
 import '../notification_service.dart';
 import '../services/user_role_service.dart';
-import '../widgets/incoming_call_dialog.dart';
 import '../screens/group_chat_screen.dart';
 import '../screens/chat_detail_screen.dart';
 
@@ -31,6 +32,10 @@ class ChildHomeController {
   // Subscripciones
   StreamSubscription<QuerySnapshot>? _incomingCallsSubscription;
   StreamSubscription<Map<String, dynamic>>? _chatNotificationSubscription;
+
+  // Mapa para rastrear listeners de documentos de llamadas específicas
+  // Key: callId, Value: StreamSubscription
+  final Map<String, StreamSubscription> _activeCallListeners = {};
 
   ChildHomeController({
     required this.childId,
@@ -146,25 +151,17 @@ class ChildHomeController {
             // Si ya fue aceptada, no mostrar el diálogo (la navegación a videollamada se maneja por el listener de CallKit)
             final status = callData['status'] ?? 'ringing';
             if (status != 'ringing') {
-              print('⏭️ Llamada ya no está en estado ringing (status: $status) - omitiendo IncomingCallDialog');
+              print('⏭️ Llamada ya no está en estado ringing (status: $status) - omitiendo procesamiento');
               return;
             }
 
-            // Obtener foto de perfil del caller
-            _firestore.collection('users').doc(callerId).get().then((callerDoc) {
-              final callerData = callerDoc.data() as Map<String, dynamic>?;
-              final callerPhotoURL = callerData?['photoURL'];
+            // Configurar listener específico para esta llamada
+            // para detectar si es cancelada por el caller
+            _setupCallCancellationListener(callId);
 
-              // Mostrar diálogo de llamada entrante
-              _showIncomingCallDialog(
-                callId: callId,
-                callerName: callerName,
-                callerId: callerId,
-                callerPhotoURL: callerPhotoURL,
-                channelName: channelName,
-                callType: callType,
-              );
-            });
+            // Las llamadas se manejan completamente por CallKit (Android) y VoIP (iOS)
+            // No se necesita mostrar diálogo de Flutter ni obtener datos adicionales del caller
+            print('📞 Llamada entrante detectada - CallKit/VoIP debe manejarla');
           } else if (change.type == DocumentChangeType.removed) {
             // IMPORTANTE: DocumentChangeType.removed NO significa que el documento fue eliminado
             // Puede significar que ya no coincide con el filtro del query (status != 'ringing')
@@ -187,9 +184,16 @@ class ChildHomeController {
               print('📵 [ChildHomeController] Llamada $callId fue cancelada antes de aceptar - cerrando CallKit');
 
               // Solo cerrar CallKit si la llamada fue cancelada (no aceptada)
-              CallKitService().endCall(callId).catchError((error) {
-                print('⚠️ [ChildHomeController] Error cerrando CallKit: $error');
-              });
+              // Usar el method channel nativo en iOS para evitar reinicio de app
+              if (Platform.isIOS) {
+                VoIPService().notifyCallEnded(callId).catchError((error) {
+                  print('⚠️ [ChildHomeController] Error cerrando VoIP en iOS: $error');
+                });
+              } else if (Platform.isAndroid) {
+                CallKitService().endCall(callId).catchError((error) {
+                  print('⚠️ [ChildHomeController] Error cerrando CallKit en Android: $error');
+                });
+              }
             } else {
               print('ℹ️ [ChildHomeController] Llamada $callId modificada (status: $status) - CallKit permanece abierto');
             }
@@ -254,32 +258,83 @@ class ChildHomeController {
     print('👂 Escuchando notificaciones de chat');
   }
 
-  /// Mostrar diálogo de llamada entrante
-  void _showIncomingCallDialog({
-    required String callId,
-    required String callerName,
-    required String callerId,
-    String? callerPhotoURL,
-    required String channelName,
-    required String callType,
-  }) {
-    // Navegar a pantalla completa
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        fullscreenDialog: true,
-        builder: (BuildContext context) {
-          return IncomingCallDialog(
-            callId: callId,
-            callerId: callerId,
-            callerName: callerName,
-            callerPhotoURL: callerPhotoURL,
-            channelName: channelName,
-            callType: callType,
-            isEmergency: false,
-          );
-        },
-      ),
-    );
+
+  /// Configura un listener para detectar si una llamada específica es cancelada
+  /// Este listener se activa cuando se muestra una llamada entrante
+  /// y se limpia automáticamente cuando la llamada termina o es aceptada
+  void _setupCallCancellationListener(String callId) {
+    print('👂 [ChildHomeController] Configurando listener de cancelación para callId: $callId');
+
+    // Si ya existe un listener para esta llamada, cancelarlo primero
+    _activeCallListeners[callId]?.cancel();
+
+    // Escuchar el documento específico de esta llamada (sin filtro de status)
+    final subscription = _firestore
+        .collection('video_calls')
+        .doc(callId)
+        .snapshots()
+        .listen((snapshot) {
+      if (!snapshot.exists) {
+        // El documento fue eliminado
+        print('📵 [ChildHomeController] Documento $callId eliminado - cerrando CallKit');
+
+        // Usar el method channel nativo en iOS para evitar reinicio de app
+        if (Platform.isIOS) {
+          VoIPService().notifyCallEnded(callId).catchError((error) {
+            print('⚠️ [ChildHomeController] Error cerrando VoIP en iOS: $error');
+          });
+        } else if (Platform.isAndroid) {
+          CallKitService().endCall(callId).catchError((error) {
+            print('⚠️ [ChildHomeController] Error cerrando CallKit en Android: $error');
+          });
+        }
+
+        _cleanupCallListener(callId);
+        return;
+      }
+
+      final data = snapshot.data() as Map<String, dynamic>?;
+      final status = data?['status'];
+
+      print('🔍 [ChildHomeController] Status de $callId cambió a: $status');
+
+      if (status == 'cancelled') {
+        // La llamada fue cancelada por el caller - cerrar CallKit
+        print('📵 [ChildHomeController] Llamada $callId cancelada por caller - cerrando CallKit');
+
+        // Usar el method channel nativo en iOS para evitar reinicio de app
+        // En Android seguimos usando el plugin
+        if (Platform.isIOS) {
+          VoIPService().notifyCallEnded(callId).catchError((error) {
+            print('⚠️ [ChildHomeController] Error cerrando VoIP en iOS: $error');
+          });
+        } else if (Platform.isAndroid) {
+          CallKitService().endCall(callId).catchError((error) {
+            print('⚠️ [ChildHomeController] Error cerrando CallKit en Android: $error');
+          });
+        }
+
+        _cleanupCallListener(callId);
+
+        // NO necesitamos cerrar diálogos aquí porque CallKit/VoIP maneja la UI nativa
+        print('ℹ️ [ChildHomeController] CallKit/VoIP manejará el cierre de la UI');
+      } else if (status == 'accepted' || status == 'active' || status == 'ended') {
+        // La llamada fue aceptada o terminada - limpiar listener
+        // (CallKit se cerrará desde VideoCallScreen cuando termine)
+        print('ℹ️ [ChildHomeController] Llamada $callId en status $status - limpiando listener');
+        _cleanupCallListener(callId);
+      }
+    });
+
+    _activeCallListeners[callId] = subscription;
+    print('✅ [ChildHomeController] Listener de cancelación configurado para $callId');
+  }
+
+  /// Limpia el listener de una llamada específica
+  void _cleanupCallListener(String callId) {
+    final subscription = _activeCallListeners.remove(callId);
+    subscription?.cancel();
+    print('🧹 [ChildHomeController] Listener limpiado para callId: $callId');
   }
 
   /// Limpiar recursos
@@ -287,5 +342,11 @@ class ChildHomeController {
     _locationService.dispose();
     _incomingCallsSubscription?.cancel();
     _chatNotificationSubscription?.cancel();
+
+    // Limpiar todos los listeners de llamadas activas
+    for (var subscription in _activeCallListeners.values) {
+      subscription.cancel();
+    }
+    _activeCallListeners.clear();
   }
 }

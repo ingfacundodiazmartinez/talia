@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
@@ -15,6 +16,7 @@ import '../services/chat/message_sending_service.dart';
 import '../services/chat/message_pagination_service.dart';
 import '../services/chat/message_actions_service.dart';
 import '../services/chat/chat_state_service.dart';
+import '../services/audio_processing_service.dart';
 
 /// Controller optimista para chat individual (REFACTORIZADO)
 ///
@@ -345,13 +347,6 @@ class ChatControllerOptimistic extends ChangeNotifier {
       return;
     }
 
-    // Ignorar mensajes propios nuevos (ya en cache)
-    if (newMessage.senderId == currentUserId &&
-        changeType == DocumentChangeType.added) {
-      print('⏭️ Ignorando mensaje propio nuevo: ${newMessage.id}');
-      return;
-    }
-
     // Actualizar mensaje existente
     if (_stateService.messageExists(newMessage.id)) {
       if (changeType == DocumentChangeType.modified) {
@@ -363,6 +358,19 @@ class ChatControllerOptimistic extends ChangeNotifier {
         );
         notifyListeners();
       }
+      return;
+    }
+
+    // Si es mensaje propio nuevo, usar addMessages para que maneje la lógica de reemplazo de pendientes
+    if (newMessage.senderId == currentUserId &&
+        changeType == DocumentChangeType.added) {
+      print('📩 Procesando mensaje propio desde Firestore: ${newMessage.id}');
+      _stateService.addMessages(
+        chatId: chatId,
+        newMessages: [newMessage],
+        currentUserId: currentUserId,
+      );
+      notifyListeners();
       return;
     }
 
@@ -455,7 +463,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
     notifyListeners();
     _sendingService.playSendSound();
 
-    // 2. Enviar a Firestore
+    // 2. Enviar a Firestore con localId
     try {
       final docId = await _sendingService.sendTextMessage(
         chatId: chatId,
@@ -463,6 +471,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
         text: text,
         contactId: contactId,
         replyTo: replyTo,
+        localId: tempId, // ✅ Enviar tempId como localId
       );
       print('✅ Mensaje enviado');
 
@@ -630,19 +639,94 @@ class ChatControllerOptimistic extends ChangeNotifier {
     }
   }
 
-  /// Enviar audio
-  Future<void> sendAudio(String audioPath) async {
+  /// ID del mensaje de audio optimista actual
+  String? _currentOptimisticAudioId;
+
+  /// Crear burbuja optimista de audio inmediatamente
+  Future<void> createOptimisticAudioBubble(String audioPath) async {
     if (currentUserId.isEmpty) return;
 
+    final tempId = const Uuid().v4();
+    _currentOptimisticAudioId = tempId;
+
+    // Procesar waveform inmediatamente
+    print('🎵 Procesando waveform del audio...');
+    final AudioProcessingService audioProcessing = AudioProcessingService();
+    final File audioFile = File(audioPath);
+    final waveformData = await audioProcessing.extractWaveform(audioFile);
+    print('✅ Waveform procesado: ${waveformData.length} puntos');
+
+    // Crear mensaje optimista con waveform real
+    final optimisticMessage = ChatMessage.optimistic(
+      id: tempId,
+      senderId: currentUserId,
+      audioUrl: audioPath, // Path local temporal
+      localPath: audioPath,
+      type: 'audio',
+      waveformData: waveformData, // ✅ Waveform real procesado
+    );
+
+    _stateService.addOptimisticMessage(optimisticMessage);
+    notifyListeners();
+    print('✅ Burbuja optimista de audio creada con waveform: $tempId');
+  }
+
+  /// Procesar y subir audio
+  Future<void> processAndUploadAudio(String audioPath) async {
+    if (currentUserId.isEmpty || _currentOptimisticAudioId == null) return;
+
+    final tempId = _currentOptimisticAudioId!;
+
     try {
-      await _sendingService.sendAudioMessage(
+      // El waveform ya fue procesado, ahora solo subimos
+      final docId = await _sendingService.sendAudioMessage(
         chatId: chatId,
         currentUserId: currentUserId,
         audioPath: audioPath,
       );
-      print('✅ Audio enviado');
+
+      // Actualizar mensaje optimista a sent
+      final optimisticMsg = _stateService.pendingMessages.firstWhere(
+        (m) => m.id == tempId,
+        orElse: () => throw Exception('Mensaje optimista no encontrado'),
+      );
+
+      final sentMessage = optimisticMsg.copyWith(
+        id: docId,
+        status: MessageStatus.sent,
+      );
+
+      await _stateService.updateMessage(
+        chatId: chatId,
+        oldId: tempId,
+        newMessage: sentMessage,
+      );
+      _stateService.removePendingMessage(tempId);
+      notifyListeners();
+
+      print('✅ Audio subido y mensaje actualizado: $docId');
+      _currentOptimisticAudioId = null;
     } catch (e) {
-      print('❌ Error enviando audio: $e');
+      print('❌ Error subiendo audio: $e');
+
+      // Marcar mensaje como error
+      final optimisticMsg = _stateService.pendingMessages.firstWhere(
+        (m) => m.id == tempId,
+        orElse: () => throw Exception('Mensaje optimista no encontrado'),
+      );
+
+      final errorMessage = optimisticMsg.copyWith(
+        status: MessageStatus.error,
+      );
+
+      await _stateService.updateMessage(
+        chatId: chatId,
+        oldId: tempId,
+        newMessage: errorMessage,
+      );
+      notifyListeners();
+
+      _currentOptimisticAudioId = null;
       rethrow;
     }
   }

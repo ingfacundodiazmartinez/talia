@@ -24,7 +24,7 @@ class MessageListWidget extends StatelessWidget {
   final VoidCallback onToggleSelection;
   final Function(String messageId) onToggleMessageSelection;
   final Function(BuildContext context, String messageId) onShowReactionPicker;
-  final Function(String messageId, String originalText) onReply;
+  final Function(String messageId, Map<String, dynamic> messageData) onReply;
   final Function(String messageId) onReplyTap;
   final Future<void> Function(String messageId, Timestamp? timestamp) onDelete;
   final Future<void> Function(String messageId, String originalText) onEdit;
@@ -164,7 +164,27 @@ class MessageListWidget extends StatelessWidget {
       contactName: contactName,
       isGroupChat: false,
       onReply: () {
-        onReply(message.id, message.text ?? '');
+        // Construir datos completos del mensaje incluyendo media
+        final replyData = {
+          'id': message.id,
+          'text': message.text ?? '',
+          'senderId': message.senderId,
+          'senderName': contactName,
+        };
+
+        // Incluir URLs de media si existen
+        if (message.imageUrl != null) {
+          replyData['imageUrl'] = message.imageUrl!;
+        }
+        if (message.videoUrl != null) {
+          replyData['videoUrl'] = message.videoUrl!;
+        }
+        if (message.audioUrl != null) {
+          replyData['audioUrl'] = message.audioUrl!;
+        }
+
+        // Llamar al callback pasando los datos completos
+        onReply(message.id, replyData);
       },
       onReplyTap: onReplyTap,
       onLongPress: onShowReactionPicker,

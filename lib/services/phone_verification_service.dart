@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show VoidCallback;
+import '../notification_service.dart';
+import 'voip_service.dart';
 
 class PhoneVerificationService {
   static final PhoneVerificationService _instance =
@@ -254,6 +257,25 @@ class PhoneVerificationService {
     try {
       final userCredential = await _auth.signInWithCredential(credential);
       print('✅ Usuario autenticado con teléfono');
+
+      // Inicializar FCM token después del login exitoso
+      try {
+        await NotificationService().initializeFCMTokenAfterLogin();
+      } catch (e) {
+        print('⚠️ Error inicializando FCM token después del login: $e');
+        // No relanzar el error para no interferir con el flujo de login
+      }
+
+      // Procesar VoIP token pendiente después del login exitoso (solo iOS)
+      if (Platform.isIOS) {
+        try {
+          await VoIPService().processVoIPTokenAfterLogin();
+        } catch (e) {
+          print('⚠️ Error procesando VoIP token después del login: $e');
+          // No relanzar el error para no interferir con el flujo de login
+        }
+      }
+
       return userCredential;
     } catch (e) {
       print('❌ Error en autenticación: $e');

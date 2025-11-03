@@ -12,6 +12,7 @@ import '../../notification_service.dart';
 import '../../utils/chat_utils.dart';
 import '../chat_detail_screen.dart';
 import '../group_chat_screen.dart';
+import '../../services/contacts_sync_service.dart';
 
 /// Observer para detectar cambios en la navegación anidada
 class _NavigatorObserver extends NavigatorObserver {
@@ -78,6 +79,19 @@ class _ParentMainShellState extends State<ParentMainShell> {
     super.initState();
     _setupNotificationListeners();
     _setupRoleChangeListener();
+    _syncContactsInBackground();
+  }
+
+  /// Sincronizar contactos en background (solo para parent/adult)
+  void _syncContactsInBackground() {
+    // Ejecutar después de que el widget esté construido
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ContactsSyncService().syncContacts().then((_) {
+        print('✅ [ParentMainShell] Sincronización de contactos completada');
+      }).catchError((e) {
+        print('⚠️ [ParentMainShell] Error sincronizando contactos: $e');
+      });
+    });
   }
 
   @override

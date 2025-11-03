@@ -27,12 +27,16 @@ class VideoCallService {
   bool _isMuted = false;
   bool _isCameraOff = false;
 
-  /// Inicializar el engine de Agora para videollamadas
-  Future<void> initializeAgora() async {
-    // Si ya está inicializado, liberar primero para reiniciar en modo video
+  // Getters para exponer el estado
+  bool get isCameraOff => _isCameraOff;
+  bool get isMuted => _isMuted;
+
+  /// Inicializar el engine de Agora para videollamadas o llamadas de audio
+  Future<void> initializeAgora({bool isVideo = true}) async {
+    // Si ya está inicializado, liberar primero para reiniciar
     if (_isInitialized && _engine != null) {
       print(
-        '⚠️ Agora ya está inicializado, liberando para reiniciar en modo video...',
+        '⚠️ Agora ya está inicializado, liberando para reiniciar en modo ${isVideo ? 'video' : 'audio'}...',
       );
       try {
         // Detener preview y deshabilitar video/audio ANTES de liberar
@@ -57,7 +61,7 @@ class VideoCallService {
     }
 
     try {
-      print('🎥 Inicializando Agora...');
+      print('🎥 Inicializando Agora en modo ${isVideo ? 'video' : 'audio'}...');
 
       // Crear engine
       _engine = createAgoraRtcEngine();
@@ -93,13 +97,16 @@ class VideoCallService {
         ),
       );
 
-      // Habilitar video
-      await _engine!.enableVideo();
+      // ✅ Solo habilitar video si es una videollamada
+      if (isVideo) {
+        await _engine!.enableVideo();
+        await _engine!.enableLocalVideo(true);
+        print('✅ Video habilitado');
+      } else {
+        print('🎤 Video NO habilitado (modo audio)');
+      }
 
-      // Habilitar captura y renderizado de video local
-      await _engine!.enableLocalVideo(true);
-
-      // Habilitar audio
+      // Habilitar audio (siempre necesario)
       await _engine!.enableAudio();
 
       // ✅ NO llamar setupLocalVideo() aquí
@@ -109,7 +116,7 @@ class VideoCallService {
       print('✅ Agora engine listo (setupLocalVideo y startPreview serán manejados por los widgets)');
 
       _isInitialized = true;
-      print('✅ Agora inicializado correctamente');
+      print('✅ Agora inicializado correctamente en modo ${isVideo ? 'video' : 'audio'}');
     } catch (e) {
       print('❌ Error inicializando Agora: $e');
       rethrow;
@@ -239,7 +246,8 @@ class VideoCallService {
     bool isVideo = true, // Por defecto video para compatibilidad
   }) async {
     if (!_isInitialized) {
-      await initializeAgora();
+      // ✅ Pasar el parámetro isVideo a initializeAgora
+      await initializeAgora(isVideo: isVideo);
     }
 
     try {
@@ -304,8 +312,18 @@ class VideoCallService {
   Future<void> toggleCamera() async {
     try {
       _isCameraOff = !_isCameraOff;
-      await _engine?.muteLocalVideoStream(_isCameraOff);
-      print(_isCameraOff ? '📷 Cámara apagada' : '📹 Cámara encendida');
+
+      if (_isCameraOff) {
+        // Deshabilitar captura de video completamente
+        await _engine?.enableLocalVideo(false);
+        await _engine?.stopPreview();
+        print('📷 Cámara apagada - captura de video deshabilitada');
+      } else {
+        // Habilitar captura de video y preview
+        await _engine?.enableLocalVideo(true);
+        await _engine?.startPreview();
+        print('📹 Cámara encendida - captura de video habilitada');
+      }
     } catch (e) {
       print('❌ Error toggle camera: $e');
     }
@@ -324,11 +342,6 @@ class VideoCallService {
   /// Obtener el engine de Agora (para usar en la UI)
   RtcEngine? get engine => _engine;
 
-  /// Estado del micrófono
-  bool get isMuted => _isMuted;
-
-  /// Estado de la cámara
-  bool get isCameraOff => _isCameraOff;
 
   /// Resetear estado de inicialización (para reintentos después de error de permisos)
   void resetInitialization() {
@@ -619,10 +632,10 @@ class VideoCallService {
               'callerName': callerName,
               'channelName': channelName,
               'callType': 'video',
-              'isGroupCall': 'true',
-              'isEmergency': isEmergency.toString(),
+              'isGroupCall': true, // Boolean en lugar de string
+              'isEmergency': isEmergency, // Boolean en lugar de string
               'groupId': groupId ?? '',
-              'senderPhotoUrl': callerPhotoURL,
+              'senderPhotoUrl': callerPhotoURL, // Consistente con llamadas 1-1
             },
           });
 
@@ -746,10 +759,10 @@ class VideoCallService {
               'callerName': callerName,
               'channelName': channelName,
               'callType': 'audio',
-              'isGroupCall': 'true',
-              'isEmergency': isEmergency.toString(),
+              'isGroupCall': true, // Boolean en lugar de string
+              'isEmergency': isEmergency, // Boolean en lugar de string
               'groupId': groupId ?? '',
-              'senderPhotoUrl': callerPhotoURL,
+              'senderPhotoUrl': callerPhotoURL, // Consistente con llamadas 1-1
             },
           });
 
@@ -828,10 +841,17 @@ class VideoCallService {
       });
 
       // Si alguien se unió, cambiar estado de llamada a 'active'
-      if (status == 'joined' && callData['status'] == 'ringing') {
-        await _firestore.collection('video_calls').doc(callId).update({
+      if (status == 'joined' && (callData['status'] == 'ringing' || callData['status'] == 'accepted')) {
+        final updateData = <String, dynamic>{
           'status': 'active',
-        });
+        };
+
+        // Solo establecer startedAt si no existe aún
+        if (callData['startedAt'] == null) {
+          updateData['startedAt'] = FieldValue.serverTimestamp();
+        }
+
+        await _firestore.collection('video_calls').doc(callId).update(updateData);
       }
 
       // Si todos salieron, terminar la llamada
@@ -1038,6 +1058,7 @@ class VideoCallService {
       await _firestore.collection('video_calls').doc(callId).update({
         'status': 'accepted',
         'acceptedAt': FieldValue.serverTimestamp(),
+        'startedAt': FieldValue.serverTimestamp(), // Marcar inicio cuando se acepta
       });
 
       print('✅ Llamada actualizada a status: accepted');
@@ -1053,10 +1074,27 @@ class VideoCallService {
     try {
       print('❌ Rechazando llamada: $callId');
 
+      // Obtener datos de la llamada antes de rechazarla
+      final callDoc = await _firestore
+          .collection('video_calls')
+          .doc(callId)
+          .get();
+      final callData = callDoc.data();
+
       await _firestore.collection('video_calls').doc(callId).update({
         'status': 'rejected',
         'rejectedAt': FieldValue.serverTimestamp(),
       });
+
+      // Crear mensaje de llamada perdida en el chat
+      if (callData != null) {
+        await _createMissedCallMessage(
+          callerId: callData['callerId'] ?? '',
+          receiverId: callData['receiverId'] ?? '',
+          callType: callData['callType'] ?? 'video',
+          callId: callId,
+        );
+      }
     } catch (e) {
       print('❌ Error rechazando llamada: $e');
       rethrow;
@@ -1079,6 +1117,12 @@ class VideoCallService {
         final startedAt = callData['startedAt'] as Timestamp?;
         final status = callData['status'] as String?;
 
+        print('📊 [endCall] Datos de la llamada:');
+        print('   - Status: $status');
+        print('   - StartedAt: $startedAt');
+        print('   - CallerId: ${callData['callerId']}');
+        print('   - ReceiverId: ${callData['receiverId']}');
+
         // Si la llamada nunca fue contestada (status: ringing), cambiar a 'cancelled'
         // El receptor detectará el cambio via listener y cerrará su CallKit
         if (status == 'ringing') {
@@ -1092,14 +1136,16 @@ class VideoCallService {
           });
           print('✅ Llamada marcada como cancelada en Firestore');
 
-          // Cerrar CallKit del lado del caller
-          try {
-            final callKitService = await import_callKitService();
-            await callKitService.endCall(callId);
-            print('✅ CallKit del caller cerrado');
-          } catch (e) {
-            print('⚠️ Error cerrando CallKit del caller: $e');
-          }
+          // Crear mensaje de llamada perdida en el chat
+          await _createMissedCallMessage(
+            callerId: callData['callerId'] ?? '',
+            receiverId: callData['receiverId'] ?? '',
+            callType: callData['callType'] ?? 'video',
+            callId: callId,
+          );
+
+          // NO cerramos CallKit aquí - VideoCallScreen._endCall() ya lo hace
+          // Cerrar CallKit dos veces causa crashes
         } else {
           // Si fue contestada o está activa, actualizar status a ended
           await _firestore.collection('video_calls').doc(callId).update({
@@ -1108,10 +1154,13 @@ class VideoCallService {
           });
 
           // Si la llamada fue contestada (tiene startedAt), crear mensaje de historial
-          if (startedAt != null && status == 'active') {
+          // Verificamos que fue 'accepted' o 'active' (cualquiera de los dos significa que fue contestada)
+          if (startedAt != null && (status == 'active' || status == 'accepted')) {
             final endedAt = DateTime.now();
             final startTime = startedAt.toDate();
             final durationSeconds = endedAt.difference(startTime).inSeconds;
+
+            print('📞 Creando mensaje de llamada contestada - duración: ${durationSeconds}s');
 
             await _createAnsweredCallMessage(
               callerId: callData['callerId'] ?? '',
@@ -1120,10 +1169,27 @@ class VideoCallService {
               callId: callId,
               durationSeconds: durationSeconds,
             );
+          } else {
+            print('⏭️ No se crea mensaje de llamada - startedAt: $startedAt, status: $status');
           }
         }
       } else {
         print('⚠️ No se encontró documento de llamada');
+
+        // Si el documento no existe, podría ser una race condition
+        // (se está creando pero aún no está disponible para lectura)
+        // Crear el documento con status cancelled para que el receiver lo detecte
+        print('🔄 Creando documento cancelled para evitar que el receiver suene');
+        try {
+          await _firestore.collection('video_calls').doc(callId).set({
+            'status': 'cancelled',
+            'cancelledAt': FieldValue.serverTimestamp(),
+            'callId': callId,
+          }, SetOptions(merge: true)); // merge: true para no sobreescribir si ya existe
+          print('✅ Documento cancelled creado/actualizado');
+        } catch (e) {
+          print('⚠️ Error creando documento cancelled: $e');
+        }
       }
 
       await leaveChannel();
@@ -1133,86 +1199,56 @@ class VideoCallService {
   }
 
   /// Escuchar llamadas entrantes para un usuario
-  /// Detecta tanto llamadas 1-a-1 (receiverId) como grupales (participantIds)
+  /// Detecta tanto llamadas 1-a-1 (receiverId) como grupales (participants array)
   Stream<QuerySnapshot> watchIncomingCalls(String userId) {
     print('🔍 [watchIncomingCalls] Iniciando listener para userId: $userId');
 
-    // Crear un StreamController para combinar ambos streams
-    final controller = StreamController<QuerySnapshot>.broadcast();
+    // Para llamadas grupales, necesitamos buscar en el array participants
+    // donde cada elemento es un objeto con userId y status
+    // Usamos un query compuesto para buscar llamadas grupales donde el usuario esté en estado 'ringing'
 
-    // Stream para llamadas directas (1-a-1)
-    print(
-      '🔍 [watchIncomingCalls] Configurando stream de llamadas directas...',
-    );
-    final directCallsStream = _firestore
+    return _firestore
         .collection('video_calls')
-        .where('receiverId', isEqualTo: userId)
-        .where('status', isEqualTo: 'ringing')
-        .snapshots();
+        .where(Filter.or(
+          // Llamadas directas (1-a-1)
+          Filter.and(
+            Filter('receiverId', isEqualTo: userId),
+            Filter('status', isEqualTo: 'ringing'),
+          ),
+          // Llamadas grupales (buscar en participants)
+          Filter.and(
+            Filter('isGroupCall', isEqualTo: true),
+            Filter('status', isEqualTo: 'ringing'),
+            // Note: No podemos filtrar directamente por participants.userId en Firestore
+            // Tendremos que filtrar en el cliente
+          ),
+        ))
+        .snapshots()
+        .map((snapshot) {
+          // Filtrar llamadas grupales en el cliente para verificar si el usuario está en participants
+          final filteredDocs = snapshot.docs.where((doc) {
+            final data = doc.data() as Map<String, dynamic>;
 
-    // Stream para llamadas grupales (emergencias, grupos)
-    print(
-      '🔍 [watchIncomingCalls] Configurando stream de llamadas grupales...',
-    );
-    final groupCallsStream = _firestore
-        .collection('video_calls')
-        .where('participantIds', arrayContains: userId)
-        .where('status', isEqualTo: 'ringing')
-        .snapshots();
+            // Si es llamada directa, ya está filtrada por el query
+            if (data['isGroupCall'] != true) {
+              return true;
+            }
 
-    // Escuchar ambos streams y emitir cuando cualquiera cambie
-    print(
-      '🔍 [watchIncomingCalls] Iniciando listen() para directCallsStream...',
-    );
-    directCallsStream.listen(
-      (snapshot) {
-        print(
-          '📞 [watchIncomingCalls] Llamadas directas: ${snapshot.docs.length}',
-        );
-        if (snapshot.docs.isNotEmpty) {
-          print('📞 [watchIncomingCalls] Documentos directos:');
-          for (var doc in snapshot.docs) {
-            print('   - ${doc.id}: ${doc.data()}');
-          }
-        }
-        controller.add(snapshot);
-      },
-      onError: (error) {
-        print('❌ [watchIncomingCalls] Error en directCallsStream: $error');
-        controller.addError(error);
-      },
-    );
+            // Si es llamada grupal, verificar si el usuario está en participants con status ringing
+            final participants = data['participants'] as List<dynamic>?;
+            if (participants == null) return false;
 
-    print(
-      '🔍 [watchIncomingCalls] Iniciando listen() para groupCallsStream...',
-    );
-    groupCallsStream.listen(
-      (snapshot) {
-        print(
-          '📞 [watchIncomingCalls] Llamadas grupales: ${snapshot.docs.length}',
-        );
-        if (snapshot.docs.isNotEmpty) {
-          print('📞 [watchIncomingCalls] Documentos grupales:');
-          for (var doc in snapshot.docs) {
-            final data = doc.data();
-            print('   - ${doc.id}');
-            print('     status: ${data['status']}');
-            print('     participantIds: ${data['participantIds']}');
-            print('     callerName: ${data['callerName']}');
-          }
-        }
-        controller.add(snapshot);
-      },
-      onError: (error) {
-        print('❌ [watchIncomingCalls] Error en groupCallsStream: $error');
-        controller.addError(error);
-      },
-    );
+            return participants.any((participant) {
+              if (participant is Map<String, dynamic>) {
+                return participant['userId'] == userId && participant['status'] == 'ringing';
+              }
+              return false;
+            });
+          }).toList();
 
-    print(
-      '🔍 [watchIncomingCalls] Listeners configurados, retornando controller.stream',
-    );
-    return controller.stream;
+          // Crear un nuevo QuerySnapshot simulado con los documentos filtrados
+          return _MockQuerySnapshot(filteredDocs);
+        });
   }
 
   /// Escuchar el estado de una llamada específica
@@ -1455,19 +1491,24 @@ class VideoCallService {
     required int durationSeconds,
   }) async {
     try {
-      print(
-        '📞 Creando mensaje de llamada contestada en el chat (${durationSeconds}s)',
-      );
+      print('📞 [_createAnsweredCallMessage] INICIANDO creación de mensaje');
+      print('   - CallerId: $callerId');
+      print('   - ReceiverId: $receiverId');
+      print('   - CallType: $callType');
+      print('   - Duración: ${durationSeconds}s');
 
       // Obtener información del chat entre los dos usuarios
       final chatService = await import_chatService();
       final chatId = chatService.getChatId(callerId, receiverId);
 
+      print('   - ChatId generado: $chatId');
+
       // Formatear duración
       final duration = _formatDuration(durationSeconds);
 
       // Crear mensaje de llamada contestada en el chat
-      await _firestore
+      print('   - Creando documento en chats/$chatId/messages...');
+      final messageRef = await _firestore
           .collection('chats')
           .doc(chatId)
           .collection('messages')
@@ -1482,9 +1523,13 @@ class VideoCallService {
                 : '📞 Llamada • $duration',
             'timestamp': FieldValue.serverTimestamp(),
             'isRead': false,
+            'readBy': [], // Agregar campo readBy
           });
 
+      print('   - Mensaje creado con ID: ${messageRef.id}');
+
       // Actualizar último mensaje del chat
+      print('   - Actualizando último mensaje del chat...');
       await _firestore.collection('chats').doc(chatId).set({
         'lastMessage': callType == 'video'
             ? '📹 Videollamada • $duration'
@@ -1497,6 +1542,58 @@ class VideoCallService {
       print('✅ Mensaje de llamada contestada creado en el chat');
     } catch (e) {
       print('❌ Error creando mensaje de llamada contestada: $e');
+      // No relanzar el error, es una operación secundaria
+    }
+  }
+
+  /// Crear mensaje de llamada perdida en el chat
+  Future<void> _createMissedCallMessage({
+    required String callerId,
+    required String receiverId,
+    required String callType, // 'video' o 'audio'
+    required String callId,
+  }) async {
+    try {
+      print('📵 Creando mensaje de llamada perdida en el chat');
+
+      // Obtener información del chat entre los dos usuarios
+      final chatService = await import_chatService();
+      final chatId = chatService.getChatId(callerId, receiverId);
+
+      // Crear mensaje de llamada perdida en el chat
+      print('   - Creando mensaje de llamada perdida en chats/$chatId/messages...');
+      final messageRef = await _firestore
+          .collection('chats')
+          .doc(chatId)
+          .collection('messages')
+          .add({
+            'senderId': callerId,
+            'type': 'missed_call',
+            'callType': callType,
+            'callId': callId,
+            'text': callType == 'video'
+                ? '📹 Videollamada perdida'
+                : '📞 Llamada perdida',
+            'timestamp': FieldValue.serverTimestamp(),
+            'isRead': false,
+            'readBy': [], // Agregar campo readBy
+          });
+
+      print('   - Mensaje de llamada perdida creado con ID: ${messageRef.id}');
+
+      // Actualizar último mensaje del chat
+      await _firestore.collection('chats').doc(chatId).set({
+        'lastMessage': callType == 'video'
+            ? '📹 Videollamada perdida'
+            : '📞 Llamada perdida',
+        'lastMessageSender': callerId,
+        'lastMessageTime': FieldValue.serverTimestamp(),
+        'participants': [callerId, receiverId],
+      }, SetOptions(merge: true));
+
+      print('✅ Mensaje de llamada perdida creado en el chat');
+    } catch (e) {
+      print('❌ Error creando mensaje de llamada perdida: $e');
       // No relanzar el error, es una operación secundaria
     }
   }
@@ -1534,8 +1631,34 @@ class VideoCallService {
 // Stub minimal de ChatService para evitar dependencia circular
 class _ChatServiceStub {
   String getChatId(String userId1, String userId2) {
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
     final sortedIds = [userId1, userId2]..sort();
-    return '${timestamp}_${sortedIds[0]}_${sortedIds[1]}';
+    return '${sortedIds[0]}_${sortedIds[1]}';
   }
+}
+
+// Mock QuerySnapshot para manejar filtrado en cliente
+class _MockQuerySnapshot implements QuerySnapshot {
+  final List<QueryDocumentSnapshot> _docs;
+
+  _MockQuerySnapshot(this._docs);
+
+  @override
+  List<QueryDocumentSnapshot> get docs => _docs;
+
+  @override
+  List<DocumentChange> get docChanges => [];
+
+  @override
+  SnapshotMetadata get metadata => MockSnapshotMetadata();
+
+  @override
+  int get size => _docs.length;
+}
+
+class MockSnapshotMetadata implements SnapshotMetadata {
+  @override
+  bool get hasPendingWrites => false;
+
+  @override
+  bool get isFromCache => false;
 }

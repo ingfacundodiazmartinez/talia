@@ -24,7 +24,6 @@ import 'screens/video_call_screen.dart';
 import 'screens/animated_splash_screen.dart';
 import 'screens/splash_wrapper.dart';
 import 'notification_service.dart';
-import 'widgets/incoming_call_dialog.dart';
 import 'theme_service.dart';
 import 'services/callkit_service.dart';
 import 'services/video_call_service.dart';
@@ -47,6 +46,7 @@ import 'services/foreground_message_listener.dart';
 import 'services/stickers_service.dart';
 import 'services/unread_messages_service.dart';
 import 'services/ad_service.dart';
+import 'services/story_service.dart';
 import 'dart:async';
 
 // IMPORTANTE: Después de ejecutar 'flutterfire configure',
@@ -334,6 +334,11 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
       // App regresó de background, verificar llamadas pendientes
       _checkPendingCall();
 
+      // Marcar en ForegroundMessageListener que la app volvió del background
+      // Esto suprime banners custom por unos segundos para evitar mostrar notificaciones
+      // cuando el usuario abre la app manualmente después de recibir notificaciones
+      ForegroundMessageListener().markAppResumedFromBackground();
+
       // ℹ️ Firestore maneja automáticamente la reconexión cuando la app se reanuda.
       // NO forzar disableNetwork/enableNetwork porque cancela todos los StreamBuilders
       // activos y causa que la UI se quede en loading infinito.
@@ -445,6 +450,14 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
         UnreadMessagesService().startBadgeListener();
         print('✅ Badge listener inicializado');
 
+        // Preload de historias en segundo plano
+        print('📱 Iniciando preload de historias...');
+        StoryService().preloadStories().then((_) {
+          print('✅ Preload de historias completado');
+        }).catchError((e) {
+          print('⚠️ Error en preload de historias: $e');
+        });
+
         // Cancelar suscripción anterior si existe
         _userRoleSubscription?.cancel();
 
@@ -520,6 +533,10 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
         _userRoleSubscription = null;
         _currentUserRole = null;
         print('🔒 Listener de role cancelado por logout');
+
+        // Limpiar cache de historias
+        StoryService().clearCache();
+        print('🧹 Cache de historias limpiado por logout');
       }
     });
   }
@@ -552,12 +569,14 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
           '📱 [iOS] Procesando llamada - usando CallKit nativo para evitar duplicación',
         );
 
+        final callId = callData['callId'] ?? '';
+
         // Importar CallKitService
         final callKit = CallKitService();
 
         // Mostrar CallKit usando el método nativo
         await callKit.showIncomingCall(
-          callId: callData['callId'] ?? '',
+          callId: callId,
           callerName: callData['callerName'] ?? 'Usuario desconocido',
           callerId: callData['callerId'] ?? '',
           callerPhotoUrl: callData['callerPhotoURL'],
@@ -567,6 +586,40 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
         );
 
         print('✅ [iOS] CallKit mostrado desde FCM foreground notification');
+
+        // IMPORTANTE: Configurar listener para detectar si la llamada es cancelada
+        // Esto maneja el caso donde la llamada se cancela antes de que el listener
+        // del controller se configure (race condition)
+        print('👂 [iOS] Configurando listener de cancelación para callId: $callId');
+        final cancelListener = FirebaseFirestore.instance
+            .collection('video_calls')
+            .doc(callId)
+            .snapshots()
+            .listen((snapshot) {
+          if (!snapshot.exists) {
+            print('📵 [iOS-main] Documento $callId eliminado - cerrando CallKit');
+            callKit.endCall(callId);
+            return;
+          }
+
+          final data = snapshot.data() as Map<String, dynamic>?;
+          final status = data?['status'];
+
+          if (status == 'cancelled') {
+            print('📵 [iOS-main] Llamada $callId cancelada - cerrando CallKit');
+            // Usar el method channel nativo en lugar del plugin para evitar reinicio
+            VoIPService().notifyCallEnded(callId);
+          } else if (status == 'accepted' || status == 'active' || status == 'ended') {
+            print('ℹ️ [iOS-main] Llamada $callId en status $status - listener se limpiará automáticamente');
+          }
+        });
+
+        // Cancelar el listener después de 60 segundos (timeout de llamada)
+        Future.delayed(Duration(seconds: 60), () {
+          cancelListener.cancel();
+          print('🧹 [iOS-main] Listener de cancelación limpiado por timeout');
+        });
+
         return; // No continuar con el diálogo de Flutter
       }
 
@@ -590,9 +643,23 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
         // Usuario aceptó desde CallKit en background - navegar directamente a VideoCallScreen
         print('✅ Llamada aceptada desde CallKit en background - generando token y navegando a videollamada');
 
-        final context = _navigatorKey.currentContext;
+        // IMPORTANTE: Si la app está en background, puede que el contexto aún no esté disponible
+        // Esperar hasta que esté listo (máximo 5 segundos)
+        BuildContext? context = _navigatorKey.currentContext;
         if (context == null) {
-          print('❌ No se pudo obtener el contexto del navegador');
+          print('⏳ Contexto no disponible, esperando a que la app inicialice...');
+          for (int i = 0; i < 50; i++) {
+            await Future.delayed(const Duration(milliseconds: 100));
+            context = _navigatorKey.currentContext;
+            if (context != null) {
+              print('✅ Contexto disponible después de ${(i + 1) * 100}ms');
+              break;
+            }
+          }
+        }
+
+        if (context == null) {
+          print('❌ No se pudo obtener el contexto del navegador después de 5 segundos');
           return;
         }
 
@@ -616,11 +683,33 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
           return;
         }
 
+        // Obtener callType desde Firestore si no está en extra
+        String callType = extra?['callType'] as String? ?? callData['type'] as String? ?? 'video';
+
+        // Si callType no está en los datos de CallKit, consultar Firestore
+        if (callType == 'video' && (extra?['callType'] == null && callData['type'] == null)) {
+          print('⚠️ callType no encontrado en CallKit data, consultando Firestore...');
+          try {
+            final callDoc = await FirebaseFirestore.instance
+                .collection('video_calls')
+                .doc(callId)
+                .get();
+            if (callDoc.exists) {
+              callType = callDoc.data()?['callType'] as String? ?? 'video';
+              print('✅ callType obtenido de Firestore: $callType');
+            }
+          } catch (e) {
+            print('⚠️ Error obteniendo callType de Firestore: $e');
+            // Mantener 'video' como default
+          }
+        }
+
         print('📞 Procesando aceptación de CallKit:');
         print('   callId: $callId');
         print('   channelName: $channelName');
         print('   callerId: $callerId');
         print('   callerName: $callerName');
+        print('   callType: $callType');
 
         // Mostrar indicador de carga mientras se genera el token
         showDialog(
@@ -652,24 +741,78 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
 
           print('✅ Token generado - UID: $uid');
 
-          // 3. Cerrar indicador de carga y navegar a videollamada
+          // 3. Cerrar indicador de carga y navegar a la pantalla de llamada correcta
           if (context.mounted) {
             Navigator.of(context).pop(); // Cerrar loading indicator
 
-            Navigator.of(context, rootNavigator: true).push(
-              MaterialPageRoute(
-                builder: (context) => VideoCallScreen(
-                  callId: callId,
-                  channelName: channelName,
-                  token: token,
-                  uid: uid,
-                  isCaller: false,
-                  remoteName: callerName,
-                  receiverId: callerId,
-                  isVideo: callType != 'audio',
+            // Navegar a AudioCallScreen para llamadas de audio, VideoCallScreen para video
+            if (callType == 'audio') {
+              await Navigator.of(context, rootNavigator: true).push(
+                MaterialPageRoute(
+                  builder: (context) => AudioCallScreen(
+                    callId: callId,
+                    channelName: channelName,
+                    token: token,
+                    uid: uid,
+                    isCaller: false,
+                    remoteName: callerName,
+                    receiverId: callerId,
+                  ),
                 ),
-              ),
-            );
+              );
+            } else {
+              await Navigator.of(context, rootNavigator: true).push(
+                MaterialPageRoute(
+                  builder: (context) => VideoCallScreen(
+                    callId: callId,
+                    channelName: channelName,
+                    token: token,
+                    uid: uid,
+                    isCaller: false,
+                    remoteName: callerName,
+                    receiverId: callerId,
+                    isVideo: true,
+                  ),
+                ),
+              );
+            }
+
+            // Cuando vuelve de VideoCallScreen, navegar de vuelta a home
+            print('📱 Videollamada terminada - navegando a home');
+
+            // Obtener el rol del usuario para navegar a la pantalla correcta
+            if (context.mounted) {
+              try {
+                final currentUser = FirebaseAuth.instance.currentUser;
+                if (currentUser != null) {
+                  final userDoc = await FirebaseFirestore.instance
+                      .collection('users')
+                      .doc(currentUser.uid)
+                      .get();
+
+                  final userData = userDoc.data();
+                  final role = userData?['role'] ?? 'child';
+
+                  print('👤 Role del usuario: $role - navegando a ${role == 'parent' ? 'ParentMainShell' : 'ChildMainShell'}');
+
+                  // Navegar a la pantalla correcta y limpiar el stack
+                  if (context.mounted) {
+                    Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+                      MaterialPageRoute(
+                        builder: (context) => role == 'parent'
+                            ? ParentMainShell()
+                            : ChildMainShell(),
+                      ),
+                      (route) => false, // Remover todas las rutas anteriores
+                    );
+                  }
+                } else {
+                  print('❌ No hay usuario autenticado después de la llamada');
+                }
+              } catch (e) {
+                print('❌ Error navegando a home después de llamada: $e');
+              }
+            }
           }
         } catch (e) {
           print('❌ Error procesando aceptación de CallKit: $e');
@@ -689,28 +832,9 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
           }
         }
       } else {
-        // Llamada entrante en foreground desde Firestore - mostrar IncomingCallDialog
-        print('✅ Mostrando IncomingCallDialog desde listener de Firestore');
-
-        final context = _navigatorKey.currentContext;
-        if (context != null) {
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              fullscreenDialog: true,
-              builder: (context) => IncomingCallDialog(
-                callId: callData['callId'] ?? '',
-                callerId: callData['callerId'] ?? '',
-                callerName: callData['callerName'] ?? 'Usuario desconocido',
-                callerPhotoURL: callData['callerPhotoURL'],
-                channelName: callData['channelName'] ?? '',
-                callType: callType,
-                isEmergency: isEmergency,
-              ),
-            ),
-          );
-        } else {
-          print('❌ No se pudo obtener el contexto del navegador');
-        }
+        // Las llamadas se manejan completamente por CallKit (Android) y VoIP (iOS)
+        print('✅ Llamada detectada en foreground - CallKit/VoIP debe manejarla');
+        print('ℹ️ No se muestra diálogo de Flutter - solo notificaciones nativas');
       }
     });
   }

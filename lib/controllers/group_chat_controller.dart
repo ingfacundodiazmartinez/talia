@@ -8,6 +8,7 @@ import '../notification_service.dart';
 import '../services/typing_indicator_service.dart';
 import '../services/media_service.dart';
 import '../services/media_compression_service.dart';
+import '../services/audio_processing_service.dart';
 
 /// Controller que maneja la lógica de un chat grupal
 class GroupChatController {
@@ -156,7 +157,7 @@ class GroupChatController {
         messageData['replyTo'] = replyTo;
       }
 
-      // Enviar mensaje
+      // Enviar mensaje (lógica optimista restaurada)
       await _firestore
           .collection('groups')
           .doc(groupId)
@@ -165,9 +166,6 @@ class GroupChatController {
 
       // Actualizar documento del grupo
       await _updateGroupDocument(text);
-
-      // Enviar notificaciones a todos los miembros (excepto el remitente)
-      await _sendNotifications(text);
 
       print('✅ Mensaje enviado exitosamente al grupo');
       return true;
@@ -279,37 +277,89 @@ class GroupChatController {
     }
   }
 
-  /// Enviar audio
-  Future<bool> sendAudio(String audioPath) async {
-    if (currentUserId.isEmpty) return false;
+  /// Enviar audio con optimistic update
+  /// Retorna el ID del mensaje optimista creado
+  Future<String?> sendAudioOptimistic({
+    required String audioPath,
+    required List<double> waveformData,
+  }) async {
+    if (currentUserId.isEmpty) return null;
 
     try {
+      // 1. Crear mensaje optimista localmente primero
+      final messageRef = _firestore
+          .collection('groups')
+          .doc(groupId)
+          .collection('messages')
+          .doc(); // Generar ID antes de agregar
+
+      final tempId = messageRef.id;
+
+      // 2. Agregar mensaje optimista a Firestore (sin esperar)
+      await messageRef.set({
+        'senderId': currentUserId,
+        'audioUrl': null, // Aún no tenemos URL
+        'localPath': audioPath, // Path local para reproducir mientras se sube
+        'waveformData': waveformData,
+        'type': 'audio',
+        'timestamp': FieldValue.serverTimestamp(),
+        'isRead': false,
+      });
+
+      print('✅ Mensaje optimista de audio creado en grupo: $tempId');
+
+      // 3. Subir audio en background
+      _uploadAudioInBackground(audioPath, tempId, waveformData);
+
+      return tempId;
+    } catch (e) {
+      print('❌ Error creando mensaje optimista de audio: $e');
+      return null;
+    }
+  }
+
+  /// Subir audio en background y actualizar mensaje
+  Future<void> _uploadAudioInBackground(
+    String audioPath,
+    String messageId,
+    List<double> waveformData,
+  ) async {
+    try {
+      print('📤 [BACKGROUND] Subiendo audio del grupo...');
+
+      // 1. Subir audio
       final audioUrl = await _mediaService.uploadAudio(
         audioPath: audioPath,
         chatId: groupId,
         userId: currentUserId,
       );
 
-      if (audioUrl == null) return false;
+      if (audioUrl == null) {
+        print('❌ [BACKGROUND] Error subiendo audio');
+        return;
+      }
 
+      // 2. Actualizar mensaje con URL real y limpiar localPath
       await _firestore
           .collection('groups')
           .doc(groupId)
           .collection('messages')
-          .add({
-            'senderId': currentUserId,
+          .doc(messageId)
+          .update({
             'audioUrl': audioUrl,
-            'type': 'audio',
-            'timestamp': FieldValue.serverTimestamp(),
-            'isRead': false,
+            'localPath': FieldValue.delete(), // Limpiar path local
           });
 
+      // 3. Actualizar documento del grupo
       await _updateGroupDocument('🎤 Audio');
-      print('✅ Audio enviado exitosamente al grupo');
-      return true;
+
+      // 4. Enviar notificaciones
+      await _sendNotifications('🎤 Audio');
+
+      print('✅ [BACKGROUND] Audio subido y mensaje actualizado en grupo');
     } catch (e) {
-      print('❌ Error enviando audio al grupo: $e');
-      return false;
+      print('❌ [BACKGROUND] Error subiendo audio: $e');
+      // TODO: Marcar mensaje con error si es necesario
     }
   }
 

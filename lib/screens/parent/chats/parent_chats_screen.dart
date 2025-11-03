@@ -7,7 +7,7 @@ import '../../../services/message_status_helper.dart';
 import '../../../services/search_service.dart';
 import '../../../models/chat_message.dart';
 import '../../../widgets/stories_section.dart';
-import '../../../widgets/create_group_widget.dart';
+import '../../create_group_screen.dart';
 import '../../../utils/chat_utils.dart';
 import '../../../models/chat_list_item_type.dart';
 import '../../../controllers/parent_chats_controller.dart';
@@ -244,17 +244,18 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                         color: Colors.white,
                         size: 26,
                       ),
-                      onPressed: () {
-                        showModalBottomSheet(
-                          context: context,
-                          isScrollControlled: true,
-                          backgroundColor: Colors.transparent,
-                          builder: (context) => CreateGroupWidget(
-                            onGroupCreated: () {
-                              setState(() {});
-                            },
+                      onPressed: () async {
+                        final result = await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => CreateGroupScreen(),
                           ),
                         );
+
+                        // Refrescar si se creó el grupo
+                        if (result == true && mounted) {
+                          setState(() {});
+                        }
                       },
                       padding: EdgeInsets.all(8),
                     ),
@@ -810,7 +811,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
     );
 
     if (confirmed == true) {
-      _leaveGroup(groupId, groupName);
+      await _leaveGroup(groupId, groupName);
     }
   }
 

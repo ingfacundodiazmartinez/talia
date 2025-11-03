@@ -396,27 +396,32 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
             parentIds.map((id) => _firestore.collection('users').doc(id).get()),
           ),
           builder: (context, parentsSnapshot) {
-            final parentNames = parentsSnapshot.hasData
-                ? parentsSnapshot.data!
-                    .map((doc) => (doc.data() as Map<String, dynamic>?)?['name'] ?? 'Padre/Madre')
-                    .toList()
-                : ['Cargando...'];
+            // Agrupar solicitudes por tipo (mis padres vs padres del otro)
+            final myParentRequests = <Map<String, dynamic>>[];
+            final otherParentRequests = <Map<String, dynamic>>[];
 
-            // Determinar el texto según quién debe aprobar
-            final bool isMyParent = (childId == currentUserId);
-            final int parentCount = parentNames.length;
+            for (var request in requests) {
+              final data = request.data() as Map<String, dynamic>;
+              final requestChildId = data['childId'] as String;
 
-            String approvalText;
-            if (isMyParent) {
-              // Mis padres deben aprobar
-              approvalText = parentCount > 1
-                  ? 'Esperando aprobación de mis padres'
-                  : 'Esperando aprobación de mi padre/madre';
-            } else {
-              // Los padres del otro usuario deben aprobar
-              approvalText = parentCount > 1
-                  ? 'Esperando aprobación de sus padres'
-                  : 'Esperando aprobación de su padre/madre';
+              if (requestChildId == currentUserId) {
+                myParentRequests.add(data);
+              } else {
+                otherParentRequests.add(data);
+              }
+            }
+
+            final hasMyParents = myParentRequests.isNotEmpty;
+            final hasOtherParents = otherParentRequests.isNotEmpty;
+
+            // Obtener nombres de padres
+            final parentNamesMap = <String, String>{};
+            if (parentsSnapshot.hasData) {
+              for (var i = 0; i < parentIds.length; i++) {
+                final doc = parentsSnapshot.data![i];
+                final name = (doc.data() as Map<String, dynamic>?)?['name'] ?? 'Padre/Madre';
+                parentNamesMap[parentIds[i]] = name;
+              }
             }
 
             return Container(
@@ -453,24 +458,92 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
                             color: colorScheme.onSurface,
                           ),
                         ),
-                        SizedBox(height: 4),
-                        Row(
+                        SizedBox(height: 8),
+                        Text(
+                          'Esperando aprobación de:',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        SizedBox(height: 6),
+                        // Mostrar estado de aprobaciones
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Icon(
-                              Icons.family_restroom,
-                              size: 14,
-                              color: colorScheme.onSurfaceVariant,
-                            ),
-                            SizedBox(width: 4),
-                            Expanded(
-                              child: Text(
-                                approvalText,
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: colorScheme.onSurfaceVariant,
-                                ),
-                              ),
-                            ),
+                            // Mis padres
+                            if (hasMyParents)
+                              ...myParentRequests.map((req) {
+                                final parentId = req['parentId'] as String;
+                                final parentName = parentNamesMap[parentId] ?? 'Padre/Madre';
+                                final status = req['status'] as String?;
+                                final isApproved = status == 'approved';
+
+                                return Padding(
+                                  padding: EdgeInsets.only(bottom: 4),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        isApproved ? Icons.check_circle : Icons.schedule,
+                                        size: 16,
+                                        color: isApproved
+                                          ? Colors.green
+                                          : colorScheme.tertiary,
+                                      ),
+                                      SizedBox(width: 6),
+                                      Expanded(
+                                        child: Text(
+                                          'Mi padre/madre ($parentName)',
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            color: colorScheme.onSurfaceVariant,
+                                            decoration: isApproved
+                                              ? TextDecoration.lineThrough
+                                              : null,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }).toList(),
+                            // Padres del otro usuario
+                            if (hasOtherParents)
+                              ...otherParentRequests.map((req) {
+                                final parentId = req['parentId'] as String;
+                                final parentName = parentNamesMap[parentId] ?? 'Padre/Madre';
+                                final status = req['status'] as String?;
+                                final isApproved = status == 'approved';
+
+                                return Padding(
+                                  padding: EdgeInsets.only(bottom: 4),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        isApproved ? Icons.check_circle : Icons.schedule,
+                                        size: 16,
+                                        color: isApproved
+                                          ? Colors.green
+                                          : colorScheme.tertiary,
+                                      ),
+                                      SizedBox(width: 6),
+                                      Expanded(
+                                        child: Text(
+                                          'Su padre/madre ($parentName)',
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            color: colorScheme.onSurfaceVariant,
+                                            decoration: isApproved
+                                              ? TextDecoration.lineThrough
+                                              : null,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }).toList(),
                           ],
                         ),
                       ],

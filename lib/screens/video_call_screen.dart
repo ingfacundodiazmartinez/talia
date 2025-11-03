@@ -1,6 +1,8 @@
-import 'package:flutter/material.dart';
-import 'package:agora_rtc_engine/agora_rtc_engine.dart';
+import 'dart:async';
 import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
+import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
@@ -53,6 +55,9 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   int? _uid;
   String? _realCallId; // ✅ El callId real de Firestore (puede diferir del widget.callId temporal)
 
+  // Subscripción al listener de status de la llamada
+  StreamSubscription<DocumentSnapshot>? _callStatusSubscription;
+
   @override
   void initState() {
     super.initState();
@@ -69,6 +74,15 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     if (!widget.isVideo) {
       _isCameraOff = true;
     }
+
+    // Sincronizar estado de cámara con el servicio al inicializar
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        setState(() {
+          _isCameraOff = _videoCallService.isCameraOff;
+        });
+      }
+    });
 
     _initializeCall();
     // ✅ NO llamar _listenToCallStatus() aquí - se llamará después de obtener el real callId
@@ -133,15 +147,32 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
           }
 
           // Actualizar datos de llamada
-          setState(() {
-            _realCallId = result['callId']; // ✅ Actualizar con el callId real de Firestore
-            _channelName = result['channelName'];
-            _token = result['token'];
-            _uid = result['uid'];
-            _connectionStatus = 'Llamando...';
-          });
+          if (mounted) {
+            setState(() {
+              _realCallId = result['callId']; // ✅ Actualizar con el callId real de Firestore
+              _channelName = result['channelName'];
+              _token = result['token'];
+              _uid = result['uid'];
+              _connectionStatus = 'Llamando...';
+            });
+          }
 
           ReleaseLogger.success('[Optimistic] Datos de llamada obtenidos: callId=$_realCallId, channel=$_channelName, uid=$_uid', tag: 'VideoCall');
+
+          // Verificar si se terminó la llamada durante initiateCall
+          if (_isEnding || !mounted) {
+            print('⏭️ [VideoCallScreen] Llamada terminada durante initiateCall - cancelando documento en Firestore');
+
+            // IMPORTANTE: Si el usuario canceló antes de que termine initiateCall,
+            // ahora tenemos el callId real y debemos cancelarlo en Firestore
+            if (_realCallId != null) {
+              print('📵 [VideoCallScreen] Cancelando documento real: $_realCallId');
+              await _videoCallService.endCall(_realCallId!).catchError((e) {
+                print('⚠️ [VideoCallScreen] Error cancelando documento: $e');
+              });
+            }
+            return;
+          }
 
           // ✅ Ahora que tenemos el callId real, iniciar el listener
           _listenToCallStatus();
@@ -152,8 +183,14 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
         _listenToCallStatus();
       }
 
-      // Paso 2: Inicializar Agora
-      await _videoCallService.initializeAgora();
+      // Paso 2: Inicializar Agora con el tipo correcto de llamada
+      await _videoCallService.initializeAgora(isVideo: widget.isVideo);
+
+      // Verificar si se terminó la llamada durante la inicialización de Agora
+      if (_isEnding || !mounted) {
+        print('⏭️ [VideoCallScreen] Llamada terminada durante inicialización de Agora - cancelando');
+        return;
+      }
 
       // Paso 3: Configurar event handlers
       _videoCallService.engine?.registerEventHandler(
@@ -161,15 +198,27 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
           onJoinChannelSuccess: (RtcConnection connection, int elapsed) async {
             print('✅ Unido al canal: ${connection.channelId}');
             print('✅ UID local asignado: ${connection.localUid}');
-            setState(() {
-              _isJoined = true;
-              _localUid = connection.localUid;
-              if (widget.isCaller) {
-                _connectionStatus = 'Llamando...';
-              } else {
-                _connectionStatus = 'Conectado';
-              }
-            });
+            if (mounted) {
+              setState(() {
+                _isJoined = true;
+                _localUid = connection.localUid;
+
+                // Detectar si es llamada grupal basándose en el documento
+                _checkIfGroupCall().then((isGroupCall) {
+                  if (mounted) {
+                    setState(() {
+                      // Para llamadas grupales, siempre mostrar "Conectado" cuando nos unimos exitosamente
+                      // Para llamadas 1:1, el caller muestra "Llamando..." hasta que el receptor se una
+                      if (isGroupCall || !widget.isCaller) {
+                        _connectionStatus = 'Conectado';
+                      } else {
+                        _connectionStatus = 'Llamando...';
+                      }
+                    });
+                  }
+                });
+              });
+            }
 
             // ✅ Iniciar preview y forzar rebuild del widget de video local
             if (widget.isVideo) {
@@ -202,11 +251,19 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
           },
           onUserOffline: (RtcConnection connection, int remoteUid, UserOfflineReasonType reason) {
             print('👋 Usuario remoto desconectado: $remoteUid');
+            print('   Razón: $reason');
+
+            if (!mounted) {
+              print('⚠️ [VideoCallScreen] Widget ya disposed - ignorando onUserOffline');
+              return;
+            }
+
             setState(() {
               _remoteUids.remove(remoteUid);
             });
 
-            if (_remoteUids.isEmpty) {
+            if (_remoteUids.isEmpty && !_isEnding) {
+              print('📵 [VideoCallScreen] Usuario remoto desconectado y lista vacía - terminando llamada');
               _endCall();
             }
           },
@@ -224,7 +281,17 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
         ),
       );
 
-      // Paso 4: Unirse al canal (esperar a tener todos los datos)
+      // Paso 4: Salir del canal anterior si existe (evitar error -17)
+      await _videoCallService.leaveChannel();
+
+      // Paso 5: Unirse al canal (esperar a tener todos los datos)
+      // ⚠️ IMPORTANTE: Verificar que no se haya terminado la llamada mientras se inicializaba
+      // Este check es CRÍTICO porque ocurre después de todas las operaciones async
+      if (_isEnding || !mounted) {
+        print('⏭️ [VideoCallScreen] Llamada terminada durante inicialización - cancelando joinChannel');
+        return;
+      }
+
       if (_channelName != null && _token != null && _uid != null) {
         await _videoCallService.joinChannel(
           channelName: _channelName!,
@@ -260,15 +327,18 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     }
 
     print('🔍 [VideoCallScreen] Iniciando listener para callId: $_realCallId');
-    _videoCallService.watchCallStatus(_realCallId!).listen((snapshot) {
+    _callStatusSubscription = _videoCallService.watchCallStatus(_realCallId!).listen((snapshot) {
+      if (!mounted) return; // No procesar si el widget ya fue disposed
+
       print('🔍 [VideoCallScreen] Snapshot recibido para callId: $_realCallId');
       print('🔍 [VideoCallScreen] Snapshot existe: ${snapshot.exists}');
 
-      // Si el documento fue eliminado, significa que la llamada fue cancelada
+      // Si el documento fue eliminado, cerrar la pantalla
       if (!snapshot.exists) {
-        print('📵 [VideoCallScreen] Documento eliminado, llamada cancelada por el caller');
-        if (!_isEnding) {
-          _endCall();
+        print('📵 [VideoCallScreen] Documento eliminado - cerrando pantalla');
+        if (!_isEnding && mounted) {
+          _isEnding = true;
+          Navigator.of(context).pop();
         }
         return;
       }
@@ -277,12 +347,22 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       final status = data['status'];
 
       print('🔍 [VideoCallScreen] Status detectado: $status');
-      print('🔍 [VideoCallScreen] Datos completos: $data');
 
-      if ((status == 'ended' || status == 'rejected') && !_isEnding) {
-        // La llamada terminó o fue rechazada
-        print('⚠️ [VideoCallScreen] Status es ended/rejected, llamando a _endCall()');
-        _endCall();
+      // Si la llamada terminó, fue rechazada o cancelada → cerrar la pantalla
+      // dispose() se encargará del cleanup
+      if ((status == 'ended' || status == 'rejected' || status == 'cancelled') && !_isEnding) {
+        print('⚠️ [VideoCallScreen] Status es $status - cerrando pantalla');
+        print('   mounted: $mounted');
+        print('   _isEnding antes: $_isEnding');
+        _isEnding = true;
+        if (mounted) {
+          print('🚪 [VideoCallScreen] Ejecutando Navigator.pop() desde listener');
+          Navigator.of(context).pop();
+        } else {
+          print('❌ [VideoCallScreen] Widget no mounted - no se puede hacer pop()');
+        }
+      } else if ((status == 'ended' || status == 'rejected' || status == 'cancelled')) {
+        print('⏭️ [VideoCallScreen] Status es $status pero _isEnding ya es true - omitiendo');
       }
     });
   }
@@ -395,11 +475,36 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   }
 
   /// Toggle cámara
-  void _toggleCamera() {
+  Future<void> _toggleCamera() async {
+    // Actualizar estado local primero para respuesta inmediata en UI
     setState(() {
       _isCameraOff = !_isCameraOff;
     });
-    _videoCallService.toggleCamera();
+
+    try {
+      // Ejecutar toggle en el servicio
+      await _videoCallService.toggleCamera();
+
+      // Forzar reconstrucción del widget después de un pequeño delay
+      // para asegurar que Agora ha actualizado el estado interno
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      if (mounted) {
+        setState(() {
+          // Sincronizar con el estado real del servicio
+          _isCameraOff = _videoCallService.isCameraOff;
+        });
+        print('🔄 Estado de cámara sincronizado: $_isCameraOff');
+      }
+    } catch (e) {
+      print('❌ Error en toggle camera: $e');
+      // Revertir estado local si hay error
+      if (mounted) {
+        setState(() {
+          _isCameraOff = !_isCameraOff;
+        });
+      }
+    }
   }
 
   /// Cambiar cámara (frontal/trasera)
@@ -413,12 +518,52 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       final currentUserId = FirebaseAuth.instance.currentUser?.uid;
       if (currentUserId == null) return;
 
-      // Obtener contactos del usuario
+      // ✅ Obtener contactos aprobados desde la colección contacts
       final contactsSnapshot = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(currentUserId)
           .collection('contacts')
+          .where('users', arrayContains: currentUserId)
+          .where('status', isEqualTo: 'approved')
           .get();
+
+      if (!mounted) return;
+
+      // Procesar contactos para obtener los datos de usuario
+      final List<Map<String, dynamic>> contactsList = [];
+
+      for (final doc in contactsSnapshot.docs) {
+        final data = doc.data();
+        final users = List<String>.from(data['users'] ?? []);
+
+        // Obtener el ID del otro usuario (no el actual)
+        final contactId = users.firstWhere(
+          (id) => id != currentUserId,
+          orElse: () => '',
+        );
+
+        if (contactId.isEmpty) continue;
+
+        // Excluir al usuario con el que ya estamos en llamada
+        if (contactId == widget.receiverId) continue;
+
+        // Obtener datos del contacto
+        try {
+          final userDoc = await FirebaseFirestore.instance
+              .collection('users')
+              .doc(contactId)
+              .get();
+
+          if (userDoc.exists) {
+            final userData = userDoc.data()!;
+            contactsList.add({
+              'id': contactId,
+              'name': userData['name'] ?? 'Usuario',
+              'photoURL': userData['photoURL'],
+            });
+          }
+        } catch (e) {
+          print('⚠️ Error obteniendo datos del contacto $contactId: $e');
+        }
+      }
 
       if (!mounted) return;
 
@@ -461,7 +606,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
                 // Lista de contactos
                 Flexible(
-                  child: contactsSnapshot.docs.isEmpty
+                  child: contactsList.isEmpty
                       ? const Center(
                           child: Text(
                             'No tienes contactos disponibles',
@@ -470,12 +615,12 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                         )
                       : ListView.builder(
                           shrinkWrap: true,
-                          itemCount: contactsSnapshot.docs.length,
+                          itemCount: contactsList.length,
                           itemBuilder: (context, index) {
-                            final contactData = contactsSnapshot.docs[index].data();
-                            final contactId = contactsSnapshot.docs[index].id;
-                            final contactName = contactData['name'] ?? 'Usuario';
-                            final contactPhotoURL = contactData['photoURL'];
+                            final contact = contactsList[index];
+                            final contactId = contact['id'] as String;
+                            final contactName = contact['name'] as String;
+                            final contactPhotoURL = contact['photoURL'] as String?;
 
                             return ListTile(
                               leading: CircleAvatar(
@@ -514,8 +659,8 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       print('❌ Error mostrando diálogo de invitación: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Error al cargar contactos'),
+          SnackBar(
+            content: Text('Error al cargar contactos: $e'),
             backgroundColor: Colors.red,
           ),
         );
@@ -569,40 +714,98 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     }
   }
 
+  /// Verificar si la llamada actual es una llamada grupal
+  Future<bool> _checkIfGroupCall() async {
+    try {
+      if (_realCallId == null) return false;
+
+      final callDoc = await FirebaseFirestore.instance
+          .collection('video_calls')
+          .doc(_realCallId!)
+          .get();
+
+      if (callDoc.exists) {
+        final data = callDoc.data() as Map<String, dynamic>;
+        return data['isGroupCall'] == true;
+      }
+    } catch (e) {
+      print('❌ Error verificando si es llamada grupal: $e');
+    }
+
+    return false;
+  }
+
   /// Terminar la llamada
+  /// PATRÓN SIMPLIFICADO (siguiendo ejemplo oficial de Agora):
+  /// - Actualiza Firestore para notificar al otro usuario
+  /// - Cierra la pantalla con Navigator.pop()
+  /// - El cleanup se hace automáticamente en dispose()
   Future<void> _endCall() async {
     if (_isEnding) return; // Evitar múltiples llamadas
     _isEnding = true;
 
     try {
-      // Cerrar CallKit UI en ambas plataformas
       final callIdToEnd = _realCallId ?? widget.callId;
-      if (Platform.isIOS) {
-        // En iOS usamos VoIPService para notificar a CallKit nativo
-        await VoIPService().notifyCallEnded(callIdToEnd);
-      } else if (Platform.isAndroid) {
-        // En Android usamos flutter_callkit_incoming
-        await CallKitService().endCall(callIdToEnd);
+      print('📵 [VideoCallScreen] Terminando llamada: $callIdToEnd');
+
+      // IMPORTANTE: Solo actualizar Firestore si tenemos el callId real
+      // Si aún tenemos el callId temporal (timestamp), significa que la llamada
+      // nunca se creó en Firestore y no hay nada que cancelar
+      final isTemporaryCallId = callIdToEnd == widget.callId && widget.isCaller && _realCallId == null;
+
+      if (isTemporaryCallId) {
+        print('⏭️ [VideoCallScreen] CallId temporal - la llamada no se creó en Firestore aún');
+        print('⏭️ [VideoCallScreen] No hay nada que cancelar, solo cerrar pantalla');
+      } else {
+        // 1. Actualizar Firestore para notificar al otro usuario
+        await _videoCallService.endCall(callIdToEnd);
+        print('✅ [VideoCallScreen] Firestore actualizado');
       }
 
-      await _videoCallService.endCall(callIdToEnd);
-      await _videoCallService.leaveChannel();
-
+      // 2. Cerrar pantalla - el cleanup se hará en dispose()
       if (mounted) {
-        Navigator.pop(context);
+        print('🚪 [VideoCallScreen] Cerrando pantalla - dispose() hará el cleanup');
+        Navigator.of(context).pop();
       }
     } catch (e) {
-      print('❌ Error terminando llamada: $e');
+      print('❌ [VideoCallScreen] Error terminando llamada: $e');
+      // Intentar cerrar pantalla de todos modos
       if (mounted) {
-        Navigator.pop(context);
+        Navigator.of(context).pop();
       }
     }
   }
 
   @override
   void dispose() {
-    _videoCallService.leaveChannel();
+    print('🗑️ [VideoCallScreen] Disposing - iniciando cleanup');
+
+    // Siguiendo el patrón oficial de Agora:
+    // 1. Cancelar listeners
+    _callStatusSubscription?.cancel();
+    print('✅ [VideoCallScreen] Listeners cancelados');
+
+    // 2. Cerrar CallKit
+    final callIdToEnd = _realCallId ?? widget.callId;
+    if (Platform.isIOS) {
+      VoIPService().notifyCallEnded(callIdToEnd).catchError((e) {
+        print('⚠️ [VideoCallScreen] Error cerrando VoIP: $e');
+      });
+    } else if (Platform.isAndroid) {
+      CallKitService().endCall(callIdToEnd).catchError((e) {
+        print('⚠️ [VideoCallScreen] Error cerrando CallKit: $e');
+      });
+    }
+    print('✅ [VideoCallScreen] CallKit cerrado');
+
+    // 3. Salir del canal de Agora (sin await en dispose)
+    _videoCallService.leaveChannel().catchError((e) {
+      print('⚠️ [VideoCallScreen] Error en leaveChannel: $e');
+    });
+    print('✅ [VideoCallScreen] leaveChannel ejecutado');
+
     super.dispose();
+    print('✅ [VideoCallScreen] Dispose completado');
   }
 
   @override
@@ -773,6 +976,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                                   color: Colors.white, size: 40),
                             )
                           : AgoraVideoView(
+                              key: ValueKey('local_video_group_${!_isCameraOff}'),
                               controller: VideoViewController(
                                 rtcEngine: _videoCallService.engine!,
                                 canvas: const VideoCanvas(uid: 0),
@@ -920,6 +1124,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(10),
         child: AgoraVideoView(
+          key: ValueKey('local_video_preview_${!_isCameraOff}'),
           controller: VideoViewController(
             rtcEngine: _videoCallService.engine!,
             canvas: const VideoCanvas(uid: 0), // 0 = video local

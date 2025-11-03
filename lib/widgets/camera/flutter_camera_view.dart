@@ -63,7 +63,7 @@ class _FlutterCameraViewState extends State<FlutterCameraView> {
       _controller = CameraController(
         widget.cameras![widget.selectedCameraIndex],
         ResolutionPreset.high,
-        enableAudio: false,
+        enableAudio: true, // ✅ Habilitar audio para grabación de video
       );
 
       await _controller!.initialize();
@@ -175,11 +175,64 @@ class _FlutterCameraViewState extends State<FlutterCameraView> {
         throw Exception('Controller description mismatch');
       }
 
-      // ✅ ARREGLADO: Usar AspectRatio con Center para evitar distorsión sin problemas de rendering
-      return Center(
-        child: AspectRatio(
-          aspectRatio: value.aspectRatio,
-          child: CameraPreview(_controller!),
+      // 🔍 DEBUG: Investigar dimensiones y aspectRatio
+      final screenSize = MediaQuery.of(context).size;
+      final screenAspectRatio = screenSize.width / screenSize.height;
+      print('🔍 DEBUG Camera aspectRatio: ${value.aspectRatio}');
+      print('🔍 DEBUG Screen size: ${screenSize.width} x ${screenSize.height}');
+      print('🔍 DEBUG Screen aspectRatio: $screenAspectRatio');
+      print('🔍 DEBUG Camera previewSize: ${value.previewSize}');
+      if (value.previewSize != null) {
+        final previewAspectRatio = value.previewSize!.width / value.previewSize!.height;
+        print('🔍 DEBUG Preview aspectRatio calculado: $previewAspectRatio');
+        print('🔍 DEBUG Preview width: ${value.previewSize!.width}, height: ${value.previewSize!.height}');
+      }
+
+      // 🔍 TEST: Probar diferentes enfoques para aspectRatio
+      // Hipótesis: Las dimensiones pueden estar invertidas por orientación del dispositivo
+
+      // Opción 1: AspectRatio original (problema actual)
+      final originalAspectRatio = value.aspectRatio;
+
+      // Opción 2: AspectRatio invertido (width/height -> height/width)
+      final invertedAspectRatio = 1.0 / value.aspectRatio;
+
+      // Opción 3: Usar Transform.scale pero corregido para portrait
+      // PROBLEMA DETECTADO: Camera reporta 1.78 (landscape) pero pantalla es 0.46 (portrait)
+      // SOLUCIÓN: Usar aspectRatio invertido para match con orientación portrait
+      final correctedAspectRatio = invertedAspectRatio; // 0.5625 en lugar de 1.78
+      final scaleForTransform = correctedAspectRatio / screenAspectRatio;
+
+      print('🔍 DEBUG originalAspectRatio: $originalAspectRatio');
+      print('🔍 DEBUG invertedAspectRatio: $invertedAspectRatio');
+      print('🔍 DEBUG correctedAspectRatio: $correctedAspectRatio');
+      print('🔍 DEBUG scaleForTransform CORREGIDO: $scaleForTransform');
+
+      // 🎯 ENFOQUE FINAL: Probando varios enfoques para encontrar el correcto
+
+      // Opción A: Transform.scale (actual - tiene zoom residual)
+      // return Container(
+      //   width: double.infinity,
+      //   height: double.infinity,
+      //   child: ClipRect(
+      //     child: Transform.scale(
+      //       scale: scaleForTransform,
+      //       child: Center(
+      //         child: CameraPreview(_controller!),
+      //       ),
+      //     ),
+      //   ),
+      // );
+
+      // Opción B: AspectRatio con el aspectRatio corregido (portrait)
+      return Container(
+        width: double.infinity,
+        height: double.infinity,
+        child: Center(
+          child: AspectRatio(
+            aspectRatio: correctedAspectRatio, // Usar 0.5625 en lugar de 1.78
+            child: CameraPreview(_controller!),
+          ),
         ),
       );
     } catch (e) {

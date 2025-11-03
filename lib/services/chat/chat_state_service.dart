@@ -76,11 +76,26 @@ class ChatStateService {
     int addedCount = 0;
     int updatedCount = 0;
     int skippedCount = 0;
+    int replacedPendingCount = 0;
 
     for (final message in newMessages) {
       final index = _messages.indexWhere((m) => m.id == message.id);
 
       if (index == -1) {
+        // Verificar si es un mensaje propio que reemplaza uno pendiente
+        if (message.senderId == currentUserId) {
+          final pendingIndex = _findMatchingPendingMessage(message);
+          if (pendingIndex != -1) {
+            // Reemplazar mensaje pendiente con el confirmado
+            final pendingMessage = _messages[pendingIndex];
+            print('🔄 Reemplazando mensaje pendiente ${pendingMessage.id} con ${message.id}');
+            _messages[pendingIndex] = message;
+            _pendingMessages.removeWhere((m) => m.id == pendingMessage.id);
+            replacedPendingCount++;
+            continue;
+          }
+        }
+
         // Mensaje nuevo
         _messages.add(message);
         addedCount++;
@@ -102,7 +117,70 @@ class ChatStateService {
     _sortMessages();
     await _cacheService.saveMessages(chatId, _messages);
 
-    print('📊 Merge: $addedCount nuevos, $updatedCount actualizados, $skippedCount omitidos');
+    print('📊 Merge: $addedCount nuevos, $updatedCount actualizados, $skippedCount omitidos, $replacedPendingCount pendientes reemplazados');
+  }
+
+  /// Encontrar mensaje pendiente que coincida con el mensaje de Firestore
+  /// Ahora usa localId para un match preciso en lugar de heurísticas
+  int _findMatchingPendingMessage(ChatMessage firestoreMessage) {
+    // Buscar por localId si existe (método nuevo y preciso)
+    if (firestoreMessage.localId != null) {
+      final index = _messages.indexWhere((m) =>
+        m.id == firestoreMessage.localId &&
+        _pendingMessages.any((p) => p.id == m.id)
+      );
+      if (index != -1) {
+        print('✅ Mensaje pendiente encontrado por localId: ${firestoreMessage.localId}');
+        return index;
+      }
+    }
+
+    // Fallback: buscar por contenido (para compatibilidad con mensajes viejos)
+    if (firestoreMessage.timestamp == null) return -1;
+
+    return _messages.indexWhere((m) {
+      // Debe estar en la lista de pendientes
+      if (!_pendingMessages.any((p) => p.id == m.id)) return false;
+
+      // Debe ser del mismo remitente
+      if (m.senderId != firestoreMessage.senderId) return false;
+
+      // Verificar coincidencia por tipo y contenido
+      if (m.type != firestoreMessage.type) return false;
+
+      // Para mensajes de texto, verificar contenido
+      if (m.type == 'text' && m.text == firestoreMessage.text) {
+        return true;
+      }
+
+      // Para imágenes, verificar URL (puede ser la misma si fue subida)
+      if (m.type == 'image' && m.imageUrl == firestoreMessage.imageUrl) {
+        return true;
+      }
+
+      // Para videos, verificar URL
+      if (m.type == 'video' && m.videoUrl == firestoreMessage.videoUrl) {
+        return true;
+      }
+
+      // Para audios, verificar URL (si ya fue subido) o waveform (si coincide)
+      if (m.type == 'audio') {
+        if (m.audioUrl == firestoreMessage.audioUrl && m.audioUrl != null) {
+          return true;
+        }
+        // Si el mensaje pendiente tiene localPath y el de Firestore tiene audioUrl,
+        // podría ser el mismo mensaje subido
+        if (m.localPath != null && firestoreMessage.audioUrl != null) {
+          // Verificar por timestamp cercano (dentro de 2 segundos)
+          if (m.timestamp != null && firestoreMessage.timestamp != null) {
+            final diff = (m.timestamp!.seconds - firestoreMessage.timestamp!.seconds).abs();
+            return diff <= 2;
+          }
+        }
+      }
+
+      return false;
+    });
   }
 
   /// Verificar si hay cambios importantes entre mensajes

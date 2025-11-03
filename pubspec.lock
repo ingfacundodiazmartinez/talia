@@ -960,6 +960,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.4.6"
+  flutter_native_video_trimmer:
+    dependency: transitive
+    description:
+      name: flutter_native_video_trimmer
+      sha256: d31159c34fb4e56fe53919b5b9978f75b5fb4b2934ceb05c6b369929139d3b72
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.1.9"
   flutter_plugin_android_lifecycle:
     dependency: transitive
     description:

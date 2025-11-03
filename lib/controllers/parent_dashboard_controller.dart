@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../notification_service.dart';
@@ -6,6 +7,7 @@ import '../services/video_call_service.dart';
 import '../services/auto_approval_service.dart';
 import '../services/user_role_service.dart';
 import '../services/callkit_service.dart';
+import '../services/voip_service.dart';
 import '../models/parent.dart';
 import '../screens/emergency_detail_screen.dart';
 
@@ -28,6 +30,10 @@ class ParentDashboardController {
   // Subscripciones (deben limpiarse en dispose)
   StreamSubscription? _emergencyNotificationSubscription;
   StreamSubscription? _incomingCallsSubscription;
+
+  // Mapa para rastrear listeners de documentos de llamadas específicas
+  // Key: callId, Value: StreamSubscription
+  final Map<String, StreamSubscription> _activeCallListeners = {};
 
   /// Constructor
   ParentDashboardController({
@@ -128,9 +134,15 @@ class ParentDashboardController {
                   return;
                 }
 
+                final callId = change.doc.id;
+
+                // Configurar listener específico para esta llamada
+                // para detectar si es cancelada por el caller
+                _setupCallCancellationListener(callId);
+
                 // Enviar al stream de NotificationService para que main.dart lo maneje
                 _notificationService.emitIncomingCall({
-                  'callId': change.doc.id,
+                  'callId': callId,
                   'callerId': callData['callerId'],
                   'callerName': callData['callerName'] ?? 'Desconocido',
                   'channelName': callData['channelName'],
@@ -160,9 +172,16 @@ class ParentDashboardController {
                   print('📵 [ParentDashboardController] Llamada $callId fue cancelada antes de aceptar - cerrando CallKit');
 
                   // Solo cerrar CallKit si la llamada fue cancelada (no aceptada)
-                  CallKitService().endCall(callId).catchError((error) {
-                    print('⚠️ [ParentDashboardController] Error cerrando CallKit: $error');
-                  });
+                  // Usar el method channel nativo en iOS para evitar reinicio de app
+                  if (Platform.isIOS) {
+                    VoIPService().notifyCallEnded(callId).catchError((error) {
+                      print('⚠️ [ParentDashboardController] Error cerrando VoIP en iOS: $error');
+                    });
+                  } else if (Platform.isAndroid) {
+                    CallKitService().endCall(callId).catchError((error) {
+                      print('⚠️ [ParentDashboardController] Error cerrando CallKit en Android: $error');
+                    });
+                  }
                 } else {
                   print('ℹ️ [ParentDashboardController] Llamada $callId modificada (status: $status) - CallKit permanece abierto');
                 }
@@ -179,6 +198,81 @@ class ParentDashboardController {
         );
 
     print('👂 Escuchando llamadas entrantes para padre: $parentId');
+  }
+
+  /// Configura un listener para detectar si una llamada específica es cancelada
+  /// Este listener se activa cuando se muestra una llamada entrante
+  /// y se limpia automáticamente cuando la llamada termina o es aceptada
+  void _setupCallCancellationListener(String callId) {
+    print('👂 [ParentDashboardController] Configurando listener de cancelación para callId: $callId');
+
+    // Si ya existe un listener para esta llamada, cancelarlo primero
+    _activeCallListeners[callId]?.cancel();
+
+    // Escuchar el documento específico de esta llamada (sin filtro de status)
+    final subscription = FirebaseFirestore.instance
+        .collection('video_calls')
+        .doc(callId)
+        .snapshots()
+        .listen((snapshot) {
+      if (!snapshot.exists) {
+        // El documento fue eliminado
+        print('📵 [ParentDashboardController] Documento $callId eliminado - cerrando CallKit');
+
+        // Usar el method channel nativo en iOS para evitar reinicio de app
+        if (Platform.isIOS) {
+          VoIPService().notifyCallEnded(callId).catchError((error) {
+            print('⚠️ [ParentDashboardController] Error cerrando VoIP en iOS: $error');
+          });
+        } else if (Platform.isAndroid) {
+          CallKitService().endCall(callId).catchError((error) {
+            print('⚠️ [ParentDashboardController] Error cerrando CallKit en Android: $error');
+          });
+        }
+
+        _cleanupCallListener(callId);
+        return;
+      }
+
+      final data = snapshot.data() as Map<String, dynamic>?;
+      final status = data?['status'];
+
+      print('🔍 [ParentDashboardController] Status de $callId cambió a: $status');
+
+      if (status == 'cancelled') {
+        // La llamada fue cancelada por el caller - cerrar CallKit
+        print('📵 [ParentDashboardController] Llamada $callId cancelada por caller - cerrando CallKit');
+
+        // Usar el method channel nativo en iOS para evitar reinicio de app
+        // En Android seguimos usando el plugin
+        if (Platform.isIOS) {
+          VoIPService().notifyCallEnded(callId).catchError((error) {
+            print('⚠️ [ParentDashboardController] Error cerrando VoIP en iOS: $error');
+          });
+        } else if (Platform.isAndroid) {
+          CallKitService().endCall(callId).catchError((error) {
+            print('⚠️ [ParentDashboardController] Error cerrando CallKit en Android: $error');
+          });
+        }
+
+        _cleanupCallListener(callId);
+      } else if (status == 'accepted' || status == 'active' || status == 'ended') {
+        // La llamada fue aceptada o terminada - limpiar listener
+        // (CallKit se cerrará desde VideoCallScreen cuando termine)
+        print('ℹ️ [ParentDashboardController] Llamada $callId en status $status - limpiando listener');
+        _cleanupCallListener(callId);
+      }
+    });
+
+    _activeCallListeners[callId] = subscription;
+    print('✅ [ParentDashboardController] Listener de cancelación configurado para $callId');
+  }
+
+  /// Limpia el listener de una llamada específica
+  void _cleanupCallListener(String callId) {
+    final subscription = _activeCallListeners.remove(callId);
+    subscription?.cancel();
+    print('🧹 [ParentDashboardController] Listener limpiado para callId: $callId');
   }
 
   /// Inicializa el servicio de aprobación automática
@@ -229,6 +323,13 @@ class ParentDashboardController {
   void dispose() {
     _emergencyNotificationSubscription?.cancel();
     _incomingCallsSubscription?.cancel();
+
+    // Limpiar todos los listeners de llamadas activas
+    for (var subscription in _activeCallListeners.values) {
+      subscription.cancel();
+    }
+    _activeCallListeners.clear();
+
     print('🧹 ParentDashboardController disposed');
   }
 }

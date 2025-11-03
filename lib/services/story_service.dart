@@ -39,6 +39,10 @@ class StoryService {
   // StreamController para notificar cambios en el cache optimista
   final StreamController<void> _optimisticStoriesController = StreamController<void>.broadcast();
 
+  // Control de preload
+  bool _isPreloading = false;
+  DateTime? _lastPreloadTime;
+
   // Crear una nueva historia
   Future<String> createStory({
     required String mediaPath,
@@ -1573,5 +1577,101 @@ class StoryService {
     } catch (e) {
       print('❌ Error convirtiendo historias expiradas: $e');
     }
+  }
+
+  /// Precargar historias al hacer login para mejorar la experiencia de usuario
+  /// Solo carga las primeras 10 usuarios con sus historias más recientes
+  Future<void> preloadStories() async {
+    final user = _auth.currentUser;
+    if (user == null) return;
+
+    // Evitar preloads múltiples o muy frecuentes
+    final now = DateTime.now();
+    if (_isPreloading) {
+      print('⏩ Preload ya en progreso, saltando...');
+      return;
+    }
+
+    if (_lastPreloadTime != null &&
+        now.difference(_lastPreloadTime!).inMinutes < 5) {
+      print('⏩ Preload reciente (${now.difference(_lastPreloadTime!).inMinutes}m), saltando...');
+      return;
+    }
+
+    try {
+      _isPreloading = true;
+      _lastPreloadTime = now;
+
+      print('🚀 [StoryService] Iniciando preload de historias...');
+
+      // 1. Obtener lista de contactos (limitada a los primeros 10 para preload)
+      final contactIdsSet = await _getContactIds();
+      if (contactIdsSet.isEmpty) return;
+
+      final contactIds = contactIdsSet.take(10).toList(); // Solo precargar top 10
+      print('📋 [StoryService] Precargando historias de ${contactIds.length} contactos...');
+
+      final List<UserStories> preloadedStories = [];
+
+      // 2. Incluir historias del usuario actual primero
+      final currentUserStories = await getCurrentUserStories();
+      if (currentUserStories != null) {
+        preloadedStories.add(currentUserStories);
+      }
+
+      // 3. Precargar historias de contactos (en paralelo para rapidez)
+      final futures = contactIds
+          .where((id) => id != user.uid) // Excluir usuario actual
+          .map((contactId) => _getUserStories(contactId));
+
+      final results = await Future.wait(futures, eagerError: false);
+
+      for (final userStories in results) {
+        if (userStories != null) {
+          preloadedStories.add(userStories);
+        }
+      }
+
+      // 4. Ordenar y cachear
+      preloadedStories.sort((a, b) {
+        if (a.hasUnviewed && !b.hasUnviewed) return -1;
+        if (!a.hasUnviewed && b.hasUnviewed) return 1;
+
+        // Ordenar por fecha de la historia más reciente
+        final aTime = a.latestStory?.createdAt;
+        final bTime = b.latestStory?.createdAt;
+
+        if (aTime == null && bTime == null) return 0;
+        if (aTime == null) return 1;
+        if (bTime == null) return -1;
+
+        return bTime.compareTo(aTime);
+      });
+
+      // 5. Actualizar cache
+      _cachedStories = preloadedStories;
+      _lastCacheUpdate = now;
+
+      print('✅ [StoryService] Preload completado: ${preloadedStories.length} usuarios con historias');
+
+      // Notificar cambios para refrescar UI si está visible
+      _optimisticStoriesController.add(null);
+
+    } catch (e) {
+      print('❌ [StoryService] Error en preload: $e');
+    } finally {
+      _isPreloading = false;
+    }
+  }
+
+  /// Método para limpiar cache cuando el usuario se desloguea
+  void clearCache() {
+    _cachedStories = null;
+    _lastCacheUpdate = null;
+    _cachedContactIds = null;
+    _lastContactsCacheUpdate = null;
+    _optimisticStories.clear();
+    _lastPreloadTime = null;
+    print('🧹 [StoryService] Cache limpiado');
   }
 }

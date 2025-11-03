@@ -140,34 +140,45 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
     try {
       print('🎵 [WAVEFORM] Iniciando extracción para ${widget.audioUrl}');
 
-      // 1. Verificar cache primero
-      final cachedWaveform = await _cacheService.getWaveform(widget.audioUrl);
-      if (cachedWaveform != null && mounted) {
-        print('✅ [WAVEFORM] Usando datos cacheados (${cachedWaveform.length} puntos)');
-        setState(() {
-          _waveformData = cachedWaveform;
-        });
-        return; // Salir temprano, no necesitamos procesar
+      // 1. Verificar cache primero (solo si no es local)
+      if (!widget.isLocal) {
+        final cachedWaveform = await _cacheService.getWaveform(widget.audioUrl);
+        if (cachedWaveform != null && mounted) {
+          print('✅ [WAVEFORM] Usando datos cacheados (${cachedWaveform.length} puntos)');
+          setState(() {
+            _waveformData = cachedWaveform;
+          });
+          return; // Salir temprano, no necesitamos procesar
+        }
       }
 
       print('🔄 [WAVEFORM] No hay cache, procesando audio...');
 
-      // 2. Descargar el archivo de audio
-      final tempDir = await getTemporaryDirectory();
-      final audioFile = File('${tempDir.path}/audio_${widget.audioUrl.hashCode}.m4a');
+      // 2. Obtener el archivo de audio (local o descargado)
+      File audioFile;
 
-      if (!await audioFile.exists()) {
-        print('📥 [WAVEFORM] Descargando audio...');
-        final response = await http.get(Uri.parse(widget.audioUrl));
-        if (response.statusCode == 200) {
-          await audioFile.writeAsBytes(response.bodyBytes);
-          print('✅ [WAVEFORM] Audio descargado: ${audioFile.lengthSync()} bytes');
-        } else {
-          print('❌ [WAVEFORM] Error descargando: ${response.statusCode}');
-          return;
-        }
+      if (widget.isLocal) {
+        // Si es local, usar directamente el path
+        audioFile = File(widget.audioUrl);
+        print('📱 [WAVEFORM] Usando archivo local: ${audioFile.path}');
       } else {
-        print('📦 [WAVEFORM] Usando cache: ${audioFile.lengthSync()} bytes');
+        // Si es remoto, descargar primero
+        final tempDir = await getTemporaryDirectory();
+        audioFile = File('${tempDir.path}/audio_${widget.audioUrl.hashCode}.m4a');
+
+        if (!await audioFile.exists()) {
+          print('📥 [WAVEFORM] Descargando audio...');
+          final response = await http.get(Uri.parse(widget.audioUrl));
+          if (response.statusCode == 200) {
+            await audioFile.writeAsBytes(response.bodyBytes);
+            print('✅ [WAVEFORM] Audio descargado: ${audioFile.lengthSync()} bytes');
+          } else {
+            print('❌ [WAVEFORM] Error descargando: ${response.statusCode}');
+            return;
+          }
+        } else {
+          print('📦 [WAVEFORM] Usando cache: ${audioFile.lengthSync()} bytes');
+        }
       }
 
       // 2. Crear controller y usar extractWaveformData() en lugar de preparePlayer()
@@ -215,8 +226,10 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
             _waveformData = amplified;
           });
 
-          // Guardar en cache para futuros usos
-          await _cacheService.saveWaveform(widget.audioUrl, amplified);
+          // Guardar en cache solo si es remoto (no local)
+          if (!widget.isLocal) {
+            await _cacheService.saveWaveform(widget.audioUrl, amplified);
+          }
 
           print('✅ [WAVEFORM] Aplicado a UI con ${amplified.length} barras (rango amplificado)');
           print('📊 [WAVEFORM] Primeros 5 amplificados: ${amplified.take(5).toList()}');
@@ -227,8 +240,10 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
             _waveformData = uniformData;
           });
 
-          // Guardar en cache también los uniformes
-          await _cacheService.saveWaveform(widget.audioUrl, uniformData);
+          // Guardar en cache solo si es remoto (no local)
+          if (!widget.isLocal) {
+            await _cacheService.saveWaveform(widget.audioUrl, uniformData);
+          }
 
           print('⚠️ [WAVEFORM] Audio sin variación detectada');
         }

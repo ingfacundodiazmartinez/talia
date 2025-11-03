@@ -37,40 +37,48 @@ class AnsweredCallBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
     final isVideo = callType == 'video';
     final duration = callDuration != null ? _formatDuration(callDuration!) : '0s';
 
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      padding: const EdgeInsets.all(12),
+      constraints: BoxConstraints(
+        maxWidth: MediaQuery.of(context).size.width * 0.75,
+      ),
+      margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: isMe
-            ? colorScheme.primaryContainer.withValues(alpha: 0.3)
-            : colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: Colors.green.withValues(alpha: 0.3),
-          width: 1,
+            ? colorScheme.primary
+            : (isDarkMode
+                ? colorScheme.surfaceContainerHighest
+                : colorScheme.surfaceContainerHigh),
+        borderRadius: BorderRadius.only(
+          topLeft: const Radius.circular(16),
+          topRight: const Radius.circular(16),
+          bottomLeft: isMe ? const Radius.circular(16) : const Radius.circular(4),
+          bottomRight: isMe ? const Radius.circular(4) : const Radius.circular(16),
         ),
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Icono y texto
+          // Icono y texto principal
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(
                 isVideo ? Icons.videocam : Icons.phone,
-                color: Colors.green,
-                size: 20,
+                color: isMe ? Colors.white.withValues(alpha: 0.9) : Colors.green[600],
+                size: 18,
               ),
               const SizedBox(width: 8),
               Flexible(
                 child: Text(
                   isVideo ? 'Videollamada' : 'Llamada',
                   style: TextStyle(
-                    color: Colors.green[700],
+                    color: isMe ? Colors.white : colorScheme.onSurface,
                     fontSize: 14,
                     fontWeight: FontWeight.w500,
                   ),
@@ -79,15 +87,17 @@ class AnsweredCallBubble extends StatelessWidget {
               const SizedBox(width: 8),
               // Duración
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color: Colors.green.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(12),
+                  color: isMe
+                      ? Colors.white.withValues(alpha: 0.2)
+                      : Colors.green.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
                   duration,
                   style: TextStyle(
-                    color: Colors.green[800],
+                    color: isMe ? Colors.white : Colors.green[700],
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
                   ),
@@ -98,29 +108,42 @@ class AnsweredCallBubble extends StatelessWidget {
 
           const SizedBox(height: 8),
 
-          // Botón para devolver llamada
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: onCallBack,
-              icon: Icon(
-                isVideo ? Icons.videocam : Icons.phone,
-                size: 18,
-              ),
-              label: Text(
-                'Llamar de nuevo',
-                style: const TextStyle(fontSize: 14),
-              ),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: Colors.green,
-                side: BorderSide(color: Colors.green),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 8,
+          // Botón para llamar de nuevo
+          InkWell(
+            onTap: onCallBack,
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: isMe
+                    ? Colors.white.withValues(alpha: 0.2)
+                    : colorScheme.primary.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: isMe
+                      ? Colors.white.withValues(alpha: 0.4)
+                      : colorScheme.primary.withValues(alpha: 0.4),
+                  width: 1,
                 ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    isVideo ? Icons.videocam : Icons.phone,
+                    size: 16,
+                    color: isMe ? Colors.white : colorScheme.primary,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Llamar de nuevo',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: isMe ? Colors.white : colorScheme.primary,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -131,7 +154,9 @@ class AnsweredCallBubble extends StatelessWidget {
             time,
             style: TextStyle(
               fontSize: 11,
-              color: colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
+              color: isMe
+                  ? Colors.white.withValues(alpha: 0.7)
+                  : colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
             ),
           ),
         ],

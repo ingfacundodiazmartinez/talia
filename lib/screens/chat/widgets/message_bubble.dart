@@ -268,7 +268,7 @@ class _MessageBubbleState extends State<MessageBubble>
                                         )
                                       : Container(
                                           margin: const EdgeInsets.only(
-                                            bottom: 4,
+                                            bottom: 8,
                                           ),
                                           padding: const EdgeInsets.symmetric(
                                             horizontal: 8,

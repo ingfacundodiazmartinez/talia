@@ -203,6 +203,7 @@ class DeviceSessionService {
           'isOnline': false,
           'lastSeen': FieldValue.serverTimestamp(),
           'fcmToken': null,
+          'voipToken': null, // Limpiar también el token VoIP
         }, SetOptions(merge: true));
       }
 

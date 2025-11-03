@@ -186,7 +186,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
       batch.update(groupRef, {
         'members': FieldValue.arrayRemove([userId]),
         'admins': FieldValue.arrayRemove([userId]),
-        'pending_members': FieldValue.arrayRemove([userId]),
+        'pendingMembers': FieldValue.arrayRemove([userId]),
       });
 
       await batch.commit();
@@ -424,7 +424,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
 
         final members = List<String>.from(groupData['members'] ?? []);
         final admins = List<String>.from(groupData['admins'] ?? []);
-        final pendingMembers = List<String>.from(groupData['pending_members'] ?? []);
+        final pendingMembers = List<String>.from(groupData['pendingMembers'] ?? []);
         _currentImageUrl = groupData['avatar'];
 
         return SingleChildScrollView(

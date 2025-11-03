@@ -74,16 +74,14 @@ class FavoriteService {
     }
   }
 
-  /// Obtiene todos los mensajes favoritos de un chat específico
-  Stream<QuerySnapshot> getFavoriteMessages({
+  /// Obtiene todos los mensajes favoritos de un chat específico como Stream de List
+  Stream<List<Map<String, dynamic>>> getFavoriteMessagesStream({
     required String chatId,
     required bool isGroupChat,
   }) {
     final currentUserId = _auth.currentUser?.uid;
     if (currentUserId == null) {
-      return Stream.value(
-        FirebaseFirestore.instance.collection('_empty').snapshots() as QuerySnapshot,
-      );
+      return Stream.value([]);
     }
 
     final collection = isGroupChat ? 'groups' : 'chats';
@@ -97,7 +95,7 @@ class FavoriteService {
         .snapshots()
         .asyncMap((snapshot) async {
       // Filtrar solo los mensajes que están marcados como favoritos por el usuario actual
-      final favoriteDocs = <QueryDocumentSnapshot>[];
+      final favoriteMessages = <Map<String, dynamic>>[];
 
       for (final doc in snapshot.docs) {
         final isFav = await isFavorite(
@@ -106,12 +104,25 @@ class FavoriteService {
           isGroupChat: isGroupChat,
         );
         if (isFav) {
-          favoriteDocs.add(doc);
+          final messageData = doc.data();
+          messageData['id'] = doc.id;
+          favoriteMessages.add(messageData);
         }
       }
 
-      return snapshot;
+      print('📋 [Favorites] Encontrados ${favoriteMessages.length} mensajes favoritos');
+      return favoriteMessages;
     });
+  }
+
+  /// Obtiene todos los mensajes favoritos de un chat específico (deprecated - usar getFavoriteMessagesStream)
+  @Deprecated('Use getFavoriteMessagesStream instead')
+  Stream<QuerySnapshot> getFavoriteMessages({
+    required String chatId,
+    required bool isGroupChat,
+  }) {
+    // Mantener por compatibilidad temporalmente, pero dirigir al nuevo método
+    return Stream.empty();
   }
 
   /// Obtiene mensajes favoritos para mostrar en el perfil público

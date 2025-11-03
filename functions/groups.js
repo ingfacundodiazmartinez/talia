@@ -29,7 +29,7 @@ exports.createGroup = onCall(
         throw new HttpsError("invalid-argument", "Debes seleccionar al menos un miembro");
       }
 
-      // 2. Obtener información del creador
+      // 2. Obtener información del creador y todos los miembros
       const creatorDoc = await db.collection("users").doc(creatorId).get();
       if (!creatorDoc.exists) {
         throw new HttpsError("not-found", "Usuario creador no encontrado");
@@ -37,41 +37,88 @@ exports.createGroup = onCall(
       const creatorData = creatorDoc.data();
       const creatorName = creatorData.name || "Usuario";
 
-      // 3. Verificar permisos con cada miembro
-      const approvedMembers = [creatorId]; // El creador siempre está aprobado
-      const pendingMembers = [];
-      const permissionChecks = [];
+      // Obtener información de todos los miembros
+      const allMemberIds = [creatorId, ...initialMembers];
+      const memberInfoMap = new Map();
 
-      for (const memberId of initialMembers) {
-        // Obtener rol del miembro
+      for (const memberId of allMemberIds) {
         const memberDoc = await db.collection("users").doc(memberId).get();
-        if (!memberDoc.exists) {
-          console.warn(`⚠️ [createGroup] Miembro ${memberId} no existe, saltando`);
-          continue;
-        }
-
-        const memberData = memberDoc.data();
-        const memberRole = memberData.role || "child";
-
-        // Verificar si hay permiso de chat
-        const canChat = await checkChatPermission(creatorId, memberId, db);
-
-        if (canChat) {
-          approvedMembers.push(memberId);
-          console.log(`✅ [createGroup] Miembro ${memberId} aprobado`);
-        } else {
-          pendingMembers.push({
+        if (memberDoc.exists) {
+          const memberData = memberDoc.data();
+          memberInfoMap.set(memberId, {
             userId: memberId,
             name: memberData.name || "Usuario",
-            role: memberRole,
+            role: memberData.role || "child",
+            email: memberData.email || "",
+            photoURL: memberData.photoURL || null,
           });
-          console.log(`⏳ [createGroup] Miembro ${memberId} pendiente de aprobación`);
         }
       }
 
-      console.log(`📊 [createGroup] Aprobados: ${approvedMembers.length}, Pendientes: ${pendingMembers.length}`);
+      // 3. Verificar TODOS los permisos cruzados entre TODOS los miembros
+      console.log(`🔍 [createGroup] Verificando permisos cruzados para ${allMemberIds.length} miembros`);
 
-      // 4. Crear el grupo con los miembros aprobados
+      const missingPermissions = [];
+
+      for (let i = 0; i < allMemberIds.length; i++) {
+        for (let j = i + 1; j < allMemberIds.length; j++) {
+          const userId1 = allMemberIds[i];
+          const userId2 = allMemberIds[j];
+
+          const canChat = await checkChatPermission(userId1, userId2, db);
+
+          if (!canChat) {
+            missingPermissions.push({
+              user1: userId1,
+              user2: userId2,
+              user1Info: memberInfoMap.get(userId1),
+              user2Info: memberInfoMap.get(userId2),
+            });
+            console.log(`❌ [createGroup] Permiso faltante entre ${userId1} y ${userId2}`);
+          }
+        }
+      }
+
+      console.log(`📊 [createGroup] Permisos faltantes: ${missingPermissions.length}`);
+
+      // 4. Determinar miembros aprobados vs pendientes
+      let approvedMembers = [creatorId];
+      let pendingMemberIds = [];
+
+      if (missingPermissions.length === 0) {
+        // Todos tienen permiso, agregar a todos
+        approvedMembers = allMemberIds;
+      } else {
+        // Hay permisos faltantes, solo los que YA tienen permiso con el creador
+        for (const memberId of initialMembers) {
+          const canChat = await checkChatPermission(creatorId, memberId, db);
+          if (canChat) {
+            // Verificar que TAMBIÉN tenga permiso con todos los otros miembros aprobados
+            let hasAllPermissions = true;
+            for (const approvedId of approvedMembers) {
+              if (approvedId !== memberId) {
+                const canChatWithApproved = await checkChatPermission(memberId, approvedId, db);
+                if (!canChatWithApproved) {
+                  hasAllPermissions = false;
+                  break;
+                }
+              }
+            }
+
+            if (hasAllPermissions) {
+              approvedMembers.push(memberId);
+            } else {
+              pendingMemberIds.push(memberId);
+            }
+          } else {
+            pendingMemberIds.push(memberId);
+          }
+        }
+      }
+
+      console.log(`📊 [createGroup] Aprobados: ${approvedMembers.length}, Pendientes: ${pendingMemberIds.length}`);
+
+      // 5. Crear el grupo con los miembros aprobados
       const groupRef = await db.collection("groups").add({
         name: name.trim(),
         description: description?.trim() || "",
@@ -80,6 +127,7 @@ exports.createGroup = onCall(
         createdAt: FieldValue.serverTimestamp(),
         isActive: true,
         members: approvedMembers,
+        pendingMembers: pendingMemberIds, // ✅ Guardar miembros pendientes
         admins: [creatorId],
         settings: {
           maxMembers: 10,
@@ -93,62 +141,187 @@ exports.createGroup = onCall(
       const groupId = groupRef.id;
       console.log(`✅ [createGroup] Grupo creado con ID: ${groupId}`);
 
-      // 5. Crear invitaciones y solicitudes de permiso para miembros pendientes
-      const invitationsCreated = [];
+      // 6. Crear solicitudes de permiso para cada combinación faltante
+      // Y auto-aprobar las que correspondan
+      const permissionRequestsCreated = [];
+      const autoApprovedPermissions = [];
+      let permissionsWereAutoApproved = false;
 
-      for (const pendingMember of pendingMembers) {
-        try {
-          // Crear invitación pendiente
-          const invitationRef = await db.collection("groupInvitations").add({
-            groupId,
-            invitedUserId: pendingMember.userId,
-            invitedBy: creatorId,
-            status: "pending",
-            missingPermissions: [{
-              fromUserId: creatorId,
-              toUserId: pendingMember.userId,
-              direction: "between_creator_and_member",
-              status: "pending",
-            }],
-            createdAt: FieldValue.serverTimestamp(),
-            expiresAt: Timestamp.fromDate(
-              new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-            ), // 7 días
-          });
+      for (const missing of missingPermissions) {
+        const { user1, user2, user1Info, user2Info } = missing;
 
-          console.log(`📨 [createGroup] Invitación creada para ${pendingMember.userId}: ${invitationRef.id}`);
+        // Determinar quién es child (si alguno lo es)
+        const user1IsChild = user1Info.role === "child";
+        const user2IsChild = user2Info.role === "child";
 
-          // Si el miembro pendiente es un child, notificar a sus padres
-          if (pendingMember.role === "child") {
-            await createPermissionRequestsForChild({
-              childId: pendingMember.userId,
-              childName: pendingMember.name,
+        // Si ambos son children, necesitamos manejar permisos para ambos
+        if (user1IsChild && user2IsChild) {
+          // Verificar si el creador es padre de alguno de los children
+          const creatorData = memberInfoMap.get(creatorId);
+          const creatorLinkedChildren = creatorData?.linkedChildrenIds || [];
+
+          // Obtener datos completos del creador para linkedChildrenIds
+          const creatorDoc = await db.collection("users").doc(creatorId).get();
+          const creatorFullData = creatorDoc.data() || {};
+          const linkedChildren = creatorFullData.linkedChildrenIds || [];
+
+          const creatorIsParentOfUser1 = linkedChildren.includes(user1);
+          const creatorIsParentOfUser2 = linkedChildren.includes(user2);
+
+          // Si el creador es padre de user1, auto-aprobar user1 -> user2
+          if (creatorIsParentOfUser1) {
+            await autoApproveChildContact({
+              childId: user1,
+              contactId: user2,
+              groupId,
+              approvedBy: creatorId,
+              approvedByName: creatorName,
+              db,
+            });
+            autoApprovedPermissions.push({ child: user1, contact: user2, approvedBy: creatorId });
+            permissionsWereAutoApproved = true;
+            console.log(`✅ [createGroup] Auto-aprobado: ${user1Info.name} -> ${user2Info.name} (creador es padre)`);
+          } else {
+            // Crear solicitud para padres de user1
+            await createPermissionRequestForChildContact({
+              childId: user1,
+              childInfo: user1Info,
+              contactId: user2,
+              contactInfo: user2Info,
               groupId,
               groupName: name.trim(),
               creatorId,
               creatorName,
               db,
             });
+            permissionRequestsCreated.push({ child: user1, contact: user2 });
           }
 
-          invitationsCreated.push({
-            userId: pendingMember.userId,
-            invitationId: invitationRef.id,
-          });
-        } catch (error) {
-          console.error(`❌ [createGroup] Error creando invitación para ${pendingMember.userId}:`, error);
+          // Si el creador es padre de user2, auto-aprobar user2 -> user1
+          if (creatorIsParentOfUser2) {
+            await autoApproveChildContact({
+              childId: user2,
+              contactId: user1,
+              groupId,
+              approvedBy: creatorId,
+              approvedByName: creatorName,
+              db,
+            });
+            autoApprovedPermissions.push({ child: user2, contact: user1, approvedBy: creatorId });
+            permissionsWereAutoApproved = true;
+            console.log(`✅ [createGroup] Auto-aprobado: ${user2Info.name} -> ${user1Info.name} (creador es padre)`);
+          } else {
+            // Crear solicitud para padres de user2
+            await createPermissionRequestForChildContact({
+              childId: user2,
+              childInfo: user2Info,
+              contactId: user1,
+              contactInfo: user1Info,
+              groupId,
+              groupName: name.trim(),
+              creatorId,
+              creatorName,
+              db,
+            });
+            permissionRequestsCreated.push({ child: user2, contact: user1 });
+          }
+        } else if (user1IsChild || user2IsChild) {
+          // Uno es child, otro es parent/adult
+          const childId = user1IsChild ? user1 : user2;
+          const childInfo = user1IsChild ? user1Info : user2Info;
+          const contactId = user1IsChild ? user2 : user1;
+          const contactInfo = user1IsChild ? user2Info : user1Info;
+
+          // Verificar si el creador es padre del child
+          const creatorDoc = await db.collection("users").doc(creatorId).get();
+          const creatorFullData = creatorDoc.data() || {};
+          const linkedChildren = creatorFullData.linkedChildrenIds || [];
+
+          if (linkedChildren.includes(childId)) {
+            // El creador es padre del child, auto-aprobar
+            await autoApproveChildContact({
+              childId,
+              contactId,
+              groupId,
+              approvedBy: creatorId,
+              approvedByName: creatorName,
+              db,
+            });
+            autoApprovedPermissions.push({ child: childId, contact: contactId, approvedBy: creatorId });
+            permissionsWereAutoApproved = true;
+            console.log(`✅ [createGroup] Auto-aprobado: ${childInfo.name} -> ${contactInfo.name} (creador es padre)`);
+          } else {
+            // Crear solicitud normal
+            await createPermissionRequestForChildContact({
+              childId,
+              childInfo,
+              contactId,
+              contactInfo,
+              groupId,
+              groupName: name.trim(),
+              creatorId,
+              creatorName,
+              db,
+            });
+            permissionRequestsCreated.push({ child: childId, contact: contactId });
+          }
         }
       }
 
-      // 6. Retornar resultado
+      // 7. Si se auto-aprobaron permisos, recalcular miembros aprobados/pendientes
+      if (permissionsWereAutoApproved) {
+        console.log(`🔄 [createGroup] Recalculando miembros después de auto-aprobaciones...`);
+
+        const updatedApprovedMembers = [creatorId];
+        const updatedPendingMembers = [];
+
+        for (const memberId of initialMembers) {
+          // Verificar que tenga permiso con TODOS los miembros actualmente aprobados
+          let hasAllPermissions = true;
+
+          for (const approvedId of updatedApprovedMembers) {
+            if (approvedId !== memberId) {
+              const canChat = await checkChatPermission(memberId, approvedId, db);
+              if (!canChat) {
+                hasAllPermissions = false;
+                break;
+              }
+            }
+          }
+
+          if (hasAllPermissions) {
+            updatedApprovedMembers.push(memberId);
+            console.log(`✅ [createGroup] Miembro ${memberInfoMap.get(memberId)?.name} ahora aprobado después de auto-aprobación`);
+          } else {
+            updatedPendingMembers.push(memberId);
+            console.log(`⏳ [createGroup] Miembro ${memberInfoMap.get(memberId)?.name} sigue pendiente`);
+          }
+        }
+
+        // Actualizar el grupo en Firestore
+        await groupRef.update({
+          members: updatedApprovedMembers,
+          pendingMembers: updatedPendingMembers,
+          lastActivity: FieldValue.serverTimestamp(),
+        });
+
+        console.log(`📊 [createGroup] RECALCULADO - Aprobados: ${updatedApprovedMembers.length}, Pendientes: ${updatedPendingMembers.length}`);
+
+        // Actualizar variables para el return
+        approvedMembers = updatedApprovedMembers;
+        pendingMemberIds = updatedPendingMembers;
+      }
+
+      // 8. Retornar resultado
       return {
         success: true,
         groupId,
         approvedMembers,
-        pendingMembers: pendingMembers.map((pm) => pm.userId),
-        invitationsCreated,
-        message: pendingMembers.length > 0 ?
-          `Grupo creado. ${pendingMembers.length} miembro(s) pendiente(s) de aprobación` :
+        pendingMembers: pendingMemberIds,
+        permissionRequestsCreated,
+        autoApprovedPermissions,
+        message: pendingMemberIds.length > 0 ?
+          `Grupo creado. ${pendingMemberIds.length} miembro(s) pendiente(s) de aprobación. ${autoApprovedPermissions.length} permiso(s) auto-aprobado(s).` :
           "Grupo creado exitosamente",
       };
     } catch (error) {
@@ -233,11 +406,13 @@ async function checkChatPermission(userId1, userId2, db) {
 }
 
 /**
- * Crear solicitudes de permiso para los padres de un child
+ * Crear solicitud de permiso cuando un child necesita conectar con un contacto
  */
-async function createPermissionRequestsForChild({
+async function createPermissionRequestForChildContact({
   childId,
-  childName,
+  childInfo,
+  contactId,
+  contactInfo,
   groupId,
   groupName,
   creatorId,
@@ -255,44 +430,223 @@ async function createPermissionRequestsForChild({
     const parentIds = linksQuery.docs.map((doc) => doc.data().parentId);
 
     if (parentIds.length === 0) {
-      console.log(`⚠️ [createPermissionRequestsForChild] No se encontraron padres para ${childId}`);
+      console.log(`⚠️ [createPermissionRequestForChildContact] No se encontraron padres para ${childId}`);
       return;
     }
 
-    // Obtener información del contacto a aprobar (el creador del grupo)
-    const creatorDoc = await db.collection("users").doc(creatorId).get();
-    const creatorData = creatorDoc.data() || {};
-
-    // Crear solicitud de permiso para cada padre
+    // Crear solicitud de permiso para cada padre del child
     for (const parentId of parentIds) {
       await db.collection("permission_requests").add({
         type: "group_invitation",
         childId,
         parentId,
-        createdBy: creatorId, // ✅ Quien crea la solicitud
+        createdBy: creatorId,
         groupInfo: {
           groupId,
           groupName,
           invitedBy: creatorName,
         },
         contactToApprove: {
-          userId: creatorId,
-          name: creatorName,
-          email: creatorData.email || "",
+          userId: contactId, // ✅ El contacto que necesita aprobar (no el creador)
+          name: contactInfo.name,
+          email: contactInfo.email || "",
+          photoURL: contactInfo.photoURL || null,
         },
         missingPermissions: [{
           fromUserId: childId,
-          toUserId: creatorId,
+          toUserId: contactId,
           direction: "needs_approval",
         }],
         status: "pending",
         createdAt: FieldValue.serverTimestamp(),
       });
 
-      console.log(`✅ [createPermissionRequestsForChild] Solicitud creada para padre ${parentId}`);
+      console.log(`✅ [createPermissionRequestForChildContact] Solicitud creada para padre ${parentId} - Aprobar ${contactInfo.name} para ${childInfo.name}`);
     }
   } catch (error) {
-    console.error("❌ [createPermissionRequestsForChild] Error:", error);
+    console.error("❌ [createPermissionRequestForChildContact] Error:", error);
+  }
+}
+
+/**
+ * Crear solicitudes de permiso cuando dos children necesitan conectar
+ */
+async function createCrossChildPermissionRequest({
+  child1Id,
+  child1Info,
+  child2Id,
+  child2Info,
+  groupId,
+  groupName,
+  creatorId,
+  creatorName,
+  db,
+}) {
+  try {
+    // Obtener padres de child1
+    const links1Query = await db
+      .collection("parent_children")
+      .where("childId", "==", child1Id)
+      .where("status", "==", "approved")
+      .get();
+
+    const parent1Ids = links1Query.docs.map((doc) => doc.data().parentId);
+
+    // Obtener padres de child2
+    const links2Query = await db
+      .collection("parent_children")
+      .where("childId", "==", child2Id)
+      .where("status", "==", "approved")
+      .get();
+
+    const parent2Ids = links2Query.docs.map((doc) => doc.data().parentId);
+
+    // Crear solicitud para padres de child1 (pedir aprobar child2)
+    for (const parentId of parent1Ids) {
+      await db.collection("permission_requests").add({
+        type: "group_invitation",
+        childId: child1Id,
+        parentId,
+        createdBy: creatorId,
+        groupInfo: {
+          groupId,
+          groupName,
+          invitedBy: creatorName,
+        },
+        contactToApprove: {
+          userId: child2Id,
+          name: child2Info.name,
+          email: child2Info.email || "",
+          photoURL: child2Info.photoURL || null,
+        },
+        missingPermissions: [{
+          fromUserId: child1Id,
+          toUserId: child2Id,
+          direction: "needs_approval",
+        }],
+        status: "pending",
+        createdAt: FieldValue.serverTimestamp(),
+      });
+
+      console.log(`✅ [createCrossChildPermissionRequest] Solicitud creada para padre ${parentId} de ${child1Info.name} - Aprobar ${child2Info.name}`);
+    }
+
+    // Crear solicitud para padres de child2 (pedir aprobar child1)
+    for (const parentId of parent2Ids) {
+      await db.collection("permission_requests").add({
+        type: "group_invitation",
+        childId: child2Id,
+        parentId,
+        createdBy: creatorId,
+        groupInfo: {
+          groupId,
+          groupName,
+          invitedBy: creatorName,
+        },
+        contactToApprove: {
+          userId: child1Id,
+          name: child1Info.name,
+          email: child1Info.email || "",
+          photoURL: child1Info.photoURL || null,
+        },
+        missingPermissions: [{
+          fromUserId: child2Id,
+          toUserId: child1Id,
+          direction: "needs_approval",
+        }],
+        status: "pending",
+        createdAt: FieldValue.serverTimestamp(),
+      });
+
+      console.log(`✅ [createCrossChildPermissionRequest] Solicitud creada para padre ${parentId} de ${child2Info.name} - Aprobar ${child1Info.name}`);
+    }
+  } catch (error) {
+    console.error("❌ [createCrossChildPermissionRequest] Error:", error);
+  }
+}
+
+/**
+ * Auto-aprobar contacto entre un child y otro usuario (cuando el creador es el padre)
+ */
+async function autoApproveChildContact({
+  childId,
+  contactId,
+  groupId,
+  approvedBy,
+  approvedByName,
+  db,
+}) {
+  try {
+    // Verificar si ya existe el contacto
+    const existingContactQuery = await db
+      .collection("contacts")
+      .where("users", "array-contains", childId)
+      .get();
+
+    let contactExists = false;
+    let contactDocId = null;
+
+    for (const doc of existingContactQuery.docs) {
+      const data = doc.data();
+      if (data.users && data.users.includes(contactId)) {
+        contactExists = true;
+        contactDocId = doc.id;
+        break;
+      }
+    }
+
+    if (contactExists) {
+      console.log(`✅ [autoApproveChildContact] Contacto ya existe entre ${childId} y ${contactId}`);
+      return { contactDocId };
+    }
+
+    // Crear el contacto aprobado automáticamente
+    const contactRef = await db.collection("contacts").add({
+      users: [childId, contactId],
+      status: "accepted",
+      createdAt: FieldValue.serverTimestamp(),
+      acceptedAt: FieldValue.serverTimestamp(),
+      approvedBy: approvedBy,
+      approvedByName: approvedByName,
+      autoApproved: true,
+      groupId: groupId, // Referencia al grupo que causó la auto-aprobación
+    });
+
+    console.log(`✅ [autoApproveChildContact] Contacto auto-aprobado: ${childId} ↔ ${contactId} por ${approvedByName}`);
+
+    // Agregar a chat_permissions del child
+    const permissionsQuery = await db
+      .collection("chat_permissions")
+      .where("childId", "==", childId)
+      .get();
+
+    if (permissionsQuery.empty) {
+      // Crear nuevo documento de permisos
+      await db.collection("chat_permissions").add({
+        childId,
+        allowedContacts: [contactId],
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      console.log(`✅ [autoApproveChildContact] Permisos de chat creados para ${childId}`);
+    } else {
+      // Actualizar documento existente
+      const permissionDoc = permissionsQuery.docs[0];
+      const currentAllowed = permissionDoc.data().allowedContacts || [];
+
+      if (!currentAllowed.includes(contactId)) {
+        await permissionDoc.ref.update({
+          allowedContacts: FieldValue.arrayUnion(contactId),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+        console.log(`✅ [autoApproveChildContact] Contacto ${contactId} agregado a permisos de ${childId}`);
+      }
+    }
+
+    return { contactDocId: contactRef.id };
+  } catch (error) {
+    console.error("❌ [autoApproveChildContact] Error:", error);
+    throw error;
   }
 }
 
@@ -434,27 +788,109 @@ exports.approveGroupPermission = onCall(
         console.log(`✅ Contacto existente actualizado: ${contactDocId}`);
       }
 
-      // 5. Actualizar solicitud de permiso a aprobada
+      // 5. Agregar a chat_permissions
+      const permissionsQuery = await db
+        .collection("chat_permissions")
+        .where("childId", "==", childId)
+        .get();
+
+      if (permissionsQuery.empty) {
+        await db.collection("chat_permissions").add({
+          childId,
+          allowedContacts: [contactId],
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+        console.log(`✅ Permisos de chat creados para ${childId}`);
+      } else {
+        const permissionDoc = permissionsQuery.docs[0];
+        await permissionDoc.ref.update({
+          allowedContacts: FieldValue.arrayUnion(contactId),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+        console.log(`✅ Contacto agregado a permisos de ${childId}`);
+      }
+
+      // 6. Actualizar solicitud de permiso a aprobada
       const updateData = {
         status: "approved",
         approvedAt: new Date(),
         approvedBy: auth.uid,
         updatedAt: new Date(),
+        contactDocId: contactDocId,
       };
 
-      // Si se está re-aprobando, limpiar campos de rechazo previo
       if (currentStatus === "rejected") {
         updateData.rejectedAt = null;
         updateData.rejectedBy = null;
       }
 
       await permissionDoc.ref.update(updateData);
-
       console.log(`✅ Permiso de grupo ${requestId} aprobado`);
+
+      // 7. Verificar si el child puede agregarse automáticamente al grupo
+      const groupId = permissionData.groupInfo?.groupId;
+      let addedToGroup = false;
+
+      if (groupId) {
+        const groupDoc = await db.collection("groups").doc(groupId).get();
+
+        if (groupDoc.exists) {
+          const groupData = groupDoc.data();
+          const currentMembers = groupData.members || [];
+          const pendingMembers = groupData.pendingMembers || [];
+
+          // Verificar si el child está pendiente
+          if (pendingMembers.includes(childId)) {
+            console.log(`🔍 Verificando si ${childId} puede agregarse al grupo ${groupId}`);
+
+            // Verificar permisos con TODOS los miembros actuales
+            let hasAllPermissions = true;
+
+            for (const memberId of currentMembers) {
+              if (memberId !== childId) {
+                const canChat = await checkChatPermission(childId, memberId, db);
+                if (!canChat) {
+                  hasAllPermissions = false;
+                  console.log(`❌ ${childId} aún no tiene permiso con ${memberId}`);
+                  break;
+                }
+              }
+            }
+
+            if (hasAllPermissions) {
+              // Agregar al grupo
+              await db.collection("groups").doc(groupId).update({
+                members: FieldValue.arrayUnion(childId),
+                pendingMembers: FieldValue.arrayRemove(childId),
+                lastActivity: FieldValue.serverTimestamp(),
+              });
+
+              addedToGroup = true;
+              console.log(`✅ ${childId} agregado automáticamente al grupo ${groupId}`);
+
+              // Enviar notificación a los miembros del grupo
+              const childDoc = await db.collection("users").doc(childId).get();
+              const childName = childDoc.data()?.name || "Usuario";
+
+              for (const memberId of currentMembers) {
+                // Aquí podrías enviar una notificación push
+                console.log(`📨 Notificar a ${memberId}: ${childName} se unió al grupo`);
+              }
+            } else {
+              console.log(`⏳ ${childId} aún tiene permisos pendientes, no se agrega al grupo`);
+            }
+          }
+        }
+      }
 
       return {
         success: true,
         contactDocId: contactDocId,
+        addedToGroup: addedToGroup,
+        message: addedToGroup
+          ? "Permiso aprobado y miembro agregado al grupo"
+          : "Permiso aprobado",
       };
     } catch (error) {
       console.error("❌ Error aprobando permiso de grupo:", error);
@@ -1014,5 +1450,8 @@ exports.processGroupInvitationsAfterContactApproval = onCall(
     }
   },
 );
+
+// Export helper function for moderation
+module.exports.analyzeMessageWithGemini = analyzeMessageWithGemini;
 
 

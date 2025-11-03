@@ -177,12 +177,22 @@ service cloud.firestore {
         // Permitir listar mensajes si eres participante o padre
         allow list: if request.auth != null && (isParticipant() || isParentOfParticipant());
 
-        // Permitir crear mensaje si eres el sender y el texto no excede 5000 caracteres
-        allow create: if request.auth != null &&
-          request.auth.uid == request.resource.data.senderId &&
-          (!request.resource.data.keys().hasAny(['text']) ||
-           request.resource.data.text == null ||
-           request.resource.data.text.size() <= 5000);
+        // Función auxiliar para verificar si es un mensaje de llamada
+        function isCallMessage() {
+          return request.resource.data.type == 'missed_call' ||
+                 request.resource.data.type == 'answered_call';
+        }
+
+        // Permitir crear mensaje si:
+        // 1. Eres el sender y el texto no excede 5000 caracteres, O
+        // 2. Es un mensaje de llamada (missed_call/answered_call) Y eres participante del chat
+        allow create: if request.auth != null && (
+          (request.auth.uid == request.resource.data.senderId &&
+           (!request.resource.data.keys().hasAny(['text']) ||
+            request.resource.data.text == null ||
+            request.resource.data.text.size() <= 5000)) ||
+          (isCallMessage() && isParticipant())
+        );
 
         // Función auxiliar para verificar si solo se están actualizando campos de metadata (reacciones, estado, etc.)
         // NOTA: Permite campos timestamp dinámicos (deliveredAt_*, readAt_*) además de los campos estáticos
@@ -1035,6 +1045,20 @@ service cloud.firestore {
 
       // No permitir modificar o eliminar transformaciones
       allow update, delete: if false;
+    }
+
+    // Estado de transformaciones en tiempo real
+    match /transformationStatus/{statusId} {
+      // Solo lectura para el usuario que hizo la transformación
+      // Permite snapshots() en tiempo real
+      allow read: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+
+      // Solo Cloud Functions pueden crear/actualizar estado
+      allow create, update: if false;
+
+      // No permitir eliminar
+      allow delete: if false;
     }
 
     // ============================================================================

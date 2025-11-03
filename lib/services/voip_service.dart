@@ -150,6 +150,26 @@ class VoIPService {
     }
   }
 
+  /// Verificar y procesar token VoIP pendiente después del login exitoso
+  /// En iOS, el token VoIP se recibe automáticamente pero solo se puede guardar cuando el usuario está autenticado
+  Future<void> processVoIPTokenAfterLogin() async {
+    try {
+      print('📱 [VoIP] Verificando token VoIP pendiente después del login...');
+
+      if (_auth.currentUser == null) {
+        print('⚠️ [VoIP] Usuario no autenticado, no se puede procesar token');
+        return;
+      }
+
+      // En iOS, el token se maneja automáticamente por el AppDelegate
+      // Este método está aquí para mantener consistencia con el FCM token
+      // y por si necesitamos agregar lógica adicional en el futuro
+      print('✅ [VoIP] Usuario autenticado - el token VoIP se procesará automáticamente cuando iOS lo envíe');
+    } catch (e) {
+      print('❌ [VoIP] Error procesando token: $e');
+    }
+  }
+
   /// Guardar token VoIP en Firestore
   Future<void> _saveVoIPToken(String token) async {
     try {
@@ -159,6 +179,9 @@ class VoIPService {
         return;
       }
 
+      // Limpiar tokens VoIP duplicados antes de guardar el nuevo
+      await _cleanupDuplicateVoIPTokens(token);
+
       await _firestore.collection('users').doc(userId).update({
         'voipToken': token,
         'voipTokenUpdatedAt': FieldValue.serverTimestamp(),
@@ -167,6 +190,47 @@ class VoIPService {
       print('✅ [VoIP] Token guardado en Firestore');
     } catch (e) {
       print('❌ [VoIP] Error guardando token: $e');
+    }
+  }
+
+  /// Limpiar tokens VoIP duplicados de otros usuarios
+  /// Esto previene que las notificaciones VoIP lleguen a usuarios anteriores del mismo dispositivo
+  Future<void> _cleanupDuplicateVoIPTokens(String newToken) async {
+    try {
+      final currentUserId = _auth.currentUser?.uid;
+      if (currentUserId == null) return;
+
+      print('🧹 [VoIP] Verificando tokens VoIP duplicados para: ${newToken.substring(0, 20)}...');
+
+      // Buscar otros usuarios que tengan el mismo token VoIP
+      final duplicateUsersQuery = await _firestore
+          .collection('users')
+          .where('voipToken', isEqualTo: newToken)
+          .get();
+
+      int cleanedCount = 0;
+      for (final doc in duplicateUsersQuery.docs) {
+        final userId = doc.id;
+        // No limpiar el token del usuario actual
+        if (userId == currentUserId) continue;
+
+        // Limpiar token del usuario anterior
+        await _firestore.collection('users').doc(userId).update({
+          'voipToken': FieldValue.delete(),
+          'voipTokenClearedAt': FieldValue.serverTimestamp(),
+          'voipTokenClearedReason': 'duplicate_token_cleanup',
+        });
+        cleanedCount++;
+        print('🗑️ [VoIP] Token VoIP limpiado del usuario anterior: $userId');
+      }
+
+      if (cleanedCount > 0) {
+        print('✅ [VoIP] Se limpiaron $cleanedCount tokens VoIP duplicados');
+      } else {
+        print('✅ [VoIP] No se encontraron tokens VoIP duplicados');
+      }
+    } catch (e) {
+      print('❌ [VoIP] Error limpiando tokens duplicados: $e');
     }
   }
 
@@ -293,8 +357,7 @@ class VoIPService {
       final callId = extra['callId'] as String;
 
       // NO llamar a endCall() - solo cerrar CallKit localmente
-      // El listener en incoming_call_dialog.dart ya maneja el cierre cuando detecta
-      // que el status cambió a 'cancelled'
+      // VoIP maneja el cierre automáticamente cuando detecta cambios en Firestore
       print('ℹ️ [CallKit] CallKit cerrado localmente para: $callId');
       print('ℹ️ [CallKit] Si la llamada fue cancelada, el listener ya lo detectó');
     } catch (e) {

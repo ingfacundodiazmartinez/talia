@@ -310,10 +310,13 @@ class ContactsSyncService {
             continue;
           }
 
-          // Crear el documento de contacto
-          final contactRef = _firestore.collection('contacts').doc();
+          // Crear el documento de contacto con ID consistente
+          final users = [currentUserId, contact.userId]..sort();
+          final contactId = '${users[0]}_${users[1]}';
+          final contactRef = _firestore.collection('contacts').doc(contactId);
+
           await contactRef.set({
-            'users': [currentUserId, contact.userId],
+            'users': users,
             'status': 'approved', // ✅ IMPORTANTE: debe estar 'approved' para que aparezca en la UI
             'createdAt': FieldValue.serverTimestamp(),
             'lastMessage': null,
@@ -321,6 +324,7 @@ class ContactsSyncService {
             'unreadCount_$currentUserId': 0,
             'unreadCount_${contact.userId}': 0,
             'autoCreated': true, // Flag para indicar que fue creado automáticamente
+            'source': 'auto_device_sync', // Para consistencia con backend
           });
 
           createdCount++;

@@ -185,6 +185,166 @@ exports.incrementUnreadCount = onDocumentCreated(
 );
 
 // ═══════════════════════════════════════════════════════════════
+// GRUPOS - Trigger automático para mensajes (replica lógica 1-1)
+// ═══════════════════════════════════════════════════════════════
+
+exports.incrementGroupUnreadCount = onDocumentCreated(
+  {
+    document: "groups/{groupId}/messages/{messageId}",
+    region: "us-central1",
+  },
+  async (event) => {
+    try {
+      const messageData = event.data.data();
+      const groupId = event.params.groupId;
+      const messageId = event.params.messageId;
+
+      console.log(`📨 Nuevo mensaje en grupo ${groupId}`);
+
+      const senderId = messageData.senderId;
+
+      // ✅ RATE LIMITING: Verificar límite de mensajes (igual que 1-1)
+      const rateLimitCheck = await checkRateLimit(
+        senderId,
+        "sendMessage",
+        RATE_LIMITS.sendMessage
+      );
+
+      if (!rateLimitCheck.allowed) {
+        console.warn(
+          `🚫 Rate limit excedido para ${senderId} - ${RATE_LIMITS.sendMessage.maxRequests} mensajes por minuto`
+        );
+
+        // Eliminar el mensaje que excede el límite
+        try {
+          await event.data.ref.delete();
+          console.log(`🗑️ Mensaje ${messageId} eliminado por spam`);
+        } catch (deleteError) {
+          console.error(`❌ Error eliminando mensaje de spam:`, deleteError);
+        }
+
+        // Notificar al usuario sobre el límite
+        try {
+          await getFirestore().collection("notifications").add({
+            userId: senderId,
+            type: "rate_limit_exceeded",
+            title: "⚠️ Límite de mensajes excedido",
+            body: `Has enviado demasiados mensajes. Espera ${rateLimitCheck.retryAfter} segundos antes de enviar más.`,
+            priority: "normal",
+            read: false,
+            createdAt: new Date(),
+            data: {
+              retryAfter: rateLimitCheck.retryAfter,
+              limit: RATE_LIMITS.sendMessage.maxRequests,
+            },
+          });
+        } catch (notifError) {
+          console.error(`❌ Error enviando notificación:`, notifError);
+        }
+
+        return null;
+      }
+
+      // Obtener información del grupo
+      const groupRef = getFirestore().collection("groups").doc(groupId);
+      const groupDoc = await groupRef.get();
+
+      if (!groupDoc.exists) {
+        console.error(`❌ Grupo ${groupId} no existe`);
+        return null;
+      }
+
+      const groupData = groupDoc.data();
+      const members = groupData.members || [];
+      const groupName = groupData.name || "Grupo";
+
+      console.log(`📊 DEBUG - Grupo: ${groupName}, Miembros: [${members.join(", ")}]`);
+
+      // Verificar que el sender es miembro del grupo
+      if (!members.includes(senderId)) {
+        console.log(`🚫 ${senderId} no es miembro del grupo ${groupId}`);
+        return null;
+      }
+
+      // Obtener información del sender para las notificaciones
+      const senderDoc = await getFirestore().collection("users").doc(senderId).get();
+      const senderData = senderDoc.data() || {};
+      const senderName = senderData.name || "Usuario";
+
+      // Crear preview del mensaje
+      const messageType = messageData.type || "text";
+      const messageText = messageData.text || "";
+      const messagePreview = messageText || (
+        messageType === "image" ? "📷 Imagen" :
+        messageType === "video" ? "🎥 Video" :
+        messageType === "audio" ? "🎤 Audio" :
+        "Mensaje"
+      );
+
+      console.log(`📝 Preview del mensaje: "${messagePreview}"`);
+
+      // Preparar datos de actualización del grupo
+      const groupUpdateData = {
+        lastMessage: messagePreview,
+        lastMessageTime: FieldValue.serverTimestamp(),
+        lastMessageSender: senderId,
+      };
+
+      // 🔔 CREAR NOTIFICACIONES para cada miembro (excepto el sender)
+      const db = getFirestore();
+      for (const memberId of members) {
+        if (memberId !== senderId) {
+          try {
+            // Incrementar contador de no leídos para este miembro
+            groupUpdateData[`unreadCount_${memberId}`] = FieldValue.increment(1);
+
+            // Crear notificación
+            await db.collection("notifications").add({
+              userId: memberId,
+              senderId: senderId,
+              type: "group_message",
+              title: `💬 ${groupName}`,
+              body: `${senderName}: ${messagePreview}`,
+              priority: "normal",
+              chatId: groupId,
+              messageId: messageId,
+              isGroup: true,
+              groupName: groupName,
+              pushSent: false, // Para que sendNotificationOnCreate envíe el push
+              timestamp: FieldValue.serverTimestamp(),
+              data: {
+                type: "group_message",
+                chatId: groupId,
+                messageId: messageId,
+                senderId: senderId,
+                senderName: senderName,
+                groupName: groupName,
+                text: messagePreview,
+                isGroup: true,
+              },
+            });
+            console.log(`🔔 [incrementGroupUnreadCount] Notificación creada para miembro: ${memberId}`);
+          } catch (notificationError) {
+            console.error(`❌ [incrementGroupUnreadCount] Error creando notificación para ${memberId}:`, notificationError);
+            // No fallar por error de notificación individual
+          }
+        }
+      }
+
+      // Actualizar documento del grupo con todos los contadores
+      await groupRef.update(groupUpdateData);
+
+      console.log(`✅ Grupo ${groupId} actualizado con ${members.length - 1} notificaciones enviadas`);
+
+      return null;
+    } catch (error) {
+      console.error("❌ Error en incrementGroupUnreadCount:", error);
+      return null;
+    }
+  },
+);
+
+// ═══════════════════════════════════════════════════════════════
 // EMERGENCIAS - Creación segura con rate limiting
 // ═══════════════════════════════════════════════════════════════
 
@@ -205,7 +365,7 @@ exports.sendChatMessage = onCall(
         throw new HttpsError("unauthenticated", "Usuario no autenticado");
       }
 
-      const { chatId, text, imageUrl, videoUrl, audioUrl, waveformData, replyTo } = request.data;
+      const { chatId, text, imageUrl, videoUrl, audioUrl, waveformData, replyTo, localId } = request.data;
       const senderId = request.auth.uid;
 
       if (!chatId) {
@@ -288,6 +448,11 @@ exports.sendChatMessage = onCall(
           reactions: {},
           edited: false,
         };
+
+        // ✅ Agregar localId si existe (para reemplazar mensajes optimistas)
+        if (localId) {
+          messageData.localId = localId;
+        }
 
         if (contentUrl) {
           if (messageType === "image") messageData.imageUrl = contentUrl;
@@ -457,6 +622,7 @@ exports.sendGroupMessage = onCall(
 
         await groupRef.update(groupUpdateData);
 
+        // ✅ Notificaciones ahora se crean automáticamente via incrementGroupUnreadCount trigger
         console.log(`✅ [sendGroupMessage] Mensaje enviado exitosamente: ${messageRef.id}`);
 
         return {

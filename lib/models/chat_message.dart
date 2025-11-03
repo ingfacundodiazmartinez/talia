@@ -56,6 +56,9 @@ class ChatMessage {
   final String? originalChatId;              // ID del chat original
   final String? originalContactName;         // Nombre del contacto original
 
+  // ✅ Campo para matching de mensajes optimistas
+  final String? localId;                     // ID temporal del mensaje optimista (para reemplazo)
+
   ChatMessage({
     required this.id,
     required this.senderId,
@@ -84,6 +87,7 @@ class ChatMessage {
     this.originalSenderId,
     this.originalChatId,
     this.originalContactName,
+    this.localId, // ✅ Agregar localId
   });
 
   /// Factory constructor desde Firestore DocumentSnapshot
@@ -153,12 +157,13 @@ class ChatMessage {
       moderationSeverity: data['moderationSeverity'] as String?,
       originalText: data['originalText'] as String?,
       waveformData: data['waveformData'] != null
-          ? List<double>.from(data['waveformData'] as List)
+          ? (data['waveformData'] as List).map((e) => (e as num).toDouble()).toList()
           : null,
       isForwarded: data['isForwarded'] ?? false,
       originalSenderId: data['originalSenderId'] as String?,
       originalChatId: data['originalChatId'] as String?,
       originalContactName: data['originalContactName'] as String?,
+      localId: data['localId'] as String?, // ✅ Parse localId desde Firestore
     );
   }
 
@@ -356,6 +361,7 @@ class ChatMessage {
       originalSenderId: this.originalSenderId,
       originalChatId: this.originalChatId,
       originalContactName: this.originalContactName,
+      localId: this.localId, // ✅ Preservar localId en copyWith
     );
   }
 
