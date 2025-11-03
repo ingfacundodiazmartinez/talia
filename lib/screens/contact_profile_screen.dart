@@ -1,12 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
-import 'package:intl/intl.dart';
-import '../services/block_service.dart';
-import '../services/contact_alias_service.dart';
-import '../services/favorite_service.dart';
+import '../controllers/contact_profile_controller.dart';
 import '../models/user.dart';
-import '../models/child.dart';
 import 'video_call_screen.dart';
 import 'audio_call_screen.dart';
 import '../widgets/profile_photo_viewer.dart';
@@ -30,12 +24,14 @@ class ContactProfileScreen extends StatefulWidget {
 
 class _ContactProfileScreenState extends State<ContactProfileScreen>
     with TickerProviderStateMixin {
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final BlockService _blockService = BlockService();
-  final ContactAliasService _aliasService = ContactAliasService();
+  // ✅ CORRECTO: Solo controller y estado UI local
+  late ContactProfileController _controller;
 
+  // Estado UI únicamente
   bool _isBlocked = false;
   bool _isLoadingBlockStatus = true;
+  String? _contactAlias;
+  Map<String, dynamic>? _contactData;
 
   // Tab controller para las pestañas
   late TabController _tabController;
@@ -44,92 +40,128 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    _checkBlockStatus();
+
+    // ✅ CORRECTO: Solo inicializar controller y configurar callbacks
+    _controller = ContactProfileController(
+      contactId: widget.contactId,
+      contactName: widget.contactName,
+      chatId: widget.chatId,
+    );
+
+    // Configurar callbacks para comunicación controller → screen
+    _setupControllerCallbacks();
+
+    // Inicializar controller
+    _controller.initialize();
+  }
+
+  /// Configurar callbacks del controller para actualizar UI
+  void _setupControllerCallbacks() {
+    _controller.onBlockStatusChanged = (blocked) {
+      if (mounted) {
+        setState(() {
+          _isBlocked = blocked;
+          _isLoadingBlockStatus = false;
+        });
+      }
+    };
+
+    _controller.onFavoriteStatusChanged = (favorite) {
+      if (mounted) {
+        setState(() {
+          // Trigger rebuild para favoriteos
+        });
+      }
+    };
+
+    _controller.onAliasChanged = (alias) {
+      if (mounted) {
+        setState(() {
+          _contactAlias = alias;
+        });
+      }
+    };
+
+    _controller.onContactDataChanged = (data) {
+      if (mounted) {
+        setState(() {
+          _contactData = data;
+        });
+      }
+    };
+
+    _controller.onError = (message) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+    };
   }
 
   @override
   void dispose() {
     _tabController.dispose();
+    _controller.dispose();
     super.dispose();
   }
 
-  Future<void> _checkBlockStatus() async {
-    final blocked = await _blockService.isBlocked(widget.contactId);
-    setState(() {
-      _isBlocked = blocked;
-      _isLoadingBlockStatus = false;
-    });
-  }
 
   Future<void> _toggleBlock() async {
-    try {
-      if (_isBlocked) {
-        // Desbloquear
-        final confirm = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: Text('Desbloquear contacto'),
-            content: Text('¿Deseas desbloquear a ${widget.contactName}?'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: Text('Cancelar'),
-              ),
-              ElevatedButton(
-                onPressed: () => Navigator.pop(context, true),
-                style: ElevatedButton.styleFrom(backgroundColor: Color(0xFF9D7FE8)),
-                child: Text('Desbloquear'),
-              ),
-            ],
-          ),
-        );
-
-        if (confirm == true) {
-          await _blockService.unblockContact(widget.contactId);
-          setState(() {
-            _isBlocked = false;
-          });
-        }
-      } else {
-        // Bloquear
-        final confirm = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: Text('Bloquear contacto'),
-            content: Text(
-              '¿Deseas bloquear a ${widget.contactName}?\n\n'
-              'No podrás recibir mensajes ni llamadas de este contacto.',
+    if (_isBlocked) {
+      // Desbloquear
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('Desbloquear contacto'),
+          content: Text('¿Deseas desbloquear a ${widget.contactName}?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text('Cancelar'),
             ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: Text('Cancelar'),
-              ),
-              ElevatedButton(
-                onPressed: () => Navigator.pop(context, true),
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                child: Text('Bloquear'),
-              ),
-            ],
-          ),
-        );
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: ElevatedButton.styleFrom(backgroundColor: Color(0xFF9D7FE8)),
+              child: Text('Desbloquear'),
+            ),
+          ],
+        ),
+      );
 
-        if (confirm == true) {
-          await _blockService.blockContact(widget.contactId);
-          setState(() {
-            _isBlocked = true;
-          });
-          // Contacto bloqueado - sin mensaje
-        }
+      if (confirm == true) {
+        await _controller.unblockContact();
       }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error: $e'),
-            backgroundColor: Colors.red,
+    } else {
+      // Bloquear
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('Bloquear contacto'),
+          content: Text(
+            '¿Deseas bloquear a ${widget.contactName}?\n\n'
+            'No podrás recibir mensajes ni llamadas de este contacto.',
           ),
-        );
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text('Cancelar'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+              child: Text('Bloquear'),
+            ),
+          ],
+        ),
+      );
+
+      if (confirm == true) {
+        await _controller.blockContact();
       }
     }
   }
@@ -270,28 +302,15 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
     );
 
     if (result != null) {
-      try {
-        // Verificar si el resultado está vacío O es el comando de restaurar
-        final shouldRemoveAlias = result.isEmpty || result == '___RESTORE___';
+      // Verificar si el resultado está vacío O es el comando de restaurar
+      final shouldRemoveAlias = result.isEmpty || result == '___RESTORE___';
 
-        if (shouldRemoveAlias) {
-          // Restaurar nombre original (eliminar alias)
-          await _aliasService.removeAlias(widget.contactId);
-          // El StreamBuilder se actualizará automáticamente
-        } else {
-          // Guardar nuevo alias
-          await _aliasService.setAlias(widget.contactId, result);
-          // El StreamBuilder se actualizará automáticamente
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Error al guardar: $e'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
+      if (shouldRemoveAlias) {
+        // Restaurar nombre original (eliminar alias)
+        await _controller.removeContactAlias();
+      } else {
+        // Guardar nuevo alias
+        await _controller.setContactAlias(result);
       }
     }
   }
@@ -327,7 +346,6 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
       backgroundColor: colorScheme.surface,
@@ -365,32 +383,29 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
             ),
         ],
       ),
-      body: StreamBuilder<DocumentSnapshot>(
-        stream: _firestore.collection('users').doc(widget.contactId).snapshots(),
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) {
-            return Center(child: CircularProgressIndicator());
-          }
+      body: _contactData == null
+          ? Center(child: CircularProgressIndicator())
+          : _buildContactProfile(),
+    );
+  }
 
-          final userData = snapshot.data!.data() as Map<String, dynamic>?;
+  Widget _buildContactProfile() {
+    final photoURL = _contactData!['photoURL'];
+    final role = _contactData!['role'] ?? 'adult';
+    final isOnline = _contactData!['isOnline'] ?? false;
 
-          if (userData == null) {
-            return Center(child: Text('Usuario no encontrado'));
-          }
+    // Usar User.age getter para calcular la edad
+    final birthDate = User.parseBirthDate(_contactData!['birthDate'] ?? _contactData!['age']);
+    final age = User.calculateAge(birthDate);
 
-          final photoURL = userData['photoURL'];
-          final role = userData['role'] ?? 'adult';
-          final isOnline = userData['isOnline'] ?? false;
+    final colorScheme = Theme.of(context).colorScheme;
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
-          // Usar User.age getter para calcular la edad
-          final birthDate = User.parseBirthDate(userData['birthDate'] ?? userData['age']);
-          final age = User.calculateAge(birthDate);
-
-          return SingleChildScrollView(
-            child: Column(
-              children: [
-                // Header con gradiente
-                Container(
+    return SingleChildScrollView(
+      child: Column(
+        children: [
+          // Header con gradiente
+          Container(
                   width: double.infinity,
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
@@ -440,49 +455,41 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
                       SizedBox(height: 16),
 
                       // Nombre con botón de edición
-                      StreamBuilder<String>(
-                        stream: _aliasService.watchDisplayName(widget.contactId, widget.contactName),
-                        initialData: widget.contactName,
-                        builder: (context, snapshot) {
-                          final displayName = snapshot.data ?? widget.contactName;
-
-                          return Column(
+                      Column(
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(
-                                    displayName,
-                                    style: TextStyle(
-                                      fontSize: 28,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.white,
-                                    ),
-                                  ),
-                                  SizedBox(width: 8),
-                                  IconButton(
-                                    icon: Icon(Icons.edit, color: Colors.white70, size: 20),
-                                    onPressed: () => _showEditNameDialog(displayName),
-                                    tooltip: 'Editar nombre',
-                                  ),
-                                ],
-                              ),
-                              if (displayName != widget.contactName)
-                                Padding(
-                                  padding: EdgeInsets.only(top: 4),
-                                  child: Text(
-                                    'Nombre real: ${widget.contactName}',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.white60,
-                                      fontStyle: FontStyle.italic,
-                                    ),
-                                  ),
+                              Text(
+                                _contactAlias ?? widget.contactName,
+                                style: TextStyle(
+                                  fontSize: 28,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
                                 ),
+                              ),
+                              SizedBox(width: 8),
+                              IconButton(
+                                icon: Icon(Icons.edit, color: Colors.white70, size: 20),
+                                onPressed: () => _showEditNameDialog(_contactAlias ?? widget.contactName),
+                                tooltip: 'Editar nombre',
+                              ),
                             ],
-                          );
-                        },
+                          ),
+                          if (_contactAlias != null && _contactAlias != widget.contactName)
+                            Padding(
+                              padding: EdgeInsets.only(top: 4),
+                              child: Text(
+                                'Nombre real: ${widget.contactName}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.white60,
+                                  fontStyle: FontStyle.italic,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
 
                       SizedBox(height: 4),
@@ -616,56 +623,37 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
                           ),
                         ),
                         Divider(height: 1),
-                        FutureBuilder<List<Map<String, dynamic>>>(
-                          future: Child(
-                            id: widget.contactId,
-                            name: widget.contactName,
-                          ).getParents(),
-                          builder: (context, parentsSnapshot) {
-                            if (!parentsSnapshot.hasData) {
-                              return Padding(
-                                padding: EdgeInsets.all(16),
-                                child: Center(child: CircularProgressIndicator()),
-                              );
-                            }
-
-                            final parents = parentsSnapshot.data!;
-
-                            if (parents.isEmpty) {
-                              return Padding(
+                        _controller.childParents.isEmpty
+                            ? Padding(
                                 padding: EdgeInsets.all(16),
                                 child: Text(
                                   'Sin padres asociados',
                                   style: TextStyle(color: Colors.grey),
                                 ),
-                              );
-                            }
-
-                            return Column(
-                              children: parents.map((parent) {
-                                return ListTile(
-                                  leading: ClickableAvatar(
-                                    photoUrl: parent['photoURL'] != null && parent['photoURL']!.isNotEmpty
-                                        ? parent['photoURL']!
-                                        : null,
-                                    name: parent['name'] ?? 'Padre/Madre',
-                                    radius: 20,
-                                    backgroundColor: Color(0xFF9D7FE8).withValues(alpha: 0.2),
-                                  ),
-                                  title: Text(
-                                    parent['name'] ?? 'Padre/Madre',
-                                    style: TextStyle(fontWeight: FontWeight.w600),
-                                  ),
-                                  trailing: Icon(
-                                    Icons.check_circle,
-                                    color: Colors.green,
-                                    size: 20,
-                                  ),
-                                );
-                              }).toList(),
-                            );
-                          },
-                        ),
+                              )
+                            : Column(
+                                children: _controller.childParents.map((parent) {
+                                  return ListTile(
+                                    leading: ClickableAvatar(
+                                      photoUrl: parent['photoURL'] != null && parent['photoURL']!.isNotEmpty
+                                          ? parent['photoURL']!
+                                          : null,
+                                      name: parent['name'] ?? 'Padre/Madre',
+                                      radius: 20,
+                                      backgroundColor: Color(0xFF9D7FE8).withValues(alpha: 0.2),
+                                    ),
+                                    title: Text(
+                                      parent['name'] ?? 'Padre/Madre',
+                                      style: TextStyle(fontWeight: FontWeight.w600),
+                                    ),
+                                    trailing: Icon(
+                                      Icons.check_circle,
+                                      color: Colors.green,
+                                      size: 20,
+                                    ),
+                                  );
+                                }).toList(),
+                              ),
                       ],
                     ),
                   ),
@@ -738,111 +726,90 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
                   ),
                 ),
 
-                SizedBox(height: 40),
-              ],
-            ),
-          );
-        },
+          SizedBox(height: 40),
+        ],
       ),
     );
   }
 
   Widget _buildFavoritesTab() {
     final colorScheme = Theme.of(context).colorScheme;
+    final favoriteMessages = _controller.favoriteMessages;
 
-    return StreamBuilder<List<Map<String, dynamic>>>(
-      stream: FavoriteService().getFavoriteMessagesStream(
-        chatId: widget.chatId,
-        isGroupChat: false, // Este es un chat 1-1 ya que es contact profile
-      ),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                SizedBox(
-                  width: 40,
-                  height: 40,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 3,
-                    valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
-                  ),
-                ),
-                SizedBox(height: 16),
-                Text(
-                  'Cargando favoritos...',
-                  style: TextStyle(
-                    color: colorScheme.onSurfaceVariant,
-                    fontSize: 14,
-                  ),
-                ),
-              ],
-            ),
-          );
-        }
-
-        if (snapshot.hasError) {
-          print('❌ Error cargando favoritos: ${snapshot.error}');
-          return Center(
-            child: Padding(
-              padding: EdgeInsets.all(32),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Container(
-                    padding: EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.red.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Icon(
-                      Icons.error_outline_rounded,
-                      color: Colors.red,
-                      size: 48,
-                    ),
-                  ),
-                  SizedBox(height: 20),
-                  Text(
-                    'Error al cargar favoritos',
-                    style: TextStyle(
-                      color: Colors.red,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    snapshot.error.toString(),
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Colors.grey[600],
-                      fontSize: 12,
-                    ),
-                  ),
-                  SizedBox(height: 16),
-                  ElevatedButton.icon(
-                    onPressed: () {
-                      // Trigger rebuild
-                      setState(() {});
-                    },
-                    icon: Icon(Icons.refresh, size: 18),
-                    label: Text('Reintentar'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: colorScheme.primary,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                  ),
-                ],
+    if (_controller.isLoadingFavorites) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: 40,
+              height: 40,
+              child: CircularProgressIndicator(
+                strokeWidth: 3,
+                valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
               ),
             ),
-          );
-        }
+            SizedBox(height: 16),
+            Text(
+              'Cargando favoritos...',
+              style: TextStyle(
+                color: colorScheme.onSurfaceVariant,
+                fontSize: 14,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
 
-        final favoriteMessages = snapshot.data ?? [];
+    if (_controller.hasError) {
+      return Center(
+        child: Padding(
+          padding: EdgeInsets.all(32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                padding: EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.red.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Icon(
+                  Icons.error_outline_rounded,
+                  color: Colors.red,
+                  size: 48,
+                ),
+              ),
+              SizedBox(height: 20),
+              Text(
+                'Error al cargar favoritos',
+                style: TextStyle(
+                  color: Colors.red,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: () {
+                  _controller.reloadFavorites();
+                },
+                icon: Icon(Icons.refresh, size: 18),
+                label: Text('Reintentar'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: colorScheme.primary,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
 
         if (favoriteMessages.isEmpty) {
           return Center(
@@ -927,15 +894,11 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
             final messageData = favoriteMessages[index];
 
             final text = messageData['text'] ?? '';
-            final timestamp = messageData['timestamp'] as Timestamp?;
+            final formattedTime = messageData['formattedTime'] ?? '';
             final senderId = messageData['senderId'] ?? '';
-            final isMe = senderId == firebase_auth.FirebaseAuth.instance.currentUser?.uid;
+            final isMe = senderId == _controller.currentUserId;
             final mediaType = messageData['mediaType'] as String?;
             final mediaUrl = messageData['mediaUrl'] as String?;
-
-            final formattedTime = timestamp != null
-                ? DateFormat('dd/MM/yyyy HH:mm').format(timestamp.toDate())
-                : '';
 
             return Container(
               decoration: BoxDecoration(
@@ -1052,8 +1015,6 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
             );
           },
         );
-      },
-    );
   }
 
   Widget _buildInfoTile({

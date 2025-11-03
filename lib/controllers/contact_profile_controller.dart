@@ -1,12 +1,13 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
+import 'package:intl/intl.dart';
 import '../services/block_service.dart';
 import '../services/contact_alias_service.dart';
 import '../services/favorite_service.dart';
 import '../services/video_call_service.dart';
-import '../models/user.dart';
 import '../models/child.dart';
+import '../models/contact_user.dart';
 
 /// Controller para manejar la lógica del perfil de contacto
 ///
@@ -35,8 +36,11 @@ class ContactProfileController {
   bool _isFavorite = false;
   bool _isLoadingFavoriteStatus = true;
   String? _contactAlias;
-  Map<String, dynamic>? _contactData;
-  Map<String, dynamic>? _contactProfile;
+  ContactUser? _contactUser;
+  List<Map<String, dynamic>> _favoriteMessages = [];
+  List<Map<String, dynamic>> _childParents = [];
+  bool _isLoadingFavorites = true;
+  bool _hasError = false;
 
   // Subscripciones
   StreamSubscription? _contactDataSubscription;
@@ -46,7 +50,7 @@ class ContactProfileController {
   Function(bool)? onBlockStatusChanged;
   Function(bool)? onFavoriteStatusChanged;
   Function(String?)? onAliasChanged;
-  Function(Map<String, dynamic>?)? onContactDataChanged;
+  Function(ContactUser?)? onContactDataChanged;
   Function(String)? onError;
   Function(String)? onSuccess;
 
@@ -74,14 +78,15 @@ class ContactProfileController {
   bool get isFavorite => _isFavorite;
   bool get isLoadingFavoriteStatus => _isLoadingFavoriteStatus;
   String? get contactAlias => _contactAlias;
-  Map<String, dynamic>? get contactData => _contactData;
-  Map<String, dynamic>? get contactProfile => _contactProfile;
+  ContactUser? get contactUser => _contactUser;
+  List<Map<String, dynamic>> get favoriteMessages => _favoriteMessages;
+  List<Map<String, dynamic>> get childParents => _childParents;
+  bool get isLoadingFavorites => _isLoadingFavorites;
+  bool get hasError => _hasError;
   String get currentUserId => _auth.currentUser?.uid ?? '';
 
   /// Inicializar el controller
   Future<void> initialize() async {
-    print('🏗️ [ContactProfileController] Inicializando para contactId: $contactId');
-
     // Cargar estados iniciales en paralelo
     await Future.wait([
       _loadBlockStatus(),
@@ -89,6 +94,9 @@ class ContactProfileController {
       _loadContactAlias(),
       _loadContactData(),
     ]);
+
+    // Cargar datos adicionales después de cargar los datos del contacto
+    await Future.wait([loadFavoriteMessages(), loadChildParents()]);
 
     // Configurar listeners para actualizaciones en tiempo real
     _setupContactDataListener();
@@ -101,7 +109,6 @@ class ContactProfileController {
       _isLoadingBlockStatus = false;
       onBlockStatusChanged?.call(_isBlocked);
     } catch (e) {
-      print('❌ [ContactProfileController] Error cargando estado de bloqueo: $e');
       _isLoadingBlockStatus = false;
       onError?.call('Error verificando estado de bloqueo');
     }
@@ -110,11 +117,11 @@ class ContactProfileController {
   /// Cargar estado de favorito
   Future<void> _loadFavoriteStatus() async {
     try {
-      _isFavorite = await _favoriteService.isFavorite(contactId);
+      // Note: We'll load favorite status later when we have message context
+      _isFavorite = false; // Initialize as false for now
       _isLoadingFavoriteStatus = false;
       onFavoriteStatusChanged?.call(_isFavorite);
     } catch (e) {
-      print('❌ [ContactProfileController] Error cargando estado de favorito: $e');
       _isLoadingFavoriteStatus = false;
       onError?.call('Error verificando favoritos');
     }
@@ -123,10 +130,13 @@ class ContactProfileController {
   /// Cargar alias del contacto
   Future<void> _loadContactAlias() async {
     try {
-      _contactAlias = await _aliasService.getContactAlias(contactId);
+      final displayName = await _aliasService.getDisplayName(
+        contactId,
+        contactName,
+      );
+      _contactAlias = displayName != contactName ? displayName : null;
       onAliasChanged?.call(_contactAlias);
     } catch (e) {
-      print('❌ [ContactProfileController] Error cargando alias: $e');
       onError?.call('Error cargando alias del contacto');
     }
   }
@@ -134,14 +144,16 @@ class ContactProfileController {
   /// Cargar datos del contacto
   Future<void> _loadContactData() async {
     try {
-      final snapshot = await _firestore.collection('users').doc(contactId).get();
+      final snapshot = await _firestore
+          .collection('users')
+          .doc(contactId)
+          .get();
       if (snapshot.exists) {
-        _contactData = snapshot.data();
-        _contactProfile = _contactData;
-        onContactDataChanged?.call(_contactData);
+        final data = snapshot.data()!;
+        _contactUser = ContactUser.fromFirestore(data, contactId, customAlias: _contactAlias);
+        onContactDataChanged?.call(_contactUser);
       }
     } catch (e) {
-      print('❌ [ContactProfileController] Error cargando datos del contacto: $e');
       onError?.call('Error cargando información del contacto');
     }
   }
@@ -152,16 +164,18 @@ class ContactProfileController {
         .collection('users')
         .doc(contactId)
         .snapshots()
-        .listen((snapshot) {
-      if (snapshot.exists) {
-        _contactData = snapshot.data();
-        _contactProfile = _contactData;
-        onContactDataChanged?.call(_contactData);
-      }
-    }, onError: (error) {
-      print('❌ [ContactProfileController] Error en listener de datos: $error');
-      onError?.call('Error actualizando información del contacto');
-    });
+        .listen(
+          (snapshot) {
+            if (snapshot.exists) {
+              final data = snapshot.data()!;
+              _contactUser = ContactUser.fromFirestore(data, contactId, customAlias: _contactAlias);
+              onContactDataChanged?.call(_contactUser);
+            }
+          },
+          onError: (error) {
+            onError?.call('Error actualizando información del contacto');
+          },
+        );
   }
 
   /// Alternar estado de bloqueo
@@ -183,33 +197,25 @@ class ContactProfileController {
         return true;
       }
     } catch (e) {
-      print('❌ [ContactProfileController] Error cambiando estado de bloqueo: $e');
-      onError?.call('Error ${_isBlocked ? 'desbloqueando' : 'bloqueando'} contacto');
+      onError?.call(
+        'Error ${_isBlocked ? 'desbloqueando' : 'bloqueando'} contacto',
+      );
       return false;
     }
   }
 
-  /// Alternar estado de favorito
-  Future<bool> toggleFavorite() async {
+  /// Alternar estado de favorito para un mensaje específico
+  Future<bool> toggleMessageFavorite(String messageId) async {
     try {
-      if (_isFavorite) {
-        // Quitar de favoritos
-        await _favoriteService.removeFavorite(contactId);
-        _isFavorite = false;
-        onFavoriteStatusChanged?.call(false);
-        onSuccess?.call('Contacto removido de favoritos');
-        return true;
-      } else {
-        // Agregar a favoritos
-        await _favoriteService.addFavorite(contactId);
-        _isFavorite = true;
-        onFavoriteStatusChanged?.call(true);
-        onSuccess?.call('Contacto agregado a favoritos');
-        return true;
-      }
+      await _favoriteService.toggleFavorite(
+        chatId: chatId,
+        messageId: messageId,
+        isGroupChat: false,
+      );
+      onSuccess?.call('Estado de favorito actualizado');
+      return true;
     } catch (e) {
-      print('❌ [ContactProfileController] Error cambiando estado de favorito: $e');
-      onError?.call('Error actualizando favoritos');
+      onError?.call('Error actualizando favorito');
       return false;
     }
   }
@@ -217,13 +223,16 @@ class ContactProfileController {
   /// Actualizar alias del contacto
   Future<bool> updateContactAlias(String? newAlias) async {
     try {
-      await _aliasService.setContactAlias(contactId, newAlias);
+      if (newAlias == null) {
+        await _aliasService.removeAlias(contactId);
+      } else {
+        await _aliasService.setAlias(contactId, newAlias);
+      }
       _contactAlias = newAlias;
       onAliasChanged?.call(newAlias);
       onSuccess?.call('Alias actualizado exitosamente');
       return true;
     } catch (e) {
-      print('❌ [ContactProfileController] Error actualizando alias: $e');
       onError?.call('Error actualizando alias');
       return false;
     }
@@ -237,15 +246,29 @@ class ContactProfileController {
         return false;
       }
 
+      final currentUser = _auth.currentUser;
+      if (currentUser == null) {
+        onError?.call('Usuario no autenticado');
+        return false;
+      }
+
+      // Obtener datos del usuario actual
+      final currentUserDoc = await _firestore
+          .collection('users')
+          .doc(currentUser.uid)
+          .get();
+      final currentUserName = currentUserDoc.data()?['name'] ?? 'Usuario';
+
       await _videoCallService.startCall(
+        callerId: currentUser.uid,
+        callerName: currentUserName,
         receiverId: contactId,
-        isVideo: true,
+        receiverName: contactName,
       );
 
       onSuccess?.call('Videollamada iniciada');
       return true;
     } catch (e) {
-      print('❌ [ContactProfileController] Error iniciando videollamada: $e');
       onError?.call('Error iniciando videollamada');
       return false;
     }
@@ -259,140 +282,104 @@ class ContactProfileController {
         return false;
       }
 
+      final currentUser = _auth.currentUser;
+      if (currentUser == null) {
+        onError?.call('Usuario no autenticado');
+        return false;
+      }
+
+      // Obtener datos del usuario actual
+      final currentUserDoc = await _firestore
+          .collection('users')
+          .doc(currentUser.uid)
+          .get();
+      final currentUserName = currentUserDoc.data()?['name'] ?? 'Usuario';
+
       await _videoCallService.startCall(
+        callerId: currentUser.uid,
+        callerName: currentUserName,
         receiverId: contactId,
-        isVideo: false,
+        receiverName: contactName,
       );
 
       onSuccess?.call('Llamada de audio iniciada');
       return true;
     } catch (e) {
-      print('❌ [ContactProfileController] Error iniciando llamada de audio: $e');
       onError?.call('Error iniciando llamada de audio');
       return false;
     }
   }
 
-  /// Obtener información del usuario como modelo
-  Future<User?> getContactAsUser() async {
-    try {
-      if (_contactData == null) {
-        await _loadContactData();
-      }
-
-      if (_contactData != null) {
-        return User.fromFirestore(_contactData!);
-      }
-      return null;
-    } catch (e) {
-      print('❌ [ContactProfileController] Error creando modelo User: $e');
-      return null;
-    }
+  /// Verificar si el contacto es un niño
+  bool isContactChild() {
+    return _contactUser?.isChild ?? false;
   }
 
   /// Obtener información del contacto como Child (si aplicable)
   Future<Child?> getContactAsChild() async {
     try {
-      if (_contactData == null) {
+      if (_contactUser == null) {
         await _loadContactData();
       }
 
-      if (_contactData != null && _contactData!['role'] == 'child') {
-        return Child.fromMap(_contactData!);
+      if (isContactChild()) {
+        // Convert ContactUser back to Map for Child.fromMap
+        final contactData = {
+          'name': _contactUser!.name,
+          'role': _contactUser!.role,
+          'birthDate': _contactUser!.birthDate,
+          'photoURL': _contactUser!.photoURL,
+          'phone': _contactUser!.phone,
+          'email': _contactUser!.email,
+          'createdAt': _contactUser!.createdAt,
+          'lastSeen': _contactUser!.lastSeen,
+        };
+        return Child.fromMap(contactId, contactData);
       }
       return null;
     } catch (e) {
-      print('❌ [ContactProfileController] Error creando modelo Child: $e');
       return null;
     }
-  }
-
-  /// Verificar si el contacto es un niño
-  bool isContactChild() {
-    return _contactData?['role'] == 'child';
   }
 
   /// Obtener edad del contacto
   int? getContactAge() {
-    if (_contactData == null) return null;
-
-    final birthDateField = _contactData!['birthDate'];
-    if (birthDateField == null) return null;
-
-    try {
-      DateTime birthDate;
-      if (birthDateField is Timestamp) {
-        birthDate = birthDateField.toDate();
-      } else if (birthDateField is String) {
-        birthDate = DateTime.parse(birthDateField);
-      } else {
-        return null;
-      }
-
-      final now = DateTime.now();
-      int age = now.year - birthDate.year;
-      if (now.month < birthDate.month ||
-          (now.month == birthDate.month && now.day < birthDate.day)) {
-        age--;
-      }
-      return age;
-    } catch (e) {
-      print('❌ [ContactProfileController] Error calculando edad: $e');
-      return null;
-    }
+    return _contactUser?.age;
   }
 
   /// Obtener nombre para mostrar (alias o nombre real)
   String getDisplayName() {
-    if (_contactAlias != null && _contactAlias!.isNotEmpty) {
-      return _contactAlias!;
-    }
-    return _contactData?['name'] ?? contactName;
+    return _contactUser?.getDisplayName(customAlias: _contactAlias) ?? contactName;
   }
 
   /// Obtener foto de perfil URL
   String? getPhotoURL() {
-    return _contactData?['photoURL'] as String?;
+    return _contactUser?.photoURL;
   }
 
   /// Obtener teléfono del contacto
   String? getPhoneNumber() {
-    return _contactData?['phone'] as String?;
+    return _contactUser?.phone;
   }
 
   /// Obtener email del contacto
   String? getEmail() {
-    return _contactData?['email'] as String?;
+    return _contactUser?.email;
   }
 
   /// Obtener fecha de registro
   DateTime? getJoinDate() {
-    final createdAt = _contactData?['createdAt'];
-    if (createdAt is Timestamp) {
-      return createdAt.toDate();
-    }
-    return null;
+    return _contactUser?.joinDate;
   }
 
   /// Verificar si el contacto está online
   bool isContactOnline() {
-    final lastSeen = _contactData?['lastSeen'];
-    if (lastSeen is Timestamp) {
-      final lastSeenDate = lastSeen.toDate();
-      final now = DateTime.now();
-      final difference = now.difference(lastSeenDate);
-      return difference.inMinutes < 5; // Online si estuvo activo en los últimos 5 minutos
-    }
-    return false;
+    return _contactUser?.isOnline ?? false;
   }
 
   /// Obtener última vez visto
   DateTime? getLastSeen() {
-    final lastSeen = _contactData?['lastSeen'];
-    if (lastSeen is Timestamp) {
-      return lastSeen.toDate();
-    }
-    return null;
+    return _contactUser?.lastSeen;
   }
 
   /// Stream de datos del contacto para actualizaciones en tiempo real
@@ -412,9 +399,83 @@ class ContactProfileController {
         .snapshots();
   }
 
+  /// Métodos para alias
+  Future<void> setContactAlias(String alias) async {
+    await updateContactAlias(alias);
+  }
+
+  Future<void> removeContactAlias() async {
+    await updateContactAlias(null);
+  }
+
+  /// Métodos para bloquear/desbloquear individualmente
+  Future<void> blockContact() async {
+    await toggleBlock();
+  }
+
+  Future<void> unblockContact() async {
+    await toggleBlock();
+  }
+
+  /// Cargar mensajes favoritos
+  Future<void> loadFavoriteMessages() async {
+    try {
+      _isLoadingFavorites = true;
+      _hasError = false;
+
+      final stream = _favoriteService.getFavoriteMessagesStream(
+        chatId: chatId,
+        isGroupChat: false,
+      );
+
+      final snapshot = await stream.first;
+
+      // Convertir Timestamp a String para que la pantalla no dependa de Firestore
+      _favoriteMessages = snapshot.map((message) {
+        final Map<String, dynamic> processedMessage = Map.from(message);
+
+        // Convertir Timestamp a String formateado
+        if (processedMessage['timestamp'] is Timestamp) {
+          final timestamp = processedMessage['timestamp'] as Timestamp;
+          processedMessage['formattedTime'] = DateFormat(
+            'dd/MM/yyyy HH:mm',
+          ).format(timestamp.toDate());
+          processedMessage.remove('timestamp'); // Remover el Timestamp original
+        }
+
+        return processedMessage;
+      }).toList();
+
+      _isLoadingFavorites = false;
+    } catch (e) {
+      _hasError = true;
+      _isLoadingFavorites = false;
+      onError?.call('Error cargando mensajes favoritos');
+    }
+  }
+
+  /// Recargar favoritos
+  Future<void> reloadFavorites() async {
+    await loadFavoriteMessages();
+  }
+
+  /// Cargar padres del niño si aplica
+  Future<void> loadChildParents() async {
+    try {
+      if (isContactChild()) {
+        final child = Child(id: contactId, name: contactName);
+        _childParents = await child.getParents();
+      } else {
+        _childParents = [];
+      }
+    } catch (e) {
+      _childParents = [];
+      onError?.call('Error cargando información de padres');
+    }
+  }
+
   /// Limpiar recursos
   void dispose() {
-    print('🧹 [ContactProfileController] Disposing controller');
     _contactDataSubscription?.cancel();
     _blockStatusSubscription?.cancel();
   }

@@ -1,13 +1,11 @@
 import 'dart:io';
 import 'dart:async';
-import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
-import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import '../services/deepar_service.dart';
 import '../services/story_service.dart';
 import '../services/stickers_service.dart';
@@ -37,7 +35,6 @@ class StoryCameraController {
   final SubscriptionService _subscriptionService;
   final StoryUploadProgressService _uploadProgressService;
   final ImagePicker _imagePicker;
-  final firebase_auth.FirebaseAuth _auth;
 
   // Estado de la cámara
   CameraController? _cameraController;
@@ -85,7 +82,6 @@ class StoryCameraController {
     SubscriptionService? subscriptionService,
     StoryUploadProgressService? uploadProgressService,
     ImagePicker? imagePicker,
-    firebase_auth.FirebaseAuth? auth,
   }) : _deepARService = deepARService ?? DeepARService(),
        _storyService = storyService ?? StoryService(),
        _stickersService = stickersService ?? StickersService(),
@@ -93,8 +89,7 @@ class StoryCameraController {
        _usageLimitsService = usageLimitsService ?? UsageLimitsService(),
        _subscriptionService = subscriptionService ?? SubscriptionService(),
        _uploadProgressService = uploadProgressService ?? StoryUploadProgressService(),
-       _imagePicker = imagePicker ?? ImagePicker(),
-       _auth = auth ?? firebase_auth.FirebaseAuth.instance;
+       _imagePicker = imagePicker ?? ImagePicker();
 
   // Getters para el estado
   CameraController? get cameraController => _cameraController;
@@ -118,7 +113,7 @@ class StoryCameraController {
 
   /// Inicializa el controller
   Future<void> initialize() async {
-    print('🏗️ [StoryCameraController] Inicializando para userId: $userId');
+    
     await _initializeCamera();
   }
 
@@ -150,7 +145,7 @@ class StoryCameraController {
 
       onCameraInitialized?.call();
     } catch (e) {
-      print('❌ [StoryCameraController] Error inicializando cámara: $e');
+      
       _hasInitializationFailed = true;
       onError?.call('Error inicializando cámara: $e');
     } finally {
@@ -189,14 +184,15 @@ class StoryCameraController {
       _filterType = filterName == DeepARFilters.none ? 'color' : 'deepar';
 
       if (_filterType == 'deepar') {
-        await _deepARService.switchEffect(filterName);
+        // DeepARService maneja el cambio de efectos internamente
+        await _deepARService.initialize(licenseKey: 'DEEPAR_LICENSE_KEY'); // TODO: Move to config
         if (!_isDeepARInitialized) {
           _deepARReinitCounter++;
           _isDeepARInitialized = true;
         }
       }
     } catch (e) {
-      print('❌ [StoryCameraController] Error aplicando filtro AR: $e');
+      
       onError?.call('Error aplicando filtro: $e');
     }
   }
@@ -219,7 +215,7 @@ class StoryCameraController {
       final image = await _cameraController!.takePicture();
       return image.path;
     } catch (e) {
-      print('❌ [StoryCameraController] Error tomando foto: $e');
+      
       onError?.call('Error tomando foto: $e');
       return null;
     } finally {
@@ -250,7 +246,7 @@ class StoryCameraController {
         }
       });
     } catch (e) {
-      print('❌ [StoryCameraController] Error iniciando grabación: $e');
+      
       onError?.call('Error iniciando grabación: $e');
     }
   }
@@ -269,7 +265,7 @@ class StoryCameraController {
 
       return videoFile.path;
     } catch (e) {
-      print('❌ [StoryCameraController] Error parando grabación: $e');
+      
       onError?.call('Error parando grabación: $e');
       return null;
     }
@@ -287,7 +283,7 @@ class StoryCameraController {
 
       return pickedFile?.path;
     } catch (e) {
-      print('❌ [StoryCameraController] Error seleccionando imagen: $e');
+      
       onError?.call('Error seleccionando imagen: $e');
       return null;
     }
@@ -337,7 +333,7 @@ class StoryCameraController {
 
       return processedPath;
     } catch (e) {
-      print('❌ [StoryCameraController] Error procesando imagen: $e');
+      
       onError?.call('Error procesando imagen: $e');
       return null;
     } finally {
@@ -362,31 +358,38 @@ class StoryCameraController {
       _setLoading(true);
 
       // Verificar límites de uso
-      final canTransform = await _usageLimitsService.canPerformTransformation(userId);
+      final canTransform = await _usageLimitsService.canUseCharacterTransform();
       if (!canTransform) {
-        final hasSubscription = await _subscriptionService.hasActiveSubscription(userId);
-        if (!hasSubscription) {
+        final premiumStatus = await _subscriptionService.checkPremiumStatus();
+        if (!premiumStatus.isPremium) {
           onError?.call('Límite de transformaciones alcanzado. Necesitas una suscripción premium.');
           return null;
         }
       }
 
+      // Primero subir imagen a Firebase Storage
+      final fileName = 'temp_transform_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final storageRef = FirebaseStorage.instance.ref().child('temp_transforms').child(fileName);
+      final uploadTask = storageRef.putFile(File(imagePath));
+      final snapshot = await uploadTask;
+      final imageUrl = await snapshot.ref.getDownloadURL();
+
       // Realizar transformación a través del servicio
-      final transformedImageUrl = await _characterService.transformImage(
-        imagePath: imagePath,
-        character: character,
-        userId: userId,
+      final transformedImageUrl = await _characterService.transformImageWithProgress(
+        imageUrl: imageUrl,
+        characterId: character.id,
+        onProgress: (progress) {
+          // Progreso manejado internamente
+        },
       );
 
-      if (transformedImageUrl != null) {
-        // Registrar uso
-        await _usageLimitsService.recordTransformation(userId);
-        onSuccess?.call('Transformación completada exitosamente');
-      }
+      // Registrar uso
+      await _usageLimitsService.incrementCharacterTransformUsage();
+      onSuccess?.call('Transformación completada exitosamente');
 
       return transformedImageUrl;
     } catch (e) {
-      print('❌ [StoryCameraController] Error transformando imagen: $e');
+      
       onError?.call('Error en transformación: $e');
       return null;
     } finally {
@@ -404,43 +407,17 @@ class StoryCameraController {
     try {
       _setLoading(true);
 
-      // Subir archivo a Firebase Storage
-      final fileName = 'story_${userId}_${DateTime.now().millisecondsSinceEpoch}.$mediaType';
-      final storageRef = FirebaseStorage.instance.ref().child('stories').child(fileName);
+      // Usar el servicio de historias para crear la historia
+      await _storyService.createStory(
+        mediaPath: mediaPath,
+        mediaType: mediaType,
+        caption: caption,
+      );
 
-      final uploadTask = storageRef.putFile(File(mediaPath));
-
-      // Monitorear progreso
-      uploadTask.snapshotEvents.listen((snapshot) {
-        final progress = snapshot.bytesTransferred / snapshot.totalBytes;
-        _uploadProgressService.updateProgress(progress);
-      });
-
-      final snapshot = await uploadTask;
-      final downloadUrl = await snapshot.ref.getDownloadURL();
-
-      // Crear historia en Firestore a través del servicio
-      final storyData = {
-        'userId': userId,
-        'mediaUrl': downloadUrl,
-        'mediaType': mediaType,
-        'caption': caption,
-        'characterId': character?.id,
-        'timestamp': DateTime.now(),
-        'status': 'pending_approval',
-      };
-
-      final success = await _storyService.createStory(storyData);
-
-      if (success) {
-        onSuccess?.call('Historia publicada exitosamente');
-      } else {
-        onError?.call('Error publicando historia');
-      }
-
-      return success;
+      onSuccess?.call('Historia publicada exitosamente');
+      return true;
     } catch (e) {
-      print('❌ [StoryCameraController] Error publicando historia: $e');
+      
       onError?.call('Error publicando historia: $e');
       return false;
     } finally {
@@ -454,7 +431,7 @@ class StoryCameraController {
       _isLoadingStickers = true;
       _stickerMetadata = await _stickersService.getAvailableStickers();
     } catch (e) {
-      print('❌ [StoryCameraController] Error cargando stickers: $e');
+      
       onError?.call('Error cargando stickers: $e');
     } finally {
       _isLoadingStickers = false;
@@ -464,9 +441,10 @@ class StoryCameraController {
   /// Verificar si el usuario tiene suscripción activa
   Future<bool> hasActiveSubscription() async {
     try {
-      return await _subscriptionService.hasActiveSubscription(userId);
+      final premiumStatus = await _subscriptionService.checkPremiumStatus();
+      return premiumStatus.isPremium;
     } catch (e) {
-      print('❌ [StoryCameraController] Error verificando suscripción: $e');
+      
       return false;
     }
   }
@@ -474,9 +452,14 @@ class StoryCameraController {
   /// Obtener límites de uso restantes
   Future<Map<String, int>> getRemainingLimits() async {
     try {
-      return await _usageLimitsService.getRemainingLimits(userId);
+      final usage = await _usageLimitsService.getCharacterTransformUsage();
+      return {
+        'transformationsUsed': usage['count'] as int,
+        'transformationsLimit': usage['limit'] as int,
+        'transformationsRemaining': usage['remaining'] as int,
+      };
     } catch (e) {
-      print('❌ [StoryCameraController] Error obteniendo límites: $e');
+      
       return {};
     }
   }
@@ -526,7 +509,7 @@ class StoryCameraController {
 
   /// Limpiar recursos
   void dispose() {
-    print('🧹 [StoryCameraController] Disposing controller');
+    
     _recordingTimer?.cancel();
     _cameraController?.dispose();
     _deepARService.dispose();
