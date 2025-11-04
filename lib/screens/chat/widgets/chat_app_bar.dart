@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import '../../../widgets/profile_photo_viewer.dart';
 import '../../../services/block_service.dart';
 import '../../../services/typing_indicator_service.dart';
+import '../../../controllers/chat_app_bar_controller.dart';
 import '../../chat_moderation_settings_screen.dart';
 
 /// AppBar personalizado para pantallas de chat
@@ -33,57 +33,20 @@ class ChatAppBar extends StatefulWidget implements PreferredSizeWidget {
 }
 
 class _ChatAppBarState extends State<ChatAppBar> {
-  bool _isParentOrAdult = false;
-  bool _isLoading = true;
   final BlockService _blockService = BlockService();
+  late final ChatAppBarController _controller;
 
   @override
   void initState() {
     super.initState();
-    _checkIfParentOrAdult();
+    _controller = ChatAppBarController();
+    _controller.initialize();
   }
 
-  Future<void> _checkIfParentOrAdult() async {
-    try {
-      final currentUserId = FirebaseAuth.instance.currentUser?.uid;
-      if (currentUserId == null) {
-        setState(() => _isLoading = false);
-        return;
-      }
-
-      final userDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(currentUserId)
-          .get();
-
-      if (!userDoc.exists) {
-        setState(() => _isLoading = false);
-        return;
-      }
-
-      final userData = userDoc.data();
-
-      // Verificar si es padre
-      bool isParentOrAdult = userData?['isParent'] == true;
-
-      // Verificar si es adulto (mayor de 18 años)
-      if (!isParentOrAdult) {
-        final birthDate = userData?['birthDate'];
-        if (birthDate != null) {
-          final birthDateTime = (birthDate as Timestamp).toDate();
-          final age = DateTime.now().difference(birthDateTime).inDays ~/ 365;
-          isParentOrAdult = age >= 18;
-        }
-      }
-
-      setState(() {
-        _isParentOrAdult = isParentOrAdult;
-        _isLoading = false;
-      });
-    } catch (e) {
-      print('❌ Error verificando si es padre/adulto: $e');
-      setState(() => _isLoading = false);
-    }
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
   }
 
   @override
@@ -101,14 +64,11 @@ class _ChatAppBarState extends State<ChatAppBar> {
       title: InkWell(
         onTap: widget.onTap,
         child: StreamBuilder<DocumentSnapshot>(
-          stream: FirebaseFirestore.instance
-              .collection('users')
-              .doc(widget.contactId)
-              .snapshots(),
+          stream: _controller.getContactDataStream(widget.contactId),
           builder: (context, snapshot) {
-            final userData = snapshot.data?.data() as Map<String, dynamic>?;
-            final photoURL = userData?['photoURL'] as String? ?? '';
-            final isOnline = userData?['isOnline'] ?? false;
+            final contactData = _controller.extractContactData(snapshot.data);
+            final photoURL = contactData['photoURL'] as String;
+            final isOnline = contactData['isOnline'] as bool;
 
             // Escuchar el estado de typing
             return StreamBuilder<bool>(
@@ -283,7 +243,7 @@ class _ChatAppBarState extends State<ChatAppBar> {
             final items = <PopupMenuEntry<String>>[];
 
             // Mostrar "Moderación con IA" solo para padres/adultos
-            if (_isParentOrAdult) {
+            if (_controller.isParentOrAdult && !_controller.isLoading) {
               items.add(
                 PopupMenuItem(
                   value: 'moderation',

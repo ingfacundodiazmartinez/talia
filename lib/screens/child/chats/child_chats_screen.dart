@@ -53,7 +53,6 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
   final ChatMuteService _muteService = ChatMuteService();
   final ChatClearService _clearService = ChatClearService();
   final MessageCacheService _cacheService = MessageCacheService();
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   @override
   bool get wantKeepAlive => true;
@@ -156,10 +155,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
 
   Widget _buildChatList(ColorScheme colorScheme) {
     return StreamBuilder<QuerySnapshot>(
-      stream: _firestore
-          .collection('chats')
-          .where('participants', arrayContains: widget.childId)
-          .snapshots(),
+      stream: _chatsController.getChatsStream(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
           return Center(child: CircularProgressIndicator());
@@ -248,13 +244,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
     final unreadCount = groupData['unreadCount_${widget.childId}'] ?? 0;
 
     return StreamBuilder<QuerySnapshot>(
-      stream: _firestore
-          .collection('groups')
-          .doc(groupId)
-          .collection('messages')
-          .orderBy('timestamp', descending: true)
-          .limit(1)
-          .snapshots(),
+      stream: _chatsController.getGroupLastMessageStream(groupId),
       builder: (context, messageSnapshot) {
         String? lastMessageSenderId;
         MessageStatus? lastMessageStatus;
@@ -388,7 +378,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
     if (otherUserId.isEmpty) return SizedBox.shrink();
 
     return StreamBuilder<DocumentSnapshot>(
-      stream: _firestore.collection('chats').doc(chatId).snapshots(),
+      stream: _chatsController.getChatDataStream(chatId),
       initialData: chatDoc,
       builder: (context, chatSnapshot) {
         final currentChatData = chatSnapshot.hasData
@@ -433,13 +423,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
 
             // StreamBuilder para obtener el estado del último mensaje
             return StreamBuilder<QuerySnapshot>(
-              stream: _firestore
-                  .collection('chats')
-                  .doc(chatId)
-                  .collection('messages')
-                  .orderBy('timestamp', descending: true)
-                  .limit(1)
-                  .snapshots(),
+              stream: _chatsController.getChatLastMessageStream(chatId),
               builder: (context, messageSnapshot) {
                 String? lastMessageSenderId;
                 MessageStatus? lastMessageStatus;

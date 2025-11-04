@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/chat_service.dart';
 import '../services/group_chat_service.dart';
+import '../utils/release_logger.dart';
 
 /// Controller base con lógica compartida entre Parent y Child chats
 ///
@@ -54,7 +55,7 @@ abstract class BaseChatsController {
       final doc = await _firestore.collection('users').doc(targetUserId).get();
       return doc.data();
     } catch (e) {
-      print('❌ Error obteniendo datos de usuario $targetUserId: $e');
+      ReleaseLogger.error('Error obteniendo datos de usuario $targetUserId: $e', tag: 'BaseChats');
       return null;
     }
   }
@@ -62,13 +63,13 @@ abstract class BaseChatsController {
   /// Forzar reconexión de Firestore (útil para pull-to-refresh)
   Future<void> forceReconnect() async {
     try {
-      print('🔄 Forzando reconexión de Firestore...');
+      ReleaseLogger.log('Forzando reconexión de Firestore...', tag: 'BaseChats');
       await _firestore.disableNetwork();
       await Future.delayed(Duration(milliseconds: 300));
       await _firestore.enableNetwork();
-      print('✅ Firestore reconectado');
+      ReleaseLogger.log('Firestore reconectado', tag: 'BaseChats');
     } catch (e) {
-      print('❌ Error forzando reconexión: $e');
+      ReleaseLogger.error('Error forzando reconexión: $e', tag: 'BaseChats');
     }
   }
 
@@ -148,5 +149,47 @@ abstract class BaseChatsController {
 
       return bTime.compareTo(aTime);
     });
+  }
+
+  /// Stream de datos específicos de un chat
+  Stream<DocumentSnapshot> getChatDataStream(String chatId) {
+    try {
+      return _firestore.collection('chats').doc(chatId).snapshots();
+    } catch (e) {
+      ReleaseLogger.error('Error obteniendo stream de chat $chatId: $e', tag: 'BaseChats');
+      rethrow;
+    }
+  }
+
+  /// Stream del último mensaje de un grupo específico
+  Stream<QuerySnapshot> getGroupLastMessageStream(String groupId) {
+    try {
+      return _firestore
+          .collection('groups')
+          .doc(groupId)
+          .collection('messages')
+          .orderBy('timestamp', descending: true)
+          .limit(1)
+          .snapshots();
+    } catch (e) {
+      ReleaseLogger.error('Error obteniendo último mensaje del grupo $groupId: $e', tag: 'BaseChats');
+      rethrow;
+    }
+  }
+
+  /// Stream del último mensaje de un chat individual
+  Stream<QuerySnapshot> getChatLastMessageStream(String chatId) {
+    try {
+      return _firestore
+          .collection('chats')
+          .doc(chatId)
+          .collection('messages')
+          .orderBy('timestamp', descending: true)
+          .limit(1)
+          .snapshots();
+    } catch (e) {
+      ReleaseLogger.error('Error obteniendo último mensaje del chat $chatId: $e', tag: 'BaseChats');
+      rethrow;
+    }
   }
 }

@@ -1,10 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../../../controllers/child_home_controller.dart';
-import '../../../services/chat_permission_service.dart';
-import '../../../services/block_service.dart';
+import '../../../controllers/child_contacts_controller.dart';
 import '../../../screens/add_contact_screen.dart';
 import '../../chat_detail_screen.dart';
 
@@ -31,12 +29,21 @@ class ChildContactsScreen extends StatefulWidget {
 }
 
 class _ChildContactsScreenState extends State<ChildContactsScreen> {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final ChatPermissionService _permissionService = ChatPermissionService();
-  final BlockService _blockService = BlockService();
-
+  late final ChildContactsController _contactsController;
   String _contactSearchQuery = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _contactsController = ChildContactsController(childId: widget.childId);
+    _contactsController.initialize();
+  }
+
+  @override
+  void dispose() {
+    _contactsController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -100,30 +107,20 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
           // Lista de contactos con StreamBuilder para bloqueados
           Expanded(
             child: StreamBuilder<List<String>>(
-              stream: _blockService.getBlockedContactsStream(),
+              stream: _contactsController.getBlockedContactsStream(),
               builder: (context, blockedSnapshot) {
                 final blockedContacts = blockedSnapshot.data ?? [];
 
                 return StreamBuilder<QuerySnapshot>(
                   // Solicitudes donde YO soy el hijo (mis padres deben aprobar)
-                  stream: _firestore
-                      .collection('contact_requests')
-                      .where('childId', isEqualTo: _auth.currentUser?.uid)
-                      .where('status', isEqualTo: 'pending')
-                      .snapshots(),
+                  stream: _contactsController.getMyContactRequestsStream(),
                   builder: (context, myRequestsSnapshot) {
                 return StreamBuilder<QuerySnapshot>(
                   // Solicitudes donde YO soy el contacto (padres del otro deben aprobar)
-                  stream: _firestore
-                      .collection('contact_requests')
-                      .where('contactId', isEqualTo: _auth.currentUser?.uid)
-                      .where('status', isEqualTo: 'pending')
-                      .snapshots(),
+                  stream: _contactsController.getOtherContactRequestsStream(),
                   builder: (context, otherRequestsSnapshot) {
                     return StreamBuilder<List<String>>(
-                      stream: _permissionService.watchBidirectionallyApprovedContacts(
-                        _auth.currentUser?.uid ?? '',
-                      ),
+                      stream: _contactsController.getBidirectionallyApprovedContactsStream(),
                       builder: (context, approvedSnapshot) {
                         if (myRequestsSnapshot.hasError ||
                             otherRequestsSnapshot.hasError ||
@@ -193,7 +190,7 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
                                   .where((contactId) => !blockedContacts.contains(contactId))
                                   .map((contactId) {
                                 return FutureBuilder<DocumentSnapshot>(
-                                  future: _firestore.collection('users').doc(contactId).get(),
+                                  future: _contactsController.getUserDocument(contactId),
                                   builder: (context, userSnapshot) {
                                     if (!userSnapshot.hasData) {
                                       return SizedBox();
@@ -289,7 +286,9 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
     List<QueryDocumentSnapshot> docs,
     ColorScheme colorScheme,
   ) {
-    final currentUserId = _auth.currentUser?.uid;
+    final currentUserId = _contactsController.currentUserId;
+    if (currentUserId == null) return [];
+
     // Agrupar solicitudes por el "otro usuario" (el que no soy yo)
     final Map<String, List<QueryDocumentSnapshot>> groupedRequests = {};
 
@@ -365,7 +364,9 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
   ) {
     if (requests.isEmpty) return SizedBox();
 
-    final currentUserId = _auth.currentUser?.uid;
+    final currentUserId = _contactsController.currentUserId;
+    if (currentUserId == null) return SizedBox();
+
     final firstRequest = requests.first.data() as Map<String, dynamic>;
     final childId = firstRequest['childId'] as String;
     final contactId = firstRequest['contactId'] as String;
@@ -383,7 +384,7 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
 
     return FutureBuilder<DocumentSnapshot>(
       // Obtener datos actualizados del otro usuario
-      future: _firestore.collection('users').doc(otherUserId).get(),
+      future: _contactsController.getUserDocument(otherUserId),
       builder: (context, otherUserSnapshot) {
         String displayName = otherUserName;
         if (otherUserSnapshot.hasData) {
@@ -392,9 +393,7 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
         }
 
         return FutureBuilder<List<DocumentSnapshot>>(
-          future: Future.wait(
-            parentIds.map((id) => _firestore.collection('users').doc(id).get()),
-          ),
+          future: _contactsController.getMultipleUserDocuments(parentIds),
           builder: (context, parentsSnapshot) {
             // Agrupar solicitudes por tipo (mis padres vs padres del otro)
             final myParentRequests = <Map<String, dynamic>>[];
@@ -647,16 +646,18 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
           ),
           IconButton(
             onPressed: () {
-              final chatId = _getChatId(_auth.currentUser!.uid, contactId);
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (context) => ChatDetailScreen(
-                    chatId: chatId,
-                    contactId: contactId,
-                    contactName: name,
+              final chatId = _contactsController.getChatIdWithContact(contactId);
+              if (chatId.isNotEmpty) {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => ChatDetailScreen(
+                      chatId: chatId,
+                      contactId: contactId,
+                      contactName: name,
+                    ),
                   ),
-                ),
-              );
+                );
+              }
             },
             icon: Icon(
               Icons.chat_bubble_outline,
@@ -668,9 +669,4 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
     );
   }
 
-  /// Generar ID único de chat entre dos usuarios
-  String _getChatId(String user1, String user2) {
-    final users = [user1, user2]..sort();
-    return '${users[0]}_${users[1]}';
-  }
 }

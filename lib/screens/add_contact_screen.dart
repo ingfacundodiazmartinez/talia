@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 
-// Services
+// Controllers
+import '../controllers/add_contact_controller.dart';
+
+// Services (still needed for some methods)
 import '../services/user_code_service.dart';
 import '../services/contact_request_service.dart';
 
@@ -30,10 +32,12 @@ class _AddContactScreenState extends State<AddContactScreen>
   late TabController _tabController;
   final TextEditingController _codeController = TextEditingController();
 
-  // Services
+  // Controller
+  late AddContactController _controller;
+
+  // Services (still needed for some direct calls)
   final UserCodeService _userCodeService = UserCodeService();
   final ContactRequestService _contactRequestService = ContactRequestService();
-  final FirebaseAuth _auth = FirebaseAuth.instance;
 
   // State
   bool _isLoading = false;
@@ -44,6 +48,7 @@ class _AddContactScreenState extends State<AddContactScreen>
   @override
   void initState() {
     super.initState();
+    _controller = AddContactController();
     _tabController = TabController(length: 3, vsync: this);
     _loadUserCode();
   }
@@ -57,7 +62,7 @@ class _AddContactScreenState extends State<AddContactScreen>
 
   Future<void> _loadUserCode() async {
     try {
-      final code = await _userCodeService.getCurrentUserCode();
+      final code = await _controller.getCurrentUserCode();
       setState(() {
         _userCode = code;
         _isLoadingMyCode = false;
@@ -113,9 +118,7 @@ class _AddContactScreenState extends State<AddContactScreen>
       });
 
       try {
-        final newCode = await _userCodeService.regenerateUserCode(
-          _auth.currentUser!.uid,
-        );
+        final newCode = await _controller.regenerateCurrentUserCode();
         setState(() {
           _userCode = newCode;
           _isLoadingMyCode = false;
@@ -284,7 +287,7 @@ class _AddContactScreenState extends State<AddContactScreen>
       // Validar que no sea el mismo usuario
       final validationError = await _contactRequestService.validateContactCode(
         targetUserId: result.userId!,
-        currentUserId: _auth.currentUser!.uid,
+        currentUserId: _controller.currentUserId!,
       );
 
       if (validationError != null) {
@@ -296,7 +299,7 @@ class _AddContactScreenState extends State<AddContactScreen>
 
       // Obtener informacion de rol del usuario actual
       final roleInfo = await _contactRequestService.getCurrentUserRoleInfo(
-        _auth.currentUser!.uid,
+        _controller.currentUserId!,
       );
 
       if (roleInfo == null) {
@@ -329,13 +332,11 @@ class _AddContactScreenState extends State<AddContactScreen>
 
   Future<void> _sendContactRequest(UserCodeResult result) async {
     try {
-      final currentUser = _auth.currentUser!;
-
       final requestResult = await _contactRequestService.sendContactRequest(
         contactUserId: result.userId!,
-        currentUserId: currentUser.uid,
-        currentUserName: currentUser.displayName ?? 'Usuario',
-        currentUserEmail: currentUser.email ?? '',
+        currentUserId: _controller.currentUserId!,
+        currentUserName: _controller.currentUserDisplayName,
+        currentUserEmail: _controller.currentUserEmail,
         contactName: result.name ?? 'Usuario',
         contactEmail: result.email ?? '',
       );

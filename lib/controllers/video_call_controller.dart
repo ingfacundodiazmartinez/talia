@@ -38,7 +38,7 @@ class VideoCallController {
   bool _isCameraOff = false;
   bool _isJoined = false;
   int? _localUid;
-  Set<int> _remoteUids = {};
+  final Set<int> _remoteUids = {};
   String _connectionStatus = 'Conectando...';
   bool _isEnding = false;
   bool _hasPermissions = false;
@@ -90,7 +90,7 @@ class VideoCallController {
 
   /// Inicializar el controller
   Future<void> initialize() async {
-    print('🏗️ [VideoCallController] Inicializando para callId: $callId');
+    ReleaseLogger.log('Inicializando VideoCallController para callId: $callId', tag: 'VideoCall');
 
     try {
       // Verificar y solicitar permisos
@@ -111,7 +111,7 @@ class VideoCallController {
       await _joinChannel();
 
     } catch (e) {
-      print('❌ [VideoCallController] Error inicializando: $e');
+      ReleaseLogger.error('Error inicializando VideoCallController: $e', tag: 'VideoCall');
       onError?.call('Error inicializando llamada: $e');
     }
   }
@@ -127,20 +127,20 @@ class VideoCallController {
     if (!allGranted) {
       // Si falta algún permiso, verificar específicamente cuál
       if (isVideo && !statuses[Permission.camera]!.isGranted) {
-        print('❌ [VideoCallController] Permiso de cámara denegado');
+        ReleaseLogger.error('Permiso de cámara denegado', tag: 'VideoCall');
         onError?.call('Permiso de cámara requerido para videollamadas');
         return;
       }
 
       if (!statuses[Permission.microphone]!.isGranted) {
-        print('❌ [VideoCallController] Permiso de micrófono denegado');
+        ReleaseLogger.error('Permiso de micrófono denegado', tag: 'VideoCall');
         onError?.call('Permiso de micrófono requerido para llamadas');
         return;
       }
     }
 
     _hasPermissions = true;
-    print('✅ [VideoCallController] Permisos concedidos');
+    ReleaseLogger.log('Permisos concedidos', tag: 'VideoCall');
   }
 
   /// Inicializar Agora RTC Engine
@@ -159,20 +159,20 @@ class VideoCallController {
     _engine!.registerEventHandler(
       RtcEngineEventHandler(
         onJoinChannelSuccess: (RtcConnection connection, int elapsed) {
-          print('✅ [VideoCallController] Usuario local se unió al canal: ${connection.localUid}');
+          // ReleaseLogger.log('Usuario local se unió al canal: ${connection.localUid}', tag: 'VideoCall');
           _localUid = connection.localUid;
           _isJoined = true;
           _updateConnectionStatus('Conectado');
           onLocalUserJoined?.call(true);
         },
         onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
-          print('✅ [VideoCallController] Usuario remoto se unió: $remoteUid');
+          // ReleaseLogger.log('✅ [VideoCallController] Usuario remoto se unió: $remoteUid');
           _remoteUids.add(remoteUid);
           onRemoteUsersChanged?.call(_remoteUids);
           _updateConnectionStatus('En llamada');
         },
         onUserOffline: (RtcConnection connection, int remoteUid, UserOfflineReasonType reason) {
-          print('👋 [VideoCallController] Usuario remoto se desconectó: $remoteUid (razón: $reason)');
+          // ReleaseLogger.log('👋 [VideoCallController] Usuario remoto se desconectó: $remoteUid (razón: $reason)');
           _remoteUids.remove(remoteUid);
           onRemoteUsersChanged?.call(_remoteUids);
 
@@ -183,7 +183,7 @@ class VideoCallController {
           }
         },
         onConnectionStateChanged: (RtcConnection connection, ConnectionStateType state, ConnectionChangedReasonType reason) {
-          print('🔄 [VideoCallController] Estado de conexión: $state (razón: $reason)');
+          // ReleaseLogger.log('🔄 [VideoCallController] Estado de conexión: $state (razón: $reason)');
 
           switch (state) {
             case ConnectionStateType.connectionStateDisconnected:
@@ -204,7 +204,7 @@ class VideoCallController {
           }
         },
         onError: (ErrorCodeType err, String msg) {
-          print('❌ [VideoCallController] Error de Agora: $err - $msg');
+          ReleaseLogger.error('Error de Agora: $err - $msg', tag: 'VideoCall');
           onError?.call('Error en la llamada: $msg');
         },
       ),
@@ -231,7 +231,7 @@ class VideoCallController {
         final data = snapshot.data() as Map<String, dynamic>;
         final status = data['status'] as String?;
 
-        print('📞 [VideoCallController] Estado de llamada: $status');
+        // ReleaseLogger.log('📞 [VideoCallController] Estado de llamada: $status');
 
         switch (status) {
           case 'ended':
@@ -274,14 +274,14 @@ class VideoCallController {
       // Timer de timeout para conexión
       _connectionTimer = Timer(const Duration(seconds: 30), () {
         if (!_isJoined) {
-          print('⏰ [VideoCallController] Timeout de conexión');
+          // ReleaseLogger.log('⏰ [VideoCallController] Timeout de conexión');
           onError?.call('Timeout de conexión. No se pudo establecer la llamada.');
           _endCall();
         }
       });
 
     } catch (e) {
-      print('❌ [VideoCallController] Error uniéndose al canal: $e');
+      ReleaseLogger.error('Error uniéndose al canal: $e', tag: 'VideoCall');
       onError?.call('Error uniéndose a la llamada: $e');
     }
   }
@@ -292,7 +292,7 @@ class VideoCallController {
 
     _isMuted = !_isMuted;
     await _engine!.muteLocalAudioStream(_isMuted);
-    print('🎤 [VideoCallController] Micrófono ${_isMuted ? 'silenciado' : 'activado'}');
+    // ReleaseLogger.log('🎤 [VideoCallController] Micrófono ${_isMuted ? 'silenciado' : 'activado'}');
   }
 
   /// Alternar estado de la cámara
@@ -301,7 +301,7 @@ class VideoCallController {
 
     _isCameraOff = !_isCameraOff;
     await _engine!.muteLocalVideoStream(_isCameraOff);
-    print('📹 [VideoCallController] Cámara ${_isCameraOff ? 'desactivada' : 'activada'}');
+    // ReleaseLogger.log('📹 [VideoCallController] Cámara ${_isCameraOff ? 'desactivada' : 'activada'}');
   }
 
   /// Cambiar cámara (frontal/trasera)
@@ -309,7 +309,7 @@ class VideoCallController {
     if (_engine == null || !isVideo) return;
 
     await _engine!.switchCamera();
-    print('🔄 [VideoCallController] Cámara cambiada');
+    // ReleaseLogger.log('🔄 [VideoCallController] Cámara cambiada');
   }
 
   /// Terminar llamada
@@ -317,7 +317,7 @@ class VideoCallController {
     if (_isEnding) return;
     _isEnding = true;
 
-    print('📞 [VideoCallController] Terminando llamada...');
+    // ReleaseLogger.log('📞 [VideoCallController] Terminando llamada...');
 
     try {
       // Actualizar estado en Firestore
@@ -330,7 +330,7 @@ class VideoCallController {
       onCallEnded?.call();
 
     } catch (e) {
-      print('❌ [VideoCallController] Error terminando llamada: $e');
+      ReleaseLogger.error('Error terminando llamada: $e', tag: 'VideoCall');
       // Forzar cleanup aunque haya error
       await _cleanup();
       onCallEnded?.call();
@@ -351,7 +351,7 @@ class VideoCallController {
 
   /// Limpiar recursos
   Future<void> _cleanup() async {
-    print('🧹 [VideoCallController] Limpiando recursos...');
+    // ReleaseLogger.log('🧹 [VideoCallController] Limpiando recursos...');
 
     // Cancelar timers y subscriptions
     _connectionTimer?.cancel();
@@ -366,7 +366,7 @@ class VideoCallController {
 
     // Limpiar estado de CallKit/VoIP si es necesario
     if (Platform.isIOS) {
-      await _voipService.endCall(callId);
+      await _voipService.notifyCallEnded(callId);
     } else if (Platform.isAndroid) {
       await _callKitService.endCall(callId);
     }
@@ -397,12 +397,13 @@ class VideoCallController {
   Future<void> initiateCall() async {
     if (isCaller) {
       try {
-        await _videoCallService.startCall(
+        await _videoCallService.initiateCall(
           receiverId: receiverId,
+          receiverName: remoteName,
           isVideo: isVideo,
         );
       } catch (e) {
-        print('❌ [VideoCallController] Error iniciando llamada: $e');
+        ReleaseLogger.error('Error iniciando llamada: $e', tag: 'VideoCall');
         onError?.call('Error iniciando llamada: $e');
       }
     }
@@ -414,7 +415,7 @@ class VideoCallController {
       try {
         await _videoCallService.acceptCall(callId);
       } catch (e) {
-        print('❌ [VideoCallController] Error aceptando llamada: $e');
+        ReleaseLogger.error('Error aceptando llamada: $e', tag: 'VideoCall');
         onError?.call('Error aceptando llamada: $e');
       }
     }
@@ -422,7 +423,7 @@ class VideoCallController {
 
   /// Dispose del controller
   void dispose() {
-    print('🧹 [VideoCallController] Disposing controller');
+    // ReleaseLogger.log('🧹 [VideoCallController] Disposing controller');
     _cleanup();
   }
 }

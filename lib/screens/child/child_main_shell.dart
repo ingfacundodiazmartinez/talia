@@ -1,13 +1,10 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import '../../controllers/child_home_controller.dart';
+import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
+import '../../controllers/child_main_shell_controller.dart';
 import 'chats/child_chats_screen.dart';
 import 'contacts/child_contacts_screen.dart';
 import 'profile/child_profile_screen.dart';
-import '../../notification_service.dart';
-import '../../utils/chat_utils.dart';
 import '../chat_detail_screen.dart';
 import '../group_chat_screen.dart';
 
@@ -57,11 +54,7 @@ class ChildMainShell extends StatefulWidget {
 
 class _ChildMainShellState extends State<ChildMainShell> {
   int _selectedIndex = 0;
-  ChildHomeController? _controller; // Nullable porque se inicializa async
-  StreamSubscription? _chatNotificationSubscription;
-  StreamSubscription? _roleChangeSubscription;
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  late final ChildMainShellController _mainController;
 
   // GlobalKeys para mantener el estado de navegación de cada tab
   final GlobalKey<NavigatorState> _chatsNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'ChildChats');
@@ -71,90 +64,46 @@ class _ChildMainShellState extends State<ChildMainShell> {
   @override
   void initState() {
     super.initState();
-    final currentUserId = _auth.currentUser?.uid;
+    final currentUserId = firebase_auth.FirebaseAuth.instance.currentUser?.uid;
     if (currentUserId != null) {
-      // Verificar que el usuario tenga rol 'child' antes de inicializar el controller
-      // Esto es una verificación de seguridad adicional
-      _verifyUserRoleAndInitialize(currentUserId);
-      _setupRoleChangeListener(currentUserId);
-    }
-    _setupNotificationListeners();
-  }
+      _mainController = ChildMainShellController(
+        childId: currentUserId,
+        context: context,
+      );
 
-  /// Verificar el rol del usuario antes de inicializar el controller
-  Future<void> _verifyUserRoleAndInitialize(String userId) async {
-    try {
-      final userDoc = await _firestore.collection('users').doc(userId).get();
-      final userData = userDoc.data();
-      final userRole = userData?['role'] ?? 'child';
+      // Configurar callback para navegación desde notificaciones
+      _mainController.onChatNotificationTap = _handleChatNotificationTap;
 
-      print('🔐 [ChildMainShell] Verificando rol de usuario: $userRole');
-
-      // Inicializar el controller si el usuario NO es 'parent'
-      // Los roles 'child' y 'adult' usan el mismo shell
-      if (userRole != 'parent') {
-        print('✅ [ChildMainShell] Usuario es $userRole - inicializando controller');
-        final controller = ChildHomeController(
-          childId: userId,
-          context: context,
-        );
-        await controller.initialize();
-
-        // Asignar después de inicializar para evitar race conditions
-        if (mounted) {
-          setState(() {
-            _controller = controller;
-          });
-        }
-      } else {
-        print('⚠️ [ChildMainShell] Usuario es parent (role: $userRole) - NO inicializando controller');
-        print('⚠️ [ChildMainShell] Este usuario debería estar en ParentMainShell, no en ChildMainShell');
-      }
-    } catch (e) {
-      print('❌ [ChildMainShell] Error verificando rol: $e');
+      _mainController.initialize();
     }
   }
 
   @override
   void dispose() {
-    _controller?.dispose(); // Usar ?. porque puede ser null
-    _chatNotificationSubscription?.cancel();
-    _roleChangeSubscription?.cancel();
+    _mainController.dispose();
     super.dispose();
   }
 
-  void _setupRoleChangeListener(String userId) {
-    // ⚠️ DESHABILITADO: No cerrar sesión automáticamente por cambios de rol
-    // El AuthWrapper en main.dart manejará los cambios de shell si es necesario
-    // Los usuarios NUNCA deben ser deslogueados automáticamente
-    print('ℹ️ [ChildMainShell] Listener de cambio de rol deshabilitado - no se cerrará sesión automáticamente');
-  }
 
-  void _setupNotificationListeners() {
-    // Escuchar taps en notificaciones de chat
-    _chatNotificationSubscription = NotificationService().chatNotificationTapStream.listen((data) {
-      print('📲 [ChildMainShell] Chat notification tapped: $data');
-      _handleChatNotificationTap(data);
-    });
-  }
 
   Future<void> _handleChatNotificationTap(Map<String, dynamic> data) async {
-    try {
-      final groupId = data['groupId'] as String?;
-      final chatId = data['chatId'] as String?;
-      final isGroup = data['isGroup'] == true || data['isGroup'] == 'true';
+    // Delegar toda la lógica al controller
+    await _mainController.handleChatNotificationTap(data);
 
-      // Primero cambiar al tab de chats
-      setState(() => _selectedIndex = 0);
+    // Primero cambiar al tab de chats
+    setState(() => _selectedIndex = 0);
 
-      // Determinar si es un chat grupal o 1-on-1
-      // Si isGroup es true, el chatId es en realidad el groupId
-      if (groupId != null || (isGroup && chatId != null)) {
-        // Notificación de mensaje grupal
-        final effectiveGroupId = groupId ?? chatId!;
-        final groupName = data['groupName'] as String? ?? 'Grupo';
-        print('✅ [ChildMainShell] Navigating to group chat: $groupName (groupId: $effectiveGroupId)');
+    // El controller maneja toda la lógica de navegación
+    final groupId = data['groupId'] as String?;
+    final chatId = data['chatId'] as String?;
+    final isGroup = data['isGroup'] == true || data['isGroup'] == 'true';
 
+    if (groupId != null || (isGroup && chatId != null)) {
+      // Notificación de mensaje grupal
+      final effectiveGroupId = groupId ?? chatId!;
+      final groupName = data['groupName'] as String? ?? 'Grupo';
+
+      if (mounted) {
         await Navigator.of(context).push(
           MaterialPageRoute(
             builder: (context) => GroupChatScreen(
@@ -163,49 +112,23 @@ class _ChildMainShellState extends State<ChildMainShell> {
             ),
           ),
         );
-      } else if (chatId != null) {
-        // Notificación de mensaje 1-on-1
-        final senderId = data['senderId'] as String?;
-
-        if (senderId == null) {
-          print('⚠️ [ChildMainShell] Missing senderId in notification data');
-          return;
-        }
-
-        print('📂 [ChildMainShell] Fetching contact info for senderId: $senderId');
-
-        // Obtener información del contacto
-        final currentUserId = _auth.currentUser?.uid;
-        if (currentUserId == null) {
-          print('❌ [ChildMainShell] User not authenticated');
-          return;
-        }
-
-        // Generar el chatId correcto usando la utilidad
-        final correctChatId = ChatUtils.getChatId(currentUserId, senderId);
-
-        // Buscar el contacto en la colección de usuarios
-        final contactDoc = await _firestore.collection('users').doc(senderId).get();
-        final contactName = contactDoc.data()?['name'] as String? ?? 'Usuario';
-
-        print('✅ [ChildMainShell] Navigating to 1-on-1 chat with $contactName');
-        print('   Notification chatId: $chatId');
-        print('   Correct chatId: $correctChatId');
-
-        await Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (context) => ChatDetailScreen(
-              contactId: senderId,
-              contactName: contactName,
-              chatId: correctChatId,
-            ),
-          ),
-        );
-      } else {
-        print('⚠️ [ChildMainShell] Missing both groupId and chatId in notification data');
       }
-    } catch (e) {
-      print('❌ [ChildMainShell] Error handling chat notification tap: $e');
+    } else if (chatId != null) {
+      // Notificación de mensaje 1-on-1
+      final senderId = data['senderId'] as String?;
+      if (senderId != null) {
+        if (mounted) {
+          await Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => ChatDetailScreen(
+                contactId: senderId,
+                contactName: 'Usuario', // El controller tiene la lógica de obtener el nombre
+                chatId: chatId,
+              ),
+            ),
+          );
+        }
+      }
     }
   }
 
@@ -259,7 +182,7 @@ class _ChildMainShellState extends State<ChildMainShell> {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final currentUserId = _auth.currentUser?.uid;
+    final currentUserId = _mainController.currentUserId;
 
     if (currentUserId == null) {
       return Scaffold(
@@ -315,14 +238,14 @@ class _ChildMainShellState extends State<ChildMainShell> {
         children: [
           Offstage(
             offstage: _selectedIndex != 0,
-            child: _controller != null
-                ? _buildNavigator(_chatsNavigatorKey, ChildChatsScreen(childId: currentUserId, controller: _controller!))
+            child: _mainController.childController != null
+                ? _buildNavigator(_chatsNavigatorKey, ChildChatsScreen(childId: currentUserId, controller: _mainController.childController!))
                 : Center(child: CircularProgressIndicator()),
           ),
           Offstage(
             offstage: _selectedIndex != 1,
-            child: _controller != null
-                ? _buildNavigator(_contactsNavigatorKey, ChildContactsScreen(childId: currentUserId, controller: _controller!))
+            child: _mainController.childController != null
+                ? _buildNavigator(_contactsNavigatorKey, ChildContactsScreen(childId: currentUserId, controller: _mainController.childController!))
                 : Center(child: CircularProgressIndicator()),
           ),
           Offstage(
@@ -339,29 +262,16 @@ class _ChildMainShellState extends State<ChildMainShell> {
 
   /// Construye el BottomNavigationBar con badges
   Widget _buildBottomNavigationBar(ColorScheme colorScheme, bool showLabels) {
-    final currentUserId = _auth.currentUser?.uid;
+    final currentUserId = _mainController.currentUserId;
 
     if (currentUserId == null) {
       return Container(); // Usuario no autenticado
     }
 
-    return StreamBuilder<QuerySnapshot>(
-      stream: _firestore
-          .collection('chats')
-          .where('participants', arrayContains: currentUserId)
-          .snapshots(),
-      builder: (context, chatSnapshot) {
-        int totalUnreadMessages = 0;
-
-        if (chatSnapshot.hasData) {
-          for (var doc in chatSnapshot.data!.docs) {
-            final data = doc.data() as Map<String, dynamic>?;
-            if (data != null) {
-              final unreadCount = data['unreadCount_$currentUserId'] as int? ?? 0;
-              totalUnreadMessages += unreadCount;
-            }
-          }
-        }
+    return StreamBuilder<int>(
+      stream: _mainController.getUnreadMessagesStream(),
+      builder: (context, snapshot) {
+        final totalUnreadMessages = snapshot.data ?? 0;
 
         return Container(
           decoration: BoxDecoration(

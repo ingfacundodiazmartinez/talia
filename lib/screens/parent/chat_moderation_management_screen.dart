@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import '../../controllers/chat_moderation_management_controller.dart';
 
 /// Pantalla para gestionar moderación con IA de los contactos del hijo
 ///
@@ -18,47 +17,36 @@ class ChatModerationManagementScreen extends StatefulWidget {
 
 class _ChatModerationManagementScreenState
     extends State<ChatModerationManagementScreen> {
-  final _firestore = FirebaseFirestore.instance;
-  final _auth = FirebaseAuth.instance;
+  late ChatModerationManagementController _controller;
   bool _isLoading = true;
   List<String> _childrenIds = [];
 
   @override
   void initState() {
     super.initState();
+    _controller = ChatModerationManagementController();
     _loadLinkedChildren();
   }
 
   Future<void> _loadLinkedChildren() async {
     try {
-      final currentUserId = _auth.currentUser!.uid;
-
-      // ⚠️ CORREGIDO: Lee desde /users/{userId}.linkedChildrenIds por seguridad
-      final userDoc = await _firestore
-          .collection('users')
-          .doc(currentUserId)
-          .get();
+      final linkedChildrenIds = await _controller.loadLinkedChildren();
 
       if (mounted) {
-        if (userDoc.exists) {
-          final userData = userDoc.data() as Map<String, dynamic>?;
-          final linkedChildrenIds = List<String>.from(userData?['linkedChildrenIds'] ?? []);
-
-          setState(() {
-            _childrenIds = linkedChildrenIds;
-            _isLoading = false;
-          });
-        } else {
-          setState(() {
-            _childrenIds = [];
-            _isLoading = false;
-          });
-        }
+        setState(() {
+          _childrenIds = linkedChildrenIds;
+          _isLoading = false;
+        });
       }
     } catch (e) {
-      print('❌ Error cargando hijos vinculados: $e');
       if (mounted) {
         setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error cargando hijos vinculados: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     }
   }

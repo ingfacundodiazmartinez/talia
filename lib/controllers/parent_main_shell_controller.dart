@@ -42,6 +42,9 @@ class ParentMainShellController {
        _firestore = firestore ?? FirebaseFirestore.instance,
        _auth = auth ?? firebase_auth.FirebaseAuth.instance;
 
+  // Getters for current user information
+  String? get currentUserId => _auth.currentUser?.uid;
+
   /// Inicializa el controller
   Future<void> initialize() async {
     print('🏗️ [ParentMainShellController] Inicializando para parent: $parentId');

@@ -2,7 +2,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:record/record.dart';
@@ -723,7 +722,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
               final messageDoc = allMessages[index];
               final messageData = messageDoc.data() as Map<String, dynamic>;
               final senderId = messageData['senderId'] ?? '';
-              final isMe = senderId == FirebaseAuth.instance.currentUser!.uid;
+              final isMe = senderId == _controller.currentUserId;
               final timestamp = messageData['timestamp'] as Timestamp?;
               final timeString = timestamp != null
                   ? '${timestamp.toDate().hour}:${timestamp.toDate().minute.toString().padLeft(2, '0')}'

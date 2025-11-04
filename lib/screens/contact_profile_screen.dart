@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../controllers/contact_profile_controller.dart';
-import '../models/user.dart';
+import '../models/contact_user.dart';
 import 'video_call_screen.dart';
 import 'audio_call_screen.dart';
 import '../widgets/profile_photo_viewer.dart';
@@ -31,7 +31,7 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
   bool _isBlocked = false;
   bool _isLoadingBlockStatus = true;
   String? _contactAlias;
-  Map<String, dynamic>? _contactData;
+  ContactUser? _contactUser;
 
   // Tab controller para las pestañas
   late TabController _tabController;
@@ -82,10 +82,10 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
       }
     };
 
-    _controller.onContactDataChanged = (data) {
+    _controller.onContactDataChanged = (user) {
       if (mounted) {
         setState(() {
-          _contactData = data;
+          _contactUser = user;
         });
       }
     };
@@ -383,20 +383,19 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
             ),
         ],
       ),
-      body: _contactData == null
+      body: _contactUser == null
           ? Center(child: CircularProgressIndicator())
           : _buildContactProfile(),
     );
   }
 
   Widget _buildContactProfile() {
-    final photoURL = _contactData!['photoURL'];
-    final role = _contactData!['role'] ?? 'adult';
-    final isOnline = _contactData!['isOnline'] ?? false;
+    final photoURL = _contactUser!.photoURL;
+    final role = _contactUser!.role ?? 'adult';
+    final isOnline = _contactUser!.isOnline;
 
-    // Usar User.age getter para calcular la edad
-    final birthDate = User.parseBirthDate(_contactData!['birthDate'] ?? _contactData!['age']);
-    final age = User.calculateAge(birthDate);
+    // Usar ContactUser.age getter (ya calculado en el modelo)
+    final age = _contactUser!.age;
 
     final colorScheme = Theme.of(context).colorScheme;
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
@@ -569,8 +568,8 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
                       _buildInfoTile(
                         icon: Icons.cake_outlined,
                         label: 'Edad',
-                        value: birthDate != null
-                            ? '$age años (${_formatBirthday(birthDate)})'
+                        value: _contactUser!.birthDate != null
+                            ? '$age años (${_formatBirthday(_contactUser!.birthDate!)})'
                             : '$age años',
                       ),
                       Divider(height: 1),

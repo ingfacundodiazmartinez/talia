@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import '../models/chat_message.dart';
 import '../services/message_forward_service.dart';
-import '../services/contact_alias_service.dart';
+import '../controllers/forward_messages_controller.dart';
 import '../utils/string_utils.dart';
 
 /// Pantalla para seleccionar chats/grupos a los que reenviar múltiples mensajes
@@ -24,95 +22,26 @@ class ForwardMessagesScreen extends StatefulWidget {
 }
 
 class _ForwardMessagesScreenState extends State<ForwardMessagesScreen> {
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final ContactAliasService _aliasService = ContactAliasService();
+  late final ForwardMessagesController _controller;
   final MessageForwardService _forwardService = MessageForwardService();
 
   final Set<String> _selectedChatIds = {};
   final Set<String> _selectedGroupIds = {};
-
-  List<ChatItem> _chats = [];
-  List<GroupItem> _groups = [];
-  bool _isLoading = true;
   bool _isForwarding = false;
 
   @override
   void initState() {
     super.initState();
-    _loadChatsAndGroups();
+    _controller = ForwardMessagesController();
+    _controller.initialize(originalChatId: widget.originalChatId);
   }
 
-  Future<void> _loadChatsAndGroups() async {
-    try {
-      final currentUserId = _auth.currentUser?.uid;
-      if (currentUserId == null) return;
-
-      // Cargar chats individuales
-      final chatsSnapshot = await _firestore
-          .collection('chats')
-          .where('participants', arrayContains: currentUserId)
-          .get();
-
-      final chatsList = <ChatItem>[];
-      for (final doc in chatsSnapshot.docs) {
-        // Saltar el chat original
-        if (doc.id == widget.originalChatId) continue;
-
-        final data = doc.data();
-        final participants = List<String>.from(data['participants'] ?? []);
-        final otherUserId = participants.firstWhere(
-          (id) => id != currentUserId,
-          orElse: () => '',
-        );
-
-        if (otherUserId.isEmpty) continue;
-
-        // Obtener info del contacto
-        final userDoc = await _firestore.collection('users').doc(otherUserId).get();
-        final userData = userDoc.data();
-
-        if (userData != null) {
-          final realName = userData['name'] ?? 'Usuario';
-          final displayName = await _aliasService.getDisplayName(otherUserId, realName);
-
-          chatsList.add(ChatItem(
-            chatId: doc.id,
-            contactId: otherUserId,
-            contactName: displayName,
-            contactPhotoUrl: userData['photoURL'],
-            isOnline: userData['isOnline'] ?? false,
-          ));
-        }
-      }
-
-      // Cargar grupos
-      final groupsSnapshot = await _firestore
-          .collection('groups')
-          .where('members', arrayContains: currentUserId)
-          .get();
-
-      final groupsList = <GroupItem>[];
-      for (final doc in groupsSnapshot.docs) {
-        final data = doc.data();
-        groupsList.add(GroupItem(
-          groupId: doc.id,
-          groupName: data['name'] ?? 'Grupo',
-          groupPhotoUrl: data['avatar'], // Campo correcto es 'avatar' no 'imageUrl'
-          membersCount: (data['members'] as List?)?.length ?? 0,
-        ));
-      }
-
-      setState(() {
-        _chats = chatsList;
-        _groups = groupsList;
-        _isLoading = false;
-      });
-    } catch (e) {
-      print('❌ Error cargando chats y grupos: $e');
-      setState(() => _isLoading = false);
-    }
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
   }
+
 
   Future<void> _forwardMessages() async {
     if (_selectedChatIds.isEmpty && _selectedGroupIds.isEmpty) return;
@@ -188,9 +117,9 @@ class _ForwardMessagesScreenState extends State<ForwardMessagesScreen> {
             ),
         ],
       ),
-      body: _isLoading
+      body: _controller.isLoading
           ? Center(child: CircularProgressIndicator())
-          : _chats.isEmpty && _groups.isEmpty
+          : !_controller.hasChatsOrGroups
               ? Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -255,7 +184,7 @@ class _ForwardMessagesScreenState extends State<ForwardMessagesScreen> {
                     ),
 
                     // Sección de Chats
-                    if (_chats.isNotEmpty) ...[
+                    if (_controller.chats.isNotEmpty) ...[
                       Padding(
                         padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
                         child: Text(
@@ -267,7 +196,7 @@ class _ForwardMessagesScreenState extends State<ForwardMessagesScreen> {
                           ),
                         ),
                       ),
-                      ..._chats.map((chat) => CheckboxListTile(
+                      ..._controller.chats.map((chat) => CheckboxListTile(
                             value: _selectedChatIds.contains(chat.chatId),
                             onChanged: (value) {
                               setState(() {
@@ -307,7 +236,7 @@ class _ForwardMessagesScreenState extends State<ForwardMessagesScreen> {
                     ],
 
                     // Sección de Grupos
-                    if (_groups.isNotEmpty) ...[
+                    if (_controller.groups.isNotEmpty) ...[
                       Padding(
                         padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
                         child: Text(
@@ -319,7 +248,7 @@ class _ForwardMessagesScreenState extends State<ForwardMessagesScreen> {
                           ),
                         ),
                       ),
-                      ..._groups.map((group) => CheckboxListTile(
+                      ..._controller.groups.map((group) => CheckboxListTile(
                             value: _selectedGroupIds.contains(group.groupId),
                             onChanged: (value) {
                               setState(() {
@@ -353,34 +282,4 @@ class _ForwardMessagesScreenState extends State<ForwardMessagesScreen> {
                 ),
     );
   }
-}
-
-class ChatItem {
-  final String chatId;
-  final String contactId;
-  final String contactName;
-  final String? contactPhotoUrl;
-  final bool isOnline;
-
-  ChatItem({
-    required this.chatId,
-    required this.contactId,
-    required this.contactName,
-    this.contactPhotoUrl,
-    required this.isOnline,
-  });
-}
-
-class GroupItem {
-  final String groupId;
-  final String groupName;
-  final String? groupPhotoUrl;
-  final int membersCount;
-
-  GroupItem({
-    required this.groupId,
-    required this.groupName,
-    this.groupPhotoUrl,
-    required this.membersCount,
-  });
 }

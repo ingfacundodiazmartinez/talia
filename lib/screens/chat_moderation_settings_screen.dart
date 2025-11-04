@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import '../controllers/chat_moderation_settings_controller.dart';
+import '../utils/release_logger.dart';
 
 /// Pantalla de configuración de moderación con IA para una conversación
 ///
@@ -25,8 +26,7 @@ class ChatModerationSettingsScreen extends StatefulWidget {
 
 class _ChatModerationSettingsScreenState
     extends State<ChatModerationSettingsScreen> {
-  final _firestore = FirebaseFirestore.instance;
-  final _auth = FirebaseAuth.instance;
+  late final ChatModerationSettingsController _controller;
   bool _isLoading = true;
   bool _moderationEnabled = false;
   String _moderationLevel = 'high'; // 'high' o 'low'
@@ -35,54 +35,33 @@ class _ChatModerationSettingsScreenState
   @override
   void initState() {
     super.initState();
+    _controller = ChatModerationSettingsController(
+      chatId: widget.chatId,
+      contactName: widget.contactName,
+    );
     _loadModerationSettings();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
   }
 
   Future<void> _loadModerationSettings() async {
     try {
-      final currentUserId = _auth.currentUser!.uid;
-
-      // 1. Obtener el chat para encontrar al otro participante (contactId)
-      final chatDoc = await _firestore.collection('chats').doc(widget.chatId).get();
-      if (!chatDoc.exists) {
-        throw Exception('Chat no encontrado');
-      }
-
-      final participants = List<String>.from(chatDoc.data()?['participants'] ?? []);
-      final contactId = participants.firstWhere((id) => id != currentUserId, orElse: () => '');
-
-      if (contactId.isEmpty) {
-        throw Exception('Contacto no encontrado');
-      }
-
-      // 2. Buscar el documento de contacto
-      final sortedUsers = [currentUserId, contactId]..sort();
-      final contactsQuery = await _firestore
-          .collection('contacts')
-          .where('users', isEqualTo: sortedUsers)
-          .limit(1)
-          .get();
-
-      if (contactsQuery.docs.isEmpty) {
-        throw Exception('Documento de contacto no encontrado');
-      }
-
-      final contactDoc = contactsQuery.docs.first;
-      final contactData = contactDoc.data();
-      final moderationSettings = contactData['moderationSettings'] as Map<String, dynamic>? ?? {};
-
-      // 3. Obtener la configuración del usuario actual
-      final userSettings = moderationSettings[currentUserId] as Map<String, dynamic>? ?? {};
+      await _controller.initialize();
+      final settings = await _controller.loadModerationSettings();
 
       if (mounted) {
         setState(() {
-          _moderationEnabled = userSettings['enabled'] ?? false;
-          _moderationLevel = userSettings['level'] ?? 'high';
+          _moderationEnabled = settings['enabled'] ?? false;
+          _moderationLevel = settings['level'] ?? 'high';
           _isLoading = false;
         });
       }
     } catch (e) {
-      print('❌ Error cargando configuración de moderación: $e');
+      ReleaseLogger.error('Error cargando configuración de moderación: $e', tag: 'ChatModerationScreen');
       if (mounted) {
         setState(() {
           _errorMessage = 'Error cargando configuración: $e';
@@ -96,52 +75,16 @@ class _ChatModerationSettingsScreenState
     setState(() => _isLoading = true);
 
     try {
-      final currentUserId = _auth.currentUser!.uid;
-
-      // 1. Obtener el chat para encontrar al otro participante
-      final chatDoc = await _firestore.collection('chats').doc(widget.chatId).get();
-      if (!chatDoc.exists) {
-        throw Exception('Chat no encontrado');
-      }
-
-      final participants = List<String>.from(chatDoc.data()?['participants'] ?? []);
-      final contactId = participants.firstWhere((id) => id != currentUserId, orElse: () => '');
-
-      if (contactId.isEmpty) {
-        throw Exception('Contacto no encontrado');
-      }
-
-      // 2. Buscar el documento de contacto
-      final sortedUsers = [currentUserId, contactId]..sort();
-      final contactsQuery = await _firestore
-          .collection('contacts')
-          .where('users', isEqualTo: sortedUsers)
-          .limit(1)
-          .get();
-
-      if (contactsQuery.docs.isEmpty) {
-        throw Exception('Documento de contacto no encontrado');
-      }
-
-      final contactDocRef = contactsQuery.docs.first.reference;
-
-      // 3. Actualizar moderationSettings para el usuario actual
-      await contactDocRef.update({
-        'moderationSettings.$currentUserId.enabled': enabled,
-        'moderationSettings.$currentUserId.level': _moderationLevel,
-        'moderationSettings.$currentUserId.${enabled ? 'enabledAt' : 'disabledAt'}': FieldValue.serverTimestamp(),
-      });
+      await _controller.toggleModeration(enabled, _moderationLevel);
 
       if (mounted) {
         setState(() {
           _moderationEnabled = enabled;
           _isLoading = false;
         });
-
-        print('✅ Moderación ${enabled ? 'activada' : 'desactivada'} para contacto $contactId');
       }
     } catch (e) {
-      print('❌ Error al actualizar moderación: $e');
+      ReleaseLogger.error('Error al actualizar moderación: $e', tag: 'ChatModerationScreen');
       if (mounted) {
         setState(() {
           _errorMessage = 'Error al actualizar: $e';
@@ -164,50 +107,16 @@ class _ChatModerationSettingsScreenState
     setState(() => _isLoading = true);
 
     try {
-      final currentUserId = _auth.currentUser!.uid;
-
-      // 1. Obtener el chat para encontrar al otro participante
-      final chatDoc = await _firestore.collection('chats').doc(widget.chatId).get();
-      if (!chatDoc.exists) {
-        throw Exception('Chat no encontrado');
-      }
-
-      final participants = List<String>.from(chatDoc.data()?['participants'] ?? []);
-      final contactId = participants.firstWhere((id) => id != currentUserId, orElse: () => '');
-
-      if (contactId.isEmpty) {
-        throw Exception('Contacto no encontrado');
-      }
-
-      // 2. Buscar el documento de contacto
-      final sortedUsers = [currentUserId, contactId]..sort();
-      final contactsQuery = await _firestore
-          .collection('contacts')
-          .where('users', isEqualTo: sortedUsers)
-          .limit(1)
-          .get();
-
-      if (contactsQuery.docs.isEmpty) {
-        throw Exception('Documento de contacto no encontrado');
-      }
-
-      final contactDocRef = contactsQuery.docs.first.reference;
-
-      // 3. Actualizar nivel de moderación
-      await contactDocRef.update({
-        'moderationSettings.$currentUserId.level': newLevel,
-      });
+      await _controller.changeModerationLevel(newLevel);
 
       if (mounted) {
         setState(() {
           _moderationLevel = newLevel;
           _isLoading = false;
         });
-
-        print('✅ Nivel de moderación cambiado a: $newLevel');
       }
     } catch (e) {
-      print('❌ Error al cambiar nivel de moderación: $e');
+      ReleaseLogger.error('Error al cambiar nivel de moderación: $e', tag: 'ChatModerationScreen');
       if (mounted) {
         setState(() {
           _isLoading = false;
@@ -373,11 +282,7 @@ class _ChatModerationSettingsScreenState
                                   const SizedBox(width: 8),
                                   Expanded(
                                     child: Text(
-                                      _moderationLevel == 'high'
-                                          ? 'Modo Alto: Bloquea contenido potencialmente peligroso, insultos directos y palabrotas. Permite lenguaje coloquial sin insultos.'
-                                          : _moderationLevel == 'medium'
-                                              ? 'Modo Medio: Bloquea insultos directos, palabrotas y contenido sexual. Permite lenguaje coloquial, sarcasmo e ironía sin insultos. Más flexible con el tono.'
-                                              : 'Modo Bajo: Solo bloquea contenido muy severo (amenazas serias, contenido sexual explícito, grooming). Más permisivo con lenguaje coloquial.',
+                                      _controller.getModerationLevelDescription(_moderationLevel),
                                       style: TextStyle(
                                         fontSize: 12,
                                         color: colorScheme.onSurface.withValues(alpha: 0.7),
@@ -574,14 +479,7 @@ class _ChatModerationSettingsScreenState
 
   Widget _buildBlockedMessagesHistory(ColorScheme colorScheme) {
     return StreamBuilder<QuerySnapshot>(
-      stream: _firestore
-          .collection('chats')
-          .doc(widget.chatId)
-          .collection('messages')
-          .where('moderationStatus', isEqualTo: 'blocked')
-          .orderBy('timestamp', descending: true)
-          .limit(50)
-          .snapshots(),
+      stream: _controller.getBlockedMessagesStream(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(
@@ -638,12 +536,10 @@ class _ChatModerationSettingsScreenState
             final timestamp = data['timestamp'] as Timestamp?;
             final moderationReason = data['moderationReason'] as String? ?? 'Sin razón especificada';
             final severity = data['moderationSeverity'] as String? ?? 'medium';
-            final senderId = data['senderId'] as String?;
-            final currentUserId = _auth.currentUser!.uid;
-            final isFromContact = senderId != currentUserId;
+            final isFromContact = _controller.isMessageFromContact(data);
 
             final timeString = timestamp != null
-                ? _formatTimestamp(timestamp.toDate())
+                ? _controller.formatTimestamp(timestamp.toDate())
                 : 'Fecha desconocida';
 
             return Card(
@@ -719,21 +615,6 @@ class _ChatModerationSettingsScreenState
     );
   }
 
-  String _formatTimestamp(DateTime dateTime) {
-    final now = DateTime.now();
-    final difference = now.difference(dateTime);
-
-    if (difference.inDays == 0) {
-      return 'Hoy ${dateTime.hour}:${dateTime.minute.toString().padLeft(2, '0')}';
-    } else if (difference.inDays == 1) {
-      return 'Ayer ${dateTime.hour}:${dateTime.minute.toString().padLeft(2, '0')}';
-    } else if (difference.inDays < 7) {
-      return '${difference.inDays} días atrás';
-    } else {
-      return '${dateTime.day}/${dateTime.month}/${dateTime.year}';
-    }
-  }
-
   Color _getSeverityColor(String severity) {
     switch (severity) {
       case 'high':
@@ -748,15 +629,6 @@ class _ChatModerationSettingsScreenState
   }
 
   String _getSeverityLabel(String severity) {
-    switch (severity) {
-      case 'high':
-        return 'ALTA';
-      case 'medium':
-        return 'MEDIA';
-      case 'low':
-        return 'BAJA';
-      default:
-        return 'N/A';
-    }
+    return _controller.getSeverityLabel(severity);
   }
 }

@@ -1,13 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
 import '../../../../services/typing_indicator_service.dart';
-import '../../../../services/chat_archive_service.dart';
-import '../../../../services/chat_mute_service.dart';
-import '../../../../services/chat_clear_service.dart';
-import '../../../../services/message_cache_service.dart';
+import '../../../../controllers/chat_list_item_controller.dart';
 import '../../../../models/chat_message.dart';
 import '../../../../widgets/message_status_indicator.dart';
 import '../../../chat_detail_screen.dart';
@@ -50,19 +46,26 @@ class ChatListItem extends StatefulWidget {
 }
 
 class _ChatListItemState extends State<ChatListItem> {
-  final ChatArchiveService _archiveService = ChatArchiveService();
-  final ChatMuteService _muteService = ChatMuteService();
-  final ChatClearService _clearService = ChatClearService();
-  final MessageCacheService _cacheService = MessageCacheService();
+  late final ChatListItemController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = ChatListItemController(
+      chatId: widget.chatId,
+      userId: widget.userId,
+    );
+    _controller.initialize();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   Future<void> _archiveChat() async {
-    final currentUserId = FirebaseAuth.instance.currentUser?.uid;
-    if (currentUserId == null) return;
-
-    final success = await _archiveService.archiveChat(
-      chatId: widget.chatId,
-      userId: currentUserId,
-    );
+    final success = await _controller.archiveChat();
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -80,13 +83,7 @@ class _ChatListItemState extends State<ChatListItem> {
   }
 
   Future<void> _muteChat() async {
-    final currentUserId = FirebaseAuth.instance.currentUser?.uid;
-    if (currentUserId == null) return;
-
-    final success = await _muteService.muteChat(
-      chatId: widget.chatId,
-      userId: currentUserId,
-    );
+    final success = await _controller.muteChat();
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -101,13 +98,7 @@ class _ChatListItemState extends State<ChatListItem> {
   }
 
   Future<void> _unmuteChat() async {
-    final currentUserId = FirebaseAuth.instance.currentUser?.uid;
-    if (currentUserId == null) return;
-
-    final success = await _muteService.unmuteChat(
-      chatId: widget.chatId,
-      userId: currentUserId,
-    );
+    final success = await _controller.unmuteChat();
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -125,13 +116,9 @@ class _ChatListItemState extends State<ChatListItem> {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final currentUserId = FirebaseAuth.instance.currentUser?.uid ?? '';
 
     return StreamBuilder<bool>(
-      stream: _muteService.watchChatMuted(
-        chatId: widget.chatId,
-        userId: currentUserId,
-      ),
+      stream: _controller.watchChatMuted(),
       initialData: false,
       builder: (context, muteSnapshot) {
         final isMuted = muteSnapshot.data ?? false;
@@ -172,9 +159,6 @@ class _ChatListItemState extends State<ChatListItem> {
               // Botón Limpiar - Rojo/Rosado suave
               CustomSlidableAction(
                 onPressed: (buttonContext) async {
-                  final currentUserId = FirebaseAuth.instance.currentUser?.uid;
-                  if (currentUserId == null) return;
-
                   final confirmed = await showDialog<bool>(
                     context: context, // Use widget's context for dialog
                     builder: (dialogContext) => AlertDialog(
@@ -198,16 +182,7 @@ class _ChatListItemState extends State<ChatListItem> {
                   );
 
                   if (confirmed == true) {
-                    final success = await _clearService.clearChat(
-                      chatId: widget.chatId,
-                      userId: currentUserId,
-                    );
-
-                    // Limpiar también el cache local
-                    if (success) {
-                      await _cacheService.clearChat(widget.chatId);
-                      print('✅ Cache local limpiado para chat ${widget.chatId}');
-                    }
+                    final success = await _controller.clearChat();
 
                     if (mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
@@ -296,16 +271,9 @@ class _ChatListItemState extends State<ChatListItem> {
                         else
                           // StreamBuilder para escuchar el estado online en tiempo real
                           StreamBuilder<DocumentSnapshot>(
-                            stream: FirebaseFirestore.instance
-                                .collection('users')
-                                .doc(widget.userId)
-                                .snapshots(),
+                            stream: _controller.getUserOnlineStatusStream(),
                             builder: (context, userSnapshot) {
-                              bool isOnline = false;
-                              if (userSnapshot.hasData && userSnapshot.data!.data() != null) {
-                                final userData = userSnapshot.data!.data() as Map<String, dynamic>;
-                                isOnline = userData['isOnline'] ?? false;
-                              }
+                              final isOnline = _controller.isUserOnline(userSnapshot.data ?? userSnapshot.data!);
 
                               if (!isOnline) {
                                 return SizedBox.shrink();
@@ -354,10 +322,7 @@ class _ChatListItemState extends State<ChatListItem> {
                               ),
                               // Indicador de chat silenciado
                               StreamBuilder<bool>(
-                                stream: _muteService.watchChatMuted(
-                                  chatId: widget.chatId,
-                                  userId: FirebaseAuth.instance.currentUser?.uid ?? '',
-                                ),
+                                stream: _controller.watchChatMuted(),
                                 initialData: false,
                                 builder: (context, muteSnapshot) {
                                   final isMuted = muteSnapshot.data ?? false;
@@ -412,8 +377,7 @@ class _ChatListItemState extends State<ChatListItem> {
                               }
 
                               // Mostrar lastMessage con indicador de estado (si es mensaje propio)
-                              final currentUserId = FirebaseAuth.instance.currentUser?.uid ?? '';
-                              final isOwnMessage = widget.lastMessageSenderId == currentUserId;
+                              final isOwnMessage = _controller.isOwnMessage(widget.lastMessageSenderId);
 
                               return Row(
                                 mainAxisSize: MainAxisSize.min,

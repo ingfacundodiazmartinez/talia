@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:intl/intl.dart';
+import '../controllers/message_info_controller.dart';
 
 /// Pantalla que muestra información detallada del mensaje en grupos
 /// Muestra para cada miembro: entregado/leído con timestamps
@@ -9,11 +10,13 @@ class MessageInfoScreen extends StatelessWidget {
   final String groupId;
   final String messageId;
 
-  const MessageInfoScreen({
+  MessageInfoScreen({
     super.key,
     required this.groupId,
     required this.messageId,
   });
+
+  late final MessageInfoController _controller = MessageInfoController();
 
   @override
   Widget build(BuildContext context) {
@@ -25,15 +28,9 @@ class MessageInfoScreen extends StatelessWidget {
         backgroundColor: colorScheme.surface,
       ),
       body: StreamBuilder<DocumentSnapshot>(
-        stream: FirebaseFirestore.instance
-            .collection('groups')
-            .doc(groupId)
-            .collection('messages')
-            .doc(messageId)
-            .snapshots(),
+        stream: _controller.getMessageStream(groupId, messageId),
         builder: (context, messageSnapshot) {
           if (messageSnapshot.hasError) {
-            print('❌ Error en messageSnapshot: ${messageSnapshot.error}');
             return Center(
               child: Text('Error al cargar mensaje: ${messageSnapshot.error}'),
             );
@@ -49,8 +46,6 @@ class MessageInfoScreen extends StatelessWidget {
               return const Center(child: Text('Mensaje no encontrado'));
             }
 
-            print('📊 MessageData keys: ${messageData.keys.toList()}');
-            print('📊 MessageData: $messageData');
 
           // Manejo seguro de listas que podrían no existir
           final deliveredTo = messageData['deliveredTo'] != null
@@ -61,10 +56,7 @@ class MessageInfoScreen extends StatelessWidget {
               : <String>[];
 
           return StreamBuilder<DocumentSnapshot>(
-            stream: FirebaseFirestore.instance
-                .collection('groups')
-                .doc(groupId)
-                .snapshots(),
+            stream: _controller.getGroupStream(groupId),
             builder: (context, groupSnapshot) {
               if (!groupSnapshot.hasData) {
                 return const Center(child: CircularProgressIndicator());
@@ -141,9 +133,7 @@ class MessageInfoScreen extends StatelessWidget {
               );
             },
           );
-          } catch (e, stackTrace) {
-            print('❌ Error procesando messageInfoScreen: $e');
-            print('❌ StackTrace: $stackTrace');
+          } catch (e) {
             return Center(
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
@@ -230,7 +220,7 @@ class MessageInfoScreen extends StatelessWidget {
     Timestamp? timestamp,
   ) {
     return FutureBuilder<DocumentSnapshot>(
-      future: FirebaseFirestore.instance.collection('users').doc(userId).get(),
+      future: _controller.getUserInfo(userId),
       builder: (context, userSnapshot) {
         if (!userSnapshot.hasData) {
           return const ListTile(

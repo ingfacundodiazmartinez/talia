@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import 'package:flutter/material.dart';
 import '../notification_service.dart';
 import '../services/video_call_service.dart';
@@ -9,7 +10,9 @@ import '../services/user_role_service.dart';
 import '../services/callkit_service.dart';
 import '../services/voip_service.dart';
 import '../models/parent.dart';
+import '../models/child.dart';
 import '../screens/emergency_detail_screen.dart';
+import '../utils/release_logger.dart';
 
 /// Controller para manejar la lógica de negocio del Parent Dashboard
 ///
@@ -21,6 +24,9 @@ import '../screens/emergency_detail_screen.dart';
 class ParentDashboardController {
   final String parentId;
   final BuildContext context;
+
+  // Firebase services
+  final firebase_auth.FirebaseAuth _auth;
 
   // Servicios
   final NotificationService _notificationService;
@@ -39,34 +45,49 @@ class ParentDashboardController {
   ParentDashboardController({
     required this.parentId,
     required this.context,
+    firebase_auth.FirebaseAuth? auth,
     required NotificationService notificationService,
     required VideoCallService videoCallService,
     required AutoApprovalService autoApprovalService,
-  })  : _notificationService = notificationService,
+  })  : _auth = auth ?? firebase_auth.FirebaseAuth.instance,
+        _notificationService = notificationService,
         _videoCallService = videoCallService,
         _autoApprovalService = autoApprovalService;
 
+  // Getters and utility methods for screen
+  String? get currentUserId => _auth.currentUser?.uid;
+  String get currentUserDisplayName => _auth.currentUser?.displayName ?? '';
+
+  /// Get user data stream for display purposes
+  Stream<DocumentSnapshot> getUserDataStream() {
+    return Parent(id: parentId, name: '').getUserDataStream();
+  }
+
+  /// Get linked children IDs stream
+  Stream<List<String>> getLinkedChildrenIdsStream() {
+    return Child.getLinkedChildrenIdsStream(parentId);
+  }
+
   /// Inicializa todos los listeners y servicios
   Future<void> initialize() async {
-    print('🚀 [ParentDashboardController] Iniciando initialize() para parentId: $parentId');
+    ReleaseLogger.log('Iniciando initialize() para parentId: $parentId', tag: 'ParentDashboard');
 
     try {
-      print('🔧 [ParentDashboardController] Inicializando auto-approval...');
+      ReleaseLogger.log('Inicializando auto-approval...', tag: 'ParentDashboard');
       await _initializeAutoApproval();
-      print('✅ [ParentDashboardController] Auto-approval inicializado');
+      ReleaseLogger.log('Auto-approval inicializado', tag: 'ParentDashboard');
 
-      print('🔧 [ParentDashboardController] Configurando listener de emergencias...');
+      ReleaseLogger.log('Configurando listener de emergencias...', tag: 'ParentDashboard');
       _setupEmergencyNotificationListener();
-      print('✅ [ParentDashboardController] Listener de emergencias configurado');
+      ReleaseLogger.log('Listener de emergencias configurado', tag: 'ParentDashboard');
 
-      print('🔧 [ParentDashboardController] Iniciando listener de llamadas entrantes...');
+      ReleaseLogger.log('Iniciando listener de llamadas entrantes...', tag: 'ParentDashboard');
       _listenForIncomingCalls();
-      print('✅ [ParentDashboardController] Listener de llamadas entrantes iniciado');
+      ReleaseLogger.log('Listener de llamadas entrantes iniciado', tag: 'ParentDashboard');
 
-      print('✅✅✅ [ParentDashboardController] Initialize() completado exitosamente');
+      ReleaseLogger.log('Initialize() completado exitosamente', tag: 'ParentDashboard');
     } catch (e) {
-      print('❌ [ParentDashboardController] Error en initialize(): $e');
-      print('❌ [ParentDashboardController] Stack trace: ${StackTrace.current}');
+      ReleaseLogger.error('Error en initialize(): $e', tag: 'ParentDashboard');
     }
   }
 
@@ -78,7 +99,7 @@ class ParentDashboardController {
     _emergencyNotificationSubscription = _notificationService
         .emergencyNotificationTapStream
         .listen((data) {
-      print('🆘 Navegando a emergencia desde notificación');
+      ReleaseLogger.log('Navegando a emergencia desde notificación', tag: 'ParentDashboard');
       final emergencyId = data['emergencyId'];
 
       if (emergencyId != null) {
@@ -105,16 +126,16 @@ class ParentDashboardController {
   /// Monitorea la colección 'video_calls' en Firestore buscando llamadas
   /// dirigidas al padre y las procesa para mostrar notificaciones
   void _listenForIncomingCalls() {
-    print('👂 [ParentDashboardController] Escuchando llamadas entrantes para usuario: $parentId');
+    ReleaseLogger.log('Escuchando llamadas entrantes para usuario: $parentId', tag: 'ParentDashboard');
 
     _incomingCallsSubscription = _videoCallService
         .watchIncomingCalls(parentId)
         .listen(
           (snapshot) {
-            print('📞 [ParentDashboardController] Snapshot de llamadas recibido: ${snapshot.docs.length} documentos');
+            ReleaseLogger.log('Snapshot de llamadas recibido: ${snapshot.docs.length} documentos', tag: 'ParentDashboard');
 
             for (var change in snapshot.docChanges) {
-              print('📞 [ParentDashboardController] Cambio detectado: ${change.type}');
+              ReleaseLogger.log('Cambio detectado: ${change.type}', tag: 'ParentDashboard');
 
               if (change.type == DocumentChangeType.added) {
                 final callData = change.doc.data() as Map<String, dynamic>;

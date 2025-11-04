@@ -1,11 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../notification_service.dart';
 import '../../../services/auto_approval_service.dart';
 import '../../../services/video_call_service.dart';
-import '../../../models/child.dart';
-import '../../../models/parent.dart';
 import '../../../controllers/parent_dashboard_controller.dart';
 import '../../../theme_service.dart';
 import 'widgets/child_dashboard_card.dart';
@@ -32,7 +29,6 @@ class ParentDashboardScreen extends StatefulWidget {
 
 class _ParentDashboardScreenState extends State<ParentDashboardScreen>
     with AutomaticKeepAliveClientMixin {
-  final firebase_auth.FirebaseAuth _auth = firebase_auth.FirebaseAuth.instance;
   late ParentDashboardController _controller;
 
   @override
@@ -41,14 +37,30 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen>
   @override
   void initState() {
     super.initState();
+    // Initialize controller without dependencies first
     _controller = ParentDashboardController(
-      parentId: _auth.currentUser!.uid,
+      parentId: '', // Will be set after initialization
       context: context,
       notificationService: NotificationService(),
       videoCallService: VideoCallService(),
       autoApprovalService: AutoApprovalService(),
     );
-    _controller.initialize();
+    _initializeController();
+  }
+
+  Future<void> _initializeController() async {
+    final currentUserId = _controller.currentUserId;
+    if (currentUserId != null) {
+      // Re-create controller with correct parentId
+      _controller = ParentDashboardController(
+        parentId: currentUserId,
+        context: context,
+        notificationService: NotificationService(),
+        videoCallService: VideoCallService(),
+        autoApprovalService: AutoApprovalService(),
+      );
+      await _controller.initialize();
+    }
   }
 
   @override
@@ -84,16 +96,13 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen>
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   StreamBuilder<DocumentSnapshot>(
-                    stream: Parent(
-                      id: _auth.currentUser!.uid,
-                      name: '',
-                    ).getUserDataStream(),
+                    stream: _controller.getUserDataStream(),
                     builder: (context, snapshot) {
                       final userData =
                           snapshot.data?.data() as Map<String, dynamic>?;
                       final userName =
                           userData?['name'] ??
-                          _auth.currentUser?.displayName ??
+                          _controller.currentUserDisplayName ??
                           "Padre";
 
                       return Column(
@@ -140,7 +149,7 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen>
                   padding: EdgeInsets.all(20),
                   physics: ClampingScrollPhysics(),
                   children: [
-                    EmergencyAlertWidget(parentId: _auth.currentUser!.uid),
+                    EmergencyAlertWidget(parentId: _controller.currentUserId ?? ''),
                     _buildQuickStats(),
                     SizedBox(height: 20),
                     WeeklyReportWidget(),
@@ -155,7 +164,7 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen>
   }
 
   Widget _buildQuickStats() {
-    final currentUserId = _auth.currentUser?.uid;
+    final currentUserId = _controller.currentUserId;
 
     if (currentUserId == null) {
       return SizedBox.shrink();
@@ -174,7 +183,7 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen>
         ),
         SizedBox(height: 16),
         StreamBuilder<List<String>>(
-          stream: Child.getLinkedChildrenIdsStream(currentUserId),
+          stream: _controller.getLinkedChildrenIdsStream(),
           builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
               return Center(

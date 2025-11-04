@@ -62,6 +62,11 @@ class _ParentMainShellState extends State<ParentMainShell> {
   int _selectedIndex = 0;
   late ParentMainShellController _controller;
 
+  // Helper method to get current user ID
+  String _getCurrentUserId() {
+    return _controller.currentUserId ?? '';
+  }
+
   // GlobalKeys para mantener el estado de navegación de cada tab
   final GlobalKey<NavigatorState> _dashboardNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'ParentDashboard');
   final GlobalKey<NavigatorState> _chatsNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'ParentChats');
@@ -73,8 +78,9 @@ class _ParentMainShellState extends State<ParentMainShell> {
   void initState() {
     super.initState();
     // ✅ CORRECTO: Solo inicializar controller
+    final currentUserId = firebase_auth.FirebaseAuth.instance.currentUser!.uid;
     _controller = ParentMainShellController(
-      parentId: firebase_auth.FirebaseAuth.instance.currentUser!.uid,
+      parentId: currentUserId,
     );
 
     // Configurar callback para navegación desde notificaciones
@@ -209,7 +215,7 @@ class _ParentMainShellState extends State<ParentMainShell> {
 
   @override
   Widget build(BuildContext context) {
-    final currentUserId = firebase_auth.FirebaseAuth.instance.currentUser?.uid;
+    final currentUserId = _getCurrentUserId();
 
     return PopScope(
       canPop: false,
@@ -317,9 +323,9 @@ class _ParentMainShellState extends State<ParentMainShell> {
     final screenWidth = MediaQuery.of(context).size.width;
     // Con 5 tabs necesitamos más espacio - aumentar umbral para dispositivos pequeños
     final showLabels = screenWidth >= 430;
-    final currentUserId = firebase_auth.FirebaseAuth.instance.currentUser?.uid;
+    final currentUserId = _getCurrentUserId();
 
-    if (currentUserId == null) {
+    if (currentUserId.isEmpty) {
       return Container(); // Usuario no autenticado
     }
 
