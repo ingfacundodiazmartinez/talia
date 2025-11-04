@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
@@ -9,7 +8,6 @@ import '../controllers/chat_controller_optimistic.dart';
 import '../notification_service.dart';
 import '../services/foreground_message_listener.dart';
 import '../services/reaction_service.dart';
-import '../services/video_call_service.dart';
 import '../widgets/reaction_picker.dart';
 import 'chat/widgets/chat_app_bar.dart';
 import 'chat/widgets/chat_input_bar.dart';
@@ -62,7 +60,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   final ScrollController _scrollController = ScrollController();
   final AudioRecorder _audioRecorder = AudioRecorder();
   final ReactionService _reactionService = ReactionService();
-  final VideoCallService _videoCallService = VideoCallService();
 
   // Local UI state
   bool _showEmojiPicker = false;
@@ -82,7 +79,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   @override
   void initState() {
     super.initState();
-    print('🏗️ [ChatDetailScreen] initState para chatId: ${widget.chatId}');
+    // ReleaseLogger.log('Inicializando ChatDetailScreen para chatId: ${widget.chatId}', tag: 'ChatDetail');
 
     WidgetsBinding.instance.addObserver(this);
     NotificationService().setCurrentChat(widget.chatId);
@@ -113,7 +110,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
 
   @override
   void dispose() {
-    print('🗑️ [ChatDetailScreen] dispose para chatId: ${widget.chatId}');
+    // ReleaseLogger.log('Disposing ChatDetailScreen para chatId: ${widget.chatId}', tag: 'ChatDetail');
     NotificationService().clearCurrentChat();
     ForegroundMessageListener().setCurrentOpenChat(null);
     WidgetsBinding.instance.removeObserver(this);
@@ -186,11 +183,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     final messageIndex = _controller.messages.indexWhere((msg) => msg.id == messageId);
 
     if (messageIndex == -1) {
-      print('⏳ Mensaje $messageId no encontrado aún');
+      // ReleaseLogger.log('Mensaje $messageId no encontrado aún', tag: 'ChatDetail');
       return;
     }
 
-    print('✅ Scroll a mensaje $messageId en índice $messageIndex');
+    // ReleaseLogger.log('Scroll a mensaje $messageId en índice $messageIndex', tag: 'ChatDetail');
     _hasScrolledToMessage = true;
 
     const itemHeight = 120.0;
@@ -272,33 +269,24 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     if (!mounted) return;
 
     _messageController.text = text;
-
-    final currentUserId = FirebaseAuth.instance.currentUser?.uid;
     final dialogContent = error.toString().replaceFirst('Exception: ', '');
 
-    if (currentUserId != null) {
-      FirebaseFirestore.instance
-          .collection('users')
-          .doc(currentUserId)
-          .get()
-          .then((userDoc) {
-        final userData = userDoc.data();
-        final isParent = userData?['isParent'] ?? true;
+    _controller.getCurrentUserData().then((userData) {
+      final isParent = userData?['isParent'] ?? true;
 
-        final title = isParent ? 'Mensaje bloqueado' : 'Mensaje no permitido';
-        final explanation = isParent
-            ? 'Este mensaje contiene contenido inapropiado detectado por la moderación con IA:\n\n$dialogContent'
-            : 'Tus padres han activado la moderación con IA en este chat.\n\nMotivo del bloqueo: $dialogContent';
+      final title = isParent ? 'Mensaje bloqueado' : 'Mensaje no permitido';
+      final explanation = isParent
+          ? 'Este mensaje contiene contenido inapropiado detectado por la moderación con IA:\n\n$dialogContent'
+          : 'Tus padres han activado la moderación con IA en este chat.\n\nMotivo del bloqueo: $dialogContent';
 
-        if (mounted) {
-          _showModerationDialog(title, explanation);
-        }
-      }).catchError((_) {
-        if (mounted) {
-          _showModerationDialog('Mensaje bloqueado', dialogContent);
-        }
-      });
-    }
+      if (mounted) {
+        _showModerationDialog(title, explanation);
+      }
+    }).catchError((_) {
+      if (mounted) {
+        _showModerationDialog('Mensaje bloqueado', dialogContent);
+      }
+    });
   }
 
   void _showModerationDialog(String title, String content) {
@@ -328,7 +316,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
       await _audioRecorder.stop();
       setState(() => _isRecording = false);
     } catch (e) {
-      print('❌ Error cancelando grabación: $e');
+      // ReleaseLogger.error('Error cancelando grabación: $e', tag: 'ChatDetail');
       setState(() => _isRecording = false);
     }
   }
@@ -358,7 +346,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
         });
       }
     } catch (e) {
-      print('❌ Error iniciando grabación: $e');
+      // ReleaseLogger.error('Error iniciando grabación: $e', tag: 'ChatDetail');
       if (mounted) {
         setState(() => _isRecording = false);
         ScaffoldMessenger.of(context).showSnackBar(
@@ -382,7 +370,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
 
         // 2. Subir en background
         _controller.processAndUploadAudio(path).catchError((e) {
-          print('❌ Error subiendo audio en background: $e');
+          // ReleaseLogger.error('Error subiendo audio en background: $e', tag: 'ChatDetail');
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
@@ -394,7 +382,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
         });
       }
     } catch (e) {
-      print('❌ Error deteniendo grabación: $e');
+      // ReleaseLogger.error('Error deteniendo grabación: $e', tag: 'ChatDetail');
     }
   }
 
@@ -409,14 +397,16 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
 
   void _showReactionPicker(BuildContext messageContext, String messageId) async {
     FocusScope.of(context).unfocus();
+    final screenWidth = MediaQuery.of(context).size.width;
+    final overlay = Overlay.of(context);
+    final RenderBox? renderBox = messageContext.findRenderObject() as RenderBox?;
+
     await Future.delayed(const Duration(milliseconds: 100));
 
-    final RenderBox? renderBox = messageContext.findRenderObject() as RenderBox?;
     if (renderBox == null) return;
 
     final position = renderBox.localToGlobal(Offset.zero);
     final size = renderBox.size;
-    final screenWidth = MediaQuery.of(context).size.width;
 
     const pickerWidth = 280.0;
     double leftPosition = position.dx;
@@ -463,7 +453,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
       ),
     );
 
-    Overlay.of(context).insert(_reactionOverlay!);
+    overlay.insert(_reactionOverlay!);
 
     Future.delayed(const Duration(seconds: 5), () {
       _reactionOverlay?.remove();
@@ -533,7 +523,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
 
   Future<void> _handleCallBack(String callType) async {
     try {
-      print('📞 Devolviendo llamada ($callType) a ${widget.contactName}');
+      // ReleaseLogger.log('Devolviendo llamada ($callType) a ${widget.contactName}', tag: 'ChatDetail');
 
       if (mounted) {
         if (callType == 'audio') {
@@ -562,7 +552,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
         }
       }
     } catch (e) {
-      print('❌ Error devolviendo llamada: $e');
+      // ReleaseLogger.error('Error devolviendo llamada: $e', tag: 'ChatDetail');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

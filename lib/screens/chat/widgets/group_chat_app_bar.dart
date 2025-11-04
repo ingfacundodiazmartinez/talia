@@ -1,13 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_functions/cloud_functions.dart';
 import '../../../widgets/profile_photo_viewer.dart';
-import '../../../services/video_call_service.dart';
+import '../../../controllers/group_chat_app_bar_controller.dart';
 import '../../video_call_screen.dart';
 
 /// AppBar personalizado para pantallas de chat grupal
-class GroupChatAppBar extends StatelessWidget implements PreferredSizeWidget {
+class GroupChatAppBar extends StatefulWidget implements PreferredSizeWidget {
   final String groupId;
   final String groupName;
   final VoidCallback onTap;
@@ -20,7 +18,51 @@ class GroupChatAppBar extends StatelessWidget implements PreferredSizeWidget {
   });
 
   @override
+  State<GroupChatAppBar> createState() => _GroupChatAppBarState();
+
+  @override
   Size get preferredSize => const Size.fromHeight(kToolbarHeight);
+}
+
+class _GroupChatAppBarState extends State<GroupChatAppBar> {
+  late GroupChatAppBarController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = GroupChatAppBarController(groupId: widget.groupId);
+    _setupControllerCallbacks();
+    _controller.initialize();
+  }
+
+  void _setupControllerCallbacks() {
+    _controller.onError = (message) {
+      if (mounted) {
+        _showErrorSnackbar(message);
+      }
+    };
+
+    _controller.onSuccess = (message) {
+      if (mounted) {
+        _showSuccessSnackbar(message);
+      }
+    };
+
+    _controller.onNavigateToCall = () {
+      if (mounted) {
+        final callData = _controller.getCallData();
+        if (callData != null) {
+          _navigateToCall(callData);
+        }
+      }
+    };
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -35,12 +77,9 @@ class GroupChatAppBar extends StatelessWidget implements PreferredSizeWidget {
         },
       ),
       title: InkWell(
-        onTap: onTap,
+        onTap: widget.onTap,
         child: StreamBuilder<DocumentSnapshot>(
-          stream: FirebaseFirestore.instance
-              .collection('groups')
-              .doc(groupId)
-              .snapshots(),
+          stream: _controller.getGroupStream(),
           builder: (context, snapshot) {
             final groupData = snapshot.data?.data() as Map<String, dynamic>?;
             final photoURL = groupData?['avatar'] as String? ?? '';
@@ -52,7 +91,7 @@ class GroupChatAppBar extends StatelessWidget implements PreferredSizeWidget {
                 // Avatar del grupo (clickeable para ver ampliado)
                 ClickableAvatar(
                   photoUrl: photoURL.isNotEmpty ? photoURL : null,
-                  name: groupName,
+                  name: widget.groupName,
                   radius: 18,
                 ),
                 const SizedBox(width: 12),
@@ -62,7 +101,7 @@ class GroupChatAppBar extends StatelessWidget implements PreferredSizeWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        groupName,
+                        widget.groupName,
                         style: const TextStyle(fontSize: 16),
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -85,10 +124,7 @@ class GroupChatAppBar extends StatelessWidget implements PreferredSizeWidget {
       ),
       actions: [
         StreamBuilder<DocumentSnapshot>(
-          stream: FirebaseFirestore.instance
-              .collection('groups')
-              .doc(groupId)
-              .snapshots(),
+          stream: _controller.getGroupStream(),
           builder: (context, snapshot) {
             final groupData = snapshot.data?.data() as Map<String, dynamic>?;
             final members = List<String>.from(groupData?['members'] ?? []);
@@ -100,13 +136,13 @@ class GroupChatAppBar extends StatelessWidget implements PreferredSizeWidget {
                 // Botón de llamada de audio
                 IconButton(
                   icon: const Icon(Icons.phone),
-                  onPressed: canStartCall ? () => _startGroupAudioCall(context, members) : null,
+                  onPressed: canStartCall ? () => _startGroupAudioCall() : null,
                   tooltip: 'Llamada grupal',
                 ),
                 // Botón de videollamada
                 IconButton(
                   icon: const Icon(Icons.videocam),
-                  onPressed: canStartCall ? () => _startGroupVideoCall(context, members) : null,
+                  onPressed: canStartCall ? () => _startGroupVideoCall() : null,
                   tooltip: 'Videollamada grupal',
                 ),
               ],
@@ -120,169 +156,47 @@ class GroupChatAppBar extends StatelessWidget implements PreferredSizeWidget {
     );
   }
 
-  // ==================== VIDEOLLAMADAS GRUPALES ====================
+  // ==================== CONTROLLER METHODS ====================
 
-  Future<void> _startGroupVideoCall(BuildContext context, List<String> members) async {
-    await _startGroupCall(context, members, isVideo: true);
+  void _startGroupVideoCall() {
+    _controller.startGroupVideoCall();
   }
 
-  Future<void> _startGroupAudioCall(BuildContext context, List<String> members) async {
-    await _startGroupCall(context, members, isVideo: false);
+  void _startGroupAudioCall() {
+    _controller.startGroupAudioCall();
   }
 
-  Future<void> _startGroupCall(BuildContext context, List<String> members, {required bool isVideo}) async {
-    bool dialogShown = false;
-
-    try {
-      final currentUserId = FirebaseAuth.instance.currentUser!.uid;
-      final firestore = FirebaseFirestore.instance;
-      final videoCallService = VideoCallService();
-
-      // Obtener datos del grupo
-      final groupDoc = await firestore.collection('groups').doc(groupId).get();
-      final groupData = groupDoc.data();
-
-      if (groupData == null) {
-        _showErrorSnackbar(context, 'Error: No se encontró el grupo');
-        return;
-      }
-
-      // Filtrar participantes (excluir usuario actual)
-      final participantIds = members.where((id) => id != currentUserId).toList();
-
-      if (participantIds.isEmpty) {
-        _showWarningSnackbar(context, 'No hay otros miembros en el grupo');
-        return;
-      }
-
-      // Mostrar loading
-      if (context.mounted) {
-        showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (context) => const Center(
-            child: CircularProgressIndicator(),
-          ),
-        );
-        dialogShown = true;
-      }
-
-      // Obtener nombre del usuario actual
-      final currentUserDoc = await firestore.collection('users').doc(currentUserId).get();
-      final currentUserName = currentUserDoc.data()?['name'] ?? 'Usuario';
-
-      // Construir mapa de nombres de participantes
-      Map<String, String> participantNames = {};
-      for (String participantId in participantIds) {
-        final userDoc = await firestore.collection('users').doc(participantId).get();
-        participantNames[participantId] = userDoc.data()?['name'] ?? 'Usuario';
-      }
-
-      // Crear llamada grupal
-      final channelName = isVideo
-          ? await videoCallService.startGroupCall(
-              callerId: currentUserId,
-              callerName: currentUserName,
-              participantIds: participantIds,
-              participantNames: participantNames,
-              groupId: groupId,
-              isEmergency: false,
-            )
-          : await videoCallService.startGroupAudioCall(
-              callerId: currentUserId,
-              callerName: currentUserName,
-              participantIds: participantIds,
-              participantNames: participantNames,
-              groupId: groupId,
-              isEmergency: false,
-            );
-
-      // Obtener token de Agora
-      print('🎫 Generando token de Agora para llamada grupal...');
-
-      final functions = FirebaseFunctions.instance;
-      final callable = functions.httpsCallable('generateAgoraToken');
-
-      try {
-        final result = await callable.call({
-          'channelName': channelName,
-          'uid': 0, // 0 = Agora asigna automáticamente
-        });
-
-        final token = result.data['token'] as String;
-        final uid = result.data['uid'] as int;
-
-        print('✅ Token de Agora generado para llamada grupal');
-        print('✅ UID asignado: $uid');
-
-        // Navegar a pantalla de videollamada ANTES de cerrar loading
-        if (context.mounted) {
-          try {
-            print('🚀 Navegando a VideoCallScreen...');
-            await Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => VideoCallScreen(
-                  callId: channelName,
-                  channelName: channelName,
-                  token: token,
-                  uid: uid,
-                  isCaller: true,
-                  remoteName: groupData['name'] ?? 'Grupo',
-                  receiverId: groupId, // ID del grupo para llamadas grupales
-                  isVideo: isVideo,
-                ),
-              ),
-            );
-            print('✅ Navegación a VideoCallScreen completada');
-          } catch (navigationError) {
-            print('❌ Error al navegar a VideoCallScreen: $navigationError');
-            _showErrorSnackbar(context, 'Error al abrir videollamada: $navigationError');
-          }
-        }
-
-        // Cerrar loading DESPUÉS de navegar
-        if (dialogShown && context.mounted) {
-          Navigator.pop(context);
-          dialogShown = false;
-          print('✅ Loading dialog cerrado');
-        }
-      } catch (cloudFunctionError) {
-        print('❌ Error generando token de Agora: $cloudFunctionError');
-
-        // Cerrar loading
-        if (dialogShown && context.mounted) {
-          Navigator.pop(context);
-          dialogShown = false;
-        }
-
-        _showErrorSnackbar(context, 'Error generando token de Agora: $cloudFunctionError');
-      }
-    } catch (e) {
-      // Cerrar loading si está abierto
-      if (dialogShown && context.mounted) {
-        Navigator.pop(context);
-        dialogShown = false;
-      }
-
-      _showErrorSnackbar(context, 'Error al iniciar ${isVideo ? "videollamada" : "llamada"}: $e');
-      print('❌ Error en _startGroupCall: $e');
-    }
+  void _navigateToCall(Map<String, dynamic> callData) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => VideoCallScreen(
+          callId: callData['callId'],
+          channelName: callData['channelName'],
+          token: callData['token'],
+          uid: callData['uid'],
+          isCaller: callData['isCaller'],
+          remoteName: callData['remoteName'],
+          receiverId: callData['receiverId'],
+          isVideo: callData['isVideo'],
+        ),
+      ),
+    );
   }
 
   // ==================== SNACKBARS ====================
 
-  void _showErrorSnackbar(BuildContext context, String message) {
-    if (!context.mounted) return;
+  void _showErrorSnackbar(String message) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message), backgroundColor: Colors.red),
     );
   }
 
-  void _showWarningSnackbar(BuildContext context, String message) {
-    if (!context.mounted) return;
+  void _showSuccessSnackbar(String message) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), backgroundColor: Colors.orange),
+      SnackBar(content: Text(message), backgroundColor: Colors.green),
     );
   }
 }

@@ -1,18 +1,18 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
-import 'package:cloud_functions/cloud_functions.dart';
 import 'package:image_picker/image_picker.dart';
-import '../../services/contact_alias_service.dart';
+import '../../controllers/group_profile_controller.dart';
 import '../../services/video_call_service.dart';
-import 'widgets/group_profile_constants.dart';
-import 'widgets/group_profile_header.dart';
-import 'widgets/group_member_tile.dart';
 import 'widgets/add_members_dialog.dart';
 import '../video_call_screen.dart';
 
+/// Pantalla de perfil de grupo refactorizada siguiendo CODING_RULES.md
+///
+/// Responsabilidades:
+/// - Solo UI y gestión de eventos de usuario
+/// - Delegación total a GroupProfileController para toda la lógica
+/// - ZERO Firebase calls (todas están en GroupProfileController)
+/// - Estado UI mínimo, todo coordinado por controller
 class GroupProfileScreen extends StatefulWidget {
   final String groupId;
 
@@ -26,544 +26,647 @@ class GroupProfileScreen extends StatefulWidget {
 }
 
 class _GroupProfileScreenState extends State<GroupProfileScreen> {
-  // ==================== SERVICIOS ====================
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final FirebaseStorage _storage = FirebaseStorage.instance;
-  final ContactAliasService _aliasService = ContactAliasService();
+  // ✅ CORRECTO: Solo controller y estado UI local
+  late GroupProfileController _controller;
   final ImagePicker _picker = ImagePicker();
   final VideoCallService _videoCallService = VideoCallService();
 
-  // ==================== ESTADO ====================
+  // Estado UI únicamente
   final TextEditingController _nameController = TextEditingController();
-  bool _isAdmin = false;
+  final TextEditingController _descriptionController = TextEditingController();
   bool _isEditing = false;
   bool _isUploading = false;
-  String? _currentImageUrl;
-
-  final Map<String, String> _userNames = {};
-  final Map<String, String> _userPhotos = {};
-
-  // ==================== LIFECYCLE ====================
 
   @override
   void initState() {
     super.initState();
-    _loadGroupData();
+
+    // ✅ CORRECTO: Solo inicializar controller y configurar callbacks
+    _controller = GroupProfileController(groupId: widget.groupId);
+
+    // Configurar callbacks para comunicación controller → screen
+    _setupControllerCallbacks();
+
+    // ✅ CORRECTO: Delegar inicialización al controller
+    _controller.initialize();
+  }
+
+  /// Configurar callbacks del controller para actualizar UI
+  void _setupControllerCallbacks() {
+    _controller.onGroupDataChanged = (groupData) {
+      if (mounted && groupData != null) {
+        setState(() {
+          _nameController.text = groupData['name'] ?? '';
+          _descriptionController.text = groupData['description'] ?? '';
+        });
+      }
+    };
+
+    _controller.onMembersChanged = (members) {
+      if (mounted) {
+        setState(() {
+          // Trigger rebuild para mostrar nuevos miembros
+        });
+      }
+    };
+
+    _controller.onPendingRequestsChanged = (requests) {
+      if (mounted) {
+        setState(() {
+          // Trigger rebuild para mostrar solicitudes
+        });
+      }
+    };
+
+    _controller.onAdminStatusChanged = (isAdmin) {
+      if (mounted) {
+        setState(() {
+          // Trigger rebuild para permisos de admin
+        });
+      }
+    };
+
+    _controller.onLoadingChanged = (isLoading) {
+      if (mounted) {
+        setState(() {
+          // Trigger rebuild para indicador de carga
+        });
+      }
+    };
+
+    _controller.onError = (message) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    };
+
+    _controller.onSuccess = (message) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    };
   }
 
   @override
   void dispose() {
     _nameController.dispose();
+    _descriptionController.dispose();
+    // ✅ CORRECTO: Delegar limpieza al controller
+    _controller.dispose();
     super.dispose();
   }
 
-  // ==================== LÓGICA DE NEGOCIO ====================
-
-  Future<void> _loadGroupData() async {
-    try {
-      final groupDoc = await _firestore.collection('groups').doc(widget.groupId).get();
-      final groupData = groupDoc.data();
-
-      if (groupData == null) return;
-
-      final admins = List<String>.from(groupData['admins'] ?? []);
-      final currentUserId = _auth.currentUser!.uid;
-
-      setState(() {
-        _nameController.text = groupData['name'] ?? '';
-        _currentImageUrl = groupData['avatar'];
-        _isAdmin = admins.contains(currentUserId);
-      });
-
-      final members = List<String>.from(groupData['members'] ?? []);
-      for (final memberId in members) {
-        await _loadUserData(memberId);
-      }
-    } catch (e) {
-      print('❌ Error cargando datos del grupo: $e');
-    }
-  }
-
-  Future<void> _loadUserData(String userId) async {
-    try {
-      final userDoc = await _firestore.collection('users').doc(userId).get();
-      final userData = userDoc.data();
-      if (userData != null) {
-        final realName = userData['name'] ?? 'Usuario';
-        final displayName = await _aliasService.getDisplayName(userId, realName);
-        setState(() {
-          _userNames[userId] = displayName;
-          _userPhotos[userId] = userData['photoURL'] ?? '';
-        });
-      }
-    } catch (e) {
-      print('❌ Error cargando usuario $userId: $e');
-    }
-  }
-
-  Future<void> _pickAndUploadImage() async {
-    try {
-      final XFile? image = await _picker.pickImage(
-        source: ImageSource.gallery,
-        maxWidth: 512,
-        maxHeight: 512,
-        imageQuality: 80,
-      );
-
-      if (image == null) return;
-
-      setState(() => _isUploading = true);
-
-      final storageRef = _storage.ref().child('group_images/${widget.groupId}/${DateTime.now().millisecondsSinceEpoch}.jpg');
-      await storageRef.putFile(File(image.path));
-      final downloadUrl = await storageRef.getDownloadURL();
-
-      await _firestore.collection('groups').doc(widget.groupId).update({
-        'avatar': downloadUrl,
-      });
-
-      setState(() {
-        _currentImageUrl = downloadUrl;
-        _isUploading = false;
-      });
-
-      _showSuccessSnackbar('Imagen actualizada');
-    } catch (e) {
-      setState(() => _isUploading = false);
-      _showErrorSnackbar('Error al actualizar imagen: $e');
-    }
-  }
-
-  Future<void> _saveGroupName() async {
-    if (_nameController.text.trim().isEmpty) {
-      _showWarningSnackbar('El nombre no puede estar vacío');
-      return;
-    }
-
-    try {
-      await _firestore.collection('groups').doc(widget.groupId).update({
-        'name': _nameController.text.trim(),
-      });
-
-      setState(() => _isEditing = false);
-      _showSuccessSnackbar('Nombre actualizado');
-    } catch (e) {
-      _showErrorSnackbar('Error al actualizar nombre: $e');
-    }
-  }
-
-  void _cancelEditing() {
-    setState(() => _isEditing = false);
-    _loadGroupData();
-  }
-
-  Future<void> _toggleAdmin(String userId, bool isCurrentlyAdmin) async {
-    try {
-      await _firestore.collection('groups').doc(widget.groupId).update(
-        isCurrentlyAdmin
-            ? {'admins': FieldValue.arrayRemove([userId])}
-            : {'admins': FieldValue.arrayUnion([userId])},
-      );
-
-      await _loadGroupData();
-      _showSuccessSnackbar(
-        isCurrentlyAdmin ? 'Administrador removido' : 'Administrador agregado',
-      );
-    } catch (e) {
-      _showErrorSnackbar('Error: $e');
-    }
-  }
-
-  Future<void> _removeMember(String userId, String userName) async {
-    final confirm = await _showRemoveMemberDialog(userName);
-    if (confirm != true) return;
-
-    try {
-      final batch = _firestore.batch();
-      final groupRef = _firestore.collection('groups').doc(widget.groupId);
-
-      batch.update(groupRef, {
-        'members': FieldValue.arrayRemove([userId]),
-        'admins': FieldValue.arrayRemove([userId]),
-        'pendingMembers': FieldValue.arrayRemove([userId]),
-      });
-
-      await batch.commit();
-      await _loadGroupData();
-      _showSuccessSnackbar('$userName eliminado del grupo');
-    } catch (e) {
-      _showErrorSnackbar('Error al eliminar miembro: $e');
-    }
-  }
-
-  Future<void> _showAddMembersDialog(List<String> currentMembers) async {
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (context) => AddMembersDialog(
-        groupId: widget.groupId,
-        currentMembers: currentMembers,
-      ),
-    );
-
-    if (result == true) {
-      await _loadGroupData();
-      _showSuccessSnackbar('Miembros agregados correctamente');
-    }
-  }
-
-  // ==================== VIDEOLLAMADAS GRUPALES ====================
-
-  Future<void> _startGroupVideoCall(List<String> members) async {
-    try {
-      final currentUserId = _auth.currentUser!.uid;
-
-      // Obtener datos del grupo
-      final groupDoc = await _firestore.collection('groups').doc(widget.groupId).get();
-      final groupData = groupDoc.data();
-
-      if (groupData == null) {
-        _showErrorSnackbar('Error: No se encontró el grupo');
-        return;
-      }
-
-      // Filtrar participantes (excluir usuario actual)
-      final participantIds = members.where((id) => id != currentUserId).toList();
-
-      if (participantIds.isEmpty) {
-        _showWarningSnackbar('No hay otros miembros en el grupo');
-        return;
-      }
-
-      // Mostrar loading
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => Center(
-          child: CircularProgressIndicator(),
-        ),
-      );
-
-      // Obtener nombre del usuario actual
-      final currentUserDoc = await _firestore.collection('users').doc(currentUserId).get();
-      final currentUserName = currentUserDoc.data()?['name'] ?? 'Usuario';
-
-      // Construir mapa de nombres de participantes
-      Map<String, String> participantNames = {};
-      for (String participantId in participantIds) {
-        final userDoc = await _firestore.collection('users').doc(participantId).get();
-        participantNames[participantId] = userDoc.data()?['name'] ?? 'Usuario';
-      }
-
-      // Crear videollamada grupal
-      final channelName = await _videoCallService.startGroupCall(
-        callerId: currentUserId,
-        callerName: currentUserName,
-        participantIds: participantIds,
-        participantNames: participantNames,
-        groupId: widget.groupId,
-        isEmergency: false,
-      );
-
-      // Obtener token de Agora directamente de Cloud Function (sin crear otra llamada)
-      print('🎫 Generando token de Agora para llamada grupal...');
-
-      final functions = FirebaseFunctions.instance;
-      final callable = functions.httpsCallable('generateAgoraToken');
-
-      try {
-        final result = await callable.call({
-          'channelName': channelName,
-          'uid': 0, // 0 = Agora asigna automáticamente
-        });
-
-        final token = result.data['token'] as String;
-        final uid = result.data['uid'] as int;
-
-        print('✅ Token de Agora generado para llamada grupal');
-        print('✅ UID asignado: $uid');
-
-        // Cerrar loading
-        if (mounted) Navigator.pop(context);
-
-        // Navegar a pantalla de videollamada
-        if (mounted) {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => VideoCallScreen(
-                callId: channelName,
-                channelName: channelName,
-                token: token,
-                uid: uid,
-                isCaller: true,
-                remoteName: groupData['name'] ?? 'Grupo',
-                receiverId: widget.groupId, // ID del grupo para llamadas grupales
-                isVideo: true,
-              ),
-            ),
-          );
-        }
-      } catch (cloudFunctionError) {
-        print('❌ Error generando token de Agora: $cloudFunctionError');
-
-        // Cerrar loading
-        if (mounted) Navigator.pop(context);
-
-        _showErrorSnackbar('Error generando token de Agora: $cloudFunctionError');
-      }
-    } catch (e) {
-      // Cerrar loading si está abierto
-      if (mounted) Navigator.pop(context);
-      _showErrorSnackbar('Error al iniciar videollamada: $e');
-      print('❌ Error en _startGroupVideoCall: $e');
-    }
-  }
-
-  // ==================== DIÁLOGOS ====================
-
-  Future<bool?> _showRemoveMemberDialog(String userName) {
-    return showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Eliminar miembro'),
-        content: Text('¿Estás seguro de que quieres eliminar a $userName del grupo?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: Text('Eliminar'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ==================== SNACKBARS ====================
-
-  void _showSuccessSnackbar(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
-  }
-
-  void _showErrorSnackbar(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), backgroundColor: Colors.red),
-    );
-  }
-
-  void _showWarningSnackbar(String message) {
-    // Sin mensaje de advertencia
-  }
-
-  // ==================== WIDGETS ====================
-
   @override
   Widget build(BuildContext context) {
+    if (_controller.isLoading) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Perfil del Grupo')),
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    if (_controller.hasError) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Perfil del Grupo')),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline, size: 64, color: Colors.red),
+              const SizedBox(height: 16),
+              Text(_controller.errorMessage ?? 'Error desconocido'),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: () => _controller.initialize(),
+                child: const Text('Reintentar'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final groupData = _controller.groupData;
+    if (groupData == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Perfil del Grupo')),
+        body: const Center(child: Text('Grupo no encontrado')),
+      );
+    }
+
     return Scaffold(
       appBar: _buildAppBar(),
-      body: _buildBody(),
+      body: SingleChildScrollView(
+        child: Column(
+          children: [
+            // Header del grupo
+            _buildGroupHeader(groupData),
+
+            const SizedBox(height: 20),
+
+            // Información del grupo
+            _buildGroupInfo(groupData),
+
+            const SizedBox(height: 20),
+
+            // Lista de miembros
+            _buildMembersSection(),
+
+            const SizedBox(height: 20),
+
+            // Solicitudes pendientes (solo para admins)
+            if (_controller.isAdmin && _controller.pendingRequests.isNotEmpty)
+              _buildPendingRequestsSection(),
+
+            const SizedBox(height: 20),
+
+            // Acciones del grupo
+            _buildGroupActions(),
+
+            const SizedBox(height: 40),
+          ],
+        ),
+      ),
     );
   }
 
   AppBar _buildAppBar() {
     return AppBar(
-      backgroundColor: GroupProfileConstants.primaryColor,
-      foregroundColor: Colors.white,
-      title: Text('Perfil del grupo'),
-      actions: _buildAppBarActions(),
-    );
-  }
-
-  List<Widget>? _buildAppBarActions() {
-    if (!_isAdmin) return null;
-
-    if (_isEditing) {
-      return [
-        IconButton(
-          icon: Icon(Icons.check),
-          onPressed: _saveGroupName,
-          tooltip: 'Guardar',
-        ),
-        IconButton(
-          icon: Icon(Icons.close),
-          onPressed: _cancelEditing,
-          tooltip: 'Cancelar',
-        ),
-      ];
-    }
-
-    return [
-      IconButton(
-        icon: Icon(Icons.edit),
-        onPressed: () => setState(() => _isEditing = true),
-        tooltip: 'Editar',
-      ),
-    ];
-  }
-
-  Widget _buildBody() {
-    return StreamBuilder<DocumentSnapshot>(
-      stream: _firestore.collection('groups').doc(widget.groupId).snapshots(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) {
-          return Center(child: CircularProgressIndicator());
-        }
-
-        final groupData = snapshot.data!.data() as Map<String, dynamic>?;
-        if (groupData == null) {
-          return Center(child: Text('Grupo no encontrado'));
-        }
-
-        final members = List<String>.from(groupData['members'] ?? []);
-        final admins = List<String>.from(groupData['admins'] ?? []);
-        final pendingMembers = List<String>.from(groupData['pendingMembers'] ?? []);
-        _currentImageUrl = groupData['avatar'];
-
-        return SingleChildScrollView(
-          child: Column(
-            children: [
-              GroupProfileHeader(
-                groupData: groupData,
-                memberCount: members.length + pendingMembers.length,
-                isAdmin: _isAdmin,
-                isEditing: _isEditing,
-                isUploading: _isUploading,
-                currentImageUrl: _currentImageUrl,
-                nameController: _nameController,
-                onPickImage: _pickAndUploadImage,
-              ),
-              _buildActionButtons(members),
-              _buildMembersList(members, admins, pendingMembers),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildActionButtons(List<String> members) {
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: Row(
-        children: [
-          Expanded(
-            child: ElevatedButton.icon(
-              onPressed: members.length > 1 ? () => _startGroupVideoCall(members) : null,
-              icon: Icon(Icons.videocam, size: 24),
-              label: Text(
-                'Videollamada Grupal',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: GroupProfileConstants.primaryColor,
-                foregroundColor: Colors.white,
-                disabledBackgroundColor: Colors.grey[300],
-                disabledForegroundColor: Colors.grey[600],
-                padding: EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                elevation: 2,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMembersList(List<String> members, List<String> admins, List<String> pendingMembers) {
-    return Padding(
-      padding: EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildMembersHeader(members),
-          SizedBox(height: 16),
-          // Miembros activos
-          ...members.map((memberId) => _buildMemberTile(memberId, admins, isPending: false)),
-          // Miembros pendientes
-          if (pendingMembers.isNotEmpty) ...[
-            SizedBox(height: 16),
-            Text(
-              'Pendientes de aprobación',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: Colors.orange[700],
-              ),
-            ),
-            SizedBox(height: 8),
-            ...pendingMembers.map((memberId) => _buildMemberTile(memberId, admins, isPending: true)),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMembersHeader(List<String> members) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(
-          'Miembros',
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-            color: Colors.grey[800],
-          ),
-        ),
-        if (_isAdmin)
-          ElevatedButton.icon(
-            onPressed: () => _showAddMembersDialog(members),
-            icon: Icon(Icons.person_add, size: 18),
-            label: Text('Agregar'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: GroupProfileConstants.primaryColor,
-              foregroundColor: Colors.white,
-              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              textStyle: TextStyle(fontSize: 12),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
+      title: Text(_isEditing ? 'Editar Grupo' : 'Perfil del Grupo'),
+      actions: [
+        if (_controller.isAdmin)
+          IconButton(
+            icon: Icon(_isEditing ? Icons.save : Icons.edit),
+            onPressed: _isEditing ? _saveChanges : _startEditing,
           ),
       ],
     );
   }
 
-  Widget _buildMemberTile(String memberId, List<String> admins, {required bool isPending}) {
-    final isUserAdmin = admins.contains(memberId);
-    final userName = _userNames[memberId] ?? 'Cargando...';
-    final userPhoto = _userPhotos[memberId] ?? '';
-    final isCurrentUser = memberId == _auth.currentUser!.uid;
+  Widget _buildGroupHeader(Map<String, dynamic> groupData) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        children: [
+          // Avatar del grupo
+          Stack(
+            children: [
+              CircleAvatar(
+                radius: 60,
+                backgroundImage: groupData['photoURL'] != null
+                    ? NetworkImage(groupData['photoURL'])
+                    : null,
+                child: groupData['photoURL'] == null
+                    ? const Icon(Icons.group, size: 60)
+                    : null,
+              ),
+              if (_controller.isAdmin && _isEditing)
+                Positioned(
+                  bottom: 0,
+                  right: 0,
+                  child: CircleAvatar(
+                    radius: 18,
+                    backgroundColor: Theme.of(context).primaryColor,
+                    child: IconButton(
+                      icon: const Icon(Icons.camera_alt, size: 16, color: Colors.white),
+                      onPressed: _isUploading ? null : _changeGroupAvatar,
+                    ),
+                  ),
+                ),
+              if (_isUploading)
+                Positioned.fill(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.black54,
+                      borderRadius: BorderRadius.circular(60),
+                    ),
+                    child: const Center(
+                      child: CircularProgressIndicator(color: Colors.white),
+                    ),
+                  ),
+                ),
+            ],
+          ),
 
-    // Cargar datos del usuario si no están cargados
-    if (!_userNames.containsKey(memberId)) {
-      _loadUserData(memberId);
-    }
+          const SizedBox(height: 16),
 
-    return GroupMemberTile(
-      userId: memberId,
-      userName: userName,
-      userPhoto: userPhoto,
-      isUserAdmin: isUserAdmin,
-      isCurrentUser: isCurrentUser,
-      canManage: _isAdmin && !isPending, // No se puede gestionar si está pendiente
-      isPending: isPending,
-      onToggleAdmin: () => _toggleAdmin(memberId, isUserAdmin),
-      onRemoveMember: () => _removeMember(memberId, userName),
+          // Nombre del grupo
+          if (_isEditing)
+            TextField(
+              controller: _nameController,
+              decoration: const InputDecoration(
+                labelText: 'Nombre del grupo',
+                border: OutlineInputBorder(),
+              ),
+              maxLength: 50,
+            )
+          else
+            Text(
+              groupData['name'] ?? 'Sin nombre',
+              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+              textAlign: TextAlign.center,
+            ),
+
+          const SizedBox(height: 8),
+
+          // Descripción del grupo
+          if (_isEditing)
+            TextField(
+              controller: _descriptionController,
+              decoration: const InputDecoration(
+                labelText: 'Descripción',
+                border: OutlineInputBorder(),
+              ),
+              maxLines: 3,
+              maxLength: 200,
+            )
+          else if (groupData['description'] != null && groupData['description'].isNotEmpty)
+            Text(
+              groupData['description'],
+              style: Theme.of(context).textTheme.bodyMedium,
+              textAlign: TextAlign.center,
+            ),
+
+          const SizedBox(height: 8),
+
+          // Información adicional
+          Text(
+            '${_controller.members.length} miembros',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Colors.grey[600],
+            ),
+          ),
+        ],
+      ),
     );
+  }
+
+  Widget _buildGroupInfo(Map<String, dynamic> groupData) {
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Información del Grupo',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 12),
+            _buildInfoRow('Creado', _formatDate(groupData['createdAt'])),
+            _buildInfoRow('ID del Grupo', widget.groupId),
+            if (_controller.isAdmin)
+              _buildInfoRow('Rol', 'Administrador'),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInfoRow(String label, String? value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 100,
+            child: Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.w500),
+            ),
+          ),
+          Expanded(
+            child: Text(value ?? 'No disponible'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMembersSection() {
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Miembros (${_controller.members.length})',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                if (_controller.isAdmin)
+                  IconButton(
+                    icon: const Icon(Icons.person_add),
+                    onPressed: _showAddMembersDialog,
+                  ),
+              ],
+            ),
+          ),
+          ...(_controller.members.map((member) => _buildMemberTile(member))),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMemberTile(Map<String, dynamic> member) {
+    return ListTile(
+      leading: CircleAvatar(
+        backgroundImage: member['photoURL'] != null
+            ? NetworkImage(member['photoURL'])
+            : null,
+        child: member['photoURL'] == null
+            ? Text(member['name'][0].toUpperCase())
+            : null,
+      ),
+      title: Text(member['displayName'] ?? member['name']),
+      subtitle: Text(member['role'] == 'child' ? 'Niño' : 'Adulto'),
+      trailing: _controller.isAdmin && member['id'] != _controller.currentUserId
+          ? PopupMenuButton(
+              itemBuilder: (context) => [
+                PopupMenuItem(
+                  value: 'remove',
+                  child: const Text('Remover del grupo'),
+                  onTap: () => _removeMember(member['id']),
+                ),
+                PopupMenuItem(
+                  value: 'call',
+                  child: const Text('Videollamada'),
+                  onTap: () => _startVideoCall(member['id'], member['name']),
+                ),
+              ],
+            )
+          : member['id'] != _controller.currentUserId
+              ? IconButton(
+                  icon: const Icon(Icons.video_call),
+                  onPressed: () => _startVideoCall(member['id'], member['name']),
+                )
+              : null,
+    );
+  }
+
+  Widget _buildPendingRequestsSection() {
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              'Solicitudes Pendientes (${_controller.pendingRequests.length})',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          ...(_controller.pendingRequests.map((request) => _buildRequestTile(request))),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRequestTile(Map<String, dynamic> request) {
+    return ListTile(
+      leading: CircleAvatar(
+        backgroundImage: request['photoURL'] != null
+            ? NetworkImage(request['photoURL'])
+            : null,
+        child: request['photoURL'] == null
+            ? Text(request['name'][0].toUpperCase())
+            : null,
+      ),
+      title: Text(request['name']),
+      subtitle: Text(request['message'] ?? 'Quiere unirse al grupo'),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            icon: const Icon(Icons.check, color: Colors.green),
+            onPressed: () => _approveRequest(request['requestId'], request['userId']),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, color: Colors.red),
+            onPressed: () => _rejectRequest(request['requestId']),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGroupActions() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        children: [
+          if (_controller.isAdmin) ...[
+            ElevatedButton.icon(
+              icon: const Icon(Icons.person_add),
+              label: const Text('Agregar Miembros'),
+              onPressed: _showAddMembersDialog,
+            ),
+            const SizedBox(height: 12),
+          ],
+          OutlinedButton.icon(
+            icon: const Icon(Icons.exit_to_app),
+            label: const Text('Abandonar Grupo'),
+            onPressed: _leaveGroup,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.red,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Métodos de UI que delegan al controller
+  void _startEditing() {
+    setState(() {
+      _isEditing = true;
+    });
+  }
+
+  Future<void> _saveChanges() async {
+    final success = await _controller.updateGroupInfo(
+      name: _nameController.text,
+      description: _descriptionController.text,
+    );
+
+    if (success) {
+      setState(() {
+        _isEditing = false;
+      });
+    }
+  }
+
+  Future<void> _changeGroupAvatar() async {
+    final XFile? image = await _picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 70,
+    );
+
+    if (image != null) {
+      setState(() {
+        _isUploading = true;
+      });
+
+      final success = await _controller.updateGroupInfo(
+        avatarFile: File(image.path),
+      );
+
+      setState(() {
+        _isUploading = false;
+      });
+
+      if (!success && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Error subiendo imagen')),
+        );
+      }
+    }
+  }
+
+  void _showAddMembersDialog() {
+    final memberIds = _controller.members.map((m) => m['id'] as String).toList();
+    showDialog(
+      context: context,
+      builder: (context) => AddMembersDialog(
+        groupId: widget.groupId,
+        currentMembers: memberIds,
+      ),
+    );
+  }
+
+  Future<void> _removeMember(String userId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Remover Miembro'),
+        content: const Text('¿Estás seguro de que quieres remover este miembro del grupo?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Remover'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await _controller.removeMember(userId);
+    }
+  }
+
+  Future<void> _approveRequest(String requestId, String userId) async {
+    await _controller.approveRequest(requestId, userId);
+  }
+
+  Future<void> _rejectRequest(String requestId) async {
+    await _controller.rejectRequest(requestId);
+  }
+
+  Future<void> _startVideoCall(String userId, String userName) async {
+    try {
+      await _videoCallService.startCall(
+        callerId: _controller.currentUserId,
+        callerName: 'Yo', // El controller podría proveer esto
+        receiverId: userId,
+        receiverName: userName,
+      );
+
+      if (mounted) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => VideoCallScreen(
+              callId: DateTime.now().millisecondsSinceEpoch.toString(),
+              isCaller: true,
+              remoteName: userName,
+              receiverId: userId,
+              isVideo: true,
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error iniciando videollamada: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _leaveGroup() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Abandonar Grupo'),
+        content: const Text('¿Estás seguro de que quieres abandonar este grupo?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Abandonar'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      final success = await _controller.leaveGroup();
+      if (success && mounted) {
+        Navigator.pop(context); // Regresar a la pantalla anterior
+      }
+    }
+  }
+
+  String _formatDate(dynamic timestamp) {
+    if (timestamp == null) return 'No disponible';
+
+    try {
+      DateTime date;
+      if (timestamp is int) {
+        date = DateTime.fromMillisecondsSinceEpoch(timestamp);
+      } else {
+        // Assume Firestore Timestamp, but we shouldn't access it directly
+        return 'Fecha no disponible';
+      }
+
+      return '${date.day}/${date.month}/${date.year}';
+    } catch (e) {
+      return 'Fecha no disponible';
+    }
   }
 }

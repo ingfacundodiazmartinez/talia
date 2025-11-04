@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../services/contact_alias_service.dart';
 import '../../../services/block_service.dart';
@@ -39,10 +38,8 @@ class ParentChatsScreen extends StatefulWidget {
 
 class _ParentChatsScreenState extends State<ParentChatsScreen>
     with AutomaticKeepAliveClientMixin {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
   final ContactAliasService _aliasService = ContactAliasService();
   final BlockService _blockService = BlockService();
-  final SearchService _searchService = SearchService();
   final TextEditingController _searchController = TextEditingController();
   final ValueNotifier<String> _searchQuery = ValueNotifier<String>('');
   late ParentChatsController _controller;
@@ -53,7 +50,9 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
   @override
   void initState() {
     super.initState();
-    _controller = ParentChatsController(userId: _auth.currentUser!.uid);
+    // Create temporary controller to get current user ID
+    final tempController = ParentChatsController(userId: '');
+    _controller = ParentChatsController(userId: tempController.currentUserId);
   }
 
   @override
@@ -69,117 +68,10 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
     required List<QueryDocumentSnapshot> chatDocs,
     required List<QueryDocumentSnapshot> groups,
   }) async {
-    if (query.isEmpty) {
-      return SearchResults(chatResults: [], messageResults: []);
-    }
-
-    final chatResults = <ChatSearchResult>[];
-    final messageResults = <MessageSearchResult>[];
-
-    // Buscar en chats directos
-    for (final chatDoc in chatDocs) {
-      final chatData = chatDoc.data() as Map<String, dynamic>;
-      final chatId = chatDoc.id;
-      final participants = chatData['participants'] as List<dynamic>?;
-
-      if (participants == null) continue;
-
-      final otherUserId = participants.firstWhere(
-        (id) => id != _auth.currentUser!.uid,
-        orElse: () => null,
-      );
-
-      if (otherUserId == null) continue;
-
-      try {
-        // Obtener datos del usuario
-        final userDoc = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(otherUserId)
-            .get();
-
-        if (!userDoc.exists) continue;
-
-        final userData = userDoc.data();
-        if (userData == null) continue;
-
-        final userName = userData['name'] ?? 'Usuario';
-        final photoURL = userData['photoURL'] as String?;
-
-        // Obtener alias si existe
-        String displayName = userName;
-        try {
-          displayName = await _aliasService
-              .watchDisplayName(otherUserId, userName)
-              .first;
-        } catch (e) {
-          // Si falla, usar el nombre original
-        }
-
-        // Verificar si coincide por nombre (usar SearchService para normalizar)
-        if (_searchService.matchesQuery(displayName, query) ||
-            _searchService.matchesQuery(userName, query)) {
-          chatResults.add(
-            ChatSearchResult(
-              chatId: chatId,
-              chatName: displayName,
-              chatPhotoUrl: photoURL,
-              chatType: ChatType.direct,
-            ),
-          );
-        }
-
-        // Buscar en mensajes del chat
-        final chatMessageResults = await _searchService.searchInChatMessages(
-          chatId: chatId,
-          query: query,
-          chatName: displayName,
-          chatPhotoUrl: photoURL,
-          chatType: ChatType.direct,
-        );
-        messageResults.addAll(chatMessageResults);
-      } catch (e) {
-        debugPrint('❌ Error buscando en chat $chatId: $e');
-      }
-    }
-
-    // Buscar en grupos
-    for (final groupDoc in groups) {
-      final groupData = groupDoc.data() as Map<String, dynamic>;
-      final groupId = groupDoc.id;
-      final groupName = groupData['name'] ?? 'Grupo';
-      final avatar = groupData['avatar'] as String?;
-
-      // Verificar si coincide por nombre
-      if (_searchService.matchesQuery(groupName, query)) {
-        chatResults.add(
-          ChatSearchResult(
-            chatId: groupId,
-            chatName: groupName,
-            chatPhotoUrl: avatar,
-            chatType: ChatType.group,
-          ),
-        );
-      }
-
-      // Buscar en mensajes del grupo
-      try {
-        final groupMessageResults = await _searchService.searchInChatMessages(
-          chatId: groupId,
-          query: query,
-          chatName: groupName,
-          chatPhotoUrl: avatar,
-          chatType: ChatType.group,
-        );
-        messageResults.addAll(groupMessageResults);
-      } catch (e) {
-        debugPrint('❌ Error buscando en grupo $groupId: $e');
-      }
-    }
-
-    return SearchResults(
-      chatResults: chatResults,
-      messageResults: messageResults,
+    return await _controller.performMessageSearch(
+      query: query,
+      chatDocs: chatDocs,
+      groups: groups,
     );
   }
 
@@ -568,7 +460,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
 
       case GroupItem(:final groupId, :final groupData):
         final groupName = groupData['name'] ?? 'Grupo';
-        final parentId = _auth.currentUser?.uid ?? '';
+        final parentId = _controller.currentUserId;
 
         // Filter by search
         if (searchQuery.isNotEmpty &&
@@ -581,13 +473,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
 
         // Obtener el último mensaje para mostrar su estado
         return StreamBuilder<QuerySnapshot>(
-          stream: FirebaseFirestore.instance
-              .collection('groups')
-              .doc(groupId)
-              .collection('messages')
-              .orderBy('timestamp', descending: true)
-              .limit(1)
-              .snapshots(),
+          stream: _controller.getLastMessageStream(groupId, isGroup: true),
           builder: (context, messageSnapshot) {
             String? lastMessageSenderId;
             MessageStatus? lastMessageStatus;
@@ -656,7 +542,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
   }) {
     final realName = childData['name'] ?? 'Hijo/a';
     final photoURL = childData['photoURL'];
-    final parentId = _auth.currentUser?.uid ?? '';
+    final parentId = _controller.currentUserId;
 
     return StreamBuilder<String>(
       stream: _aliasService.watchDisplayName(childId, realName),
@@ -679,13 +565,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
 
               // Obtener el último mensaje para mostrar su estado
               return StreamBuilder<QuerySnapshot>(
-                stream: FirebaseFirestore.instance
-                    .collection('chats')
-                    .doc(chatDoc.id)
-                    .collection('messages')
-                    .orderBy('timestamp', descending: true)
-                    .limit(1)
-                    .snapshots(),
+                stream: _controller.getLastMessageStream(chatDoc.id),
                 builder: (context, messageSnapshot) {
                   String? lastMessageSenderId;
                   MessageStatus? lastMessageStatus;
@@ -907,33 +787,24 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
     String? scrollToMessageId,
   ]) async {
     try {
-      // Obtener el chat doc para sacar el contactId
-      final chatDoc = await FirebaseFirestore.instance
-          .collection('chats')
-          .doc(chatId)
-          .get();
-      if (!chatDoc.exists) return;
+      final chatData = await _controller.getChatDataForNavigation(chatId);
+      if (chatData == null) return;
 
-      final participants = chatDoc.data()?['participants'] as List<dynamic>?;
-      if (participants == null) return;
-
-      final contactId = participants.firstWhere(
-        (id) => id != _auth.currentUser!.uid,
-        orElse: () => null,
-      );
-
+      final contactId = chatData['contactId'];
       if (contactId == null) return;
 
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (context) => ChatDetailScreen(
-            chatId: chatId,
-            contactId: contactId,
-            contactName: contactName,
-            scrollToMessageId: scrollToMessageId,
+      if (mounted) {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => ChatDetailScreen(
+              chatId: chatId,
+              contactId: contactId,
+              contactName: contactName,
+              scrollToMessageId: scrollToMessageId,
+            ),
           ),
-        ),
-      );
+        );
+      }
     } catch (e) {
       debugPrint('Error navegando a chat directo: $e');
     }

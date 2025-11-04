@@ -1,12 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
-import 'package:firebase_storage/firebase_storage.dart';
-import '../services/group_chat_service.dart';
-import '../services/chat_permission_service.dart';
-import '../services/contact_alias_service.dart';
+import '../controllers/create_group_controller.dart';
 
 class CreateGroupScreen extends StatefulWidget {
   const CreateGroupScreen({super.key});
@@ -16,25 +11,15 @@ class CreateGroupScreen extends StatefulWidget {
 }
 
 class _CreateGroupScreenState extends State<CreateGroupScreen> {
-  static const int maxMembers = 50;
+  // Controller
+  late CreateGroupController _controller;
 
-  final GroupChatService _groupService = GroupChatService();
-  final ChatPermissionService _permissionService = ChatPermissionService();
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final ContactAliasService _aliasService = ContactAliasService();
-
-  // Controllers
+  // UI Controllers
   final TextEditingController _groupNameController = TextEditingController();
   final TextEditingController _searchController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
-  // Estado
-  bool _isLoading = false;
-  bool _isCreating = false;
-
-  // Datos del grupo
-  List<ContactInfo> _allContacts = [];
+  // Local UI state
   List<ContactInfo> _filteredContacts = [];
   final List<ContactInfo> _selectedContacts = [];
   File? _groupImageFile;
@@ -43,7 +28,9 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
   @override
   void initState() {
     super.initState();
-    _loadAvailableContacts();
+    _controller = CreateGroupController();
+    _setupControllerCallbacks();
+    _controller.loadAvailableContacts();
     _searchController.addListener(_filterContacts);
   }
 
@@ -55,71 +42,41 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
     super.dispose();
   }
 
-  void _filterContacts() {
-    final query = _searchController.text.toLowerCase();
-    setState(() {
-      if (query.isEmpty) {
-        _filteredContacts = List.from(_allContacts);
-      } else {
-        _filteredContacts = _allContacts.where((contact) {
-          return contact.name.toLowerCase().contains(query) ||
-              contact.email.toLowerCase().contains(query);
-        }).toList();
+  void _setupControllerCallbacks() {
+    _controller.onContactsLoaded = (contacts) {
+      if (mounted) {
+        setState(() {
+          _filteredContacts = List.from(contacts);
+        });
       }
+    };
+
+    _controller.onError = (message) {
+      if (mounted) {
+        _showSnackbar(message, isError: true);
+      }
+    };
+
+    _controller.onSuccess = (message) {
+      if (mounted) {
+        _showSnackbar(message, isError: false);
+      }
+    };
+
+    _controller.onGroupCreated = () {
+      if (mounted) {
+        Navigator.of(context).pop(true);
+      }
+    };
+  }
+
+  void _filterContacts() {
+    final query = _searchController.text;
+    setState(() {
+      _filteredContacts = _controller.filterContacts(query);
     });
   }
 
-  Future<void> _loadAvailableContacts() async {
-    setState(() => _isLoading = true);
-
-    try {
-      final currentUserId = _auth.currentUser?.uid;
-      if (currentUserId == null) return;
-
-      print('🔍 Cargando contactos con aprobación bidireccional...');
-
-      final bidirectionalContactIds = await _permissionService
-          .getBidirectionallyApprovedContacts(currentUserId);
-
-      final contacts = <ContactInfo>[];
-
-      for (final contactId in bidirectionalContactIds) {
-        final userDoc = await _firestore.collection('users').doc(contactId).get();
-        final userData = userDoc.data();
-
-        if (userData != null) {
-          final realName = userData['name'] ?? 'Usuario';
-          final displayName =
-              await _aliasService.getDisplayName(contactId, realName);
-
-          contacts.add(
-            ContactInfo(
-              id: contactId,
-              name: displayName,
-              email: userData['email'] ?? '',
-              avatar: userData['photoURL'],
-              isOnline: userData['isOnline'] ?? false,
-            ),
-          );
-        }
-      }
-
-      // Ordenar alfabéticamente
-      contacts.sort((a, b) => a.name.compareTo(b.name));
-
-      print('✅ Encontrados ${contacts.length} contactos');
-
-      setState(() {
-        _allContacts = contacts;
-        _filteredContacts = List.from(contacts);
-      });
-    } catch (e) {
-      print('❌ Error cargando contactos: $e');
-      _showSnackbar('Error cargando contactos', isError: true);
-    } finally {
-      setState(() => _isLoading = false);
-    }
-  }
 
   Future<void> _pickGroupImage() async {
     try {
@@ -136,144 +93,20 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
         });
       }
     } catch (e) {
-      print('❌ Error seleccionando imagen: $e');
       _showSnackbar('Error al seleccionar la imagen', isError: true);
-    }
-  }
-
-  Future<String?> _uploadGroupImage() async {
-    if (_groupImageFile == null) return null;
-
-    try {
-      final user = _auth.currentUser;
-      if (user == null) return null;
-
-      final fileName = 'group_${DateTime.now().millisecondsSinceEpoch}.jpg';
-      final storageRef = FirebaseStorage.instance
-          .ref()
-          .child('group_images')
-          .child(fileName);
-
-      final uploadTask = await storageRef.putFile(_groupImageFile!);
-      final downloadUrl = await uploadTask.ref.getDownloadURL();
-
-      return downloadUrl;
-    } catch (e) {
-      print('❌ Error subiendo imagen del grupo: $e');
-      return null;
     }
   }
 
   Future<void> _createGroup() async {
     final groupName = _groupNameController.text.trim();
 
-    if (groupName.isEmpty) {
-      _showSnackbar('El nombre del grupo es obligatorio', isError: true);
-      return;
-    }
-
-    if (_selectedContacts.isEmpty) {
-      _showSnackbar('Debes seleccionar al menos un contacto', isError: true);
-      return;
-    }
-
-    setState(() => _isCreating = true);
-
-    try {
-      // Subir imagen del grupo si existe
-      String? imageUrl;
-      if (_groupImageFile != null) {
-        imageUrl = await _uploadGroupImage();
-      }
-
-      final selectedUserIds = _selectedContacts.map((c) => c.id).toList();
-
-      final result = await _groupService.createGroup(
-        name: groupName,
-        description: '',
-        avatar: imageUrl,
-        initialMembers: selectedUserIds,
-      );
-
-      if (mounted) {
-        if (result.isSuccess || result.isPartialSuccess) {
-          // Mostrar resultado y cerrar
-          await _showSuccessDialog(result);
-          if (mounted) {
-            Navigator.pop(context, true); // Retornar true para indicar éxito
-          }
-        } else {
-          _showSnackbar(result.error ?? 'Error creando grupo', isError: true);
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        _showSnackbar('Error creando grupo: $e', isError: true);
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isCreating = false);
-      }
-    }
-  }
-
-  Future<void> _showSuccessDialog(GroupCreationResult result) async {
-    final colorScheme = Theme.of(context).colorScheme;
-
-    return showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: result.isSuccess
-                    ? Colors.green.withValues(alpha: 0.15)
-                    : Colors.orange.withValues(alpha: 0.15),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                result.isSuccess ? Icons.check_circle : Icons.schedule,
-                size: 48,
-                color: result.isSuccess ? Colors.green : Colors.orange,
-              ),
-            ),
-            SizedBox(height: 16),
-            Text(
-              result.isSuccess ? '¡Grupo Creado!' : 'Grupo Creado Parcialmente',
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-                color: colorScheme.onSurface,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            SizedBox(height: 12),
-            Text(
-              result.isSuccess
-                  ? 'Tu grupo "${_groupNameController.text}" está listo.'
-                  : '${result.pendingCount} ${result.pendingCount == 1 ? 'miembro está' : 'miembros están'} pendientes de aprobación.',
-              style: TextStyle(
-                fontSize: 14,
-                color: colorScheme.onSurfaceVariant,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Entendido'),
-          ),
-        ],
-      ),
+    await _controller.createGroup(
+      groupName: groupName,
+      selectedContacts: _selectedContacts,
+      groupImageFile: _groupImageFile,
     );
   }
+
 
   void _showSnackbar(String message, {bool isError = false}) {
     if (!mounted) return;
@@ -289,7 +122,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
   bool get _canCreate =>
       _groupNameController.text.trim().isNotEmpty &&
       _selectedContacts.isNotEmpty &&
-      !_isCreating;
+      !_controller.isCreating;
 
   @override
   Widget build(BuildContext context) {
@@ -301,13 +134,13 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
         foregroundColor: Colors.white,
         leading: IconButton(
           icon: Icon(Icons.close),
-          onPressed: _isCreating ? null : () => Navigator.pop(context),
+          onPressed: _controller.isCreating ? null : () => Navigator.pop(context),
         ),
         title: Text('Nuevo Grupo'),
         actions: [
           TextButton(
             onPressed: _canCreate ? _createGroup : null,
-            child: _isCreating
+            child: _controller.isCreating
                 ? SizedBox(
                     width: 20,
                     height: 20,
@@ -406,7 +239,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
 
           // Sección inferior: Lista de contactos (scrollable)
           Expanded(
-            child: _isLoading
+            child: _controller.isLoading
                 ? Center(child: CircularProgressIndicator())
                 : Column(
                     children: [
@@ -450,7 +283,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                               child: Text(
                                 _selectedContacts.isEmpty
                                     ? 'Selecciona contactos para el grupo'
-                                    : '${_selectedContacts.length} de $maxMembers miembros seleccionados',
+                                    : '${_selectedContacts.length} de ${CreateGroupController.maxMembers} miembros seleccionados',
                                 style: TextStyle(
                                   color: _selectedContacts.isEmpty
                                       ? colorScheme.onSurfaceVariant
@@ -466,7 +299,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
 
                       // Lista de contactos
                       Expanded(
-                        child: _allContacts.isEmpty
+                        child: _controller.allContacts.isEmpty
                             ? _buildEmptyState()
                             : _filteredContacts.isEmpty
                                 ? _buildNoResultsState()
@@ -495,7 +328,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
 
   Widget _buildContactItem(ContactInfo contact, bool isSelected) {
     final colorScheme = Theme.of(context).colorScheme;
-    final reachedLimit = _selectedContacts.length >= maxMembers;
+    final reachedLimit = _selectedContacts.length >= CreateGroupController.maxMembers;
     final isDisabled = !isSelected && reachedLimit;
 
     return Opacity(
@@ -535,20 +368,6 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                       )
                     : null,
               ),
-              if (contact.isOnline)
-                Positioned(
-                  right: 0,
-                  bottom: 0,
-                  child: Container(
-                    width: 12,
-                    height: 12,
-                    decoration: BoxDecoration(
-                      color: Colors.green,
-                      shape: BoxShape.circle,
-                      border: Border.all(color: colorScheme.surface, width: 2),
-                    ),
-                  ),
-                ),
             ],
           ),
           title: Text(
@@ -577,7 +396,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
           onTap: isDisabled
               ? () {
                   _showSnackbar(
-                    'Has alcanzado el límite de $maxMembers miembros',
+                    'Has alcanzado el límite de ${CreateGroupController.maxMembers} miembros',
                     isError: true,
                   );
                 }
@@ -670,31 +489,4 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
       ),
     );
   }
-}
-
-// Clase para información de contacto
-class ContactInfo {
-  final String id;
-  final String name;
-  final String email;
-  final String? avatar;
-  final bool isOnline;
-
-  ContactInfo({
-    required this.id,
-    required this.name,
-    required this.email,
-    this.avatar,
-    required this.isOnline,
-  });
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is ContactInfo &&
-          runtimeType == other.runtimeType &&
-          id == other.id;
-
-  @override
-  int get hashCode => id.hashCode;
 }

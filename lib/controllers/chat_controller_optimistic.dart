@@ -794,9 +794,29 @@ class ChatControllerOptimistic extends ChangeNotifier {
     return _firestore.collection('users').doc(contactId).snapshots();
   }
 
+  /// Obtener datos del usuario actual para manejo de errores
+  Future<Map<String, dynamic>?> getCurrentUserData() async {
+    try {
+      final currentUserId = _auth.currentUser?.uid;
+      if (currentUserId == null) return null;
+
+      final userDoc = await _firestore.collection('users').doc(currentUserId).get();
+      if (userDoc.exists) {
+        return userDoc.data();
+      }
+      return null;
+    } catch (e) {
+      // ReleaseLogger.error('Error obteniendo datos del usuario: $e', tag: 'ChatController');
+      return null;
+    }
+  }
+
+  /// Obtener ID del usuario actual
+  String get currentUserId => _auth.currentUser?.uid ?? '';
+
   @override
   void dispose() {
-    print('🗑️ [Controller-$_controllerId] Disposing...');
+    // ReleaseLogger.log('Disposing ChatController-$_controllerId', tag: 'ChatController');
     stopTyping();
     _notificationSubscription?.cancel();
     _messagesSubscription?.cancel();
