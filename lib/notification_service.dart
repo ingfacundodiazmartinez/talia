@@ -16,18 +16,19 @@ import 'constants/notification_types.dart';
 import 'services/notification_filter.dart';
 import 'services/callkit_service.dart';
 import 'services/foreground_message_listener.dart';
+import 'utils/release_logger.dart';
 
 // Manejador de mensajes en segundo plano (debe estar fuera de la clase)
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  print('🔥 ============================================');
-  print('📩 BACKGROUND MESSAGE HANDLER EJECUTADO');
-  print('🔥 ============================================');
-  print('📩 Notification title: ${message.notification?.title}');
-  print('📩 Notification body: ${message.notification?.body}');
-  print('📦 Tipo: ${message.data['type']}');
-  print('📦 Data completa: ${message.data}');
-  print('🔥 ============================================');
+  ReleaseLogger.log('🔥 ============================================', tag: 'NotificationService');
+  ReleaseLogger.log('📩 BACKGROUND MESSAGE HANDLER EJECUTADO', tag: 'NotificationService');
+  ReleaseLogger.log('🔥 ============================================', tag: 'NotificationService');
+  ReleaseLogger.log('📩 Notification title: ${message.notification?.title}', tag: 'NotificationService');
+  ReleaseLogger.log('📩 Notification body: ${message.notification?.body}', tag: 'NotificationService');
+  ReleaseLogger.log('📦 Tipo: ${message.data['type']}', tag: 'NotificationService');
+  ReleaseLogger.log('📦 Data completa: ${message.data}', tag: 'NotificationService');
+  ReleaseLogger.log('🔥 ============================================', tag: 'NotificationService');
 
   // Inicializar Firebase si no está inicializado
   // Esto es necesario para que el background handler funcione en iOS
@@ -36,10 +37,10 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       await Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform,
       );
-      print('✅ Firebase inicializado en background handler');
+      ReleaseLogger.log('✅ Firebase inicializado en background handler', tag: 'NotificationService');
     }
   } catch (e) {
-    print('❌ Error inicializando Firebase en background: $e');
+    ReleaseLogger.error('Error inicializando Firebase en background: $e', tag: 'NotificationService');
   }
 
   // Si es una llamada, mostrar CallKit en pantalla completa
@@ -48,11 +49,11 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       message.data['type'] == 'group_video_call' ||
       message.data['type'] == 'group_audio_call' ||
       message.data['type'] == 'emergency_call') {
-    print('📞 LLAMADA ENTRANTE DETECTADA EN SEGUNDO PLANO');
-    print('📞 Tipo de llamada: ${message.data['type']}');
-    print('📞 Call ID: ${message.data['callId']}');
-    print('📞 Caller Name: ${message.data['callerName']}');
-    print('📞 Caller ID: ${message.data['callerId']}');
+    ReleaseLogger.log('📞 LLAMADA ENTRANTE DETECTADA EN SEGUNDO PLANO', tag: 'NotificationService');
+    ReleaseLogger.log('📞 Tipo de llamada: ${message.data['type']}', tag: 'NotificationService');
+    ReleaseLogger.log('📞 Call ID: ${message.data['callId']}', tag: 'NotificationService');
+    ReleaseLogger.log('📞 Caller Name: ${message.data['callerName']}', tag: 'NotificationService');
+    ReleaseLogger.log('📞 Caller ID: ${message.data['callerId']}', tag: 'NotificationService');
 
     try {
       final callKit = CallKitService();
@@ -65,17 +66,17 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         isEmergency: message.data['isEmergency'] == 'true' || message.data['isEmergency'] == true,
         extraData: message.data,
       );
-      print('✅ CallKit mostrado exitosamente');
+      ReleaseLogger.log('✅ CallKit mostrado exitosamente', tag: 'NotificationService');
     } catch (e) {
-      print('❌ ERROR mostrando CallKit: $e');
-      print('❌ Stack trace: ${StackTrace.current}');
+      ReleaseLogger.error('ERROR mostrando CallKit: $e', tag: 'NotificationService');
+      ReleaseLogger.error('Stack trace: ${StackTrace.current}', tag: 'NotificationService');
     }
   }
 
   // Las demás notificaciones se manejan automáticamente por FCM
-  print('🔥 ============================================');
-  print('📩 BACKGROUND HANDLER FINALIZADO');
-  print('🔥 ============================================');
+  ReleaseLogger.log('🔥 ============================================', tag: 'NotificationService');
+  ReleaseLogger.log('📩 BACKGROUND HANDLER FINALIZADO', tag: 'NotificationService');
+  ReleaseLogger.log('🔥 ============================================', tag: 'NotificationService');
 }
 
 class NotificationService {
@@ -121,12 +122,12 @@ class NotificationService {
   // Establecer el chat actual (para suprimir notificaciones solo de ese chat)
   void setCurrentChat(String chatId) {
     _currentChatId = chatId;
-    print('📍 Chat actual establecido: $chatId');
+    ReleaseLogger.log('📍 Chat actual establecido: $chatId', tag: 'NotificationService');
   }
 
   // Limpiar el chat actual (cuando sales del chat)
   void clearCurrentChat() {
-    print('📍 Chat actual limpiado: $_currentChatId');
+    ReleaseLogger.log('📍 Chat actual limpiado: $_currentChatId', tag: 'NotificationService');
     _currentChatId = null;
   }
 
@@ -144,7 +145,7 @@ class NotificationService {
   /// Inicializar token FCM después del login exitoso
   /// Debe llamarse desde el flujo de autenticación para asegurar que el token se guarde
   Future<void> initializeFCMTokenAfterLogin() async {
-    print('🔄 Inicializando FCM token después del login...');
+    ReleaseLogger.log('🔄 Inicializando FCM token después del login...', tag: 'NotificationService');
     await _getFCMToken();
   }
 
@@ -187,7 +188,7 @@ class NotificationService {
         print('✅ No se encontraron tokens FCM duplicados');
       }
     } catch (e) {
-      print('❌ Error limpiando tokens duplicados: $e');
+      ReleaseLogger.error('Error limpiando tokens duplicados: $e', tag: 'NotificationService');
       // No hacer throw para no bloquear el flujo principal de registro
     }
   }
@@ -231,7 +232,7 @@ class NotificationService {
       _isInitialized = true;
       print('✅ Servicio de notificaciones inicializado');
     } catch (e) {
-      print('❌ Error inicializando notificaciones: $e');
+      ReleaseLogger.error('Error inicializando notificaciones: $e', tag: 'NotificationService');
     }
   }
 
@@ -267,7 +268,7 @@ class NotificationService {
         print('   2. Activa "Permitir notificaciones"');
       }
     } catch (e) {
-      print('❌ Error solicitando permisos: $e');
+      ReleaseLogger.error('Error solicitando permisos: $e', tag: 'NotificationService');
       print('   Stack trace: ${StackTrace.current}');
     }
   }
@@ -375,7 +376,7 @@ class NotificationService {
         }
       });
     } catch (e) {
-      print('❌ Error obteniendo token: $e');
+      ReleaseLogger.error('Error obteniendo token: $e', tag: 'NotificationService');
       print('   Stack trace: ${StackTrace.current}');
     }
   }
@@ -437,7 +438,7 @@ class NotificationService {
             // No necesitamos hacer nada adicional aquí
           }
         } catch (e) {
-          print('❌ ERROR mostrando notificación nativa en foreground: $e');
+          ReleaseLogger.error('ERROR mostrando notificación nativa en foreground: $e', tag: 'NotificationService');
         }
         return;
       } else {

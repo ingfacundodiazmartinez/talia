@@ -9,6 +9,7 @@ import 'package:uuid/uuid.dart';
 import '../models/chat_message.dart';
 import '../notification_service.dart';
 import '../services/typing_indicator_service.dart';
+import '../utils/release_logger.dart';
 import '../services/sound_service.dart';
 import '../services/user_profile_cache_service.dart';
 import '../services/block_service.dart';
@@ -116,7 +117,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
     _controllerId = DateTime.now().millisecondsSinceEpoch.toString().substring(
       8,
     );
-    print('🏗️ [Controller-$_controllerId] Creado para chat: $chatId');
+    ReleaseLogger.log('Controller-$_controllerId creado para chat: $chatId', tag: 'ChatController');
   }
 
   String get currentUserId => _auth.currentUser?.uid ?? '';

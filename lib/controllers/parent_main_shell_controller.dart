@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import '../notification_service.dart';
 import '../services/contacts_sync_service.dart';
 import '../utils/chat_utils.dart';
+import '../utils/release_logger.dart';
 
 /// Controller para el shell principal de padres
 ///
@@ -14,8 +15,9 @@ import '../utils/chat_utils.dart';
 /// - Gestionar listeners de Firestore
 /// - Sincronizar contactos en background
 /// - Manejar cambios de rol de usuario
+/// - Cumplir con CODING_RULES.md: ZERO Firebase calls en screens
 class ParentMainShellController {
-  final String parentId;
+  late final String parentId;
 
   // Servicios privados
   final NotificationService _notificationService;
@@ -32,7 +34,6 @@ class ParentMainShellController {
 
   // Constructor
   ParentMainShellController({
-    required this.parentId,
     NotificationService? notificationService,
     ContactsSyncService? contactsSyncService,
     FirebaseFirestore? firestore,
@@ -47,11 +48,22 @@ class ParentMainShellController {
 
   /// Inicializa el controller
   Future<void> initialize() async {
-    print('🏗️ [ParentMainShellController] Inicializando para parent: $parentId');
+    try {
+      final currentUser = _auth.currentUser;
+      if (currentUser == null) {
+        ReleaseLogger.error('Usuario no autenticado en ParentMainShellController', tag: 'ParentMainShell');
+        return;
+      }
 
-    _setupNotificationListeners();
-    _setupRoleChangeListener();
-    _syncContactsInBackground();
+      parentId = currentUser.uid;
+      ReleaseLogger.log('Inicializando para parent: $parentId', tag: 'ParentMainShell');
+
+      _setupNotificationListeners();
+      _setupRoleChangeListener();
+      _syncContactsInBackground();
+    } catch (e) {
+      ReleaseLogger.error('Error inicializando ParentMainShellController: $e', tag: 'ParentMainShell');
+    }
   }
 
   /// Configurar listeners de notificaciones de chat
@@ -59,7 +71,7 @@ class ParentMainShellController {
     _chatNotificationSubscription = _notificationService
         .chatNotificationTapStream
         .listen((data) {
-      print('📲 [ParentMainShellController] Chat notification tapped: $data');
+      ReleaseLogger.log('Chat notification tapped: $data', tag: 'ParentMainShell');
       // Llamar al callback configurado por el screen para manejar navegación
       onChatNotificationTap?.call(data);
     });
@@ -67,24 +79,40 @@ class ParentMainShellController {
 
   /// Configurar listener de cambios de rol
   void _setupRoleChangeListener() {
-    _roleChangeSubscription = _firestore
-        .collection('users')
-        .doc(_auth.currentUser!.uid)
-        .snapshots()
-        .listen((snapshot) {
-      if (snapshot.exists) {
-        final data = snapshot.data() as Map<String, dynamic>?;
-        final role = data?['role'] as String?;
-
-        print('🔄 [ParentMainShellController] Role changed to: $role');
-
-        // Si el rol cambió, necesita reiniciar la app
-        if (role != 'parent') {
-          print('⚠️ [ParentMainShellController] Role is no longer parent, app should restart');
-          // El screen puede manejar esto mostrando un diálogo o navegando
-        }
+    try {
+      final currentUserId = _auth.currentUser?.uid;
+      if (currentUserId == null) {
+        ReleaseLogger.error('Usuario no autenticado para listener de rol', tag: 'ParentMainShell');
+        return;
       }
-    });
+
+      _roleChangeSubscription = _firestore
+          .collection('users')
+          .doc(currentUserId)
+          .snapshots()
+          .listen((snapshot) {
+        try {
+          if (snapshot.exists) {
+            final data = snapshot.data() as Map<String, dynamic>?;
+            final role = data?['role'] as String?;
+
+            ReleaseLogger.log('Role changed to: $role', tag: 'ParentMainShell');
+
+            // Si el rol cambió, necesita reiniciar la app
+            if (role != 'parent') {
+              ReleaseLogger.warning('Role is no longer parent, app should restart', tag: 'ParentMainShell');
+              // El screen puede manejar esto mostrando un diálogo o navegando
+            }
+          }
+        } catch (e) {
+          ReleaseLogger.error('Error procesando cambio de rol: $e', tag: 'ParentMainShell');
+        }
+      }, onError: (error) {
+        ReleaseLogger.error('Error en listener de rol: $error', tag: 'ParentMainShell');
+      });
+    } catch (e) {
+      ReleaseLogger.error('Error configurando listener de rol: $e', tag: 'ParentMainShell');
+    }
   }
 
   /// Sincronizar contactos en background
@@ -92,7 +120,7 @@ class ParentMainShellController {
     // Usar WidgetsBinding para ejecutar después del primer frame
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _contactsSyncService.syncContacts().catchError((error) {
-        print('⚠️ [ParentMainShellController] Error syncing contacts: $error');
+        ReleaseLogger.error('Error syncing contacts: $error', tag: 'ParentMainShell');
       });
     });
   }
@@ -108,7 +136,7 @@ class ParentMainShellController {
         name: contactName,
       );
     } catch (error) {
-      print('❌ [ParentMainShellController] Error getting contact info: $error');
+      ReleaseLogger.error('Error getting contact info: $error', tag: 'ParentMainShell');
       return ContactInfo(
         id: senderId,
         name: 'Usuario',
@@ -118,7 +146,12 @@ class ParentMainShellController {
 
   /// Obtener chatId para navegación
   String getChatId(String senderId) {
-    return ChatUtils.getChatId(_auth.currentUser!.uid, senderId);
+    final currentUserId = _auth.currentUser?.uid;
+    if (currentUserId == null) {
+      ReleaseLogger.error('Usuario no autenticado para obtener chatId', tag: 'ParentMainShell');
+      return '';
+    }
+    return ChatUtils.getChatId(currentUserId, senderId);
   }
 
   /// Stream de invitaciones de grupo pendientes para badge
@@ -199,7 +232,7 @@ class ParentMainShellController {
 
   /// Limpiar recursos
   void dispose() {
-    print('🧹 [ParentMainShellController] Disposing controller');
+    ReleaseLogger.log('Disposing controller', tag: 'ParentMainShell');
     _chatNotificationSubscription?.cancel();
     _roleChangeSubscription?.cancel();
   }

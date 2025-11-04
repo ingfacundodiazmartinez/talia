@@ -10,6 +10,7 @@ import '../notification_service.dart';
 import '../firebase_service.dart';
 import 'user_role_service.dart';
 import 'contact_alias_service.dart';
+import '../utils/release_logger.dart';
 
 class StoryService {
   // Singleton pattern
@@ -54,11 +55,11 @@ class StoryService {
     if (user == null) throw Exception('Usuario no autenticado');
 
     try {
-      print('🚀 Iniciando creación de historia para usuario: ${user.uid}');
+      ReleaseLogger.log('🚀 Iniciando creación de historia para usuario: ${user.uid}', tag: 'StoryService');
 
       // 1. Subir media a Firebase Storage
       final mediaUrl = await _uploadStoryMedia(mediaPath, user.uid);
-      print('📸 Media subida exitosamente: $mediaUrl');
+      ReleaseLogger.log('📸 Media subida exitosamente: $mediaUrl', tag: 'StoryService');
 
       // 2. Obtener datos del usuario
       final userDoc = await _firestore.collection('users').doc(user.uid).get();
@@ -77,12 +78,12 @@ class StoryService {
         if (linkedParents.isNotEmpty) {
           status = 'pending';
           requiresApproval = true;
-          print('👶 Usuario es niño con padres vinculados - requiere aprobación');
+          ReleaseLogger.log('👶 Usuario es niño con padres vinculados - requiere aprobación', tag: 'StoryService');
         } else {
-          print('👶 Usuario es niño sin padres vinculados - auto-aprobada');
+          ReleaseLogger.log('👶 Usuario es niño sin padres vinculados - auto-aprobada', tag: 'StoryService');
         }
       } else {
-        print('👔 Usuario es $userRole - historia auto-aprobada');
+        ReleaseLogger.log('👔 Usuario es $userRole - historia auto-aprobada', tag: 'StoryService');
       }
 
       // 4. Crear historia en Firestore
@@ -109,13 +110,13 @@ class StoryService {
         'savedToPermanentAt': null,
       };
 
-      print('💾 Guardando historia en Firestore...');
+      ReleaseLogger.log('💾 Guardando historia en Firestore...', tag: 'StoryService');
       final docRef = await _firestore.collection('stories').add(storyData);
-      print('✅ Historia guardada con ID: ${docRef.id}');
+      ReleaseLogger.log('✅ Historia guardada con ID: ${docRef.id}', tag: 'StoryService');
 
       // Solo notificar al padre si requiere aprobación
       if (requiresApproval) {
-        print('📬 Enviando notificación al padre...');
+        ReleaseLogger.log('📬 Enviando notificación al padre...', tag: 'StoryService');
         await _notifyParentOfPendingStory(user.uid, docRef.id);
       }
 
@@ -143,12 +144,12 @@ class StoryService {
     if (user == null) throw Exception('Usuario no autenticado');
 
     try {
-      print('🚀 [OPTIMISTIC] Iniciando creación optimista de historia para usuario: ${user.uid}');
+      ReleaseLogger.log('🚀 [OPTIMISTIC] Iniciando creación optimista de historia para usuario: ${user.uid}', tag: 'StoryService');
 
       // 1. Generar ID temporal único para la historia
       final uuid = Uuid();
       final tempStoryId = 'temp_${uuid.v4()}';
-      print('🆔 ID temporal generado: $tempStoryId');
+      ReleaseLogger.log('🆔 ID temporal generado: $tempStoryId', tag: 'StoryService');
 
       // 2. Obtener datos del usuario (necesarios para crear el objeto Story)
       final userDoc = await _firestore.collection('users').doc(user.uid).get();
@@ -181,7 +182,7 @@ class StoryService {
 
       // 4. Guardar en cache local
       _optimisticStories[tempStoryId] = tempStory;
-      print('💾 [OPTIMISTIC] Historia guardada en cache local: $tempStoryId');
+      ReleaseLogger.log('💾 [OPTIMISTIC] Historia guardada en cache local: $tempStoryId', tag: 'StoryService');
 
       // Notificar cambio en el cache para actualizar UI
       _optimisticStoriesController.add(null);
@@ -202,13 +203,13 @@ class StoryService {
         onProgressUpdate: onProgressUpdate,
       );
 
-      print('✅ [OPTIMISTIC] Historia temporal creada con ID: $tempStoryId');
-      print('⏳ [OPTIMISTIC] Subida en progreso...');
+      ReleaseLogger.log('✅ [OPTIMISTIC] Historia temporal creada con ID: $tempStoryId', tag: 'StoryService');
+      ReleaseLogger.log('⏳ [OPTIMISTIC] Subida en progreso...', tag: 'StoryService');
 
       // 6. Retornar ID inmediatamente
       return tempStoryId;
     } catch (e) {
-      print('❌ [OPTIMISTIC] Error creando historia optimista: $e');
+      ReleaseLogger.error('[OPTIMISTIC] Error creando historia optimista: $e', tag: 'StoryService');
       throw Exception('Error creando historia optimista: $e');
     }
   }
@@ -229,7 +230,7 @@ class StoryService {
     Function(String storyId, double progress)? onProgressUpdate,
   }) async {
     try {
-      print('📤 [OPTIMISTIC] Iniciando subida en background para: $tempStoryId');
+      ReleaseLogger.log('📤 [OPTIMISTIC] Iniciando subida en background para: $tempStoryId', tag: 'StoryService');
 
       // 1. Subir media a Firebase Storage con tracking de progreso
       String mediaUrl;
@@ -238,7 +239,7 @@ class StoryService {
           mediaPath,
           userId,
           (progress) {
-            print('📊 [OPTIMISTIC] Progreso de subida: ${(progress * 100).toStringAsFixed(1)}%');
+            ReleaseLogger.log('📊 [OPTIMISTIC] Progreso de subida: ${(progress * 100).toStringAsFixed(1)}%', tag: 'StoryService');
 
             // Actualizar progreso en el cache
             final cachedStory = _optimisticStories[tempStoryId];
@@ -254,9 +255,9 @@ class StoryService {
             onProgressUpdate?.call(tempStoryId, progress);
           },
         );
-        print('✅ [OPTIMISTIC] Media subida exitosamente: $mediaUrl');
+        ReleaseLogger.log('✅ [OPTIMISTIC] Media subida exitosamente: $mediaUrl', tag: 'StoryService');
       } catch (uploadError) {
-        print('❌ [OPTIMISTIC] Error subiendo media: $uploadError');
+        ReleaseLogger.error('[OPTIMISTIC] Error subiendo media: $uploadError', tag: 'StoryService');
 
         // Actualizar estado de error en el cache
         final cachedStory = _optimisticStories[tempStoryId];
@@ -285,12 +286,12 @@ class StoryService {
         if (linkedParents.isNotEmpty) {
           status = 'pending';
           requiresApproval = true;
-          print('👶 [OPTIMISTIC] Usuario es niño con padres vinculados - requiere aprobación');
+          ReleaseLogger.log('👶 [OPTIMISTIC] Usuario es niño con padres vinculados - requiere aprobación', tag: 'StoryService');
         } else {
-          print('👶 [OPTIMISTIC] Usuario es niño sin padres vinculados - auto-aprobada');
+          ReleaseLogger.log('👶 [OPTIMISTIC] Usuario es niño sin padres vinculados - auto-aprobada', tag: 'StoryService');
         }
       } else {
-        print('👔 [OPTIMISTIC] Usuario es $userRole - historia auto-aprobada');
+        ReleaseLogger.log('👔 [OPTIMISTIC] Usuario es $userRole - historia auto-aprobada', tag: 'StoryService');
       }
 
       // 3. Crear historia en Firestore
@@ -315,37 +316,37 @@ class StoryService {
         'tempStoryId': tempStoryId, // Guardar el ID temporal para referencia
       };
 
-      print('💾 [OPTIMISTIC] Guardando historia en Firestore...');
+      ReleaseLogger.log('💾 [OPTIMISTIC] Guardando historia en Firestore...', tag: 'StoryService');
       final docRef = await _firestore.collection('stories').add(storyData);
-      print('✅ [OPTIMISTIC] Historia guardada con ID real: ${docRef.id}');
+      ReleaseLogger.log('✅ [OPTIMISTIC] Historia guardada con ID real: ${docRef.id}', tag: 'StoryService');
 
       // 4. Crear solicitudes de aprobación si es necesario
       if (requiresApproval) {
-        print('📬 [OPTIMISTIC] Creando solicitudes de aprobación...');
+        ReleaseLogger.log('📬 [OPTIMISTIC] Creando solicitudes de aprobación...', tag: 'StoryService');
         await _notifyParentOfPendingStory(userId, docRef.id);
       }
 
       // 5. Reportar progreso completo (1.0)
       onProgressUpdate?.call(tempStoryId, 1.0);
-      print('✅ [OPTIMISTIC] Subida completada exitosamente');
+      ReleaseLogger.log('✅ [OPTIMISTIC] Subida completada exitosamente', tag: 'StoryService');
 
       // 6. Eliminar del cache de historias optimistas después de un delay
       // (para que la UI tenga tiempo de mostrar el 100% antes de cambiar al documento real)
       Future.delayed(Duration(seconds: 2), () {
         _optimisticStories.remove(tempStoryId);
-        print('🗑️ [OPTIMISTIC] Historia temporal eliminada del cache: $tempStoryId');
+        ReleaseLogger.log('🗑️ [OPTIMISTIC] Historia temporal eliminada del cache: $tempStoryId', tag: 'StoryService');
         // Notificar cambio para actualizar UI
         _optimisticStoriesController.add(null);
       });
     } catch (e) {
-      print('❌ [OPTIMISTIC] Error en subida background: $e');
+      ReleaseLogger.error('[OPTIMISTIC] Error en subida background: $e', tag: 'StoryService');
       // Reportar error a través del callback con progreso -1.0
       onProgressUpdate?.call(tempStoryId, -1.0);
 
       // Mantener en cache por más tiempo en caso de error (para mostrar el estado de error)
       Future.delayed(Duration(seconds: 5), () {
         _optimisticStories.remove(tempStoryId);
-        print('🗑️ [OPTIMISTIC] Historia temporal con error eliminada del cache: $tempStoryId');
+        ReleaseLogger.log('🗑️ [OPTIMISTIC] Historia temporal con error eliminada del cache: $tempStoryId', tag: 'StoryService');
         // Notificar cambio para actualizar UI
         _optimisticStoriesController.add(null);
       });
@@ -359,7 +360,7 @@ class StoryService {
     Function(double progress) onProgress,
   ) async {
     try {
-      print('📤 [OPTIMISTIC] Subiendo archivo con progreso: $filePath para usuario: $userId');
+      ReleaseLogger.log('📤 [OPTIMISTIC] Subiendo archivo con progreso: $filePath para usuario: $userId', tag: 'StoryService');
       final file = File(filePath);
       final fileName = 'story_${DateTime.now().millisecondsSinceEpoch}';
       final storageRef = _storage.ref('stories/$userId/$fileName');
@@ -378,13 +379,13 @@ class StoryService {
 
       if (snapshot.state == TaskState.success) {
         final downloadURL = await snapshot.ref.getDownloadURL();
-        print('✅ [OPTIMISTIC] Subida exitosa. URL: $downloadURL');
+        ReleaseLogger.log('✅ [OPTIMISTIC] Subida exitosa. URL: $downloadURL', tag: 'StoryService');
         return downloadURL;
       } else {
         throw Exception('Error en la subida del archivo: ${snapshot.state}');
       }
     } catch (e) {
-      print('❌ [OPTIMISTIC] Error subiendo media: $e');
+      ReleaseLogger.error('❌ [OPTIMISTIC] Error subiendo media: $e', tag: 'StoryService');
       throw Exception('Error subiendo media: $e');
     }
   }
@@ -402,7 +403,7 @@ class StoryService {
       final linkedParents = await userRoleService.getLinkedParents(childId);
 
       if (linkedParents.isEmpty) {
-        print('⚠️ No hay padres vinculados para enviar notificación');
+        ReleaseLogger.log('⚠️ No hay padres vinculados para enviar notificación', tag: 'StoryService');
         return;
       }
 
@@ -420,33 +421,33 @@ class StoryService {
 
         // ✅ La notificación se creará automáticamente por Cloud Function
         // cuando se cree el documento en story_approval_requests
-        print('📱 Solicitud de aprobación creada para padre $parentId');
-        print('🔔 La notificación se creará automáticamente por Cloud Function');
+        ReleaseLogger.log('📱 Solicitud de aprobación creada para padre $parentId', tag: 'StoryService');
+        ReleaseLogger.log('🔔 La notificación se creará automáticamente por Cloud Function', tag: 'StoryService');
       }
 
-      print('✅ Notificaciones enviadas a ${linkedParents.length} padre(s)');
+      ReleaseLogger.log('✅ Notificaciones enviadas a ${linkedParents.length} padre(s)', tag: 'StoryService');
     } catch (e) {
-      print('Error enviando notificación a padres: $e');
+      ReleaseLogger.error('Error enviando notificación a padres: $e', tag: 'StoryService');
     }
   }
 
   // Subir media a Firebase Storage
   Future<String> _uploadStoryMedia(String filePath, String userId) async {
     try {
-      print('📤 Subiendo archivo: $filePath para usuario: $userId');
+      ReleaseLogger.log('📤 Subiendo archivo: $filePath para usuario: $userId', tag: 'StoryService');
       final file = File(filePath);
       final fileName = 'story_${DateTime.now().millisecondsSinceEpoch}';
-      print('📂 Nombre del archivo: $fileName');
+      ReleaseLogger.log('📂 Nombre del archivo: $fileName', tag: 'StoryService');
       final storageRef = _storage.ref('stories/$userId/$fileName');
-      print('🔗 Referencia de Storage: ${storageRef.fullPath}');
+      ReleaseLogger.log('🔗 Referencia de Storage: ${storageRef.fullPath}', tag: 'StoryService');
 
-      print('⬆️ Iniciando subida...');
+      ReleaseLogger.log('⬆️ Iniciando subida...', tag: 'StoryService');
       final uploadTask = storageRef.putFile(file);
       final snapshot = await uploadTask;
 
       if (snapshot.state == TaskState.success) {
         final downloadURL = await snapshot.ref.getDownloadURL();
-        print('✅ Subida exitosa. URL: $downloadURL');
+        ReleaseLogger.log('✅ Subida exitosa. URL: $downloadURL', tag: 'StoryService');
         return downloadURL;
       } else {
         throw Exception('Error en la subida del archivo: ${snapshot.state}');
@@ -465,11 +466,11 @@ class StoryService {
     if (_cachedContactIds != null &&
         _lastContactsCacheUpdate != null &&
         DateTime.now().difference(_lastContactsCacheUpdate!) < _contactsCacheDuration) {
-      print('📋 Usando cache de contactos (${_cachedContactIds!.length} contactos)');
+      ReleaseLogger.log('📋 Usando cache de contactos (${_cachedContactIds!.length} contactos)', tag: 'StoryService');
       return _cachedContactIds!;
     }
 
-    print('🔄 Recalculando lista de contactos...');
+    ReleaseLogger.log('🔄 Recalculando lista de contactos...', tag: 'StoryService');
     final contactIds = <String>{};
 
     // 1. Obtener contactos desde la colección 'contacts' (bidireccional)
@@ -510,7 +511,7 @@ class StoryService {
       contactIds.add(parentDoc.id);
     }
 
-    print('✅ Contactos recalculados: ${contactIds.length}');
+    ReleaseLogger.log('✅ Contactos recalculados: ${contactIds.length}', tag: 'StoryService');
 
     // Actualizar cache
     _cachedContactIds = contactIds;
@@ -551,7 +552,7 @@ class StoryService {
       chunks.add(contactIds.sublist(i, end));
     }
 
-    print('📢 [StoryService] Escuchando historias de ${contactIds.length} contactos en ${chunks.length} chunk(s)');
+    ReleaseLogger.log('📢 [StoryService] Escuchando historias de ${contactIds.length} contactos en ${chunks.length} chunk(s)', tag: 'StoryService');
 
     // Crear un stream por cada chunk y combinarlos con StreamGroup
     final List<Stream<QuerySnapshot>> chunkStreams = chunks.map((chunk) {
@@ -576,7 +577,7 @@ class StoryService {
     await for (final _ in combinedStream) {
       // ✅ Invalidar cache al detectar cambios en Firestore
       // Esto asegura que siempre leamos data fresca del servidor
-      print('🔄 [StoryService] Cambio detectado en Firestore o cache local, invalidando cache...');
+      ReleaseLogger.log('🔄 [StoryService] Cambio detectado en Firestore o cache local, invalidando cache...', tag: 'StoryService');
 
       final List<UserStories> userStoriesList = [];
 
@@ -704,7 +705,7 @@ class StoryService {
             }
           }
         } catch (e) {
-          print('⚠️ Error obteniendo historias pendientes de $userId: $e');
+          ReleaseLogger.error('⚠️ Error obteniendo historias pendientes de $userId: $e', tag: 'StoryService');
           // No es crítico, continuar con las historias aprobadas
         }
       }
@@ -726,7 +727,7 @@ class StoryService {
         hasUnviewed: hasUnviewed,
       );
     } catch (e) {
-      print('Error obteniendo historias de usuario $userId: $e');
+      ReleaseLogger.error('Error obteniendo historias de usuario $userId: $e', tag: 'StoryService');
       return null;
     }
   }
@@ -742,7 +743,7 @@ class StoryService {
         'viewedBy': FieldValue.arrayUnion([user.uid]),
       });
     } catch (e) {
-      print('Error marcando historia como vista: $e');
+      ReleaseLogger.error('Error marcando historia como vista: $e', tag: 'StoryService');
     }
   }
 
@@ -768,9 +769,9 @@ class StoryService {
         try {
           final storageRef = _storage.refFromURL(mediaUrl);
           await storageRef.delete();
-          print('🗑️ Archivo eliminado de Storage');
+          ReleaseLogger.log('🗑️ Archivo eliminado de Storage', tag: 'StoryService');
         } catch (e) {
-          print('⚠️ Error eliminando archivo de Storage: $e');
+          ReleaseLogger.error('⚠️ Error eliminando archivo de Storage: $e', tag: 'StoryService');
         }
       }
 
@@ -785,7 +786,7 @@ class StoryService {
       }
 
       if (requestsQuery.docs.isNotEmpty) {
-        print('🗑️ Eliminadas ${requestsQuery.docs.length} solicitud(es) de aprobación');
+        ReleaseLogger.log('🗑️ Eliminadas ${requestsQuery.docs.length} solicitud(es) de aprobación', tag: 'StoryService');
       }
 
       // Eliminar documento de Firestore
@@ -805,7 +806,7 @@ class StoryService {
       // el stream de Firestore NO se dispara (el usuario ya no matchea el query)
       _optimisticStoriesController.add(null);
 
-      print('✅ Historia $storyId eliminada exitosamente');
+      ReleaseLogger.log('✅ Historia $storyId eliminada exitosamente', tag: 'StoryService');
     } catch (e) {
       throw Exception('Error eliminando historia: $e');
     }
@@ -829,14 +830,14 @@ class StoryService {
           final storageRef = _storage.refFromURL(mediaUrl);
           await storageRef.delete();
         } catch (e) {
-          print('Error eliminando archivo expirado de Storage: $e');
+          ReleaseLogger.error('Error eliminando archivo expirado de Storage: $e', tag: 'StoryService');
         }
 
         // Eliminar documento
         await storyDoc.reference.delete();
       }
     } catch (e) {
-      print('Error limpiando historias expiradas: $e');
+      ReleaseLogger.error('Error limpiando historias expiradas: $e', tag: 'StoryService');
     }
   }
 
@@ -888,7 +889,7 @@ class StoryService {
           .toList();
 
       if (optimisticUserStories.isNotEmpty) {
-        print('📋 [OPTIMISTIC] Agregando ${optimisticUserStories.length} historia(s) optimista(s) al cache');
+        ReleaseLogger.log('📋 [OPTIMISTIC] Agregando ${optimisticUserStories.length} historia(s) optimista(s) al cache', tag: 'StoryService');
         stories.addAll(optimisticUserStories);
         // Ordenar por fecha de creación (más recientes primero)
         stories.sort((a, b) => b.createdAt.compareTo(a.createdAt));
@@ -904,7 +905,7 @@ class StoryService {
         hasUnviewed: false, // Para el usuario actual no aplica
       );
     } catch (e) {
-      print('Error obteniendo historias del usuario actual: $e');
+      ReleaseLogger.error('Error obteniendo historias del usuario actual: $e', tag: 'StoryService');
       return null;
     }
   }
@@ -938,7 +939,7 @@ class StoryService {
             }
           }
         } catch (e) {
-          print('Error obteniendo historia pendiente: $e');
+          ReleaseLogger.error('Error obteniendo historia pendiente: $e', tag: 'StoryService');
         }
       }
 
@@ -959,7 +960,7 @@ class StoryService {
         try {
           return Story.fromFirestore(doc);
         } catch (e) {
-          print('Error parseando historia: $e');
+          ReleaseLogger.error('Error parseando historia: $e', tag: 'StoryService');
           rethrow;
         }
       }).toList();
@@ -999,7 +1000,7 @@ class StoryService {
           final story = Story.fromFirestore(doc);
           approvedStories.add(story);
         } catch (e) {
-          print('Error obteniendo historia aprobada: $e');
+          ReleaseLogger.error('Error obteniendo historia aprobada: $e', tag: 'StoryService');
         }
       }
 
@@ -1021,7 +1022,7 @@ class StoryService {
         try {
           return Story.fromFirestore(doc);
         } catch (e) {
-          print('Error parseando historia aprobada: $e');
+          ReleaseLogger.error('Error parseando historia aprobada: $e', tag: 'StoryService');
           rethrow;
         }
       }).toList();
@@ -1061,7 +1062,7 @@ class StoryService {
           final story = Story.fromFirestore(doc);
           rejectedStories.add(story);
         } catch (e) {
-          print('Error obteniendo historia rechazada: $e');
+          ReleaseLogger.error('Error obteniendo historia rechazada: $e', tag: 'StoryService');
         }
       }
 
@@ -1083,7 +1084,7 @@ class StoryService {
         try {
           return Story.fromFirestore(doc);
         } catch (e) {
-          print('Error parseando historia rechazada: $e');
+          ReleaseLogger.error('Error parseando historia rechazada: $e', tag: 'StoryService');
           rethrow;
         }
       }).toList();
@@ -1132,15 +1133,15 @@ class StoryService {
             childId: childId,
           );
         } catch (notifError) {
-          print('⚠️ Error enviando notificación de aprobación: $notifError');
+          ReleaseLogger.error('⚠️ Error enviando notificación de aprobación: $notifError', tag: 'StoryService');
           // No lanzar error, la historia ya fue aprobada correctamente
         }
       }
 
-      print('✅ Historia $storyId aprobada');
+      ReleaseLogger.log('✅ Historia $storyId aprobada', tag: 'StoryService');
     } catch (e) {
       // Solo lanzar error si falló la actualización de la historia/solicitud
-      print('❌ Error en approveStory: $e');
+      ReleaseLogger.error('Error en approveStory: $e', tag: 'StoryService');
       throw Exception('Error aprobando historia: $e');
     }
   }
@@ -1189,15 +1190,15 @@ class StoryService {
             reason: reason,
           );
         } catch (notifError) {
-          print('⚠️ Error enviando notificación de rechazo: $notifError');
+          ReleaseLogger.error('⚠️ Error enviando notificación de rechazo: $notifError', tag: 'StoryService');
           // No lanzar error, la historia ya fue rechazada correctamente
         }
       }
 
-      print('❌ Historia $storyId rechazada');
+      ReleaseLogger.log('❌ Historia $storyId rechazada', tag: 'StoryService');
     } catch (e) {
       // Solo lanzar error si falló la actualización de la historia/solicitud
-      print('❌ Error en rejectStory: $e');
+      ReleaseLogger.error('❌ Error en rejectStory: $e', tag: 'StoryService');
       throw Exception('Error rechazando historia: $e');
     }
   }
@@ -1247,7 +1248,7 @@ class StoryService {
 
       return childrenStories;
     } catch (e) {
-      print('Error obteniendo historias de hijos: $e');
+      ReleaseLogger.error('Error obteniendo historias de hijos: $e', tag: 'StoryService');
       return [];
     }
   }
@@ -1263,7 +1264,7 @@ class StoryService {
     if (user == null) throw Exception('Usuario no autenticado');
 
     try {
-      print('💬 Respondiendo a historia $storyId...');
+      ReleaseLogger.log('💬 Respondiendo a historia $storyId...', tag: 'StoryService');
 
       // Obtener datos del usuario
       final userDoc = await _firestore.collection('users').doc(user.uid).get();
@@ -1283,7 +1284,7 @@ class StoryService {
         'replies': FieldValue.arrayUnion([reply.toMap()]),
       });
 
-      print('✅ Respuesta agregada a historia $storyId');
+      ReleaseLogger.log('✅ Respuesta agregada a historia $storyId', tag: 'StoryService');
 
       // Obtener información de la historia y su creador
       final storyDoc = await _firestore.collection('stories').doc(storyId).get();
@@ -1297,10 +1298,10 @@ class StoryService {
           final mediaUrl = storyData?['mediaUrl'];
           final mediaType = storyData?['mediaType'] ?? 'image';
 
-          print('📸 Datos de la historia:');
-          print('  - mediaUrl: $mediaUrl');
-          print('  - mediaType: $mediaType');
-          print('  - text: $text');
+          ReleaseLogger.log('📸 Datos de la historia:', tag: 'StoryService');
+          ReleaseLogger.log('  - mediaUrl: $mediaUrl', tag: 'StoryService');
+          ReleaseLogger.log('  - mediaType: $mediaType', tag: 'StoryService');
+          ReleaseLogger.log('  - text: $text', tag: 'StoryService');
 
           if (mediaUrl != null && mediaUrl.toString().isNotEmpty) {
             // Copiar la imagen/video a una ubicación permanente en chats
@@ -1308,7 +1309,7 @@ class StoryService {
             String? permanentMediaUrl;
 
             try {
-              print('📋 Copiando media de historia a ubicación permanente...');
+              ReleaseLogger.log('📋 Copiando media de historia a ubicación permanente...', tag: 'StoryService');
 
               // Obtener referencia a la imagen original de la historia
               final storageRef = _storage.refFromURL(mediaUrl);
@@ -1327,11 +1328,11 @@ class StoryService {
                 await newRef.putData(data);
                 permanentMediaUrl = await newRef.getDownloadURL();
 
-                print('✅ Media copiada a: $newPath');
-                print('✅ Nueva URL permanente: $permanentMediaUrl');
+                ReleaseLogger.log('✅ Media copiada a: $newPath', tag: 'StoryService');
+                ReleaseLogger.log('✅ Nueva URL permanente: $permanentMediaUrl', tag: 'StoryService');
               }
             } catch (copyError) {
-              print('❌ Error copiando media: $copyError');
+              ReleaseLogger.error('❌ Error copiando media: $copyError', tag: 'StoryService');
               // Si falla la copia, usar la URL original (imagen se romperá en 24h)
               permanentMediaUrl = mediaUrl;
             }
@@ -1344,9 +1345,9 @@ class StoryService {
               type: mediaType,
               mediaUrl: permanentMediaUrl ?? mediaUrl,
             );
-            print('💬 Mensaje con historia enviado al chat privado');
+            ReleaseLogger.log('💬 Mensaje con historia enviado al chat privado', tag: 'StoryService');
           } else {
-            print('⚠️ mediaUrl es null o vacío, no se puede enviar el mensaje con imagen');
+            ReleaseLogger.log('⚠️ mediaUrl es null o vacío, no se puede enviar el mensaje con imagen', tag: 'StoryService');
             // Enviar solo el texto si no hay mediaUrl
             await _firebaseService.sendMessage(
               chatId: chatId,
@@ -1357,15 +1358,15 @@ class StoryService {
             );
           }
         } catch (chatError) {
-          print('⚠️ Error enviando mensaje al chat: $chatError');
+          ReleaseLogger.error('⚠️ Error enviando mensaje al chat: $chatError', tag: 'StoryService');
         }
 
         // ✅ NO enviar notificación aquí - la Cloud Function la enviará después de moderar
         // Esto evita notificaciones duplicadas (una de historia + una del chat)
-        print('✅ Mensaje enviado al chat - Cloud Function enviará la notificación tras moderar');
+        ReleaseLogger.log('✅ Mensaje enviado al chat - Cloud Function enviará la notificación tras moderar', tag: 'StoryService');
       }
     } catch (e) {
-      print('❌ Error respondiendo a historia: $e');
+      ReleaseLogger.error('❌ Error respondiendo a historia: $e', tag: 'StoryService');
       throw Exception('Error al responder historia: $e');
     }
   }
@@ -1378,16 +1379,16 @@ class StoryService {
   /// Automáticamente llamado cuando una historia expira y está aprobada
   Future<void> saveToPermanent(String storyId) async {
     try {
-      print('💾 Guardando historia $storyId como permanente...');
+      ReleaseLogger.log('💾 Guardando historia $storyId como permanente...', tag: 'StoryService');
 
       await _firestore.collection('stories').doc(storyId).update({
         'visibility': 'permanent',
         'savedToPermanentAt': FieldValue.serverTimestamp(),
       });
 
-      print('✅ Historia guardada como permanente exitosamente');
+      ReleaseLogger.log('✅ Historia guardada como permanente exitosamente', tag: 'StoryService');
     } catch (e) {
-      print('❌ Error guardando historia como permanente: $e');
+      ReleaseLogger.error('❌ Error guardando historia como permanente: $e', tag: 'StoryService');
       throw Exception('Error guardando historia: $e');
     }
   }
@@ -1407,15 +1408,15 @@ class StoryService {
         throw Exception('No tienes permiso para archivar esta historia');
       }
 
-      print('📦 Archivando historia $storyId...');
+      ReleaseLogger.log('📦 Archivando historia $storyId...', tag: 'StoryService');
 
       await _firestore.collection('stories').doc(storyId).update({
         'visibility': 'archived',
       });
 
-      print('✅ Historia archivada exitosamente');
+      ReleaseLogger.log('✅ Historia archivada exitosamente', tag: 'StoryService');
     } catch (e) {
-      print('❌ Error archivando historia: $e');
+      ReleaseLogger.error('❌ Error archivando historia: $e', tag: 'StoryService');
       throw Exception('Error archivando historia: $e');
     }
   }
@@ -1435,15 +1436,15 @@ class StoryService {
         throw Exception('No tienes permiso para desarchivar esta historia');
       }
 
-      print('📤 Desarchivando historia $storyId...');
+      ReleaseLogger.log('📤 Desarchivando historia $storyId...', tag: 'StoryService');
 
       await _firestore.collection('stories').doc(storyId).update({
         'visibility': 'permanent',
       });
 
-      print('✅ Historia desarchivada exitosamente');
+      ReleaseLogger.log('✅ Historia desarchivada exitosamente', tag: 'StoryService');
     } catch (e) {
-      print('❌ Error desarchivando historia: $e');
+      ReleaseLogger.error('❌ Error desarchivando historia: $e', tag: 'StoryService');
       throw Exception('Error desarchivando historia: $e');
     }
   }
@@ -1499,7 +1500,7 @@ class StoryService {
 
       yield allStories;
     } catch (e) {
-      print('Error obteniendo historias del usuario: $e');
+      ReleaseLogger.error('Error obteniendo historias del usuario: $e', tag: 'StoryService');
       yield [];
     }
   }
@@ -1539,7 +1540,7 @@ class StoryService {
   /// Este método debería ser llamado por un Cloud Function o background task
   Future<void> convertExpiredStoriesToPermanent() async {
     try {
-      print('🔄 Iniciando conversión de historias expiradas a permanentes...');
+      ReleaseLogger.log('🔄 Iniciando conversión de historias expiradas a permanentes...', tag: 'StoryService');
 
       final now = DateTime.now();
       final snapshot = await _firestore
@@ -1549,7 +1550,7 @@ class StoryService {
           .where('expiresAt', isLessThan: Timestamp.fromDate(now))
           .get();
 
-      print('📊 Encontradas ${snapshot.docs.length} historias expiradas para convertir');
+      ReleaseLogger.log('📊 Encontradas ${snapshot.docs.length} historias expiradas para convertir', tag: 'StoryService');
 
       final batch = _firestore.batch();
       int count = 0;
@@ -1573,9 +1574,9 @@ class StoryService {
         await batch.commit();
       }
 
-      print('✅ ${snapshot.docs.length} historias convertidas a permanentes');
+      ReleaseLogger.log('✅ ${snapshot.docs.length} historias convertidas a permanentes', tag: 'StoryService');
     } catch (e) {
-      print('❌ Error convirtiendo historias expiradas: $e');
+      ReleaseLogger.error('❌ Error convirtiendo historias expiradas: $e', tag: 'StoryService');
     }
   }
 
@@ -1588,13 +1589,13 @@ class StoryService {
     // Evitar preloads múltiples o muy frecuentes
     final now = DateTime.now();
     if (_isPreloading) {
-      print('⏩ Preload ya en progreso, saltando...');
+      ReleaseLogger.log('⏩ Preload ya en progreso, saltando...', tag: 'StoryService');
       return;
     }
 
     if (_lastPreloadTime != null &&
         now.difference(_lastPreloadTime!).inMinutes < 5) {
-      print('⏩ Preload reciente (${now.difference(_lastPreloadTime!).inMinutes}m), saltando...');
+      ReleaseLogger.log('⏩ Preload reciente (${now.difference(_lastPreloadTime!).inMinutes}m), saltando...', tag: 'StoryService');
       return;
     }
 
@@ -1602,14 +1603,14 @@ class StoryService {
       _isPreloading = true;
       _lastPreloadTime = now;
 
-      print('🚀 [StoryService] Iniciando preload de historias...');
+      ReleaseLogger.log('🚀 [StoryService] Iniciando preload de historias...', tag: 'StoryService');
 
       // 1. Obtener lista de contactos (limitada a los primeros 10 para preload)
       final contactIdsSet = await _getContactIds();
       if (contactIdsSet.isEmpty) return;
 
       final contactIds = contactIdsSet.take(10).toList(); // Solo precargar top 10
-      print('📋 [StoryService] Precargando historias de ${contactIds.length} contactos...');
+      ReleaseLogger.log('📋 [StoryService] Precargando historias de ${contactIds.length} contactos...', tag: 'StoryService');
 
       final List<UserStories> preloadedStories = [];
 
@@ -1652,13 +1653,13 @@ class StoryService {
       _cachedStories = preloadedStories;
       _lastCacheUpdate = now;
 
-      print('✅ [StoryService] Preload completado: ${preloadedStories.length} usuarios con historias');
+      ReleaseLogger.log('✅ [StoryService] Preload completado: ${preloadedStories.length} usuarios con historias', tag: 'StoryService');
 
       // Notificar cambios para refrescar UI si está visible
       _optimisticStoriesController.add(null);
 
     } catch (e) {
-      print('❌ [StoryService] Error en preload: $e');
+      ReleaseLogger.error('❌ [StoryService] Error en preload: $e', tag: 'StoryService');
     } finally {
       _isPreloading = false;
     }
@@ -1672,6 +1673,6 @@ class StoryService {
     _lastContactsCacheUpdate = null;
     _optimisticStories.clear();
     _lastPreloadTime = null;
-    print('🧹 [StoryService] Cache limpiado');
+    ReleaseLogger.log('🧹 [StoryService] Cache limpiado', tag: 'StoryService');
   }
 }

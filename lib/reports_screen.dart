@@ -2,25 +2,35 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'utils/release_logger.dart';
 
 class ReportsScreen extends StatefulWidget {
   /// Opcional: si se proporciona, filtra alertas y reportes solo de este hijo
   final String? childId;
+  final FirebaseAuth? auth;
+  final FirebaseFirestore? firestore;
 
-  const ReportsScreen({super.key, this.childId});
+  const ReportsScreen({super.key, this.childId, this.auth, this.firestore});
 
   @override
   State<ReportsScreen> createState() => _ReportsScreenState();
 }
 
 class _ReportsScreenState extends State<ReportsScreen> {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  late final FirebaseAuth _auth;
+  late final FirebaseFirestore _firestore;
+
+  @override
+  void initState() {
+    super.initState();
+    _auth = widget.auth ?? FirebaseAuth.instance;
+    _firestore = widget.firestore ?? FirebaseFirestore.instance;
+  }
 
   /// Obtener alertas no leídas para un padre
   /// Si widget.childId está presente, filtra solo alertas de ese hijo
   Stream<QuerySnapshot> _getUnreadAlerts(String parentId) {
-    print('📋 [ReportsScreen] Consultando alertas - parentId: $parentId, childId: ${widget.childId}');
+    ReleaseLogger.log('Consultando alertas - parentId: $parentId, childId: ${widget.childId}', tag: 'ReportsScreen');
 
     var query = _firestore
         .collection('alerts')
@@ -30,13 +40,13 @@ class _ReportsScreenState extends State<ReportsScreen> {
     // ✅ Si hay childId, filtrar solo alertas de ese hijo
     if (widget.childId != null) {
       query = query.where('childId', isEqualTo: widget.childId);
-      print('📋 [ReportsScreen] Filtrando por childId: ${widget.childId}');
+      ReleaseLogger.log('Filtrando por childId: ${widget.childId}', tag: 'ReportsScreen');
     }
 
     return query.orderBy('createdAt', descending: true).snapshots().map((snapshot) {
-      print('📋 [ReportsScreen] Encontradas ${snapshot.docs.length} alertas');
+      ReleaseLogger.log('Encontradas ${snapshot.docs.length} alertas', tag: 'ReportsScreen');
       if (snapshot.docs.isNotEmpty) {
-        print('📋 [ReportsScreen] Primera alerta: ${snapshot.docs.first.data()}');
+        ReleaseLogger.log('Primera alerta: ${snapshot.docs.first.data()}', tag: 'ReportsScreen');
       }
       return snapshot;
     });
@@ -50,7 +60,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         'readAt': FieldValue.serverTimestamp(),
       });
     } catch (e) {
-      print('Error marking alert as read: $e');
+      ReleaseLogger.error('Error marking alert as read: $e', tag: 'ReportsScreen');
     }
   }
 
@@ -111,7 +121,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
             builder: (context, reportsSnapshot) {
               // Manejo de errores
               if (reportsSnapshot.hasError) {
-                print('❌ [ReportsScreen] Error en StreamBuilder: ${reportsSnapshot.error}');
+                ReleaseLogger.error('Error en StreamBuilder: ${reportsSnapshot.error}', tag: 'ReportsScreen');
                 return Center(
                   child: Padding(
                     padding: EdgeInsets.all(32),
@@ -149,9 +159,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
               // Logging para debug
               if (reportsSnapshot.hasData) {
-                print('📊 [ReportsScreen] Reportes cargados: ${reportsSnapshot.data!.docs.length}');
+                ReleaseLogger.log('Reportes cargados: ${reportsSnapshot.data!.docs.length}', tag: 'ReportsScreen');
               } else {
-                print('⚠️ [ReportsScreen] StreamBuilder sin datos');
+                ReleaseLogger.log('StreamBuilder sin datos', tag: 'ReportsScreen');
               }
 
               return CustomScrollView(
@@ -684,7 +694,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
     );
 
     try {
-      print('📊 Llamando a Cloud Function generateChildReport');
+      ReleaseLogger.log('Llamando a Cloud Function generateChildReport', tag: 'ReportsScreen');
 
       // Llamar a la Cloud Function
       final callable = FirebaseFunctions.instance.httpsCallable('generateChildReport');
@@ -706,7 +716,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
       }
 
       if (data['success'] == true) {
-        print('✅ Reporte generado exitosamente');
+        ReleaseLogger.log('Reporte generado exitosamente', tag: 'ReportsScreen');
 
         // Dar tiempo para que Firestore propague el nuevo documento al stream
         // Esto es necesario porque hay latencia entre cuando se escribe el documento
@@ -730,14 +740,14 @@ class _ReportsScreenState extends State<ReportsScreen> {
         throw Exception(data['message'] ?? 'Error desconocido');
       }
     } catch (e) {
-      print('❌ Error generando reporte: $e');
+      ReleaseLogger.error('Error generando reporte: $e', tag: 'ReportsScreen');
 
       // Cerrar diálogo si todavía está abierto
       if (mounted) {
         try {
           Navigator.of(scaffoldContext, rootNavigator: true).pop();
         } catch (popError) {
-          print('⚠️ No se pudo cerrar el diálogo: $popError');
+          ReleaseLogger.error('No se pudo cerrar el diálogo: $popError', tag: 'ReportsScreen');
         }
       }
 
@@ -1186,12 +1196,16 @@ class ReportHistoryScreen extends StatelessWidget {
   final String childId;
   final String childName;
   final String? photoUrl;
+  final FirebaseAuth? auth;
+  final FirebaseFirestore? firestore;
 
   const ReportHistoryScreen({
     super.key,
     required this.childId,
     required this.childName,
     this.photoUrl,
+    this.auth,
+    this.firestore,
   });
 
   @override
@@ -1203,10 +1217,10 @@ class ReportHistoryScreen extends StatelessWidget {
         title: Text('Historial de $childName'),
       ),
       body: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance
+        stream: (firestore ?? FirebaseFirestore.instance)
             .collection('weekly_reports')
             .where('childId', isEqualTo: childId)
-            .where('parentId', isEqualTo: FirebaseAuth.instance.currentUser!.uid)
+            .where('parentId', isEqualTo: (auth ?? FirebaseAuth.instance).currentUser!.uid)
             .orderBy('generatedAt', descending: true)
             .snapshots(),
         builder: (context, snapshot) {

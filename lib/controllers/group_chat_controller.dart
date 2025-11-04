@@ -9,6 +9,7 @@ import '../services/typing_indicator_service.dart';
 import '../services/media_service.dart';
 import '../services/media_compression_service.dart';
 import '../services/audio_processing_service.dart';
+import '../utils/release_logger.dart';
 
 /// Controller que maneja la lógica de un chat grupal
 class GroupChatController {
@@ -82,9 +83,9 @@ class GroupChatController {
         }
       }
 
-      print('✅ Cargados ${_memberIds.length} miembros del grupo');
+      ReleaseLogger.log('Cargados ${_memberIds.length} miembros del grupo', tag: 'GroupChatController');
     } catch (e) {
-      print('❌ Error cargando miembros del grupo: $e');
+      ReleaseLogger.error('Error cargando miembros del grupo: $e', tag: 'GroupChatController');
     }
   }
 
@@ -97,9 +98,9 @@ class GroupChatController {
         'unreadCount_$currentUserId': 0,
       });
 
-      print('✅ Mensajes marcados como leídos para grupo: $groupId');
+      ReleaseLogger.log('Mensajes marcados como leídos para grupo: $groupId', tag: 'GroupChatController');
     } catch (e) {
-      print('❌ Error marcando mensajes como leídos: $e');
+      ReleaseLogger.error('Error marcando mensajes como leídos: $e', tag: 'GroupChatController');
     }
   }
 
@@ -130,10 +131,10 @@ class GroupChatController {
       _lastDocument = snapshot.docs.last;
       _hasMoreMessages = snapshot.docs.length == messagesPerPage;
 
-      print('📥 Cargados ${snapshot.docs.length} mensajes más antiguos del grupo');
+      ReleaseLogger.log('Cargados ${snapshot.docs.length} mensajes más antiguos del grupo', tag: 'GroupChatController');
       return snapshot.docs;
     } catch (e) {
-      print('❌ Error cargando más mensajes: $e');
+      ReleaseLogger.error('Error cargando más mensajes: $e', tag: 'GroupChatController');
       return [];
     }
   }
@@ -167,10 +168,10 @@ class GroupChatController {
       // Actualizar documento del grupo
       await _updateGroupDocument(text);
 
-      print('✅ Mensaje enviado exitosamente al grupo');
+      ReleaseLogger.log('Mensaje enviado exitosamente al grupo', tag: 'GroupChatController');
       return true;
     } catch (e) {
-      print('❌ Error enviando mensaje al grupo: $e');
+      ReleaseLogger.error('Error enviando mensaje al grupo: $e', tag: 'GroupChatController');
       return false;
     }
   }
@@ -204,10 +205,10 @@ class GroupChatController {
           });
 
       await _updateGroupDocument('📷 Imagen');
-      print('✅ Imagen enviada exitosamente al grupo');
+      ReleaseLogger.log('Imagen enviada exitosamente al grupo', tag: 'GroupChatController');
       return true;
     } catch (e) {
-      print('❌ Error enviando imagen al grupo: $e');
+      ReleaseLogger.error('Error enviando imagen al grupo: $e', tag: 'GroupChatController');
       return false;
     }
   }
@@ -221,7 +222,7 @@ class GroupChatController {
     if (currentUserId.isEmpty) return false;
 
     try {
-      print('🎥 Procesando video: $videoPath');
+      ReleaseLogger.log('Procesando video: $videoPath', tag: 'GroupChatController');
       final File videoFile = File(videoPath);
 
       // 1. Comprimir y validar video
@@ -233,7 +234,7 @@ class GroupChatController {
       final File? validatedVideo = await compressionService.validateVideo(
         videoFile,
         onProgress: (progress) {
-          print('🗜️ Progreso de compresión: ${progress.toStringAsFixed(0)}%');
+          ReleaseLogger.log('Progreso de compresión: ${progress.toStringAsFixed(0)}%', tag: 'GroupChatController');
         },
       );
 
@@ -241,7 +242,7 @@ class GroupChatController {
       onHideMessage?.call();
 
       if (validatedVideo == null) {
-        print('❌ No se pudo comprimir el video bajo 10 MB');
+        ReleaseLogger.error('No se pudo comprimir el video bajo 10 MB', tag: 'GroupChatController');
         onShowMessage?.call('El video es muy grande y no se pudo comprimir bajo el límite de 10 MB. Intenta con un video más corto.');
         throw Exception('El video no se pudo comprimir bajo el límite de 10 MB');
       }
@@ -269,10 +270,10 @@ class GroupChatController {
           });
 
       await _updateGroupDocument('🎥 Video');
-      print('✅ Video enviado exitosamente al grupo');
+      ReleaseLogger.log('Video enviado exitosamente al grupo', tag: 'GroupChatController');
       return true;
     } catch (e) {
-      print('❌ Error enviando video al grupo: $e');
+      ReleaseLogger.error('Error enviando video al grupo: $e', tag: 'GroupChatController');
       return false;
     }
   }
@@ -306,14 +307,14 @@ class GroupChatController {
         'isRead': false,
       });
 
-      print('✅ Mensaje optimista de audio creado en grupo: $tempId');
+      ReleaseLogger.log('Mensaje optimista de audio creado en grupo: $tempId', tag: 'GroupChatController');
 
       // 3. Subir audio en background
       _uploadAudioInBackground(audioPath, tempId, waveformData);
 
       return tempId;
     } catch (e) {
-      print('❌ Error creando mensaje optimista de audio: $e');
+      ReleaseLogger.error('Error creando mensaje optimista de audio: $e', tag: 'GroupChatController');
       return null;
     }
   }
@@ -325,7 +326,7 @@ class GroupChatController {
     List<double> waveformData,
   ) async {
     try {
-      print('📤 [BACKGROUND] Subiendo audio del grupo...');
+      ReleaseLogger.log('[BACKGROUND] Subiendo audio del grupo...', tag: 'GroupChatController');
 
       // 1. Subir audio
       final audioUrl = await _mediaService.uploadAudio(
@@ -335,7 +336,7 @@ class GroupChatController {
       );
 
       if (audioUrl == null) {
-        print('❌ [BACKGROUND] Error subiendo audio');
+        ReleaseLogger.error('[BACKGROUND] Error subiendo audio', tag: 'GroupChatController');
         return;
       }
 
@@ -356,9 +357,9 @@ class GroupChatController {
       // 4. Enviar notificaciones
       await _sendNotifications('🎤 Audio');
 
-      print('✅ [BACKGROUND] Audio subido y mensaje actualizado en grupo');
+      ReleaseLogger.log('[BACKGROUND] Audio subido y mensaje actualizado en grupo', tag: 'GroupChatController');
     } catch (e) {
-      print('❌ [BACKGROUND] Error subiendo audio: $e');
+      ReleaseLogger.error('[BACKGROUND] Error subiendo audio: $e', tag: 'GroupChatController');
       // TODO: Marcar mensaje con error si es necesario
     }
   }
@@ -407,7 +408,7 @@ class GroupChatController {
         }
       }
     } catch (e) {
-      print('⚠️ Error enviando notificaciones: $e');
+      ReleaseLogger.error('Error enviando notificaciones: $e', tag: 'GroupChatController');
     }
   }
 
@@ -459,7 +460,7 @@ class GroupChatController {
         final difference = now.difference(messageTime);
 
         if (difference.inMinutes >= 5) {
-          print('⚠️ No se puede eliminar: Han pasado más de 5 minutos');
+          ReleaseLogger.log('No se puede eliminar: Han pasado más de 5 minutos', tag: 'GroupChatController');
           return false;
         }
       }
@@ -472,10 +473,10 @@ class GroupChatController {
           .doc(messageId)
           .delete();
 
-      print('✅ Mensaje eliminado exitosamente del grupo');
+      ReleaseLogger.log('Mensaje eliminado exitosamente del grupo', tag: 'GroupChatController');
       return true;
     } catch (e) {
-      print('❌ Error eliminando mensaje del grupo: $e');
+      ReleaseLogger.error('Error eliminando mensaje del grupo: $e', tag: 'GroupChatController');
       return false;
     }
   }

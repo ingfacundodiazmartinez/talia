@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'user.dart';
+import '../utils/release_logger.dart';
 
 class Child extends User {
   Child({
@@ -60,7 +61,7 @@ class Child extends User {
 
       return Child.fromFirestore(doc);
     } catch (e) {
-      print('❌ Error obteniendo hijo: $e');
+      ReleaseLogger.error('Error obteniendo hijo: $e', tag: 'Child');
       return null;
     }
   }
@@ -76,7 +77,7 @@ class Child extends User {
           .get();
 
       if (!userDoc.exists) {
-        print('⚠️ Usuario $parentId no existe');
+        ReleaseLogger.log('Usuario $parentId no existe', tag: 'Child');
         return [];
       }
 
@@ -94,7 +95,7 @@ class Child extends User {
 
       return children;
     } catch (e) {
-      print('❌ Error obteniendo hijos vinculados: $e');
+      ReleaseLogger.error('Error obteniendo hijos vinculados: $e', tag: 'Child');
       return [];
     }
   }
@@ -126,7 +127,7 @@ class Child extends User {
 
       return snapshot.docs.length;
     } catch (e) {
-      print('❌ Error obteniendo contactos: $e');
+      ReleaseLogger.error('Error obteniendo contactos: $e', tag: 'Child');
       return 0;
     }
   }
@@ -155,7 +156,7 @@ class Child extends User {
 
       return snapshot.docs.length;
     } catch (e) {
-      print('❌ Error obteniendo mensajes: $e');
+      ReleaseLogger.error('Error obteniendo mensajes: $e', tag: 'Child');
       return 0;
     }
   }
@@ -182,11 +183,11 @@ class Child extends User {
         .where('isRead', isEqualTo: false)
         .snapshots()
         .map((snapshot) {
-      print('🚨 [ALERTS BADGE] Query for childId=$id, parentId=$parentId');
-      print('🚨 [ALERTS BADGE] Found ${snapshot.docs.length} unread alerts');
+      ReleaseLogger.log('🚨 [ALERTS BADGE] Query for childId=$id, parentId=$parentId', tag: 'Child');
+      ReleaseLogger.log('🚨 [ALERTS BADGE] Found ${snapshot.docs.length} unread alerts', tag: 'Child');
       if (snapshot.docs.isNotEmpty) {
-        print('🚨 [ALERTS BADGE] Alert IDs: ${snapshot.docs.map((d) => d.id).toList()}');
-        print('🚨 [ALERTS BADGE] First alert data: ${snapshot.docs.first.data()}');
+        ReleaseLogger.log('🚨 [ALERTS BADGE] Alert IDs: ${snapshot.docs.map((d) => d.id).toList()}', tag: 'Child');
+        ReleaseLogger.log('🚨 [ALERTS BADGE] First alert data: ${snapshot.docs.first.data()}', tag: 'Child');
       }
       return snapshot.docs.length;
     });
@@ -211,7 +212,7 @@ class Child extends User {
 
       return parents;
     } catch (e) {
-      print('❌ Error obteniendo padres del hijo: $e');
+      ReleaseLogger.error('Error obteniendo padres del hijo: $e', tag: 'Child');
       return [];
     }
   }

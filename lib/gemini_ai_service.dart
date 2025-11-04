@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'notification_service.dart';
 import 'services/user_role_service.dart';
+import 'utils/release_logger.dart';
 
 // ⚠️ ADVERTENCIA DE SEGURIDAD ⚠️
 // Este servicio está DESHABILITADO por razones de seguridad.
@@ -13,7 +14,10 @@ import 'services/user_role_service.dart';
 // NO uses este servicio directamente.
 
 class GeminiAIService {
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FirebaseFirestore _firestore;
+
+  GeminiAIService({FirebaseFirestore? firestore})
+      : _firestore = firestore ?? FirebaseFirestore.instance;
 
   // Analizar mensajes por lotes
   Future<Map<String, dynamic>> analyzeMessagesBatch(String childId) async {
@@ -22,8 +26,7 @@ class GeminiAIService {
       final DateTime now = DateTime.now();
       final DateTime sevenDaysAgo = now.subtract(Duration(days: 7));
 
-      print('📅 Analizando mensajes desde: ${sevenDaysAgo.toString()}');
-      print('📅 Hasta: ${now.toString()}');
+      ReleaseLogger.log('Analizando mensajes desde: ${sevenDaysAgo.toString()} hasta: ${now.toString()}', tag: 'GeminiAIService');
 
       final chatsQuery = await _firestore
           .collection('chats')
@@ -78,13 +81,10 @@ class GeminiAIService {
         (a, b) => (a['date'] as DateTime).compareTo(b['date'] as DateTime),
       );
 
-      print(
-        '📊 Total de mensajes encontrados (últimos 7 días): ${allMessages.length}',
-      );
-      print('📅 Primer mensaje: ${allMessages.first['date']}');
-      print('📅 Último mensaje: ${allMessages.last['date']}');
+      ReleaseLogger.log('Total de mensajes encontrados (últimos 7 días): ${allMessages.length}', tag: 'GeminiAIService');
+      ReleaseLogger.log('Primer mensaje: ${allMessages.first['date']}, Último mensaje: ${allMessages.last['date']}', tag: 'GeminiAIService');
 
-      print('📊 Analizando ${allMessages.length} mensajes con IA...');
+      ReleaseLogger.log('Analizando ${allMessages.length} mensajes con IA...', tag: 'GeminiAIService');
 
       // 2. Este método está deshabilitado por seguridad
       // Usar Cloud Function 'generateChildReport' en su lugar
@@ -168,7 +168,7 @@ class GeminiAIService {
       };
       */ // FIN CÓDIGO DESHABILITADO
     } catch (e) {
-      print('❌ Error en análisis por lotes: $e');
+      ReleaseLogger.error('Error en análisis por lotes: $e', tag: 'GeminiAIService');
       return {'status': 'error', 'message': 'Error: $e'};
     }
   }
@@ -194,7 +194,7 @@ class GeminiAIService {
       final DateTime twoWeeksAgo = DateTime.now().subtract(Duration(days: 14));
       final DateTime eightDaysAgo = DateTime.now().subtract(Duration(days: 8));
 
-      print('📊 Buscando reporte anterior entre: $twoWeeksAgo y $eightDaysAgo');
+      ReleaseLogger.log('Buscando reporte anterior entre: $twoWeeksAgo y $eightDaysAgo', tag: 'GeminiAIService');
 
       final previousAnalysis = await _firestore
           .collection('ai_batch_analysis')
@@ -225,11 +225,9 @@ class GeminiAIService {
               .round();
         }
 
-        print(
-          '📈 Comparación: Anterior=$prevScore, Actual=$currentScore, Cambio=$percentageChange%',
-        );
+        ReleaseLogger.log('Comparación: Anterior=$prevScore, Actual=$currentScore, Cambio=$percentageChange%', tag: 'GeminiAIService');
       } else {
-        print('ℹ️ No hay reporte anterior para comparar');
+        ReleaseLogger.log('No hay reporte anterior para comparar', tag: 'GeminiAIService');
       }
 
       // 3. Construir reporte completo
@@ -267,11 +265,8 @@ class GeminiAIService {
       // 4. Guardar reporte
       await _firestore.collection('weekly_reports').add(report);
 
-      print('✅ Reporte generado con IA exitosamente');
-      print(
-        '📅 Periodo: ${periodStart.day}/${periodStart.month} - ${periodEnd.day}/${periodEnd.month}',
-      );
-      print('📊 Mensajes analizados: $messagesCount');
+      ReleaseLogger.log('Reporte generado con IA exitosamente', tag: 'GeminiAIService');
+      ReleaseLogger.log('Periodo: ${periodStart.day}/${periodStart.month} - ${periodEnd.day}/${periodEnd.month}, Mensajes analizados: $messagesCount', tag: 'GeminiAIService');
 
       // Obtener todos los padres vinculados y enviar notificación
       final childDoc = await _firestore.collection('users').doc(childId).get();
@@ -286,14 +281,14 @@ class GeminiAIService {
           parentId: parentId,
           childName: childName,
         );
-        print('📱 Notificación de reporte enviada al padre: $parentId');
+        ReleaseLogger.log('Notificación de reporte enviada al padre: $parentId', tag: 'GeminiAIService');
       }
 
-      print('✅ Notificaciones enviadas a ${linkedParents.length} padre(s)');
+      ReleaseLogger.log('Notificaciones enviadas a ${linkedParents.length} padre(s)', tag: 'GeminiAIService');
 
       return report;
     } catch (e) {
-      print('❌ Error generando reporte: $e');
+      ReleaseLogger.error('Error generando reporte: $e', tag: 'GeminiAIService');
       return {'status': 'error', 'message': 'Error al generar reporte: $e'};
     }
   }
@@ -312,14 +307,14 @@ class GeminiAIService {
 
       return query.docs.first.data();
     } catch (e) {
-      print('❌ Error obteniendo análisis: $e');
+      ReleaseLogger.error('Error obteniendo análisis: $e', tag: 'GeminiAIService');
       return null;
     }
   }
 
   // Test de conexión con Gemini (DESHABILITADO - usar Cloud Function)
   Future<bool> testAPIConnection() async {
-    print('🚫 SEGURIDAD: No usar Gemini desde cliente. Usar Cloud Function "generateChildReport"');
+    ReleaseLogger.log('SEGURIDAD: No usar Gemini desde cliente. Usar Cloud Function "generateChildReport"', tag: 'GeminiAIService');
     return false;
 
     /* CÓDIGO DESHABILITADO POR SEGURIDAD

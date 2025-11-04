@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'services/group_chat_service.dart';
+import 'utils/release_logger.dart';
 
 class FirebaseService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -63,9 +64,9 @@ class FirebaseService {
         throw Exception(result.data['message'] ?? 'Error creating parent-child link');
       }
 
-      print('✅ Parent-child link created: ${result.data['linkId']}');
+      ReleaseLogger.log('✅ Parent-child link created: ${result.data['linkId']}', tag: 'FirebaseService');
     } catch (e) {
-      print('❌ Error calling createParentChildLink: $e');
+      ReleaseLogger.error('❌ Error calling createParentChildLink: $e', tag: 'FirebaseService');
       rethrow;
     }
   }
@@ -257,7 +258,7 @@ class FirebaseService {
     final moderationEnabled = chatDoc.data()?['moderationEnabled'] ?? false;
 
     if (moderationEnabled) {
-      print('🔒 Chat tiene moderación activa, verificando mensaje antes de enviar...');
+      ReleaseLogger.log('🔒 Chat tiene moderación activa, verificando mensaje antes de enviar...', tag: 'FirebaseService');
 
       try {
         final functions = FirebaseFunctions.instance;
@@ -273,13 +274,13 @@ class FirebaseService {
           final reason = result.data['reason'] as String? ?? 'Contenido inapropiado detectado';
           final severity = result.data['severity'] as String? ?? 'medium';
 
-          print('🚫 Mensaje bloqueado por moderación: $reason');
+          ReleaseLogger.log('🚫 Mensaje bloqueado por moderación: $reason', tag: 'FirebaseService');
 
           // Lanzar excepción con el motivo del bloqueo
           throw Exception('Mensaje bloqueado: $reason');
         }
 
-        print('✅ Mensaje aprobado por moderación, enviando...');
+        ReleaseLogger.log('✅ Mensaje aprobado por moderación, enviando...', tag: 'FirebaseService');
       } catch (e) {
         // Si el error es de moderación, propagarlo
         if (e.toString().contains('Mensaje bloqueado')) {
@@ -287,7 +288,7 @@ class FirebaseService {
         }
 
         // Si es otro error (network, etc), loguearlo pero continuar
-        print('⚠️ Error en pre-moderación (continuando de todos modos): $e');
+        ReleaseLogger.error('⚠️ Error en pre-moderación (continuando de todos modos): $e', tag: 'FirebaseService');
       }
     }
 

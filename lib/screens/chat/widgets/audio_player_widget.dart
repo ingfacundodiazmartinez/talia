@@ -7,6 +7,7 @@ import 'package:audio_waveforms/audio_waveforms.dart' hide PlayerState;
 import 'package:path_provider/path_provider.dart';
 import 'package:http/http.dart' as http;
 import '../../../services/waveform_cache_service.dart';
+import '../../../utils/release_logger.dart';
 
 /// Widget para reproducir mensajes de audio en el chat
 class AudioPlayerWidget extends StatefulWidget {
@@ -47,7 +48,7 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
 
     // Si ya tenemos waveformData (optimistic), usarlo directamente
     if (widget.waveformData != null && widget.waveformData!.isNotEmpty) {
-      print('✅ [AUDIO PLAYER] Usando waveform pre-procesado (${widget.waveformData!.length} puntos)');
+      ReleaseLogger.log('Usando waveform pre-procesado (${widget.waveformData!.length} puntos)', tag: 'AudioPlayer');
       _waveformData = widget.waveformData;
     }
 
@@ -131,20 +132,20 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
       }
       // La duración se actualizará automáticamente via onDurationChanged
     } catch (e) {
-      print('Error cargando duración del audio: $e');
+      ReleaseLogger.error('Error cargando duración del audio: $e', tag: 'AudioPlayer');
     }
   }
 
   /// Extrae el waveform real del audio usando audio_waveforms
   Future<void> _extractWaveform() async {
     try {
-      print('🎵 [WAVEFORM] Iniciando extracción para ${widget.audioUrl}');
+      ReleaseLogger.log('Iniciando extracción waveform para ${widget.audioUrl}', tag: 'AudioPlayer');
 
       // 1. Verificar cache primero (solo si no es local)
       if (!widget.isLocal) {
         final cachedWaveform = await _cacheService.getWaveform(widget.audioUrl);
         if (cachedWaveform != null && mounted) {
-          print('✅ [WAVEFORM] Usando datos cacheados (${cachedWaveform.length} puntos)');
+          ReleaseLogger.log('Usando datos cacheados (${cachedWaveform.length} puntos)', tag: 'AudioPlayer');
           setState(() {
             _waveformData = cachedWaveform;
           });
@@ -152,7 +153,7 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
         }
       }
 
-      print('🔄 [WAVEFORM] No hay cache, procesando audio...');
+      ReleaseLogger.log('No hay cache, procesando audio...', tag: 'AudioPlayer');
 
       // 2. Obtener el archivo de audio (local o descargado)
       File audioFile;
@@ -160,30 +161,30 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
       if (widget.isLocal) {
         // Si es local, usar directamente el path
         audioFile = File(widget.audioUrl);
-        print('📱 [WAVEFORM] Usando archivo local: ${audioFile.path}');
+        ReleaseLogger.log('Usando archivo local: ${audioFile.path}', tag: 'AudioPlayer');
       } else {
         // Si es remoto, descargar primero
         final tempDir = await getTemporaryDirectory();
         audioFile = File('${tempDir.path}/audio_${widget.audioUrl.hashCode}.m4a');
 
         if (!await audioFile.exists()) {
-          print('📥 [WAVEFORM] Descargando audio...');
+          ReleaseLogger.log('Descargando audio...', tag: 'AudioPlayer');
           final response = await http.get(Uri.parse(widget.audioUrl));
           if (response.statusCode == 200) {
             await audioFile.writeAsBytes(response.bodyBytes);
-            print('✅ [WAVEFORM] Audio descargado: ${audioFile.lengthSync()} bytes');
+            ReleaseLogger.log('Audio descargado: ${audioFile.lengthSync()} bytes', tag: 'AudioPlayer');
           } else {
-            print('❌ [WAVEFORM] Error descargando: ${response.statusCode}');
+            ReleaseLogger.error('Error descargando: ${response.statusCode}', tag: 'AudioPlayer');
             return;
           }
         } else {
-          print('📦 [WAVEFORM] Usando cache: ${audioFile.lengthSync()} bytes');
+          ReleaseLogger.log('Usando cache: ${audioFile.lengthSync()} bytes', tag: 'AudioPlayer');
         }
       }
 
       // 2. Crear controller y usar extractWaveformData() en lugar de preparePlayer()
       _waveController = PlayerController();
-      print('🎧 [WAVEFORM] Llamando extractWaveformData()...');
+      ReleaseLogger.log('Llamando extractWaveformData()...', tag: 'AudioPlayer');
 
       // IMPORTANTE: extractWaveformData() es el método correcto para extraer de archivos existentes
       final waveData = await _waveController!.extractWaveformData(
@@ -191,12 +192,12 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
         noOfSamples: 35, // 35 barras para buena visualización
       );
 
-      print('📊 [WAVEFORM] extractWaveformData retornó: ${waveData.length} puntos');
-      print('📊 [WAVEFORM] waveformData isEmpty: ${waveData.isEmpty}');
+      ReleaseLogger.log('extractWaveformData retornó: ${waveData.length} puntos', tag: 'AudioPlayer');
+      ReleaseLogger.log('waveformData isEmpty: ${waveData.isEmpty}', tag: 'AudioPlayer');
 
       if (waveData.isNotEmpty && mounted) {
-        print('✅ [WAVEFORM] Extraídos ${waveData.length} puntos');
-        print('📊 [WAVEFORM] Primeros 5 valores: ${waveData.take(5).toList()}');
+        ReleaseLogger.log('Extraídos ${waveData.length} puntos', tag: 'AudioPlayer');
+        ReleaseLogger.log('Primeros 5 valores: ${waveData.take(5).toList()}', tag: 'AudioPlayer');
 
         // Convertir a valores absolutos
         final absValues = waveData.map((v) => v.abs()).toList();
@@ -206,7 +207,7 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
         final minVal = absValues.reduce((a, b) => a < b ? a : b);
         final range = maxVal - minVal;
 
-        print('📊 [WAVEFORM] Min: $minVal, Max: $maxVal, Range: $range');
+        ReleaseLogger.log('Min: $minVal, Max: $maxVal, Range: $range', tag: 'AudioPlayer');
 
         if (range > 0) {
           // Normalizar entre 0 y 1 usando min-max
@@ -231,8 +232,8 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
             await _cacheService.saveWaveform(widget.audioUrl, amplified);
           }
 
-          print('✅ [WAVEFORM] Aplicado a UI con ${amplified.length} barras (rango amplificado)');
-          print('📊 [WAVEFORM] Primeros 5 amplificados: ${amplified.take(5).toList()}');
+          ReleaseLogger.log('Aplicado a UI con ${amplified.length} barras (rango amplificado)', tag: 'AudioPlayer');
+          ReleaseLogger.log('Primeros 5 amplificados: ${amplified.take(5).toList()}', tag: 'AudioPlayer');
         } else {
           // Si no hay variación, usar altura uniforme media
           final uniformData = List.filled(waveData.length, 0.5);
@@ -245,14 +246,14 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
             await _cacheService.saveWaveform(widget.audioUrl, uniformData);
           }
 
-          print('⚠️ [WAVEFORM] Audio sin variación detectada');
+          ReleaseLogger.warning('Audio sin variación detectada', tag: 'AudioPlayer');
         }
       } else {
-        print('⚠️ [WAVEFORM] extractWaveformData retornó lista vacía. mounted: $mounted');
+        ReleaseLogger.warning('extractWaveformData retornó lista vacía. mounted: $mounted', tag: 'AudioPlayer');
       }
     } catch (e, stackTrace) {
-      print('❌ [WAVEFORM] Error: $e');
-      print('   Stack: $stackTrace');
+      ReleaseLogger.error('Error: $e', tag: 'AudioPlayer');
+      ReleaseLogger.error('Stack: $stackTrace', tag: 'AudioPlayer');
     }
   }
 
@@ -275,7 +276,7 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
         }
         // El estado se actualizará a través de onPlayerStateChanged
       } catch (e) {
-        print('Error reproduciendo audio: $e');
+        ReleaseLogger.error('Error reproduciendo audio: $e', tag: 'AudioPlayer');
         setState(() {
           _isLoading = false;
         });

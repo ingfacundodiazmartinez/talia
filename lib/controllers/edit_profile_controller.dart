@@ -4,10 +4,17 @@ import '../models/parent.dart';
 import '../models/user.dart';
 import '../services/image_service.dart';
 import '../services/user_role_service.dart';
+import '../utils/release_logger.dart';
 
 /// Controller para manejar la lógica de edición de perfil
+///
+/// Responsabilidades:
+/// - Manejar autenticación de usuario
+/// - Gestionar carga y guardado de datos de perfil
+/// - Validar datos de entrada
+/// - Cumplir con CODING_RULES.md: ZERO Firebase calls en screens
 class EditProfileController {
-  final String userId;
+  late final String userId;
   final ImageService _imageService;
   final UserRoleService _roleService;
   final firebase_auth.FirebaseAuth _auth;
@@ -15,8 +22,15 @@ class EditProfileController {
   Parent? _parent;
   Map<String, dynamic>? _userData;
 
+  // Getters for authentication
+  firebase_auth.User? get currentUser => _auth.currentUser;
+  String? get currentUserId => _auth.currentUser?.uid;
+  String? get currentUserEmail => _auth.currentUser?.email;
+  String? get currentUserDisplayName => _auth.currentUser?.displayName;
+  String? get currentUserPhotoURL => _auth.currentUser?.photoURL;
+  bool get isUserAuthenticated => currentUser != null;
+
   EditProfileController({
-    required this.userId,
     ImageService? imageService,
     UserRoleService? roleService,
     firebase_auth.FirebaseAuth? auth,
@@ -26,8 +40,20 @@ class EditProfileController {
 
   /// Inicializa el controller cargando datos del usuario
   Future<void> initialize() async {
-    _parent = await Parent.getById(userId);
-    _userData = await _parent?.getUserData();
+    try {
+      final currentUser = _auth.currentUser;
+      if (currentUser == null) {
+        ReleaseLogger.error('Usuario no autenticado en EditProfileController', tag: 'EditProfile');
+        return;
+      }
+
+      userId = currentUser.uid;
+      _parent = await Parent.getById(userId);
+      _userData = await _parent?.getUserData();
+      ReleaseLogger.log('EditProfileController inicializado para usuario: $userId', tag: 'EditProfile');
+    } catch (e) {
+      ReleaseLogger.error('Error inicializando EditProfileController: $e', tag: 'EditProfile');
+    }
   }
 
   /// Obtiene los datos del usuario
@@ -57,7 +83,7 @@ class EditProfileController {
 
       return null;
     } catch (e) {
-      print('❌ Error subiendo foto de perfil: $e');
+      ReleaseLogger.error('Error subiendo foto de perfil: $e', tag: 'EditProfile');
       rethrow;
     }
   }
@@ -137,12 +163,12 @@ class EditProfileController {
       final age = response['age'] as int?;
 
       if (success) {
-        print('✅ Perfil actualizado con rol: $newRole (edad: $age)');
+        ReleaseLogger.log('Perfil actualizado con rol: $newRole (edad: $age)', tag: 'EditProfile');
       } else {
         throw Exception('Error al actualizar perfil');
       }
     } catch (e) {
-      print('❌ Error guardando perfil: $e');
+      ReleaseLogger.error('Error guardando perfil: $e', tag: 'EditProfile');
       rethrow;
     }
   }

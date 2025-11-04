@@ -1,10 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
-import '../../../services/chat_archive_service.dart';
-import '../../../services/contact_alias_service.dart';
-import '../../../services/block_service.dart';
+import '../../../controllers/parent_archived_chats_controller.dart';
 import '../../../utils/chat_utils.dart';
 import '../../chat_detail_screen.dart';
 import '../../../theme_service.dart';
@@ -18,19 +15,23 @@ class ParentArchivedChatsScreen extends StatefulWidget {
 }
 
 class _ParentArchivedChatsScreenState extends State<ParentArchivedChatsScreen> {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final ChatArchiveService _archiveService = ChatArchiveService();
-  final ContactAliasService _aliasService = ContactAliasService();
-  final BlockService _blockService = BlockService();
+  late final ParentArchivedChatsController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = ParentArchivedChatsController();
+    _controller.initialize();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   Future<void> _unarchiveChat(String chatId) async {
-    final currentUserId = _auth.currentUser?.uid;
-    if (currentUserId == null) return;
-
-    final success = await _archiveService.unarchiveChat(
-      chatId: chatId,
-      userId: currentUserId,
-    );
+    final success = await _controller.unarchiveChat(chatId);
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -46,7 +47,13 @@ class _ParentArchivedChatsScreenState extends State<ParentArchivedChatsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final currentUserId = _auth.currentUser?.uid ?? '';
+    if (!_controller.isUserAuthenticated) {
+      return Scaffold(
+        body: Center(
+          child: Text('Error: Usuario no autenticado'),
+        ),
+      );
+    }
 
     return Scaffold(
       body: Container(
@@ -108,7 +115,7 @@ class _ParentArchivedChatsScreenState extends State<ParentArchivedChatsScreen> {
                     ),
                   ),
                   child: StreamBuilder<QuerySnapshot>(
-                    stream: _archiveService.getArchivedChatsStream(currentUserId),
+                    stream: _controller.getArchivedChatsStream(),
                     builder: (context, snapshot) {
                       if (snapshot.connectionState == ConnectionState.waiting) {
                         return Center(child: CircularProgressIndicator());
@@ -135,19 +142,7 @@ class _ParentArchivedChatsScreenState extends State<ParentArchivedChatsScreen> {
                       }
 
                       final archivedChatsDocs = snapshot.data?.docs ?? [];
-
-                      // Ordenar por última actividad en el cliente
-                      final archivedChats = List.from(archivedChatsDocs)
-                        ..sort((a, b) {
-                          final aData = a.data() as Map<String, dynamic>;
-                          final bData = b.data() as Map<String, dynamic>;
-                          final aTime = aData['lastMessageTime'] as Timestamp?;
-                          final bTime = bData['lastMessageTime'] as Timestamp?;
-                          if (aTime == null && bTime == null) return 0;
-                          if (aTime == null) return 1;
-                          if (bTime == null) return -1;
-                          return bTime.compareTo(aTime);
-                        });
+                      final archivedChats = _controller.sortChatsByLastActivity(archivedChatsDocs);
 
                       if (archivedChats.isEmpty) {
                         return Center(
@@ -190,29 +185,20 @@ class _ParentArchivedChatsScreenState extends State<ParentArchivedChatsScreen> {
                           final participants = List<String>.from(
                             chatData['participants'] ?? [],
                           );
-                          final otherUserId = participants.firstWhere(
-                            (id) => id != currentUserId,
-                            orElse: () => '',
-                          );
+                          final otherUserId = _controller.getOtherParticipant(participants);
 
                           if (otherUserId.isEmpty) return SizedBox.shrink();
 
                           return FutureBuilder<DocumentSnapshot>(
-                            future: FirebaseFirestore.instance
-                                .collection('users')
-                                .doc(otherUserId)
-                                .get(),
+                            future: _controller.getUserDocument(otherUserId),
                             builder: (context, userSnapshot) {
                               if (!userSnapshot.hasData) return SizedBox.shrink();
 
-                              final userData = userSnapshot.data!.data()
-                                  as Map<String, dynamic>?;
-                              if (userData == null) return SizedBox.shrink();
-
-                              final realName = userData['name'] ?? 'Usuario';
+                              final formattedUserData = _controller.formatUserData(userSnapshot.data!);
+                              final realName = formattedUserData['realName'];
 
                               return StreamBuilder<String>(
-                                stream: _aliasService.watchDisplayName(
+                                stream: _controller.watchDisplayName(
                                   otherUserId,
                                   realName,
                                 ),
@@ -221,17 +207,13 @@ class _ParentArchivedChatsScreenState extends State<ParentArchivedChatsScreen> {
                                   final displayName = aliasSnapshot.data ?? realName;
 
                                   return StreamBuilder<bool>(
-                                    stream: _blockService.isBlockedStream(otherUserId),
+                                    stream: _controller.isBlockedStream(otherUserId),
                                     initialData: false,
                                     builder: (context, blockedSnapshot) {
                                       final isBlocked = blockedSnapshot.data ?? false;
 
                                       // Verificar si el chat fue limpiado y no hay mensajes nuevos
-                                      final parentId = FirebaseAuth.instance.currentUser?.uid ?? '';
-                                      final clearedAt = chatData['clearedAt_$parentId'] as Timestamp?;
-                                      final lastMessageTime = chatData['lastMessageTime'] as Timestamp?;
-                                      final isChatCleared = clearedAt != null &&
-                                          (lastMessageTime == null || clearedAt.compareTo(lastMessageTime) >= 0);
+                                      final isChatCleared = _controller.isChatCleared(chatData);
 
                                       return _buildArchivedChatItem(
                                         chatId: chatDoc.id,
@@ -247,8 +229,8 @@ class _ParentArchivedChatsScreenState extends State<ParentArchivedChatsScreen> {
                                             : ChatUtils.formatChatTime(
                                                 chatData['lastMessageTime'],
                                               ),
-                                        isOnline: userData['isOnline'] ?? false,
-                                        photoURL: userData['photoURL'],
+                                        isOnline: formattedUserData['isOnline'],
+                                        photoURL: formattedUserData['photoURL'],
                                         isBlocked: isBlocked,
                                       );
                                     },

@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../../controllers/edit_profile_controller.dart';
 import '../../../services/image_service.dart';
+import '../../../utils/release_logger.dart';
 
 /// Screen para editar perfil de usuario
 ///
@@ -19,7 +19,6 @@ class EditProfileScreen extends StatefulWidget {
 }
 
 class _EditProfileScreenState extends State<EditProfileScreen> {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
   final ImageService _imageService = ImageService();
   final _formKey = GlobalKey<FormState>();
 
@@ -34,13 +33,19 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   @override
   void initState() {
     super.initState();
-    _nameController = TextEditingController(
-      text: _auth.currentUser?.displayName ?? '',
-    );
+    _controller = EditProfileController();
+    _nameController = TextEditingController();
     _phoneController = TextEditingController();
 
-    _controller = EditProfileController(userId: _auth.currentUser!.uid);
-    _loadUserData();
+    _initializeController();
+  }
+
+  Future<void> _initializeController() async {
+    await _controller.initialize();
+    if (_controller.isUserAuthenticated) {
+      _nameController.text = _controller.currentUserDisplayName ?? '';
+      _loadUserData();
+    }
   }
 
   Future<void> _loadUserData() async {
@@ -72,7 +77,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
             }
           }
 
-          _profileImageUrl = userData['photoURL'] ?? _auth.currentUser?.photoURL;
+          _profileImageUrl = userData['photoURL'] ?? _controller.currentUserPhotoURL;
         });
       }
     } catch (e) {
@@ -83,26 +88,26 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   }
 
   Future<void> _changeProfilePhoto() async {
-    print('📸 [EditProfile] Iniciando cambio de foto de perfil...');
+    ReleaseLogger.log('Iniciando cambio de foto de perfil...', tag: 'EditProfile');
 
     try {
       setState(() => _isUploadingImage = true);
-      print('📸 [EditProfile] Loading state activado');
+      ReleaseLogger.log('Loading state activado', tag: 'EditProfile');
 
       // Mostrar selector de fuente de imagen
-      print('📸 [EditProfile] Mostrando selector de fuente...');
+      ReleaseLogger.log('Mostrando selector de fuente...', tag: 'EditProfile');
       final ImageSource? source = await _imageService.showImageSourceSelection(
         context,
       );
-      print('📸 [EditProfile] Selector cerrado. Source seleccionado: $source');
+      ReleaseLogger.log('Selector cerrado. Source seleccionado: $source', tag: 'EditProfile');
 
       if (source == null) {
-        print('⚠️ [EditProfile] Usuario canceló la selección');
+        ReleaseLogger.log('Usuario canceló la selección', tag: 'EditProfile');
         setState(() => _isUploadingImage = false);
         return;
       }
 
-      print('📸 [EditProfile] Iniciando selección y subida de imagen desde ${source == ImageSource.camera ? 'cámara' : 'galería'}...');
+      ReleaseLogger.log('Iniciando selección y subida de imagen desde ${source == ImageSource.camera ? 'cámara' : 'galería'}...', tag: 'EditProfile');
 
       // Seleccionar imagen
       final String? imageUrl = await _imageService.pickAndUploadProfileImage(
@@ -110,28 +115,28 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         context: context,
       );
 
-      print('📸 [EditProfile] Resultado de pickAndUploadProfileImage: ${imageUrl != null ? 'URL obtenida' : 'null'}');
+      ReleaseLogger.log('Resultado de pickAndUploadProfileImage: ${imageUrl != null ? 'URL obtenida' : 'null'}', tag: 'EditProfile');
 
       // Si la imagen fue subida exitosamente, actualizar en Firestore via controller
       if (imageUrl != null && mounted) {
-        print('📸 [EditProfile] Actualizando foto de perfil en Firestore...');
+        ReleaseLogger.log('Actualizando foto de perfil en Firestore...', tag: 'EditProfile');
         await _controller.uploadProfilePhoto(imageUrl);
         setState(() {
           _profileImageUrl = imageUrl;
         });
-        print('✅ [EditProfile] Foto de perfil actualizada exitosamente');
+        ReleaseLogger.log('Foto de perfil actualizada exitosamente', tag: 'EditProfile');
       } else {
-        print('⚠️ [EditProfile] No se obtuvo URL de imagen');
+        ReleaseLogger.log('No se obtuvo URL de imagen', tag: 'EditProfile');
       }
     } catch (e) {
-      print('❌ [EditProfile] Error al cambiar foto: $e');
+      ReleaseLogger.error('Error al cambiar foto: $e', tag: 'EditProfile');
       if (mounted) {
         _showErrorSnackBar('Error al cambiar foto: ${EditProfileController.getErrorMessage(e)}');
       }
     } finally {
       if (mounted) {
         setState(() => _isUploadingImage = false);
-        print('📸 [EditProfile] Loading state desactivado');
+        ReleaseLogger.log('Loading state desactivado', tag: 'EditProfile');
       }
     }
   }
@@ -255,12 +260,12 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               color: Colors.transparent,
               child: InkWell(
                 onTap: () {
-                  print('📸 [EditProfile] Botón de cámara tocado');
-                  print('📸 [EditProfile] _isUploadingImage: $_isUploadingImage');
+                  ReleaseLogger.log('Botón de cámara tocado', tag: 'EditProfile');
+                  ReleaseLogger.log('_isUploadingImage: $_isUploadingImage', tag: 'EditProfile');
                   if (!_isUploadingImage) {
                     _changeProfilePhoto();
                   } else {
-                    print('⚠️ [EditProfile] Bloqueado porque _isUploadingImage es true');
+                    ReleaseLogger.log('Bloqueado porque _isUploadingImage es true', tag: 'EditProfile');
                   }
                 },
                 customBorder: CircleBorder(),
@@ -335,7 +340,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         ),
         SizedBox(height: 8),
         TextFormField(
-          initialValue: _auth.currentUser?.email ?? '',
+          initialValue: _controller.currentUserEmail ?? '',
           enabled: false,
           decoration: InputDecoration(
             prefixIcon: Icon(Icons.email_outlined,

@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_firestore/cloud_firestore.dart' show Timestamp;
 import '../../../models/chat_message.dart';
 import '../../../services/favorite_service.dart';
+import '../../../utils/release_logger.dart';
 import 'media_viewer_screen.dart';
 import 'message_bubble/blocked_message_content.dart';
 import 'message_bubble/reply_preview_widget.dart';
@@ -341,12 +342,14 @@ class _MessageBubbleState extends State<MessageBubble>
                                                       if (widget
                                                               .originalContactName !=
                                                           null) {
-                                                        print(
-                                                          '💬 MessageBubble(${widget.messageId.substring(0, 8)}...): Mostrando indicador - isForwarded=true, originalContactName="${widget.originalContactName}" ✅',
+                                                        ReleaseLogger.log(
+                                                          'MessageBubble(${widget.messageId.substring(0, 8)}...): Mostrando indicador - isForwarded=true, originalContactName="${widget.originalContactName}"',
+                                                          tag: 'MessageBubble',
                                                         );
                                                       } else {
-                                                        print(
-                                                          '⚠️ MessageBubble(${widget.messageId.substring(0, 8)}...): isForwarded=true pero originalContactName=null! NO se muestra indicador',
+                                                        ReleaseLogger.warning(
+                                                          'MessageBubble(${widget.messageId.substring(0, 8)}...): isForwarded=true pero originalContactName=null! NO se muestra indicador',
+                                                          tag: 'MessageBubble',
                                                         );
                                                       }
                                                     }
@@ -638,7 +641,7 @@ class _MessageBubbleState extends State<MessageBubble>
         );
       }
     } catch (e) {
-      print('❌ Error al cambiar favorito: $e');
+      ReleaseLogger.error('Error al cambiar favorito: $e', tag: 'MessageBubble');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -654,22 +657,22 @@ class _MessageBubbleState extends State<MessageBubble>
 
   /// Navegar a la pantalla de información del mensaje (solo grupos)
   void _viewMessageInfo() {
-    print('🔍 [MessageBubble] _viewMessageInfo llamado');
-    print('   mounted: $mounted');
-    print('   chatId: ${widget.chatId}');
-    print('   messageId: ${widget.messageId}');
+    ReleaseLogger.log('_viewMessageInfo llamado', tag: 'MessageBubble');
+    ReleaseLogger.log('mounted: $mounted', tag: 'MessageBubble');
+    ReleaseLogger.log('chatId: ${widget.chatId}', tag: 'MessageBubble');
+    ReleaseLogger.log('messageId: ${widget.messageId}', tag: 'MessageBubble');
 
     if (!mounted) {
-      print('❌ [MessageBubble] Widget no mounted, abortando navegación');
+      ReleaseLogger.error('Widget no mounted, abortando navegación', tag: 'MessageBubble');
       return;
     }
 
     try {
-      print('✅ [MessageBubble] Navegando a MessageInfoScreen...');
+      ReleaseLogger.log('Navegando a MessageInfoScreen...', tag: 'MessageBubble');
       Navigator.of(context).push(
         MaterialPageRoute(
           builder: (context) {
-            print('✅ [MessageBubble] Builder de MessageInfoScreen ejecutado');
+            ReleaseLogger.log('Builder de MessageInfoScreen ejecutado', tag: 'MessageBubble');
             return MessageInfoScreen(
               groupId: widget.chatId,
               messageId: widget.messageId,
@@ -677,10 +680,10 @@ class _MessageBubbleState extends State<MessageBubble>
           },
         ),
       );
-      print('✅ [MessageBubble] Navigator.push completado');
+      ReleaseLogger.log('Navigator.push completado', tag: 'MessageBubble');
     } catch (e, stackTrace) {
-      print('❌ [MessageBubble] Error en navegación: $e');
-      print('   StackTrace: $stackTrace');
+      ReleaseLogger.error('Error en navegación: $e', tag: 'MessageBubble');
+      ReleaseLogger.error('StackTrace: $stackTrace', tag: 'MessageBubble');
     }
   }
 

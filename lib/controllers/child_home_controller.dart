@@ -10,6 +10,7 @@ import '../notification_service.dart';
 import '../services/user_role_service.dart';
 import '../screens/group_chat_screen.dart';
 import '../screens/chat_detail_screen.dart';
+import '../utils/release_logger.dart';
 
 /// Controller que maneja la lógica de negocio del home de niños
 ///
@@ -65,31 +66,31 @@ class ChildHomeController {
 
     // IMPORTANTE: Solo iniciar tracking si el usuario es un niño con padres vinculados
     // Esto evita solicitar permisos innecesarios a usuarios parent o adult
-    print('🔍 Verificando si debe iniciar tracking de ubicación...');
+    ReleaseLogger.log('Verificando si debe iniciar tracking de ubicación...', tag: 'ChildHomeController');
 
     // Verificar el rol del usuario desde Firestore
     final userDoc = await _firestore.collection('users').doc(childId).get();
     final userData = userDoc.data();
     final userRole = userData?['role'] ?? 'child';
 
-    print('   Role del usuario: $userRole');
+    ReleaseLogger.log('Role del usuario: $userRole', tag: 'ChildHomeController');
 
     // Solo continuar si el usuario es 'child'
     if (userRole != 'child') {
-      print('⏭️ Usuario no es child (role: $userRole) - omitiendo tracking de ubicación');
+      ReleaseLogger.log('Usuario no es child (role: $userRole) - omitiendo tracking de ubicación', tag: 'ChildHomeController');
       return;
     }
 
     // Verificar si tiene padres vinculados
     final hasParents = await hasLinkedParents();
-    print('   Tiene padres vinculados: $hasParents');
+    ReleaseLogger.log('Tiene padres vinculados: $hasParents', tag: 'ChildHomeController');
 
     if (!hasParents) {
-      print('⏭️ Usuario child sin padres vinculados - omitiendo tracking de ubicación');
+      ReleaseLogger.log('Usuario child sin padres vinculados - omitiendo tracking de ubicación', tag: 'ChildHomeController');
       return;
     }
 
-    print('✅ Usuario child con padres vinculados - iniciando tracking de ubicación');
+    ReleaseLogger.log('Usuario child con padres vinculados - iniciando tracking de ubicación', tag: 'ChildHomeController');
 
     // Habilitar tracking en background
     await _locationService.enableBackgroundTracking();
@@ -97,7 +98,7 @@ class ChildHomeController {
     // Iniciar tracking de ubicación en foreground
     await _locationService.startLocationTracking();
 
-    print('✅ Tracking de ubicación inicializado (foreground + background)');
+    ReleaseLogger.log('Tracking de ubicación inicializado (foreground + background)', tag: 'ChildHomeController');
   }
 
   /// Verificar si el usuario tiene padres vinculados
@@ -106,7 +107,7 @@ class ChildHomeController {
       final linkedParents = await _userRoleService.getLinkedParents(childId);
       return linkedParents.isNotEmpty;
     } catch (e) {
-      print('❌ Error verificando padres vinculados: $e');
+      ReleaseLogger.error('Error verificando padres vinculados: $e', tag: 'ChildHomeController');
       return false;
     }
   }
@@ -117,22 +118,22 @@ class ChildHomeController {
       final linkedParents = await _userRoleService.getLinkedParents(childId);
       return linkedParents.isNotEmpty ? linkedParents.first : null;
     } catch (e) {
-      print('❌ Error obteniendo padre vinculado: $e');
+      ReleaseLogger.error('Error obteniendo padre vinculado: $e', tag: 'ChildHomeController');
       return null;
     }
   }
 
   /// Escuchar llamadas entrantes
   void _listenForIncomingCalls() {
-    print('👂 Escuchando llamadas entrantes para usuario: $childId');
+    ReleaseLogger.log('Escuchando llamadas entrantes para usuario: $childId', tag: 'ChildHomeController');
 
     _incomingCallsSubscription = _videoCallService
         .watchIncomingCalls(childId)
         .listen(
       (snapshot) {
-        print('📞 Snapshot de llamadas recibido: ${snapshot.docs.length} documentos');
+        ReleaseLogger.log('Snapshot de llamadas recibido: ${snapshot.docs.length} documentos', tag: 'ChildHomeController');
         for (var change in snapshot.docChanges) {
-          print('📞 Cambio detectado: ${change.type}');
+          ReleaseLogger.log('Cambio detectado: ${change.type}', tag: 'ChildHomeController');
           if (change.type == DocumentChangeType.added) {
             final callData = change.doc.data() as Map<String, dynamic>;
             final callId = change.doc.id;
@@ -141,17 +142,13 @@ class ChildHomeController {
             final channelName = callData['channelName'];
             final callType = callData['callType'] ?? 'video';
 
-            print('📞 Llamada entrante detectada:');
-            print('   - ID: $callId');
-            print('   - De: $callerName ($callerId)');
-            print('   - Tipo: $callType');
-            print('   - Canal: $channelName');
+            ReleaseLogger.log('Llamada entrante detectada: ID: $callId, De: $callerName ($callerId), Tipo: $callType, Canal: $channelName', tag: 'ChildHomeController');
 
             // Verificar el estado de la llamada antes de mostrar diálogo
             // Si ya fue aceptada, no mostrar el diálogo (la navegación a videollamada se maneja por el listener de CallKit)
             final status = callData['status'] ?? 'ringing';
             if (status != 'ringing') {
-              print('⏭️ Llamada ya no está en estado ringing (status: $status) - omitiendo procesamiento');
+              ReleaseLogger.log('Llamada ya no está en estado ringing (status: $status) - omitiendo procesamiento', tag: 'ChildHomeController');
               return;
             }
 
@@ -161,7 +158,7 @@ class ChildHomeController {
 
             // Las llamadas se manejan completamente por CallKit (Android) y VoIP (iOS)
             // No se necesita mostrar diálogo de Flutter ni obtener datos adicionales del caller
-            print('📞 Llamada entrante detectada - CallKit/VoIP debe manejarla');
+            ReleaseLogger.log('Llamada entrante detectada - CallKit/VoIP debe manejarla', tag: 'ChildHomeController');
           } else if (change.type == DocumentChangeType.removed) {
             // IMPORTANTE: DocumentChangeType.removed NO significa que el documento fue eliminado
             // Puede significar que ya no coincide con el filtro del query (status != 'ringing')
@@ -169,11 +166,11 @@ class ChildHomeController {
             // y sale del query que filtra por status='ringing'
 
             final callId = change.doc.id;
-            print('ℹ️ [ChildHomeController] Llamada $callId removida del query (cambió status o fue eliminada)');
+            ReleaseLogger.log('Llamada $callId removida del query (cambió status o fue eliminada)', tag: 'ChildHomeController');
 
             // NO cerramos CallKit aquí porque puede ser simplemente un cambio de status
             // CallKit se cerrará cuando el usuario termine la llamada desde VideoCallScreen
-            print('ℹ️ [ChildHomeController] CallKit permanece abierto - se cerrará desde VideoCallScreen');
+            ReleaseLogger.log('CallKit permanece abierto - se cerrará desde VideoCallScreen', tag: 'ChildHomeController');
           } else if (change.type == DocumentChangeType.modified) {
             // Verificar si la llamada fue cancelada antes de ser aceptada
             final callData = change.doc.data() as Map<String, dynamic>?;
@@ -181,21 +178,21 @@ class ChildHomeController {
             final callId = change.doc.id;
 
             if (status == 'cancelled') {
-              print('📵 [ChildHomeController] Llamada $callId fue cancelada antes de aceptar - cerrando CallKit');
+              ReleaseLogger.log('Llamada $callId fue cancelada antes de aceptar - cerrando CallKit', tag: 'ChildHomeController');
 
               // Solo cerrar CallKit si la llamada fue cancelada (no aceptada)
               // Usar el method channel nativo en iOS para evitar reinicio de app
               if (Platform.isIOS) {
                 VoIPService().notifyCallEnded(callId).catchError((error) {
-                  print('⚠️ [ChildHomeController] Error cerrando VoIP en iOS: $error');
+                  ReleaseLogger.error('Error cerrando VoIP en iOS: $error', tag: 'ChildHomeController');
                 });
               } else if (Platform.isAndroid) {
                 CallKitService().endCall(callId).catchError((error) {
-                  print('⚠️ [ChildHomeController] Error cerrando CallKit en Android: $error');
+                  ReleaseLogger.error('Error cerrando CallKit en Android: $error', tag: 'ChildHomeController');
                 });
               }
             } else {
-              print('ℹ️ [ChildHomeController] Llamada $callId modificada (status: $status) - CallKit permanece abierto');
+              ReleaseLogger.log('Llamada $callId modificada (status: $status) - CallKit permanece abierto', tag: 'ChildHomeController');
             }
           }
         }
@@ -203,9 +200,9 @@ class ChildHomeController {
       onError: (error) {
         // Ignorar errores de permisos durante cierre de sesión
         if (error.toString().contains('permission-denied')) {
-          print('ℹ️ Listener de video_calls cancelado (cierre de sesión)');
+          ReleaseLogger.log('Listener de video_calls cancelado (cierre de sesión)', tag: 'ChildHomeController');
         } else {
-          print('⚠️ Error en listener de video_calls: $error');
+          ReleaseLogger.error('Error en listener de video_calls: $error', tag: 'ChildHomeController');
         }
       },
     );
@@ -215,7 +212,7 @@ class ChildHomeController {
   void _listenForChatNotifications() {
     _chatNotificationSubscription = _notificationService.chatNotificationTapStream.listen(
       (data) async {
-        print('💬 Notificación de chat tocada: $data');
+        ReleaseLogger.log('Notificación de chat tocada: $data', tag: 'ChildHomeController');
 
         final chatId = data['chatId'] as String?;
         final senderId = data['senderId'] as String?;
@@ -251,11 +248,11 @@ class ChildHomeController {
         }
       },
       onError: (error) {
-        print('⚠️ Error en listener de notificaciones de chat: $error');
+        ReleaseLogger.error('Error en listener de notificaciones de chat: $error', tag: 'ChildHomeController');
       },
     );
 
-    print('👂 Escuchando notificaciones de chat');
+    ReleaseLogger.log('Escuchando notificaciones de chat', tag: 'ChildHomeController');
   }
 
 
@@ -263,7 +260,7 @@ class ChildHomeController {
   /// Este listener se activa cuando se muestra una llamada entrante
   /// y se limpia automáticamente cuando la llamada termina o es aceptada
   void _setupCallCancellationListener(String callId) {
-    print('👂 [ChildHomeController] Configurando listener de cancelación para callId: $callId');
+    ReleaseLogger.log('Configurando listener de cancelación para callId: $callId', tag: 'ChildHomeController');
 
     // Si ya existe un listener para esta llamada, cancelarlo primero
     _activeCallListeners[callId]?.cancel();
@@ -276,16 +273,16 @@ class ChildHomeController {
         .listen((snapshot) {
       if (!snapshot.exists) {
         // El documento fue eliminado
-        print('📵 [ChildHomeController] Documento $callId eliminado - cerrando CallKit');
+        ReleaseLogger.log('Documento $callId eliminado - cerrando CallKit', tag: 'ChildHomeController');
 
         // Usar el method channel nativo en iOS para evitar reinicio de app
         if (Platform.isIOS) {
           VoIPService().notifyCallEnded(callId).catchError((error) {
-            print('⚠️ [ChildHomeController] Error cerrando VoIP en iOS: $error');
+            ReleaseLogger.error('Error cerrando VoIP en iOS: $error', tag: 'ChildHomeController');
           });
         } else if (Platform.isAndroid) {
           CallKitService().endCall(callId).catchError((error) {
-            print('⚠️ [ChildHomeController] Error cerrando CallKit en Android: $error');
+            ReleaseLogger.error('Error cerrando CallKit en Android: $error', tag: 'ChildHomeController');
           });
         }
 
@@ -296,45 +293,45 @@ class ChildHomeController {
       final data = snapshot.data() as Map<String, dynamic>?;
       final status = data?['status'];
 
-      print('🔍 [ChildHomeController] Status de $callId cambió a: $status');
+      ReleaseLogger.log('Status de $callId cambió a: $status', tag: 'ChildHomeController');
 
       if (status == 'cancelled') {
         // La llamada fue cancelada por el caller - cerrar CallKit
-        print('📵 [ChildHomeController] Llamada $callId cancelada por caller - cerrando CallKit');
+        ReleaseLogger.log('Llamada $callId cancelada por caller - cerrando CallKit', tag: 'ChildHomeController');
 
         // Usar el method channel nativo en iOS para evitar reinicio de app
         // En Android seguimos usando el plugin
         if (Platform.isIOS) {
           VoIPService().notifyCallEnded(callId).catchError((error) {
-            print('⚠️ [ChildHomeController] Error cerrando VoIP en iOS: $error');
+            ReleaseLogger.error('Error cerrando VoIP en iOS: $error', tag: 'ChildHomeController');
           });
         } else if (Platform.isAndroid) {
           CallKitService().endCall(callId).catchError((error) {
-            print('⚠️ [ChildHomeController] Error cerrando CallKit en Android: $error');
+            ReleaseLogger.error('Error cerrando CallKit en Android: $error', tag: 'ChildHomeController');
           });
         }
 
         _cleanupCallListener(callId);
 
         // NO necesitamos cerrar diálogos aquí porque CallKit/VoIP maneja la UI nativa
-        print('ℹ️ [ChildHomeController] CallKit/VoIP manejará el cierre de la UI');
+        ReleaseLogger.log('CallKit/VoIP manejará el cierre de la UI', tag: 'ChildHomeController');
       } else if (status == 'accepted' || status == 'active' || status == 'ended') {
         // La llamada fue aceptada o terminada - limpiar listener
         // (CallKit se cerrará desde VideoCallScreen cuando termine)
-        print('ℹ️ [ChildHomeController] Llamada $callId en status $status - limpiando listener');
+        ReleaseLogger.log('Llamada $callId en status $status - limpiando listener', tag: 'ChildHomeController');
         _cleanupCallListener(callId);
       }
     });
 
     _activeCallListeners[callId] = subscription;
-    print('✅ [ChildHomeController] Listener de cancelación configurado para $callId');
+    ReleaseLogger.log('Listener de cancelación configurado para $callId', tag: 'ChildHomeController');
   }
 
   /// Limpia el listener de una llamada específica
   void _cleanupCallListener(String callId) {
     final subscription = _activeCallListeners.remove(callId);
     subscription?.cancel();
-    print('🧹 [ChildHomeController] Listener limpiado para callId: $callId');
+    ReleaseLogger.log('Listener limpiado para callId: $callId', tag: 'ChildHomeController');
   }
 
   /// Limpiar recursos

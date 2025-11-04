@@ -3,17 +3,29 @@ import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import 'package:image_picker/image_picker.dart';
 import '../models/parent.dart';
 import '../services/image_service.dart';
+import '../utils/release_logger.dart';
 
 /// Controller que maneja la lógica del perfil de usuario
+///
+/// Responsabilidades:
+/// - Manejar autenticación de usuario
+/// - Gestionar imagen de perfil
+/// - Actualizar configuraciones de usuario
+/// - Cumplir con CODING_RULES.md: ZERO Firebase calls en screens
 class ProfileController {
-  final String parentId;
+  late final String parentId;
   final ImageService _imageService;
   final firebase_auth.FirebaseAuth _auth;
 
   Parent? _parent;
 
+  // Getters for authentication
+  firebase_auth.User? get currentUser => _auth.currentUser;
+  String? get currentUserId => _auth.currentUser?.uid;
+  String? get currentUserEmail => _auth.currentUser?.email;
+  bool get isUserAuthenticated => currentUser != null;
+
   ProfileController({
-    required this.parentId,
     ImageService? imageService,
     firebase_auth.FirebaseAuth? auth,
   })  : _imageService = imageService ?? ImageService(),
@@ -21,14 +33,26 @@ class ProfileController {
 
   /// Inicializa el controller cargando los datos del padre
   Future<void> initialize() async {
-    _parent = await Parent.getById(parentId);
+    try {
+      final currentUser = _auth.currentUser;
+      if (currentUser == null) {
+        ReleaseLogger.error('Usuario no autenticado en ProfileController', tag: 'ProfileController');
+        return;
+      }
+
+      parentId = currentUser.uid;
+      _parent = await Parent.getById(parentId);
+      ReleaseLogger.log('ProfileController inicializado para usuario: $parentId', tag: 'ProfileController');
+    } catch (e) {
+      ReleaseLogger.error('Error inicializando ProfileController: $e', tag: 'ProfileController');
+    }
   }
 
   /// Maneja la selección y subida de una imagen de perfil
   /// Retorna la URL de la imagen subida o null si hubo error
   Future<String?> pickAndUploadImage(ImageSource source) async {
     try {
-      print('🔄 Iniciando selección de imagen desde: ${source == ImageSource.camera ? 'cámara' : 'galería'}');
+      ReleaseLogger.log('Iniciando selección de imagen desde: ${source == ImageSource.camera ? 'cámara' : 'galería'}', tag: 'ProfileController');
 
       final pickedFile = await ImagePicker().pickImage(
         source: source,
@@ -38,11 +62,11 @@ class ProfileController {
       );
 
       if (pickedFile == null) {
-        print('📷 Usuario canceló la selección de imagen');
+        ReleaseLogger.log('Usuario canceló la selección de imagen', tag: 'ProfileController');
         return null;
       }
 
-      print('✅ Imagen seleccionada: ${pickedFile.path}');
+      ReleaseLogger.log('Imagen seleccionada: ${pickedFile.path}', tag: 'ProfileController');
 
       // Subir imagen
       final String? downloadUrl = await _imageService.uploadImageToStorage(pickedFile.path);
@@ -54,7 +78,7 @@ class ProfileController {
 
       return downloadUrl;
     } catch (e) {
-      print('❌ Error en pickAndUploadImage: $e');
+      ReleaseLogger.error('Error en pickAndUploadImage: $e', tag: 'ProfileController');
       rethrow; // Propagar el error para que el UI lo maneje
     }
   }
@@ -68,7 +92,7 @@ class ProfileController {
         await _parent!.deletePhotoURL();
       }
     } catch (e) {
-      print('❌ Error eliminando foto de perfil: $e');
+      ReleaseLogger.error('Error eliminando foto de perfil: $e', tag: 'ProfileController');
       rethrow;
     }
   }
@@ -82,7 +106,7 @@ class ProfileController {
     try {
       await _parent!.updateAutoApprovalSetting(enabled);
     } catch (e) {
-      print('❌ Error actualizando auto-aprobación: $e');
+      ReleaseLogger.error('Error actualizando auto-aprobación: $e', tag: 'ProfileController');
       rethrow;
     }
   }
@@ -96,7 +120,7 @@ class ProfileController {
 
       await _auth.signOut();
     } catch (e) {
-      print('❌ Error durante logout: $e');
+      ReleaseLogger.error('Error durante logout: $e', tag: 'ProfileController');
       rethrow;
     }
   }

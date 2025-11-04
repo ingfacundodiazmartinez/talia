@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import 'dashboard/parent_dashboard_screen.dart';
 import 'chats/parent_chats_screen.dart';
 import 'contacts/parent_contacts_screen.dart';
@@ -10,6 +9,7 @@ import 'group_invitations_screen.dart';
 import '../chat_detail_screen.dart';
 import '../group_chat_screen.dart';
 import '../../controllers/parent_main_shell_controller.dart';
+import '../../utils/release_logger.dart';
 
 /// Observer para detectar cambios en la navegación anidada
 class _NavigatorObserver extends NavigatorObserver {
@@ -78,10 +78,7 @@ class _ParentMainShellState extends State<ParentMainShell> {
   void initState() {
     super.initState();
     // ✅ CORRECTO: Solo inicializar controller
-    final currentUserId = firebase_auth.FirebaseAuth.instance.currentUser!.uid;
-    _controller = ParentMainShellController(
-      parentId: currentUserId,
-    );
+    _controller = ParentMainShellController();
 
     // Configurar callback para navegación desde notificaciones
     _controller.onChatNotificationTap = _handleChatNotificationTap;
@@ -114,7 +111,7 @@ class _ParentMainShellState extends State<ParentMainShell> {
         // Notificación de mensaje grupal
         final effectiveGroupId = groupId ?? chatId!;
         final groupName = data['groupName'] as String? ?? 'Grupo';
-        print('✅ [ParentMainShell] Navigating to group chat: $groupName (groupId: $effectiveGroupId)');
+        ReleaseLogger.log('Navigating to group chat: $groupName (groupId: $effectiveGroupId)', tag: 'ParentMainShell');
 
         await Navigator.of(context).push(
           MaterialPageRoute(
@@ -129,19 +126,19 @@ class _ParentMainShellState extends State<ParentMainShell> {
         final senderId = data['senderId'] as String?;
 
         if (senderId == null) {
-          print('⚠️ [ParentMainShell] Missing senderId in notification data');
+          ReleaseLogger.warning('Missing senderId in notification data', tag: 'ParentMainShell');
           return;
         }
 
-        print('📂 [ParentMainShell] Fetching contact info for senderId: $senderId');
+        ReleaseLogger.log('Fetching contact info for senderId: $senderId', tag: 'ParentMainShell');
 
         // ✅ CORRECTO: Usar controller para obtener datos
         final contactInfo = await _controller.getContactInfo(senderId);
         final correctChatId = _controller.getChatId(senderId);
 
-        print('✅ [ParentMainShell] Navigating to 1-on-1 chat with ${contactInfo.name}');
-        print('   Notification chatId: $chatId');
-        print('   Correct chatId: $correctChatId');
+        ReleaseLogger.log('Navigating to 1-on-1 chat with ${contactInfo.name}', tag: 'ParentMainShell');
+        ReleaseLogger.log('Notification chatId: $chatId', tag: 'ParentMainShell');
+        ReleaseLogger.log('Correct chatId: $correctChatId', tag: 'ParentMainShell');
 
         await Navigator.of(context).push(
           MaterialPageRoute(
@@ -153,10 +150,10 @@ class _ParentMainShellState extends State<ParentMainShell> {
           ),
         );
       } else {
-        print('⚠️ [ParentMainShell] Missing both groupId and chatId in notification data');
+        ReleaseLogger.warning('Missing both groupId and chatId in notification data', tag: 'ParentMainShell');
       }
     } catch (e) {
-      print('❌ [ParentMainShell] Error handling chat notification tap: $e');
+      ReleaseLogger.error('Error handling chat notification tap: $e', tag: 'ParentMainShell');
     }
   }
 

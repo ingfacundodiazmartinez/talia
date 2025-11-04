@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'edit_profile_screen.dart';
 import '../../common/privacy_security_screen.dart';
@@ -14,6 +13,7 @@ import '../../../services/subscription_service.dart';
 import '../../../widgets/profile/profile_header_widget.dart';
 import '../../../widgets/profile/children_list_widget.dart';
 import '../../../widgets/profile/profile_statistics_widget.dart';
+import '../../../utils/release_logger.dart';
 
 class ParentProfileScreen extends StatefulWidget {
   const ParentProfileScreen({super.key});
@@ -24,7 +24,6 @@ class ParentProfileScreen extends StatefulWidget {
 
 class _ParentProfileScreenState extends State<ParentProfileScreen>
     with AutomaticKeepAliveClientMixin {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
   late ProfileController _controller;
   late Parent _parent;
 
@@ -34,10 +33,12 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
   @override
   void initState() {
     super.initState();
-    final userId = _auth.currentUser!.uid;
-    _parent = Parent(id: userId, name: '');
-    _controller = ProfileController(parentId: userId);
-    _controller.initialize();
+    _controller = ProfileController();
+    _controller.initialize().then((_) {
+      if (_controller.isUserAuthenticated) {
+        _parent = Parent(id: _controller.currentUserId!, name: '');
+      }
+    });
   }
 
   @override
@@ -51,14 +52,15 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
     super.build(context); // Necesario para AutomaticKeepAliveClientMixin
 
     // Verificar si el usuario sigue autenticado
-    final currentUser = _auth.currentUser;
-    if (currentUser == null) {
+    if (!_controller.isUserAuthenticated) {
       return Scaffold(
         body: Center(
           child: CircularProgressIndicator(),
         ),
       );
     }
+
+    final currentUser = _controller.currentUser!;
 
     return Scaffold(
       appBar: AppBar(
@@ -474,14 +476,14 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
 
     if (confirm == true) {
       try {
-        print('🚪 Cerrando sesión...');
+        ReleaseLogger.log('Cerrando sesión...', tag: 'ParentProfile');
         await _controller.logout();
-        print('✅ Sesión cerrada - AuthWrapper detectará el cambio automáticamente');
+        ReleaseLogger.log('Sesión cerrada - AuthWrapper detectará el cambio automáticamente', tag: 'ParentProfile');
 
         // NO hacer navegación manual - AuthWrapper detectará el signOut
         // y mostrará AuthScreen automáticamente
       } catch (e) {
-        print('❌ Error cerrando sesión: $e');
+        ReleaseLogger.error('Error cerrando sesión: $e', tag: 'ParentProfile');
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(

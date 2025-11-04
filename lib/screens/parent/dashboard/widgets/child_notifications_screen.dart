@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:talia/services/remote_logger_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:intl/intl.dart';
+import '../../../../controllers/child_notifications_controller.dart';
 import '../../../story_approval_screen.dart';
 import '../../contacts/child_contacts_filter_screen.dart';
 
@@ -29,94 +27,50 @@ class ChildNotificationsScreen extends StatefulWidget {
 }
 
 class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final FirebaseAuth _auth = FirebaseAuth.instance;
+  late final ChildNotificationsController _controller;
   final ScrollController _scrollController = ScrollController();
-
-  // Paginación
-  static const int _pageSize = 20;
-  DocumentSnapshot? _lastDocument;
-  bool _isLoadingMore = false;
-  bool _hasMoreData = true;
-  final List<DocumentSnapshot> _notifications = [];
-
-  // Tracking de notificaciones marcadas como leídas
-  final Set<String> _markedAsRead = {};
 
   @override
   void initState() {
     super.initState();
+
+    // Inicializar controller
+    _controller = ChildNotificationsController(
+      childId: widget.childId,
+      childName: widget.childName,
+    );
+    _controller.initialize();
+
     _scrollController.addListener(_onScroll);
     // Marcar notificaciones visibles como leídas después de 2 segundos
-    Future.delayed(Duration(seconds: 2), _markVisibleNotificationsAsRead);
+    Future.delayed(Duration(seconds: 2), () => _controller.markVisibleNotificationsAsRead());
   }
 
   @override
   void dispose() {
     _scrollController.dispose();
+    _controller.dispose();
     super.dispose();
   }
 
   void _onScroll() {
     if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200) {
-      if (!_isLoadingMore && _hasMoreData) {
+      if (!_controller.isLoadingMore && _controller.hasMoreData) {
         _loadMoreNotifications();
       }
     }
   }
 
   Future<void> _loadMoreNotifications() async {
-    if (_isLoadingMore || !_hasMoreData) return;
-
-    setState(() {
-      _isLoadingMore = true;
-    });
-
-    try {
-      final currentUser = _auth.currentUser;
-      if (currentUser == null) return;
-
-      Query query = _firestore
-          .collection('notifications')
-          .where('userId', isEqualTo: currentUser.uid)
-          .orderBy('timestamp', descending: true)
-          .limit(_pageSize);
-
-      if (_lastDocument != null) {
-        query = query.startAfterDocument(_lastDocument!);
-      }
-
-      final snapshot = await query.get();
-
-      if (snapshot.docs.isEmpty) {
-        setState(() {
-          _hasMoreData = false;
-          _isLoadingMore = false;
-        });
-        return;
-      }
-
-      setState(() {
-        _lastDocument = snapshot.docs.last;
-        _notifications.addAll(snapshot.docs);
-        _isLoadingMore = false;
-        if (snapshot.docs.length < _pageSize) {
-          _hasMoreData = false;
-        }
-      });
-    } catch (e) {
-      appLogger.log('❌ Error cargando más notificaciones: $e', level: 'ERROR');
-      setState(() {
-        _isLoadingMore = false;
-      });
+    final success = await _controller.loadMoreNotifications();
+    if (mounted && success) {
+      setState(() {}); // Refresh UI
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final currentUserId = _auth.currentUser?.uid;
-
-    if (currentUserId == null) {
+    if (!_controller.isUserAuthenticated) {
       return Scaffold(
         appBar: AppBar(
           title: Text('Alertas de ${widget.childName}'),
@@ -138,20 +92,14 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
           IconButton(
             icon: Icon(Icons.done_all),
             tooltip: 'Marcar todas como leídas',
-            onPressed: () => _markAllAsRead(currentUserId),
+            onPressed: _markAllAsRead,
           ),
         ],
       ),
       body: StreamBuilder<QuerySnapshot>(
-        stream: _firestore
-            .collection('notifications')
-            .where('userId', isEqualTo: currentUserId)
-            // ✅ Ahora mostramos TODAS las notificaciones (leídas y no leídas)
-            .orderBy('timestamp', descending: true)
-            .limit(50) // Cargar las primeras 50 notificaciones
-            .snapshots(),
+        stream: _controller.getNotificationsStream(),
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting && _notifications.isEmpty) {
+          if (snapshot.connectionState == ConnectionState.waiting && _controller.notifications.isEmpty) {
             return Center(
               child: CircularProgressIndicator(
                 color: Color(0xFF9D7FE8),
@@ -180,73 +128,29 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
 
           // Combinar notificaciones del stream inicial con las cargadas por paginación
           final firstPageDocs = snapshot.data?.docs ?? [];
-          final allDocs = [...firstPageDocs, ..._notifications.where((doc) {
+          final allDocs = [...firstPageDocs, ..._controller.notifications.where((doc) {
             return !firstPageDocs.any((firstDoc) => firstDoc.id == doc.id);
           })];
 
-          print('🔍 Total documentos: ${allDocs.length}, Buscando notificaciones para childId: ${widget.childId}');
-          print('📋 IDs de documentos: ${allDocs.map((d) => d.id.substring(0, 8)).join(", ")}');
+          _controller.logDebugInfo('Total documentos: ${allDocs.length}, Buscando notificaciones para childId: ${widget.childId}');
 
           // Filtrar solo las notificaciones relacionadas a este hijo
-          // Y EXCLUIR notificaciones de mensajes de chat
-          final allChildNotifications = allDocs.where((doc) {
-            final data = doc.data() as Map<String, dynamic>;
-            final notifData = data['data'] as Map<String, dynamic>?;
-            final senderId = data['senderId'] as String?;
-            final type = data['type'] as String?;
-            final read = data['read'] as bool?;
-
-            // Debug: mostrar TODAS las notificaciones primero
-            print('  📧 Notificación ${doc.id.substring(0, 8)}: '
-                'type=$type, '
-                'senderId=$senderId, '
-                'read=$read, '
-                'data.childId=${notifData?['childId']}, '
-                'data.senderId=${notifData?['senderId']}, '
-                'buscando=${widget.childId}');
-
-            // Filtrar notificaciones de chat
-            if (type == 'chat_message') {
-              print('    ⏭️  Saltando: es chat_message');
-              return false; // Skip chat notifications
-            }
-
-            // Verificar si la notificación está relacionada con este hijo
-            final isRelated = notifData?['childId'] == widget.childId ||
-                   notifData?['senderId'] == widget.childId ||
-                   senderId == widget.childId;
-
-            if (isRelated) {
-              print('    ✅ MATCH! Relacionada con ${widget.childName}');
-            }
-
-            return isRelated;
-          }).toList();
+          final allChildNotifications = _controller.filterNotificationsForChild(allDocs);
 
           // ✅ Separar notificaciones leídas y no leídas
-          final unreadNotifications = allChildNotifications.where((doc) {
-            final data = doc.data() as Map<String, dynamic>;
-            return !(data['read'] as bool? ?? false);
-          }).toList();
-
-          final readNotifications = allChildNotifications.where((doc) {
-            final data = doc.data() as Map<String, dynamic>;
-            return data['read'] as bool? ?? false;
-          }).toList();
+          final separatedNotifications = _controller.separateReadUnread(allChildNotifications);
+          final unreadNotifications = separatedNotifications['unread']!;
+          final readNotifications = separatedNotifications['read']!;
 
           // ✅ Combinar: NO LEÍDAS primero, luego LEÍDAS
           final childNotifications = [...unreadNotifications, ...readNotifications];
-
-          print('🎯 Notificaciones filtradas para ${widget.childName}: ${childNotifications.length} (${unreadNotifications.length} no leídas, ${readNotifications.length} leídas)');
 
           // ✅ Actualizar _hasMoreData basado en el número de documentos recibidos
           // Si recibimos menos de 50 documentos (el límite), no hay más datos
           if (allDocs.length < 50) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted && _hasMoreData) {
-                setState(() {
-                  _hasMoreData = false;
-                });
+              if (mounted && _controller.hasMoreData) {
+                setState(() {}); // Trigger rebuild
               }
             });
           }
@@ -289,7 +193,7 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
           return ListView.builder(
             controller: _scrollController,
             padding: EdgeInsets.all(16),
-            itemCount: childNotifications.length + (_hasMoreData ? 1 : 0),
+            itemCount: childNotifications.length + (_controller.hasMoreData ? 1 : 0),
             itemBuilder: (context, index) {
               if (index == childNotifications.length) {
                 // Loading indicator al final
@@ -356,7 +260,7 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
     final notifData = data['data'] as Map<String, dynamic>? ?? {};
 
     // Determinar color e icono según tipo y prioridad
-    final notifStyle = _getNotificationStyle(type, priority);
+    final notifStyle = _controller.getNotificationStyle(type, priority);
     final colorScheme = Theme.of(context).colorScheme;
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
@@ -415,7 +319,7 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
                         if (timestamp != null) ...[
                           SizedBox(height: 4),
                           Text(
-                            _formatTimestamp(timestamp),
+                            _controller.formatTimestamp(timestamp),
                             style: TextStyle(
                               fontSize: 12,
                               color: colorScheme.onSurface.withValues(alpha: 0.6),
@@ -464,14 +368,14 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
                 ),
               ],
               // Botón de acción si aplica
-              if (_hasAction(type)) ...[
+              if (_controller.hasAction(type)) ...[
                 SizedBox(height: 12),
                 Align(
                   alignment: Alignment.centerRight,
                   child: TextButton.icon(
                     onPressed: () => _handleNotificationAction(type, notifData),
                     icon: Icon(Icons.arrow_forward, size: 16),
-                    label: Text(_getActionLabel(type)),
+                    label: Text(_controller.getActionLabel(type)),
                     style: TextButton.styleFrom(
                       foregroundColor: notifStyle.color,
                     ),
@@ -486,77 +390,6 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
     );
   }
 
-  NotificationStyle _getNotificationStyle(String type, String priority) {
-    switch (type) {
-      case 'contact_request':
-        return NotificationStyle(
-          color: Colors.blue,
-          icon: Icons.person_add,
-          label: 'Solicitud de Contacto',
-        );
-      case 'story_approval_request':
-        return NotificationStyle(
-          color: Colors.purple,
-          icon: Icons.photo_library,
-          label: 'Historia Pendiente',
-        );
-      case 'story_approved':
-        return NotificationStyle(
-          color: Colors.green,
-          icon: Icons.check_circle,
-          label: 'Historia Aprobada',
-        );
-      case 'story_rejected':
-        return NotificationStyle(
-          color: Colors.orange,
-          icon: Icons.cancel,
-          label: 'Historia Rechazada',
-        );
-      case 'bullying_alert':
-      case 'activity_alert':
-        return NotificationStyle(
-          color: Colors.red,
-          icon: Icons.warning,
-          label: type == 'bullying_alert' ? 'Alerta de Bullying' : 'Alerta de Actividad',
-        );
-      case 'contact_approved':
-        return NotificationStyle(
-          color: Colors.green,
-          icon: Icons.check_circle,
-          label: 'Contacto Aprobado',
-        );
-      case 'whitelist_change':
-        return NotificationStyle(
-          color: Colors.indigo,
-          icon: Icons.shield,
-          label: 'Cambio en Lista Blanca',
-        );
-      default:
-        return NotificationStyle(
-          color: priority == 'high' ? Colors.orange : Colors.blue,
-          icon: Icons.notifications,
-          label: 'Notificación',
-        );
-    }
-  }
-
-  bool _hasAction(String type) {
-    return [
-      'contact_request',
-      'story_approval_request',
-    ].contains(type);
-  }
-
-  String _getActionLabel(String type) {
-    switch (type) {
-      case 'contact_request':
-        return 'Ver Solicitud';
-      case 'story_approval_request':
-        return 'Revisar Historia';
-      default:
-        return 'Ver Detalles';
-    }
-  }
 
   Future<void> _handleNotificationTap(
     String notificationId,
@@ -566,63 +399,12 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
   ) async {
     // SIEMPRE marcar como leída al tocar (incluso si ya está marcada)
     // Esto asegura que se marca al visualizar
-    await _markAsRead(notificationId);
+    await _controller.markAsRead(notificationId);
 
     // Navegar según el tipo
     _handleNotificationAction(type, notifData);
   }
 
-  // Marcar todas las notificaciones visibles en el viewport como leídas
-  Future<void> _markVisibleNotificationsAsRead() async {
-    if (!mounted) return;
-
-    try {
-      final currentUser = _auth.currentUser;
-      if (currentUser == null) return;
-
-      // Obtener notificaciones no leídas del hijo actual
-      final unreadSnapshot = await _firestore
-          .collection('notifications')
-          .where('userId', isEqualTo: currentUser.uid)
-          .where('read', isEqualTo: false)
-          .limit(10) // Solo las primeras 10 visibles
-          .get();
-
-      final batch = _firestore.batch();
-      int markedCount = 0;
-
-      for (final doc in unreadSnapshot.docs) {
-        final data = doc.data();
-        final notifData = data['data'] as Map<String, dynamic>?;
-
-        // Filtrar notificaciones de chat
-        if (data['type'] == 'chat_message') {
-          continue; // Skip chat notifications
-        }
-
-        // Verificar si está relacionada con este hijo
-        final isRelatedToChild = notifData?['childId'] == widget.childId ||
-            notifData?['senderId'] == widget.childId ||
-            data['senderId'] == widget.childId;
-
-        if (isRelatedToChild && !_markedAsRead.contains(doc.id)) {
-          batch.update(doc.reference, {
-            'read': true,
-            'readAt': FieldValue.serverTimestamp(),
-          });
-          _markedAsRead.add(doc.id);
-          markedCount++;
-        }
-      }
-
-      if (markedCount > 0) {
-        await batch.commit();
-        print('✅ Marcadas $markedCount notificaciones como leídas automáticamente');
-      }
-    } catch (e) {
-      appLogger.log('❌ Error marcando notificaciones visibles: $e', level: 'ERROR');
-    }
-  }
 
   void _handleNotificationAction(String type, Map<String, dynamic> notifData) {
     switch (type) {
@@ -660,76 +442,11 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
     }
   }
 
-  String _formatTimestamp(Timestamp timestamp) {
-    final date = timestamp.toDate();
-    final now = DateTime.now();
-    final difference = now.difference(date);
+  Future<void> _markAllAsRead() async {
+    final markedCount = await _controller.markAllAsRead();
 
-    if (difference.inDays == 0) {
-      if (difference.inHours == 0) {
-        if (difference.inMinutes == 0) {
-          return 'Ahora';
-        }
-        return 'Hace ${difference.inMinutes} min';
-      }
-      return 'Hace ${difference.inHours}h';
-    } else if (difference.inDays == 1) {
-      return 'Ayer ${DateFormat('HH:mm').format(date)}';
-    } else if (difference.inDays < 7) {
-      return 'Hace ${difference.inDays} días';
-    } else {
-      return DateFormat('dd/MM/yyyy HH:mm').format(date);
-    }
-  }
-
-  Future<void> _markAsRead(String notificationId) async {
-    try {
-      await _firestore.collection('notifications').doc(notificationId).update({
-        'read': true,
-        'readAt': FieldValue.serverTimestamp(),
-      });
-    } catch (e) {
-      appLogger.log('❌ Error marcando notificación como leída: $e', level: 'ERROR');
-    }
-  }
-
-  Future<void> _markAllAsRead(String parentId) async {
-    try {
-      final batch = _firestore.batch();
-
-      // Obtener todas las notificaciones no leídas del padre
-      final notificationsSnapshot = await _firestore
-          .collection('notifications')
-          .where('userId', isEqualTo: parentId)
-          .where('read', isEqualTo: false)
-          .get();
-
-      // Filtrar solo las relacionadas a este hijo y excluir notificaciones de chat
-      int markedCount = 0;
-      for (final doc in notificationsSnapshot.docs) {
-        final data = doc.data();
-        final notifData = data['data'] as Map<String, dynamic>?;
-
-        // Filtrar notificaciones de chat
-        if (data['type'] == 'chat_message') {
-          continue; // Skip chat notifications
-        }
-
-        // Verificar si la notificación está relacionada con este hijo
-        if (notifData?['childId'] == widget.childId ||
-            notifData?['senderId'] == widget.childId ||
-            data['senderId'] == widget.childId) {
-          batch.update(doc.reference, {
-            'read': true,
-            'readAt': FieldValue.serverTimestamp(),
-          });
-          markedCount++;
-        }
-      }
-
-      await batch.commit();
-
-      if (mounted && markedCount > 0) {
+    if (mounted) {
+      if (markedCount > 0) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('$markedCount notificación${markedCount > 1 ? 'es' : ''} marcada${markedCount > 1 ? 's' : ''} como leída${markedCount > 1 ? 's' : ''}'),
@@ -738,29 +455,6 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
           ),
         );
       }
-    } catch (e) {
-      appLogger.log('❌ Error marcando todas las notificaciones como leídas: $e', level: 'ERROR');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al marcar notificaciones'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
     }
   }
-}
-
-// Clase auxiliar para estilos de notificaciones
-class NotificationStyle {
-  final Color color;
-  final IconData icon;
-  final String label;
-
-  NotificationStyle({
-    required this.color,
-    required this.icon,
-    required this.label,
-  });
 }
