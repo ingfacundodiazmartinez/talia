@@ -12,7 +12,7 @@ import '../../../emergency_detail_screen.dart';
 /// - Navegar a detalle de emergencia al tocar
 ///
 /// Se muestra solo cuando hay emergencias activas, sino retorna SizedBox.shrink()
-class EmergencyAlertWidget extends StatelessWidget {
+class EmergencyAlertWidget extends StatefulWidget {
   final String parentId;
 
   const EmergencyAlertWidget({
@@ -21,31 +21,113 @@ class EmergencyAlertWidget extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    final emergencyService = EmergencyService();
+  State<EmergencyAlertWidget> createState() => _EmergencyAlertWidgetState();
+}
 
-    print('🆘 EmergencyAlertWidget - Building for parent: $parentId');
+class _EmergencyAlertWidgetState extends State<EmergencyAlertWidget> {
+  List<QueryDocumentSnapshot>? _cachedEmergencies;
+  late final EmergencyService _emergencyService;
+
+  @override
+  void initState() {
+    super.initState();
+    _emergencyService = EmergencyService();
+    print('🆘 EmergencyAlertWidget - EmergencyService creado en initState');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    print('🆘 EmergencyAlertWidget - Building for parent: ${widget.parentId}');
 
     return StreamBuilder<QuerySnapshot>(
-      stream: emergencyService.getActiveEmergenciesForParent(parentId),
+      stream: _emergencyService.getActiveEmergenciesForParent(widget.parentId),
       builder: (context, snapshot) {
         print('🆘 EmergencyAlertWidget - hasData: ${snapshot.hasData}');
         print('🆘 EmergencyAlertWidget - connectionState: ${snapshot.connectionState}');
-        if (snapshot.hasData) {
-          print('🆘 EmergencyAlertWidget - docs count: ${snapshot.data!.docs.length}');
-        }
-        if (snapshot.hasError) {
-          print('❌ EmergencyAlertWidget - error: ${snapshot.error}');
+
+        // ✅ OPTIMIZACIÓN: Usar cache cuando no hay datos nuevos
+        if (snapshot.connectionState == ConnectionState.waiting && _cachedEmergencies != null) {
+          print('🆘 EmergencyAlertWidget - usando cache durante waiting (${_cachedEmergencies!.length} emergencias)');
+          return _buildEmergencyWidget(_cachedEmergencies!);
         }
 
-        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+        if (snapshot.hasData) {
+          print('🆘 EmergencyAlertWidget - docs count: ${snapshot.data!.docs.length}');
+          // ✅ OPTIMIZACIÓN: Solo actualizar cache si los datos realmente cambiaron
+          final newEmergencies = snapshot.data!.docs;
+          if (_hasEmergenciesChanged(newEmergencies)) {
+            _cachedEmergencies = newEmergencies;
+            print('🆘 EmergencyAlertWidget - cache actualizado');
+          } else {
+            print('🆘 EmergencyAlertWidget - datos sin cambios, omitiendo rebuild');
+            // ✅ OPTIMIZACIÓN: Si los datos no han cambiado, no rebuildeamos
+            return _buildEmergencyWidget(_cachedEmergencies!);
+          }
+
+          return _buildEmergencyWidget(_cachedEmergencies!);
+        }
+
+        if (snapshot.hasError) {
+          print('❌ EmergencyAlertWidget - error: ${snapshot.error}');
           return SizedBox.shrink();
         }
 
-        final emergencies = snapshot.data!.docs;
-        print('✅ EmergencyAlertWidget - Showing ${emergencies.length} emergencies');
+        if (!snapshot.hasData) {
+          // Si no hay datos y tenemos cache, usar cache
+          if (_cachedEmergencies != null) {
+            print('🆘 EmergencyAlertWidget - sin datos nuevos, usando cache');
+            return _buildEmergencyWidget(_cachedEmergencies!);
+          }
+          // Si no hay datos ni cache, mostrar vacío
+          print('🆘 EmergencyAlertWidget - sin datos ni cache');
+          return SizedBox.shrink();
+        }
 
-        return Container(
+        // Datos vacíos
+        if (snapshot.data!.docs.isEmpty) {
+          _cachedEmergencies = [];
+          print('🆘 EmergencyAlertWidget - datos vacíos');
+          return SizedBox.shrink();
+        }
+
+        // No debería llegar aquí, pero por seguridad
+        return _buildEmergencyWidget(_cachedEmergencies ?? []);
+      },
+    );
+  }
+
+  /// Verificar si las emergencias han cambiado realmente
+  bool _hasEmergenciesChanged(List<QueryDocumentSnapshot> newEmergencies) {
+    if (_cachedEmergencies == null) return true;
+    if (_cachedEmergencies!.length != newEmergencies.length) return true;
+
+    // Comparar IDs de documentos y datos principales
+    for (int i = 0; i < _cachedEmergencies!.length; i++) {
+      final cachedDoc = _cachedEmergencies![i];
+      final newDoc = newEmergencies[i];
+
+      // Comparar ID
+      if (cachedDoc.id != newDoc.id) return true;
+
+      // Comparar datos principales que afectan la UI
+      final cachedData = cachedDoc.data() as Map<String, dynamic>?;
+      final newData = newDoc.data() as Map<String, dynamic>?;
+
+      if (cachedData?['childId'] != newData?['childId']) return true;
+      if (cachedData?['status'] != newData?['status']) return true;
+      if (cachedData?['timestamp'] != newData?['timestamp']) return true;
+    }
+
+    return false;
+  }
+
+  /// Construir el widget de emergencias
+  Widget _buildEmergencyWidget(List<QueryDocumentSnapshot> emergencies) {
+    if (emergencies.isEmpty) {
+      return SizedBox.shrink();
+    }
+
+    return Container(
           margin: EdgeInsets.only(bottom: 20),
           decoration: BoxDecoration(
             gradient: LinearGradient(
@@ -196,7 +278,5 @@ class EmergencyAlertWidget extends StatelessWidget {
             ),
           ),
         );
-      },
-    );
   }
 }

@@ -18,6 +18,9 @@ class OnlineStatusService with WidgetsBindingObserver {
   Timer? _heartbeatTimer;
   DateTime? _lastOnlineUpdate;
 
+  // ✅ OPTIMIZACIÓN: Rastrear último estado para evitar updates innecesarios
+  bool? _lastOnlineState;
+
   /// Inicializar el servicio
   void initialize() {
     if (_isInitialized) return;
@@ -52,30 +55,42 @@ class OnlineStatusService with WidgetsBindingObserver {
   }
 
   /// Actualizar estado en línea
+  /// ✅ OPTIMIZACIÓN: Solo actualizar cuando realmente cambia el estado
   Future<void> _setOnlineStatus(bool isOnline) async {
     final user = _auth.currentUser;
     if (user == null) return;
 
     try {
+      // ✅ OPTIMIZACIÓN: Solo actualizar si el estado realmente cambió
+      if (_lastOnlineState == isOnline) {
+        print('⏭️ Estado online sin cambios ($isOnline), omitiendo update');
+        return;
+      }
+
       // Verificar si el usuario permite mostrar estado online
       final userDoc = await _firestore.collection('users').doc(user.uid).get();
       final userData = userDoc.data();
       final showOnlineStatus = userData?['showOnlineStatus'] ?? true;
 
+      final finalOnlineStatus = isOnline && showOnlineStatus;
+
+      // Solo actualizar el documento del usuario cuando cambia el estado online
       await _firestore.collection('users').doc(user.uid).set({
-        'isOnline': isOnline && showOnlineStatus,
+        'isOnline': finalOnlineStatus,
         'lastSeen': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
       _lastOnlineUpdate = DateTime.now();
+      _lastOnlineState = isOnline; // ✅ Recordar el último estado
 
-      print('${isOnline ? '🟢' : '⚫'} Estado online actualizado: $isOnline');
+      print('${isOnline ? '🟢' : '⚫'} Estado online actualizado: $finalOnlineStatus (era: ${_lastOnlineState == null ? 'null' : (!isOnline).toString()})');
     } catch (e) {
       print('❌ Error actualizando estado online: $e');
     }
   }
 
   /// Actualizar solo lastSeen sin cambiar isOnline (para heartbeat)
+  /// ✅ OPTIMIZACIÓN: Usar subcolección para evitar rebuilds del dashboard
   Future<void> _updateLastSeen() async {
     final user = _auth.currentUser;
     if (user == null) return;
@@ -87,11 +102,22 @@ class OnlineStatusService with WidgetsBindingObserver {
         return;
       }
 
-      await _firestore.collection('users').doc(user.uid).update({
+      // ✅ OPTIMIZACIÓN CRÍTICA: Usar subcolección para heartbeat
+      // En lugar de actualizar el documento principal del usuario,
+      // actualizar un documento separado que NO causa rebuilds del dashboard
+      await _firestore
+          .collection('users')
+          .doc(user.uid)
+          .collection('_private')
+          .doc('heartbeat')
+          .set({
         'lastSeen': FieldValue.serverTimestamp(),
-      });
+        'isActive': true,
+      }, SetOptions(merge: true));
 
       _lastOnlineUpdate = DateTime.now();
+
+      print('💓 Heartbeat actualizado (sin rebuilds del dashboard)');
     } catch (e) {
       // No imprimir error para evitar spam en logs
       // print('⚠️ Error actualizando lastSeen: $e');

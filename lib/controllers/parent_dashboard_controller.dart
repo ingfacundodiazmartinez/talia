@@ -61,14 +61,38 @@ class ParentDashboardController {
   String? get currentUserId => _auth.currentUser?.uid;
   String get currentUserDisplayName => _auth.currentUser?.displayName ?? '';
 
+  // ✅ OPTIMIZACIÓN: Stream centralizado para evitar duplicar listeners al mismo documento
+  Stream<DocumentSnapshot>? _cachedUserDataStream;
+
   /// Get user data stream for display purposes
+  /// ✅ OPTIMIZADO: Usa cache para evitar múltiples listeners al mismo documento
   Stream<DocumentSnapshot> getUserDataStream() {
-    return Parent(id: parentId, name: '').getUserDataStream();
+    print('🔍 [ParentDashboard] getUserDataStream llamado - usando cache: ${_cachedUserDataStream != null}');
+
+    _cachedUserDataStream ??= FirebaseFirestore.instance
+        .collection('users')
+        .doc(parentId)
+        .snapshots()
+        .asBroadcastStream(); // Permite múltiples subscripciones
+
+    return _cachedUserDataStream!;
   }
 
   /// Get linked children IDs stream
+  /// ✅ OPTIMIZADO: Deriva del stream principal para evitar duplicación
   Stream<List<String>> getLinkedChildrenIdsStream() {
-    return Child.getLinkedChildrenIdsStream(parentId);
+    print('🔍 [ParentDashboard] getLinkedChildrenIdsStream llamado - derivando del stream principal');
+
+    return getUserDataStream().map((snapshot) {
+      if (!snapshot.exists) {
+        print('🔍 [ParentDashboard] Documento usuario no existe');
+        return <String>[];
+      }
+      final userData = snapshot.data() as Map<String, dynamic>;
+      final childrenIds = List<String>.from(userData['linkedChildrenIds'] ?? []);
+      print('🔍 [ParentDashboard] Retornando ${childrenIds.length} hijos: $childrenIds');
+      return childrenIds;
+    });
   }
 
   /// Inicializa todos los listeners y servicios
@@ -344,12 +368,15 @@ class ParentDashboardController {
     _emergencyNotificationSubscription?.cancel();
     _incomingCallsSubscription?.cancel();
 
+    // ✅ OPTIMIZACIÓN: Limpiar stream cacheado
+    _cachedUserDataStream = null;
+
     // Limpiar todos los listeners de llamadas activas
     for (var subscription in _activeCallListeners.values) {
       subscription.cancel();
     }
     _activeCallListeners.clear();
 
-    ReleaseLogger.log('ParentDashboardController disposed', tag: 'ParentDashboard');
+    ReleaseLogger.log('ParentDashboardController disposed (con stream cache limpio)', tag: 'ParentDashboard');
   }
 }

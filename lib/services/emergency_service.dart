@@ -6,6 +6,7 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../utils/release_logger.dart';
 
 class EmergencyService {
   static final EmergencyService _instance = EmergencyService._internal();
@@ -40,7 +41,7 @@ class EmergencyService {
 
       return difference.inMinutes < _cooldownMinutes;
     } catch (e) {
-      print('❌ Error verificando cooldown: $e');
+      ReleaseLogger.error('❌ Error verificando cooldown: $e', tag: 'EmergencyService');
       return false;
     }
   }
@@ -51,11 +52,11 @@ class EmergencyService {
     BuildContext? context,
   }) async {
     try {
-      print('🆘 Activando emergencia...');
+      ReleaseLogger.log('🆘 Activando emergencia...', tag: 'EmergencyService');
 
       final user = _auth.currentUser;
       if (user == null) {
-        print('❌ Usuario no autenticado');
+        ReleaseLogger.error('❌ Usuario no autenticado', tag: 'EmergencyService');
         return null;
       }
 
@@ -64,8 +65,8 @@ class EmergencyService {
 
       if (existingEmergency != null) {
         final emergencyId = existingEmergency['id'] as String;
-        print('⚠️ Ya existe emergencia activa: $emergencyId');
-        print('📞 Reactivando llamada sin crear nueva emergencia...');
+        ReleaseLogger.log('⚠️ Ya existe emergencia activa: $emergencyId', tag: 'EmergencyService');
+        ReleaseLogger.log('📞 Reactivando llamada sin crear nueva emergencia...', tag: 'EmergencyService');
 
         // Vibración de emergencia
         await _triggerEmergencyVibration();
@@ -91,7 +92,7 @@ class EmergencyService {
 
       // Verificar cooldown solo si no hay emergencia activa
       if (await isInCooldown()) {
-        print('⏰ Emergencia en cooldown');
+        ReleaseLogger.log('⏰ Emergencia en cooldown', tag: 'EmergencyService');
         if (context != null) {
           _showCooldownMessage(context);
         }
@@ -113,7 +114,7 @@ class EmergencyService {
       final parents = results[2] as List<Map<String, dynamic>>;
 
       if (childData == null) {
-        print('❌ No se pudo obtener datos del niño');
+        ReleaseLogger.error('❌ No se pudo obtener datos del niño', tag: 'EmergencyService');
         return null;
       }
 
@@ -126,7 +127,7 @@ class EmergencyService {
       );
 
       if (emergencyId == null) {
-        print('❌ Error creando registro de emergencia');
+        ReleaseLogger.error('❌ Error creando registro de emergencia', tag: 'EmergencyService');
         return null;
       }
 
@@ -142,7 +143,7 @@ class EmergencyService {
       // Guardar timestamp del último uso
       await _saveLastEmergencyTime();
 
-      print('✅ Emergencia activada exitosamente');
+      ReleaseLogger.log('✅ Emergencia activada exitosamente', tag: 'EmergencyService');
 
       if (context != null) {
         _showEmergencyConfirmation(context);
@@ -156,7 +157,7 @@ class EmergencyService {
         'isReactivation': false,
       };
     } catch (e) {
-      print('❌ Error activando emergencia: $e');
+      ReleaseLogger.error('❌ Error activando emergencia: $e', tag: 'EmergencyService');
       if (context != null) {
         _showErrorMessage(context, e.toString());
       }
@@ -184,7 +185,7 @@ class EmergencyService {
 
       return null;
     } catch (e) {
-      print('❌ Error obteniendo emergencia activa: $e');
+      ReleaseLogger.error('❌ Error obteniendo emergencia activa: $e', tag: 'EmergencyService');
       return null;
     }
   }
@@ -192,13 +193,13 @@ class EmergencyService {
   // Obtener ubicación actual (se ejecuta en background)
   Future<Position?> _getCurrentLocation() async {
     try {
-      print('📍 Obteniendo ubicación de emergencia en background...');
+      ReleaseLogger.log('📍 Obteniendo ubicación de emergencia en background...', tag: 'EmergencyService');
 
       // Verificar permisos
       LocationPermission permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied ||
           permission == LocationPermission.deniedForever) {
-        print('❌ Sin permisos de ubicación para emergencia');
+        ReleaseLogger.error('❌ Sin permisos de ubicación para emergencia', tag: 'EmergencyService');
         return null;
       }
 
@@ -208,10 +209,10 @@ class EmergencyService {
         timeLimit: Duration(seconds: 10),
       );
 
-      print('✅ Ubicación de emergencia obtenida: ${position.latitude}, ${position.longitude}');
+      ReleaseLogger.log('✅ Ubicación de emergencia obtenida: ${position.latitude}, ${position.longitude}', tag: 'EmergencyService');
       return position;
     } catch (e) {
-      print('❌ Error obteniendo ubicación de emergencia: $e');
+      ReleaseLogger.error('❌ Error obteniendo ubicación de emergencia: $e', tag: 'EmergencyService');
       return null;
     }
   }
@@ -225,7 +226,7 @@ class EmergencyService {
       }
       return null;
     } catch (e) {
-      print('❌ Error obteniendo datos del niño: $e');
+      ReleaseLogger.error('❌ Error obteniendo datos del niño: $e', tag: 'EmergencyService');
       return null;
     }
   }
@@ -238,7 +239,7 @@ class EmergencyService {
     String? customMessage,
   }) async {
     try {
-      print('🔐 Creando emergencia usando Cloud Function segura...');
+      ReleaseLogger.log('🔐 Creando emergencia usando Cloud Function segura...', tag: 'EmergencyService');
 
       // Preparar datos de ubicación
       Map<String, dynamic>? locationData;
@@ -262,26 +263,26 @@ class EmergencyService {
 
       if (data['success'] == true) {
         final emergencyId = data['emergencyId'] as String;
-        print('✅ Emergencia creada via Cloud Function: $emergencyId');
-        print('📧 ${data['notifiedParents']} padres notificados');
+        ReleaseLogger.log('✅ Emergencia creada via Cloud Function: $emergencyId', tag: 'EmergencyService');
+        ReleaseLogger.log('📧 ${data['notifiedParents']} padres notificados', tag: 'EmergencyService');
         return emergencyId;
       } else {
-        print('❌ Error: Cloud Function no retornó success');
+        ReleaseLogger.error('❌ Error: Cloud Function no retornó success', tag: 'EmergencyService');
         return null;
       }
     } on FirebaseFunctionsException catch (e) {
-      print('❌ Error de Cloud Function: ${e.code} - ${e.message}');
+      ReleaseLogger.error('❌ Error de Cloud Function: ${e.code} - ${e.message}', tag: 'EmergencyService');
 
       // Mostrar mensaje específico según el error
       if (e.code == 'resource-exhausted') {
-        print('⚠️ Rate limit excedido: ${e.message}');
+        ReleaseLogger.log('⚠️ Rate limit excedido: ${e.message}', tag: 'EmergencyService');
       } else if (e.code == 'failed-precondition') {
-        print('⚠️ Sin padres vinculados: ${e.message}');
+        ReleaseLogger.log('⚠️ Sin padres vinculados: ${e.message}', tag: 'EmergencyService');
       }
 
       return null;
     } catch (e) {
-      print('❌ Error creando emergencia: $e');
+      ReleaseLogger.error('❌ Error creando emergencia: $e', tag: 'EmergencyService');
       return null;
     }
   }
@@ -304,10 +305,10 @@ class EmergencyService {
         parents.add(parentData);
       }
 
-      print('✅ Encontrados ${parents.length} padres para notificar');
+      ReleaseLogger.log('✅ Encontrados ${parents.length} padres para notificar', tag: 'EmergencyService');
       return parents;
     } catch (e) {
-      print('❌ Error obteniendo padres: $e');
+      ReleaseLogger.error('❌ Error obteniendo padres: $e', tag: 'EmergencyService');
       return [];
     }
   }
@@ -349,10 +350,10 @@ class EmergencyService {
           'priority': 'high',
         });
 
-        print('✅ Notificación de emergencia enviada a $parentName');
+        ReleaseLogger.log('✅ Notificación de emergencia enviada a $parentName', tag: 'EmergencyService');
       }
     } catch (e) {
-      print('❌ Error enviando notificaciones: $e');
+      ReleaseLogger.error('❌ Error enviando notificaciones: $e', tag: 'EmergencyService');
     }
   }
 
@@ -360,7 +361,7 @@ class EmergencyService {
   Future<void> _makeEmergencyVideoCall(List<Map<String, dynamic>> parents, String emergencyId) async {
     try {
       if (parents.isEmpty) {
-        print('❌ No hay padres para llamar');
+        ReleaseLogger.error('❌ No hay padres para llamar', tag: 'EmergencyService');
         return;
       }
 
@@ -382,7 +383,7 @@ class EmergencyService {
         parentNames[parentId] = parentName;
       }
 
-      print('🆘 Creando videollamada de emergencia grupal para ${parentIds.length} padres...');
+      ReleaseLogger.log('🆘 Creando videollamada de emergencia grupal para ${parentIds.length} padres...', tag: 'EmergencyService');
 
       // ✅ El documento de video_calls ya fue creado por la Cloud Function
       // No necesitamos crearlo de nuevo aquí para evitar race conditions
@@ -394,10 +395,10 @@ class EmergencyService {
       // ✅ La Cloud Function también ya envió las notificaciones a los padres
       // incluyendo los datos de la llamada (callId, channelName, etc.)
 
-      print('✅ Videollamada de emergencia creada por Cloud Function: $emergencyId');
-      print('✅ Padres notificados por Cloud Function');
+      ReleaseLogger.log('✅ Videollamada de emergencia creada por Cloud Function: $emergencyId', tag: 'EmergencyService');
+      ReleaseLogger.log('✅ Padres notificados por Cloud Function', tag: 'EmergencyService');
     } catch (e) {
-      print('❌ Error creando llamada de emergencia grupal: $e');
+      ReleaseLogger.error('❌ Error creando llamada de emergencia grupal: $e', tag: 'EmergencyService');
     }
   }
 
@@ -414,7 +415,7 @@ class EmergencyService {
   // Iniciar tracking continuo de ubicación
   Future<void> _startLocationTracking(String emergencyId) async {
     try {
-      print('📍 Iniciando tracking de ubicación de emergencia...');
+      ReleaseLogger.log('📍 Iniciando tracking de ubicación de emergencia...', tag: 'EmergencyService');
 
       _currentEmergencyId = emergencyId;
 
@@ -430,14 +431,14 @@ class EmergencyService {
       // Auto-detener después de 1 hora
       Future.delayed(Duration(minutes: _maxTrackingMinutes), () {
         if (_locationTrackingTimer?.isActive ?? false) {
-          print('⏰ Deteniendo tracking automáticamente después de 1 hora');
+          ReleaseLogger.log('⏰ Deteniendo tracking automáticamente después de 1 hora', tag: 'EmergencyService');
           stopLocationTracking();
         }
       });
 
-      print('✅ Tracking de ubicación iniciado');
+      ReleaseLogger.log('✅ Tracking de ubicación iniciado', tag: 'EmergencyService');
     } catch (e) {
-      print('❌ Error iniciando tracking de ubicación: $e');
+      ReleaseLogger.error('❌ Error iniciando tracking de ubicación: $e', tag: 'EmergencyService');
     }
   }
 
@@ -459,9 +460,9 @@ class EmergencyService {
         'dateTime': DateTime.now().toIso8601String(),
       });
 
-      print('📍 Ubicación guardada: ${position.latitude}, ${position.longitude}');
+      ReleaseLogger.log('📍 Ubicación guardada: ${position.latitude}, ${position.longitude}', tag: 'EmergencyService');
     } catch (e) {
-      print('❌ Error guardando punto de ubicación: $e');
+      ReleaseLogger.error('❌ Error guardando punto de ubicación: $e', tag: 'EmergencyService');
     }
   }
 
@@ -470,7 +471,7 @@ class EmergencyService {
     _locationTrackingTimer?.cancel();
     _locationTrackingTimer = null;
     _currentEmergencyId = null;
-    print('⏹️ Tracking de ubicación detenido');
+    ReleaseLogger.log('⏹️ Tracking de ubicación detenido', tag: 'EmergencyService');
   }
 
   // Vibración de emergencia
@@ -485,7 +486,7 @@ class EmergencyService {
       await Future.delayed(Duration(milliseconds: 100));
       await HapticFeedback.mediumImpact();
     } catch (e) {
-      print('❌ Error en vibración de emergencia: $e');
+      ReleaseLogger.error('❌ Error en vibración de emergencia: $e', tag: 'EmergencyService');
     }
   }
 
@@ -495,7 +496,7 @@ class EmergencyService {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt('last_emergency_time', DateTime.now().millisecondsSinceEpoch);
     } catch (e) {
-      print('❌ Error guardando timestamp de emergencia: $e');
+      ReleaseLogger.error('❌ Error guardando timestamp de emergencia: $e', tag: 'EmergencyService');
     }
   }
 
@@ -505,7 +506,7 @@ class EmergencyService {
       final user = _auth.currentUser;
       if (user == null) return false;
 
-      print('🗑️ Resolviendo emergencia: eliminando documento y subcollección...');
+      ReleaseLogger.log('🗑️ Resolviendo emergencia: eliminando documento y subcollección...', tag: 'EmergencyService');
 
       // Detener tracking de ubicación si es la emergencia actual
       if (_currentEmergencyId == emergencyId) {
@@ -524,75 +525,96 @@ class EmergencyService {
         batch.delete(doc.reference);
       }
       await batch.commit();
-      print('✅ Eliminados ${trackingDocs.docs.length} registros de ubicación');
+      ReleaseLogger.log('✅ Eliminados ${trackingDocs.docs.length} registros de ubicación', tag: 'EmergencyService');
 
       // 2. Eliminar el documento principal de emergencia
       await _firestore.collection('emergencies').doc(emergencyId).delete();
-      print('✅ Emergencia eliminada completamente: $emergencyId');
+      ReleaseLogger.log('✅ Emergencia eliminada completamente: $emergencyId', tag: 'EmergencyService');
 
       return true;
     } catch (e) {
-      print('❌ Error resolviendo emergencia: $e');
+      ReleaseLogger.error('❌ Error resolviendo emergencia: $e', tag: 'EmergencyService');
       return false;
     }
   }
 
+  // Cached streams por parentId para evitar crear nuevos streams en cada call
+  final Map<String, Stream<QuerySnapshot>> _cachedEmergencyStreams = {};
+
   // Obtener emergencias activas para TODOS los hijos de un padre
-  // ⚠️ CORREGIDO: Lee desde /users/{parentId}.linkedChildrenIds por seguridad
-  Stream<QuerySnapshot> getActiveEmergenciesForParent(String parentId) async* {
+  // ✅ CORREGIDO: Retorna el mismo stream object para evitar infinite rebuilds
+  Stream<QuerySnapshot> getActiveEmergenciesForParent(String parentId) {
+    print('🔍 [EmergencyService] getActiveEmergenciesForParent llamado - parentId: $parentId');
+    print('🔍 [EmergencyService] Cache keys actuales: ${_cachedEmergencyStreams.keys.toList()}');
+    print('🔍 [EmergencyService] Cache contiene parentId? ${_cachedEmergencyStreams.containsKey(parentId)}');
+
+    // ✅ Usar cache para retornar el mismo stream object
+    if (_cachedEmergencyStreams.containsKey(parentId)) {
+      print('📋 [EmergencyService] ✅ USANDO CACHE para padre: $parentId');
+      ReleaseLogger.log('📋 [EmergencyService] Usando stream cacheado para padre: $parentId', tag: 'EmergencyService');
+      return _cachedEmergencyStreams[parentId]!;
+    }
+
+    print('🚨 [EmergencyService] ❌ CREANDO NUEVO STREAM para padre: $parentId');
+    ReleaseLogger.log('🚨 [EmergencyService] Creando nuevo stream para padre: $parentId', tag: 'EmergencyService');
+
+    // ✅ CORREGIDO: Convertir Future<Stream> en Stream usando asyncExpand una sola vez
+    final stream = Stream.fromFuture(_createEmergencyStreamForParent(parentId))
+        .asyncExpand((innerStream) => innerStream);
+
+    // ✅ Cachear el stream
+    _cachedEmergencyStreams[parentId] = stream;
+    print('🔍 [EmergencyService] Stream cacheado. Cache keys después: ${_cachedEmergencyStreams.keys.toList()}');
+
+    return stream;
+  }
+
+  // Helper method para crear el stream real
+  Future<Stream<QuerySnapshot>> _createEmergencyStreamForParent(String parentId) async {
+    ReleaseLogger.log('🚨 [EmergencyService] Creando stream estable para padre: $parentId', tag: 'EmergencyService');
+
     try {
-      print('🚨 [EmergencyService] Buscando emergencias para padre: $parentId');
+      // ✅ CORREGIDO: Obtener childrenIds una sola vez con await
+      final parentSnapshot = await _firestore.collection('users').doc(parentId).get();
 
-      // Obtener IDs de todos los hijos del padre desde linkedChildrenIds
-      final parentDoc = await _firestore.collection('users').doc(parentId).get();
-
-      if (!parentDoc.exists) {
-        print('⚠️ [EmergencyService] Usuario padre $parentId no existe');
-        yield* Stream.value(
-          await _firestore.collection('emergencies').where('childId', isEqualTo: 'no_parent').get(),
-        );
-        return;
+      if (!parentSnapshot.exists) {
+        ReleaseLogger.log('⚠️ [EmergencyService] Usuario padre $parentId no existe', tag: 'EmergencyService');
+        // Retornar stream vacío estable
+        return _firestore.collection('emergencies').where('childId', isEqualTo: 'no_parent').snapshots();
       }
 
-      final parentData = parentDoc.data() as Map<String, dynamic>?;
+      final parentData = parentSnapshot.data() as Map<String, dynamic>?;
       final childrenIds = List<String>.from(parentData?['linkedChildrenIds'] ?? []);
 
-      print('🔍 [EmergencyService] linkedChildrenIds: ${childrenIds.length} hijos');
+      ReleaseLogger.log('🔍 [EmergencyService] linkedChildrenIds: ${childrenIds.length} hijos', tag: 'EmergencyService');
 
       if (childrenIds.isEmpty) {
-        // Si no tiene hijos, emitir stream vacío
-        print('⚠️ [EmergencyService] No se encontraron hijos para el padre $parentId');
-        yield* Stream.value(
-          await _firestore.collection('emergencies').where('childId', isEqualTo: 'no_children').get(),
-        );
-        return;
+        ReleaseLogger.log('⚠️ [EmergencyService] No se encontraron hijos para el padre $parentId', tag: 'EmergencyService');
+        // Retornar stream vacío estable
+        return _firestore.collection('emergencies').where('childId', isEqualTo: 'no_children').snapshots();
       }
 
-      print('📡 [EmergencyService] Escuchando emergencias de ${childrenIds.length} hijos: $childrenIds');
+      ReleaseLogger.log('📡 [EmergencyService] Escuchando emergencias de ${childrenIds.length} hijos: $childrenIds', tag: 'EmergencyService');
 
-      // Escuchar emergencias activas de todos los hijos
-      final stream = _firestore
+      // ✅ CORREGIDO: Retornar stream fijo que NO cambia nunca - completamente estable
+      return _firestore
           .collection('emergencies')
           .where('childId', whereIn: childrenIds)
           .where('resolved', isEqualTo: false)
           .orderBy('timestamp', descending: true)
-          .snapshots();
-
-      await for (final snapshot in stream) {
-        print('📡 [EmergencyService] Recibido snapshot con ${snapshot.docs.length} emergencias');
+          .snapshots()
+          .map((snapshot) {
+        ReleaseLogger.log('📡 [EmergencyService] Recibido snapshot con ${snapshot.docs.length} emergencias', tag: 'EmergencyService');
         for (final doc in snapshot.docs) {
           final data = doc.data();
-          print('🆘 [EmergencyService] Emergencia: ${doc.id} - resolved: ${data['resolved']} - childId: ${data['childId']}');
+          ReleaseLogger.log('🆘 [EmergencyService] Emergencia: ${doc.id} - resolved: ${data['resolved']} - childId: ${data['childId']}', tag: 'EmergencyService');
         }
-        yield snapshot;
-      }
+        return snapshot;
+      });
     } catch (e) {
-      print('❌ [EmergencyService] Error obteniendo emergencias del padre: $e');
-      print('❌ [EmergencyService] Stack trace: ${StackTrace.current}');
-      // Emitir stream vacío en caso de error
-      yield* Stream.value(
-        await _firestore.collection('emergencies').where('childId', isEqualTo: 'error').get(),
-      );
+      ReleaseLogger.error('❌ [EmergencyService] Error obteniendo emergencias del padre: $e', tag: 'EmergencyService');
+      // Retornar stream vacío estable
+      return _firestore.collection('emergencies').where('childId', isEqualTo: 'error').snapshots();
     }
   }
 
@@ -622,7 +644,7 @@ class EmergencyService {
         return data;
       }).toList();
     } catch (e) {
-      print('❌ Error obteniendo historial de emergencias: $e');
+      ReleaseLogger.error('❌ Error obteniendo historial de emergencias: $e', tag: 'EmergencyService');
       return [];
     }
   }

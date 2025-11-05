@@ -48,6 +48,7 @@ import 'services/unread_messages_service.dart';
 import 'services/ad_service.dart';
 import 'services/story_service.dart';
 import 'dart:async';
+import 'utils/release_logger.dart';
 
 // IMPORTANTE: Después de ejecutar 'flutterfire configure',
 // descomenta la siguiente línea:
@@ -56,12 +57,18 @@ import 'firebase_options.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // 🔍 DEBUGGING: Activar logging detallado de rebuilds (solo en debug)
+  if (kDebugMode) {
+    debugPrintRebuildDirtyWidgets = true;
+    print('🔍 REBUILD DEBUGGING ACTIVADO - Veremos todos los rebuilds en logs');
+  }
+
   // Bloquear rotación de pantalla - solo permitir portrait
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
   ]);
-  print('📱 Rotación de pantalla bloqueada a portrait');
+  ReleaseLogger.log('📱 Rotación de pantalla bloqueada a portrait', tag: 'MainApp');
 
   // Configurar el status bar para que sea visible
   SystemChrome.setSystemUIOverlayStyle(
@@ -74,24 +81,19 @@ void main() async {
       systemNavigationBarIconBrightness: Brightness.dark, // Iconos oscuros
     ),
   );
-  print('📱 Status bar configurado como visible');
+  ReleaseLogger.log('📱 Status bar configurado como visible', tag: 'MainApp');
 
-  print('🚀 Iniciando aplicación Talia...');
+  ReleaseLogger.log('🚀 Iniciando aplicación Talia...', tag: 'MainApp');
 
-  // Inicializar MessageCacheService (Hive)
+  // 🚀 CACHE INITIALIZATION: MessageCacheService primero (inicializa Hive)
+  ReleaseLogger.log('🚀 Inicializando MessageCacheService...', tag: 'MainApp');
+
+  // Inicializar MessageCacheService primero (llama Hive.initFlutter())
   try {
     await MessageCacheService().initialize();
-    print('✅ MessageCacheService inicializado');
+    ReleaseLogger.log('✅ MessageCacheService inicializado', tag: 'MainApp');
   } catch (e) {
-    print('❌ Error inicializando MessageCacheService: $e');
-  }
-
-  // Inicializar DashboardCacheService (Hive)
-  try {
-    await DashboardCacheService().initialize();
-    print('✅ DashboardCacheService inicializado');
-  } catch (e) {
-    print('❌ Error inicializando DashboardCacheService: $e');
+    ReleaseLogger.error('❌ Error inicializando MessageCacheService: $e', tag: 'MainApp');
   }
 
   // Inicializar Firebase solo si no está inicializado
@@ -99,93 +101,109 @@ void main() async {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
-    print('✅ Firebase inicializado');
+    ReleaseLogger.log('✅ Firebase inicializado', tag: 'MainApp');
   } else {
-    print('✅ Firebase ya estaba inicializado');
+    ReleaseLogger.log('✅ Firebase ya estaba inicializado', tag: 'MainApp');
+  }
+
+  // Ahora DashboardCacheService puede usar Hive Y Firebase (remote logger)
+  try {
+    await DashboardCacheService().initialize();
+    ReleaseLogger.log('✅ DashboardCacheService inicializado', tag: 'MainApp');
+  } catch (e) {
+    ReleaseLogger.error('❌ Error inicializando DashboardCacheService: $e', tag: 'MainApp');
   }
 
   // Configurar Crashlytics
   if (kDebugMode) {
     // Deshabilitar Crashlytics en modo debug para no contaminar reportes
     await FirebaseCrashlytics.instance.setCrashlyticsCollectionEnabled(false);
-    print('🐛 Crashlytics DESHABILITADO en modo debug');
+    ReleaseLogger.log('🐛 Crashlytics DESHABILITADO en modo debug', tag: 'MainApp');
   } else {
     // Habilitar Crashlytics en producción
     await FirebaseCrashlytics.instance.setCrashlyticsCollectionEnabled(true);
-    print('📊 Crashlytics HABILITADO en producción');
+    ReleaseLogger.log('📊 Crashlytics HABILITADO en producción', tag: 'MainApp');
   }
 
   // Capturar errores de Flutter framework
   FlutterError.onError = (errorDetails) {
     FirebaseCrashlytics.instance.recordFlutterFatalError(errorDetails);
-    print('❌ Flutter error capturado: ${errorDetails.exception}');
+    ReleaseLogger.error('❌ Flutter error capturado: ${errorDetails.exception}', tag: 'MainApp');
+    ReleaseLogger.error('📍 Stack trace: ${errorDetails.stack}', tag: 'MainApp');
+    print('🔍 FLUTTER ERROR DEBUG:');
+    print('   Exception: ${errorDetails.exception}');
+    print('   Library: ${errorDetails.library}');
+    print('   Context: ${errorDetails.context}');
+    print('   Stack trace: ${errorDetails.stack}');
+    print('🔍 END FLUTTER ERROR DEBUG');
   };
 
   // Capturar errores asíncronos fuera del framework Flutter
   PlatformDispatcher.instance.onError = (error, stack) {
     FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
-    print('❌ Error asíncrono capturado: $error');
+    ReleaseLogger.error('❌ Error asíncrono capturado: $error', tag: 'MainApp');
+    ReleaseLogger.error('📍 Stack trace: $stack', tag: 'MainApp');
+    print('🔍 ASYNC ERROR DEBUG:');
+    print('   Error: $error');
+    print('   Stack trace: $stack');
+    print('🔍 END ASYNC ERROR DEBUG');
     return true;
   };
 
-  print('✅ Crashlytics configurado');
+  ReleaseLogger.log('✅ Crashlytics configurado', tag: 'MainApp');
 
-  // Inicializar Firebase Analytics
-  try {
-    await AnalyticsService().initialize();
-    print('✅ Analytics inicializado');
-  } catch (e) {
-    print('⚠️ Error inicializando Analytics: $e (continuando...)');
-  }
+  // 🚀 PERFORMANCE OPTIMIZATION: Paralelizar servicios independientes post-Firebase
+  ReleaseLogger.log('🚀 Inicializando servicios principales en paralelo...', tag: 'MainApp');
+  await Future.wait([
+    // Grupo 1: Firebase Services
+    AnalyticsService().initialize().then((_) {
+      ReleaseLogger.log('✅ Analytics inicializado', tag: 'MainApp');
+    }).catchError((e) {
+      ReleaseLogger.error('⚠️ Error inicializando Analytics: $e (continuando...)', tag: 'MainApp');
+    }),
 
-  // Inicializar Firebase Performance Monitoring
-  try {
-    await PerformanceService().initialize();
-    print('✅ Performance Monitoring inicializado');
-  } catch (e) {
-    print('⚠️ Error inicializando Performance: $e (continuando...)');
-  }
+    PerformanceService().initialize().then((_) {
+      ReleaseLogger.log('✅ Performance Monitoring inicializado', tag: 'MainApp');
+    }).catchError((e) {
+      ReleaseLogger.error('⚠️ Error inicializando Performance: $e (continuando...)', tag: 'MainApp');
+    }),
 
-  // Inicializar Network Status Service
-  try {
-    await NetworkStatusService().initialize();
-    print('✅ Network Status Service inicializado');
-  } catch (e) {
-    print('⚠️ Error inicializando Network Status: $e (continuando...)');
-  }
+    // Grupo 2: Network & Queue Services
+    NetworkStatusService().initialize().then((_) {
+      ReleaseLogger.log('✅ Network Status Service inicializado', tag: 'MainApp');
+    }).catchError((e) {
+      ReleaseLogger.error('⚠️ Error inicializando Network Status: $e (continuando...)', tag: 'MainApp');
+    }),
 
-  // Inicializar Offline Queue Service
-  try {
-    await OfflineQueueService().initialize();
-    print('✅ Offline Queue Service inicializado');
-  } catch (e) {
-    print('⚠️ Error inicializando Offline Queue: $e (continuando...)');
-  }
+    OfflineQueueService().initialize().then((_) {
+      ReleaseLogger.log('✅ Offline Queue Service inicializado', tag: 'MainApp');
+    }).catchError((e) {
+      ReleaseLogger.error('⚠️ Error inicializando Offline Queue: $e (continuando...)', tag: 'MainApp');
+    }),
 
-  // Inicializar Accessibility Service
-  try {
-    await AccessibilityService().initialize();
-    print('✅ Accessibility Service inicializado');
-  } catch (e) {
-    print('⚠️ Error inicializando Accessibility: $e (continuando...)');
-  }
+    // Grupo 3: Independent Services
+    AccessibilityService().initialize().then((_) {
+      ReleaseLogger.log('✅ Accessibility Service inicializado', tag: 'MainApp');
+    }).catchError((e) {
+      ReleaseLogger.error('⚠️ Error inicializando Accessibility: $e (continuando...)', tag: 'MainApp');
+    }),
 
-  // Inicializar AdMob (Google Mobile Ads) para monetización
-  try {
-    await AdService().initialize();
-    print('✅ AdMob inicializado con cumplimiento COPPA');
-  } catch (e) {
-    print('⚠️ Error inicializando AdMob: $e (continuando...)');
-  }
+    AdService().initialize().then((_) {
+      ReleaseLogger.log('✅ AdMob inicializado con cumplimiento COPPA', tag: 'MainApp');
+    }).catchError((e) {
+      ReleaseLogger.error('⚠️ Error inicializando AdMob: $e (continuando...)', tag: 'MainApp');
+    }),
+  ]);
+  ReleaseLogger.log('✅ Servicios principales inicializados concurrentemente', tag: 'MainApp');
 
   // Pre-cargar stickers en segundo plano (sin bloquear la app)
   StickersService()
       .preloadStickers()
       .then((_) {
-        print('✅ Stickers pre-cargados en segundo plano');
+        ReleaseLogger.log('✅Stickers pre-cargados en segundo plano');
       })
       .catchError((e) {
-        print('⚠️ Error pre-cargando stickers: $e (continuando...)');
+        ReleaseLogger.log('⚠️ Error pre-cargando stickers: $e (continuando...)');
       });
 
   // Activar Firebase App Check con Play Integrity para producción
@@ -196,32 +214,31 @@ void main() async {
       appleProvider: AppleProvider.debug,
       webProvider: ReCaptchaV3Provider('recaptcha-v3-site-key'),
     );
-    print('🐛 Firebase App Check activado con DEBUG provider');
+    ReleaseLogger.log('🐛Firebase App Check activado con DEBUG provider');
 
     // Obtener y mostrar el debug token para registrarlo en Firebase Console
     // En Android debug, el token se genera automáticamente por el debug provider
-    // Esperar un momento para que se genere
-    await Future.delayed(Duration(seconds: 2));
+    // OPTIMIZACIÓN: Eliminar delay artificial de 2 segundos en main thread
 
     try {
       final token = await FirebaseAppCheck.instance.getToken();
       if (token != null && token.isNotEmpty) {
-        print('🔑 DEBUG TOKEN para Firebase Console:');
-        print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        print('   $token');
-        print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        print('📋 Copia este token y regístralo en:');
-        print('   Firebase Console → App Check → Apps → Manage debug tokens');
-        print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        ReleaseLogger.log('🔑DEBUG TOKEN para Firebase Console:');
+        ReleaseLogger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', tag: 'MainApp');
+        ReleaseLogger.log('   $token', tag: 'MainApp');
+        ReleaseLogger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', tag: 'MainApp');
+        ReleaseLogger.log('📋Copia este token y regístralo en:');
+        ReleaseLogger.log('   Firebase Console → App Check → Apps → Manage debug tokens');
+        ReleaseLogger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', tag: 'MainApp');
       } else {
-        print('⚠️ No se pudo obtener debug token (token es null o vacío)');
-        print('💡 En algunos casos, el token se genera en logcat de Android');
-        print('   Busca en logcat: "DebugAppCheckProvider"');
+        ReleaseLogger.log('⚠️ No se pudo obtener debug token (token es null o vacío)');
+        ReleaseLogger.log('💡En algunos casos, el token se genera en logcat de Android');
+        ReleaseLogger.log('   Busca en logcat: "DebugAppCheckProvider"');
       }
     } catch (e) {
-      print('⚠️ No se pudo obtener debug token: $e');
-      print('💡 El token de debug se puede encontrar en logcat de Android');
-      print('   Busca: "DebugAppCheckProvider" o "AppCheckDebugProvider"');
+      ReleaseLogger.log('⚠️ No se pudo obtener debug token: $e');
+      ReleaseLogger.log('💡El token de debug se puede encontrar en logcat de Android');
+      ReleaseLogger.log('   Busca: "DebugAppCheckProvider" o "AppCheckDebugProvider"');
     }
   } else {
     // En producción, usar Play Integrity y Device Check
@@ -230,7 +247,7 @@ void main() async {
       appleProvider: AppleProvider.deviceCheck,
       webProvider: ReCaptchaV3Provider('recaptcha-v3-site-key'),
     );
-    print('✅ Firebase App Check activado con Play Integrity y Device Check');
+    ReleaseLogger.log('✅Firebase App Check activado con Play Integrity y Device Check');
   }
 
   // Habilitar persistencia offline de Firestore para caché local
@@ -238,59 +255,90 @@ void main() async {
     persistenceEnabled: true,
     cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
   );
-  print('💾 Persistencia offline de Firestore habilitada');
+  ReleaseLogger.log('💾Persistencia offline de Firestore habilitada');
 
-  // Inicializar Remote Config para configuraciones de la app
-  try {
-    await AppConfigService().initialize();
-    print('✅ App Config Service inicializado');
-  } catch (e) {
-    print(
-      '⚠️ Error inicializando App Config: $e (continuando con valores por defecto)',
-    );
-  }
+  // 🚀 PERFORMANCE OPTIMIZATION: AppConfig puede inicializar concurrentemente con ThemeService
+  ReleaseLogger.log('🚀 Inicializando configuración final en paralelo...', tag: 'MainApp');
+  late ThemeService themeService;
 
-  // Inicializar servicio de notificaciones
-  print('📲 Inicializando servicio de notificaciones...');
-  await NotificationService().initialize();
-  print('✅ Servicio de notificaciones completado');
+  await Future.wait([
+    AppConfigService().initialize().then((_) {
+      ReleaseLogger.log('✅ App Config Service inicializado', tag: 'MainApp');
+    }).catchError((e) {
+      ReleaseLogger.log('⚠️ Error inicializando App Config: $e (continuando con valores por defecto)', tag: 'MainApp');
+    }),
 
-  // Inicializar VoIP Push y CallKit (solo iOS)
-  if (Platform.isIOS) {
-    print('📱 Inicializando VoIP Service...');
-    await VoIPService().initialize();
-    print('✅ VoIP Service inicializado');
-  }
+    () async {
+      themeService = ThemeService();
+      await themeService.initialize();
+      ReleaseLogger.log('✅ ThemeService inicializado', tag: 'MainApp');
+    }(),
+  ]);
+  ReleaseLogger.log('✅ Configuración final completada concurrentemente', tag: 'MainApp');
 
-  // Registrar APNs token para Phone Authentication (iOS)
-  if (Platform.isIOS) {
-    try {
-      print('📱 Obteniendo APNs token para Phone Auth...');
-      final apnsToken = await FirebaseMessaging.instance.getAPNSToken();
-      if (apnsToken != null) {
-        print('✅ APNs token obtenido: ${apnsToken.substring(0, 20)}...');
-      } else {
-        print('⚠️ No se pudo obtener APNs token - esperando registro...');
-        // Escuchar cuando se obtenga el token
-        FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
-          print('✅ APNs token actualizado');
-        });
-      }
-    } catch (e) {
-      print('⚠️ Error obteniendo APNs token: $e');
-    }
-  }
+  // 🚀 PERFORMANCE OPTIMIZATION: Diferir servicios pesados para después de runApp()
+  // Esto permite que la UI se renderice primero, mejorando perceived performance
 
-  print('✅ APNs configurado y listo para Phone Auth');
-
-  // Inicializar ThemeService
-  final themeService = ThemeService();
-  await themeService.initialize();
-  print('✅ ThemeService inicializado');
+  ReleaseLogger.log('🎯 Configuración crítica completada - iniciando UI...', tag: 'MainApp');
 
   runApp(
     ChangeNotifierProvider.value(value: themeService, child: const TaliaApp()),
   );
+
+  // 🚀 BACKGROUND INITIALIZATION: Inicializar servicios pesados después del primer render
+  // Esto mejora el perceived performance significativamente
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    _initializeHeavyServicesInBackground();
+  });
+}
+
+/// 🚀 PERFORMANCE OPTIMIZATION: Inicializar servicios pesados en background
+/// después de que la UI esté completamente renderizada
+Future<void> _initializeHeavyServicesInBackground() async {
+  ReleaseLogger.log('🚀 Inicializando servicios pesados en background...', tag: 'BackgroundInit');
+
+  // Paralelizar servicios pesados para máximo performance
+  await Future.wait([
+    // Notification Service (FCM setup)
+    NotificationService().initialize().then((_) {
+      ReleaseLogger.log('✅ NotificationService inicializado en background', tag: 'BackgroundInit');
+    }).catchError((e) {
+      ReleaseLogger.error('❌ Error inicializando NotificationService: $e', tag: 'BackgroundInit');
+    }),
+
+    // VoIP Service (solo iOS, para llamadas)
+    () async {
+      if (Platform.isIOS) {
+        try {
+          await VoIPService().initialize();
+          ReleaseLogger.log('✅ VoIP Service inicializado en background (iOS)', tag: 'BackgroundInit');
+        } catch (e) {
+          ReleaseLogger.error('❌ Error inicializando VoIP Service: $e', tag: 'BackgroundInit');
+        }
+      }
+    }(),
+
+    // APNs Token (solo iOS, para Phone Auth)
+    () async {
+      if (Platform.isIOS) {
+        try {
+          final apnsToken = await FirebaseMessaging.instance.getAPNSToken();
+          if (apnsToken != null) {
+            ReleaseLogger.log('✅ APNs token obtenido en background: ${apnsToken.substring(0, 20)}...', tag: 'BackgroundInit');
+          } else {
+            ReleaseLogger.log('⚠️ APNs token no disponible - configurando listener', tag: 'BackgroundInit');
+            FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
+              ReleaseLogger.log('✅ APNs token actualizado en background', tag: 'BackgroundInit');
+            });
+          }
+        } catch (e) {
+          ReleaseLogger.error('❌ Error obteniendo APNs token: $e', tag: 'BackgroundInit');
+        }
+      }
+    }(),
+  ]);
+
+  ReleaseLogger.log('✅ Servicios pesados inicializados completamente en background', tag: 'BackgroundInit');
 }
 
 class TaliaApp extends StatefulWidget {
@@ -329,7 +377,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      print('📱 App resumed from background');
+      ReleaseLogger.log('📱App resumed from background');
 
       // App regresó de background, verificar llamadas pendientes
       _checkPendingCall();
@@ -342,7 +390,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
       // ℹ️ Firestore maneja automáticamente la reconexión cuando la app se reanuda.
       // NO forzar disableNetwork/enableNetwork porque cancela todos los StreamBuilders
       // activos y causa que la UI se quede en loading infinito.
-      print('✅ Firestore se reconectará automáticamente');
+      ReleaseLogger.log('✅Firestore se reconectará automáticamente');
     }
   }
 
@@ -353,7 +401,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
     _pendingCallSubscription = VoIPService().pendingCallStream.listen((
       callData,
     ) {
-      print('📞 [Main] Llamada pendiente recibida del stream: $callData');
+      ReleaseLogger.log('📞[Main] Llamada pendiente recibida del stream: $callData');
       _navigateToCall(callData);
     });
   }
@@ -367,7 +415,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
 
     final pendingData = VoIPService().getPendingCallData();
     if (pendingData != null) {
-      print('📞 [Main] Llamada pendiente detectada: $pendingData');
+      ReleaseLogger.log('📞[Main] Llamada pendiente detectada: $pendingData');
       _navigateToCall(pendingData);
     }
   }
@@ -383,17 +431,17 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
 
     final isAudioCall = callType == 'audio';
 
-    print('🚀 [Main] Navegando a pantalla de llamada:');
-    print('   - Call ID: $callId');
-    print('   - Channel: $channelName');
-    print('   - Type: $callType');
-    print('   - Is Audio: $isAudioCall');
-    print('   - UID: $uid');
+    ReleaseLogger.log('🚀[Main] Navegando a pantalla de llamada:');
+    ReleaseLogger.log('   -Call ID: $callId');
+    ReleaseLogger.log('   -Channel: $channelName');
+    ReleaseLogger.log('   -Type: $callType');
+    ReleaseLogger.log('   -Is Audio: $isAudioCall');
+    ReleaseLogger.log('   -UID: $uid');
 
     if (_navigatorKey.currentContext != null) {
       if (isAudioCall) {
         // Navegar a AudioCallScreen para llamadas de audio
-        print('📞 [Main] Navegando a AudioCallScreen');
+        ReleaseLogger.log('📞[Main] Navegando a AudioCallScreen');
         Navigator.of(_navigatorKey.currentContext!).push(
           MaterialPageRoute(
             builder: (context) => AudioCallScreen(
@@ -408,7 +456,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
         );
       } else {
         // Navegar a VideoCallScreen para llamadas de video
-        print('📹 [Main] Navegando a VideoCallScreen');
+        ReleaseLogger.log('📹[Main] Navegando a VideoCallScreen');
         Navigator.of(_navigatorKey.currentContext!).push(
           MaterialPageRoute(
             builder: (context) => VideoCallScreen(
@@ -429,33 +477,33 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
 
   void _setupRoleListener() {
     firebase_auth.FirebaseAuth.instance.authStateChanges().listen((user) {
-      print(
+      ReleaseLogger.log(
         '🔐 AUTH STATE CHANGED - User: ${user?.uid ?? "null"}, Phone: ${user?.phoneNumber ?? "null"}',
       );
       if (user != null) {
-        print('✅ Usuario autenticado: ${user.uid}');
+        ReleaseLogger.log('✅Usuario autenticado: ${user.uid}');
 
         // Inicializar ForegroundMessageListener para notificaciones en tiempo real
-        print('🔔 Inicializando ForegroundMessageListener...');
+        ReleaseLogger.log('🔔Inicializando ForegroundMessageListener...');
         ForegroundMessageListener().initialize(_navigatorKey);
-        print('✅ ForegroundMessageListener inicializado');
+        ReleaseLogger.log('✅ForegroundMessageListener inicializado');
 
         // Inicializar protección de screenshots
-        print('📸 Inicializando ScreenshotProtectionService...');
+        ReleaseLogger.log('📸 Inicializando ScreenshotProtectionService...');
         ScreenshotProtectionService().initialize();
-        print('✅ ScreenshotProtectionService inicializado');
+        ReleaseLogger.log('✅ScreenshotProtectionService inicializado');
 
         // Inicializar listener de badge del ícono
-        print('🔔 Inicializando badge listener...');
+        ReleaseLogger.log('🔔Inicializando badge listener...');
         UnreadMessagesService().startBadgeListener();
-        print('✅ Badge listener inicializado');
+        ReleaseLogger.log('✅Badge listener inicializado');
 
-        // Preload de historias en segundo plano
-        print('📱 Iniciando preload de historias...');
-        StoryService().preloadStories().then((_) {
-          print('✅ Preload de historias completado');
+        // Inicializar stream background de historias
+        ReleaseLogger.log('📱Iniciando stream background de historias...');
+        StoryService().startBackgroundCacheUpdates().then((_) {
+          ReleaseLogger.log('✅Stream background de historias iniciado');
         }).catchError((e) {
-          print('⚠️ Error en preload de historias: $e');
+          ReleaseLogger.log('⚠️ Error iniciando stream background de historias: $e');
         });
 
         // Cancelar suscripción anterior si existe
@@ -467,17 +515,17 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
             .doc(user.uid)
             .snapshots()
             .listen((snapshot) {
-              print(
+              ReleaseLogger.log(
                 '📄 Snapshot de usuario: exists=${snapshot.exists}, data=${snapshot.data()}',
               );
               if (snapshot.exists) {
                 final userData = snapshot.data();
                 final newRole = userData?['role'] ?? 'child';
-                print('🔍 Role actual en Firestore: $newRole');
-                print('🔍 Role guardado en memoria: $_currentUserRole');
+                ReleaseLogger.log('🔍Role actual en Firestore: $newRole');
+                ReleaseLogger.log('🔍Role guardado en memoria: $_currentUserRole');
 
                 if (_currentUserRole != null && _currentUserRole != newRole) {
-                  print(
+                  ReleaseLogger.log(
                     '🔄 Role cambió de $_currentUserRole a $newRole - Reconstruyendo navegación',
                   );
 
@@ -485,35 +533,35 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
                   _currentUserRole = newRole;
 
                   // Forzar reconexión de Firestore para obtener datos frescos sin cache
-                  print('🔄 Forzando reconexión de Firestore para limpiar cache...');
+                  ReleaseLogger.log('🔄Forzando reconexión de Firestore para limpiar cache...');
                   FirebaseFirestore.instance.disableNetwork().then((_) {
-                    print('✅ Firestore desconectado');
+                    ReleaseLogger.log('✅Firestore desconectado');
                     return Future.delayed(Duration(milliseconds: 200));
                   }).then((_) {
                     return FirebaseFirestore.instance.enableNetwork();
                   }).then((_) {
-                    print('✅ Firestore reconectado con datos frescos');
+                    ReleaseLogger.log('✅Firestore reconectado con datos frescos');
 
                     // Navegar después de que Firestore esté listo
                     Future.delayed(Duration(milliseconds: 100), () {
                       final navigator = _navigatorKey.currentState;
                       if (navigator != null && navigator.mounted) {
-                        print('✅ Navegando a AuthWrapper con nuevo rol: $newRole');
+                        ReleaseLogger.log('✅Navegando a AuthWrapper con nuevo rol: $newRole');
                         navigator.pushAndRemoveUntil(
                           MaterialPageRoute(builder: (_) => const AuthWrapper()),
                           (route) => false,
                         );
                       } else {
-                        print('⚠️ Navigator no disponible para navegación');
+                        ReleaseLogger.log('⚠️ Navigator no disponible para navegación');
                       }
                     });
                   }).catchError((error) {
-                    print('⚠️ Error reconectando Firestore: $error');
+                    ReleaseLogger.log('⚠️ Error reconectando Firestore: $error');
                     // Intentar navegar de todos modos
                     Future.delayed(Duration(milliseconds: 100), () {
                       final navigator = _navigatorKey.currentState;
                       if (navigator != null && navigator.mounted) {
-                        print('⚠️ Navegando a AuthWrapper a pesar del error');
+                        ReleaseLogger.log('⚠️ Navegando a AuthWrapper a pesar del error');
                         navigator.pushAndRemoveUntil(
                           MaterialPageRoute(builder: (_) => const AuthWrapper()),
                           (route) => false,
@@ -522,7 +570,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
                     });
                   });
                 } else if (_currentUserRole == null) {
-                  print('ℹ️ Inicializando role por primera vez: $newRole');
+                  ReleaseLogger.log('ℹ️Inicializando role por primera vez: $newRole');
                   _currentUserRole = newRole;
                 }
               }
@@ -532,11 +580,11 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
         _userRoleSubscription?.cancel();
         _userRoleSubscription = null;
         _currentUserRole = null;
-        print('🔒 Listener de role cancelado por logout');
+        ReleaseLogger.log('🔒 Listener de role cancelado por logout');
 
         // Limpiar cache de historias
         StoryService().clearCache();
-        print('🧹 Cache de historias limpiado por logout');
+        ReleaseLogger.log('🧹 Cache de historias limpiado por logout');
       }
     });
   }
@@ -551,21 +599,21 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
 
       final isEmergency = callData['isEmergency'] == true;
 
-      print(
+      ReleaseLogger.log(
         '📞 ${isAudioCall ? 'Llamada de audio' : 'Videollamada'} entrante recibida en main.dart',
       );
-      print('📦 Datos completos: $callData');
-      print(
+      ReleaseLogger.log('📦 Datos completos: $callData');
+      ReleaseLogger.log(
         '📦 channelName: "${callData['channelName']}" (null? ${callData['channelName'] == null})',
       );
       if (isEmergency) {
-        print('🆘 Es una llamada de EMERGENCIA');
+        ReleaseLogger.log('🆘 Es una llamada de EMERGENCIA');
       }
 
       // En iOS, usar CallKit nativo directamente (no el diálogo de Flutter)
       // Esto evita duplicación con VoIP push que puede llegar después
       if (Platform.isIOS) {
-        print(
+        ReleaseLogger.log(
           '📱 [iOS] Procesando llamada - usando CallKit nativo para evitar duplicación',
         );
 
@@ -585,19 +633,19 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
           extraData: callData,
         );
 
-        print('✅ [iOS] CallKit mostrado desde FCM foreground notification');
+        ReleaseLogger.log('✅[iOS] CallKit mostrado desde FCM foreground notification');
 
         // IMPORTANTE: Configurar listener para detectar si la llamada es cancelada
         // Esto maneja el caso donde la llamada se cancela antes de que el listener
         // del controller se configure (race condition)
-        print('👂 [iOS] Configurando listener de cancelación para callId: $callId');
+        ReleaseLogger.log('👂[iOS] Configurando listener de cancelación para callId: $callId');
         final cancelListener = FirebaseFirestore.instance
             .collection('video_calls')
             .doc(callId)
             .snapshots()
             .listen((snapshot) {
           if (!snapshot.exists) {
-            print('📵 [iOS-main] Documento $callId eliminado - cerrando CallKit');
+            ReleaseLogger.log('📵 [iOS-main] Documento $callId eliminado - cerrando CallKit');
             callKit.endCall(callId);
             return;
           }
@@ -606,18 +654,18 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
           final status = data?['status'];
 
           if (status == 'cancelled') {
-            print('📵 [iOS-main] Llamada $callId cancelada - cerrando CallKit');
+            ReleaseLogger.log('📵 [iOS-main] Llamada $callId cancelada - cerrando CallKit');
             // Usar el method channel nativo en lugar del plugin para evitar reinicio
             VoIPService().notifyCallEnded(callId);
           } else if (status == 'accepted' || status == 'active' || status == 'ended') {
-            print('ℹ️ [iOS-main] Llamada $callId en status $status - listener se limpiará automáticamente');
+            ReleaseLogger.log('ℹ️[iOS-main] Llamada $callId en status $status - listener se limpiará automáticamente');
           }
         });
 
         // Cancelar el listener después de 60 segundos (timeout de llamada)
         Future.delayed(Duration(seconds: 60), () {
           cancelListener.cancel();
-          print('🧹 [iOS-main] Listener de cancelación limpiado por timeout');
+          ReleaseLogger.log('🧹 [iOS-main] Listener de cancelación limpiado por timeout');
         });
 
         return; // No continuar con el diálogo de Flutter
@@ -633,33 +681,33 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
       final hasFromNotificationTap = callData.containsKey('fromNotificationTap');
       final isFromCallKitAcceptance = hasId && !hasFromFirestore && !hasFromNotificationTap;
 
-      print('🔍 Detectando origen del evento:');
-      print('   hasId: $hasId');
-      print('   hasFromFirestore: $hasFromFirestore');
-      print('   hasFromNotificationTap: $hasFromNotificationTap');
-      print('   isFromCallKitAcceptance: $isFromCallKitAcceptance');
+      ReleaseLogger.log('🔍Detectando origen del evento:');
+      ReleaseLogger.log('   hasId: $hasId');
+      ReleaseLogger.log('   hasFromFirestore: $hasFromFirestore');
+      ReleaseLogger.log('   hasFromNotificationTap: $hasFromNotificationTap');
+      ReleaseLogger.log('   isFromCallKitAcceptance: $isFromCallKitAcceptance');
 
       if (isFromCallKitAcceptance) {
         // Usuario aceptó desde CallKit en background - navegar directamente a VideoCallScreen
-        print('✅ Llamada aceptada desde CallKit en background - generando token y navegando a videollamada');
+        ReleaseLogger.log('✅Llamada aceptada desde CallKit en background - generando token y navegando a videollamada');
 
         // IMPORTANTE: Si la app está en background, puede que el contexto aún no esté disponible
         // Esperar hasta que esté listo (máximo 5 segundos)
         BuildContext? context = _navigatorKey.currentContext;
         if (context == null) {
-          print('⏳ Contexto no disponible, esperando a que la app inicialice...');
+          ReleaseLogger.log('⏳ Contexto no disponible, esperando a que la app inicialice...');
           for (int i = 0; i < 50; i++) {
             await Future.delayed(const Duration(milliseconds: 100));
             context = _navigatorKey.currentContext;
             if (context != null) {
-              print('✅ Contexto disponible después de ${(i + 1) * 100}ms');
+              ReleaseLogger.log('✅Contexto disponible después de ${(i + 1) * 100}ms');
               break;
             }
           }
         }
 
         if (context == null) {
-          print('❌ No se pudo obtener el contexto del navegador después de 5 segundos');
+          ReleaseLogger.error('❌No se pudo obtener el contexto del navegador después de 5 segundos');
           return;
         }
 
@@ -675,11 +723,11 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
         final callerName = callData['nameCaller'] as String? ?? extra?['callerName'] as String? ?? 'Usuario desconocido';
 
         if (callId == null || channelName == null || callerId == null) {
-          print('❌ Datos incompletos en callData de CallKit:');
-          print('   callId=$callId');
-          print('   channelName=$channelName');
-          print('   callerId=$callerId');
-          print('   extra=$extra');
+          ReleaseLogger.error('❌Datos incompletos en callData de CallKit:');
+          ReleaseLogger.log('   callId=$callId');
+          ReleaseLogger.log('   channelName=$channelName');
+          ReleaseLogger.log('   callerId=$callerId');
+          ReleaseLogger.log('   extra=$extra');
           return;
         }
 
@@ -688,7 +736,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
 
         // Si callType no está en los datos de CallKit, consultar Firestore
         if (callType == 'video' && (extra?['callType'] == null && callData['type'] == null)) {
-          print('⚠️ callType no encontrado en CallKit data, consultando Firestore...');
+          ReleaseLogger.log('⚠️ callType no encontrado en CallKit data, consultando Firestore...');
           try {
             final callDoc = await FirebaseFirestore.instance
                 .collection('video_calls')
@@ -696,20 +744,20 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
                 .get();
             if (callDoc.exists) {
               callType = callDoc.data()?['callType'] as String? ?? 'video';
-              print('✅ callType obtenido de Firestore: $callType');
+              ReleaseLogger.log('✅callType obtenido de Firestore: $callType');
             }
           } catch (e) {
-            print('⚠️ Error obteniendo callType de Firestore: $e');
+            ReleaseLogger.log('⚠️ Error obteniendo callType de Firestore: $e');
             // Mantener 'video' como default
           }
         }
 
-        print('📞 Procesando aceptación de CallKit:');
-        print('   callId: $callId');
-        print('   channelName: $channelName');
-        print('   callerId: $callerId');
-        print('   callerName: $callerName');
-        print('   callType: $callType');
+        ReleaseLogger.log('📞Procesando aceptación de CallKit:');
+        ReleaseLogger.log('   callId: $callId');
+        ReleaseLogger.log('   channelName: $channelName');
+        ReleaseLogger.log('   callerId: $callerId');
+        ReleaseLogger.log('   callerName: $callerName');
+        ReleaseLogger.log('   callType: $callType');
 
         // Mostrar indicador de carga mientras se genera el token
         showDialog(
@@ -722,12 +770,12 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
 
         try {
           // 1. Actualizar estado de llamada en Firestore
-          print('📝 Actualizando estado de llamada en Firestore...');
+          ReleaseLogger.log('📝 Actualizando estado de llamada en Firestore...');
           await VideoCallService().acceptCall(callId);
-          print('✅ Llamada aceptada en Firestore');
+          ReleaseLogger.log('✅Llamada aceptada en Firestore');
 
           // 2. Generar token de Agora
-          print('🎫 Generando token de Agora...');
+          ReleaseLogger.log('🎫 Generando token de Agora...');
           final functions = FirebaseFunctions.instance;
           final callable = functions.httpsCallable('generateAgoraToken');
 
@@ -739,7 +787,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
           final token = result.data['token'] as String;
           final uid = result.data['uid'] as int;
 
-          print('✅ Token generado - UID: $uid');
+          ReleaseLogger.log('✅Token generado - UID: $uid');
 
           // 3. Cerrar indicador de carga y navegar a la pantalla de llamada correcta
           if (context.mounted) {
@@ -778,7 +826,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
             }
 
             // Cuando vuelve de VideoCallScreen, navegar de vuelta a home
-            print('📱 Videollamada terminada - navegando a home');
+            ReleaseLogger.log('📱Videollamada terminada - navegando a home');
 
             // Obtener el rol del usuario para navegar a la pantalla correcta
             if (context.mounted) {
@@ -793,7 +841,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
                   final userData = userDoc.data();
                   final role = userData?['role'] ?? 'child';
 
-                  print('👤 Role del usuario: $role - navegando a ${role == 'parent' ? 'ParentMainShell' : 'ChildMainShell'}');
+                  ReleaseLogger.log('👤Role del usuario: $role - navegando a ${role == 'parent' ? 'ParentMainShell' : 'ChildMainShell'}');
 
                   // Navegar a la pantalla correcta y limpiar el stack
                   if (context.mounted) {
@@ -807,15 +855,15 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
                     );
                   }
                 } else {
-                  print('❌ No hay usuario autenticado después de la llamada');
+                  ReleaseLogger.error('❌No hay usuario autenticado después de la llamada');
                 }
               } catch (e) {
-                print('❌ Error navegando a home después de llamada: $e');
+                ReleaseLogger.error('❌Error navegando a home después de llamada: $e');
               }
             }
           }
         } catch (e) {
-          print('❌ Error procesando aceptación de CallKit: $e');
+          ReleaseLogger.error('❌Error procesando aceptación de CallKit: $e');
 
           if (context.mounted) {
             // Cerrar loading indicator
@@ -833,8 +881,8 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
         }
       } else {
         // Las llamadas se manejan completamente por CallKit (Android) y VoIP (iOS)
-        print('✅ Llamada detectada en foreground - CallKit/VoIP debe manejarla');
-        print('ℹ️ No se muestra diálogo de Flutter - solo notificaciones nativas');
+        ReleaseLogger.log('✅Llamada detectada en foreground - CallKit/VoIP debe manejarla');
+        ReleaseLogger.log('ℹ️No se muestra diálogo de Flutter - solo notificaciones nativas');
       }
     });
   }
@@ -966,19 +1014,19 @@ class _AuthWrapperState extends State<AuthWrapper> {
     return StreamBuilder<firebase_auth.User?>(
       stream: firebase_auth.FirebaseAuth.instance.authStateChanges(),
       builder: (context, snapshot) {
-        print('🔄 AuthWrapper - Connection state: ${snapshot.connectionState}');
-        print('🔄 AuthWrapper - Has data: ${snapshot.hasData}');
-        print('🔄 AuthWrapper - User: ${snapshot.data?.email}');
+        ReleaseLogger.log('🔄AuthWrapper - Connection state: ${snapshot.connectionState}');
+        ReleaseLogger.log('🔄AuthWrapper - Has data: ${snapshot.hasData}');
+        ReleaseLogger.log('🔄AuthWrapper - User: ${snapshot.data?.email}');
 
         // Usuario autenticado
         if (snapshot.hasData) {
-          print('✅ Usuario autenticado: ${snapshot.data!.email}');
+          ReleaseLogger.log('✅Usuario autenticado: ${snapshot.data!.email}');
 
           // Registrar sesión del dispositivo
           _deviceSessionService
               .registerDeviceSession(snapshot.data!.uid)
               .catchError((e) {
-                print('⚠️ Error registrando sesión de dispositivo: $e');
+                ReleaseLogger.log('⚠️ Error registrando sesión de dispositivo: $e');
               });
 
           // Iniciar listener de sesión para detectar login en otro dispositivo
@@ -1014,15 +1062,15 @@ class _AuthWrapperState extends State<AuthWrapper> {
               }
 
               if (userSnapshot.hasError) {
-                print('❌ Error consultando usuario: ${userSnapshot.error}');
+                ReleaseLogger.error('❌Error consultando usuario: ${userSnapshot.error}');
                 // Intentar obtener datos del cache local antes de mostrar error
                 // Si hay datos cacheados, usarlos aunque haya error de red
                 if (userSnapshot.hasData && userSnapshot.data != null) {
-                  print('⚠️ Error de red detectado, usando datos cacheados');
+                  ReleaseLogger.log('⚠️ Error de red detectado, usando datos cacheados');
                   // Continuar con los datos cacheados (no hacer return aquí)
                 } else {
                   // Sin cache disponible, volver a AuthScreen
-                  print(
+                  ReleaseLogger.log(
                     '❌ Sin datos cacheados disponibles, mostrando AuthScreen',
                   );
                   return AuthScreen();
@@ -1030,15 +1078,15 @@ class _AuthWrapperState extends State<AuthWrapper> {
               }
 
               if (!userSnapshot.hasData || !userSnapshot.data!.exists) {
-                print(
+                ReleaseLogger.log(
                   '❌ Usuario no existe en Firestore: ${snapshot.data!.uid}',
                 );
-                print('   hasData: ${userSnapshot.hasData}');
-                print('   exists: ${userSnapshot.data?.exists}');
-                print('   connectionState: ${userSnapshot.connectionState}');
+                ReleaseLogger.log('   hasData: ${userSnapshot.hasData}');
+                ReleaseLogger.log('   exists: ${userSnapshot.data?.exists}');
+                ReleaseLogger.log('   connectionState: ${userSnapshot.connectionState}');
 
                 // Usuario autenticado pero no existe en Firestore - ir a completar perfil
-                print(
+                ReleaseLogger.log(
                   '📝 Mostrando ProfileCompletionScreen para completar registro',
                 );
                 return ProfileCompletionScreen(
@@ -1051,7 +1099,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
 
               // Verificar que userData no sea null
               if (userData == null) {
-                print('❌ userData es null');
+                ReleaseLogger.error('❌userData es null');
                 return ProfileCompletionScreen(
                   phoneNumber: snapshot.data!.phoneNumber ?? 'Sin teléfono',
                 );
@@ -1061,11 +1109,11 @@ class _AuthWrapperState extends State<AuthWrapper> {
               final userPhone = snapshot.data!.phoneNumber;
               final userId = snapshot.data!.uid;
 
-              print('✅ Usuario encontrado en Firestore:');
-              print('   Email: $userEmail');
-              print('   Phone: $userPhone');
-              print('   Role: $role');
-              print(
+              ReleaseLogger.log('✅Usuario encontrado en Firestore:');
+              ReleaseLogger.log('   Email: $userEmail');
+              ReleaseLogger.log('   Phone: $userPhone');
+              ReleaseLogger.log('   Role: $role');
+              ReleaseLogger.log(
                 '   🔑 Timestamp: ${DateTime.now().millisecondsSinceEpoch}',
               );
 
@@ -1073,7 +1121,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
               final has2FA = userData?['twoFactorEnabled'] ?? false;
 
               if (has2FA) {
-                print('🔐 Usuario tiene 2FA habilitado');
+                ReleaseLogger.log('🔐Usuario tiene 2FA habilitado');
 
                 // Verificar si ya lo verificó en esta sesión (async)
                 return FutureBuilder<bool>(
@@ -1098,7 +1146,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
                     final isVerified = verificationSnapshot.data ?? false;
 
                     if (!isVerified) {
-                      print(
+                      ReleaseLogger.log(
                         '⚠️ 2FA no verificado en esta sesión, mostrando pantalla de verificación',
                       );
                       return TwoFactorVerificationScreen(
@@ -1107,28 +1155,28 @@ class _AuthWrapperState extends State<AuthWrapper> {
                       );
                     }
 
-                    print('✅ 2FA ya verificado en esta sesión');
+                    ReleaseLogger.log('✅2FA ya verificado en esta sesión');
 
                     // Usuario verificado, continuar con navegación normal
                     if (role == 'parent') {
-                      print('👔 Redirigiendo a ParentMainShell');
+                      ReleaseLogger.log('👔 Redirigiendo a ParentMainShell');
                       return ParentMainShell();
                     } else {
-                      print('👶 Redirigiendo a ChildMainShell (role: $role)');
+                      ReleaseLogger.log('👶 Redirigiendo a ChildMainShell (role: $role)');
                       return ChildMainShell();
                     }
                   },
                 );
               } else {
-                print('ℹ️ Usuario NO tiene 2FA habilitado');
+                ReleaseLogger.log('ℹ️Usuario NO tiene 2FA habilitado');
               }
 
               // Redirigir según el rol: solo 'parent' va a ParentMainShell, el resto va a ChildMainShell
               if (role == 'parent') {
-                print('👔 Redirigiendo a ParentMainShell');
+                ReleaseLogger.log('👔 Redirigiendo a ParentMainShell');
                 return ParentMainShell();
               } else {
-                print('👶 Redirigiendo a ChildMainShell (role: $role)');
+                ReleaseLogger.log('👶 Redirigiendo a ChildMainShell (role: $role)');
                 return ChildMainShell();
               }
             },
@@ -1136,8 +1184,8 @@ class _AuthWrapperState extends State<AuthWrapper> {
         }
 
         // No autenticado - mostrar pantalla de login
-        print('❌ Usuario no autenticado');
-        print('🔑 Mostrando pantalla de autenticación');
+        ReleaseLogger.error('❌Usuario no autenticado');
+        ReleaseLogger.log('🔑Mostrando pantalla de autenticación');
         return AuthScreen();
       },
     );
