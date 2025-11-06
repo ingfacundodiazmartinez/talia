@@ -1,0 +1,430 @@
+import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
+import '../../../models/story.dart';
+
+/// Repository para acceso a datos de historias en Firestore
+///
+/// Responsabilidades:
+/// - CRUD operations de historias
+/// - Queries específicas de Firestore
+/// - Conversión entre DocumentSnapshot y modelos
+/// - NO contiene lógica de negocio
+class StoryRepository {
+  final FirebaseFirestore _firestore;
+  final FirebaseAuth _auth;
+
+  StoryRepository({
+    required FirebaseFirestore firestore,
+    required FirebaseAuth auth,
+  }) : _firestore = firestore,
+       _auth = auth;
+
+  // ═══════════════════════════════════════════════════════════════
+  // BASIC CRUD OPERATIONS
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Obtener historia por ID
+  Future<Story?> getById(String storyId) async {
+    try {
+      final doc = await _firestore.collection('stories').doc(storyId).get();
+
+      if (!doc.exists) return null;
+
+      return Story.fromFirestore(doc);
+    } catch (e) {
+      throw Exception('Error obteniendo historia: $e');
+    }
+  }
+
+  /// Crear nueva historia en Firestore
+  Future<void> create(Story story) async {
+    try {
+      await _firestore.collection('stories').doc(story.id).set(story.toFirestore());
+    } catch (e) {
+      throw Exception('Error creando historia: $e');
+    }
+  }
+
+  /// Actualizar historia existente
+  Future<void> update(String storyId, Map<String, dynamic> data) async {
+    try {
+      await _firestore.collection('stories').doc(storyId).update(data);
+    } catch (e) {
+      throw Exception('Error actualizando historia: $e');
+    }
+  }
+
+  /// Eliminar historia
+  Future<void> delete(String storyId) async {
+    try {
+      await _firestore.collection('stories').doc(storyId).delete();
+    } catch (e) {
+      throw Exception('Error eliminando historia: $e');
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // QUERY OPERATIONS
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Obtener historias de un usuario específico
+  Future<List<Story>> getByUserId(String userId) async {
+    try {
+      final snapshot = await _firestore
+          .collection('stories')
+          .where('userId', isEqualTo: userId)
+          .where('createdAt', isGreaterThan: _get24HoursAgo())
+          .orderBy('createdAt', descending: true)
+          .get();
+
+      return snapshot.docs
+          .map((doc) => Story.fromFirestore(doc))
+          .toList();
+    } catch (e) {
+      throw Exception('Error obteniendo historias del usuario: $e');
+    }
+  }
+
+  /// Stream de historias de un usuario específico
+  Stream<List<Story>> getByUserIdStream(String userId) {
+    return _firestore
+        .collection('stories')
+        .where('userId', isEqualTo: userId)
+        .where('createdAt', isGreaterThan: _get24HoursAgo())
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .map((snapshot) => snapshot.docs
+            .map((doc) => Story.fromFirestore(doc))
+            .toList());
+  }
+
+  /// Obtener historias de múltiples usuarios (chunked para Firestore limits)
+  Future<List<Story>> getByUserIds(List<String> userIds) async {
+    if (userIds.isEmpty) return [];
+
+    try {
+      final List<Story> allStories = [];
+
+      // Firestore whereIn limita a 10 items, dividir en chunks
+      for (int i = 0; i < userIds.length; i += 10) {
+        final chunk = userIds.skip(i).take(10).toList();
+
+        final snapshot = await _firestore
+            .collection('stories')
+            .where('userId', whereIn: chunk)
+            .where('status', isEqualTo: 'approved')
+            .where('createdAt', isGreaterThan: _get24HoursAgo())
+            .orderBy('createdAt', descending: true)
+            .get();
+
+        allStories.addAll(
+          snapshot.docs.map((doc) => Story.fromFirestore(doc))
+        );
+      }
+
+      return allStories;
+    } catch (e) {
+      throw Exception('Error obteniendo historias de usuarios: $e');
+    }
+  }
+
+  /// Stream de historias de múltiples usuarios
+  Stream<List<Story>> getByUserIdsStream(List<String> userIds) async* {
+    if (userIds.isEmpty) {
+      yield [];
+      return;
+    }
+
+    final twentyFourHoursAgo = _get24HoursAgo();
+
+    try {
+      // Single stream para todos los userIds (limitado a 10 por Firestore)
+      final Stream<QuerySnapshot> mainStream;
+
+      if (userIds.length <= 10) {
+        mainStream = _firestore
+            .collection('stories')
+            .where('userId', whereIn: userIds)
+            .where('status', isEqualTo: 'approved')
+            .where('createdAt', isGreaterThan: twentyFourHoursAgo)
+            .orderBy('createdAt', descending: true)
+            .snapshots();
+      } else {
+        // Si hay más de 10, usar solo los primeros 10
+        mainStream = _firestore
+            .collection('stories')
+            .where('userId', whereIn: userIds.take(10).toList())
+            .where('status', isEqualTo: 'approved')
+            .where('createdAt', isGreaterThan: twentyFourHoursAgo)
+            .orderBy('createdAt', descending: true)
+            .snapshots();
+      }
+
+      await for (final snapshot in mainStream) {
+        final allStories = snapshot.docs
+            .map((doc) => Story.fromFirestore(doc))
+            .toList();
+
+        yield allStories;
+      }
+    } catch (e) {
+      throw Exception('Error en stream de historias: $e');
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // APPROVAL RELATED QUERIES
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Obtener historias pendientes de aprobación para un padre
+  Stream<List<Story>> getPendingForParent(String parentId) {
+    return _firestore
+        .collection('story_approval_requests')
+        .where('parentId', isEqualTo: parentId)
+        .where('status', isEqualTo: 'pending')
+        .snapshots()
+        .asyncMap((snapshot) async {
+      final List<Story> pendingStories = [];
+
+      for (final doc in snapshot.docs) {
+        try {
+          final data = doc.data();
+          final storyId = data['storyId'] as String;
+
+          // Obtener la historia completa
+          final storyDoc = await _firestore.collection('stories').doc(storyId).get();
+          if (storyDoc.exists) {
+            final story = Story.fromFirestore(storyDoc);
+            if (story.isPending) {
+              pendingStories.add(story);
+            }
+          }
+        } catch (e) {
+          // Log error pero continuar con otras historias
+          continue;
+        }
+      }
+
+      return pendingStories;
+    });
+  }
+
+  /// Obtener historias aprobadas por un padre específico
+  Stream<List<Story>> getApprovedByParent(String parentId) {
+    return _firestore
+        .collection('stories')
+        .where('status', isEqualTo: 'approved')
+        .where('createdAt', isGreaterThan: _get24HoursAgo())
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .map((snapshot) => snapshot.docs
+            .map((doc) => Story.fromFirestore(doc))
+            .toList());
+  }
+
+  /// Obtener historias rechazadas por un padre específico
+  Stream<List<Story>> getRejectedByParent(String parentId) {
+    return _firestore
+        .collection('stories')
+        .where('status', isEqualTo: 'rejected')
+        .orderBy('createdAt', descending: true)
+        .limit(50) // Limitar historias rechazadas para performance
+        .snapshots()
+        .map((snapshot) => snapshot.docs
+            .map((doc) => Story.fromFirestore(doc))
+            .toList());
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // VIEWING QUERIES (OPTIMIZED)
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Obtener historias vistas por usuario específico (query optimizada)
+  Future<List<Story>> getViewedByUser(String userId) async {
+    try {
+      final snapshot = await _firestore
+          .collection('stories')
+          .where('viewedBy', arrayContains: userId)
+          .where('createdAt', isGreaterThan: _get24HoursAgo())
+          .orderBy('createdAt', descending: true)
+          .get();
+
+      return snapshot.docs
+          .map((doc) => Story.fromFirestore(doc))
+          .toList();
+    } catch (e) {
+      throw Exception('Error obteniendo historias vistas: $e');
+    }
+  }
+
+  /// Stream de historias vistas por usuario específico
+  Stream<List<Story>> getViewedByUserStream(String userId) {
+    return _firestore
+        .collection('stories')
+        .where('viewedBy', arrayContains: userId)
+        .where('createdAt', isGreaterThan: _get24HoursAgo())
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .map((snapshot) => snapshot.docs
+            .map((doc) => Story.fromFirestore(doc))
+            .toList());
+  }
+
+  /// Obtener historias NO vistas por usuario específico de contacts específicos
+  Future<List<Story>> getUnviewedFromContacts(String userId, List<String> contactIds) async {
+    if (contactIds.isEmpty) return [];
+
+    try {
+      final List<Story> allUnviewedStories = [];
+
+      // Dividir en chunks de 10 para Firestore whereIn limit
+      for (int i = 0; i < contactIds.length; i += 10) {
+        final chunk = contactIds.skip(i).take(10).toList();
+
+        final snapshot = await _firestore
+            .collection('stories')
+            .where('userId', whereIn: chunk)
+            .where('status', isEqualTo: 'approved')
+            .where('createdAt', isGreaterThan: _get24HoursAgo())
+            .orderBy('createdAt', descending: true)
+            .get();
+
+        // Filtrar historias no vistas en el cliente (más eficiente que query compleja)
+        final unviewedInChunk = snapshot.docs
+            .map((doc) => Story.fromFirestore(doc))
+            .where((story) => !story.viewedBy.contains(userId))
+            .toList();
+
+        allUnviewedStories.addAll(unviewedInChunk);
+      }
+
+      return allUnviewedStories;
+    } catch (e) {
+      throw Exception('Error obteniendo historias no vistas: $e');
+    }
+  }
+
+  /// Stream de historias NO vistas por usuario específico de contacts específicos
+  Stream<List<Story>> getUnviewedFromContactsStream(String userId, List<String> contactIds) async* {
+    if (contactIds.isEmpty) {
+      yield [];
+      return;
+    }
+
+    try {
+      // Para performance, limitamos a 10 contactos
+      final limitedContactIds = contactIds.take(10).toList();
+
+      final Stream<QuerySnapshot> stream = _firestore
+          .collection('stories')
+          .where('userId', whereIn: limitedContactIds)
+          .where('status', isEqualTo: 'approved')
+          .where('createdAt', isGreaterThan: _get24HoursAgo())
+          .orderBy('createdAt', descending: true)
+          .snapshots();
+
+      await for (final snapshot in stream) {
+        final unviewedStories = snapshot.docs
+            .map((doc) => Story.fromFirestore(doc))
+            .where((story) => !story.viewedBy.contains(userId))
+            .toList();
+
+        yield unviewedStories;
+      }
+    } catch (e) {
+      throw Exception('Error en stream de historias no vistas: $e');
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // SPECIALIZED OPERATIONS
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Marcar historia como vista por usuario
+  Future<void> markAsViewed(String storyId, String userId) async {
+    try {
+      await _firestore.collection('stories').doc(storyId).update({
+        'viewedBy': FieldValue.arrayUnion([userId]),
+      });
+    } catch (e) {
+      throw Exception('Error marcando historia como vista: $e');
+    }
+  }
+
+  /// Aprobar historia
+  Future<void> approve(String storyId, String approvedBy, {String? message}) async {
+    try {
+      final updateData = {
+        'status': 'approved',
+        'approvedAt': FieldValue.serverTimestamp(),
+        'approvedBy': approvedBy,
+      };
+
+      if (message != null) {
+        updateData['approvalMessage'] = message;
+      }
+
+      await _firestore.collection('stories').doc(storyId).update(updateData);
+    } catch (e) {
+      throw Exception('Error aprobando historia: $e');
+    }
+  }
+
+  /// Rechazar historia
+  Future<void> reject(String storyId, String rejectedBy, {String? reason}) async {
+    try {
+      final updateData = {
+        'status': 'rejected',
+      };
+
+      if (reason != null) {
+        updateData['rejectionReason'] = reason;
+      }
+
+      await _firestore.collection('stories').doc(storyId).update(updateData);
+    } catch (e) {
+      throw Exception('Error rechazando historia: $e');
+    }
+  }
+
+  /// Limpiar historias expiradas (>24 horas)
+  Future<void> cleanupExpiredStories() async {
+    try {
+      final cutoff = _get24HoursAgo();
+
+      final expiredStories = await _firestore
+          .collection('stories')
+          .where('createdAt', isLessThan: cutoff)
+          .get();
+
+      final batch = _firestore.batch();
+
+      for (final doc in expiredStories.docs) {
+        batch.delete(doc.reference);
+      }
+
+      await batch.commit();
+    } catch (e) {
+      throw Exception('Error limpiando historias expiradas: $e');
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // HELPER METHODS
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Obtener timestamp de hace 24 horas
+  Timestamp _get24HoursAgo() {
+    final twentyFourHoursAgo = DateTime.now().subtract(Duration(hours: 24));
+    return Timestamp.fromDate(twentyFourHoursAgo);
+  }
+
+
+  /// Obtener usuario actual
+  String? get currentUserId => _auth.currentUser?.uid;
+
+  /// Acceso a la instancia de Firestore (para operaciones avanzadas)
+  FirebaseFirestore get firestore => _firestore;
+}
