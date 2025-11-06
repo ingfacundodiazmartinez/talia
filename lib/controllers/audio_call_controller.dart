@@ -5,7 +5,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../services/video_call_service.dart';
-import '../services/voip_service.dart';
 import '../services/callkit_service.dart';
 import '../utils/release_logger.dart';
 
@@ -28,7 +27,6 @@ class AudioCallController {
 
   // Services
   final VideoCallService _callService;
-  final VoipService _voipService;
   final CallKitService _callKitService;
 
   // State
@@ -61,10 +59,8 @@ class AudioCallController {
     required this.remoteName,
     this.receiverId,
     VideoCallService? callService,
-    VoipService? voipService,
     CallKitService? callKitService,
   }) : _callService = callService ?? VideoCallService(),
-       _voipService = voipService ?? VoipService(),
        _callKitService = callKitService ?? CallKitService() {
 
     // Inicializar credenciales desde parámetros

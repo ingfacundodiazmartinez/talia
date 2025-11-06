@@ -59,7 +59,17 @@ class AddContactController {
   /// Buscar contacto por código
   Future<Map<String, dynamic>?> findContactByCode(String code) async {
     try {
-      return await _userCodeService.findUserByCode(code);
+      final result = await _userCodeService.findUserByCode(code);
+      if (result.isFound) {
+        return {
+          'userId': result.userId,
+          'name': result.name,
+          'email': result.email,
+          'photoURL': result.photoURL,
+          'isParent': result.isParent,
+        };
+      }
+      return null;
     } catch (e) {
       ReleaseLogger.error('Error buscando contacto por código: $e', tag: 'AddContact');
       rethrow;
@@ -67,46 +77,32 @@ class AddContactController {
   }
 
   /// Enviar solicitud de contacto
-  Future<bool> sendContactRequest(String targetUserId) async {
+  Future<bool> sendContactRequest({
+    required String targetUserId,
+    required String targetUserName,
+    required String targetUserEmail,
+  }) async {
     try {
       final currentUserId = this.currentUserId;
       if (currentUserId == null) {
         throw 'Usuario no autenticado';
       }
 
-      await _contactRequestService.sendContactRequest(
-        senderId: currentUserId,
-        receiverId: targetUserId,
+      final result = await _contactRequestService.sendContactRequest(
+        contactUserId: targetUserId,
+        currentUserId: currentUserId,
+        currentUserName: currentUserDisplayName,
+        currentUserEmail: currentUserEmail,
+        contactName: targetUserName,
+        contactEmail: targetUserEmail,
       );
 
-      ReleaseLogger.log('Solicitud de contacto enviada a $targetUserId', tag: 'AddContact');
-      return true;
+      ReleaseLogger.log('Solicitud de contacto enviada a $targetUserName: ${result.success}', tag: 'AddContact');
+      return result.success;
     } catch (e) {
       ReleaseLogger.error('Error enviando solicitud de contacto: $e', tag: 'AddContact');
       return false;
     }
   }
 
-  /// Enviar solicitud grupal
-  Future<bool> sendGroupRequest(String groupCode) async {
-    try {
-      final currentUserId = this.currentUserId;
-      if (currentUserId == null) {
-        throw 'Usuario no autenticado';
-      }
-
-      await _contactRequestService.sendGroupRequest(
-        groupCode: groupCode,
-        currentUserId: currentUserId,
-        currentUserName: currentUserDisplayName,
-        currentUserEmail: currentUserEmail,
-      );
-
-      ReleaseLogger.log('Solicitud grupal enviada para código $groupCode', tag: 'AddContact');
-      return true;
-    } catch (e) {
-      ReleaseLogger.error('Error enviando solicitud grupal: $e', tag: 'AddContact');
-      return false;
-    }
-  }
 }

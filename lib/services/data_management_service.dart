@@ -11,6 +11,7 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:flutter/foundation.dart';
+import '../utils/release_logger.dart';
 
 /// Política de retención de datos
 class RetentionPolicy {
@@ -63,7 +64,7 @@ class DataManagementService {
     }
 
     _isInitialized = true;
-    print('✅ DataManagementService initialized');
+    ReleaseLogger.log('✅ DataManagementService initialized', tag: 'DataManagementService');
   }
 
   /// Programar limpieza automática
@@ -88,17 +89,17 @@ class DataManagementService {
       );
     });
 
-    print('🕐 Automatic cleanup scheduled for ${scheduledTime.toString()}');
+    ReleaseLogger.log('🕐 Automatic cleanup scheduled for ${scheduledTime.toString()}', tag: 'DataManagementService');
   }
 
   /// Ejecutar limpieza automática
   Future<void> performAutomaticCleanup() async {
     if (kDebugMode) {
-      print('⚠️ Skipping automatic cleanup in debug mode');
+      ReleaseLogger.log('⚠️ Skipping automatic cleanup in debug mode', tag: 'DataManagementService');
       return;
     }
 
-    print('🧹 Starting automatic cleanup...');
+    ReleaseLogger.log('🧹 Starting automatic cleanup...', tag: 'DataManagementService');
 
     try {
       final results = await Future.wait([
@@ -111,9 +112,9 @@ class DataManagementService {
 
       final totalCleaned = results.fold<int>(0, (sum, count) => sum + count);
 
-      print('✅ Automatic cleanup completed: $totalCleaned items cleaned');
+      ReleaseLogger.log('✅ Automatic cleanup completed: $totalCleaned items cleaned', tag: 'DataManagementService');
     } catch (e) {
-      print('❌ Error in automatic cleanup: $e');
+      ReleaseLogger.error('❌ Error in automatic cleanup: $e', tag: 'DataManagementService');
     }
   }
 
@@ -156,10 +157,10 @@ class DataManagementService {
         }
       }
 
-      print('🗑️ Cleaned $deletedCount old messages');
+      ReleaseLogger.log('🗑️ Cleaned $deletedCount old messages', tag: 'DataManagementService');
       return deletedCount;
     } catch (e) {
-      print('❌ Error cleaning old messages: $e');
+      ReleaseLogger.error('❌ Error cleaning old messages: $e', tag: 'DataManagementService');
       return 0;
     }
   }
@@ -180,12 +181,12 @@ class DataManagementService {
 
       // Esta operación debe hacerse con cuidado en producción
       // Por ahora, solo registramos la cantidad de archivos antiguos
-      print('⚠️ Media cleanup requires manual intervention or Cloud Function');
-      print('   Consider implementing as a scheduled Cloud Function');
+      ReleaseLogger.log('⚠️ Media cleanup requires manual intervention or Cloud Function', tag: 'DataManagementService');
+      ReleaseLogger.log('   Consider implementing as a scheduled Cloud Function', tag: 'DataManagementService');
 
       return deletedCount;
     } catch (e) {
-      print('❌ Error cleaning old media: $e');
+      ReleaseLogger.error('❌ Error cleaning old media: $e', tag: 'DataManagementService');
       return 0;
     }
   }
@@ -220,10 +221,10 @@ class DataManagementService {
         await batch.commit();
       }
 
-      print('🗑️ Cleaned $deletedCount old locations');
+      ReleaseLogger.log('🗑️ Cleaned $deletedCount old locations', tag: 'DataManagementService');
       return deletedCount;
     } catch (e) {
-      print('❌ Error cleaning old locations: $e');
+      ReleaseLogger.error('❌ Error cleaning old locations: $e', tag: 'DataManagementService');
       return 0;
     }
   }
@@ -267,10 +268,10 @@ class DataManagementService {
         await batch.commit();
       }
 
-      print('🗑️ Cleaned $deletedCount old emergencies');
+      ReleaseLogger.log('🗑️ Cleaned $deletedCount old emergencies', tag: 'DataManagementService');
       return deletedCount;
     } catch (e) {
-      print('❌ Error cleaning old emergencies: $e');
+      ReleaseLogger.error('❌ Error cleaning old emergencies: $e', tag: 'DataManagementService');
       return 0;
     }
   }
@@ -324,10 +325,10 @@ class DataManagementService {
         }
       }
 
-      print('🗑️ Cleaned $deletedCount cache items');
+      ReleaseLogger.log('🗑️ Cleaned $deletedCount cache items', tag: 'DataManagementService');
       return deletedCount;
     } catch (e) {
-      print('❌ Error cleaning local cache: $e');
+      ReleaseLogger.error('❌ Error cleaning local cache: $e', tag: 'DataManagementService');
       return 0;
     }
   }
@@ -343,9 +344,9 @@ class DataManagementService {
         'archivedAt': FieldValue.serverTimestamp(),
       });
 
-      print('📦 Conversation $chatId archived');
+      ReleaseLogger.log('📦 Conversation $chatId archived', tag: 'DataManagementService');
     } catch (e) {
-      print('❌ Error archiving conversation: $e');
+      ReleaseLogger.error('❌ Error archiving conversation: $e', tag: 'DataManagementService');
       rethrow;
     }
   }
@@ -360,9 +361,9 @@ class DataManagementService {
         'archivedBy': FieldValue.arrayRemove([user.uid]),
       });
 
-      print('📤 Conversation $chatId unarchived');
+      ReleaseLogger.log('📤 Conversation $chatId unarchived', tag: 'DataManagementService');
     } catch (e) {
-      print('❌ Error unarchiving conversation: $e');
+      ReleaseLogger.error('❌ Error unarchiving conversation: $e', tag: 'DataManagementService');
       rethrow;
     }
   }
@@ -373,7 +374,7 @@ class DataManagementService {
       final user = _auth.currentUser;
       if (user == null) throw Exception('User not authenticated');
 
-      print('📦 Exporting user data for ${user.uid}...');
+      ReleaseLogger.log('📦 Exporting user data for ${user.uid}...', tag: 'DataManagementService');
 
       final userData = <String, dynamic>{};
 
@@ -422,10 +423,10 @@ class DataManagementService {
       userData['exportDate'] = DateTime.now().toIso8601String();
       userData['userId'] = user.uid;
 
-      print('✅ User data exported successfully');
+      ReleaseLogger.log('✅ User data exported successfully', tag: 'DataManagementService');
       return userData;
     } catch (e) {
-      print('❌ Error exporting user data: $e');
+      ReleaseLogger.error('❌ Error exporting user data: $e', tag: 'DataManagementService');
       rethrow;
     }
   }
@@ -446,9 +447,9 @@ class DataManagementService {
         'scheduledDeletionDate': Timestamp.fromDate(deletionDate),
       });
 
-      print('🗑️ Account deletion requested. Scheduled for: $deletionDate');
+      ReleaseLogger.log('🗑️ Account deletion requested. Scheduled for: $deletionDate', tag: 'DataManagementService');
     } catch (e) {
-      print('❌ Error requesting account deletion: $e');
+      ReleaseLogger.error('❌ Error requesting account deletion: $e', tag: 'DataManagementService');
       rethrow;
     }
   }
@@ -465,9 +466,9 @@ class DataManagementService {
         'scheduledDeletionDate': FieldValue.delete(),
       });
 
-      print('✅ Account deletion request canceled');
+      ReleaseLogger.log('✅ Account deletion request canceled', tag: 'DataManagementService');
     } catch (e) {
-      print('❌ Error canceling account deletion: $e');
+      ReleaseLogger.error('❌ Error canceling account deletion: $e', tag: 'DataManagementService');
       rethrow;
     }
   }
@@ -480,7 +481,7 @@ class DataManagementService {
       final user = _auth.currentUser;
       if (user == null) throw Exception('User not authenticated');
 
-      print('🗑️ Permanently deleting account for ${user.uid}...');
+      ReleaseLogger.log('🗑️ Permanently deleting account for ${user.uid}...');
 
       final batch = _firestore.batch();
 
@@ -522,15 +523,15 @@ class DataManagementService {
         final avatarRef = _storage.ref('profile_images/${user.uid}.jpg');
         await avatarRef.delete();
       } catch (e) {
-        print('⚠️ No avatar to delete: $e');
+        ReleaseLogger.log('⚠️ No avatar to delete: $e', tag: 'DataManagementService');
       }
 
       // Eliminar cuenta de Authentication
       await user.delete();
 
-      print('✅ Account permanently deleted');
+      ReleaseLogger.log('✅ Account permanently deleted', tag: 'DataManagementService');
     } catch (e) {
-      print('❌ Error deleting account permanently: $e');
+      ReleaseLogger.error('❌ Error deleting account permanently: $e', tag: 'DataManagementService');
       rethrow;
     }
   }
@@ -587,7 +588,7 @@ class DataManagementService {
 
       return stats;
     } catch (e) {
-      print('❌ Error getting data usage stats: $e');
+      ReleaseLogger.error('❌ Error getting data usage stats: $e', tag: 'DataManagementService');
       rethrow;
     }
   }
@@ -595,7 +596,7 @@ class DataManagementService {
   /// Limpiar recursos
   void dispose() {
     _cleanupTimer?.cancel();
-    print('👋 DataManagementService disposed');
+    ReleaseLogger.log('👋 DataManagementService disposed', tag: 'DataManagementService');
   }
 }
 

@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import '../utils/release_logger.dart';
 
 class ChatBlockService {
   static final ChatBlockService _instance = ChatBlockService._internal();
@@ -18,31 +19,51 @@ class ChatBlockService {
     String? blockedBy,
   }) async {
     try {
-      print('🔒 Bloqueando chat entre $childId y $contactId');
+      ReleaseLogger.log('🔒 Bloqueando chat entre $childId y $contactId');
 
       // Generar ID del chat (mismo formato que se usa en la app)
       final chatId = _getChatId(childId, contactId);
 
       final blockedByUser = blockedBy ?? _auth.currentUser?.uid;
       final currentUser = _auth.currentUser;
-      print('📝 Datos del documento:');
-      print('   chatId: $chatId');
-      print('   childId: $childId');
-      print('   contactId: $contactId');
-      print('   blockedBy: $blockedByUser');
-      print('   reason: $reason');
-      print('🔐 Usuario autenticado:');
-      print('   UID: ${currentUser?.uid}');
-      print('   Email: ${currentUser?.email}');
-      print('   Phone: ${currentUser?.phoneNumber}');
-      print('   Is Anonymous: ${currentUser?.isAnonymous}');
+      ReleaseLogger.log('📝 Datos del documento:', tag: 'ChatBlockService');
+      ReleaseLogger.log('   chatId: $chatId', tag: 'ChatBlockService');
+      ReleaseLogger.log('   childId: $childId', tag: 'ChatBlockService');
+      ReleaseLogger.log('   contactId: $contactId', tag: 'ChatBlockService');
+      ReleaseLogger.log(
+        '   blockedBy: $blockedByUser',
+        tag: 'ChatBlockService',
+      );
+      ReleaseLogger.log('   reason: $reason', tag: 'ChatBlockService');
+      ReleaseLogger.log('🔐 Usuario autenticado:', tag: 'ChatBlockService');
+      ReleaseLogger.log('   UID: ${currentUser?.uid}', tag: 'ChatBlockService');
+      ReleaseLogger.log(
+        '   Email: ${_redactEmail(currentUser?.email)}',
+        tag: 'ChatBlockService',
+      );
+      ReleaseLogger.log(
+        '   Phone: ${_redactPhoneNumber(currentUser?.phoneNumber)}',
+        tag: 'ChatBlockService',
+      );
+      ReleaseLogger.log(
+        '   Is Anonymous: ${currentUser?.isAnonymous}',
+        tag: 'ChatBlockService',
+      );
 
-      print('🔧 Configuración de Firestore:');
-      print('   App: ${_firestore.app.name}');
-      print('   Settings: ${_firestore.settings}');
+      ReleaseLogger.log(
+        '🔧 Configuración de Firestore:',
+        tag: 'ChatBlockService',
+      );
+      ReleaseLogger.log(
+        '   App: ${_firestore.app.name}',
+        tag: 'ChatBlockService',
+      );
+      ReleaseLogger.log('   Settings: ${_firestore.settings}');
 
       // Crear registro de chat bloqueado
-      print('📤 Intentando crear documento en blocked_chats/$chatId...');
+      ReleaseLogger.log(
+        '📤 Intentando crear documento en blocked_chats/$chatId...',
+      );
       await _firestore.collection('blocked_chats').doc(chatId).set({
         'chatId': chatId,
         'childId': childId,
@@ -66,14 +87,15 @@ class ChatBlockService {
           'lastActivity': FieldValue.serverTimestamp(),
         });
 
-        print('✅ Chat existente marcado como bloqueado: $chatId');
+        ReleaseLogger.log('✅ Chat existente marcado como bloqueado: $chatId');
       } else {
-        print(
+        ReleaseLogger.log(
           'ℹ️ Chat no existe aún, pero se creó registro de bloqueo: $chatId',
+          tag: 'ChatBlockService',
         );
       }
     } catch (e) {
-      print('❌ Error bloqueando chat: $e');
+      ReleaseLogger.log('❌ Error bloqueando chat: $e');
       rethrow;
     }
   }
@@ -84,7 +106,7 @@ class ChatBlockService {
     required String contactId,
   }) async {
     try {
-      print('🔓 Desbloqueando chat entre $childId y $contactId');
+      ReleaseLogger.log('🔓 Desbloqueando chat entre $childId y $contactId');
 
       final chatId = _getChatId(childId, contactId);
 
@@ -107,9 +129,12 @@ class ChatBlockService {
         });
       }
 
-      print('✅ Chat desbloqueado: $chatId');
+      ReleaseLogger.log(
+        '✅ Chat desbloqueado: $chatId',
+        tag: 'ChatBlockService',
+      );
     } catch (e) {
-      print('❌ Error desbloqueando chat: $e');
+      ReleaseLogger.log('❌ Error desbloqueando chat: $e');
       rethrow;
     }
   }
@@ -162,12 +187,14 @@ class ChatBlockService {
       } catch (chatError) {
         // Ignorar errores de permisos al verificar chat
         // (el chat puede no existir aún o no tener permisos)
-        print('⚠️ No se pudo verificar estado en chats: $chatError');
+        ReleaseLogger.log(
+          '⚠️ No se pudo verificar estado en chats: $chatError',
+        );
       }
 
       return ChatBlockStatus(isBlocked: false);
     } catch (e) {
-      print('❌ Error verificando estado de bloqueo: $e');
+      ReleaseLogger.log('❌ Error verificando estado de bloqueo: $e');
       return ChatBlockStatus(isBlocked: false, error: e.toString());
     }
   }
@@ -209,7 +236,7 @@ class ChatBlockService {
 
       return blockedChats.docs.map((doc) => doc.id).toList();
     } catch (e) {
-      print('❌ Error obteniendo chats bloqueados: $e');
+      ReleaseLogger.log('❌ Error obteniendo chats bloqueados: $e');
       return [];
     }
   }
@@ -248,12 +275,36 @@ class ChatBlockService {
       }
 
       await batch.commit();
-      print(
+      ReleaseLogger.log(
         '🧹 Limpieza completada: ${oldBlocks.docs.length} registros eliminados',
+        tag: 'ChatBlockService',
       );
     } catch (e) {
-      print('❌ Error en limpieza: $e');
+      ReleaseLogger.error('❌ Error en limpieza: $e', tag: 'ChatBlockService');
     }
+  }
+
+  // 🔒 PRIVACY HELPERS - Redact sensitive data for GDPR/COPPA compliance
+  String _redactEmail(String? email) {
+    if (email == null || email.isEmpty) return 'null';
+    final parts = email.split('@');
+    if (parts.length != 2) return '***@***';
+    final username = parts[0];
+    final domain = parts[1];
+
+    // Show first 2 chars + *** + last char @ domain
+    if (username.length <= 3) return '***@$domain';
+    return '${username.substring(0, 2)}***${username.substring(username.length - 1)}@$domain';
+  }
+
+  String _redactPhoneNumber(String? phoneNumber) {
+    if (phoneNumber == null || phoneNumber.isEmpty) return 'null';
+    if (phoneNumber.length < 6) return '***';
+
+    // Show country code + first 2 digits + *** + last 2 digits
+    final first = phoneNumber.substring(0, 3);
+    final last = phoneNumber.substring(phoneNumber.length - 2);
+    return '$first***$last';
   }
 }
 

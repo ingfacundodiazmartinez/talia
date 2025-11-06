@@ -4,7 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../models/story.dart';
-import '../services/story_service.dart';
+import '../services/story_service_refactored.dart';
 import '../services/story_upload_progress_service.dart';
 import '../screens/story_camera_screen.dart';
 import '../screens/story_viewer_screen.dart';
@@ -26,8 +26,19 @@ class _StoriesSectionState extends State<StoriesSection> {
   @override
   void initState() {
     super.initState();
-    // CRÍTICO: Crear el stream UNA SOLA VEZ para evitar bucle infinito
-    _storiesStream = storyService.getStoriesFromWhitelist();
+    print('🎬 StoriesSection.initState() - Inicializando stream...');
+
+    // ✅ FORZAR inicio de background stream como fallback
+    print('🎬 StoriesSection.initState() - Forzando startBackgroundCacheUpdates()...');
+    storyService.startBackgroundCacheUpdates().then((_) {
+      print('🎬 StoriesSection.initState() - Background stream iniciado exitosamente');
+    }).catchError((e) {
+      print('🎬 StoriesSection.initState() - Error en background stream: $e');
+    });
+
+    // CRÍTICO: Usar storiesFromCache que reacciona a los background streams
+    _storiesStream = storyService.storiesFromCache;
+    print('🎬 StoriesSection.initState() - Stream asignado (cache): $_storiesStream');
   }
 
   @override
@@ -44,6 +55,8 @@ class _StoriesSectionState extends State<StoriesSection> {
             stream: _storiesStream,
             initialData: _cachedStories,
             builder: (context, snapshot) {
+              print('🎬 StoriesSection.StreamBuilder - connectionState: ${snapshot.connectionState}, hasData: ${snapshot.hasData}, data length: ${snapshot.data?.length ?? "null"}');
+
               // Actualizar cache cuando llegan datos nuevos
               if (snapshot.hasData && snapshot.data != null) {
                 _cachedStories = snapshot.data;
@@ -66,6 +79,17 @@ class _StoriesSectionState extends State<StoriesSection> {
 
               final userStoriesList = snapshot.data ?? _cachedStories ?? [];
 
+              // DEBUG: Log detallado para diagnosticar
+              print('🎬 StoriesSection: userStoriesList.length = ${userStoriesList.length}');
+              for (int i = 0; i < userStoriesList.length; i++) {
+                final userStory = userStoriesList[i];
+                print('🎬 Historia $i: userId=${userStory.userId}, userName=${userStory.userName}, stories.length=${userStory.stories.length}');
+                for (int j = 0; j < userStory.stories.length; j++) {
+                  final story = userStory.stories[j];
+                  print('🎬   Story $j: id=${story.id}, status=${story.status}, mediaUrl=${story.mediaUrl}');
+                }
+              }
+
               // Ordenar grupos: primero los que tienen historias no vistas, luego los que tienen todas vistas
               final sortedUserStoriesList = List<UserStories>.from(userStoriesList);
               sortedUserStoriesList.sort((a, b) {
@@ -75,18 +99,31 @@ class _StoriesSectionState extends State<StoriesSection> {
                 return a.hasUnviewed ? -1 : 1;
               });
 
+              print('🎬 StoriesSection: Después de ordenar, sortedUserStoriesList.length = ${sortedUserStoriesList.length}');
+
               return ListView.builder(
                 scrollDirection: Axis.horizontal,
                 padding: EdgeInsets.symmetric(horizontal: 16),
                 itemCount:
                     sortedUserStoriesList.length + 1, // +1 para el botón "Mi Historia"
                 itemBuilder: (context, index) {
+                  print('🎬 StoriesSection: Building item $index de ${sortedUserStoriesList.length + 1}');
+
                   if (index == 0) {
                     // Botón para crear historia
+                    print('🎬 StoriesSection: Building ADD button');
                     return _buildAddStoryButton(context);
                   }
 
-                  final userStories = sortedUserStoriesList[index - 1];
+                  // PROTECCIÓN: Verificar que el índice es válido
+                  final storyIndex = index - 1;
+                  if (storyIndex >= sortedUserStoriesList.length) {
+                    print('❌ StoriesSection: Invalid index $storyIndex for list of length ${sortedUserStoriesList.length}');
+                    return Container(); // Widget vacío como fallback
+                  }
+
+                  final userStories = sortedUserStoriesList[storyIndex];
+                  print('🎬 StoriesSection: Building story item for ${userStories.userName}');
                   return _buildStoryItem(
                     context: context,
                     userStories: userStories,
@@ -106,6 +143,20 @@ class _StoriesSectionState extends State<StoriesSection> {
   Widget _buildAddStoryButton(BuildContext context) {
     return GestureDetector(
       onTap: () async {
+        // iOS: Ir directamente a la cámara y dejar que el camera package
+        // maneje los permisos automáticamente cuando intente abrir la cámara.
+        // Esto evita el bug en permission_handler donde request() retorna
+        // permanentlyDenied sin mostrar el diálogo del sistema.
+        if (Platform.isIOS) {
+          if (context.mounted) {
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (context) => const StoryCameraScreen()),
+            );
+          }
+          return;
+        }
+
+        // ANDROID: permission_handler funciona correctamente, verificar y solicitar permiso
         final currentStatus = await Permission.camera.status;
 
         // Si ya está permanentemente denegado, mostrar diálogo para ir a Settings
@@ -130,38 +181,25 @@ class _StoriesSectionState extends State<StoriesSection> {
           return;
         }
 
-        // ANDROID: permission_handler funciona correctamente, solicitar permiso
-        if (Platform.isAndroid) {
-          final status = await Permission.camera.request();
+        // Solicitar permiso en Android
+        final status = await Permission.camera.request();
 
-          if (status.isGranted) {
-            if (context.mounted) {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (context) => const StoryCameraScreen()),
-              );
-            }
-          } else if (status.isPermanentlyDenied) {
-            if (context.mounted) {
-              PermissionDialog.showPermissionDeniedDialog(
-                context: context,
-                title: 'Permiso de Cámara Requerido',
-                message: 'Para crear historias necesitas habilitar el acceso a la cámara en la configuración de la aplicación.',
-              );
-            }
+        if (status.isGranted) {
+          if (context.mounted) {
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (context) => const StoryCameraScreen()),
+            );
           }
-          // Si es denied pero no permanentemente, no hacer nada (usuario canceló)
-          return;
+        } else if (status.isPermanentlyDenied) {
+          if (context.mounted) {
+            PermissionDialog.showPermissionDeniedDialog(
+              context: context,
+              title: 'Permiso de Cámara Requerido',
+              message: 'Para crear historias necesitas habilitar el acceso a la cámara en la configuración de la aplicación.',
+            );
+          }
         }
-
-        // iOS: Workaround por bug en permission_handler donde request()
-        // retorna permanentlyDenied sin mostrar el diálogo del sistema.
-        // Navegamos directamente a la cámara y dejamos que el camera package
-        // maneje los permisos automáticamente cuando intente abrir la cámara.
-        if (context.mounted) {
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (context) => const StoryCameraScreen()),
-          );
-        }
+        // Si es denied pero no permanentemente, no hacer nada (usuario canceló)
       },
       child: Container(
         width: 70,

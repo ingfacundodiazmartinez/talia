@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dashboard/parent_dashboard_screen.dart';
@@ -10,6 +11,45 @@ import '../chat_detail_screen.dart';
 import '../group_chat_screen.dart';
 import '../../controllers/parent_main_shell_controller.dart';
 import '../../utils/release_logger.dart';
+
+/// Clase para combinar todos los datos del BottomNavigationBar en un solo stream
+class BottomNavData {
+  final List<String> childrenIds;
+  final int pendingStoriesCount;
+  final int emergenciesCount;
+  final int unreadChatsCount;
+  final int unreadNotificationsCount;
+
+  BottomNavData({
+    required this.childrenIds,
+    required this.pendingStoriesCount,
+    required this.emergenciesCount,
+    required this.unreadChatsCount,
+    required this.unreadNotificationsCount,
+  });
+
+  int get dashboardBadgeCount => pendingStoriesCount + emergenciesCount;
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is BottomNavData &&
+        other.childrenIds.length == childrenIds.length &&
+        other.pendingStoriesCount == pendingStoriesCount &&
+        other.emergenciesCount == emergenciesCount &&
+        other.unreadChatsCount == unreadChatsCount &&
+        other.unreadNotificationsCount == unreadNotificationsCount;
+  }
+
+  @override
+  int get hashCode {
+    return childrenIds.length.hashCode ^
+        pendingStoriesCount.hashCode ^
+        emergenciesCount.hashCode ^
+        unreadChatsCount.hashCode ^
+        unreadNotificationsCount.hashCode;
+  }
+}
 
 /// Observer para detectar cambios en la navegación anidada
 class _NavigatorObserver extends NavigatorObserver {
@@ -62,6 +102,11 @@ class _ParentMainShellState extends State<ParentMainShell> {
   int _selectedIndex = 0;
   late ParentMainShellController _controller;
 
+  // ✅ OPTIMIZACIÓN: Stream combinado para evitar 5 StreamBuilders anidados
+  StreamController<BottomNavData>? _bottomNavDataController;
+  Stream<BottomNavData>? _bottomNavDataStream;
+  List<StreamSubscription>? _subscriptions;
+
   // Helper method to get current user ID
   String _getCurrentUserId() {
     return _controller.currentUserId ?? '';
@@ -84,11 +129,17 @@ class _ParentMainShellState extends State<ParentMainShell> {
     _controller.onChatNotificationTap = _handleChatNotificationTap;
 
     _controller.initialize();
+
+    // ✅ OPTIMIZACIÓN: Inicializar stream combinado
+    _initializeCombinedStream();
   }
 
 
   @override
   void dispose() {
+    // ✅ OPTIMIZACIÓN: Disponer streams combinados
+    _disposeCombinedStream();
+
     // ✅ CORRECTO: Solo disponer controller
     _controller.dispose();
     super.dispose();
@@ -161,10 +212,17 @@ class _ParentMainShellState extends State<ParentMainShell> {
   Widget _buildNavigator(GlobalKey<NavigatorState> key, Widget child) {
     return Navigator(
       key: key,
-      onGenerateRoute: (RouteSettings settings) {
-        return MaterialPageRoute(
-          builder: (BuildContext context) => child,
-        );
+      pages: [
+        MaterialPage(
+          key: ValueKey('tab_root'),
+          child: child,
+        ),
+      ],
+      onPopPage: (route, result) {
+        if (!route.didPop(result)) {
+          return false;
+        }
+        return true;
       },
       observers: [_NavigatorObserver(_onNavigationChanged)],
     );
@@ -326,56 +384,31 @@ class _ParentMainShellState extends State<ParentMainShell> {
       return Container(); // Usuario no autenticado
     }
 
-    // ✅ CORRECTO: Usar controller streams en lugar de queries directas
-    return StreamBuilder<DocumentSnapshot>(
-      stream: _controller.getCurrentUserStream(),
-      builder: (context, userSnapshot) {
-        List<String> childrenIds = [];
-        if (userSnapshot.hasData && userSnapshot.data != null) {
-          final userData = userSnapshot.data!.data() as Map<String, dynamic>?;
-          if (userData != null) {
-            childrenIds = List<String>.from(userData['linkedChildrenIds'] ?? []);
-          }
+    // ✅ OPTIMIZACIÓN: Un solo StreamBuilder en lugar de 5 anidados
+    if (_bottomNavDataStream == null) {
+      // Fallback mientras se inicializa el stream combinado
+      return _buildBottomNavBar(colorScheme, showLabels, 0, 0, 0);
+    }
+
+    return StreamBuilder<BottomNavData>(
+      stream: _bottomNavDataStream!,
+      builder: (context, snapshot) {
+        print('🏠 ÚNICO StreamBuilder - rebuilding');
+
+        if (!snapshot.hasData) {
+          // Mientras no tengamos datos, mostrar sin badges
+          return _buildBottomNavBar(colorScheme, showLabels, 0, 0, 0);
         }
 
-        // Dashboard badge: historias pendientes + emergencias activas
-        return StreamBuilder<int>(
-          stream: _controller.getPendingStoryRequestsStream(),
-          builder: (context, storiesSnapshot) {
-            final pendingStoriesCount = storiesSnapshot.data ?? 0;
+        final data = snapshot.data!;
+        print('🏠 ÚNICO StreamBuilder - datos: dashboard=${data.dashboardBadgeCount}, chats=${data.unreadChatsCount}, notif=${data.unreadNotificationsCount}');
 
-            return StreamBuilder<int>(
-              stream: _controller.getActiveEmergenciesStream(childrenIds),
-              builder: (context, emergenciesSnapshot) {
-                final emergenciesCount = emergenciesSnapshot.data ?? 0;
-                final dashboardBadgeCount = pendingStoriesCount + emergenciesCount;
-
-                // Chats badge: chats no leídos
-                return StreamBuilder<int>(
-                  stream: _controller.getUnreadChatsStream(),
-                  builder: (context, chatsSnapshot) {
-                    final unreadChatsCount = chatsSnapshot.data ?? 0;
-
-                    // Whitelist badge: notificaciones no leídas
-                    return StreamBuilder<int>(
-                      stream: _controller.getUnreadNotificationsStream(),
-                      builder: (context, notificationsSnapshot) {
-                        final unreadNotificationsCount = notificationsSnapshot.data ?? 0;
-
-                        return _buildBottomNavBar(
-                          colorScheme,
-                          showLabels,
-                          dashboardBadgeCount,
-                          unreadChatsCount,
-                          unreadNotificationsCount,
-                        );
-                      },
-                    );
-                  },
-                );
-              },
-            );
-          },
+        return _buildBottomNavBar(
+          colorScheme,
+          showLabels,
+          data.dashboardBadgeCount,
+          data.unreadChatsCount,
+          data.unreadNotificationsCount,
         );
       },
     );
@@ -454,6 +487,94 @@ class _ParentMainShellState extends State<ParentMainShell> {
         ],
       ),
     );
+  }
+
+  /// ✅ OPTIMIZACIÓN: Inicializar stream combinado para evitar 5 StreamBuilders anidados
+  void _initializeCombinedStream() {
+    print('🏠 Inicializando stream combinado del BottomNavigationBar');
+
+    _bottomNavDataController = StreamController<BottomNavData>.broadcast();
+    _bottomNavDataStream = _bottomNavDataController!.stream;
+    _subscriptions = [];
+
+    // Variables para mantener el estado actual de cada stream
+    List<String> currentChildrenIds = [];
+    int currentPendingStories = 0;
+    int currentEmergencies = 0;
+    int currentUnreadChats = 0;
+    int currentUnreadNotifications = 0;
+
+    void _emitCombinedData() {
+      if (!_bottomNavDataController!.isClosed) {
+        final data = BottomNavData(
+          childrenIds: currentChildrenIds,
+          pendingStoriesCount: currentPendingStories,
+          emergenciesCount: currentEmergencies,
+          unreadChatsCount: currentUnreadChats,
+          unreadNotificationsCount: currentUnreadNotifications,
+        );
+        _bottomNavDataController!.add(data);
+        print('🏠 Stream combinado emitido: dashboard=${data.dashboardBadgeCount}, chats=${data.unreadChatsCount}, notif=${data.unreadNotificationsCount}');
+      }
+    }
+
+    // 1. Escuchar cambios en datos del usuario (linkedChildrenIds)
+    _subscriptions!.add(
+      _controller.getCurrentUserStream().listen((userSnapshot) {
+        print('🏠 Stream 1/5 - getCurrentUserStream cambió');
+        if (userSnapshot.exists) {
+          final userData = userSnapshot.data() as Map<String, dynamic>?;
+          currentChildrenIds = List<String>.from(userData?['linkedChildrenIds'] ?? []);
+          _emitCombinedData();
+        }
+      })
+    );
+
+    // 2. Escuchar cambios en historias pendientes
+    _subscriptions!.add(
+      _controller.getPendingStoryRequestsStream().listen((count) {
+        print('🏠 Stream 2/5 - getPendingStoryRequestsStream cambió: $count');
+        currentPendingStories = count;
+        _emitCombinedData();
+      })
+    );
+
+    // 3. Escuchar cambios en emergencias activas
+    _subscriptions!.add(
+      _controller.getActiveEmergenciesStream(currentChildrenIds).listen((count) {
+        print('🏠 Stream 3/5 - getActiveEmergenciesStream cambió: $count');
+        currentEmergencies = count;
+        _emitCombinedData();
+      })
+    );
+
+    // 4. Escuchar cambios en chats no leídos
+    _subscriptions!.add(
+      _controller.getUnreadChatsStream().listen((count) {
+        print('🏠 Stream 4/5 - getUnreadChatsStream cambió: $count');
+        currentUnreadChats = count;
+        _emitCombinedData();
+      })
+    );
+
+    // 5. Escuchar cambios en notificaciones no leídas
+    _subscriptions!.add(
+      _controller.getUnreadNotificationsStream().listen((count) {
+        print('🏠 Stream 5/5 - getUnreadNotificationsStream cambió: $count');
+        currentUnreadNotifications = count;
+        _emitCombinedData();
+      })
+    );
+  }
+
+  /// ✅ OPTIMIZACIÓN: Disponer stream combinado
+  void _disposeCombinedStream() {
+    print('🏠 Disponiendo stream combinado del BottomNavigationBar');
+    _subscriptions?.forEach((sub) => sub.cancel());
+    _subscriptions?.clear();
+    _bottomNavDataController?.close();
+    _bottomNavDataController = null;
+    _bottomNavDataStream = null;
   }
 
   /// Construye un ícono con badge si el count > 0

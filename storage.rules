@@ -2,9 +2,137 @@ rules_version = '2';
 
 service firebase.storage {
   match /b/{bucket}/o {
-    // TEMPORALMENTE TODO PÚBLICO PARA DEBUGGING
+    // 🔒 SECURE STORAGE RULES - USER DATA PROTECTION
+
+    // User profile images - only owner and approved contacts can access
+    match /profile_images/{userId}/{fileName} {
+      allow read: if request.auth != null
+                  && (request.auth.uid == userId || isApprovedContact(userId, request.auth.uid));
+      allow write: if request.auth != null
+                   && request.auth.uid == userId
+                   && isValidImage()
+                   && resource.size < 5 * 1024 * 1024; // 5MB limit
+    }
+
+    // Chat media - only participants can access
+    match /chat_media/{chatId}/{fileName} {
+      allow read, write: if request.auth != null
+                         && isParticipant(chatId, request.auth.uid)
+                         && isValidMediaFile()
+                         && resource.size < 10 * 1024 * 1024; // 10MB limit
+    }
+
+    // Story content - owner and approved contacts only
+    match /stories/{userId}/{fileName} {
+      allow read: if request.auth != null
+                  && (request.auth.uid == userId || canViewStory(userId, request.auth.uid));
+      allow write: if request.auth != null
+                   && request.auth.uid == userId
+                   && isValidMediaFile()
+                   && resource.size < 25 * 1024 * 1024; // 25MB limit for stories
+    }
+
+    // Audio messages - chat participants only
+    match /audio_messages/{chatId}/{fileName} {
+      allow read, write: if request.auth != null
+                         && isParticipant(chatId, request.auth.uid)
+                         && isValidAudioFile()
+                         && resource.size < 5 * 1024 * 1024; // 5MB limit
+    }
+
+    // Document attachments - chat participants only
+    match /documents/{chatId}/{fileName} {
+      allow read, write: if request.auth != null
+                         && isParticipant(chatId, request.auth.uid)
+                         && isValidDocumentFile()
+                         && resource.size < 20 * 1024 * 1024; // 20MB limit
+    }
+
+    // Temporary files - user specific, auto-expire
+    match /temp/{userId}/{fileName} {
+      allow read, write: if request.auth != null
+                         && request.auth.uid == userId
+                         && resource.size < 50 * 1024 * 1024; // 50MB limit
+    }
+
+    // Deny all other access
     match /{allPaths=**} {
-      allow read, write: if true;
+      allow read, write: if false;
+    }
+
+    // 🛡️ SECURITY FUNCTIONS
+
+    function isValidImage() {
+      return request.resource.contentType.matches('image/.*')
+             && request.resource.contentType in ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    }
+
+    function isValidMediaFile() {
+      return request.resource.contentType.matches('image/.*')
+             || request.resource.contentType.matches('video/.*')
+             && request.resource.contentType in [
+               'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+               'video/mp4', 'video/mov', 'video/avi', 'video/webm'
+             ];
+    }
+
+    function isValidAudioFile() {
+      return request.resource.contentType.matches('audio/.*')
+             && request.resource.contentType in [
+               'audio/mpeg', 'audio/wav', 'audio/m4a', 'audio/aac', 'audio/ogg'
+             ];
+    }
+
+    function isValidDocumentFile() {
+      return request.resource.contentType in [
+        'application/pdf', 'text/plain', 'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.ms-excel',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      ];
+    }
+
+    function isParticipant(chatId, userId) {
+      // Check if user is participant in the chat
+      let chatDoc = firestore.get(/databases/$(database)/documents/chats/$(chatId));
+
+      return chatDoc != null &&
+             chatDoc.data != null &&
+             chatDoc.data.participants != null &&
+             userId in chatDoc.data.participants;
+    }
+
+    function canViewStory(storyUserId, viewerId) {
+      // Story owner can always view
+      if (storyUserId == viewerId) {
+        return true;
+      }
+
+      // Check if viewer is an approved contact who can see stories
+      return isApprovedContact(storyUserId, viewerId);
+    }
+
+    function isApprovedContact(profileUserId, viewerId) {
+      // Allow self-access always
+      if (profileUserId == viewerId) {
+        return true;
+      }
+
+      // Check using consistent contact document ID (smaller_id + '_' + larger_id)
+      let contactDocId = profileUserId < viewerId ?
+                        profileUserId + '_' + viewerId :
+                        viewerId + '_' + profileUserId;
+
+      // Try to get the contact document
+      let contactDoc = firestore.get(/databases/$(database)/documents/contacts/$(contactDocId));
+
+      // Contact exists, has both users in array, and is not blocked
+      return contactDoc != null &&
+             contactDoc.data != null &&
+             contactDoc.data.users != null &&
+             profileUserId in contactDoc.data.users &&
+             viewerId in contactDoc.data.users &&
+             (!('status' in contactDoc.data) || contactDoc.data.status != 'blocked');
     }
   }
 }

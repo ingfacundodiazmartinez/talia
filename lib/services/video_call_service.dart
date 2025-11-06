@@ -1021,7 +1021,7 @@ class VideoCallService {
         // No lanzar error - la invitación ya se agregó a Firestore
       }
 
-      ReleaseLogger.log('✅ Usuario invitado exitosamente a la llamada, tag: 'VideoCallService');
+      ReleaseLogger.log('✅ Usuario invitado exitosamente a la llamada', tag: 'VideoCallService');
 
       return {'success': true};
     } catch (e) {
@@ -1044,7 +1044,7 @@ class VideoCallService {
   /// Aceptar una llamada
   Future<void> acceptCall(String callId) async {
     try {
-      ReleaseLogger.log('✅ Aceptando llamada: $callId, tag: 'VideoCallService');
+      ReleaseLogger.log('✅ Aceptando llamada: $callId', tag: 'VideoCallService');
 
       // Primero verificar si el documento existe
       final docSnapshot = await _firestore.collection('video_calls').doc(callId).get();
@@ -1061,7 +1061,7 @@ class VideoCallService {
         'startedAt': FieldValue.serverTimestamp(), // Marcar inicio cuando se acepta
       });
 
-      ReleaseLogger.log('✅ Llamada actualizada a status: accepted, tag: 'VideoCallService');
+      ReleaseLogger.log('✅ Llamada actualizada a status: accepted', tag: 'VideoCallService');
     } catch (e) {
       ReleaseLogger.error('❌ Error aceptando llamada: $e', tag: 'VideoCallService');
       ReleaseLogger.error('❌ Stack trace: ${StackTrace.current}', tag: 'VideoCallService');
@@ -1134,7 +1134,7 @@ class VideoCallService {
             'status': 'cancelled',
             'cancelledAt': FieldValue.serverTimestamp(),
           });
-          ReleaseLogger.log('✅ Llamada marcada como cancelada en Firestore, tag: 'VideoCallService');
+          ReleaseLogger.log('✅ Llamada marcada como cancelada en Firestore', tag: 'VideoCallService');
 
           // Crear mensaje de llamada perdida en el chat
           await _createMissedCallMessage(
@@ -1186,7 +1186,7 @@ class VideoCallService {
             'cancelledAt': FieldValue.serverTimestamp(),
             'callId': callId,
           }, SetOptions(merge: true)); // merge: true para no sobreescribir si ya existe
-          ReleaseLogger.log('✅ Documento cancelled creado/actualizado, tag: 'VideoCallService');
+          ReleaseLogger.log('✅ Documento cancelled creado/actualizado', tag: 'VideoCallService');
         } catch (e) {
           ReleaseLogger.error('⚠️ Error creando documento cancelled: $e', tag: 'VideoCallService');
         }
@@ -1324,7 +1324,7 @@ class VideoCallService {
           };
         }
 
-        ReleaseLogger.log('✅ Verificación de bloqueo pasada, tag: 'VideoCallService');
+        ReleaseLogger.log('✅ Verificación de bloqueo pasada', tag: 'VideoCallService');
       } catch (blockError) {
         ReleaseLogger.error('⚠️ Error verificando bloqueo: $blockError', tag: 'VideoCallService');
         // Continuar de todos modos - no es un error crítico
@@ -1354,7 +1354,7 @@ class VideoCallService {
               receiverName: receiverName,
             );
 
-      ReleaseLogger.log('✅ $callType creada: $channelName, tag: 'VideoCallService');
+      ReleaseLogger.log('✅ $callType creada: $channelName', tag: 'VideoCallService');
 
       // 5. Obtener token de App Check
       String? appCheckTokenValue;
@@ -1373,7 +1373,7 @@ class VideoCallService {
       ReleaseLogger.log('☁️ Llamando Cloud Function generateAgoraToken...', tag: 'VideoCallService');
 
       final functions = FirebaseFunctions.instance;
-      final callable = functions.httpsCallable('generateAgoraToken, tag: 'VideoCallService');
+      final callable = functions.httpsCallable('generateAgoraToken');
 
       try {
         final result = await callable.call({
@@ -1384,8 +1384,8 @@ class VideoCallService {
         final token = result.data['token'] as String;
         final uid = result.data['uid'] as int;
 
-        ReleaseLogger.log('✅ Token generado para caller exitosamente, tag: 'VideoCallService');
-        ReleaseLogger.log('✅ UID asignado: $uid, tag: 'VideoCallService');
+        ReleaseLogger.log('✅ Token generado para caller exitosamente', tag: 'VideoCallService');
+        ReleaseLogger.log('✅ UID asignado: $uid', tag: 'VideoCallService');
 
         return {
           'success': true,
@@ -1469,7 +1469,7 @@ class VideoCallService {
         'participants': [callerId, receiverId],
       }, SetOptions(merge: true));
 
-      ReleaseLogger.log('✅ Mensaje de llamada perdida creado en el chat, tag: 'VideoCallService');
+      ReleaseLogger.log('✅ Mensaje de llamada perdida creado en el chat', tag: 'VideoCallService');
     } catch (e) {
       ReleaseLogger.error('❌ Error creando mensaje de llamada perdida: $e', tag: 'VideoCallService');
       // No relanzar el error, es una operación secundaria
@@ -1533,7 +1533,7 @@ class VideoCallService {
         'participants': [callerId, receiverId],
       }, SetOptions(merge: true));
 
-      ReleaseLogger.log('✅ Mensaje de llamada contestada creado en el chat, tag: 'VideoCallService');
+      ReleaseLogger.log('✅ Mensaje de llamada contestada creado en el chat', tag: 'VideoCallService');
     } catch (e) {
       ReleaseLogger.error('❌ Error creando mensaje de llamada contestada: $e', tag: 'VideoCallService');
       // No relanzar el error, es una operación secundaria
@@ -1585,7 +1585,7 @@ class VideoCallService {
         'participants': [callerId, receiverId],
       }, SetOptions(merge: true));
 
-      ReleaseLogger.log('✅ Mensaje de llamada perdida creado en el chat, tag: 'VideoCallService');
+      ReleaseLogger.log('✅ Mensaje de llamada perdida creado en el chat', tag: 'VideoCallService');
     } catch (e) {
       ReleaseLogger.error('❌ Error creando mensaje de llamada perdida: $e', tag: 'VideoCallService');
       // No relanzar el error, es una operación secundaria

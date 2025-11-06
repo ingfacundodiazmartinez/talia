@@ -1,9 +1,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'block_status_cache_service.dart';
 
 class BlockService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
+  final BlockStatusCacheService _blockStatusCache = BlockStatusCacheService();
 
   // Bloquear un contacto
   Future<void> blockContact(String contactId) async {
@@ -19,7 +21,11 @@ class BlockService {
         'createdAt': DateTime.now().toIso8601String(),
       });
 
+      // Notificar al cache service para triggear el refresh automático
+      _blockStatusCache.updateBlockStatus(contactId, true);
+
       print('🚫 Usuario $contactId bloqueado exitosamente');
+      print('📡 Evento de bloqueo emitido para actualización automática de historias');
     } catch (e) {
       throw Exception('Error bloqueando contacto: $e');
     }
@@ -43,7 +49,11 @@ class BlockService {
         await doc.reference.delete();
       }
 
+      // Notificar al cache service para triggear el refresh automático
+      _blockStatusCache.updateBlockStatus(contactId, false);
+
       print('✅ Usuario $contactId desbloqueado exitosamente');
+      print('📡 Evento de desbloqueo emitido para actualización automática de historias');
     } catch (e) {
       throw Exception('Error desbloqueando contacto: $e');
     }

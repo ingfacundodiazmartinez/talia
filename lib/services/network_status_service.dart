@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
+import '../utils/release_logger.dart';
 
 /// Servicio para monitorear el estado de la conexión de red
 ///
@@ -16,9 +17,12 @@ class NetworkStatusService {
   final Connectivity _connectivity = Connectivity();
   StreamSubscription<List<ConnectivityResult>>? _subscription;
 
-  // Stream controller para notificar cambios
-  final StreamController<bool> _connectionStatusController = StreamController<bool>.broadcast();
-  Stream<bool> get connectionStatus => _connectionStatusController.stream;
+  // Stream controller para notificar cambios (nullable para lifecycle management)
+  StreamController<bool>? _connectionStatusController;
+  Stream<bool> get connectionStatus {
+    _connectionStatusController ??= StreamController<bool>.broadcast();
+    return _connectionStatusController!.stream;
+  }
 
   bool _isConnected = true;
   bool get isConnected => _isConnected;
@@ -33,29 +37,32 @@ class NetworkStatusService {
   /// Inicializa el servicio y empieza a monitorear la red
   Future<void> initialize() async {
     if (_isInitialized) {
-      print('📡 [Network] Servicio ya estaba inicializado');
+      ReleaseLogger.log('📡 Network Service ya estaba inicializado', tag: 'NetworkStatusService');
       return;
     }
+
+    ReleaseLogger.log('📡 Inicializando Network Service...', tag: 'NetworkStatusService');
 
     // Verificar estado inicial INMEDIATAMENTE
     try {
       final result = await _connectivity.checkConnectivity();
       _updateConnectionStatus(result);
-      print('📡 [Network] Estado inicial verificado: $_isConnected');
+      ReleaseLogger.log('📡 Estado inicial verificado: $_isConnected', tag: 'NetworkStatusService');
     } catch (e) {
-      print('⚠️ [Network] Error verificando estado inicial: $e');
+      ReleaseLogger.error('⚠️ Error verificando estado inicial: $e', tag: 'NetworkStatusService');
       // En caso de error, asumir que no hay conexión por seguridad
       _isConnected = false;
-      _connectionStatusController.add(false);
+      _connectionStatusController?.add(false);
     }
 
-    // Escuchar cambios
+    // Escuchar cambios (con cleanup previo por seguridad)
+    _subscription?.cancel();
     _subscription = _connectivity.onConnectivityChanged.listen((result) {
       _updateConnectionStatus(result);
     });
 
     _isInitialized = true;
-    print('📡 [Network] Servicio de red inicializado con estado: $_isConnected');
+    ReleaseLogger.log('✅ Network Service inicializado con estado: $_isConnected', tag: 'NetworkStatusService');
   }
 
   /// Registra callback para cuando se conecta
@@ -74,7 +81,7 @@ class NetworkStatusService {
     _isConnected = results.any((result) => result != ConnectivityResult.none);
 
     // Notificar stream
-    _connectionStatusController.add(_isConnected);
+    _connectionStatusController?.add(_isConnected);
 
     // Ejecutar callbacks si cambió el estado
     if (wasConnected != _isConnected) {
@@ -93,9 +100,48 @@ class NetworkStatusService {
   }
 
   /// Limpia recursos
+  /// 🔒 LIFECYCLE MANAGEMENT: Limpiar recursos y permitir re-inicialización
   void dispose() {
+    ReleaseLogger.log('🗑️ Limpiando recursos Network Service...', tag: 'NetworkStatusService');
+
     _subscription?.cancel();
-    _connectionStatusController.close();
+    _subscription = null;
+
+    _connectionStatusController?.close();
+    _connectionStatusController = null;
+
+    _isInitialized = false;
+
+    // Limpiar callbacks
+    _onConnectedCallbacks.clear();
+    _onDisconnectedCallbacks.clear();
+
+    ReleaseLogger.log('✅ Network Service resources disposed', tag: 'NetworkStatusService');
+  }
+
+  /// 🔒 BACKGROUND LIFECYCLE: Limpiar recursos cuando la app va a background
+  void onAppPaused() {
+    // Network service debe seguir funcionando en background para detectar cambios de red
+    ReleaseLogger.log('⏸️ Network Service: App pausada, manteniendo monitoreo activo', tag: 'NetworkStatusService');
+  }
+
+  /// 🔒 FOREGROUND LIFECYCLE: Re-conectar cuando la app vuelve de background
+  Future<void> onAppResumed() async {
+    ReleaseLogger.log('▶️ Network Service: App resumida', tag: 'NetworkStatusService');
+
+    // Verificar estado y re-inicializar si es necesario
+    if (!_isInitialized) {
+      await initialize();
+    } else {
+      // Re-verificar estado actual de red
+      try {
+        final result = await _connectivity.checkConnectivity();
+        _updateConnectionStatus(result);
+        ReleaseLogger.log('🔄 Network status re-verificado: $_isConnected', tag: 'NetworkStatusService');
+      } catch (e) {
+        ReleaseLogger.error('⚠️ Error re-verificando network status: $e', tag: 'NetworkStatusService');
+      }
+    }
   }
 }
 

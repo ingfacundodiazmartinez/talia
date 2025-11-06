@@ -2,7 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:video_player/video_player.dart';
-import '../../services/story_service.dart';
+import '../../services/story_service_refactored.dart';
 
 /// Pantalla de preview de la historia antes de compartir
 class StoryPreviewScreen extends StatefulWidget {
@@ -75,14 +75,6 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
             ? {'type': widget.filter, 'arFilter': widget.arFilter}
             : null,
       );
-
-      // Verificar el status de la historia creada
-      final storyDoc = await FirebaseFirestore.instance
-          .collection('stories')
-          .doc(storyId)
-          .get();
-
-      final storyStatus = storyDoc.data()?['status'] ?? 'approved';
 
       if (!mounted) return;
 

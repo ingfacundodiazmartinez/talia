@@ -64,6 +64,9 @@ class ParentDashboardController {
   // ✅ OPTIMIZACIÓN: Stream centralizado para evitar duplicar listeners al mismo documento
   Stream<DocumentSnapshot>? _cachedUserDataStream;
 
+  // ✅ OPTIMIZACIÓN: Cache para el stream derivado de children IDs
+  Stream<List<String>>? _cachedLinkedChildrenIdsStream;
+
   /// Get user data stream for display purposes
   /// ✅ OPTIMIZADO: Usa cache para evitar múltiples listeners al mismo documento
   Stream<DocumentSnapshot> getUserDataStream() {
@@ -79,11 +82,11 @@ class ParentDashboardController {
   }
 
   /// Get linked children IDs stream
-  /// ✅ OPTIMIZADO: Deriva del stream principal para evitar duplicación
+  /// ✅ OPTIMIZADO: Deriva del stream principal para evitar duplicación Y usa cache propio
   Stream<List<String>> getLinkedChildrenIdsStream() {
-    print('🔍 [ParentDashboard] getLinkedChildrenIdsStream llamado - derivando del stream principal');
+    print('🔍 [ParentDashboard] getLinkedChildrenIdsStream llamado - usando cache: ${_cachedLinkedChildrenIdsStream != null}');
 
-    return getUserDataStream().map((snapshot) {
+    _cachedLinkedChildrenIdsStream ??= getUserDataStream().map((snapshot) {
       if (!snapshot.exists) {
         print('🔍 [ParentDashboard] Documento usuario no existe');
         return <String>[];
@@ -92,7 +95,9 @@ class ParentDashboardController {
       final childrenIds = List<String>.from(userData['linkedChildrenIds'] ?? []);
       print('🔍 [ParentDashboard] Retornando ${childrenIds.length} hijos: $childrenIds');
       return childrenIds;
-    });
+    }).asBroadcastStream(); // ✅ CRÍTICO: Permite múltiples subscripciones
+
+    return _cachedLinkedChildrenIdsStream!;
   }
 
   /// Inicializa todos los listeners y servicios
@@ -368,8 +373,9 @@ class ParentDashboardController {
     _emergencyNotificationSubscription?.cancel();
     _incomingCallsSubscription?.cancel();
 
-    // ✅ OPTIMIZACIÓN: Limpiar stream cacheado
+    // ✅ OPTIMIZACIÓN: Limpiar streams cacheados
     _cachedUserDataStream = null;
+    _cachedLinkedChildrenIdsStream = null;
 
     // Limpiar todos los listeners de llamadas activas
     for (var subscription in _activeCallListeners.values) {

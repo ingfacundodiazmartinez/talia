@@ -273,7 +273,9 @@ class _ChatListItemState extends State<ChatListItem> {
                           StreamBuilder<DocumentSnapshot>(
                             stream: _controller.getUserOnlineStatusStream(),
                             builder: (context, userSnapshot) {
-                              final isOnline = _controller.isUserOnline(userSnapshot.data ?? userSnapshot.data!);
+                              final isOnline = userSnapshot.hasData && userSnapshot.data != null
+                                  ? _controller.isUserOnline(userSnapshot.data!)
+                                  : false;
 
                               if (!isOnline) {
                                 return SizedBox.shrink();

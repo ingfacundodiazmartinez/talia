@@ -181,6 +181,12 @@ class UserProfileCacheService {
     }
   }
 
+  /// Stream de datos de usuario (sin caché)
+  /// NOTA: Los streams no pueden ser cacheados debido a su naturaleza en tiempo real
+  Stream<DocumentSnapshot> getUserDataStream(String userId) {
+    return _firestore.collection('users').doc(userId).snapshots();
+  }
+
   /// Obtiene estadísticas del caché
   Map<String, dynamic> getCacheStats() {
     return {

@@ -99,6 +99,12 @@ class _FakeConfirmationResult_11 extends _i1.SmartFake
     : super(parent, parentInvocation);
 }
 
+class _FakePasswordValidationStatus_12 extends _i1.SmartFake
+    implements _i6.PasswordValidationStatus {
+  _FakePasswordValidationStatus_12(Object parent, Invocation parentInvocation)
+    : super(parent, parentInvocation);
+}
+
 /// A class which mocks [FirebaseFirestore].
 ///
 /// See the documentation for Mockito's code generation for more information.
@@ -114,17 +120,6 @@ class MockFirebaseFirestore extends _i1.Mock implements _i4.FirebaseFirestore {
             returnValue: _FakeFirebaseApp_0(this, Invocation.getter(#app)),
           )
           as _i2.FirebaseApp);
-
-  @override
-  String get databaseURL =>
-      (super.noSuchMethod(
-            Invocation.getter(#databaseURL),
-            returnValue: _i8.dummyValue<String>(
-              this,
-              Invocation.getter(#databaseURL),
-            ),
-          )
-          as String);
 
   @override
   String get databaseId =>
@@ -148,12 +143,6 @@ class MockFirebaseFirestore extends _i1.Mock implements _i4.FirebaseFirestore {
   @override
   set app(_i2.FirebaseApp? value) => super.noSuchMethod(
     Invocation.setter(#app, value),
-    returnValueForMissingStub: null,
-  );
-
-  @override
-  set databaseURL(String? value) => super.noSuchMethod(
-    Invocation.setter(#databaseURL, value),
     returnValueForMissingStub: null,
   );
 
@@ -202,17 +191,6 @@ class MockFirebaseFirestore extends _i1.Mock implements _i4.FirebaseFirestore {
   _i5.Future<void> clearPersistence() =>
       (super.noSuchMethod(
             Invocation.method(#clearPersistence, []),
-            returnValue: _i5.Future<void>.value(),
-            returnValueForMissingStub: _i5.Future<void>.value(),
-          )
-          as _i5.Future<void>);
-
-  @override
-  _i5.Future<void> enablePersistence([
-    _i3.PersistenceSettings? persistenceSettings,
-  ]) =>
-      (super.noSuchMethod(
-            Invocation.method(#enablePersistence, [persistenceSettings]),
             returnValue: _i5.Future<void>.value(),
             returnValueForMissingStub: _i5.Future<void>.value(),
           )
@@ -401,21 +379,6 @@ class MockFirebaseFirestore extends _i1.Mock implements _i4.FirebaseFirestore {
           as _i5.Future<void>);
 
   @override
-  _i5.Future<void> setIndexConfiguration({
-    required List<_i3.Index>? indexes,
-    List<_i3.FieldOverrides>? fieldOverrides,
-  }) =>
-      (super.noSuchMethod(
-            Invocation.method(#setIndexConfiguration, [], {
-              #indexes: indexes,
-              #fieldOverrides: fieldOverrides,
-            }),
-            returnValue: _i5.Future<void>.value(),
-            returnValueForMissingStub: _i5.Future<void>.value(),
-          )
-          as _i5.Future<void>);
-
-  @override
   _i5.Future<void> setIndexConfigurationFromJSON(String? json) =>
       (super.noSuchMethod(
             Invocation.method(#setIndexConfigurationFromJSON, [json]),
@@ -542,14 +505,6 @@ class MockFirebaseAuth extends _i1.Mock implements _i7.FirebaseAuth {
             ),
           )
           as _i5.Future<_i7.UserCredential>);
-
-  @override
-  _i5.Future<List<String>> fetchSignInMethodsForEmail(String? email) =>
-      (super.noSuchMethod(
-            Invocation.method(#fetchSignInMethodsForEmail, [email]),
-            returnValue: _i5.Future<List<String>>.value(<String>[]),
-          )
-          as _i5.Future<List<String>>);
 
   @override
   _i5.Future<_i7.UserCredential> getRedirectResult() =>
@@ -808,15 +763,6 @@ class MockFirebaseAuth extends _i1.Mock implements _i7.FirebaseAuth {
           as _i5.Future<void>);
 
   @override
-  _i5.Future<void> signOut() =>
-      (super.noSuchMethod(
-            Invocation.method(#signOut, []),
-            returnValue: _i5.Future<void>.value(),
-            returnValueForMissingStub: _i5.Future<void>.value(),
-          )
-          as _i5.Future<void>);
-
-  @override
   _i5.Future<String> verifyPasswordResetCode(String? code) =>
       (super.noSuchMethod(
             Invocation.method(#verifyPasswordResetCode, [code]),
@@ -874,6 +820,15 @@ class MockFirebaseAuth extends _i1.Mock implements _i7.FirebaseAuth {
           as _i5.Future<void>);
 
   @override
+  _i5.Future<void> signOut() =>
+      (super.noSuchMethod(
+            Invocation.method(#signOut, []),
+            returnValue: _i5.Future<void>.value(),
+            returnValueForMissingStub: _i5.Future<void>.value(),
+          )
+          as _i5.Future<void>);
+
+  @override
   _i5.Future<void> initializeRecaptchaConfig() =>
       (super.noSuchMethod(
             Invocation.method(#initializeRecaptchaConfig, []),
@@ -881,4 +836,20 @@ class MockFirebaseAuth extends _i1.Mock implements _i7.FirebaseAuth {
             returnValueForMissingStub: _i5.Future<void>.value(),
           )
           as _i5.Future<void>);
+
+  @override
+  _i5.Future<_i6.PasswordValidationStatus> validatePassword(
+    _i7.FirebaseAuth? auth,
+    String? password,
+  ) =>
+      (super.noSuchMethod(
+            Invocation.method(#validatePassword, [auth, password]),
+            returnValue: _i5.Future<_i6.PasswordValidationStatus>.value(
+              _FakePasswordValidationStatus_12(
+                this,
+                Invocation.method(#validatePassword, [auth, password]),
+              ),
+            ),
+          )
+          as _i5.Future<_i6.PasswordValidationStatus>);
 }

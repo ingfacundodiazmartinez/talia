@@ -106,6 +106,7 @@ class NotificationService: UNNotificationServiceExtension {
                             print("✅ [NotificationService] Attachment agregado con orientación corregida")
                         }
                     }
+                    
 
                     contentHandler(bestAttemptContent)
                 }

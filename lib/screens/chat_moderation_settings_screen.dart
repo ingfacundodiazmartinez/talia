@@ -268,16 +268,22 @@ class _ChatModerationSettingsScreenState
                             Container(
                               padding: const EdgeInsets.all(12),
                               decoration: BoxDecoration(
-                                color: colorScheme.surfaceContainerHighest,
+                                color: _moderationLevel == 'high'
+                                    ? colorScheme.errorContainer.withValues(alpha: 0.3)
+                                    : colorScheme.surfaceContainerHighest,
                                 borderRadius: BorderRadius.circular(8),
                               ),
                               child: Row(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Icon(
-                                    Icons.info_outline,
+                                    _moderationLevel == 'high'
+                                        ? Icons.warning_outlined
+                                        : Icons.info_outline,
                                     size: 20,
-                                    color: colorScheme.primary,
+                                    color: _moderationLevel == 'high'
+                                        ? colorScheme.error
+                                        : colorScheme.primary,
                                   ),
                                   const SizedBox(width: 8),
                                   Expanded(
@@ -292,6 +298,52 @@ class _ChatModerationSettingsScreenState
                                 ],
                               ),
                             ),
+                            // Advertencia adicional específica para nivel Alto
+                            if (_moderationLevel == 'high') ...[
+                              const SizedBox(height: 12),
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: colorScheme.errorContainer,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: colorScheme.error, width: 1),
+                                ),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Icon(
+                                      Icons.error_outline,
+                                      size: 20,
+                                      color: colorScheme.error,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            'ADVERTENCIA: Nivel muy estricto',
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.bold,
+                                              color: colorScheme.onErrorContainer,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            'Este nivel puede bloquear conversación normal entre familiares y amigos. Considera usar "Medio" si experimentas demasiados bloqueos.',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: colorScheme.onErrorContainer.withValues(alpha: 0.8),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ],
                         ),
                       ),

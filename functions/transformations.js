@@ -4,6 +4,7 @@ const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
 const { getMessaging } = require("firebase-admin/messaging");
 const { getStorage } = require("firebase-admin/storage");
+const Replicate = require("replicate");
 
 // ═══════════════════════════════════════════════════════════════
 // TRANSFORMATIONS
@@ -269,7 +270,6 @@ exports.createCharacterTransformation = onCall(
       }
 
       // 3. Inicializar Replicate client
-      const Replicate = require("replicate");
       const replicate = new Replicate({
         auth: replicateToken,
       });
@@ -512,7 +512,6 @@ exports.getTransformationStatus = onCall(
         throw new HttpsError("failed-precondition", "Servicio de transformación no configurado");
       }
 
-      const Replicate = require("replicate");
       const replicate = new Replicate({
         auth: replicateToken,
       });

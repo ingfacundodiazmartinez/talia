@@ -3,13 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import '../controllers/story_camera_controller.dart';
 import '../services/deepar_service.dart';
-import '../services/subscription_service.dart';
-import '../models/character.dart';
+import '../utils/release_logger.dart';
 import '../widgets/permission_dialog.dart';
 import '../widgets/camera/flutter_camera_view.dart';
 import '../widgets/camera/deepar_camera_view.dart';
-import '../widgets/character_selector_dialog.dart';
-import '../widgets/premium_paywall_dialog.dart';
 import 'package:flutter_story_editor/flutter_story_editor.dart';
 import 'package:flutter_story_editor/src/controller/controller.dart';
 
@@ -32,7 +29,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   // ✅ CORRECTO: Solo controller y estado UI local
   late StoryCameraController _controller;
 
-  // Estado UI únicamente (ninguno actualmente)
+  // Estado UI únicamente
+  bool _isVideoMode = false; // Estado para modo foto/video
 
   @override
   void initState() {
@@ -47,7 +45,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     _setupControllerCallbacks();
 
     // Inicializar controller
-    _controller.initialize();
+    _controller.initialize(context: context);
   }
 
   /// Configurar callbacks del controller para actualizar UI
@@ -80,6 +78,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       _showAppSettingsDialog();
     };
 
+    _controller.onPermissionGranted = () {
+      // Los permisos fueron concedidos, simplemente continuar sin mostrar mensajes
+      // La cámara se inicializará automáticamente y el usuario verá el preview
+    };
+
     _controller.onCameraInitialized = () {
       if (mounted) {
         setState(() {
@@ -108,7 +111,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+
+    // Dispose controller which will handle cleanup of any active modals
     _controller.dispose();
+
     super.dispose();
   }
 
@@ -134,8 +140,13 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       context: context,
       title: 'Permiso de Cámara Requerido',
       message: 'Para crear historias necesitas habilitar el acceso a la cámara en la configuración de la aplicación.',
-    ).then((openSettings) {
-      if (!openSettings && mounted) {
+    ).then((openSettings) async {
+      if (openSettings && mounted) {
+        // El usuario fue a configuración, reintentar cuando regrese
+        ReleaseLogger.log('📱 Usuario regresó de configuración, reintentando inicialización...', tag: 'StoryCameraScreen');
+        await _controller.retryInitialization(context: context);
+      } else if (!openSettings && mounted) {
+        // El usuario canceló, cerrar la pantalla
         Navigator.pop(context);
       }
     });
@@ -153,7 +164,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   Future<void> _takePicture() async {
     final imagePath = await _controller.takePhoto();
     if (imagePath != null) {
-      _navigateToStoryEditor(imagePath, 'image');
+      await _navigateToStoryEditor(imagePath, 'image');
     }
   }
 
@@ -161,7 +172,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     if (_controller.isRecordingVideo) {
       final videoPath = await _controller.stopVideoRecording();
       if (videoPath != null) {
-        _navigateToStoryEditor(videoPath, 'video');
+        await _navigateToStoryEditor(videoPath, 'video');
       }
     } else {
       await _controller.startVideoRecording();
@@ -171,7 +182,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   Future<void> _pickFromGallery() async {
     final imagePath = await _controller.selectImageFromGallery();
     if (imagePath != null) {
-      _navigateToStoryEditor(imagePath, 'image');
+      await _navigateToStoryEditor(imagePath, 'image');
     }
   }
 
@@ -189,62 +200,69 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     setState(() {}); // Rebuild UI
   }
 
-  Future<void> _showCharacterTransformation() async {
-    // Verificar suscripción antes de mostrar
-    final hasSubscription = await _controller.hasActiveSubscription();
-    if (!hasSubscription) {
-      // Mostrar paywall
-      if (mounted) {
-        await PremiumPaywallDialog.show(
-          context,
-          feature: PremiumFeature.avatarGenerator,
-        );
-      }
-      return;
-    }
-
-    // Mostrar selector y esperar resultado
-    if (!mounted) return;
-    final character = await showDialog<Character>(
-      context: context,
-      builder: (context) => CharacterSelectorDialog(),
-    );
-
-    // Si se seleccionó un personaje, aplicar transformación
-    if (character != null) {
-      _transformWithCharacter(character);
-    }
-  }
-
-  Future<void> _transformWithCharacter(Character character) async {
-    // Primero tomar foto
-    final imagePath = await _controller.takePhoto();
-    if (imagePath != null) {
-      // Aplicar transformación
-      final transformedPath = await _controller.transformImageWithCharacter(imagePath, character);
-      if (transformedPath != null) {
-        _navigateToStoryEditor(transformedPath, 'image');
-      }
-    }
-  }
+  // Métodos de character transformation removidos - ahora están en el story editor
 
   /// Navegar al editor de historias
-  void _navigateToStoryEditor(String mediaPath, String mediaType) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => FlutterStoryEditor(
-          selectedFiles: [File(mediaPath)],
-          controller: FlutterStoryEditorController(),
-          onSaveClickListener: (editedFiles) {
-            if (editedFiles.isNotEmpty) {
-              _publishStory(editedFiles.first.path, mediaType);
-            }
-            Navigator.pop(context);
-          },
+  Future<void> _navigateToStoryEditor(String mediaPath, String mediaType) async {
+    try {
+      ReleaseLogger.log('🎬 Navegando al editor con: $mediaPath (tipo: $mediaType)', tag: 'StoryCameraScreen');
+
+      // Verificar que el archivo existe antes de navegar
+      final file = File(mediaPath);
+      if (!await file.exists()) {
+        _controller.onError?.call('Error: El archivo no existe');
+        return;
+      }
+
+      final fileSize = await file.length();
+      ReleaseLogger.log('📂 Archivo válido - Tamaño: $fileSize bytes', tag: 'StoryCameraScreen');
+
+      if (fileSize == 0) {
+        _controller.onError?.call('Error: El archivo está vacío');
+        return;
+      }
+
+      // Verificar que es una imagen válida para story editor
+      if (mediaType == 'image') {
+        final extension = mediaPath.toLowerCase().split('.').last;
+        if (!['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'].contains(extension)) {
+          _controller.onError?.call('Formato de imagen no soportado: $extension');
+          return;
+        }
+      }
+
+      ReleaseLogger.log('✅ Archivo validado, abriendo story editor...', tag: 'StoryCameraScreen');
+
+      if (!mounted) return;
+
+      // ✅ CRUCIAL: Crear controllers UNA SOLA VEZ para evitar recrearlos en rebuilds
+      final storyController = FlutterStoryEditorController();
+      final captionController = TextEditingController();
+
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => FlutterStoryEditor(
+            selectedFiles: [file],
+            controller: storyController,
+            captionController: captionController,
+            onSaveClickListener: (editedFiles) {
+              ReleaseLogger.log('💾 Story editor completado con ${editedFiles.length} archivos', tag: 'StoryCameraScreen');
+              if (editedFiles.isNotEmpty) {
+                _publishStory(editedFiles.first.path, mediaType);
+              }
+              Navigator.pop(context);
+            },
+            onFaceSwapClickListener: (currentFile, currentIndex) async {
+              return await _handleFaceSwap(currentFile, currentIndex);
+            },
+          ),
         ),
-      ),
-    );
+      );
+    } catch (e) {
+      ReleaseLogger.error('❌ Error navegando al story editor: $e', tag: 'StoryCameraScreen');
+      _controller.onError?.call('Error abriendo editor: $e');
+    }
   }
 
   /// Publicar historia usando el controller
@@ -257,6 +275,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     if (success && mounted) {
       Navigator.pop(context); // Cerrar cámara después de publicar
     }
+  }
+
+  /// Manejar face swap en el editor
+  Future<String?> _handleFaceSwap(File currentFile, int currentIndex) async {
+    return await _controller.applyFaceSwapToFile(context, currentFile);
   }
 
   /// ===== BUILD UI =====
@@ -449,41 +472,112 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   }
 
   Widget _buildMainControls() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+    return Column(
       children: [
-        // Galería
-        IconButton(
-          onPressed: _pickFromGallery,
-          icon: Icon(Icons.photo_library, color: Colors.white, size: 32),
-        ),
+        // Selector de modo: FOTO | VIDEO
+        _buildModeSelector(),
 
-        // Botón de captura/grabación
-        GestureDetector(
-          onTap: _controller.isRecordingVideo ? _toggleVideoRecording : _takePicture,
-          onLongPress: _controller.isRecordingVideo ? null : _toggleVideoRecording,
-          child: Container(
-            width: 80,
-            height: 80,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: _controller.isRecordingVideo ? Colors.red : Colors.white,
-              border: Border.all(color: Colors.white, width: 4),
-            ),
-            child: Icon(
-              _controller.isRecordingVideo ? Icons.stop : Icons.camera_alt,
-              color: _controller.isRecordingVideo ? Colors.white : Colors.black,
-              size: 32,
-            ),
-          ),
-        ),
+        SizedBox(height: 20),
 
-        // Transformación de personajes
-        IconButton(
-          onPressed: _showCharacterTransformation,
-          icon: Icon(Icons.face, color: Colors.white, size: 32),
+        // Controles principales
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            // Galería
+            IconButton(
+              onPressed: _pickFromGallery,
+              icon: Icon(Icons.photo_library, color: Colors.white, size: 32),
+            ),
+
+            // Botón principal (cambia según modo)
+            _isVideoMode ? _buildVideoButton() : _buildPhotoButton(),
+
+            // Espacio vacío para mantener centrado el botón principal
+            SizedBox(width: 48), // Mismo ancho que un IconButton
+          ],
         ),
       ],
+    );
+  }
+
+  /// Widget selector de modo FOTO/VIDEO - SOLO UI
+  Widget _buildModeSelector() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(25),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildModeButton('FOTO', !_isVideoMode),
+          _buildModeButton('VIDEO', _isVideoMode),
+        ],
+      ),
+    );
+  }
+
+  /// Widget botón de modo - SOLO UI
+  Widget _buildModeButton(String text, bool isSelected) {
+    return GestureDetector(
+      onTap: () => setState(() => _isVideoMode = text == 'VIDEO'),
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        decoration: BoxDecoration(
+          color: isSelected ? Color(0xFF9D7FE8) : Colors.transparent,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Text(
+          text,
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+            fontSize: 14,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Widget botón de foto - SOLO UI, delega al controller
+  Widget _buildPhotoButton() {
+    return GestureDetector(
+      onTap: _takePicture,
+      child: Container(
+        width: 80,
+        height: 80,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: Colors.white,
+          border: Border.all(color: Colors.white, width: 4),
+        ),
+        child: Icon(
+          Icons.camera_alt,
+          color: Colors.black,
+          size: 32,
+        ),
+      ),
+    );
+  }
+
+  /// Widget botón de video - SOLO UI, delega al controller
+  Widget _buildVideoButton() {
+    return GestureDetector(
+      onTap: _toggleVideoRecording,
+      child: Container(
+        width: 80,
+        height: 80,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: _controller.isRecordingVideo ? Colors.red : Colors.red.withValues(alpha: 0.8),
+          border: Border.all(color: Colors.white, width: 4),
+        ),
+        child: Icon(
+          _controller.isRecordingVideo ? Icons.stop : Icons.videocam,
+          color: Colors.white,
+          size: 32,
+        ),
+      ),
     );
   }
 

@@ -8,6 +8,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import '../widgets/permission_dialog.dart';
+import '../utils/release_logger.dart';
 
 class ImageService {
   final FirebaseStorage _storage = FirebaseStorage.instance;
@@ -22,15 +23,15 @@ class ImageService {
     try {
       // En iOS, intentar directamente seleccionar la imagen
       // ImagePicker maneja permisos automáticamente
-      print('📸 Intentando seleccionar imagen desde ${source == ImageSource.camera ? 'cámara' : 'galería'}');
+      ReleaseLogger.log('📸 Intentando seleccionar imagen desde ${source == ImageSource.camera ? 'cámara' : 'galería'}', tag: 'ImageService');
 
       final XFile? image = await _pickImageWithErrorHandling(source);
       if (image == null) {
-        print('⚠️ Usuario canceló la selección de imagen');
+        ReleaseLogger.log('⚠️ Usuario canceló la selección de imagen', tag: 'ImageService');
         return null;
       }
 
-      print('✅ Imagen seleccionada: ${image.path}');
+      ReleaseLogger.log('✅ Imagen seleccionada: ${image.path}', tag: 'ImageService');
 
       // ⏱️ Pequeño delay para dar tiempo a que el selector de imágenes se cierre visualmente
       // Esto mejora la UX evitando que el diálogo aparezca mientras el selector aún está visible
@@ -76,7 +77,7 @@ class ImageService {
         rethrow;
       }
     } on PlatformException catch (e) {
-      print('❌ Error de permisos: ${e.code} - ${e.message}');
+      ReleaseLogger.error('❌ Error de permisos: ${e.code} - ${e.message}', tag: 'ImageService');
 
       // Si es error de permisos, verificar y mostrar diálogo
       if (e.code == 'camera_access_denied' || e.code == 'photo_access_denied') {
@@ -86,12 +87,12 @@ class ImageService {
           throw Exception('Permisos de ${source == ImageSource.camera ? 'cámara' : 'galería'} denegados');
         }
         // Si llegamos aquí, los permisos están OK, reintentar
-        print('🔄 Permisos verificados, reintentando...');
+        ReleaseLogger.log('🔄 Permisos verificados, reintentando...', tag: 'ImageService');
         return await pickAndUploadProfileImage(source: source, context: context);
       }
       rethrow;
     } catch (e) {
-      print('❌ Error picking and uploading image: $e');
+      ReleaseLogger.error('❌ Error picking and uploading image: $e', tag: 'ImageService');
       rethrow;
     }
   }
@@ -139,36 +140,36 @@ class ImageService {
 
       // Verificar el estado actual del permiso PRIMERO
       final PermissionStatus currentStatus = await permission.status;
-      print('🔍 ${Platform.isIOS ? 'iOS' : 'Android'} Estado actual del permiso ${permission.toString()}: $currentStatus');
+      ReleaseLogger.log('🔍 ${Platform.isIOS ? 'iOS' : 'Android'} Estado actual del permiso ${permission.toString()}: $currentStatus', tag: 'ImageService');
 
       // Si ya tenemos el permiso, retornar inmediatamente sin mostrar diálogos
       // En iOS, tanto 'granted' como 'limited' son válidos para acceder a fotos
       if (currentStatus == PermissionStatus.granted ||
           (Platform.isIOS && currentStatus == PermissionStatus.limited && source == ImageSource.gallery)) {
-        print('✅ Permiso ya concedido (${currentStatus}), procediendo directamente');
+        ReleaseLogger.log('✅ Permiso ya concedido (${currentStatus}), procediendo directamente', tag: 'ImageService');
         return true;
       }
 
-      print('⚠️ Permiso no concedido, estado: $currentStatus');
+      ReleaseLogger.log('⚠️ Permiso no concedido, estado: $currentStatus', tag: 'ImageService');
 
       // LÓGICA ESPECÍFICA PARA iOS
       if (Platform.isIOS) {
-        print('🍎 Manejando permisos para iOS');
+        ReleaseLogger.log('🍎 Manejando permisos para iOS', tag: 'ImageService');
 
         // En iOS, intentar solicitar directamente sin diálogos previos
-        print('🔄 iOS: Solicitando permiso directamente al sistema...');
+        ReleaseLogger.log('🔄 iOS: Solicitando permiso directamente al sistema...', tag: 'ImageService');
         final PermissionStatus iosStatus = await permission.request();
-        print('📋 iOS: Resultado de solicitud: $iosStatus');
+        ReleaseLogger.log('📋 iOS: Resultado de solicitud: $iosStatus', tag: 'ImageService');
 
         if (iosStatus == PermissionStatus.granted ||
             (iosStatus == PermissionStatus.limited && source == ImageSource.gallery)) {
-          print('✅ iOS: Permiso concedido (${iosStatus})');
+          ReleaseLogger.log('✅ iOS: Permiso concedido (${iosStatus})', tag: 'ImageService');
           return true;
         } else if (iosStatus == PermissionStatus.permanentlyDenied) {
-          print('❌ iOS: Permiso denegado permanentemente');
+          ReleaseLogger.log('❌ iOS: Permiso denegado permanentemente', tag: 'ImageService');
           return await _handlePermanentlyDeniedPermission(context, title, source);
         } else {
-          print('❌ iOS: Permiso denegado: $iosStatus');
+          ReleaseLogger.log('❌ iOS: Permiso denegado: $iosStatus', tag: 'ImageService');
           return false;
         }
       }
@@ -176,12 +177,12 @@ class ImageService {
       // LÓGICA PARA ANDROID (mantener la existente)
       // Si el permiso nunca se ha solicitado (undetermined), saltamos el diálogo y solicitamos directamente
       if (currentStatus == PermissionStatus.denied) {
-        print('📋 Android: Permiso nunca solicitado, solicitando directamente sin diálogo...');
+        ReleaseLogger.log('📋 Android: Permiso nunca solicitado, solicitando directamente sin diálogo...', tag: 'ImageService');
         final PermissionStatus directStatus = await permission.request();
-        print('📋 Android: Resultado de solicitud directa: $directStatus');
+        ReleaseLogger.log('📋 Android: Resultado de solicitud directa: $directStatus', tag: 'ImageService');
 
         if (directStatus == PermissionStatus.granted) {
-          print('✅ Android: Permiso concedido directamente');
+          ReleaseLogger.log('✅ Android: Permiso concedido directamente', tag: 'ImageService');
           return true;
         } else if (directStatus == PermissionStatus.permanentlyDenied) {
           return await _handlePermanentlyDeniedPermission(context, title, source);
@@ -195,7 +196,7 @@ class ImageService {
       }
 
       // Solo mostrar diálogo si realmente necesitamos solicitar el permiso
-      print('📋 Android: Mostrando diálogo de solicitud de permiso');
+      ReleaseLogger.log('📋 Android: Mostrando diálogo de solicitud de permiso', tag: 'ImageService');
 
       // Mostrar diálogo explicativo antes de solicitar el permiso
       final bool userAccepted = await PermissionDialog.showPermissionDialog(
@@ -207,23 +208,23 @@ class ImageService {
       );
 
       if (!userAccepted) {
-        print('❌ Usuario rechazó el diálogo de permiso');
+        ReleaseLogger.log('❌ Usuario rechazó el diálogo de permiso', tag: 'ImageService');
         return false;
       }
 
       // Solicitar el permiso
-      print('🔄 Android: Solicitando permiso...');
+      ReleaseLogger.log('🔄 Android: Solicitando permiso...', tag: 'ImageService');
       final PermissionStatus status = await permission.request();
-      print('📋 Android: Resultado de solicitud de permiso: $status');
+      ReleaseLogger.log('📋 Android: Resultado de solicitud de permiso: $status', tag: 'ImageService');
 
       if (status == PermissionStatus.granted) {
-        print('✅ Android: Permiso concedido exitosamente');
+        ReleaseLogger.log('✅ Android: Permiso concedido exitosamente', tag: 'ImageService');
         return true;
       } else if (status == PermissionStatus.permanentlyDenied) {
         return await _handlePermanentlyDeniedPermission(context, title, source);
       } else {
         // Permiso denegado pero no permanentemente
-        print('❌ Android: Permiso denegado: $status');
+        ReleaseLogger.log('❌ Android: Permiso denegado: $status', tag: 'ImageService');
         await PermissionDialog.showPermissionDeniedDialog(
           context: context,
           title: 'Permiso Denegado',
@@ -234,7 +235,7 @@ class ImageService {
         return false;
       }
     } catch (e) {
-      print('❌ Error requesting permissions: $e');
+      ReleaseLogger.error('❌ Error requesting permissions: $e', tag: 'ImageService');
       return false;
     }
   }
@@ -264,7 +265,7 @@ class ImageService {
       // Para iOS, retornamos un valor que forzará el uso de Permission.photos
       return 33;
     } catch (e) {
-      print('Error obteniendo versión de Android: $e');
+      ReleaseLogger.error('Error obteniendo versión de Android: $e', tag: 'ImageService');
       // Fallback seguro: usar Permission.photos (para Android 13+)
       return 33;
     }
@@ -298,7 +299,7 @@ class ImageService {
   }
 
   Future<ImageSource?> showImageSourceSelection(BuildContext context) async {
-    print('📸 [ImageService] showImageSourceSelection llamado');
+    ReleaseLogger.log('📸 [ImageService] showImageSourceSelection llamado', tag: 'ImageService');
     final result = await showModalBottomSheet<ImageSource>(
       context: context,
       backgroundColor: Colors.transparent,
@@ -306,7 +307,7 @@ class ImageService {
       enableDrag: true,
       isScrollControlled: false,
       builder: (BuildContext modalContext) {
-        print('📸 [ImageService] Builder del modal ejecutándose');
+        ReleaseLogger.log('📸 [ImageService] Builder del modal ejecutándose', tag: 'ImageService');
         return Container(
           decoration: BoxDecoration(
             color: Colors.white,
@@ -367,7 +368,7 @@ class ImageService {
                         width: double.infinity,
                         child: TextButton(
                           onPressed: () {
-                            print('📸 [ImageService] Usuario canceló la selección');
+                            ReleaseLogger.log('📸 [ImageService] Usuario canceló la selección', tag: 'ImageService');
                             Navigator.pop(modalContext, null);
                           },
                           child: Text(
@@ -388,7 +389,7 @@ class ImageService {
         );
       },
     );
-    print('📸 [ImageService] Modal cerrado, resultado: $result');
+    ReleaseLogger.log('📸 [ImageService] Modal cerrado, resultado: $result', tag: 'ImageService');
     return result;
   }
 
@@ -404,10 +405,10 @@ class ImageService {
       color: Colors.transparent,
       child: InkWell(
         onTap: () {
-          print('📸 [ImageService] Opción seleccionada: ${source == ImageSource.camera ? 'CÁMARA' : 'GALERÍA'}');
-          print('📸 [ImageService] Llamando Navigator.pop con source: $source');
+          ReleaseLogger.log('📸 [ImageService] Opción seleccionada: ${source == ImageSource.camera ? 'CÁMARA' : 'GALERÍA'}', tag: 'ImageService');
+          ReleaseLogger.log('📸 [ImageService] Llamando Navigator.pop con source: $source', tag: 'ImageService');
           Navigator.of(context).pop(source);
-          print('📸 [ImageService] Navigator.pop ejecutado');
+          ReleaseLogger.log('📸 [ImageService] Navigator.pop ejecutado', tag: 'ImageService');
         },
         borderRadius: BorderRadius.circular(16),
         child: Container(
@@ -479,11 +480,11 @@ class ImageService {
 
       // Obtener el ID token para asegurar que Storage tenga acceso
       final String? idToken = await refreshedUser.getIdToken(true); // true = force refresh
-      print('🔑 ID Token obtenido para Storage: ${idToken?.substring(0, 20)}...');
+      ReleaseLogger.log('🔑 ID Token obtenido para Storage: ${idToken?.substring(0, 20)}...', tag: 'ImageService');
 
       // Dar tiempo para que el SDK de Storage actualice su caché de token
       await Future.delayed(Duration(milliseconds: 500));
-      print('⏱️ Esperando propagación del token al SDK de Storage...');
+      ReleaseLogger.log('⏱️ Esperando propagación del token al SDK de Storage...', tag: 'ImageService');
 
       // Verificar que el archivo existe
       if (!await imageFile.exists()) {
@@ -501,7 +502,7 @@ class ImageService {
       final String fileName = '${refreshedUser.uid}.jpg';
       final Reference storageRef = _storage.ref('profile_images/$fileName');
 
-      print('📁 Subiendo a: profile_images/$fileName');
+      ReleaseLogger.log('📁 Subiendo a: profile_images/$fileName', tag: 'ImageService');
 
       // Configurar metadata
       final SettableMetadata metadata = SettableMetadata(
@@ -527,7 +528,7 @@ class ImageService {
         throw Exception('Error en la subida: Estado ${snapshot.state}');
       }
     } on FirebaseException catch (e) {
-      print('🔥 Firebase Error: ${e.code} - ${e.message}');
+      ReleaseLogger.error('🔥 Firebase Error: ${e.code} - ${e.message}', tag: 'ImageService');
       if (e.code == 'storage/unauthorized') {
         throw Exception('Sin permisos para subir archivos. Verifica la configuración de Firebase Storage.');
       } else if (e.code == 'storage/canceled') {
@@ -538,7 +539,7 @@ class ImageService {
         throw Exception('Error de Firebase Storage: ${e.message}');
       }
     } catch (e) {
-      print('❌ Error uploading image to storage: $e');
+      ReleaseLogger.error('❌ Error uploading image to storage: $e', tag: 'ImageService');
       rethrow;
     }
   }
@@ -554,29 +555,29 @@ class ImageService {
         throw Exception('Usuario no autenticado');
       }
 
-      print('🔄 Actualizando foto de perfil para usuario: ${user.uid}');
-      print('🔗 URL de la imagen: ${imageUrl.substring(0, 50)}...');
+      ReleaseLogger.log('🔄 Actualizando foto de perfil para usuario: ${user.uid}', tag: 'ImageService');
+      ReleaseLogger.log('🔗 URL de la imagen: ${imageUrl.substring(0, 50)}...', tag: 'ImageService');
 
       // Primero actualizar en Firestore (esto es lo más importante)
       await _firestore.collection('users').doc(user.uid).update({
         'photoURL': imageUrl,
         'updatedAt': FieldValue.serverTimestamp(),
       });
-      print('✅ Foto actualizada en Firestore');
+      ReleaseLogger.log('✅ Foto actualizada en Firestore', tag: 'ImageService');
 
       // Intentar actualizar en Firebase Authentication (opcional)
       // Si falla, no es crítico porque ya está en Firestore
       try {
         await user.updatePhotoURL(imageUrl);
-        print('✅ Foto actualizada en Firebase Auth');
+        ReleaseLogger.log('✅ Foto actualizada en Firebase Auth', tag: 'ImageService');
       } catch (authError) {
-        print('⚠️ No se pudo actualizar en Firebase Auth (no crítico): $authError');
+        ReleaseLogger.log('⚠️ No se pudo actualizar en Firebase Auth (no crítico): $authError', tag: 'ImageService');
         // No lanzamos el error porque ya está guardado en Firestore
       }
 
-      print('✅ Actualización de foto de perfil completada');
+      ReleaseLogger.log('✅ Actualización de foto de perfil completada', tag: 'ImageService');
     } catch (e) {
-      print('❌ Error updating user profile image: $e');
+      ReleaseLogger.error('❌ Error updating user profile image: $e', tag: 'ImageService');
       rethrow;
     }
   }
@@ -610,11 +611,11 @@ class ImageService {
               await imageRef.delete();
             } on FirebaseException catch (e) {
               if (e.code != 'storage/object-not-found') {
-                print('Error eliminando de Storage: ${e.message}');
+                ReleaseLogger.error('Error eliminando de Storage: ${e.message}', tag: 'ImageService');
               }
             }
           } catch (e) {
-            print('Error procesando URL de Storage: $e');
+            ReleaseLogger.error('Error procesando URL de Storage: $e', tag: 'ImageService');
           }
         }
       }
@@ -626,7 +627,7 @@ class ImageService {
         'updatedAt': FieldValue.serverTimestamp(),
       });
     } catch (e) {
-      print('❌ Error deleting profile image: $e');
+      ReleaseLogger.error('❌ Error deleting profile image: $e', tag: 'ImageService');
       rethrow;
     }
   }
@@ -640,20 +641,20 @@ class ImageService {
     try {
       final User? user = _auth.currentUser;
       if (user == null) {
-        print('⚠️ No hay usuario autenticado para test de Storage');
+        ReleaseLogger.log('⚠️ No hay usuario autenticado para test de Storage', tag: 'ImageService');
         return false;
       }
 
-      print('🧪 Testeando configuración de Firebase Storage...');
+      ReleaseLogger.log('🧪 Testeando configuración de Firebase Storage...', tag: 'ImageService');
 
       // En vez de intentar subir un archivo de test a una ruta no permitida,
       // simplemente verificamos que el usuario esté autenticado
       // El test real ocurrirá cuando se suba la imagen de perfil
 
-      print('✅ Usuario autenticado, procediendo con la subida');
+      ReleaseLogger.log('✅ Usuario autenticado, procediendo con la subida', tag: 'ImageService');
       return true;
     } catch (e) {
-      print('❌ Error inesperado testando Storage: $e');
+      ReleaseLogger.error('❌ Error inesperado testando Storage: $e', tag: 'ImageService');
       return false;
     }
   }
@@ -662,7 +663,7 @@ class ImageService {
   Future<String?> uploadImageWithRetry(String imagePath, {int maxRetries = 3}) async {
     for (int attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        print('🔄 Intento $attempt de $maxRetries');
+        ReleaseLogger.log('🔄 Intento $attempt de $maxRetries', tag: 'ImageService');
 
         // Verificar configuración en el primer intento
         if (attempt == 1) {
@@ -674,11 +675,11 @@ class ImageService {
 
         final String? result = await _uploadImageToStorage(File(imagePath));
         if (result != null) {
-          print('✅ Subida exitosa en intento $attempt');
+          ReleaseLogger.log('✅ Subida exitosa en intento $attempt', tag: 'ImageService');
           return result;
         }
       } catch (e) {
-        print('❌ Error en intento $attempt: $e');
+        ReleaseLogger.error('❌ Error en intento $attempt: $e', tag: 'ImageService');
 
         if (attempt == maxRetries) {
           // En el último intento, lanzar error con información de diagnóstico

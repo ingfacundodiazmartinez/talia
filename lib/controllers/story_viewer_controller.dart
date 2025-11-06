@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import '../models/story.dart';
-import '../services/story_service.dart';
+import '../services/story_service_refactored.dart';
 import '../services/ad_service.dart';
 import '../utils/release_logger.dart';
 
@@ -130,7 +130,7 @@ class StoryViewerController {
         return;
       }
 
-      await _storyService.markStoryAsViewed(storyId, userId);
+      await _storyService.markStoryAsViewed(storyId);
       ReleaseLogger.log('Historia $storyId marcada como vista', tag: 'StoryViewer');
     } catch (e) {
       ReleaseLogger.error('Error marcando historia como vista: $e', tag: 'StoryViewer');
@@ -151,11 +151,9 @@ class StoryViewerController {
         return false;
       }
 
-      await _storyService.sendStoryReply(
+      await _storyService.replyToStory(
         storyId: story.id,
-        replyText: replyText.trim(),
-        senderId: userId,
-        receiverId: story.userId,
+        text: replyText.trim(),
       );
 
       ReleaseLogger.log('Respuesta enviada a historia ${story.id}', tag: 'StoryViewer');
@@ -329,11 +327,9 @@ class StoryViewerController {
         return false;
       }
 
-      await _storyService.sendStoryReply(
+      await _storyService.replyToStory(
         storyId: storyId,
-        replyText: text,
-        senderId: userId,
-        receiverId: receiverId,
+        text: text,
       );
 
       ReleaseLogger.log('Respuesta enviada a historia $storyId', tag: 'StoryViewer');

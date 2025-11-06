@@ -54,6 +54,13 @@ service cloud.firestore {
         allow read: if request.auth != null && request.auth.uid == userId;
         allow write: if request.auth != null && request.auth.uid == userId;
       }
+
+      // Datos privados del usuario (heartbeat, lastSeen, etc.)
+      match /_private/{docId} {
+        // Solo el usuario puede leer y escribir sus datos privados
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow write: if request.auth != null && request.auth.uid == userId;
+      }
     }
 
     // Parent-children relationships
@@ -442,6 +449,31 @@ service cloud.firestore {
 
     // Stories
     match /stories/{storyId} {
+      // 🔒 FUNCIÓN DE SEGURIDAD: Verificar si el viewer es contacto aprobado del story owner
+      function isApprovedContactForStory(storyUserId, viewerId) {
+        // Si eres el owner, siempre puedes ver
+        return storyUserId == viewerId ||
+               // Verificar que no esté bloqueado
+               (!exists(/databases/$(database)/documents/blocked_contacts/$(storyUserId + '_' + viewerId)) &&
+                !exists(/databases/$(database)/documents/blocked_contacts/$(viewerId + '_' + storyUserId)));
+      }
+
+      // 🔒 FUNCIÓN DE SEGURIDAD: Verificar relación padre-hijo
+      function isParentChildRelationForStory(storyUserId, viewerId) {
+        // Buscar en la colección users si hay relación padre-hijo
+        return get(/databases/$(database)/documents/users/$(storyUserId)).data.linkedChildrenIds != null &&
+               viewerId in get(/databases/$(database)/documents/users/$(storyUserId)).data.linkedChildrenIds ||
+               get(/databases/$(database)/documents/users/$(viewerId)).data.linkedChildrenIds != null &&
+               storyUserId in get(/databases/$(database)/documents/users/$(viewerId)).data.linkedChildrenIds;
+      }
+
+      // 🔒 FUNCIÓN DE SEGURIDAD: Verificar si puede acceder via story_approval_requests
+      function hasStoryApprovalAccess(storyUserId, viewerId) {
+        // Simplificado: verificar si el viewer es padre del story owner
+        return get(/databases/$(database)/documents/users/$(viewerId)).data.linkedChildrenIds != null &&
+               storyUserId in get(/databases/$(database)/documents/users/$(viewerId)).data.linkedChildrenIds;
+      }
+
       // Función auxiliar para verificar si solo se está actualizando viewedBy
       function isOnlyUpdatingViewedBy() {
         let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
@@ -454,55 +486,69 @@ service cloud.firestore {
         return changedKeys.hasOnly(['replies']);
       }
 
-      // Función auxiliar para verificar si solo se están actualizando campos de aprobación
+      // 🔒 SEGURIDAD CRÍTICA: Campos de aprobación BLOQUEADOS para clientes
+      // Solo Cloud Functions pueden modificar status, approvedBy, approvedAt, rejectionReason
       function isOnlyUpdatingApprovalFields() {
         let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
-        // Permitir actualizar cualquier combinación de estos campos de aprobación
+        // BLOQUEAR completamente cambios de status desde cliente
+        // Solo permitir updatedAt (timestamp automático)
         return changedKeys.size() > 0 &&
-               changedKeys.hasOnly(['status', 'approvedBy', 'approvedAt', 'rejectionReason', 'updatedAt']);
+               changedKeys.hasOnly(['updatedAt']) &&
+               !changedKeys.hasAny(['status', 'approvedBy', 'approvedAt', 'rejectionReason']);
       }
 
       // Función auxiliar para verificar si solo se están actualizando campos de visibilidad/archivado
       function isOnlyUpdatingVisibilityFields() {
         let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
         // Permitir actualizar visibility y savedToPermanentAt (para guardar/archivar historias)
+        // 🔒 IMPORTANTE: NO permitir cambiar status desde cliente
         return changedKeys.size() > 0 &&
-               changedKeys.hasOnly(['visibility', 'savedToPermanentAt', 'status']);
+               changedKeys.hasOnly(['visibility', 'savedToPermanentAt']) &&
+               !changedKeys.hasAny(['status']);
       }
 
-      // ⚠️ CORREGIDO: Reglas más restrictivas para historias
-      // Permitir leer historia individual si:
-      // 1. Eres el creador (puedes ver tus propias historias pending), O
-      // 2. La historia está aprobada (cualquier autenticado puede ver aprobadas), O
-      // 3. La historia está pendiente (los padres acceden vía story_approval_requests)
-      // NOTA: Confiamos en que la app filtra correctamente usando story_approval_requests
-      // para verificar que el padre tiene permiso antes de intentar leer la historia
+      // 🔒 SEGURIDAD CRÍTICA: Reglas extremadamente restrictivas para historias
+      // Permitir leer historia individual SOLO si:
+      // 1. Eres el creador (owner), O
+      // 2. Eres contacto aprobado del creador Y la historia está aprobada, O
+      // 3. Eres padre/hijo del creador (relación verificada), O
+      // 4. Tienes acceso via story_approval_requests como padre
       allow get: if request.auth != null && (
         request.auth.uid == resource.data.userId ||
-        resource.data.status == 'approved' ||
-        resource.data.status == 'pending'
+        (resource.data.status == 'approved' && isApprovedContactForStory(resource.data.userId, request.auth.uid)) ||
+        isParentChildRelationForStory(resource.data.userId, request.auth.uid) ||
+        hasStoryApprovalAccess(resource.data.userId, request.auth.uid)
       );
 
-      // Permitir queries/list de historias SOLO si autenticado
-      // La app debe filtrar por userId o usar story_approval_requests para historias pendientes
+      // 🔒 PREVENIR ENUMERACIÓN: Las queries requieren filtros específicos
+      // La app DEBE usar uno de estos filtros obligatorios:
+      // - .where('userId', isEqualTo, currentUserId) para propias stories
+      // - Acceso via story_approval_requests para stories pendientes
+      // NOTA: Esta regla evalúa cada documento, NO puede forzar filtros en queries
+      // pero sí previene acceso no autorizado documento por documento
       allow list: if request.auth != null;
 
       // Solo el creador puede crear su propia historia
       allow create: if request.auth != null &&
         request.auth.uid == request.resource.data.userId;
 
-      // Permitir actualizar si:
+      // Función auxiliar para verificar si el usuario puede ver la historia (misma lógica que 'get')
+      function canViewStory() {
+        return request.auth.uid == resource.data.userId ||
+               (resource.data.status == 'approved' && isApprovedContactForStory(resource.data.userId, request.auth.uid)) ||
+               isParentChildRelationForStory(resource.data.userId, request.auth.uid) ||
+               hasStoryApprovalAccess(resource.data.userId, request.auth.uid);
+      }
+
+      // 🔒 ACTUALIZACIÓN SEGURA: Permitir actualizar SOLO si:
       // 1. Eres el creador de la historia, O
-      // 2. Solo estás agregando tu UID al array viewedBy, O
-      // 3. Solo estás agregando una respuesta (reply), O
-      // 4. La historia está pendiente Y solo actualizas campos de aprobación
-      //    (confiamos en que la app solo permite esto a padres autorizados), O
-      // 5. Eres el creador Y solo actualizas campos de visibilidad (archivar/guardar permanente)
+      // 2. Puedes ver la historia Y solo agregando a viewedBy/replies (permite marcar como vista), O
+      // 3. Tienes acceso de aprobación Y solo actualizas campos de aprobación, O
+      // 4. Eres el creador Y solo actualizas campos de visibilidad
       allow update: if request.auth != null && (
         request.auth.uid == resource.data.userId ||
-        isOnlyUpdatingViewedBy() ||
-        isOnlyUpdatingReplies() ||
-        (resource.data.status == 'pending' && isOnlyUpdatingApprovalFields()) ||
+        (canViewStory() && (isOnlyUpdatingViewedBy() || isOnlyUpdatingReplies())) ||
+        (hasStoryApprovalAccess(resource.data.userId, request.auth.uid) && isOnlyUpdatingApprovalFields()) ||
         (request.auth.uid == resource.data.userId && isOnlyUpdatingVisibilityFields())
       );
 

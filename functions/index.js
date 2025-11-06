@@ -87,6 +87,9 @@ const stickerFunctions = require("./sticker-functions");
 // Stories
 const stories = require("./stories");
 
+// Story Approval (Cloud Functions for secure approval)
+const storyApproval = require("./story-approval");
+
 // ═══════════════════════════════════════════════════════════════
 // RE-EXPORTS
 // ═══════════════════════════════════════════════════════════════
@@ -161,5 +164,11 @@ exports.cleanupOldStickers = stickerFunctions.cleanupOldStickers;
 
 // Stories
 exports.onStoryApprovalRequestCreated = stories.onStoryApprovalRequestCreated;
+exports.replyToStory = stories.replyToStory;
+
+// Story Approval (Secure Cloud Functions)
+exports.createStory = storyApproval.createStory;
+exports.approveStory = storyApproval.approveStory;
+exports.rejectStory = storyApproval.rejectStory;
 
 console.log("✅ Todas las funciones exportadas correctamente");

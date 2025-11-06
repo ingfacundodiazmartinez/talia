@@ -7,6 +7,7 @@ class UsageLimitsService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
   static const int CHARACTER_TRANSFORM_MONTHLY_LIMIT = 10;
+  static const int FACE_SWAP_MONTHLY_LIMIT = 10;
 
   /// Obtener el mes actual en formato YYYY-MM
   String _getCurrentMonth() {
@@ -141,6 +142,138 @@ class UsageLimitsService {
       print('✅ Contador de transformaciones incrementado');
     } catch (e) {
       print('❌ Error incrementando contador de transformaciones: $e');
+    }
+  }
+
+  /// ===== FACE SWAP USAGE LIMITS =====
+
+  /// Verificar si el usuario puede usar face swap
+  Future<bool> canUseFaceSwap() async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) return false;
+
+      final currentMonth = _getCurrentMonth();
+      final doc = await _firestore
+          .collection('user_limits')
+          .doc(user.uid)
+          .get();
+
+      if (!doc.exists) {
+        return true; // Primera vez, puede usar
+      }
+
+      final data = doc.data()!;
+      final month = data['faceSwapMonth'] as String?;
+      final count = data['faceSwapCount'] as int? ?? 0;
+
+      // Si es un mes nuevo, puede usar
+      if (month != currentMonth) {
+        return true;
+      }
+
+      // Verificar si no ha superado el límite
+      return count < FACE_SWAP_MONTHLY_LIMIT;
+    } catch (e) {
+      print('❌ Error verificando límite de face swap: $e');
+      return false;
+    }
+  }
+
+  /// Obtener el uso actual de face swap del mes
+  Future<Map<String, dynamic>> getFaceSwapUsage() async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) {
+        return {
+          'count': 0,
+          'limit': FACE_SWAP_MONTHLY_LIMIT,
+          'remaining': FACE_SWAP_MONTHLY_LIMIT,
+        };
+      }
+
+      final currentMonth = _getCurrentMonth();
+      final doc = await _firestore
+          .collection('user_limits')
+          .doc(user.uid)
+          .get();
+
+      if (!doc.exists) {
+        return {
+          'count': 0,
+          'limit': FACE_SWAP_MONTHLY_LIMIT,
+          'remaining': FACE_SWAP_MONTHLY_LIMIT,
+        };
+      }
+
+      final data = doc.data()!;
+      final month = data['faceSwapMonth'] as String?;
+      final count = data['faceSwapCount'] as int? ?? 0;
+
+      // Si es un mes nuevo, resetear
+      if (month != currentMonth) {
+        return {
+          'count': 0,
+          'limit': FACE_SWAP_MONTHLY_LIMIT,
+          'remaining': FACE_SWAP_MONTHLY_LIMIT,
+        };
+      }
+
+      return {
+        'count': count,
+        'limit': FACE_SWAP_MONTHLY_LIMIT,
+        'remaining': FACE_SWAP_MONTHLY_LIMIT - count,
+      };
+    } catch (e) {
+      print('❌ Error obteniendo uso de face swap: $e');
+      return {
+        'count': 0,
+        'limit': FACE_SWAP_MONTHLY_LIMIT,
+        'remaining': FACE_SWAP_MONTHLY_LIMIT,
+      };
+    }
+  }
+
+  /// Incrementar el contador de face swap después de un uso exitoso
+  Future<void> incrementFaceSwapUsage() async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) return;
+
+      final currentMonth = _getCurrentMonth();
+      final docRef = _firestore.collection('user_limits').doc(user.uid);
+      final doc = await docRef.get();
+
+      if (!doc.exists) {
+        // Crear documento nuevo
+        await docRef.set({
+          'faceSwapMonth': currentMonth,
+          'faceSwapCount': 1,
+          'lastFaceSwap': FieldValue.serverTimestamp(),
+        });
+      } else {
+        final data = doc.data()!;
+        final month = data['faceSwapMonth'] as String?;
+
+        if (month != currentMonth) {
+          // Nuevo mes, resetear contador
+          await docRef.update({
+            'faceSwapMonth': currentMonth,
+            'faceSwapCount': 1,
+            'lastFaceSwap': FieldValue.serverTimestamp(),
+          });
+        } else {
+          // Incrementar contador
+          await docRef.update({
+            'faceSwapCount': FieldValue.increment(1),
+            'lastFaceSwap': FieldValue.serverTimestamp(),
+          });
+        }
+      }
+
+      print('✅ Contador de face swap incrementado');
+    } catch (e) {
+      print('❌ Error incrementando contador de face swap: $e');
     }
   }
 }

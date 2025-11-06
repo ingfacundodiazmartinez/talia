@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show VoidCallback;
 import '../notification_service.dart';
 import 'voip_service.dart';
+import '../utils/release_logger.dart';
 
 class PhoneVerificationService {
   static final PhoneVerificationService _instance =
@@ -39,7 +40,7 @@ class PhoneVerificationService {
     VoidCallback? onTimeout,
   }) async {
     try {
-      print('📱 Iniciando verificación de teléfono: $phoneNumber');
+      ReleaseLogger.log('📱 Iniciando verificación de teléfono: $phoneNumber', tag: 'PhoneVerificationService');
 
       // Formatear número de teléfono con código de país
       final fullPhoneNumber = _formatPhoneNumber(phoneNumber, countryCode);
@@ -48,8 +49,8 @@ class PhoneVerificationService {
         throw Exception('Número de teléfono inválido');
       }
 
-      print('📱 Usando Firebase real para SMS a: $fullPhoneNumber');
-      print('📲 Recibirás un SMS real con un código real');
+      ReleaseLogger.log('📱 Usando Firebase real para SMS a: $fullPhoneNumber', tag: 'PhoneVerificationService');
+      ReleaseLogger.log('📲 Recibirás un SMS real con un código real', tag: 'PhoneVerificationService');
 
       // Cancelar verificación anterior si existe
       await _cancelCurrentVerification();
@@ -65,17 +66,18 @@ class PhoneVerificationService {
       });
 
       // Configurar Firebase Auth para dispositivos reales
-      print('🔧 Configurando Firebase Auth para dispositivos físicos');
+      ReleaseLogger.log('🔧 Configurando Firebase Auth para dispositivos físicos', tag: 'PhoneVerificationService');
       // NOTA: appVerificationDisabledForTesting NO funciona en dispositivos físicos reales
       // Debes configurar Play Integrity en Firebase Console o deshabilitar enforcement
-      print(
+      ReleaseLogger.log(
         '📱 Para dispositivos reales: Configura Play Integrity o desactiva enforcement en Firebase Console',
+        tag: 'PhoneVerificationService',
       );
 
       await _auth.verifyPhoneNumber(
         phoneNumber: fullPhoneNumber,
         verificationCompleted: (PhoneAuthCredential credential) async {
-          print('✅ Verificación automática completada');
+          ReleaseLogger.log('✅ Verificación automática completada', tag: 'PhoneVerificationService');
           try {
             final result = await _signInWithCredential(credential);
             if (!completer.isCompleted) {
@@ -92,16 +94,16 @@ class PhoneVerificationService {
           }
         },
         verificationFailed: (FirebaseAuthException e) {
-          print('❌ Error en verificación: ${e.code} - ${e.message}');
-          print('❌ Error details: ${e.toString()}');
-          print('❌ Error stackTrace: ${e.stackTrace}');
+          ReleaseLogger.error('❌ Error en verificación: ${e.code} - ${e.message}', tag: 'PhoneVerificationService');
+          ReleaseLogger.error('❌ Error details: ${e.toString()}', tag: 'PhoneVerificationService');
+          ReleaseLogger.error('❌ Error stackTrace: ${e.stackTrace}', tag: 'PhoneVerificationService');
           if (e.code == 'internal-error') {
-            print('❌ INTERNAL ERROR - Detalles completos:');
-            print('   - code: ${e.code}');
-            print('   - message: ${e.message}');
-            print('   - plugin: ${e.plugin}');
-            print('   - email: ${e.email}');
-            print('   - credential: ${e.credential}');
+            ReleaseLogger.error('❌ INTERNAL ERROR - Detalles completos:', tag: 'PhoneVerificationService');
+            ReleaseLogger.log('   - code: ${e.code}', tag: 'PhoneVerificationService');
+            ReleaseLogger.log('   - message: ${e.message}', tag: 'PhoneVerificationService');
+            ReleaseLogger.log('   - plugin: ${e.plugin}', tag: 'PhoneVerificationService');
+            ReleaseLogger.log('   - email: ${e.email}', tag: 'PhoneVerificationService');
+            ReleaseLogger.log('   - credential: ${e.credential}', tag: 'PhoneVerificationService');
           }
           onError?.call(_getErrorMessage(e));
 
@@ -112,7 +114,7 @@ class PhoneVerificationService {
           }
         },
         codeSent: (String verificationId, int? resendToken) {
-          print('📨 Código SMS enviado');
+          ReleaseLogger.log('📨 Código SMS enviado', tag: 'PhoneVerificationService');
           _verificationId = verificationId;
           _resendToken = resendToken;
 
@@ -125,7 +127,7 @@ class PhoneVerificationService {
           }
         },
         codeAutoRetrievalTimeout: (String verificationId) {
-          print('⏰ Timeout de auto-recuperación');
+          ReleaseLogger.log('⏰ Timeout de auto-recuperación', tag: 'PhoneVerificationService');
           _verificationId = verificationId;
         },
         forceResendingToken: _resendToken,
@@ -133,7 +135,7 @@ class PhoneVerificationService {
 
       return await completer.future;
     } catch (e) {
-      print('❌ Error iniciando verificación: $e');
+      ReleaseLogger.error('❌ Error iniciando verificación: $e', tag: 'PhoneVerificationService');
       return PhoneVerificationResult.error('Error iniciando verificación: $e');
     }
   }
@@ -149,7 +151,7 @@ class PhoneVerificationService {
         throw Exception('El código debe tener 6 dígitos');
       }
 
-      print('🔢 Verificando código SMS: $smsCode');
+      ReleaseLogger.log('🔢 Verificando código SMS: $smsCode', tag: 'PhoneVerificationService');
 
       // TODO: En desarrollo, verificar si es un código de prueba (solo si está habilitado)
       // if (kDebugMode &&
@@ -166,7 +168,7 @@ class PhoneVerificationService {
       final authResult = await _signInWithCredential(credential);
       return PhoneVerificationResult.verified(authResult);
     } catch (e) {
-      print('❌ Error verificando código: $e');
+      ReleaseLogger.error('❌ Error verificando código: $e', tag: 'PhoneVerificationService');
       return PhoneVerificationResult.error(_getErrorMessage(e));
     }
   }
@@ -179,7 +181,7 @@ class PhoneVerificationService {
     Function(String)? onError,
   }) async {
     try {
-      print('🔄 Reenviando código SMS');
+      ReleaseLogger.log('🔄 Reenviando código SMS', tag: 'PhoneVerificationService');
 
       return await startPhoneVerification(
         phoneNumber: phoneNumber,
@@ -188,7 +190,7 @@ class PhoneVerificationService {
         onError: onError,
       );
     } catch (e) {
-      print('❌ Error reenviando código: $e');
+      ReleaseLogger.error('❌ Error reenviando código: $e', tag: 'PhoneVerificationService');
       return PhoneVerificationResult.error('Error reenviando código: $e');
     }
   }
@@ -201,7 +203,7 @@ class PhoneVerificationService {
         throw Exception('No hay usuario autenticado');
       }
 
-      print('🔗 Asociando teléfono a usuario: ${currentUser.email}');
+      ReleaseLogger.log('🔗 Asociando teléfono a usuario: ${currentUser.email}', tag: 'PhoneVerificationService');
 
       // Enlazar credencial de teléfono al usuario actual
       await currentUser.linkWithCredential(phoneCredential.credential!);
@@ -212,10 +214,10 @@ class PhoneVerificationService {
         phoneNumber: phoneCredential.user?.phoneNumber,
       );
 
-      print('✅ Teléfono asociado exitosamente');
+      ReleaseLogger.log('✅ Teléfono asociado exitosamente', tag: 'PhoneVerificationService');
       return true;
     } catch (e) {
-      print('❌ Error asociando teléfono: $e');
+      ReleaseLogger.error('❌ Error asociando teléfono: $e', tag: 'PhoneVerificationService');
 
       // Si el teléfono ya está asociado a otra cuenta
       if (e.toString().contains('already-in-use')) {
@@ -243,9 +245,9 @@ class PhoneVerificationService {
         'updatedAt': FieldValue.serverTimestamp(),
       });
 
-      print('✅ Información de teléfono actualizada en Firestore');
+      ReleaseLogger.log('✅ Información de teléfono actualizada en Firestore', tag: 'PhoneVerificationService');
     } catch (e) {
-      print('❌ Error actualizando Firestore: $e');
+      ReleaseLogger.error('❌ Error actualizando Firestore: $e', tag: 'PhoneVerificationService');
       rethrow;
     }
   }
@@ -256,13 +258,13 @@ class PhoneVerificationService {
   ) async {
     try {
       final userCredential = await _auth.signInWithCredential(credential);
-      print('✅ Usuario autenticado con teléfono');
+      ReleaseLogger.log('✅ Usuario autenticado con teléfono', tag: 'PhoneVerificationService');
 
       // Inicializar FCM token después del login exitoso
       try {
         await NotificationService().initializeFCMTokenAfterLogin();
       } catch (e) {
-        print('⚠️ Error inicializando FCM token después del login: $e');
+        ReleaseLogger.log('⚠️ Error inicializando FCM token después del login: $e', tag: 'PhoneVerificationService');
         // No relanzar el error para no interferir con el flujo de login
       }
 
@@ -271,14 +273,14 @@ class PhoneVerificationService {
         try {
           await VoIPService().processVoIPTokenAfterLogin();
         } catch (e) {
-          print('⚠️ Error procesando VoIP token después del login: $e');
+          ReleaseLogger.log('⚠️ Error procesando VoIP token después del login: $e', tag: 'PhoneVerificationService');
           // No relanzar el error para no interferir con el flujo de login
         }
       }
 
       return userCredential;
     } catch (e) {
-      print('❌ Error en autenticación: $e');
+      ReleaseLogger.error('❌ Error en autenticación: $e', tag: 'PhoneVerificationService');
       rethrow;
     }
   }
@@ -353,7 +355,7 @@ class PhoneVerificationService {
       final data = doc.data();
       return data?['phoneVerified'] == true;
     } catch (e) {
-      print('❌ Error verificando estado de teléfono: $e');
+      ReleaseLogger.error('❌ Error verificando estado de teléfono: $e', tag: 'PhoneVerificationService');
       return false;
     }
   }
@@ -365,7 +367,7 @@ class PhoneVerificationService {
       final data = doc.data();
       return data?['phone'];
     } catch (e) {
-      print('❌ Error obteniendo teléfono: $e');
+      ReleaseLogger.error('❌ Error obteniendo teléfono: $e', tag: 'PhoneVerificationService');
       return null;
     }
   }

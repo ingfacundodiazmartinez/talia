@@ -1,6 +1,20 @@
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
+
+/// Evento de cambio de estado de bloqueo
+class BlockStatusChange {
+  final String contactId;
+  final bool isBlocked;
+  final DateTime timestamp;
+
+  BlockStatusChange({
+    required this.contactId,
+    required this.isBlocked,
+    required this.timestamp,
+  });
+}
 
 /// Servicio de caché para estados de bloqueo
 ///
@@ -9,7 +23,9 @@ import 'package:flutter/foundation.dart';
 class BlockStatusCacheService {
   static final BlockStatusCacheService _instance = BlockStatusCacheService._internal();
   factory BlockStatusCacheService() => _instance;
-  BlockStatusCacheService._internal();
+  BlockStatusCacheService._internal() {
+    _initializeBlockStatusListener();
+  }
 
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -25,6 +41,16 @@ class BlockStatusCacheService {
 
   // Límite de items en caché
   static const int _maxCacheSize = 200;
+
+  // Stream para notificar cambios de bloqueo
+  final StreamController<BlockStatusChange> _blockStatusChanges =
+      StreamController<BlockStatusChange>.broadcast();
+
+  // Stream subscription para escuchar cambios en Firestore
+  StreamSubscription<QuerySnapshot>? _firestoreSubscription;
+
+  /// Stream de cambios de estado de bloqueo
+  Stream<BlockStatusChange> get blockStatusChanges => _blockStatusChanges.stream;
 
   /// Verifica si un contacto está bloqueado (con caché)
   Future<bool> isBlocked(String contactId) async {
@@ -182,8 +208,16 @@ class BlockStatusCacheService {
     final cacheKey = '${userId}_$contactId';
     _cacheBlockStatus(cacheKey, isBlocked);
 
+    // Emitir evento de cambio de estado
+    _blockStatusChanges.add(BlockStatusChange(
+      contactId: contactId,
+      isBlocked: isBlocked,
+      timestamp: DateTime.now(),
+    ));
+
     if (kDebugMode) {
       print('🔄 [BlockCache] Estado actualizado: $cacheKey = $isBlocked');
+      print('📡 [BlockCache] Evento emitido para contacto $contactId');
     }
   }
 
@@ -223,5 +257,105 @@ class BlockStatusCacheService {
       'maxSize': _maxCacheSize,
       'cacheDurationMinutes': _cacheDuration.inMinutes,
     };
+  }
+
+  /// Inicializa el listener de Firestore para detectar bloqueos bidireccionales
+  void _initializeBlockStatusListener() {
+    // Solo inicializar si hay un usuario autenticado
+    _auth.authStateChanges().listen((user) {
+      if (user != null) {
+        _startFirestoreListener(user.uid);
+      } else {
+        _stopFirestoreListener();
+      }
+    });
+  }
+
+  /// Inicia el listener de Firestore para el usuario actual
+  void _startFirestoreListener(String userId) {
+    _stopFirestoreListener(); // Detener listener anterior si existe
+
+    if (kDebugMode) {
+      print('🔄 [BlockCache] Iniciando listener de bloqueos para usuario: $userId');
+    }
+
+    // Escuchar cambios donde YO soy bloqueado por otros (blockedUserId == userId)
+    _firestoreSubscription = _firestore
+        .collection('blocked_contacts')
+        .where('blockedUserId', isEqualTo: userId)
+        .snapshots()
+        .listen(
+      (snapshot) {
+        for (final change in snapshot.docChanges) {
+          final data = change.doc.data();
+          if (data == null) continue;
+
+          final blockerUserId = data['userId'] as String?;
+          if (blockerUserId == null) continue;
+
+          switch (change.type) {
+            case DocumentChangeType.added:
+              // Alguien me bloqueó
+              handleBlockStatusChange(blockerUserId, true, isBlockedBy: true);
+              break;
+            case DocumentChangeType.removed:
+              // Alguien me desbloqueó
+              handleBlockStatusChange(blockerUserId, false, isBlockedBy: true);
+              break;
+            case DocumentChangeType.modified:
+              // Cambio en documento existente (raro, pero manejar)
+              handleBlockStatusChange(blockerUserId, true, isBlockedBy: true);
+              break;
+          }
+        }
+      },
+      onError: (error) {
+        if (kDebugMode) {
+          print('❌ [BlockCache] Error en listener de Firestore: $error');
+        }
+      },
+    );
+  }
+
+  /// Detiene el listener de Firestore
+  void _stopFirestoreListener() {
+    _firestoreSubscription?.cancel();
+    _firestoreSubscription = null;
+  }
+
+  /// Maneja cambios de estado de bloqueo detectados por Firestore
+  @visibleForTesting
+  void handleBlockStatusChange(String contactId, bool isBlocked, {bool isBlockedBy = false}) {
+    final userId = _auth.currentUser?.uid;
+    if (userId == null) return;
+
+    // Actualizar cache
+    final cacheKey = isBlockedBy ? '${contactId}_$userId' : '${userId}_$contactId';
+    _cacheBlockStatus(cacheKey, isBlocked);
+
+    // Emitir evento de cambio
+    _blockStatusChanges.add(BlockStatusChange(
+      contactId: contactId,
+      isBlocked: isBlocked,
+      timestamp: DateTime.now(),
+    ));
+
+    if (kDebugMode) {
+      final action = isBlocked ? 'bloqueó' : 'desbloqueó';
+      final direction = isBlockedBy ? 'me $action' : 'bloqueé a';
+      print('📡 [BlockCache] Firestore detectó: $contactId $direction $userId');
+      print('🔄 [BlockCache] Evento emitido para contacto: $contactId');
+    }
+  }
+
+  /// Limpia recursos y cierra streams
+  void dispose() {
+    _stopFirestoreListener();
+    _blockStatusChanges.close();
+    clearCache();
+
+    if (kDebugMode) {
+      print('🗑️ [BlockCache] Servicio disposado');
+    }
   }
 }

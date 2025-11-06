@@ -25,7 +25,7 @@ class ParentProfileScreen extends StatefulWidget {
 class _ParentProfileScreenState extends State<ParentProfileScreen>
     with AutomaticKeepAliveClientMixin {
   late ProfileController _controller;
-  late Parent _parent;
+  Parent? _parent;
 
   @override
   bool get wantKeepAlive => true;
@@ -35,8 +35,10 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
     super.initState();
     _controller = ProfileController();
     _controller.initialize().then((_) {
-      if (_controller.isUserAuthenticated) {
-        _parent = Parent(id: _controller.currentUserId!, name: '');
+      if (_controller.isUserAuthenticated && mounted) {
+        setState(() {
+          _parent = Parent(id: _controller.currentUserId!, name: '');
+        });
       }
     });
   }
@@ -280,8 +282,44 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
   Widget _buildAutoApprovalSetting() {
     final colorScheme = Theme.of(context).colorScheme;
 
+    // Return loading state if parent is not yet initialized
+    if (_parent == null) {
+      return Container(
+        margin: EdgeInsets.only(bottom: 8),
+        child: ListTile(
+          leading: Icon(
+            Icons.auto_awesome,
+            color: colorScheme.primary,
+          ),
+          title: Text(
+            'Aceptar solicitudes por defecto',
+            style: TextStyle(
+              color: colorScheme.onSurface,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          subtitle: Text(
+            'Cargando configuración...',
+            style: TextStyle(
+              fontSize: 12,
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ),
+          trailing: Switch(
+            value: false,
+            onChanged: null, // Disabled while loading
+            activeColor: colorScheme.primary,
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          tileColor: colorScheme.surfaceContainerHighest,
+        ),
+      );
+    }
+
     return StreamBuilder<DocumentSnapshot>(
-      stream: _parent.getParentSettingsStream(),
+      stream: _parent!.getParentSettingsStream(),
       builder: (context, snapshot) {
         bool autoApprovalEnabled = false;
 

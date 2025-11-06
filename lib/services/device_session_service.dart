@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
+import '../utils/release_logger.dart';
 
 /// Servicio para gestionar sesiones únicas por dispositivo
 /// Solo permite que un usuario esté logueado en un dispositivo a la vez
@@ -20,6 +21,10 @@ class DeviceSessionService {
   StreamSubscription<DocumentSnapshot>? _sessionListener;
   String? _currentDeviceId;
   bool _isCheckingSession = false;
+
+  /// 🔒 LIFECYCLE MANAGEMENT para prevenir memory leaks
+  bool _isInitialized = false;
+  bool get isInitialized => _isInitialized;
 
   /// Obtener ID único del dispositivo actual
   Future<String> getDeviceId() async {
@@ -155,17 +160,17 @@ class DeviceSessionService {
         }
       }
     }, onError: (error) {
-      print('❌ Error en session listener: $error');
+      ReleaseLogger.error('❌ Error en session listener: $error', tag: 'DeviceSessionService');
     });
 
-    print('👂 Session listener iniciado para usuario: ${user.uid}');
+    ReleaseLogger.log('👂 Session listener iniciado para usuario: ${user.uid}', tag: 'DeviceSessionService');
   }
 
   /// Detener escucha de cambios de sesión
   void stopSessionListener() {
     _sessionListener?.cancel();
     _sessionListener = null;
-    print('🛑 Session listener detenido');
+    ReleaseLogger.log('🛑 Session listener detenido', tag: 'DeviceSessionService');
   }
 
   /// Mostrar diálogo informando que la sesión expiró
@@ -237,7 +242,70 @@ class DeviceSessionService {
   }
 
   /// Limpiar al hacer dispose
+  /// 🔒 LIFECYCLE MANAGEMENT: Limpiar recursos y permitir re-inicialización
   void dispose() {
+    ReleaseLogger.log('🗑️ Limpiando recursos DeviceSession Service...', tag: 'DeviceSessionService');
+
     stopSessionListener();
+    _currentDeviceId = null;
+    _isCheckingSession = false;
+    _isInitialized = false;
+
+    ReleaseLogger.log('✅ DeviceSession Service resources disposed', tag: 'DeviceSessionService');
+  }
+
+  /// 🔒 BACKGROUND LIFECYCLE: Limpiar recursos cuando la app va a background
+  void onAppPaused() {
+    ReleaseLogger.log('⏸️ DeviceSession Service: App pausada, manteniendo sesión activa', tag: 'DeviceSessionService');
+    // No detener completamente la sesión en pausa, pero sí limpiar el listener
+    stopSessionListener();
+  }
+
+  /// 🔒 FOREGROUND LIFECYCLE: Re-conectar cuando la app vuelve de background
+  Future<void> onAppResumed() async {
+    ReleaseLogger.log('▶️ DeviceSession Service: App resumida', tag: 'DeviceSessionService');
+
+    // Re-inicializar listener de sesión si hay usuario autenticado
+    final user = _auth.currentUser;
+    if (user != null) {
+      _startSessionListenerSilent();
+    }
+  }
+
+  /// Versión sin UI para uso en background services
+  void _startSessionListenerSilent() {
+    final user = _auth.currentUser;
+    if (user == null) return;
+
+    // Cancelar listener anterior si existe
+    stopSessionListener();
+
+    _sessionListener = _firestore
+        .collection('users')
+        .doc(user.uid)
+        .snapshots()
+        .listen((snapshot) async {
+      if (!snapshot.exists || _isCheckingSession) return;
+
+      final data = snapshot.data();
+      if (data == null) return;
+
+      final activeDeviceId = data['activeDeviceId'] as String?;
+      final currentDeviceId = await getDeviceId();
+
+      // Si hay un dispositivo activo diferente al actual, cerrar sesión silenciosamente
+      if (activeDeviceId != null && activeDeviceId != currentDeviceId) {
+        ReleaseLogger.log('🔒 Sesión detectada en otro dispositivo: $activeDeviceId (actual: $currentDeviceId)', tag: 'DeviceSessionService');
+
+        _isCheckingSession = true;
+
+        // Cerrar sesión silenciosamente
+        await _signOutCurrentDevice();
+
+        _isCheckingSession = false;
+      }
+    });
+
+    ReleaseLogger.log('📱 Session listener iniciado (modo silencioso)', tag: 'DeviceSessionService');
   }
 }

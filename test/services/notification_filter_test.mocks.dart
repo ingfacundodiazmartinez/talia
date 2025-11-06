@@ -187,17 +187,6 @@ class MockFirebaseFirestore extends _i1.Mock implements _i4.FirebaseFirestore {
           as _i3.FirebaseApp);
 
   @override
-  String get databaseURL =>
-      (super.noSuchMethod(
-            Invocation.getter(#databaseURL),
-            returnValue: _i7.dummyValue<String>(
-              this,
-              Invocation.getter(#databaseURL),
-            ),
-          )
-          as String);
-
-  @override
   String get databaseId =>
       (super.noSuchMethod(
             Invocation.getter(#databaseId),
@@ -219,12 +208,6 @@ class MockFirebaseFirestore extends _i1.Mock implements _i4.FirebaseFirestore {
   @override
   set app(_i3.FirebaseApp? value) => super.noSuchMethod(
     Invocation.setter(#app, value),
-    returnValueForMissingStub: null,
-  );
-
-  @override
-  set databaseURL(String? value) => super.noSuchMethod(
-    Invocation.setter(#databaseURL, value),
     returnValueForMissingStub: null,
   );
 
@@ -273,17 +256,6 @@ class MockFirebaseFirestore extends _i1.Mock implements _i4.FirebaseFirestore {
   _i5.Future<void> clearPersistence() =>
       (super.noSuchMethod(
             Invocation.method(#clearPersistence, []),
-            returnValue: _i5.Future<void>.value(),
-            returnValueForMissingStub: _i5.Future<void>.value(),
-          )
-          as _i5.Future<void>);
-
-  @override
-  _i5.Future<void> enablePersistence([
-    _i4.PersistenceSettings? persistenceSettings,
-  ]) =>
-      (super.noSuchMethod(
-            Invocation.method(#enablePersistence, [persistenceSettings]),
             returnValue: _i5.Future<void>.value(),
             returnValueForMissingStub: _i5.Future<void>.value(),
           )
@@ -466,21 +438,6 @@ class MockFirebaseFirestore extends _i1.Mock implements _i4.FirebaseFirestore {
   _i5.Future<void> waitForPendingWrites() =>
       (super.noSuchMethod(
             Invocation.method(#waitForPendingWrites, []),
-            returnValue: _i5.Future<void>.value(),
-            returnValueForMissingStub: _i5.Future<void>.value(),
-          )
-          as _i5.Future<void>);
-
-  @override
-  _i5.Future<void> setIndexConfiguration({
-    required List<_i4.Index>? indexes,
-    List<_i4.FieldOverrides>? fieldOverrides,
-  }) =>
-      (super.noSuchMethod(
-            Invocation.method(#setIndexConfiguration, [], {
-              #indexes: indexes,
-              #fieldOverrides: fieldOverrides,
-            }),
             returnValue: _i5.Future<void>.value(),
             returnValueForMissingStub: _i5.Future<void>.value(),
           )

@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'base_chats_controller.dart';
 import '../models/chat_list_item_type.dart';
 import '../services/search_service.dart';
+import '../services/user_profile_cache_service.dart';
 import '../utils/release_logger.dart';
 
 /// Controller para manejar la lógica de negocio de Parent Chats
@@ -16,6 +17,7 @@ import '../utils/release_logger.dart';
 class ParentChatsController extends BaseChatsController {
   final firebase_auth.FirebaseAuth _auth;
   final SearchService _searchService;
+  final UserProfileCacheService _userProfileService;
 
   ParentChatsController({
     required super.userId,
@@ -24,13 +26,16 @@ class ParentChatsController extends BaseChatsController {
     super.groupChatService,
     firebase_auth.FirebaseAuth? auth,
     SearchService? searchService,
+    UserProfileCacheService? userProfileService,
   }) : _auth = auth ?? firebase_auth.FirebaseAuth.instance,
-       _searchService = searchService ?? SearchService();
+       _searchService = searchService ?? SearchService(),
+       _userProfileService = userProfileService ?? UserProfileCacheService();
 
   /// Stream de relaciones padre-hijo aprobadas
   /// Lee desde /users/{userId}.linkedChildrenIds por seguridad
   Stream<List<String>> getParentChildLinksStream() {
-    return FirebaseFirestore.instance.collection('users').doc(userId).snapshots().map((
+    // ✅ CODING_RULES: Delegando a UserProfileCacheService
+    return _userProfileService.getUserDataStream(userId).map((
       snapshot,
     ) {
       if (!snapshot.exists) {
@@ -38,7 +43,7 @@ class ParentChatsController extends BaseChatsController {
         return <String>[];
       }
 
-      final userData = snapshot.data();
+      final userData = snapshot.data() as Map<String, dynamic>?;
       if (userData == null) {
         debugPrint('⚠️ [ParentChatsController] userData es null para $userId');
         return <String>[];
@@ -113,13 +118,10 @@ class ParentChatsController extends BaseChatsController {
   String get currentUserId => _auth.currentUser?.uid ?? '';
 
   /// Obtener datos de usuario por ID
+  @override
   Future<Map<String, dynamic>?> getUserData(String userId) async {
     try {
-      final userDoc = await firestore.collection('users').doc(userId).get();
-      if (userDoc.exists) {
-        return userDoc.data();
-      }
-      return null;
+      return await _userProfileService.getUserProfile(userId);
     } catch (e) {
       ReleaseLogger.error('Error obteniendo datos de usuario $userId: $e', tag: 'ParentChats');
       return null;
@@ -127,8 +129,9 @@ class ParentChatsController extends BaseChatsController {
   }
 
   /// Stream de datos de usuario
+  @override
   Stream<DocumentSnapshot> getUserDataStream(String userId) {
-    return firestore.collection('users').doc(userId).snapshots();
+    return _userProfileService.getUserDataStream(userId);
   }
 
   /// Buscar en mensajes de todos los chats
@@ -235,37 +238,23 @@ class ParentChatsController extends BaseChatsController {
 
   /// Obtener último mensaje de un chat
   Stream<QuerySnapshot> getLastMessageStream(String chatId, {bool isGroup = false}) {
-    final collection = isGroup ? 'groups' : 'chats';
-    return firestore
-        .collection(collection)
-        .doc(chatId)
-        .collection('messages')
-        .orderBy('timestamp', descending: true)
-        .limit(1)
-        .snapshots();
+    // ✅ CODING_RULES: Usando métodos del BaseChatsController
+    if (isGroup) {
+      return getGroupLastMessageStream(chatId);
+    } else {
+      return getChatLastMessageStream(chatId);
+    }
   }
 
   /// Obtener datos de chat para navegación
   Future<Map<String, dynamic>?> getChatDataForNavigation(String chatId) async {
     try {
-      final chatDoc = await firestore.collection('chats').doc(chatId).get();
-      if (!chatDoc.exists) return null;
-
-      final participants = chatDoc.data()?['participants'] as List<dynamic>?;
-      if (participants == null) return null;
-
-      final contactId = participants.firstWhere(
-        (id) => id != currentUserId,
-        orElse: () => null,
-      );
-
-      if (contactId == null) return null;
-
-      return {
-        'chatId': chatId,
-        'contactId': contactId,
-        'participants': participants,
-      };
+      // ✅ CODING_RULES: Usando métodos del BaseChatsController
+      final snapshot = await getChatDataStream(chatId).first;
+      if (snapshot.exists) {
+        return snapshot.data() as Map<String, dynamic>?;
+      }
+      return null;
     } catch (e) {
       ReleaseLogger.error('Error obteniendo datos de chat $chatId: $e', tag: 'ParentChats');
       return null;

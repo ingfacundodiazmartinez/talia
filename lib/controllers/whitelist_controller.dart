@@ -4,6 +4,7 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../models/contact_request.dart';
 import '../models/permission_request.dart';
+import '../utils/release_logger.dart';
 
 /// Controller para manejar la lógica de negocio del Control Parental (Lista Blanca)
 ///
@@ -78,32 +79,32 @@ class WhitelistController {
     required String contactName,
     required String contactPhone,
   }) async {
-    print('📞 Llamando a Cloud Function updateContactRequestStatus...');
+    ReleaseLogger.log('📞Llamando a Cloud Function updateContactRequestStatus...');
 
     final result = await _functions.httpsCallable('updateContactRequestStatus').call({
       'requestId': requestId,
       'status': 'approved',
     });
 
-    print('✅ Contacto aprobado: ${result.data}');
+    ReleaseLogger.log('✅Contacto aprobado: ${result.data}');
 
     // Procesar invitaciones de grupo pendientes solo si tenemos los datos necesarios
     if (childId.isNotEmpty && contactPhone.isNotEmpty) {
       try {
-        print('📨 Procesando invitaciones de grupo para el contacto aprobado...');
-        print('   childId: $childId');
-        print('   contactPhone: $contactPhone');
+        ReleaseLogger.log('📨Procesando invitaciones de grupo para el contacto aprobado...');
+        ReleaseLogger.log('childId: $childId');
+        ReleaseLogger.log('contactPhone: $contactPhone');
         await _functions.httpsCallable('processGroupInvitationsAfterContactApproval').call({
           'childId': childId,
           'contactPhone': contactPhone,
         });
-        print('✅ Invitaciones de grupo procesadas');
+        ReleaseLogger.log('✅Invitaciones de grupo procesadas');
       } catch (e) {
-        print('⚠️ Error procesando invitaciones de grupo: $e');
+        ReleaseLogger.error('⚠️Error procesando invitaciones de grupo: $e');
         // No lanzar error, es opcional
       }
     } else {
-      print('⚠️ No se pueden procesar invitaciones: datos faltantes (childId: ${childId.isEmpty ? 'vacío' : 'ok'}, contactPhone: ${contactPhone.isEmpty ? 'vacío' : 'ok'})');
+      ReleaseLogger.error('⚠️No se pueden procesar invitaciones: datos faltantes (childId: ${childId.isEmpty ? 'vacío' : 'ok'}, contactPhone: ${contactPhone.isEmpty ? 'vacío' : 'ok'})');
     }
   }
 
@@ -114,7 +115,7 @@ class WhitelistController {
     required String contactId,
     required String contactName,
   }) async {
-    print('📞 Llamando a Cloud Function approveGroupPermission...');
+    ReleaseLogger.log('📞Llamando a Cloud Function approveGroupPermission...');
 
     await _functions.httpsCallable('approveGroupPermission').call({
       'requestId': requestId,
@@ -123,7 +124,7 @@ class WhitelistController {
       'contactName': contactName,
     });
 
-    print('✅ Permiso de grupo aprobado');
+    ReleaseLogger.log('✅Permiso de grupo aprobado');
   }
 
   /// Rechazar una solicitud individual
@@ -133,19 +134,19 @@ class WhitelistController {
   }) async {
     try {
       if (type == 'contact') {
-        print('📞 Llamando a Cloud Function updateContactRequestStatus para rechazar...');
+        ReleaseLogger.log('📞Llamando a Cloud Function updateContactRequestStatus para rechazar...');
         await _functions.httpsCallable('updateContactRequestStatus').call({
           'requestId': requestId,
           'status': 'rejected',
         });
-        print('✅ Solicitud de contacto rechazada via Cloud Function');
+        ReleaseLogger.log('✅Solicitud de contacto rechazada via Cloud Function');
       } else if (type == 'group') {
         // Usar Cloud Function para permission_requests también
         await _functions.httpsCallable('updateGroupPermissionStatus').call({
           'requestId': requestId,
           'status': 'rejected',
         });
-        print('✅ Solicitud de grupo rechazada via Cloud Function');
+        ReleaseLogger.log('✅Solicitud de grupo rechazada via Cloud Function');
       }
 
       selectedRequests.remove(requestId);
@@ -190,7 +191,7 @@ class WhitelistController {
 
       return sharedGroups;
     } catch (e) {
-      print('❌ Error obteniendo grupos compartidos: $e');
+      ReleaseLogger.error('❌Error obteniendo grupos compartidos: $e');
       return [];
     }
   }
@@ -205,9 +206,9 @@ class WhitelistController {
         'members': FieldValue.arrayRemove([childId]),
       });
 
-      print('✅ Niño removido del grupo: $groupId');
+      ReleaseLogger.log('✅Niño removido del grupo: $groupId');
     } catch (e) {
-      print('❌ Error removiendo niño del grupo: $e');
+      ReleaseLogger.error('❌Error removiendo niño del grupo: $e');
       rethrow;
     }
   }
@@ -224,17 +225,17 @@ class WhitelistController {
     try {
       // Llamar al Cloud Function para cambiar el estado a rejected
       if (type == 'contact') {
-        print('🔄 Revocando contacto...');
-        print('   requestId: $requestId');
-        print('   childId: $childId');
-        print('   data: $data');
+        ReleaseLogger.log('🔄Revocando contacto...');
+        ReleaseLogger.log('requestId: $requestId');
+        ReleaseLogger.log('childId: $childId');
+        ReleaseLogger.log('data: $data');
 
         await _functions.httpsCallable('updateContactRequestStatus').call({
           'requestId': requestId,
           'status': 'rejected',
         });
 
-        print('✅ Contacto revocado');
+        ReleaseLogger.log('✅Contacto revocado');
 
         // Remover de grupos si se especificaron
         if (groupsToRemove != null && groupsToRemove.isNotEmpty) {
@@ -245,36 +246,36 @@ class WhitelistController {
 
         // Obtener el contactId para bloquear el chat
         final contactPhone = data['contactPhone'] as String?;
-        print('📞 contactPhone desde data: $contactPhone');
+        ReleaseLogger.log('📞contactPhone desde data: $contactPhone');
 
         if (contactPhone != null) {
           await _blockChatByPhone(childId: childId, contactPhone: contactPhone);
         } else {
-          print('⚠️ No se encontró contactPhone en data, intentando con contactId directamente');
+          ReleaseLogger.error('⚠️No se encontró contactPhone en data, intentando con contactId directamente');
 
           // Si no hay contactPhone, intentar con contactId directamente
           final contactId = data['contactId'] as String?;
           if (contactId != null) {
             final currentUserId = _auth.currentUser?.uid;
-            print('🔍 Bloqueando directamente con contactId: $contactId');
-            print('👤 Usuario actual (blockedBy): $currentUserId');
+            ReleaseLogger.log('🔍Bloqueando directamente con contactId: $contactId');
+            ReleaseLogger.log('👤Usuario actual (blockedBy): $currentUserId');
 
             if (currentUserId == null) {
-              print('❌ ERROR: No hay usuario autenticado');
+              ReleaseLogger.error('❌ERROR: No hay usuario autenticado');
               throw Exception('Usuario no autenticado');
             }
 
             // Usar Cloud Function para bloquear el chat
-            print('📞 Llamando a Cloud Function blockChat...');
+            ReleaseLogger.log('📞Llamando a Cloud Function blockChat...');
             await _functions.httpsCallable('blockChat').call({
               'childId': childId,
               'contactId': contactId,
               'reason': 'Contacto revocado por el padre',
               'blockedBy': currentUserId,
             });
-            print('✅ Chat bloqueado via Cloud Function');
+            ReleaseLogger.log('✅Chat bloqueado via Cloud Function');
           } else {
-            print('❌ ERROR: No se encontró ni contactPhone ni contactId en data');
+            ReleaseLogger.error('❌ERROR: No se encontró ni contactPhone ni contactId en data');
           }
         }
       } else if (type == 'group') {
@@ -283,7 +284,7 @@ class WhitelistController {
           'status': 'rejected',
         });
 
-        print('✅ Permiso de grupo revocado');
+        ReleaseLogger.log('✅Permiso de grupo revocado');
       }
 
       processingRequests.remove(requestId);
@@ -319,15 +320,15 @@ class WhitelistController {
         // Desbloquear el chat si estaba bloqueado
         final contactId = data['contactId'] as String?;
         if (contactId != null) {
-          print('🔓 Desbloqueando chat entre $childId y $contactId');
+          ReleaseLogger.log('🔓Desbloqueando chat entre $childId y $contactId');
           try {
             await _functions.httpsCallable('unblockChat').call({
               'childId': childId,
               'contactId': contactId,
             });
-            print('✅ Chat desbloqueado exitosamente');
+            ReleaseLogger.log('✅Chat desbloqueado exitosamente');
           } catch (e) {
-            print('⚠️ Error desbloqueando chat: $e');
+            ReleaseLogger.error('⚠️Error desbloqueando chat: $e');
             // No lanzar error, el chat puede no haber estado bloqueado
           }
         }
@@ -359,7 +360,7 @@ class WhitelistController {
     required String contactPhone,
   }) async {
     try {
-      print('🔍 Buscando usuario con teléfono: $contactPhone');
+      ReleaseLogger.log('🔍Buscando usuario con teléfono: $contactPhone');
 
       // Buscar el usuario por teléfono (intentar ambos campos)
       var userQuery = await _firestore
@@ -379,18 +380,18 @@ class WhitelistController {
 
       if (userQuery.docs.isNotEmpty) {
         final contactId = userQuery.docs.first.id;
-        print('✅ Usuario encontrado: $contactId');
+        ReleaseLogger.log('✅Usuario encontrado: $contactId');
 
         // Bloquear chat usando Cloud Function
         final currentUserId = _auth.currentUser?.uid;
-        print('👤 Usuario actual (blockedBy) en _blockChatByPhone: $currentUserId');
+        ReleaseLogger.log('👤Usuario actual (blockedBy) en _blockChatByPhone: $currentUserId');
 
         if (currentUserId == null) {
-          print('❌ ERROR: No hay usuario autenticado en _blockChatByPhone');
+          ReleaseLogger.error('❌ERROR: No hay usuario autenticado en _blockChatByPhone');
           throw Exception('Usuario no autenticado');
         }
 
-        print('📞 Llamando a Cloud Function blockChat...');
+        ReleaseLogger.log('📞Llamando a Cloud Function blockChat...');
         await _functions.httpsCallable('blockChat').call({
           'childId': childId,
           'contactId': contactId,
@@ -398,12 +399,12 @@ class WhitelistController {
           'blockedBy': currentUserId,
         });
 
-        print('✅ Chat bloqueado exitosamente via Cloud Function');
+        ReleaseLogger.log('✅Chat bloqueado exitosamente via Cloud Function');
       } else {
-        print('⚠️ No se encontró usuario con teléfono: $contactPhone');
+        ReleaseLogger.error('⚠️No se encontró usuario con teléfono: $contactPhone');
       }
     } catch (e) {
-      print('❌ Error bloqueando chat por teléfono: $e');
+      ReleaseLogger.error('❌Error bloqueando chat por teléfono: $e');
     }
   }
 

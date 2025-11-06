@@ -6,6 +6,7 @@ import '../notification_service.dart';
 import '../services/contacts_sync_service.dart';
 import '../utils/chat_utils.dart';
 import '../utils/release_logger.dart';
+import '../constants/notification_types.dart';
 
 /// Controller para el shell principal de padres
 ///
@@ -28,6 +29,9 @@ class ParentMainShellController {
   // Subscripciones privadas
   StreamSubscription? _chatNotificationSubscription;
   StreamSubscription? _roleChangeSubscription;
+
+  // ✅ OPTIMIZACIÓN: Stream centralizado para evitar duplicar listeners al mismo documento
+  Stream<DocumentSnapshot>? _cachedUserDataStream;
 
   // Callback para navegación (configurado por el screen)
   Function(Map<String, dynamic>)? onChatNotificationTap;
@@ -164,19 +168,37 @@ class ParentMainShellController {
   }
 
   /// Stream de datos del usuario actual
+  /// ✅ OPTIMIZADO: Usa cache para evitar múltiples listeners al mismo documento
   Stream<DocumentSnapshot> getCurrentUserStream() {
-    return _firestore
+    // ✅ FIX: Usar currentUserId si parentId no está inicializado aún
+    final userId = currentUserId;
+    if (userId == null) {
+      throw Exception('Usuario no autenticado');
+    }
+
+    print('🔍 [ParentMainShell] getCurrentUserStream llamado - usando cache: ${_cachedUserDataStream != null}, userId: $userId');
+
+    _cachedUserDataStream ??= _firestore
         .collection('users')
-        .doc(parentId)
-        .snapshots();
+        .doc(userId)
+        .snapshots()
+        .asBroadcastStream(); // Permite múltiples subscripciones
+
+    return _cachedUserDataStream!;
   }
 
-  /// Stream de notificaciones no leídas
+  /// Stream de notificaciones no leídas relacionadas con Lista Blanca
+  /// Solo cuenta solicitudes de contacto y cambios de whitelist
   Stream<int> getUnreadNotificationsStream() {
     return _firestore
         .collection('notifications')
         .where('userId', isEqualTo: parentId)
         .where('read', isEqualTo: false)
+        .where('type', whereIn: [
+          NotificationTypes.contactRequest,
+          NotificationTypes.whitelistChange,
+          NotificationTypes.groupPermissionRequest
+        ])
         .snapshots()
         .map((snapshot) => snapshot.docs.length);
   }
@@ -190,17 +212,37 @@ class ParentMainShellController {
         .map((snapshot) {
       int unreadCount = 0;
       for (var doc in snapshot.docs) {
-        final data = doc.data() as Map<String, dynamic>;
-        final lastMessage = data['lastMessage'] as Map<String, dynamic>?;
+        try {
+          final data = doc.data() as Map<String, dynamic>;
+          final lastMessageField = data['lastMessage'];
 
-        if (lastMessage != null) {
-          final senderId = lastMessage['senderId'] as String?;
-          final isRead = lastMessage['isRead'] as bool? ?? true;
-
-          // Solo contar como no leído si no lo envié yo y no está leído
-          if (senderId != parentId && !isRead) {
-            unreadCount++;
+          // ✅ OPTIMIZACIÓN: Verificar tipo antes de cast para evitar errores
+          Map<String, dynamic>? lastMessage;
+          if (lastMessageField is Map<String, dynamic>) {
+            lastMessage = lastMessageField;
+          } else if (lastMessageField is String) {
+            // Si es un String, saltear este documento (formato legacy o corrupto)
+            ReleaseLogger.log('lastMessage es String en vez de Map en chat ${doc.id}, saltando', tag: 'ParentMainShell');
+            continue;
+          } else if (lastMessageField != null) {
+            // Si es algún otro tipo, log y saltar
+            ReleaseLogger.log('lastMessage tiene tipo inesperado: ${lastMessageField.runtimeType} en chat ${doc.id}', tag: 'ParentMainShell');
+            continue;
           }
+
+          if (lastMessage != null) {
+            final senderId = lastMessage['senderId'] as String?;
+            final isRead = lastMessage['isRead'] as bool? ?? true;
+
+            // Solo contar como no leído si no lo envié yo y no está leído
+            if (senderId != parentId && !isRead) {
+              unreadCount++;
+            }
+          }
+        } catch (e) {
+          ReleaseLogger.error('Error procesando chat ${doc.id}: $e', tag: 'ParentMainShell');
+          // Continuar con el siguiente documento
+          continue;
         }
       }
       return unreadCount;
@@ -235,6 +277,9 @@ class ParentMainShellController {
     ReleaseLogger.log('Disposing controller', tag: 'ParentMainShell');
     _chatNotificationSubscription?.cancel();
     _roleChangeSubscription?.cancel();
+
+    // ✅ OPTIMIZACIÓN: Limpiar stream cacheado
+    _cachedUserDataStream = null;
   }
 }
 

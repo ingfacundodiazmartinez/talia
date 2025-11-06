@@ -51,7 +51,6 @@ class ChatControllerOptimistic extends ChangeNotifier {
   final NotificationService _notificationService;
   final TypingIndicatorService _typingService;
   final SoundService _soundService;
-  final UserProfileCacheService _userProfileCache;
   final BlockService _blockService;
 
   // Subscripciones
@@ -101,7 +100,6 @@ class ChatControllerOptimistic extends ChangeNotifier {
     NotificationService? notificationService,
     TypingIndicatorService? typingService,
     SoundService? soundService,
-    UserProfileCacheService? userProfileCache,
     BlockService? blockService,
   }) : _firestore = firestore ?? FirebaseFirestore.instance,
        _auth = auth ?? FirebaseAuth.instance,
@@ -112,7 +110,6 @@ class ChatControllerOptimistic extends ChangeNotifier {
        _notificationService = notificationService ?? NotificationService(),
        _typingService = typingService ?? TypingIndicatorService(),
        _soundService = soundService ?? SoundService(),
-       _userProfileCache = userProfileCache ?? UserProfileCacheService(),
        _blockService = blockService ?? BlockService() {
     _controllerId = DateTime.now().millisecondsSinceEpoch.toString().substring(
       8,
@@ -130,14 +127,14 @@ class ChatControllerOptimistic extends ChangeNotifier {
 
   /// Inicializar el controller
   Future<void> initialize() async {
-    print('🔄 [Controller-$_controllerId] Inicializando...');
+    ReleaseLogger.log('🔄[Controller-$_controllerId] Inicializando...');
     await _loadContactInfo();
     await _loadCachedMessages();
     await _loadFirestoreMessages();
     _setupNotificationListener();
     _setupMessagesListener();
     setupBlockListeners();
-    print('✅ [Controller-$_controllerId] Inicialización completa');
+    ReleaseLogger.log('✅[Controller-$_controllerId] Inicialización completa');
   }
 
   /// Configurar listeners para estado de bloqueo
@@ -183,10 +180,10 @@ class ChatControllerOptimistic extends ChangeNotifier {
           'readBy': readBy,
           'readAt_$currentUserId': FieldValue.serverTimestamp(),
         });
-        print('✅ [AutoRead] Mensaje $messageId marcado como leído');
+        ReleaseLogger.log('✅[AutoRead] Mensaje $messageId marcado como leído');
       }
     } catch (e) {
-      print('❌ [AutoRead] Error marcando mensaje como leído: $e');
+      ReleaseLogger.error('❌[AutoRead] Error marcando mensaje como leído: $e');
     }
   }
 
@@ -200,7 +197,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
         _contactIsOnline = userData['isOnline'] ?? false;
       }
     } catch (e) {
-      print('❌ Error cargando info del contacto: $e');
+      ReleaseLogger.error('❌Error cargando info del contacto: $e');
     }
   }
 
@@ -236,9 +233,9 @@ class ChatControllerOptimistic extends ChangeNotifier {
       );
 
       _hasLoadedInitialMessages = true;
-      print('📥 Cargados ${firestoreMessages.length} mensajes de Firestore');
+      ReleaseLogger.log('📥Cargados ${firestoreMessages.length} mensajes de Firestore');
     } catch (e) {
-      print('❌ Error cargando mensajes: $e');
+      ReleaseLogger.error('❌Error cargando mensajes: $e');
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -248,7 +245,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
   /// Cargar más mensajes antiguos (paginación)
   Future<void> loadMoreMessages() async {
     if (_isLoadingMore || !hasMoreMessages) {
-      print('📄 No se pueden cargar más mensajes');
+      ReleaseLogger.log('📄No se pueden cargar más mensajes');
       return;
     }
 
@@ -267,9 +264,9 @@ class ChatControllerOptimistic extends ChangeNotifier {
         currentUserId: currentUserId,
       );
 
-      print('📄 Cargados ${moreMessages.length} mensajes adicionales');
+      ReleaseLogger.log('📄Cargados ${moreMessages.length} mensajes adicionales');
     } catch (e) {
-      print('❌ Error cargando más mensajes: $e');
+      ReleaseLogger.error('❌Error cargando más mensajes: $e');
     } finally {
       _isLoadingMore = false;
       notifyListeners();
@@ -289,7 +286,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
       (snapshot) {
         if (!_listenerInitialized) {
           _listenerInitialized = true;
-          print('👂 [Realtime] Listener inicializado');
+          ReleaseLogger.log('👂[Realtime] Listener inicializado');
           return;
         }
 
@@ -307,14 +304,14 @@ class ChatControllerOptimistic extends ChangeNotifier {
       },
       onError: (error) {
         if (error.toString().contains('permission-denied')) {
-          print('💬 [Realtime] Chat vacío, esperando primer mensaje...');
+          ReleaseLogger.log('💬[Realtime] Chat vacío, esperando primer mensaje...');
         } else {
-          print('❌ [Realtime] Error: $error');
+          ReleaseLogger.error('❌[Realtime] Error: $error');
         }
       },
     );
 
-    print('👂 [Realtime] Listener configurado');
+    ReleaseLogger.log('👂[Realtime] Listener configurado');
   }
 
   /// Manejar mensaje del listener en tiempo real
@@ -326,7 +323,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
     if (changeType == DocumentChangeType.added &&
         newMessage.senderId != currentUserId &&
         !newMessage.isRead) {
-      print(
+      ReleaseLogger.log(
         '👁️ [AutoRead] Marcando mensaje ${newMessage.id} como leído inmediatamente',
       );
       _markSingleMessageAsRead(newMessage.id);
@@ -336,7 +333,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
     if (newMessage.senderId != currentUserId) {
       if (newMessage.moderationStatus != ModerationStatus.approved &&
           newMessage.moderationStatus != ModerationStatus.blocked) {
-        print('🔒 Ignorando mensaje pendiente: ${newMessage.id}');
+        ReleaseLogger.log('🔒Ignorando mensaje pendiente: ${newMessage.id}');
         return;
       }
     }
@@ -351,7 +348,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
     // Actualizar mensaje existente
     if (_stateService.messageExists(newMessage.id)) {
       if (changeType == DocumentChangeType.modified) {
-        print('🔄 Actualizando mensaje: ${newMessage.id}');
+        ReleaseLogger.log('🔄Actualizando mensaje: ${newMessage.id}');
         _stateService.updateMessage(
           chatId: chatId,
           oldId: newMessage.id,
@@ -365,7 +362,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
     // Si es mensaje propio nuevo, usar addMessages para que maneje la lógica de reemplazo de pendientes
     if (newMessage.senderId == currentUserId &&
         changeType == DocumentChangeType.added) {
-      print('📩 Procesando mensaje propio desde Firestore: ${newMessage.id}');
+      ReleaseLogger.log('📩Procesando mensaje propio desde Firestore: ${newMessage.id}');
       _stateService.addMessages(
         chatId: chatId,
         newMessages: [newMessage],
@@ -379,7 +376,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
     final clearedAt = _paginationService.clearedAtTimestamp;
     if (clearedAt != null && newMessage.timestamp != null) {
       if (newMessage.timestamp!.compareTo(clearedAt) <= 0) {
-        print('🧹 Ignorando mensaje anterior a limpieza');
+        ReleaseLogger.log('🧹Ignorando mensaje anterior a limpieza');
         return;
       }
     }
@@ -391,12 +388,12 @@ class ChatControllerOptimistic extends ChangeNotifier {
       text: newMessage.text,
       imageUrl: newMessage.imageUrl,
     )) {
-      print('🚫 Ignorando duplicado: ${newMessage.id}');
+      ReleaseLogger.log('🚫Ignorando duplicado: ${newMessage.id}');
       return;
     }
 
     // Agregar nuevo mensaje
-    print('✅ Nuevo mensaje del contacto: ${newMessage.id}');
+    ReleaseLogger.log('✅Nuevo mensaje del contacto: ${newMessage.id}');
     _stateService.addOptimisticMessage(newMessage);
     _stateService.updateLastMessageTimestamp(newMessage.timestamp);
 
@@ -412,7 +409,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
 
   /// Manejar mensaje bloqueado propio
   void _handleBlockedOwnMessage(ChatMessage blockedMessage) {
-    print('🚫 Mensaje bloqueado propio recibido: ${blockedMessage.id}');
+    ReleaseLogger.log('🚫Mensaje bloqueado propio recibido: ${blockedMessage.id}');
 
     // Buscar mensaje optimista pendiente
     final pendingMsg = _stateService.pendingMessages.firstWhere(
@@ -428,7 +425,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
       );
       _stateService.removePendingMessage(pendingMsg.id);
       notifyListeners();
-      print('✅ Mensaje optimista reemplazado por bloqueado');
+      ReleaseLogger.log('✅Mensaje optimista reemplazado por bloqueado');
     }
   }
 
@@ -474,14 +471,14 @@ class ChatControllerOptimistic extends ChangeNotifier {
         replyTo: replyTo,
         localId: tempId, // ✅ Enviar tempId como localId
       );
-      print('✅ Mensaje enviado');
+      ReleaseLogger.log('✅Mensaje enviado');
 
       // 3. Actualizar mensaje optimista
       final sentMessage = optimisticMessage.copyWith(
         id: docId,
         status: MessageStatus.sent,
       );
-      print('✅ Mensaje optimista actualizado');
+      ReleaseLogger.log('✅Mensaje optimista actualizado');
 
       await _stateService.updateMessage(
         chatId: chatId,
@@ -489,15 +486,15 @@ class ChatControllerOptimistic extends ChangeNotifier {
         newMessage: sentMessage,
       );
 
-      print('✅ Mensaje optimista reemplazado por enviado');
+      ReleaseLogger.log('✅Mensaje optimista reemplazado por enviado');
       _stateService.removePendingMessage(tempId);
-      print('✅ Mensaje optimista removido de pendientes');
+      ReleaseLogger.log('✅Mensaje optimista removido de pendientes');
       notifyListeners();
-      print('✅ UI notificada de actualización de mensaje');
+      ReleaseLogger.log('✅UI notificada de actualización de mensaje');
 
-      print('✅ Mensaje enviado: $text');
+      ReleaseLogger.log('✅Mensaje enviado: $text');
     } catch (e) {
-      print('❌ Error enviando mensaje 1: $e');
+      ReleaseLogger.error('❌Error enviando mensaje 1: $e');
       _handleSendError(tempId, optimisticMessage, e);
     }
   }
@@ -549,9 +546,9 @@ class ChatControllerOptimistic extends ChangeNotifier {
         currentUserId: currentUserId,
         source: source,
       );
-      print('✅ Imagen enviada: $docId');
+      ReleaseLogger.log('✅Imagen enviada: $docId');
     } catch (e) {
-      print('❌ Error enviando imagen: $e');
+      ReleaseLogger.error('❌Error enviando imagen: $e');
       rethrow;
     }
   }
@@ -576,7 +573,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
 
     _stateService.addOptimisticMessage(optimisticMessage);
     notifyListeners();
-    print('✅ Burbuja optimista de video creada: $tempId');
+    ReleaseLogger.log('✅Burbuja optimista de video creada: $tempId');
   }
 
   /// Procesar y subir video
@@ -618,10 +615,10 @@ class ChatControllerOptimistic extends ChangeNotifier {
         notifyListeners();
       }
 
-      print('✅ Video enviado');
+      ReleaseLogger.log('✅Video enviado');
     } catch (e) {
       onHideMessage?.call();
-      print('❌ Error enviando video: $e');
+      ReleaseLogger.error('❌Error enviando video: $e');
 
       final optimisticMsg = _stateService.getMessageById(tempId);
       if (optimisticMsg != null) {
@@ -651,11 +648,11 @@ class ChatControllerOptimistic extends ChangeNotifier {
     _currentOptimisticAudioId = tempId;
 
     // Procesar waveform inmediatamente
-    print('🎵 Procesando waveform del audio...');
+    ReleaseLogger.log('🎵Procesando waveform del audio...');
     final AudioProcessingService audioProcessing = AudioProcessingService();
     final File audioFile = File(audioPath);
     final waveformData = await audioProcessing.extractWaveform(audioFile);
-    print('✅ Waveform procesado: ${waveformData.length} puntos');
+    ReleaseLogger.log('✅Waveform procesado: ${waveformData.length} puntos');
 
     // Crear mensaje optimista con waveform real
     final optimisticMessage = ChatMessage.optimistic(
@@ -669,7 +666,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
 
     _stateService.addOptimisticMessage(optimisticMessage);
     notifyListeners();
-    print('✅ Burbuja optimista de audio creada con waveform: $tempId');
+    ReleaseLogger.log('✅Burbuja optimista de audio creada con waveform: $tempId');
   }
 
   /// Procesar y subir audio
@@ -705,10 +702,10 @@ class ChatControllerOptimistic extends ChangeNotifier {
       _stateService.removePendingMessage(tempId);
       notifyListeners();
 
-      print('✅ Audio subido y mensaje actualizado: $docId');
+      ReleaseLogger.log('✅Audio subido y mensaje actualizado: $docId');
       _currentOptimisticAudioId = null;
     } catch (e) {
-      print('❌ Error subiendo audio: $e');
+      ReleaseLogger.error('❌Error subiendo audio: $e');
 
       // Marcar mensaje como error
       final optimisticMsg = _stateService.pendingMessages.firstWhere(
@@ -812,8 +809,6 @@ class ChatControllerOptimistic extends ChangeNotifier {
     }
   }
 
-  /// Obtener ID del usuario actual
-  String get currentUserId => _auth.currentUser?.uid ?? '';
 
   @override
   void dispose() {

@@ -164,6 +164,40 @@ class _CharacterSelectorDialogState extends State<CharacterSelectorDialog> {
               ),
             ),
 
+            // Warning sobre condiciones de iluminación
+            Container(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.amber.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: Colors.amber.withValues(alpha: 0.3),
+                  width: 1,
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.lightbulb_outline,
+                    color: Colors.amber[700],
+                    size: 20,
+                  ),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Para mejores resultados, asegúrate de que tu cara sea claramente visible con buena iluminación. Evita sombras o imágenes muy oscuras.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: isDarkMode ? Colors.amber[200] : Colors.amber[800],
+                        height: 1.3,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
             // Categories
             if (_characters.isNotEmpty && _categories.length > 2)
               Container(

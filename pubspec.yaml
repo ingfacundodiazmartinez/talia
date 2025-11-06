@@ -48,6 +48,10 @@ dependencies:
   firebase_remote_config: ^6.1.0
   logger: ^2.5.0
   http: ^1.1.0
+
+  # Validación y Sanitización - Solo packages actualizados
+  # Usamos dart:convert (nativo) para HtmlEscape en lugar de html_unescape
+  # Usamos validaciones custom en lugar de form_field_validator (3+ años sin update)
   flutter_local_notifications: ^19.4.2
   url_launcher: ^6.3.2
   shared_preferences: ^2.3.3
@@ -65,6 +69,7 @@ dependencies:
   workmanager: ^0.8.0
   crypto: ^3.0.6
   encrypt: ^5.0.3
+  flutter_secure_storage: ^9.2.2
   qr_flutter: ^4.1.0
   mobile_scanner: ^7.1.2
   uuid: ^4.5.1
@@ -108,11 +113,13 @@ dev_dependencies:
   mockito: ^5.4.4
   build_runner: ^2.4.13
   fake_cloud_firestore: ^4.0.0  # Compatible con Firestore 6.x
+  firebase_auth_mocks: ^0.15.1
   integration_test:
     sdk: flutter
 
 dependency_overrides:
   intl: ^0.19.0
+  pointycastle: ^4.0.0  # Fix conflict between firebase_auth_mocks and encrypt
   # Dejar que use la versión de pub.dev normal (no el fork de git que causaba problemas)
 
 flutter_launcher_icons:

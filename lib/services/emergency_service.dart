@@ -558,9 +558,10 @@ class EmergencyService {
     print('🚨 [EmergencyService] ❌ CREANDO NUEVO STREAM para padre: $parentId');
     ReleaseLogger.log('🚨 [EmergencyService] Creando nuevo stream para padre: $parentId', tag: 'EmergencyService');
 
-    // ✅ CORREGIDO: Convertir Future<Stream> en Stream usando asyncExpand una sola vez
+    // ✅ CORREGIDO: Convertir Future<Stream> en Stream usando asyncExpand y hacer broadcast
     final stream = Stream.fromFuture(_createEmergencyStreamForParent(parentId))
-        .asyncExpand((innerStream) => innerStream);
+        .asyncExpand((innerStream) => innerStream)
+        .asBroadcastStream();
 
     // ✅ Cachear el stream
     _cachedEmergencyStreams[parentId] = stream;

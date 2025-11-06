@@ -156,7 +156,7 @@ class NotificationService {
       final currentUserId = _auth.currentUser?.uid;
       if (currentUserId == null) return;
 
-      print('🧹 Verificando tokens FCM duplicados para: ${newToken.substring(0, 20)}...');
+      ReleaseLogger.log('🧹 Verificando tokens FCM duplicados para: ${newToken.substring(0, 20)}...', tag: 'NotificationService');
 
       // Buscar otros usuarios que tengan el mismo token FCM
       final duplicateUsersQuery = await _firestore
@@ -179,13 +179,13 @@ class NotificationService {
         });
 
         cleanedCount++;
-        print('🗑️ Token FCM limpiado del usuario anterior: $userId');
+        ReleaseLogger.log('🗑️ Token FCM limpiado del usuario anterior: $userId', tag: 'NotificationService');
       }
 
       if (cleanedCount > 0) {
-        print('✅ Se limpiaron $cleanedCount tokens FCM duplicados');
+        ReleaseLogger.log('✅ Se limpiaron $cleanedCount tokens FCM duplicados', tag: 'NotificationService');
       } else {
-        print('✅ No se encontraron tokens FCM duplicados');
+        ReleaseLogger.log('✅ No se encontraron tokens FCM duplicados', tag: 'NotificationService');
       }
     } catch (e) {
       ReleaseLogger.error('Error limpiando tokens duplicados: $e', tag: 'NotificationService');
@@ -203,7 +203,7 @@ class NotificationService {
       FirebaseMessaging.onBackgroundMessage(
         _firebaseMessagingBackgroundHandler,
       );
-      print('✅ Background handler de Flutter registrado');
+      ReleaseLogger.log('✅ Background handler de Flutter registrado', tag: 'NotificationService');
 
       // 2. Solicitar permisos
       await _requestPermissions();
@@ -215,7 +215,7 @@ class NotificationService {
         badge: false,
         sound: false,
       );
-      print('✅ Notificaciones push desactivadas en foreground (solo custom notifications)');
+      ReleaseLogger.log('✅ Notificaciones push desactivadas en foreground (solo custom notifications)', tag: 'NotificationService');
 
       // 3. Configurar notificaciones locales
       await _initializeLocalNotifications();
@@ -230,7 +230,7 @@ class NotificationService {
       _setupListeners();
 
       _isInitialized = true;
-      print('✅ Servicio de notificaciones inicializado');
+      ReleaseLogger.log('✅ Servicio de notificaciones inicializado', tag: 'NotificationService');
     } catch (e) {
       ReleaseLogger.error('Error inicializando notificaciones: $e', tag: 'NotificationService');
     }
@@ -239,7 +239,7 @@ class NotificationService {
   // Solicitar permisos de notificaciones
   Future<void> _requestPermissions() async {
     try {
-      print('🔔 Solicitando permisos de notificaciones...');
+      ReleaseLogger.log('🔔 Solicitando permisos de notificaciones...', tag: 'NotificationService');
       final settings = await _fcm.requestPermission(
         alert: true,
         announcement: false,
@@ -250,26 +250,26 @@ class NotificationService {
         sound: true,
       );
 
-      print('📱 Permisos de notificaciones: ${settings.authorizationStatus}');
-      print('   Alert: ${settings.alert}');
-      print('   Badge: ${settings.badge}');
-      print('   Sound: ${settings.sound}');
+      ReleaseLogger.log('📱 Permisos de notificaciones: ${settings.authorizationStatus}', tag: 'NotificationService');
+      ReleaseLogger.log('   Alert: ${settings.alert}', tag: 'NotificationService');
+      ReleaseLogger.log('   Badge: ${settings.badge}', tag: 'NotificationService');
+      ReleaseLogger.log('   Sound: ${settings.sound}', tag: 'NotificationService');
 
       if (settings.authorizationStatus == AuthorizationStatus.authorized) {
-        print('✅ Permisos concedidos');
+        ReleaseLogger.log('✅ Permisos concedidos', tag: 'NotificationService');
       } else if (settings.authorizationStatus ==
           AuthorizationStatus.provisional) {
-        print('⚠️ Permisos provisionales');
+        ReleaseLogger.log('⚠️ Permisos provisionales', tag: 'NotificationService');
       } else {
-        print('❌ Permisos denegados o no decididos');
-        print('   Status: ${settings.authorizationStatus}');
-        print('⚠️ Para habilitar notificaciones:');
-        print('   1. Ve a Ajustes > Talia > Notificaciones');
-        print('   2. Activa "Permitir notificaciones"');
+        ReleaseLogger.log('❌ Permisos denegados o no decididos', tag: 'NotificationService');
+        ReleaseLogger.log('   Status: ${settings.authorizationStatus}', tag: 'NotificationService');
+        ReleaseLogger.log('⚠️ Para habilitar notificaciones:', tag: 'NotificationService');
+        ReleaseLogger.log('   1. Ve a Ajustes > Talia > Notificaciones', tag: 'NotificationService');
+        ReleaseLogger.log('   2. Activa "Permitir notificaciones"', tag: 'NotificationService');
       }
     } catch (e) {
       ReleaseLogger.error('Error solicitando permisos: $e', tag: 'NotificationService');
-      print('   Stack trace: ${StackTrace.current}');
+      ReleaseLogger.error('   Stack trace: ${StackTrace.current}', tag: 'NotificationService');
     }
   }
 
@@ -330,26 +330,26 @@ class NotificationService {
   // Obtener token FCM
   Future<void> _getFCMToken() async {
     try {
-      print('🔄 Verificando estado de autenticación...');
+      ReleaseLogger.log('🔄 Verificando estado de autenticación...', tag: 'NotificationService');
       if (_auth.currentUser == null) {
-        print('⚠️ No hay usuario autenticado, FCM token se obtendrá después del login');
+        ReleaseLogger.log('⚠️ No hay usuario autenticado, FCM token se obtendrá después del login', tag: 'NotificationService');
         return;
       }
 
-      print('🔄 Obteniendo FCM token...');
+      ReleaseLogger.log('🔄 Obteniendo FCM token...', tag: 'NotificationService');
       _fcmToken = await _fcm.getToken();
 
       if (_fcmToken == null) {
-        print('❌ No se pudo obtener el FCM token');
-        print('   Esto puede ocurrir si:');
-        print('   - Los permisos de notificaciones están denegados');
-        print('   - No hay conexión a internet');
-        print('   - El dispositivo no está registrado en APNs (iOS)');
+        ReleaseLogger.error('❌ No se pudo obtener el FCM token', tag: 'NotificationService');
+        ReleaseLogger.error('   Esto puede ocurrir si:', tag: 'NotificationService');
+        ReleaseLogger.error('   - Los permisos de notificaciones están denegados', tag: 'NotificationService');
+        ReleaseLogger.error('   - No hay conexión a internet', tag: 'NotificationService');
+        ReleaseLogger.error('   - El dispositivo no está registrado en APNs (iOS)', tag: 'NotificationService');
         return;
       }
 
-      print('🔑 FCM Token obtenido: ${_fcmToken!.substring(0, 20)}...');
-      print('💾 Guardando FCM token en Firestore...');
+      ReleaseLogger.log('🔑 FCM Token obtenido: ${_fcmToken!.substring(0, 20)}...', tag: 'NotificationService');
+      ReleaseLogger.log('💾 Guardando FCM token en Firestore...', tag: 'NotificationService');
 
       // IMPORTANTE: Limpiar token duplicado de otros usuarios antes de registrar
       await _cleanupDuplicateTokens(_fcmToken!);
@@ -359,11 +359,11 @@ class NotificationService {
         'fcmToken': _fcmToken,
         'fcmTokenUpdatedAt': FieldValue.serverTimestamp(),
       });
-      print('✅ FCM token guardado exitosamente');
+      ReleaseLogger.log('✅ FCM token guardado exitosamente', tag: 'NotificationService');
 
       // Escuchar cambios de token
       _fcm.onTokenRefresh.listen((newToken) async {
-        print('🔄 FCM token actualizado');
+        ReleaseLogger.log('🔄 FCM token actualizado', tag: 'NotificationService');
         _fcmToken = newToken;
         if (_auth.currentUser != null) {
           // Limpiar token duplicado de otros usuarios antes de registrar el nuevo
@@ -377,7 +377,7 @@ class NotificationService {
       });
     } catch (e) {
       ReleaseLogger.error('Error obteniendo token: $e', tag: 'NotificationService');
-      print('   Stack trace: ${StackTrace.current}');
+      ReleaseLogger.error('   Stack trace: ${StackTrace.current}', tag: 'NotificationService');
     }
   }
 
@@ -385,29 +385,27 @@ class NotificationService {
   void _initializeCallKit() {
     _callKit.initialize(
       onCallAccepted: (callData) {
-        print('✅ CallKit: Llamada aceptada');
+        ReleaseLogger.log('✅ CallKit: Llamada aceptada', tag: 'NotificationService');
         // Emitir evento para que la app navegue a la pantalla de llamada
         _incomingCallController.add(callData);
       },
       onCallDeclined: (callId) {
-        print('❌ CallKit: Llamada rechazada - $callId');
+        ReleaseLogger.log('❌ CallKit: Llamada rechazada - $callId', tag: 'NotificationService');
         // Aquí podrías enviar una notificación al llamador de que se rechazó
       },
       onCallEnded: (callId) {
-        print('🔚 CallKit: Llamada finalizada - $callId');
+        ReleaseLogger.log('🔚 CallKit: Llamada finalizada - $callId', tag: 'NotificationService');
         // Limpiar recursos si es necesario
       },
     );
-    print('✅ CallKit inicializado correctamente');
+    ReleaseLogger.log('✅ CallKit inicializado correctamente', tag: 'NotificationService');
   }
 
   // Configurar listeners de mensajes
   void _setupListeners() {
     // Mensajes cuando la app está en primer plano
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      print(
-        '📨 Mensaje recibido en primer plano: ${message.notification?.title}',
-      );
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
+      ReleaseLogger.log('📨 Mensaje recibido en primer plano: ${message.notification?.title}', tag: 'NotificationService');
 
       // Verificar si es una videollamada o llamada de audio
       if (message.data['type'] == 'video_call' ||
@@ -415,8 +413,8 @@ class NotificationService {
           message.data['type'] == 'group_video_call' ||
           message.data['type'] == 'group_audio_call' ||
           message.data['type'] == 'emergency_call') {
-        print('📞 ${message.data['type']} entrante detectada en FOREGROUND');
-        print('📞 Mostrando CallKit incluso en foreground para experiencia nativa');
+        ReleaseLogger.log('📞 ${message.data['type']} entrante detectada en FOREGROUND', tag: 'NotificationService');
+        ReleaseLogger.log('📞 Mostrando CallKit incluso en foreground para experiencia nativa', tag: 'NotificationService');
 
         try {
           if (Platform.isAndroid) {
@@ -430,10 +428,10 @@ class NotificationService {
               isEmergency: message.data['isEmergency'] == 'true' || message.data['isEmergency'] == true,
               extraData: message.data,
             );
-            print('✅ CallKit (Android) mostrado exitosamente en foreground');
+            ReleaseLogger.log('✅ CallKit (Android) mostrado exitosamente en foreground', tag: 'NotificationService');
           } else if (Platform.isIOS) {
             // iOS usa VoIP nativo - las notificaciones VoIP se manejan automáticamente por el sistema
-            print('✅ iOS VoIP - las llamadas se manejan automáticamente por el sistema');
+            ReleaseLogger.log('✅ iOS VoIP - las llamadas se manejan automáticamente por el sistema', tag: 'NotificationService');
             // En iOS, las notificaciones VoIP push aparecen automáticamente como CallKit
             // No necesitamos hacer nada adicional aquí
           }
@@ -444,23 +442,21 @@ class NotificationService {
       } else {
         // ✅ NO mostrar notificaciones push cuando la app está en foreground
         // Las custom notifications (ForegroundMessageListener) se encargan de mostrar los mensajes
-        print('✅ App en foreground - mensaje manejado por custom notifications (no push)');
+        ReleaseLogger.log('✅ App en foreground - mensaje manejado por custom notifications (no push)', tag: 'NotificationService');
         return;
       }
     });
 
     // Mensajes cuando se toca la notificación (app en segundo plano)
     FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-      print('🔔 Notificación tocada: ${message.notification?.title}');
+      ReleaseLogger.log('🔔 Notificación tocada: ${message.notification?.title}', tag: 'NotificationService');
       _handleNotificationTap(message.data);
     });
 
     // Verificar si la app se abrió desde una notificación
     _fcm.getInitialMessage().then((RemoteMessage? message) {
       if (message != null) {
-        print(
-          '🚀 App abierta desde notificación: ${message.notification?.title}',
-        );
+        ReleaseLogger.log('🚀 App abierta desde notificación: ${message.notification?.title}', tag: 'NotificationService');
         // Delay para dar tiempo a que los shells se inicialicen y agreguen sus listeners
         Future.delayed(Duration(milliseconds: 500), () {
           _handleNotificationTap(message.data);
@@ -475,7 +471,7 @@ class NotificationService {
       // Verificar usuario actual
       final currentUser = _auth.currentUser;
       if (currentUser == null) {
-        print('⚠️ No hay usuario autenticado');
+        ReleaseLogger.log('⚠️ No hay usuario autenticado', tag: 'NotificationService');
         return;
       }
 
@@ -483,9 +479,9 @@ class NotificationService {
       final notificationType = message.data['type'] ?? 'unknown';
       final senderId = message.data['senderId'];
 
-      print('📨 Procesando notificación local:');
-      print('   Tipo: $notificationType');
-      print('   Usuario: ${currentUser.uid.substring(0, 8)}...');
+      ReleaseLogger.log('📨 Procesando notificación local:', tag: 'NotificationService');
+      ReleaseLogger.log('   Tipo: $notificationType', tag: 'NotificationService');
+      ReleaseLogger.log('   Usuario: ${currentUser.uid.substring(0, 8)}...', tag: 'NotificationService');
 
       // Verificar si se debe mostrar la notificación
       final decision = await _filter.shouldSendNotification(
@@ -495,11 +491,11 @@ class NotificationService {
       );
 
       if (!decision.shouldSend) {
-        print('🚫 Notificación bloqueada: ${decision.reason}');
+        ReleaseLogger.log('🚫 Notificación bloqueada: ${decision.reason}', tag: 'NotificationService');
         return;
       }
 
-      print('✅ Notificación permitida: ${decision.reason}');
+      ReleaseLogger.log('✅ Notificación permitida: ${decision.reason}', tag: 'NotificationService');
 
       // Obtener configuración de sonido
       final soundConfig = await _filter.getSoundConfig(currentUser.uid);
@@ -513,7 +509,7 @@ class NotificationService {
       // Solo para Android: descargar y procesar foto del remitente como largeIcon
       if (Platform.isAndroid && senderPhotoUrl != null && senderPhotoUrl.isNotEmpty && senderPhotoUrl != 'null') {
         try {
-          print('📥 [Android] Descargando foto del remitente: $senderPhotoUrl');
+          ReleaseLogger.log('📥 [Android] Descargando foto del remitente: $senderPhotoUrl', tag: 'NotificationService');
           final response = await http.get(Uri.parse(senderPhotoUrl)).timeout(Duration(seconds: 5));
 
           if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
@@ -540,23 +536,23 @@ class NotificationService {
 
               if (await file.exists()) {
                 largeIconPath = filePath;
-                print('✅ [Android] Foto del remitente procesada y guardada: $largeIconPath');
+                ReleaseLogger.log('✅ [Android] Foto del remitente procesada y guardada: $largeIconPath', tag: 'NotificationService');
               }
             } else {
-              print('⚠️ [Android] No se pudo decodificar la imagen');
+              ReleaseLogger.log('⚠️ [Android] No se pudo decodificar la imagen', tag: 'NotificationService');
             }
           } else {
-            print('⚠️ [Android] Respuesta inválida: ${response.statusCode}, bytes: ${response.bodyBytes.length}');
+            ReleaseLogger.log('⚠️ [Android] Respuesta inválida: ${response.statusCode}, bytes: ${response.bodyBytes.length}', tag: 'NotificationService');
           }
         } catch (e) {
-          print('⚠️ [Android] Error descargando/procesando foto de perfil: $e');
+          ReleaseLogger.error('⚠️ [Android] Error descargando/procesando foto de perfil: $e', tag: 'NotificationService');
         }
       }
 
       // Si no hay foto del remitente en Android, usar logo de la app
       if (Platform.isAndroid && largeIconPath == null) {
         try {
-          print('📥 [Android] Cargando y procesando logo de fallback...');
+          ReleaseLogger.log('📥 [Android] Cargando y procesando logo de fallback...', tag: 'NotificationService');
           final ByteData logoData = await rootBundle.load('assets/images/logo.png');
           final logoBytes = logoData.buffer.asUint8List();
 
@@ -583,11 +579,11 @@ class NotificationService {
 
             if (await file.exists()) {
               largeIconPath = filePath;
-              print('✅ [Android] Logo procesado y guardado: $largeIconPath');
+              ReleaseLogger.log('✅ [Android] Logo procesado y guardado: $largeIconPath', tag: 'NotificationService');
             }
           }
         } catch (e) {
-          print('⚠️ [Android] Error cargando/procesando logo de la app: $e');
+          ReleaseLogger.error('⚠️ [Android] Error cargando/procesando logo de la app: $e', tag: 'NotificationService');
         }
       }
 
@@ -625,7 +621,7 @@ class NotificationService {
       try {
         payload = message.data.isNotEmpty ? jsonEncode(message.data) : '';
       } catch (e) {
-        print('⚠️ Error codificando payload: $e');
+        ReleaseLogger.error('⚠️ Error codificando payload: $e', tag: 'NotificationService');
       }
 
       await _localNotifications.show(
@@ -636,55 +632,55 @@ class NotificationService {
         payload: payload,
       );
     } catch (e) {
-      print('❌ Error mostrando notificación local: $e');
+      ReleaseLogger.error('❌ Error mostrando notificación local: $e', tag: 'NotificationService');
     }
   }
 
   // Manejar tap en notificación local
   void _onNotificationTapped(NotificationResponse response) {
-    print('👆 Notificación local tocada: ${response.payload}');
+    ReleaseLogger.log('👆 Notificación local tocada: ${response.payload}', tag: 'NotificationService');
 
     if (response.payload != null && response.payload!.isNotEmpty) {
       try {
         // Parsear el JSON del payload
         final data = jsonDecode(response.payload!) as Map<String, dynamic>;
-        print('📦 Datos parseados: $data');
+        ReleaseLogger.log('📦 Datos parseados: $data', tag: 'NotificationService');
 
         // Manejar según el tipo
         _handleNotificationTap(data);
       } catch (e) {
-        print('❌ Error parseando payload: $e');
+        ReleaseLogger.error('❌ Error parseando payload: $e', tag: 'NotificationService');
       }
     }
   }
 
   // Manejar tap en notificación
   void _handleNotificationTap(Map<String, dynamic> data) {
-    print('📍 Navegando según tipo: ${data['type']}');
+    ReleaseLogger.log('📍 Navegando según tipo: ${data['type']}', tag: 'NotificationService');
 
     // Si es una videollamada o llamada de audio, emitir evento para mostrar el diálogo
     if (data['type'] == 'video_call' || data['type'] == 'audio_call') {
-      print('📞 Notificación de ${data['type'] == 'video_call' ? 'videollamada' : 'llamada de audio'} tocada, mostrando diálogo');
+      ReleaseLogger.log('📞 Notificación de ${data['type'] == 'video_call' ? 'videollamada' : 'llamada de audio'} tocada, mostrando diálogo', tag: 'NotificationService');
       // Marcar como originado desde tap de notificación (no CallKit acceptance)
       data['fromNotificationTap'] = true;
       _incomingCallController.add(data);
     } else if (data['type'] == 'chat_message' || data['type'] == 'group_message') {
-      print('💬 Notificación de ${data['type'] == 'group_message' ? 'mensaje grupal' : 'chat'} tocada, navegando');
+      ReleaseLogger.log('💬 Notificación de ${data['type'] == 'group_message' ? 'mensaje grupal' : 'chat'} tocada, navegando', tag: 'NotificationService');
 
       // Marcar el chat como ignorado en el ForegroundMessageListener
       // para evitar que se muestre un banner custom inmediatamente
       final chatId = data['chatId'] as String?;
       if (chatId != null) {
-        print('🔕 Marcando chat $chatId como ignorado en ForegroundMessageListener');
+        ReleaseLogger.log('🔕 Marcando chat $chatId como ignorado en ForegroundMessageListener', tag: 'NotificationService');
         ForegroundMessageListener().markChatOpenedFromNotification(chatId);
       }
 
       _chatNotificationTapController.add(data);
     } else if (data['type'] == 'contact_request') {
-      print('👥 Notificación de solicitud de contacto tocada, navegando a contactos');
+      ReleaseLogger.log('👥 Notificación de solicitud de contacto tocada, navegando a contactos', tag: 'NotificationService');
       _contactRequestNotificationTapController.add(data);
     } else if (data['type'] == 'emergency') {
-      print('🆘 Notificación de emergencia tocada, navegando a detalles');
+      ReleaseLogger.log('🆘 Notificación de emergencia tocada, navegando a detalles', tag: 'NotificationService');
       _emergencyNotificationTapController.add(data);
     }
   }
@@ -712,7 +708,7 @@ class NotificationService {
       );
 
       if (!decision.shouldSend) {
-        print('🚫 Notificación bloqueada para usuario ${userId.substring(0, 8)}...: ${decision.reason}');
+        ReleaseLogger.log('🚫 Notificación bloqueada para usuario ${userId.substring(0, 8)}...: ${decision.reason}', tag: 'NotificationService');
         return false;
       }
 
@@ -735,10 +731,10 @@ class NotificationService {
       //   'priority': priority,
       // });
 
-      print('✅ Notificación delegada a Cloud Functions para usuario ${userId.substring(0, 8)}... (tipo: $notificationType)');
+      ReleaseLogger.log('✅ Notificación delegada a Cloud Functions para usuario ${userId.substring(0, 8)}... (tipo: $notificationType)', tag: 'NotificationService');
       return true;
     } catch (e) {
-      print('❌ Error creando notificación: $e');
+      ReleaseLogger.error('❌ Error creando notificación: $e', tag: 'NotificationService');
       return false;
     }
   }
@@ -769,9 +765,9 @@ class NotificationService {
         'priority': 'high',
       });
 
-      print('✅ Notificación de solicitud de grupo enviada al padre: $parentId');
+      ReleaseLogger.log('✅ Notificación de solicitud de grupo enviada al padre: $parentId', tag: 'NotificationService');
     } catch (e) {
-      print('❌ Error enviando notificación de grupo: $e');
+      ReleaseLogger.error('❌ Error enviando notificación de grupo: $e', tag: 'NotificationService');
     }
   }
 
@@ -795,9 +791,9 @@ class NotificationService {
         'priority': 'normal',
       });
 
-      print('✅ Notificación de membresía aprobada enviada a: $userId');
+      ReleaseLogger.log('✅ Notificación de membresía aprobada enviada a: $userId', tag: 'NotificationService');
     } catch (e) {
-      print('❌ Error enviando notificación de membresía: $e');
+      ReleaseLogger.error('❌ Error enviando notificación de membresía: $e', tag: 'NotificationService');
     }
   }
 
@@ -833,9 +829,9 @@ class NotificationService {
         });
       }
 
-      print('✅ Notificaciones de grupo enviadas a ${recipientIds.length} miembros');
+      ReleaseLogger.log('✅ Notificaciones de grupo enviadas a ${recipientIds.length} miembros', tag: 'NotificationService');
     } catch (e) {
-      print('❌ Error enviando notificaciones de grupo: $e');
+      ReleaseLogger.error('❌ Error enviando notificaciones de grupo: $e', tag: 'NotificationService');
     }
   }
 
@@ -863,9 +859,9 @@ class NotificationService {
         'priority': 'normal',
       });
 
-      print('✅ Recordatorio de grupo enviado al padre: $parentId');
+      ReleaseLogger.log('✅ Recordatorio de grupo enviado al padre: $parentId', tag: 'NotificationService');
     } catch (e) {
-      print('❌ Error enviando recordatorio de grupo: $e');
+      ReleaseLogger.error('❌ Error enviando recordatorio de grupo: $e', tag: 'NotificationService');
     }
   }
 
@@ -881,11 +877,11 @@ class NotificationService {
     String? groupName,
   }) async {
     try {
-      print('📤 Enviando notificación de mensaje:');
-      print('   - Destinatario: $recipientId');
-      print('   - Remitente: $senderId ($senderName)');
-      print('   - Chat ID: $chatId');
-      print('   - Mensaje: ${messageText.substring(0, messageText.length > 50 ? 50 : messageText.length)}...');
+      ReleaseLogger.log('📤 Enviando notificación de mensaje:', tag: 'NotificationService');
+      ReleaseLogger.log('   - Destinatario: $recipientId', tag: 'NotificationService');
+      ReleaseLogger.log('   - Remitente: $senderId ($senderName)', tag: 'NotificationService');
+      ReleaseLogger.log('   - Chat ID: $chatId', tag: 'NotificationService');
+      ReleaseLogger.log('   - Mensaje: ${messageText.substring(0, messageText.length > 50 ? 50 : messageText.length)}...', tag: 'NotificationService');
 
       // Preparar datos
       final messagePreview = messageText.length > 100
@@ -918,11 +914,11 @@ class NotificationService {
       );
 
       if (created) {
-        print('   → La Cloud Function debería enviarla automáticamente');
+        ReleaseLogger.log('   → La Cloud Function debería enviarla automáticamente', tag: 'NotificationService');
       }
     } catch (e) {
-      print('❌ Error enviando notificación de mensaje: $e');
-      print('   Stack trace: ${StackTrace.current}');
+      ReleaseLogger.error('❌ Error enviando notificación de mensaje: $e', tag: 'NotificationService');
+      ReleaseLogger.error('   Stack trace: ${StackTrace.current}', tag: 'NotificationService');
     }
   }
 
@@ -948,7 +944,7 @@ class NotificationService {
         senderId: childId,
       );
     } catch (e) {
-      print('❌ Error enviando notificación de solicitud: $e');
+      ReleaseLogger.error('❌ Error enviando notificación de solicitud: $e', tag: 'NotificationService');
     }
   }
 
@@ -971,7 +967,7 @@ class NotificationService {
         senderId: parentId,
       );
     } catch (e) {
-      print('❌ Error enviando notificación de aprobación: $e');
+      ReleaseLogger.error('❌ Error enviando notificación de aprobación: $e', tag: 'NotificationService');
     }
   }
 
@@ -1002,9 +998,9 @@ class NotificationService {
         'priority': 'normal',
       });
 
-      print('✅ Notificación de aprobación automática enviada al padre');
+      ReleaseLogger.log('✅ Notificación de aprobación automática enviada al padre', tag: 'NotificationService');
     } catch (e) {
-      print('❌ Error enviando notificación de aprobación automática: $e');
+      ReleaseLogger.error('❌ Error enviando notificación de aprobación automática: $e', tag: 'NotificationService');
     }
   }
 
@@ -1029,9 +1025,9 @@ class NotificationService {
         },
         senderId: childId,
       );
-      print('⚠️ Alerta de bullying enviada/verificada');
+      ReleaseLogger.log('⚠️ Alerta de bullying enviada/verificada', tag: 'NotificationService');
     } catch (e) {
-      print('❌ Error enviando alerta de bullying: $e');
+      ReleaseLogger.error('❌ Error enviando alerta de bullying: $e', tag: 'NotificationService');
     }
   }
 
@@ -1052,9 +1048,9 @@ class NotificationService {
         'priority': 'normal',
       });
 
-      print('📊 Notificación de reporte enviada');
+      ReleaseLogger.log('📊 Notificación de reporte enviada', tag: 'NotificationService');
     } catch (e) {
-      print('❌ Error enviando notificación: $e');
+      ReleaseLogger.error('❌ Error enviando notificación: $e', tag: 'NotificationService');
     }
   }
 
@@ -1079,9 +1075,9 @@ class NotificationService {
         },
         senderId: childId,
       );
-      print('📸 Notificación de historia pendiente enviada/verificada');
+      ReleaseLogger.log('📸 Notificación de historia pendiente enviada/verificada', tag: 'NotificationService');
     } catch (e) {
-      print('❌ Error enviando notificación de historia: $e');
+      ReleaseLogger.error('❌ Error enviando notificación de historia: $e', tag: 'NotificationService');
     }
   }
 
@@ -1101,9 +1097,9 @@ class NotificationService {
         },
         senderId: parentId,
       );
-      print('✅ Notificación de historia aprobada enviada/verificada');
+      ReleaseLogger.log('✅ Notificación de historia aprobada enviada/verificada', tag: 'NotificationService');
     } catch (e) {
-      print('❌ Error enviando notificación de aprobación: $e');
+      ReleaseLogger.error('❌ Error enviando notificación de aprobación: $e', tag: 'NotificationService');
     }
   }
 
@@ -1127,9 +1123,9 @@ class NotificationService {
         },
         senderId: parentId,
       );
-      print('❌ Notificación de historia rechazada enviada/verificada');
+      ReleaseLogger.log('❌ Notificación de historia rechazada enviada/verificada', tag: 'NotificationService');
     } catch (e) {
-      print('❌ Error enviando notificación de rechazo: $e');
+      ReleaseLogger.error('❌ Error enviando notificación de rechazo: $e', tag: 'NotificationService');
     }
   }
 
@@ -1151,9 +1147,9 @@ class NotificationService {
           'replyText': replyText,
         },
       );
-      print('💬 Notificación de respuesta a historia enviada/verificada');
+      ReleaseLogger.log('💬 Notificación de respuesta a historia enviada/verificada', tag: 'NotificationService');
     } catch (e) {
-      print('❌ Error enviando notificación de respuesta: $e');
+      ReleaseLogger.error('❌ Error enviando notificación de respuesta: $e', tag: 'NotificationService');
     }
   }
 
@@ -1175,7 +1171,7 @@ class NotificationService {
         'readAt': FieldValue.serverTimestamp(),
       });
     } catch (e) {
-      print('❌ Error marcando como leída: $e');
+      ReleaseLogger.error('❌ Error marcando como leída: $e', tag: 'NotificationService');
     }
   }
 
@@ -1197,9 +1193,9 @@ class NotificationService {
       }
 
       await batch.commit();
-      print('✅ Todas las notificaciones marcadas como leídas');
+      ReleaseLogger.log('✅ Todas las notificaciones marcadas como leídas', tag: 'NotificationService');
     } catch (e) {
-      print('❌ Error marcando todas como leídas: $e');
+      ReleaseLogger.error('❌ Error marcando todas como leídas: $e', tag: 'NotificationService');
     }
   }
 
@@ -1222,9 +1218,9 @@ class NotificationService {
         );
       }
       _fcmToken = null;
-      print('🗑️ Token FCM limpiado');
+      ReleaseLogger.log('🗑️ Token FCM limpiado', tag: 'NotificationService');
     } catch (e) {
-      print('❌ Error limpiando token: $e');
+      ReleaseLogger.error('❌ Error limpiando token: $e', tag: 'NotificationService');
     }
   }
 
@@ -1234,7 +1230,7 @@ class NotificationService {
       final user = _auth.currentUser;
       if (user == null) return;
 
-      print('🗑️ Limpiando notificaciones para chat: $chatId (isGroup: $isGroup)');
+      ReleaseLogger.log('🗑️ Limpiando notificaciones para chat: $chatId (isGroup: $isGroup)', tag: 'NotificationService');
 
       // Buscar todas las notificaciones del usuario para este chat
       final query = await _firestore
@@ -1244,7 +1240,7 @@ class NotificationService {
           .get();
 
       if (query.docs.isEmpty) {
-        print('ℹ️ No hay notificaciones para limpiar en chat: $chatId');
+        ReleaseLogger.log('ℹ️ No hay notificaciones para limpiar en chat: $chatId', tag: 'NotificationService');
         return;
       }
 
@@ -1255,17 +1251,17 @@ class NotificationService {
       }
 
       await batch.commit();
-      print('✅ Limpiadas ${query.docs.length} notificaciones para chat: $chatId');
+      ReleaseLogger.log('✅ Limpiadas ${query.docs.length} notificaciones para chat: $chatId', tag: 'NotificationService');
 
       // Opcional: También limpiar notificaciones locales del sistema
       if (Platform.isAndroid || Platform.isIOS) {
         // Nota: No hay forma directa de limpiar notificaciones específicas del sistema
         // sin un ID específico, pero las nuevas notificaciones no aparecerán
         await _localNotifications.cancelAll();
-        print('🗑️ Notificaciones locales limpiadas');
+        ReleaseLogger.log('🗑️ Notificaciones locales limpiadas', tag: 'NotificationService');
       }
     } catch (e) {
-      print('❌ Error limpiando notificaciones del chat $chatId: $e');
+      ReleaseLogger.error('❌ Error limpiando notificaciones del chat $chatId: $e', tag: 'NotificationService');
     }
   }
 

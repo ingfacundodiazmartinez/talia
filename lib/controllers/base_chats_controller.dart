@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import '../services/chat_service.dart';
 import '../services/group_chat_service.dart';
 import '../utils/release_logger.dart';
@@ -24,6 +25,13 @@ abstract class BaseChatsController {
   }) : _firestore = firestore ?? FirebaseFirestore.instance,
        _chatService = chatService ?? ChatService(),
        _groupChatService = groupChatService ?? GroupChatService();
+
+  // Getters protegidos para acceso desde subclases
+  @protected
+  ChatService get chatService => _chatService;
+
+  @protected
+  GroupChatService get groupChatService => _groupChatService;
 
   /// Stream de chats donde el usuario participa
   Stream<QuerySnapshot> getChatsStream() {

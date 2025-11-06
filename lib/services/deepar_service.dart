@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../utils/release_logger.dart';
 
 class DeepARService {
   static const MethodChannel _channel = MethodChannel('talia.deepar/ar_filters');
@@ -38,20 +38,20 @@ class DeepARService {
     try {
       // CRÍTICO: Esperar si dispose está en proceso
       if (_isDisposing) {
-        print('⏳ Esperando a que dispose termine...');
+        ReleaseLogger.log('⏳ Esperando a que dispose termine...', tag: 'DeepARService');
         int attempts = 0;
         while (_isDisposing && attempts < 50) {
           await Future.delayed(Duration(milliseconds: 100));
           attempts++;
         }
         if (_isDisposing) {
-          print('❌ Timeout esperando dispose');
+          ReleaseLogger.error('❌ Timeout esperando dispose', tag: 'DeepARService');
           return false;
         }
-        print('✅ Dispose completado, continuando con inicialización');
+        ReleaseLogger.log('✅ Dispose completado, continuando con inicialización', tag: 'DeepARService');
       }
 
-      print('🎭 Inicializando DeepAR...');
+      ReleaseLogger.log('🎭 Inicializando DeepAR...', tag: 'DeepARService');
 
       final result = await _channel.invokeMethod('initialize', {
         'licenseKey': licenseKey,
@@ -60,12 +60,12 @@ class DeepARService {
       if (result == true) {
         _isInitialized = true;
         _setupEventListener();
-        print('✅ DeepAR inicializado exitosamente');
+        ReleaseLogger.log('✅ DeepAR inicializado exitosamente', tag: 'DeepARService');
       }
 
       return result ?? false;
     } catch (e) {
-      print('❌ Error inicializando DeepAR: $e');
+      ReleaseLogger.error('❌ Error inicializando DeepAR: $e', tag: 'DeepARService');
       return false;
     }
   }
@@ -98,11 +98,11 @@ class DeepARService {
             _currentFilter = deepAREvent.data['filterPath'];
           }
         } catch (e) {
-          print('❌ Error procesando evento DeepAR: $e');
+          ReleaseLogger.error('❌ Error procesando evento DeepAR: $e', tag: 'DeepARService');
         }
       },
       onError: (error) {
-        print('❌ Error en eventos DeepAR: $error');
+        ReleaseLogger.error('❌ Error en eventos DeepAR: $error', tag: 'DeepARService');
         if (!_eventController.isClosed) {
           _eventController.addError(error);
         }
@@ -113,12 +113,12 @@ class DeepARService {
   /// Cambiar filtro AR
   Future<bool> switchFilter(String filterPath) async {
     if (!_isInitialized) {
-      print('❌ DeepAR no está inicializado');
+      ReleaseLogger.error('❌ DeepAR no está inicializado', tag: 'DeepARService');
       return false;
     }
 
     try {
-      print('🔄 Cambiando filtro: $filterPath');
+      ReleaseLogger.log('🔄 Cambiando filtro: $filterPath', tag: 'DeepARService');
 
       final result = await _channel.invokeMethod('switchFilter', {
         'filterPath': filterPath,
@@ -126,12 +126,12 @@ class DeepARService {
 
       if (result == true) {
         _currentFilter = filterPath;
-        print('✅ Filtro cambiado: $filterPath');
+        ReleaseLogger.log('✅ Filtro cambiado: $filterPath', tag: 'DeepARService');
       }
 
       return result ?? false;
     } catch (e) {
-      print('❌ Error cambiando filtro: $e');
+      ReleaseLogger.error('❌ Error cambiando filtro: $e', tag: 'DeepARService');
       return false;
     }
   }
@@ -149,13 +149,13 @@ class DeepARService {
     int bitRate = 4000000,
   }) async {
     if (!_isInitialized) {
-      print('❌ DeepAR no está inicializado');
+      ReleaseLogger.error('❌ DeepAR no está inicializado', tag: 'DeepARService');
       return false;
     }
 
     try {
-      print('🎬 Iniciando grabación: $outputPath');
-      print('📏 Dimensiones de grabación: ${width}x${height} (aspect ratio: ${width/height})');
+      ReleaseLogger.log('🎬 Iniciando grabación: $outputPath', tag: 'DeepARService');
+      ReleaseLogger.log('📏 Dimensiones de grabación: ${width}x${height} (aspect ratio: ${width/height})', tag: 'DeepARService');
 
       final result = await _channel.invokeMethod('startRecording', {
         'outputPath': outputPath,
@@ -166,12 +166,12 @@ class DeepARService {
 
       if (result == true) {
         _isRecording = true;
-        print('✅ Grabación iniciada');
+        ReleaseLogger.log('✅ Grabación iniciada', tag: 'DeepARService');
       }
 
       return result ?? false;
     } catch (e) {
-      print('❌ Error iniciando grabación: $e');
+      ReleaseLogger.error('❌ Error iniciando grabación: $e', tag: 'DeepARService');
 
       // Re-throw el error para que story_camera_screen pueda manejarlo específicamente
       rethrow;
@@ -181,23 +181,23 @@ class DeepARService {
   /// Parar grabación
   Future<bool> stopRecording() async {
     if (!_isInitialized || !_isRecording) {
-      print('❌ No hay grabación en progreso');
+      ReleaseLogger.error('❌ No hay grabación en progreso', tag: 'DeepARService');
       return false;
     }
 
     try {
-      print('⏹️ Deteniendo grabación...');
+      ReleaseLogger.log('⏹️ Deteniendo grabación...', tag: 'DeepARService');
 
       final result = await _channel.invokeMethod('stopRecording');
 
       if (result == true) {
         _isRecording = false;
-        print('✅ Grabación detenida');
+        ReleaseLogger.log('✅ Grabación detenida', tag: 'DeepARService');
       }
 
       return result ?? false;
     } catch (e) {
-      print('❌ Error deteniendo grabación: $e');
+      ReleaseLogger.error('❌ Error deteniendo grabación: $e', tag: 'DeepARService');
       return false;
     }
   }
@@ -205,23 +205,23 @@ class DeepARService {
   /// Tomar screenshot
   Future<Uint8List?> takeScreenshot() async {
     if (!_isInitialized) {
-      print('❌ DeepAR no está inicializado');
+      ReleaseLogger.error('❌ DeepAR no está inicializado', tag: 'DeepARService');
       return null;
     }
 
     try {
-      print('📸 Tomando screenshot...');
+      ReleaseLogger.log('📸 Tomando screenshot...', tag: 'DeepARService');
 
       final result = await _channel.invokeMethod('takeScreenshot');
 
       if (result != null) {
-        print('✅ Screenshot tomado');
+        ReleaseLogger.log('✅ Screenshot tomado', tag: 'DeepARService');
         return Uint8List.fromList(result.cast<int>());
       }
 
       return null;
     } catch (e) {
-      print('❌ Error tomando screenshot: $e');
+      ReleaseLogger.error('❌ Error tomando screenshot: $e', tag: 'DeepARService');
       return null;
     }
   }
@@ -229,22 +229,22 @@ class DeepARService {
   /// Cambiar cámara (frontal/trasera)
   Future<bool> switchCamera() async {
     if (!_isInitialized) {
-      print('❌ DeepAR no está inicializado');
+      ReleaseLogger.error('❌ DeepAR no está inicializado', tag: 'DeepARService');
       return false;
     }
 
     try {
-      print('🔄 Cambiando cámara...');
+      ReleaseLogger.log('🔄 Cambiando cámara...', tag: 'DeepARService');
 
       final result = await _channel.invokeMethod('switchCamera');
 
       if (result == true) {
-        print('✅ Cámara cambiada');
+        ReleaseLogger.log('✅ Cámara cambiada', tag: 'DeepARService');
       }
 
       return result ?? false;
     } catch (e) {
-      print('❌ Error cambiando cámara: $e');
+      ReleaseLogger.error('❌ Error cambiando cámara: $e', tag: 'DeepARService');
       return false;
     }
   }
@@ -255,7 +255,7 @@ class DeepARService {
       final result = await _channel.invokeMethod('getAvailableFilters');
       return List<String>.from(result ?? []);
     } catch (e) {
-      print('❌ Error obteniendo filtros: $e');
+      ReleaseLogger.error('❌ Error obteniendo filtros: $e', tag: 'DeepARService');
       return [];
     }
   }
@@ -278,9 +278,9 @@ class DeepARService {
   Future<void> startCamera() async {
     try {
       await _channel.invokeMethod('startCamera');
-      print('▶️ Cámara DeepAR iniciada');
+      ReleaseLogger.log('▶️ Cámara DeepAR iniciada', tag: 'DeepARService');
     } catch (e) {
-      print('❌ Error iniciando cámara DeepAR: $e');
+      ReleaseLogger.error('❌ Error iniciando cámara DeepAR: $e', tag: 'DeepARService');
     }
   }
 
@@ -288,9 +288,9 @@ class DeepARService {
   Future<void> stopCamera() async {
     try {
       await _channel.invokeMethod('stopCamera');
-      print('⏹️ Cámara DeepAR detenida');
+      ReleaseLogger.log('⏹️ Cámara DeepAR detenida', tag: 'DeepARService');
     } catch (e) {
-      print('❌ Error deteniendo cámara DeepAR: $e');
+      ReleaseLogger.error('❌ Error deteniendo cámara DeepAR: $e', tag: 'DeepARService');
     }
   }
 
@@ -299,21 +299,21 @@ class DeepARService {
     try {
       await _eventSubscription?.cancel();
       _eventSubscription = null;
-      print('⏸️ DeepAR temporalmente pausado');
+      ReleaseLogger.log('⏸️ DeepAR temporalmente pausado', tag: 'DeepARService');
     } catch (e) {
-      print('❌ Error pausando DeepAR: $e');
+      ReleaseLogger.error('❌ Error pausando DeepAR: $e', tag: 'DeepARService');
     }
   }
 
   /// Limpiar recursos completamente
   Future<void> dispose() async {
     if (_isDisposing) {
-      print('⚠️ Dispose ya en proceso, ignorando llamada duplicada');
+      ReleaseLogger.log('⚠️ Dispose ya en proceso, ignorando llamada duplicada', tag: 'DeepARService');
       return;
     }
 
     _isDisposing = true;
-    print('🗑️ [dispose] Iniciando cleanup (bloqueando nuevas inicializaciones)...');
+    ReleaseLogger.log('🗑️ [dispose] Iniciando cleanup (bloqueando nuevas inicializaciones)...', tag: 'DeepARService');
 
     try {
       await _eventSubscription?.cancel();
@@ -324,11 +324,11 @@ class DeepARService {
       }
 
       if (_isInitialized) {
-        print('🗑️ [dispose] Llamando dispose nativo...');
+        ReleaseLogger.log('🗑️ [dispose] Llamando dispose nativo...', tag: 'DeepARService');
         await _channel.invokeMethod('dispose');
 
         // CRÍTICO: Dar tiempo para que el shutdown nativo complete
-        print('⏳ [dispose] Esperando 500ms para que cleanup nativo complete...');
+        ReleaseLogger.log('⏳ [dispose] Esperando 500ms para que cleanup nativo complete...', tag: 'DeepARService');
         await Future.delayed(Duration(milliseconds: 500));
 
         _isInitialized = false;
@@ -336,12 +336,12 @@ class DeepARService {
         _currentFilter = null;
       }
 
-      print('✅ DeepAR resources disposed');
+      ReleaseLogger.log('✅ DeepAR resources disposed', tag: 'DeepARService');
     } catch (e) {
-      print('❌ Error disposing DeepAR: $e');
+      ReleaseLogger.error('❌ Error disposing DeepAR: $e', tag: 'DeepARService');
     } finally {
       _isDisposing = false;
-      print('✅ [dispose] Flag _isDisposing reseteado, listo para nueva inicialización');
+      ReleaseLogger.log('✅ [dispose] Flag _isDisposing reseteado, listo para nueva inicialización', tag: 'DeepARService');
     }
   }
 }

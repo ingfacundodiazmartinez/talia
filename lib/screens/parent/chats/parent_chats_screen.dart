@@ -421,7 +421,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
         return StreamBuilder<DocumentSnapshot>(
           stream: _controller.getUserDataStream(userId),
           builder: (context, userSnapshot) {
-            if (!userSnapshot.hasData) return SizedBox.shrink();
+            if (!userSnapshot.hasData || userSnapshot.data == null) return SizedBox.shrink();
 
             final fetchedUserData =
                 userSnapshot.data!.data() as Map<String, dynamic>?;
@@ -480,6 +480,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
             ModerationStatus? lastMessageModerationStatus;
 
             if (messageSnapshot.hasData &&
+                messageSnapshot.data != null &&
                 messageSnapshot.data!.docs.isNotEmpty) {
               final lastMessageDoc = messageSnapshot.data!.docs.first;
               final lastMessageData =
@@ -572,6 +573,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                   ModerationStatus? lastMessageModerationStatus;
 
                   if (messageSnapshot.hasData &&
+                      messageSnapshot.data != null &&
                       messageSnapshot.data!.docs.isNotEmpty) {
                     final lastMessageDoc = messageSnapshot.data!.docs.first;
                     final lastMessageData =

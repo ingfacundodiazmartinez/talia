@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:uuid/uuid.dart';
+import '../utils/release_logger.dart';
 
 // Method channel para comunicación con AppDelegate nativo (iOS)
 const MethodChannel _nativeCallKitChannel = MethodChannel('com.talia.chat/callkit');
@@ -21,33 +22,46 @@ class CallKitService {
   Function(String)? _onCallDeclined;
   Function(String)? _onCallEnded;
 
+  /// 🔒 LIFECYCLE MANAGEMENT para prevenir memory leaks
+  bool _isInitialized = false;
+  bool get isInitialized => _isInitialized;
+
   /// Inicializar el servicio de CallKit
   void initialize({
     Function(Map<String, dynamic>)? onCallAccepted,
     Function(String)? onCallDeclined,
     Function(String)? onCallEnded,
   }) {
+    // 🔒 Prevenir re-inicialización innecesaria
+    if (_isInitialized) {
+      ReleaseLogger.log('📞 CallKit Service ya estaba inicializado', tag: 'CallKitService');
+      return;
+    }
+
+    ReleaseLogger.log('📞 Inicializando CallKit Service...', tag: 'CallKitService');
+
     _onCallAccepted = onCallAccepted;
     _onCallDeclined = onCallDeclined;
     _onCallEnded = onCallEnded;
 
-    // Escuchar eventos de llamadas
+    // Escuchar eventos de llamadas (con cleanup previo por seguridad)
     _callEventSubscription?.cancel();
     _callEventSubscription = FlutterCallkitIncoming.onEvent.listen((event) {
       _handleCallEvent(event!);
     });
 
-    print('✅ CallKitService inicializado');
+    _isInitialized = true;
+    ReleaseLogger.log('✅ CallKit Service inicializado exitosamente', tag: 'CallKitService');
   }
 
   /// Manejar eventos de llamadas
   void _handleCallEvent(CallEvent event) {
-    print('📞 CallKit event: ${event.event} - ${event.body}');
+    ReleaseLogger.log('📞 CallKit event: ${event.event} - ${event.body}', tag: 'CallKitService');
 
     switch (event.event) {
       case Event.actionCallAccept:
         // Usuario aceptó la llamada
-        print('✅ Llamada aceptada');
+        ReleaseLogger.log('✅ Llamada aceptada', tag: 'CallKitService');
         if (_onCallAccepted != null && event.body != null) {
           _onCallAccepted!(event.body!);
         }
@@ -55,7 +69,7 @@ class CallKitService {
 
       case Event.actionCallDecline:
         // Usuario rechazó la llamada
-        print('❌ Llamada rechazada');
+        ReleaseLogger.log('❌ Llamada rechazada', tag: 'CallKitService');
         if (_onCallDeclined != null && event.body != null) {
           final callId = event.body!['id'] as String?;
           if (callId != null) {
@@ -66,7 +80,7 @@ class CallKitService {
 
       case Event.actionCallEnded:
         // Llamada terminada
-        print('🔚 Llamada terminada');
+        ReleaseLogger.log('🔚 Llamada terminada', tag: 'CallKitService');
         if (_onCallEnded != null && event.body != null) {
           final callId = event.body!['id'] as String?;
           if (callId != null) {
@@ -77,7 +91,7 @@ class CallKitService {
 
       case Event.actionCallTimeout:
         // Llamada expiró (timeout)
-        print('⏱️ Llamada expiró');
+        ReleaseLogger.log('⏱️ Llamada expiró', tag: 'CallKitService');
         if (_onCallDeclined != null && event.body != null) {
           final callId = event.body!['id'] as String?;
           if (callId != null) {
@@ -87,7 +101,7 @@ class CallKitService {
         break;
 
       default:
-        print('ℹ️ Evento no manejado: ${event.event}');
+        ReleaseLogger.log('ℹ️ Evento no manejado: ${event.event}', tag: 'CallKitService');
     }
   }
 
@@ -105,7 +119,7 @@ class CallKitService {
       // SOLUCIÓN AL CRASH: En iOS, usar el CXProvider nativo de AppDelegate
       // No usar flutter_callkit_incoming porque crea conflictos con CXProvider
       if (Platform.isIOS) {
-        print('📱 [iOS] Usando implementación nativa de CallKit vía Method Channel');
+        ReleaseLogger.log('📱 [iOS] Usando implementación nativa de CallKit vía Method Channel', tag: 'CallKitService');
 
         try {
           // Llamar al AppDelegate nativo para mostrar CallKit UI
@@ -118,47 +132,47 @@ class CallKitService {
             'isEmergency': isEmergency,
             'channelName': extraData?['channelName'] ?? callId,
           });
-          print('✅ [iOS] CallKit UI mostrado desde AppDelegate nativo');
+          ReleaseLogger.log('✅ [iOS] CallKit UI mostrado desde AppDelegate nativo', tag: 'CallKitService');
         } catch (e) {
-          print('❌ [iOS] Error llamando a método nativo showIncomingCall: $e');
+          ReleaseLogger.error('❌ [iOS] Error llamando a método nativo showIncomingCall: $e', tag: 'CallKitService');
           // Si falla, intentar con VoIP push como fallback
-          print('⚠️ [iOS] Esperando VoIP push notification para mostrar llamada');
+          ReleaseLogger.log('⚠️ [iOS] Esperando VoIP push notification para mostrar llamada', tag: 'CallKitService');
         }
         return;
       }
 
       // ANDROID: Continuar con flutter_callkit_incoming
-      print('📱 [Android] Usando flutter_callkit_incoming para mostrar llamada');
+      ReleaseLogger.log('📱 [Android] Usando flutter_callkit_incoming para mostrar llamada', tag: 'CallKitService');
 
       // Verificar llamadas activas primero
       List<dynamic> activeCalls = [];
       try {
         activeCalls = await FlutterCallkitIncoming.activeCalls();
-        print('📱 Llamadas activas antes de mostrar nueva: ${activeCalls.length}');
+        ReleaseLogger.log('📱 Llamadas activas antes de mostrar nueva: ${activeCalls.length}', tag: 'CallKitService');
       } catch (e) {
-        print('⚠️ Error obteniendo llamadas activas: $e');
+        ReleaseLogger.log('⚠️ Error obteniendo llamadas activas: $e', tag: 'CallKitService');
         // Asumir que no hay llamadas activas si falla
       }
 
       // Solo finalizar si hay llamadas activas
       if (activeCalls.isNotEmpty) {
         try {
-          print('🧹 Finalizando ${activeCalls.length} llamada(s) anterior(es)...');
+          ReleaseLogger.log('🧹 Finalizando ${activeCalls.length} llamada(s) anterior(es)...', tag: 'CallKitService');
           await FlutterCallkitIncoming.endAllCalls();
           // Pequeño delay para que el sistema procese el cierre
           await Future.delayed(const Duration(milliseconds: 500));
-          print('✅ Llamadas anteriores finalizadas');
+          ReleaseLogger.log('✅ Llamadas anteriores finalizadas', tag: 'CallKitService');
         } catch (e) {
-          print('⚠️ Error finalizando llamadas anteriores: $e');
+          ReleaseLogger.log('⚠️ Error finalizando llamadas anteriores: $e', tag: 'CallKitService');
           // Continuar de todas formas
         }
       }
 
-      print('📞 Preparando para mostrar llamada en Android...');
+      ReleaseLogger.log('📞 Preparando para mostrar llamada en Android...', tag: 'CallKitService');
 
       // Generar UUID único si no se proporciona
       final uuid = callId.isNotEmpty ? callId : const Uuid().v4();
-      print('🔑 UUID de llamada: $uuid');
+      ReleaseLogger.log('🔑 UUID de llamada: $uuid', tag: 'CallKitService');
 
       final params = CallKitParams(
         id: uuid,
@@ -216,13 +230,13 @@ class CallKitService {
         ),
       );
 
-      print('🚀 Llamando a FlutterCallkitIncoming.showCallkitIncoming()...');
+      ReleaseLogger.log('🚀 Llamando a FlutterCallkitIncoming.showCallkitIncoming()...', tag: 'CallKitService');
       await FlutterCallkitIncoming.showCallkitIncoming(params);
-      print('✅ CallKit mostrado exitosamente: $uuid');
+      ReleaseLogger.log('✅ CallKit mostrado exitosamente: $uuid', tag: 'CallKitService');
     } catch (e, stackTrace) {
-      print('❌ Error mostrando CallKit: $e');
-      print('📍 Stack trace: $stackTrace');
-      print('📦 Call data: callId=$callId, callerName=$callerName, callerId=$callerId');
+      ReleaseLogger.error('❌ Error mostrando CallKit: $e', tag: 'CallKitService');
+      ReleaseLogger.log('📍 Stack trace: $stackTrace', tag: 'CallKitService');
+      ReleaseLogger.log('📦 Call data: callId=$callId, callerName=$callerName, callerId=$callerId', tag: 'CallKitService');
       // NO hacer rethrow para evitar crash de la app
       // En su lugar, loggear el error y continuar
     }
@@ -232,9 +246,9 @@ class CallKitService {
   Future<void> endCall(String callId) async {
     try {
       await FlutterCallkitIncoming.endCall(callId);
-      print('✅ Llamada finalizada: $callId');
+      ReleaseLogger.log('✅ Llamada finalizada: $callId', tag: 'CallKitService');
     } catch (e) {
-      print('❌ Error finalizando llamada: $e');
+      ReleaseLogger.error('❌ Error finalizando llamada: $e', tag: 'CallKitService');
     }
   }
 
@@ -242,9 +256,9 @@ class CallKitService {
   Future<void> endAllCalls() async {
     try {
       await FlutterCallkitIncoming.endAllCalls();
-      print('✅ Todas las llamadas finalizadas');
+      ReleaseLogger.log('✅ Todas las llamadas finalizadas', tag: 'CallKitService');
     } catch (e) {
-      print('❌ Error finalizando todas las llamadas: $e');
+      ReleaseLogger.error('❌ Error finalizando todas las llamadas: $e', tag: 'CallKitService');
     }
   }
 
@@ -254,7 +268,7 @@ class CallKitService {
       final calls = await FlutterCallkitIncoming.activeCalls();
       return calls ?? [];
     } catch (e) {
-      print('❌ Error obteniendo llamadas activas: $e');
+      ReleaseLogger.error('❌ Error obteniendo llamadas activas: $e', tag: 'CallKitService');
       return [];
     }
   }
@@ -266,9 +280,35 @@ class CallKitService {
   }
 
   /// Limpiar y disponer recursos
+  /// 🔒 LIFECYCLE MANAGEMENT: Limpiar recursos y permitir re-inicialización
   void dispose() {
+    ReleaseLogger.log('🗑️ Limpiando recursos CallKit Service...', tag: 'CallKitService');
+
     _callEventSubscription?.cancel();
     _callEventSubscription = null;
-    print('🛑 CallKitService disposed');
+
+    _onCallAccepted = null;
+    _onCallDeclined = null;
+    _onCallEnded = null;
+
+    _isInitialized = false;
+
+    ReleaseLogger.log('✅ CallKit Service resources disposed', tag: 'CallKitService');
+  }
+
+  /// 🔒 BACKGROUND LIFECYCLE: Limpiar recursos cuando la app va a background
+  void onAppPaused() {
+    ReleaseLogger.log('⏸️ CallKit Service: App pausada, manteniendo CallKit activo para llamadas', tag: 'CallKitService');
+    // CallKit debe seguir funcionando en background para recibir llamadas
+  }
+
+  /// 🔒 FOREGROUND LIFECYCLE: Re-conectar cuando la app vuelve de background
+  Future<void> onAppResumed() async {
+    ReleaseLogger.log('▶️ CallKit Service: App resumida', tag: 'CallKitService');
+
+    // Re-inicializar si es necesario (callbacks podrían haberse perdido)
+    if (!_isInitialized) {
+      ReleaseLogger.log('⚠️ CallKit Service requiere re-inicialización manual', tag: 'CallKitService');
+    }
   }
 }

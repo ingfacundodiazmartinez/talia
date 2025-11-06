@@ -23,6 +23,10 @@ class ForegroundMessageListener {
   StreamSubscription? _groupsSubscription;
   StreamSubscription? _notificationsSubscription;
 
+  /// 🔒 LIFECYCLE MANAGEMENT para prevenir memory leaks
+  bool _isInitialized = false;
+  bool get isInitialized => _isInitialized;
+
   /// Último mensaje procesado por chat (para evitar duplicados)
   final Map<String, String> _lastProcessedMessageIds = {};
 
@@ -51,6 +55,12 @@ class ForegroundMessageListener {
     appLogger.log('🚀 ForegroundMessageListener.initialize() LLAMADO', level: 'INFO');
     appLogger.log('══════════════════════════════════════════════════════════════', level: 'INFO');
 
+    // 🔒 Prevenir re-inicialización innecesaria
+    if (_isInitialized) {
+      appLogger.log('⚠️ ForegroundMessageListener ya estaba inicializado', level: 'INFO');
+      return;
+    }
+
     // Limpiar listeners anteriores si existen (hot restart)
     appLogger.log('🧹 Limpiando listeners antiguos si existen...', level: 'INFO');
     _chatsSubscription?.cancel();
@@ -73,6 +83,9 @@ class ForegroundMessageListener {
     appLogger.log('', level: 'INFO');
     appLogger.log('🎯 Iniciando escucha de mensajes en Firestore...', level: 'INFO');
     _startListening();
+
+    _isInitialized = true;
+    appLogger.log('✅ ForegroundMessageListener inicializado exitosamente', level: 'INFO');
     appLogger.log('══════════════════════════════════════════════════════════════', level: 'INFO');
   }
 
@@ -684,26 +697,42 @@ class ForegroundMessageListener {
     }
   }
 
-  /// Detener todos los listeners
+  /// 🔒 LIFECYCLE MANAGEMENT: Detener todos los listeners y permitir re-inicialización
   void dispose() {
     appLogger.log('🛑 Deteniendo todos los listeners', level: 'INFO');
+
     _chatsSubscription?.cancel();
+    _chatsSubscription = null;
+
     _groupsSubscription?.cancel();
+    _groupsSubscription = null;
+
     _notificationsSubscription?.cancel();
+    _notificationsSubscription = null;
+
     _lastProcessedMessageIds.clear();
     _processedNotificationIds.clear();
+    _ignoredChatsFromNotifications.clear();
+
     _navigatorKey = null;
+    _currentOpenChatId = null;
+    _startTime = null;
+    _appResumedAt = null;
+
+    _isInitialized = false;
+
+    appLogger.log('✅ ForegroundMessageListener resources disposed', level: 'INFO');
   }
 
-  /// Pausar listeners (cuando la app va a background)
+  /// 🔒 BACKGROUND LIFECYCLE: Pausar listeners (cuando la app va a background)
   void pause() {
-    appLogger.log('⏸️ Pausando listeners de foreground', level: 'INFO');
+    appLogger.log('⏸️ ForegroundMessageListener: App pausada - Limpiando recursos para prevenir memory leaks', level: 'INFO');
     dispose();
   }
 
-  /// Reanudar listeners (cuando la app vuelve a foreground)
+  /// 🔒 FOREGROUND LIFECYCLE: Reanudar listeners (cuando la app vuelve a foreground)
   void resume(GlobalKey<NavigatorState> navigatorKey) {
-    appLogger.log('▶️ Reanudando listeners de foreground', level: 'INFO');
+    appLogger.log('▶️ ForegroundMessageListener: App resumida - Re-inicializando listeners', level: 'INFO');
     initialize(navigatorKey);
   }
 }

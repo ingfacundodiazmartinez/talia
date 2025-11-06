@@ -33,26 +33,39 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
   }
 
   Future<void> _loadChild() async {
+    print('🧒 [ChildDashboardCard] Iniciando carga para childId: ${widget.childId}');
+
     // 1. Intentar cargar desde cache primero (instantáneo)
     final cachedChild = await _cacheService.getChild(widget.childId);
     if (cachedChild != null && mounted) {
+      print('🧒 [ChildDashboardCard] Child cargado desde cache: ${cachedChild.name}');
       setState(() {
         _cachedChild = cachedChild;
       });
+    } else {
+      print('🧒 [ChildDashboardCard] No hay datos en cache para childId: ${widget.childId}');
     }
 
     // 2. Cargar desde Firestore en segundo plano
-    final freshChild = await Child.getById(widget.childId);
-    if (freshChild != null) {
-      // 3. Actualizar cache con datos frescos
-      await _cacheService.saveChild(freshChild);
+    try {
+      print('🧒 [ChildDashboardCard] Cargando desde Firestore...');
+      final freshChild = await Child.getById(widget.childId);
+      if (freshChild != null) {
+        print('🧒 [ChildDashboardCard] Child cargado desde Firestore: ${freshChild.name}');
+        // 3. Actualizar cache con datos frescos
+        await _cacheService.saveChild(freshChild);
 
-      // 4. Actualizar UI
-      if (mounted) {
-        setState(() {
-          _cachedChild = freshChild;
-        });
+        // 4. Actualizar UI
+        if (mounted) {
+          setState(() {
+            _cachedChild = freshChild;
+          });
+        }
+      } else {
+        print('❌ [ChildDashboardCard] Child no encontrado en Firestore: ${widget.childId}');
       }
+    } catch (e) {
+      print('❌ [ChildDashboardCard] Error cargando child: $e');
     }
   }
 

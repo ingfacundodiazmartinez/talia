@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import '../notification_service.dart';
+import '../utils/release_logger.dart';
 import 'chat_permission_service.dart';
 import 'user_role_service.dart';
 
@@ -33,7 +34,7 @@ class GroupChatService {
         return GroupCreationResult.error('Usuario no autenticado');
       }
 
-      print('🎯 Creando grupo via Cloud Function: $name con ${initialMembers.length} miembros');
+      ReleaseLogger.log('🎯 Creando grupo via Cloud Function: $name con ${initialMembers.length} miembros', tag: 'GroupChatService');
 
       // ✅ Llamar a Cloud Function en lugar de crear directamente
       final callable = FirebaseFunctions.instance.httpsCallable(
@@ -55,9 +56,9 @@ class GroupChatService {
         final approvedMembers = List<String>.from(data['approvedMembers'] ?? []);
         final pendingMembers = List<String>.from(data['pendingMembers'] ?? []);
 
-        print('✅ Grupo creado exitosamente: $groupId');
-        print('✅ Miembros aprobados: ${approvedMembers.length}');
-        print('⏳ Miembros pendientes: ${pendingMembers.length}');
+        ReleaseLogger.log('✅ Grupo creado exitosamente: $groupId', tag: 'GroupChatService');
+        ReleaseLogger.log('✅ Miembros aprobados: ${approvedMembers.length}', tag: 'GroupChatService');
+        ReleaseLogger.log('⏳ Miembros pendientes: ${pendingMembers.length}', tag: 'GroupChatService');
 
         if (pendingMembers.isEmpty) {
           return GroupCreationResult.success(groupId, approvedMembers);
@@ -73,7 +74,7 @@ class GroupChatService {
         return GroupCreationResult.error(data['message'] ?? 'Error desconocido');
       }
     } catch (e) {
-      print('❌ Error creando grupo: $e');
+      ReleaseLogger.error('❌ Error creando grupo: $e', tag: 'GroupChatService');
       return GroupCreationResult.error('Error creando grupo: $e');
     }
   }
@@ -108,10 +109,10 @@ class GroupChatService {
         'messageCount': 0,
       });
 
-      print('✅ Grupo creado con ID: ${groupRef.id}');
+      ReleaseLogger.log('✅ Grupo creado con ID: ${groupRef.id}', tag: 'GroupChatService');
       return groupRef.id;
     } catch (e) {
-      print('❌ Error creando documento del grupo: $e');
+      ReleaseLogger.error('❌ Error creando documento del grupo: $e', tag: 'GroupChatService');
       rethrow;
     }
   }
@@ -151,9 +152,9 @@ class GroupChatService {
         invitedBy: invitedBy,
       );
 
-      print('✅ Invitación pendiente creada para usuario: $invitedUserId');
+      ReleaseLogger.log('✅ Invitación pendiente creada para usuario: $invitedUserId', tag: 'GroupChatService');
     } catch (e) {
-      print('❌ Error creando invitación pendiente: $e');
+      ReleaseLogger.error('❌ Error creando invitación pendiente: $e', tag: 'GroupChatService');
       rethrow;
     }
   }
@@ -205,7 +206,7 @@ class GroupChatService {
         );
       }
     } catch (e) {
-      print('❌ Error enviando solicitudes a padres: $e');
+      ReleaseLogger.error('❌ Error enviando solicitudes a padres: $e', tag: 'GroupChatService');
     }
   }
 
@@ -229,7 +230,7 @@ class GroupChatService {
       final linkedParents = await userRoleService.getLinkedParents(childId);
 
       if (linkedParents.isEmpty) {
-        print('⚠️ No se encontraron padres vinculados para el niño: $childId');
+        ReleaseLogger.log('⚠️ No se encontraron padres vinculados para el niño: $childId', tag: 'GroupChatService');
         return;
       }
 
@@ -278,12 +279,12 @@ class GroupChatService {
           inviterName: inviterName,
         );
 
-        print('✅ Solicitud enviada al padre $parentId del niño: $childId');
+        ReleaseLogger.log('✅ Solicitud enviada al padre $parentId del niño: $childId', tag: 'GroupChatService');
       }
 
-      print('✅ Solicitudes enviadas a ${linkedParents.length} padre(s)');
+      ReleaseLogger.log('✅ Solicitudes enviadas a ${linkedParents.length} padre(s)', tag: 'GroupChatService');
     } catch (e) {
-      print('❌ Error enviando solicitud a padres: $e');
+      ReleaseLogger.error('❌ Error enviando solicitud a padres: $e', tag: 'GroupChatService');
     }
   }
 
@@ -293,8 +294,9 @@ class GroupChatService {
     String contactId,
   ) async {
     try {
-      print(
+      ReleaseLogger.log(
         '🔄 Procesando invitaciones pendientes después de aprobar contacto',
+        tag: 'GroupChatService',
       );
 
       // Buscar invitaciones para el child
@@ -327,9 +329,9 @@ class GroupChatService {
         );
       }
 
-      print('✅ Procesadas ${allInvitations.length} invitaciones pendientes');
+      ReleaseLogger.log('✅ Procesadas ${allInvitations.length} invitaciones pendientes', tag: 'GroupChatService');
     } catch (e) {
-      print('❌ Error procesando invitaciones pendientes: $e');
+      ReleaseLogger.error('❌ Error procesando invitaciones pendientes: $e', tag: 'GroupChatService');
     }
   }
 
@@ -370,7 +372,7 @@ class GroupChatService {
           groupName: groupData?['name'] ?? 'Grupo',
         );
 
-        print('✅ Usuario agregado al grupo automáticamente: $invitedUserId');
+        ReleaseLogger.log('✅ Usuario agregado al grupo automáticamente: $invitedUserId', tag: 'GroupChatService');
       } else {
         // Obtener permisos faltantes específicos
         final missingApprovals = <Map<String, dynamic>>[];
@@ -404,10 +406,10 @@ class GroupChatService {
               'updatedAt': FieldValue.serverTimestamp(),
             });
 
-        print('⏳ Invitación actualizada, aún faltan permisos: $invitationId');
+        ReleaseLogger.log('⏳ Invitación actualizada, aún faltan permisos: $invitationId', tag: 'GroupChatService');
       }
     } catch (e) {
-      print('❌ Error re-validando invitación: $e');
+      ReleaseLogger.error('❌ Error re-validando invitación: $e', tag: 'GroupChatService');
     }
   }
 
@@ -419,9 +421,9 @@ class GroupChatService {
         'lastActivity': FieldValue.serverTimestamp(),
       });
 
-      print('✅ Miembro agregado al grupo: $userId');
+      ReleaseLogger.log('✅ Miembro agregado al grupo: $userId', tag: 'GroupChatService');
     } catch (e) {
-      print('❌ Error agregando miembro al grupo: $e');
+      ReleaseLogger.error('❌ Error agregando miembro al grupo: $e', tag: 'GroupChatService');
       rethrow;
     }
   }
@@ -429,7 +431,7 @@ class GroupChatService {
   // Salir de un grupo
   Future<void> leaveGroup(String groupId, String userId) async {
     try {
-      print('👋 Usuario $userId saliendo del grupo $groupId');
+      ReleaseLogger.log('👋 Usuario $userId saliendo del grupo $groupId', tag: 'GroupChatService');
 
       // Remover al usuario usando arrayRemove (operación atómica permitida por Firestore)
       await _firestore.collection('groups').doc(groupId).update({
@@ -437,12 +439,12 @@ class GroupChatService {
         'lastActivity': FieldValue.serverTimestamp(),
       });
 
-      print('✅ Usuario removido del grupo exitosamente');
+      ReleaseLogger.log('✅ Usuario removido del grupo exitosamente', tag: 'GroupChatService');
 
       // Nota: Si el grupo queda sin miembros, no aparecerá en las consultas
       // porque usamos arrayContains en la query. No es necesario marcarlo como inactivo.
     } catch (e) {
-      print('❌ Error saliendo del grupo: $e');
+      ReleaseLogger.error('❌ Error saliendo del grupo: $e', tag: 'GroupChatService');
       rethrow;
     }
   }
@@ -451,7 +453,7 @@ class GroupChatService {
   Stream<List<GroupChat>> getUserGroups(String userId) async* {
     // Emitir cache inmediatamente si existe para este usuario
     if (_cachedUserGroups.containsKey(userId)) {
-      print('📦 Emitiendo grupos desde cache para usuario $userId');
+      ReleaseLogger.log('📦 Emitiendo grupos desde cache para usuario $userId', tag: 'GroupChatService');
       yield _cachedUserGroups[userId]!;
     }
 
@@ -472,7 +474,7 @@ class GroupChatService {
       _cachedUserGroups[userId] = groups;
       _lastGroupsCacheUpdate[userId] = DateTime.now();
 
-      print('🔄 Grupos actualizados desde Firestore para usuario $userId (${groups.length} grupos)');
+      ReleaseLogger.log('🔄 Grupos actualizados desde Firestore para usuario $userId (${groups.length} grupos)', tag: 'GroupChatService');
       yield groups;
     }
   }
@@ -486,7 +488,7 @@ class GroupChatService {
     if (cachedGroups != null && lastUpdate != null) {
       final cacheAge = DateTime.now().difference(lastUpdate);
       if (cacheAge.inSeconds < 5) {
-        print('📦 Usando grupos desde cache (${cachedGroups.length} grupos)');
+        ReleaseLogger.log('📦 Usando grupos desde cache (${cachedGroups.length} grupos)', tag: 'GroupChatService');
         // Convertir de vuelta a QuerySnapshot simulado
         // Por ahora, hacemos fetch pero silenciosamente
       }

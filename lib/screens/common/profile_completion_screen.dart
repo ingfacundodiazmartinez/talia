@@ -9,6 +9,7 @@ import 'profile_completion/widgets/profile_header.dart';
 import 'profile_completion/widgets/profile_image_picker.dart';
 import 'profile_completion/widgets/profile_form_fields.dart';
 import 'profile_completion/widgets/image_picker_modal.dart';
+import '../../utils/release_logger.dart';
 
 class ProfileCompletionScreen extends StatefulWidget {
   final String phoneNumber;
@@ -56,21 +57,21 @@ class _ProfileCompletionScreenState extends State<ProfileCompletionScreen>
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) {
-        print('❌ No hay usuario autenticado');
+        ReleaseLogger.log('❌ No hay usuario autenticado');
         return;
       }
 
-      print('📋 Cargando datos del usuario: ${user.uid}');
-      print('   Email: ${user.email}');
-      print('   Phone: ${user.phoneNumber}');
+      ReleaseLogger.log('📋 Cargando datos del usuario: ${user.uid}', tag: 'ProfileCompletionScreen');
+      ReleaseLogger.log('   Email: ${_redactEmail(user.email)}', tag: 'ProfileCompletionScreen');
+      ReleaseLogger.log('   Phone: ${_redactPhoneNumber(user.phoneNumber)}', tag: 'ProfileCompletionScreen');
 
       final userData = await _profileService.loadExistingUserData(user.uid);
 
       if (userData != null && mounted) {
-        print('✅ Datos del usuario cargados exitosamente:');
-        print('   Nombre: ${userData['name']}');
-        print('   Fecha nacimiento: ${userData['birthDate']}');
-        print('   Foto: ${userData['photoURL'] != null ? "Sí" : "No"}');
+        ReleaseLogger.log('✅ Datos del usuario cargados exitosamente:', tag: 'ProfileCompletionScreen');
+        ReleaseLogger.log('   Nombre: ${userData['name']}', tag: 'ProfileCompletionScreen');
+        ReleaseLogger.log('   Fecha nacimiento: ${userData['birthDate']}', tag: 'ProfileCompletionScreen');
+        ReleaseLogger.log('   Foto: ${userData['photoURL'] != null ? "Sí" : "No"}');
 
         setState(() {
           _nameController.text = userData['name'] ?? '';
@@ -79,12 +80,12 @@ class _ProfileCompletionScreenState extends State<ProfileCompletionScreen>
           _isEditMode = true;
         });
       } else {
-        print('ℹ️ No hay datos previos del usuario en Firestore (primera vez o documento vacío)');
-        print('   userData == null: ${userData == null}');
+        ReleaseLogger.log('ℹ️ No hay datos previos del usuario en Firestore (primera vez o documento vacío)', tag: 'ProfileCompletionScreen');
+        ReleaseLogger.log('   userData == null: ${userData == null}');
       }
     } catch (e, stackTrace) {
-      print('❌ ERROR cargando datos del usuario: $e');
-      print('   Stack trace: $stackTrace');
+      ReleaseLogger.log('❌ ERROR cargando datos del usuario: $e', tag: 'ProfileCompletionScreen');
+      ReleaseLogger.log('   Stack trace: $stackTrace');
 
       // Mostrar un mensaje al usuario sobre el error
       if (mounted) {
@@ -102,7 +103,7 @@ class _ProfileCompletionScreenState extends State<ProfileCompletionScreen>
         setState(() {
           _isLoadingData = false;
         });
-        print('✅ Pantalla de completar perfil lista para mostrar (isEditMode: $_isEditMode)');
+        ReleaseLogger.log('✅ Pantalla de completar perfil lista para mostrar (isEditMode: $_isEditMode)');
       }
     }
   }
@@ -129,7 +130,7 @@ class _ProfileCompletionScreenState extends State<ProfileCompletionScreen>
         });
       }
     } catch (e) {
-      print('❌ Error seleccionando imagen: $e');
+      ReleaseLogger.log('❌ Error seleccionando imagen: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -187,7 +188,7 @@ class _ProfileCompletionScreenState extends State<ProfileCompletionScreen>
         _navigateToMainScreen(result.role ?? 'child');
       }
     } catch (e) {
-      print('❌ Error completando perfil: $e');
+      ReleaseLogger.log('❌ Error completando perfil: $e');
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -227,7 +228,7 @@ class _ProfileCompletionScreenState extends State<ProfileCompletionScreen>
         _navigateToMainScreen(result.role ?? 'child');
       }
     } catch (e) {
-      print('❌ Error en skip: $e');
+      ReleaseLogger.log('❌ Error en skip: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -414,5 +415,28 @@ class _ProfileCompletionScreenState extends State<ProfileCompletionScreen>
         ),
       ),
     );
+  }
+
+  // 🔒 PRIVACY HELPERS - Redact sensitive data for GDPR/COPPA compliance
+  String _redactEmail(String? email) {
+    if (email == null || email.isEmpty) return 'null';
+    final parts = email.split('@');
+    if (parts.length != 2) return '***@***';
+    final username = parts[0];
+    final domain = parts[1];
+
+    // Show first 2 chars + *** + last char @ domain
+    if (username.length <= 3) return '***@$domain';
+    return '${username.substring(0, 2)}***${username.substring(username.length - 1)}@$domain';
+  }
+
+  String _redactPhoneNumber(String? phoneNumber) {
+    if (phoneNumber == null || phoneNumber.isEmpty) return 'null';
+    if (phoneNumber.length < 6) return '***';
+
+    // Show country code + first 2 digits + *** + last 2 digits
+    final first = phoneNumber.substring(0, 3);
+    final last = phoneNumber.substring(phoneNumber.length - 2);
+    return '$first***$last';
   }
 }

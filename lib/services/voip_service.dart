@@ -24,19 +24,35 @@ class VoIPService {
   StreamSubscription<CallEvent?>? _callEventSubscription;
 
   // Stream para notificar cuando hay llamadas pendientes
-  final StreamController<Map<String, dynamic>> _pendingCallNotifier = StreamController<Map<String, dynamic>>.broadcast();
-  Stream<Map<String, dynamic>> get pendingCallStream => _pendingCallNotifier.stream;
+  StreamController<Map<String, dynamic>>? _pendingCallNotifier;
+  Stream<Map<String, dynamic>> get pendingCallStream {
+    _pendingCallNotifier ??= StreamController<Map<String, dynamic>>.broadcast();
+    return _pendingCallNotifier!.stream;
+  }
+
+  // 🔒 LIFECYCLE MANAGEMENT para prevenir memory leaks
+  bool _isInitialized = false;
+  bool get isInitialized => _isInitialized;
 
   /// Inicializar VoIP Push y CallKit
   Future<void> initialize() async {
     try {
+      // 🔒 Prevenir re-inicialización innecesaria
+      if (_isInitialized) {
+        ReleaseLogger.log('📱 VoIP Service ya estaba inicializado', tag: 'VoIPService');
+        return;
+      }
+
       ReleaseLogger.log('📱 Inicializando VoIP Service...', tag: 'VoIPService');
 
       // Configurar listener para el token VoIP desde iOS
       _voipChannel.setMethodCallHandler(_handleVoIPMethodCall);
 
-      // Escuchar eventos de CallKit
+      // Escuchar eventos de CallKit (con cleanup previo por seguridad)
+      _callEventSubscription?.cancel();
       _callEventSubscription = FlutterCallkitIncoming.onEvent.listen(_handleCallKitEvent);
+
+      _isInitialized = true;
 
       ReleaseLogger.log('✅ VoIP Service inicializado', tag: 'VoIPService');
     } catch (e) {
@@ -142,7 +158,7 @@ class VoIPService {
       ReleaseLogger.log('   - Caller ID: $callerId', tag: 'VoIPService');
 
       // Notificar inmediatamente que hay datos pendientes
-      _pendingCallNotifier.add(_pendingCallData!);
+      _pendingCallNotifier?.add(_pendingCallData!);
 
       // Limpiar inmediatamente para evitar navegación duplicada
       _pendingCallData = null;
@@ -155,19 +171,19 @@ class VoIPService {
   /// En iOS, el token VoIP se recibe automáticamente pero solo se puede guardar cuando el usuario está autenticado
   Future<void> processVoIPTokenAfterLogin() async {
     try {
-      print('📱 [VoIP] Verificando token VoIP pendiente después del login...');
+      ReleaseLogger.log('📱[VoIP] Verificando token VoIP pendiente después del login...', tag: 'VoIPService');
 
       if (_auth.currentUser == null) {
-        print('⚠️ [VoIP] Usuario no autenticado, no se puede procesar token');
+        ReleaseLogger.log('⚠️ [VoIP] Usuario no autenticado, no se puede procesar token', tag: 'VoIPService');
         return;
       }
 
       // En iOS, el token se maneja automáticamente por el AppDelegate
       // Este método está aquí para mantener consistencia con el FCM token
       // y por si necesitamos agregar lógica adicional en el futuro
-      print('✅ [VoIP] Usuario autenticado - el token VoIP se procesará automáticamente cuando iOS lo envíe');
+      ReleaseLogger.log('✅ [VoIP] Usuario autenticado - el token VoIP se procesará automáticamente cuando iOS lo envíe', tag: 'VoIPService');
     } catch (e) {
-      print('❌ [VoIP] Error procesando token: $e');
+      ReleaseLogger.error('❌ [VoIP] Error procesando token: $e', tag: 'VoIPService');
     }
   }
 
@@ -176,7 +192,7 @@ class VoIPService {
     try {
       final userId = _auth.currentUser?.uid;
       if (userId == null) {
-        print('⚠️ [VoIP] Usuario no autenticado, no se puede guardar token');
+        ReleaseLogger.log('⚠️ [VoIP] Usuario no autenticado, no se puede guardar token', tag: 'VoIPService');
         return;
       }
 
@@ -188,9 +204,9 @@ class VoIPService {
         'voipTokenUpdatedAt': FieldValue.serverTimestamp(),
       });
 
-      print('✅ [VoIP] Token guardado en Firestore');
+      ReleaseLogger.log('✅ [VoIP] Token guardado en Firestore', tag: 'VoIPService');
     } catch (e) {
-      print('❌ [VoIP] Error guardando token: $e');
+      ReleaseLogger.error('❌ [VoIP] Error guardando token: $e', tag: 'VoIPService');
     }
   }
 
@@ -201,7 +217,7 @@ class VoIPService {
       final currentUserId = _auth.currentUser?.uid;
       if (currentUserId == null) return;
 
-      print('🧹 [VoIP] Verificando tokens VoIP duplicados para: ${newToken.substring(0, 20)}...');
+      ReleaseLogger.log('🧹 [VoIP] Verificando tokens VoIP duplicados para: ${newToken.substring(0, 20)}...', tag: 'VoIPService');
 
       // Buscar otros usuarios que tengan el mismo token VoIP
       final duplicateUsersQuery = await _firestore
@@ -222,16 +238,16 @@ class VoIPService {
           'voipTokenClearedReason': 'duplicate_token_cleanup',
         });
         cleanedCount++;
-        print('🗑️ [VoIP] Token VoIP limpiado del usuario anterior: $userId');
+        ReleaseLogger.log('🗑️ [VoIP] Token VoIP limpiado del usuario anterior: $userId', tag: 'VoIPService');
       }
 
       if (cleanedCount > 0) {
-        print('✅ [VoIP] Se limpiaron $cleanedCount tokens VoIP duplicados');
+        ReleaseLogger.log('✅ [VoIP] Se limpiaron $cleanedCount tokens VoIP duplicados', tag: 'VoIPService');
       } else {
-        print('✅ [VoIP] No se encontraron tokens VoIP duplicados');
+        ReleaseLogger.log('✅ [VoIP] No se encontraron tokens VoIP duplicados', tag: 'VoIPService');
       }
     } catch (e) {
-      print('❌ [VoIP] Error limpiando tokens duplicados: $e');
+      ReleaseLogger.error('❌ [VoIP] Error limpiando tokens duplicados: $e', tag: 'VoIPService');
     }
   }
 
@@ -239,8 +255,8 @@ class VoIPService {
   Future<void> _handleCallKitEvent(CallEvent? event) async {
     if (event == null) return;
 
-    print('📱 [CallKit] Evento recibido: ${event.event}');
-    print('📱 [CallKit] Datos: ${event.body}');
+    ReleaseLogger.log('📱[CallKit] Evento recibido: ${event.event}');
+    ReleaseLogger.log('📱[CallKit] Datos: ${event.body}');
 
     switch (event.event) {
       case Event.actionCallAccept:
@@ -256,21 +272,21 @@ class VoIPService {
         break;
 
       case Event.actionCallTimeout:
-        print('⏰ [CallKit] Llamada timeout');
+        ReleaseLogger.log('⏰ [CallKit] Llamada timeout', tag: 'VoIPService');
         break;
 
       default:
-        print('⚠️ [CallKit] Evento desconocido: ${event.event}');
+        ReleaseLogger.log('⚠️ [CallKit] Evento desconocido: ${event.event}', tag: 'VoIPService');
     }
   }
 
   /// Cuando el usuario acepta la llamada desde CallKit
   Future<void> _handleCallAccepted(Map<String, dynamic>? data) async {
     try {
-      print('✅ [CallKit] Llamada aceptada');
+      ReleaseLogger.log('✅ [CallKit] Llamada aceptada', tag: 'VoIPService');
 
       if (data == null || data['extra'] == null) {
-        print('❌ [CallKit] Datos de llamada inválidos');
+        ReleaseLogger.error('❌ [CallKit] Datos de llamada inválidos', tag: 'VoIPService');
         return;
       }
 
@@ -282,17 +298,17 @@ class VoIPService {
       final callType = extra['callType'] as String?;
       final isEmergency = extra['isEmergency'] == 'true';
 
-      print('📞 [CallKit] Procesando llamada aceptada:');
-      print('   - Call ID: $callId');
-      print('   - Channel: $channelName');
-      print('   - Type: $callType');
-      print('   - Emergency: $isEmergency');
+      ReleaseLogger.log('📞 [CallKit] Procesando llamada aceptada:', tag: 'VoIPService');
+      ReleaseLogger.log('   - Call ID: $callId', tag: 'VoIPService');
+      ReleaseLogger.log('   - Channel: $channelName', tag: 'VoIPService');
+      ReleaseLogger.log('   - Type: $callType', tag: 'VoIPService');
+      ReleaseLogger.log('   - Emergency: $isEmergency', tag: 'VoIPService');
 
       // Actualizar estado en Firestore
       await VideoCallService().acceptCall(callId);
 
       // Obtener token de Agora directamente (sin crear nueva llamada)
-      print('🎫 [CallKit] Generando token de Agora para unirse al canal: $channelName');
+      ReleaseLogger.log('🎫 [CallKit] Generando token de Agora para unirse al canal: $channelName', tag: 'VoIPService');
       final functions = FirebaseFunctions.instance;
       final result = await functions.httpsCallable('generateAgoraToken').call({
         'channelName': channelName,
@@ -302,7 +318,7 @@ class VoIPService {
       final token = result.data['token'] as String;
       final uid = result.data['uid'] as int;
 
-      print('✅ [CallKit] Token generado - UID: $uid');
+      ReleaseLogger.log('✅ [CallKit] Token generado - UID: $uid', tag: 'VoIPService');
 
       // Navegar a pantalla de llamada
       // Nota: Necesitamos acceso al BuildContext, lo manejaremos desde main.dart
@@ -317,23 +333,23 @@ class VoIPService {
         'callerId': callerId, // Agregar callerId para la navegación
       };
 
-      print('✅ [CallKit] Datos de llamada guardados para navegación');
-      print('   - Caller ID: $callerId');
+      ReleaseLogger.log('✅ [CallKit] Datos de llamada guardados para navegación', tag: 'VoIPService');
+      ReleaseLogger.log('   - Caller ID: $callerId', tag: 'VoIPService');
 
       // Notificar inmediatamente que hay datos pendientes
-      _pendingCallNotifier.add(_pendingCallData!);
+      _pendingCallNotifier?.add(_pendingCallData!);
 
       // Limpiar inmediatamente para evitar navegación duplicada
       _pendingCallData = null;
     } catch (e) {
-      print('❌ [CallKit] Error manejando aceptación: $e');
+      ReleaseLogger.error('❌ [CallKit] Error manejando aceptación: $e', tag: 'VoIPService');
     }
   }
 
   /// Cuando el usuario rechaza la llamada desde CallKit
   Future<void> _handleCallDeclined(Map<String, dynamic>? data) async {
     try {
-      print('❌ [CallKit] Llamada rechazada');
+      ReleaseLogger.log('❌ [CallKit] Llamada rechazada', tag: 'VoIPService');
 
       if (data == null || data['extra'] == null) return;
 
@@ -341,16 +357,16 @@ class VoIPService {
       final callId = extra['callId'] as String;
 
       await VideoCallService().rejectCall(callId);
-      print('✅ [CallKit] Llamada rechazada en Firestore');
+      ReleaseLogger.log('✅ [CallKit] Llamada rechazada en Firestore', tag: 'VoIPService');
     } catch (e) {
-      print('❌ [CallKit] Error manejando rechazo: $e');
+      ReleaseLogger.error('❌ [CallKit] Error manejando rechazo: $e', tag: 'VoIPService');
     }
   }
 
   /// Cuando la llamada termina desde CallKit
   Future<void> _handleCallEnded(Map<String, dynamic>? data) async {
     try {
-      print('📵 [CallKit] Llamada terminada');
+      ReleaseLogger.log('📵 [CallKit] Llamada terminada', tag: 'VoIPService');
 
       if (data == null || data['extra'] == null) return;
 
@@ -359,10 +375,10 @@ class VoIPService {
 
       // NO llamar a endCall() - solo cerrar CallKit localmente
       // VoIP maneja el cierre automáticamente cuando detecta cambios en Firestore
-      print('ℹ️ [CallKit] CallKit cerrado localmente para: $callId');
-      print('ℹ️ [CallKit] Si la llamada fue cancelada, el listener ya lo detectó');
+      ReleaseLogger.log('ℹ️ [CallKit] CallKit cerrado localmente para: $callId', tag: 'VoIPService');
+      ReleaseLogger.log('ℹ️ [CallKit] Si la llamada fue cancelada, el listener ya lo detectó', tag: 'VoIPService');
     } catch (e) {
-      print('❌ [CallKit] Error manejando fin de llamada: $e');
+      ReleaseLogger.error('❌ [CallKit] Error manejando fin de llamada: $e', tag: 'VoIPService');
     }
   }
 
@@ -380,15 +396,40 @@ class VoIPService {
   Future<void> notifyCallEnded(String callId) async {
     try {
       await _voipChannel.invokeMethod('endCallKit', {'callId': callId});
-      print('✅ [VoIP] Notificado a iOS que la llamada terminó: $callId');
+      ReleaseLogger.log('✅ [VoIP] Notificado a iOS que la llamada terminó: $callId', tag: 'VoIPService');
     } catch (e) {
-      print('❌ [VoIP] Error notificando fin de llamada a iOS: $e');
+      ReleaseLogger.error('❌ [VoIP] Error notificando fin de llamada a iOS: $e', tag: 'VoIPService');
     }
   }
 
-  /// Limpiar recursos
+  /// 🔒 LIFECYCLE MANAGEMENT: Limpiar recursos y permitir re-inicialización
   void dispose() {
+    ReleaseLogger.log('🗑️ Limpiando recursos VoIP Service...', tag: 'VoIPService');
+
     _callEventSubscription?.cancel();
-    _pendingCallNotifier.close();
+    _callEventSubscription = null;
+
+    _pendingCallNotifier?.close();
+    _pendingCallNotifier = null;
+
+    _isInitialized = false;
+
+    ReleaseLogger.log('✅ VoIP Service resources disposed', tag: 'VoIPService');
+  }
+
+  /// 🔒 BACKGROUND LIFECYCLE: Limpiar recursos cuando la app va a background
+  void onAppPaused() {
+    ReleaseLogger.log('⏸️ VoIP Service: App pausada, manteniendo conexiones esenciales', tag: 'VoIPService');
+    // No disposar completamente en pausa, VoIP debe seguir funcionando en background
+  }
+
+  /// 🔒 FOREGROUND LIFECYCLE: Re-conectar cuando la app vuelve de background
+  Future<void> onAppResumed() async {
+    ReleaseLogger.log('▶️ VoIP Service: App resumida', tag: 'VoIPService');
+
+    // Verificar estado de conexiones y re-inicializar si es necesario
+    if (!_isInitialized) {
+      await initialize();
+    }
   }
 }

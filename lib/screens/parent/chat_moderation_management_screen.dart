@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../../controllers/chat_moderation_management_controller.dart';
 
 /// Pantalla para gestionar moderación con IA de los contactos del hijo
@@ -18,6 +20,7 @@ class ChatModerationManagementScreen extends StatefulWidget {
 class _ChatModerationManagementScreenState
     extends State<ChatModerationManagementScreen> {
   late ChatModerationManagementController _controller;
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   bool _isLoading = true;
   List<String> _childrenIds = [];
 

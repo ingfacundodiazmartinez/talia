@@ -4,6 +4,7 @@ import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import 'package:video_compress/video_compress.dart';
+import '../utils/release_logger.dart';
 
 /// Servicio para comprimir y validar archivos multimedia
 ///
@@ -23,7 +24,7 @@ class MediaCompressionService {
       final fileSize = await file.length();
       return fileSize <= maxFileSizeBytes;
     } catch (e) {
-      print('❌ Error validando tamaño: $e');
+      ReleaseLogger.error('❌ Error validando tamaño: $e', tag: 'MediaCompressionService');
       return false;
     }
   }
@@ -34,7 +35,7 @@ class MediaCompressionService {
       final fileSize = await file.length();
       return fileSize / (1024 * 1024);
     } catch (e) {
-      print('❌ Error obteniendo tamaño: $e');
+      ReleaseLogger.error('❌ Error obteniendo tamaño: $e', tag: 'MediaCompressionService');
       return 0;
     }
   }
@@ -52,11 +53,11 @@ class MediaCompressionService {
       img.Image? image = img.decodeImage(bytes);
 
       if (image == null) {
-        print('❌ No se pudo decodificar la imagen');
+        ReleaseLogger.error('❌ No se pudo decodificar la imagen', tag: 'MediaCompressionService');
         return null;
       }
 
-      print('📸 Imagen original: ${image.width}x${image.height}');
+      ReleaseLogger.log('📸 Imagen original: ${image.width}x${image.height}', tag: 'MediaCompressionService');
 
       // 1. Redimensionar si excede las dimensiones objetivo
       if (image.width > targetImageWidth || image.height > targetImageHeight) {
@@ -65,7 +66,7 @@ class MediaCompressionService {
           width: image.width > image.height ? targetImageWidth : null,
           height: image.height >= image.width ? targetImageHeight : null,
         );
-        print('📏 Redimensionada a: ${image.width}x${image.height}');
+        ReleaseLogger.log('📏 Redimensionada a: ${image.width}x${image.height}', tag: 'MediaCompressionService');
       }
 
       // 2. Comprimir con calidad inicial
@@ -89,10 +90,10 @@ class MediaCompressionService {
 
         // Verificar tamaño
         final sizeMB = await getFileSizeMB(compressedFile);
-        print('🗜️ Comprimida (calidad $quality): ${sizeMB.toStringAsFixed(2)} MB');
+        ReleaseLogger.log('🗜️ Comprimida (calidad $quality): ${sizeMB.toStringAsFixed(2)} MB', tag: 'MediaCompressionService');
 
         if (sizeMB <= 10) {
-          print('✅ Imagen comprimida exitosamente: ${sizeMB.toStringAsFixed(2)} MB');
+          ReleaseLogger.log('✅ Imagen comprimida exitosamente: ${sizeMB.toStringAsFixed(2)} MB', tag: 'MediaCompressionService');
           return compressedFile;
         }
 
@@ -104,7 +105,7 @@ class MediaCompressionService {
       if (compressedFile != null) {
         final sizeMB = await getFileSizeMB(compressedFile);
         if (sizeMB > 10) {
-          print('⚠️ Reduciendo dimensiones agresivamente...');
+          ReleaseLogger.log('⚠️ Reduciendo dimensiones agresivamente...', tag: 'MediaCompressionService');
           image = img.copyResize(
             image,
             width: (image.width * 0.7).toInt(),
@@ -123,7 +124,7 @@ class MediaCompressionService {
           compressedFile = await File(tempPath).writeAsBytes(compressedBytes);
 
           final finalSize = await getFileSizeMB(compressedFile);
-          print('🗜️ Compresión agresiva: ${finalSize.toStringAsFixed(2)} MB');
+          ReleaseLogger.log('🗜️ Compresión agresiva: ${finalSize.toStringAsFixed(2)} MB', tag: 'MediaCompressionService');
 
           if (finalSize <= 10) {
             return compressedFile;
@@ -131,10 +132,10 @@ class MediaCompressionService {
         }
       }
 
-      print('❌ No se pudo comprimir la imagen bajo 10 MB');
+      ReleaseLogger.error('❌ No se pudo comprimir la imagen bajo 10 MB', tag: 'MediaCompressionService');
       return null;
     } catch (e) {
-      print('❌ Error comprimiendo imagen: $e');
+      ReleaseLogger.error('❌ Error comprimiendo imagen: $e', tag: 'MediaCompressionService');
       return null;
     }
   }
@@ -147,16 +148,16 @@ class MediaCompressionService {
     try {
       // 1. Verificar tamaño original
       final originalSizeMB = await getFileSizeMB(videoFile);
-      print('🎥 Video original: ${originalSizeMB.toStringAsFixed(2)} MB');
+      ReleaseLogger.log('🎥 Video original: ${originalSizeMB.toStringAsFixed(2)} MB', tag: 'MediaCompressionService');
 
       // 2. Si ya está bajo el límite, retornar sin comprimir
       if (originalSizeMB <= 10) {
-        print('✅ Video ya está bajo el límite (${originalSizeMB.toStringAsFixed(2)} MB)');
+        ReleaseLogger.log('✅ Video ya está bajo el límite (${originalSizeMB.toStringAsFixed(2)} MB)', tag: 'MediaCompressionService');
         return videoFile;
       }
 
       // 3. Comprimir video
-      print('🗜️ Comprimiendo video de ${originalSizeMB.toStringAsFixed(2)} MB...');
+      ReleaseLogger.log('🗜️ Comprimiendo video de ${originalSizeMB.toStringAsFixed(2)} MB...', tag: 'MediaCompressionService');
 
       // Comprimir con calidad media (sin escuchar progreso para evitar error de Stream)
       // El progreso se imprime internamente por video_compress
@@ -169,22 +170,22 @@ class MediaCompressionService {
 
       // 4. Verificar si la compresión fue exitosa
       if (compressedInfo == null || compressedInfo.file == null) {
-        print('❌ Error: La compresión no produjo un archivo');
+        ReleaseLogger.error('❌ Error: La compresión no produjo un archivo', tag: 'MediaCompressionService');
         return null;
       }
 
       final compressedFile = compressedInfo.file!;
       final compressedSizeMB = await getFileSizeMB(compressedFile);
-      print('✅ Video comprimido: ${compressedSizeMB.toStringAsFixed(2)} MB');
+      ReleaseLogger.log('✅ Video comprimido: ${compressedSizeMB.toStringAsFixed(2)} MB', tag: 'MediaCompressionService');
 
       // 5. Verificar si el video comprimido está bajo el límite
       if (compressedSizeMB <= 10) {
-        print('✅ Video comprimido exitosamente de ${originalSizeMB.toStringAsFixed(2)} MB a ${compressedSizeMB.toStringAsFixed(2)} MB');
+        ReleaseLogger.log('✅ Video comprimido exitosamente de ${originalSizeMB.toStringAsFixed(2)} MB a ${compressedSizeMB.toStringAsFixed(2)} MB', tag: 'MediaCompressionService');
         return compressedFile;
       }
 
       // 6. Si aún es muy grande, intentar con calidad baja
-      print('⚠️ Video aún muy grande, intentando con calidad baja...');
+      ReleaseLogger.log('⚠️ Video aún muy grande, intentando con calidad baja...', tag: 'MediaCompressionService');
 
       final MediaInfo? lowQualityInfo = await VideoCompress.compressVideo(
         videoFile.path,
@@ -194,24 +195,24 @@ class MediaCompressionService {
       );
 
       if (lowQualityInfo == null || lowQualityInfo.file == null) {
-        print('❌ Error en compresión de baja calidad');
+        ReleaseLogger.error('❌ Error en compresión de baja calidad', tag: 'MediaCompressionService');
         return null;
       }
 
       final lowQualityFile = lowQualityInfo.file!;
       final lowQualitySizeMB = await getFileSizeMB(lowQualityFile);
-      print('🗜️ Video calidad baja: ${lowQualitySizeMB.toStringAsFixed(2)} MB');
+      ReleaseLogger.log('🗜️ Video calidad baja: ${lowQualitySizeMB.toStringAsFixed(2)} MB', tag: 'MediaCompressionService');
 
       if (lowQualitySizeMB <= 10) {
-        print('✅ Video comprimido con calidad baja: ${lowQualitySizeMB.toStringAsFixed(2)} MB');
+        ReleaseLogger.log('✅ Video comprimido con calidad baja: ${lowQualitySizeMB.toStringAsFixed(2)} MB', tag: 'MediaCompressionService');
         return lowQualityFile;
       }
 
       // 7. Si aún es muy grande, fallar
-      print('❌ No se pudo comprimir el video bajo 10 MB');
+      ReleaseLogger.error('❌ No se pudo comprimir el video bajo 10 MB', tag: 'MediaCompressionService');
       return null;
     } catch (e) {
-      print('❌ Error comprimiendo video: $e');
+      ReleaseLogger.error('❌ Error comprimiendo video: $e', tag: 'MediaCompressionService');
       return null;
     }
   }
@@ -221,7 +222,7 @@ class MediaCompressionService {
     try {
       await VideoCompress.cancelCompression();
     } catch (e) {
-      print('⚠️ Error cancelando compresión: $e');
+      ReleaseLogger.log('⚠️ Error cancelando compresión: $e', tag: 'MediaCompressionService');
     }
   }
 
@@ -230,7 +231,7 @@ class MediaCompressionService {
     try {
       await VideoCompress.deleteAllCache();
     } catch (e) {
-      print('⚠️ Error limpiando cache de videos: $e');
+      ReleaseLogger.log('⚠️ Error limpiando cache de videos: $e', tag: 'MediaCompressionService');
     }
   }
 
@@ -241,15 +242,15 @@ class MediaCompressionService {
 
       if (!isValid) {
         final sizeMB = await getFileSizeMB(audioFile);
-        print('❌ Audio muy grande: ${sizeMB.toStringAsFixed(2)} MB (máx 10 MB)');
+        ReleaseLogger.error('❌ Audio muy grande: ${sizeMB.toStringAsFixed(2)} MB (máx 10 MB)', tag: 'MediaCompressionService');
         return null;
       }
 
       final sizeMB = await getFileSizeMB(audioFile);
-      print('✅ Audio válido: ${sizeMB.toStringAsFixed(2)} MB');
+      ReleaseLogger.log('✅ Audio válido: ${sizeMB.toStringAsFixed(2)} MB', tag: 'MediaCompressionService');
       return audioFile;
     } catch (e) {
-      print('❌ Error validando audio: $e');
+      ReleaseLogger.error('❌ Error validando audio: $e', tag: 'MediaCompressionService');
       return null;
     }
   }

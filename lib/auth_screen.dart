@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'services/phone_verification_service.dart';
 import 'widgets/phone_verification_widget.dart';
 import 'screens/common/profile_completion_screen.dart';
+import 'utils/release_logger.dart';
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key});
@@ -38,7 +39,8 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
 
   // Manejar éxito de verificación de teléfono
   void _onPhoneVerificationSuccess(String phoneNumber) {
-    print('✅ SMS verificado exitosamente para: $phoneNumber');
+    // 🔒 SECURE LOGGING - Redact sensitive phone number
+    ReleaseLogger.log('✅ SMS verificado exitosamente para: ${_redactPhoneNumber(phoneNumber)}', tag: 'AuthScreen');
 
     // Navegar a la pantalla de completar perfil
     Navigator.of(context).pushReplacement(
@@ -136,5 +138,16 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
         ),
       ),
     );
+  }
+
+  // 🔒 PRIVACY HELPER - Redact sensitive phone number for GDPR/COPPA compliance
+  String _redactPhoneNumber(String phoneNumber) {
+    if (phoneNumber.length < 6) return '***';
+
+    // Show country code + first 2 digits + *** + last 2 digits
+    // Example: +1234567890 → +12***90
+    final first = phoneNumber.substring(0, 3);
+    final last = phoneNumber.substring(phoneNumber.length - 2);
+    return '$first***$last';
   }
 }

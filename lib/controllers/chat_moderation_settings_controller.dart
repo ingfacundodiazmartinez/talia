@@ -271,11 +271,11 @@ class ChatModerationSettingsController {
   String getModerationLevelDescription(String level) {
     switch (level) {
       case 'high':
-        return 'Modo Alto: Bloquea contenido potencialmente peligroso, insultos directos y palabrotas. Permite lenguaje coloquial sin insultos.';
+        return '⚠️ Modo Alto (MUY RESTRICTIVO): Bloquea insultos, palabrotas Y expresiones como "qué pesado", "no seas exagerado", etc. Solo permite conversación completamente cordial y educada. Puede bloquear conversación normal entre amigos/familia.';
       case 'medium':
-        return 'Modo Medio: Bloquea insultos directos, palabrotas y contenido sexual. Permite lenguaje coloquial, sarcasmo e ironía sin insultos. Más flexible con el tono.';
+        return '✅ Modo Medio (RECOMENDADO): Equilibrio perfecto. Bloquea insultos directos, palabrotas y contenido sexual, pero permite lenguaje coloquial normal, sarcasmo e ironía sin insultos. Ideal para la mayoría de casos.';
       case 'low':
-        return 'Modo Bajo: Solo bloquea contenido muy severo (amenazas serias, contenido sexual explícito, grooming). Más permisivo con lenguaje coloquial.';
+        return 'Modo Bajo (PERMISIVO): Solo bloquea contenido muy severo como amenazas serias, contenido sexual explícito o grooming. Muy permisivo con el tono y lenguaje coloquial entre adultos.';
       default:
         return 'Nivel no reconocido';
     }

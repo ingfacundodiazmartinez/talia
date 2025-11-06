@@ -190,17 +190,26 @@ class CreateGroupController {
       final selectedUserIds = selectedContacts.map((c) => c.id).toList();
 
       // Crear el grupo usando el servicio
-      final groupId = await _groupService.createGroup(
+      final result = await _groupService.createGroup(
         name: groupName.trim(),
-        memberIds: selectedUserIds,
-        imageUrl: imageUrl,
+        initialMembers: selectedUserIds,
+        avatar: imageUrl,
       );
 
-      ReleaseLogger.log('Grupo creado exitosamente: $groupId', tag: 'CreateGroup');
-      onSuccess?.call('Grupo "$groupName" creado exitosamente');
-      onGroupCreated?.call();
-
-      return true;
+      if (result.isSuccess) {
+        ReleaseLogger.log('Grupo creado exitosamente: ${result.groupId}', tag: 'CreateGroup');
+        if (result.isPartialSuccess) {
+          onSuccess?.call('Grupo "$groupName" creado. ${result.pendingCount} invitaciones pendientes.');
+        } else {
+          onSuccess?.call('Grupo "$groupName" creado exitosamente');
+        }
+        onGroupCreated?.call();
+        return true;
+      } else {
+        ReleaseLogger.error('Error en creación de grupo: ${result.error}', tag: 'CreateGroup');
+        _setError('Error al crear el grupo: ${result.error}');
+        return false;
+      }
     } catch (e) {
       ReleaseLogger.error('Error creando grupo: $e', tag: 'CreateGroup');
       _setError('Error al crear el grupo: $e');

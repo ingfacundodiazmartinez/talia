@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/story.dart';
-import '../services/story_service.dart';
+import '../services/story_service_refactored.dart';
 import '../services/story_upload_progress_service.dart';
 import '../services/unread_messages_service.dart';
 
