@@ -146,7 +146,7 @@ class ImageService {
       // En iOS, tanto 'granted' como 'limited' son válidos para acceder a fotos
       if (currentStatus == PermissionStatus.granted ||
           (Platform.isIOS && currentStatus == PermissionStatus.limited && source == ImageSource.gallery)) {
-        ReleaseLogger.log('✅ Permiso ya concedido (${currentStatus}), procediendo directamente', tag: 'ImageService');
+        ReleaseLogger.log('✅ Permiso ya concedido ($currentStatus), procediendo directamente', tag: 'ImageService');
         return true;
       }
 
@@ -163,7 +163,7 @@ class ImageService {
 
         if (iosStatus == PermissionStatus.granted ||
             (iosStatus == PermissionStatus.limited && source == ImageSource.gallery)) {
-          ReleaseLogger.log('✅ iOS: Permiso concedido (${iosStatus})', tag: 'ImageService');
+          ReleaseLogger.log('✅ iOS: Permiso concedido ($iosStatus)', tag: 'ImageService');
           return true;
         } else if (iosStatus == PermissionStatus.permanentlyDenied) {
           ReleaseLogger.log('❌ iOS: Permiso denegado permanentemente', tag: 'ImageService');

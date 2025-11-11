@@ -45,7 +45,7 @@ void verifyAccessibility(WidgetTester tester) {
   // Verificar que todos los botones tengan labels
   final buttons = find.byType(IconButton);
   for (final button in tester.widgetList(buttons)) {
-    final semantics = tester.getSemantics(find.byWidget(button as Widget));
+    final semantics = tester.getSemantics(find.byWidget(button));
     expect(semantics.label, isNotNull, reason: 'Button should have a label');
   }
 }

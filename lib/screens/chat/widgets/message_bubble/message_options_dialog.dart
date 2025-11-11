@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../../../services/reaction_service.dart';
 import '../../../../models/chat_message.dart';
+import '../../../../utils/release_logger.dart';
 
 /// Widget que muestra el diálogo de opciones de un mensaje con diseño moderno
 class MessageOptionsDialog {
@@ -27,13 +28,8 @@ class MessageOptionsDialog {
     bool isFavorite = false, // Si el mensaje está marcado como favorito
     VoidCallback? onToggleFavorite, // Callback para marcar/desmarcar favorito
   }) {
-    print('🔍 [MessageOptionsDialog] Mostrando diálogo moderno');
-
     // Verificar si el mensaje está bloqueado por moderación
     final isBlocked = moderationStatus == ModerationStatus.blocked;
-    if (isBlocked) {
-      print('🚫 [MessageOptionsDialog] Mensaje bloqueado - limitando opciones disponibles');
-    }
 
     // Verificar si puede eliminar el mensaje (propio y < 5 minutos)
     bool canDelete = false;
@@ -386,12 +382,6 @@ class MessageOptionsDialog {
     bool isGroupChat,
   ) async {
     try {
-      print('🔍 [MessageOptions] Intentando reaccionar:');
-      print('   chatId: $chatId');
-      print('   messageId: $messageId');
-      print('   emoji: $emoji');
-      print('   isGroupChat: $isGroupChat');
-
       final reactionService = ReactionService();
       await reactionService.toggleReaction(
         chatId: chatId,
@@ -399,11 +389,8 @@ class MessageOptionsDialog {
         reaction: emoji,
         isGroup: isGroupChat,
       );
-
-      print('✅ Reacción agregada exitosamente: $emoji');
     } catch (e) {
-      print('❌ Error agregando reacción: $e');
-      print('   Stack trace: ${StackTrace.current}');
+      // Error adding reaction - silent
     }
   }
 
@@ -505,8 +492,6 @@ class MessageOptionsDialog {
         'reason': 'offensive', // Categoría: ofensivo
       });
 
-      print('✅ Mensaje reportado exitosamente: $messageId');
-
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -518,7 +503,7 @@ class MessageOptionsDialog {
         );
       }
     } catch (e) {
-      print('❌ Error reportando mensaje: $e');
+      ReleaseLogger.error('Error reportando mensaje: $e', tag: 'MessageOptionsDialog');
 
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

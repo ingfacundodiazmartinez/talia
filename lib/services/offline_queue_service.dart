@@ -1,9 +1,6 @@
-import 'dart:convert';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
-import 'package:flutter/foundation.dart';
 import 'network_status_service.dart';
 import 'snackbar_service.dart';
 import 'app_logger.dart';

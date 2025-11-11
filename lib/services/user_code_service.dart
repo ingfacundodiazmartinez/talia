@@ -37,7 +37,6 @@ class UserCodeService {
             'isActive': true,
           });
 
-          print('✅ Código único generado para usuario $userId: $code');
           return code;
         }
 
@@ -46,7 +45,6 @@ class UserCodeService {
 
       throw Exception('No se pudo generar un código único después de 5 intentos');
     } catch (e) {
-      print('❌ Error generando código de usuario: $e');
       rethrow;
     }
   }
@@ -64,7 +62,6 @@ class UserCodeService {
       // Si no tiene código o está inactivo, generar uno nuevo
       return await generateUserCode(userId);
     } catch (e) {
-      print('❌ Error obteniendo código de usuario: $e');
       rethrow;
     }
   }
@@ -72,7 +69,6 @@ class UserCodeService {
   /// Buscar usuario por código
   Future<UserCodeResult> findUserByCode(String code) async {
     try {
-      print('🔍 Buscando usuario con código: $code');
 
       final codeQuery = await _firestore
           .collection('user_codes')
@@ -105,7 +101,6 @@ class UserCodeService {
         isParent: userData['isParent'] ?? false,
       );
     } catch (e) {
-      print('❌ Error buscando usuario por código: $e');
       return UserCodeResult.error(e.toString());
     }
   }
@@ -122,7 +117,6 @@ class UserCodeService {
       // Generar nuevo código
       return await generateUserCode(userId);
     } catch (e) {
-      print('❌ Error regenerando código: $e');
       rethrow;
     }
   }

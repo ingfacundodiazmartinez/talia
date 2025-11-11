@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
@@ -16,6 +15,7 @@ import '../../../controllers/chat_controller_optimistic.dart';
 mixin MediaHandlersMixin<T extends StatefulWidget> on State<T> {
   // Debe ser implementado por el widget que usa este mixin
   ChatControllerOptimistic get controller;
+  @override
   BuildContext get context;
 
   /// Manejar envío de imagen
@@ -88,7 +88,7 @@ mixin MediaHandlersMixin<T extends StatefulWidget> on State<T> {
         quality: 75,
       );
     } catch (e) {
-      print('⚠️ Error generando thumbnail: $e');
+      // Error generating thumbnail - continue without it
     }
 
     // Crear burbuja optimista inmediatamente
@@ -100,7 +100,7 @@ mixin MediaHandlersMixin<T extends StatefulWidget> on State<T> {
     // Procesar y subir en segundo plano
     // ignore: unawaited_futures
     controller.processAndUploadVideo(videoPath: videoPath).catchError((e) {
-      print('❌ Error al enviar video: $e');
+      // Error sending video - handled by optimistic UI
     });
   }
 

@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../../services/emergency_service.dart';
 import '../../../../models/user.dart';
 import '../../../emergency_detail_screen.dart';
+import '../../../../utils/release_logger.dart';
 
 /// Widget que muestra alertas de emergencias activas
 ///
@@ -32,34 +33,24 @@ class _EmergencyAlertWidgetState extends State<EmergencyAlertWidget> {
   void initState() {
     super.initState();
     _emergencyService = EmergencyService();
-    print('🆘 EmergencyAlertWidget - EmergencyService creado en initState');
   }
 
   @override
   Widget build(BuildContext context) {
-    print('🆘 EmergencyAlertWidget - Building for parent: ${widget.parentId}');
-
     return StreamBuilder<QuerySnapshot>(
       stream: _emergencyService.getActiveEmergenciesForParent(widget.parentId),
       builder: (context, snapshot) {
-        print('🆘 EmergencyAlertWidget - hasData: ${snapshot.hasData}');
-        print('🆘 EmergencyAlertWidget - connectionState: ${snapshot.connectionState}');
-
         // ✅ OPTIMIZACIÓN: Usar cache cuando no hay datos nuevos
         if (snapshot.connectionState == ConnectionState.waiting && _cachedEmergencies != null) {
-          print('🆘 EmergencyAlertWidget - usando cache durante waiting (${_cachedEmergencies!.length} emergencias)');
           return _buildEmergencyWidget(_cachedEmergencies!);
         }
 
         if (snapshot.hasData) {
-          print('🆘 EmergencyAlertWidget - docs count: ${snapshot.data!.docs.length}');
           // ✅ OPTIMIZACIÓN: Solo actualizar cache si los datos realmente cambiaron
           final newEmergencies = snapshot.data!.docs;
           if (_hasEmergenciesChanged(newEmergencies)) {
             _cachedEmergencies = newEmergencies;
-            print('🆘 EmergencyAlertWidget - cache actualizado');
           } else {
-            print('🆘 EmergencyAlertWidget - datos sin cambios, omitiendo rebuild');
             // ✅ OPTIMIZACIÓN: Si los datos no han cambiado, no rebuildeamos
             return _buildEmergencyWidget(_cachedEmergencies!);
           }
@@ -68,25 +59,22 @@ class _EmergencyAlertWidgetState extends State<EmergencyAlertWidget> {
         }
 
         if (snapshot.hasError) {
-          print('❌ EmergencyAlertWidget - error: ${snapshot.error}');
+          ReleaseLogger.error('Error in EmergencyAlertWidget: ${snapshot.error}', tag: 'EmergencyAlertWidget');
           return SizedBox.shrink();
         }
 
         if (!snapshot.hasData) {
           // Si no hay datos y tenemos cache, usar cache
           if (_cachedEmergencies != null) {
-            print('🆘 EmergencyAlertWidget - sin datos nuevos, usando cache');
             return _buildEmergencyWidget(_cachedEmergencies!);
           }
           // Si no hay datos ni cache, mostrar vacío
-          print('🆘 EmergencyAlertWidget - sin datos ni cache');
           return SizedBox.shrink();
         }
 
         // Datos vacíos
         if (snapshot.data!.docs.isEmpty) {
           _cachedEmergencies = [];
-          print('🆘 EmergencyAlertWidget - datos vacíos');
           return SizedBox.shrink();
         }
 
@@ -148,18 +136,14 @@ class _EmergencyAlertWidgetState extends State<EmergencyAlertWidget> {
             color: Colors.transparent,
             child: InkWell(
               onTap: () {
-                print('🆘 [EmergencyAlertWidget] onTap - Navegando a detalle');
                 // Si hay múltiples emergencias, navegar a la primera
                 final emergency = emergencies.first;
                 final emergencyData = emergency.data() as Map<String, dynamic>;
-                print('🆘 [EmergencyAlertWidget] emergencyId: ${emergency.id}');
-                print('🆘 [EmergencyAlertWidget] emergencyData: $emergencyData');
 
                 try {
                   Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (context) {
-                        print('🆘 [EmergencyAlertWidget] Construyendo EmergencyDetailScreen');
                         return EmergencyDetailScreen(
                           emergencyId: emergency.id,
                           emergencyData: emergencyData,
@@ -167,10 +151,8 @@ class _EmergencyAlertWidgetState extends State<EmergencyAlertWidget> {
                       },
                     ),
                   );
-                  print('🆘 [EmergencyAlertWidget] Navigator.push ejecutado');
                 } catch (e, stackTrace) {
-                  print('❌ [EmergencyAlertWidget] Error navegando: $e');
-                  print('❌ Stack trace: $stackTrace');
+                  ReleaseLogger.error('Error navigating to emergency detail: $e\nStack: $stackTrace', tag: 'EmergencyAlertWidget');
                 }
               },
               borderRadius: BorderRadius.circular(16),

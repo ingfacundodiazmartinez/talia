@@ -1,6 +1,6 @@
 import 'dart:async';
-import '../../../lib/services/block_service.dart';
-import '../../../lib/services/block_status_cache_service.dart';
+import 'package:talia/services/block_service.dart';
+import 'package:talia/services/block_status_cache_service.dart';
 
 /// Mock centralizado del BlockService para tests
 class MockBlockService implements BlockService {
@@ -58,6 +58,7 @@ class MockBlockStatusCacheService implements BlockStatusCacheService {
   }
 
   // Método adicional para tests que necesitan simular comportamiento bidireccional
+  @override
   void handleBlockStatusChange(String contactId, bool isBlocked, {bool isBlockedBy = false}) {
     final key = isBlockedBy ? 'blockedBy_$contactId' : 'blocked_$contactId';
     _mockBlockStatuses[key] = isBlocked;

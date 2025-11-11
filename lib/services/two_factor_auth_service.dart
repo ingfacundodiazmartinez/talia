@@ -105,7 +105,6 @@ class TwoFactorAuthService {
 
       return code == nextCode;
     } catch (e) {
-      print('❌ Error verificando código TOTP: $e');
       return false;
     }
   }
@@ -140,7 +139,6 @@ class TwoFactorAuthService {
 
       return false;
     } catch (e) {
-      print('❌ Error verificando código de recuperación: $e');
       return false;
     }
   }
@@ -163,9 +161,7 @@ class TwoFactorAuthService {
         'updatedAt': FieldValue.serverTimestamp(),
       });
 
-      print('✅ 2FA habilitado para usuario $userId');
     } catch (e) {
-      print('❌ Error habilitando 2FA: $e');
       throw Exception('Error al habilitar 2FA: $e');
     }
   }
@@ -181,9 +177,7 @@ class TwoFactorAuthService {
         'updatedAt': FieldValue.serverTimestamp(),
       });
 
-      print('✅ 2FA deshabilitado para usuario $userId');
     } catch (e) {
-      print('❌ Error deshabilitando 2FA: $e');
       throw Exception('Error al deshabilitar 2FA: $e');
     }
   }
@@ -200,7 +194,6 @@ class TwoFactorAuthService {
       final data = doc.data();
       return data?['twoFactorEnabled'] ?? false;
     } catch (e) {
-      print('❌ Error verificando estado de 2FA: $e');
       return false;
     }
   }
@@ -217,7 +210,6 @@ class TwoFactorAuthService {
       final data = doc.data();
       return data?['twoFactorSecret'];
     } catch (e) {
-      print('❌ Error obteniendo secreto 2FA: $e');
       return null;
     }
   }
@@ -267,7 +259,6 @@ class TwoFactorAuthService {
 
       return await completer.future;
     } catch (e) {
-      print('❌ Error enviando SMS de verificación: $e');
       throw Exception('Error al enviar SMS: $e');
     }
   }
@@ -283,7 +274,6 @@ class TwoFactorAuthService {
       await _auth.currentUser?.reauthenticateWithCredential(credential);
       return true;
     } catch (e) {
-      print('❌ Error verificando código SMS: $e');
       return false;
     }
   }
@@ -304,7 +294,6 @@ class TwoFactorAuthService {
       });
     } catch (e) {
       // Silencioso - los logs no deben interrumpir el flujo
-      print('⚠️ Error registrando evento de seguridad: $e');
     }
   }
 }

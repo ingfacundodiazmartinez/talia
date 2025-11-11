@@ -7,20 +7,31 @@ import 'firebase_options.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:image/image.dart' as img;
 import 'constants/notification_types.dart';
 import 'services/notification_filter.dart';
 import 'services/callkit_service.dart';
-import 'services/foreground_message_listener.dart';
 import 'utils/release_logger.dart';
 
-// Manejador de mensajes en segundo plano (debe estar fuera de la clase)
+// ═══════════════════════════════════════════════════════════════
+// 🔥 BACKGROUND MESSAGE HANDLER (CRITICAL FCM FIX)
+// ═══════════════════════════════════════════════════════════════
+//
+// MUST BE AT TOP LEVEL: Esta función debe estar fuera de cualquier clase
+// para que Flutter pueda accederla desde main.dart
+//
+// REGISTRADO EN: main.dart después de Firebase.initializeApp()
+// PROBLEMA RESUELTO: Los handlers FCM no se ejecutaban porque estaban mal registrados
+//
+// ✅ FIXED: Cache global para deduplicación (accesible desde background handler)
+final Set<String> _globalProcessedCallIds = {};
+
 @pragma('vm:entry-point')
-Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   ReleaseLogger.log('🔥 ============================================', tag: 'NotificationService');
   ReleaseLogger.log('📩 BACKGROUND MESSAGE HANDLER EJECUTADO', tag: 'NotificationService');
   ReleaseLogger.log('🔥 ============================================', tag: 'NotificationService');
@@ -43,6 +54,96 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     ReleaseLogger.error('Error inicializando Firebase en background: $e', tag: 'NotificationService');
   }
 
+  // Obtener el ID correcto según el tipo de notificación
+  final chatId = message.data['chatId'];
+  final groupId = message.data['groupId'];
+  final messageType = message.data['type'];
+
+  // Determinar el ID del chat/grupo actual
+  String? targetId;
+  if (messageType == 'group_message' || groupId != null) {
+    targetId = groupId ?? chatId;
+  } else {
+    targetId = chatId;
+  }
+
+  // ✅ FILTRO CHAT ACTUAL MEJORADO: Verificar si el usuario está viendo este chat
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final currentChatId = prefs.getString('current_chat_id');
+
+    if (currentChatId != null && targetId != null && currentChatId == targetId) {
+      ReleaseLogger.log('🚫 [Background] Usuario está viendo ${messageType == 'group_message' ? 'grupo' : 'chat'} $targetId - bloqueando notificación push', tag: 'NotificationService');
+      return; // No mostrar notificación push
+    }
+
+    // 🔒 FILTRO ANTI-SPAM ESTILO WHATSAPP: Verificar unreadCount antes de mostrar notificación
+    ReleaseLogger.log('🔍 [Background DEBUG] Iniciando validación unreadCount...', tag: 'NotificationService');
+    ReleaseLogger.log('🔍 [Background DEBUG] targetId: $targetId', tag: 'NotificationService');
+    ReleaseLogger.log('🔍 [Background DEBUG] messageType: $messageType', tag: 'NotificationService');
+    ReleaseLogger.log('🔍 [Background DEBUG] groupId: $groupId', tag: 'NotificationService');
+    ReleaseLogger.log('🔍 [Background DEBUG] chatId: $chatId', tag: 'NotificationService');
+
+    if (targetId != null) {
+      try {
+        // Inicializar Firebase en background si es necesario
+        if (!Firebase.apps.isNotEmpty) {
+          await Firebase.initializeApp();
+        }
+
+        final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+        ReleaseLogger.log('🔍 [Background DEBUG] currentUserId: $currentUserId', tag: 'NotificationService');
+
+        if (currentUserId != null) {
+          // Detectar si es mensaje de grupo o chat individual
+          final isGroupMessage = messageType == 'group_message' ||
+                                 message.data['isGroup'] == 'true' ||
+                                 groupId != null ||
+                                 message.data['groupName'] != null;
+
+          // Usar la colección correcta según el tipo de chat
+          final collection = isGroupMessage ? 'groups' : 'chats';
+
+          ReleaseLogger.log('🔍 [Background DEBUG] isGroupMessage: $isGroupMessage', tag: 'NotificationService');
+          ReleaseLogger.log('🔍 [Background DEBUG] collection: $collection', tag: 'NotificationService');
+          ReleaseLogger.log('🔍 [Background DEBUG] Consultando: $collection/$targetId', tag: 'NotificationService');
+
+          final chatDoc = await FirebaseFirestore.instance.collection(collection).doc(targetId).get();
+          ReleaseLogger.log('🔍 [Background DEBUG] chatDoc.exists: ${chatDoc.exists}', tag: 'NotificationService');
+
+          if (chatDoc.exists) {
+            final chatData = chatDoc.data();
+            final unreadCount = chatData?['unreadCount_$currentUserId'] ?? 0;
+
+            ReleaseLogger.log('🔍 [Background DEBUG] unreadCount_$currentUserId: $unreadCount', tag: 'NotificationService');
+            ReleaseLogger.log('🔍 [Background DEBUG] chatData keys: ${chatData?.keys.toList()}', tag: 'NotificationService');
+
+            if (unreadCount == 0) {
+              ReleaseLogger.log('🚫 [Background] ${isGroupMessage ? 'Grupo' : 'Chat'} $targetId ya leído (unreadCount=0) - NO mostrar notificación', tag: 'NotificationService');
+              return;
+            } else {
+              ReleaseLogger.log('✅ [Background] ${isGroupMessage ? 'Grupo' : 'Chat'} $targetId tiene $unreadCount mensajes no leídos - mostrando notificación', tag: 'NotificationService');
+            }
+          } else {
+            ReleaseLogger.log('⚠️ [Background DEBUG] Documento no encontrado: $collection/$targetId', tag: 'NotificationService');
+          }
+        }
+      } catch (e) {
+        ReleaseLogger.error('❌ [Background] Error verificando unreadCount: $e', tag: 'NotificationService');
+        // En caso de error, continuar y mostrar notificación (fail-safe)
+      }
+    }
+
+    if (currentChatId != null) {
+      ReleaseLogger.log('📱 [Background] Usuario en chat $currentChatId, notificación de chat $chatId - permitida', tag: 'NotificationService');
+    } else {
+      ReleaseLogger.log('📱 [Background] No hay chat actual - notificación permitida', tag: 'NotificationService');
+    }
+  } catch (e) {
+    ReleaseLogger.error('❌ [Background] Error verificando chat actual: $e', tag: 'NotificationService');
+    // En caso de error, permitir notificación (fail-safe)
+  }
+
   // Si es una llamada, mostrar CallKit en pantalla completa
   if (message.data['type'] == 'video_call' ||
       message.data['type'] == 'audio_call' ||
@@ -55,10 +156,18 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     ReleaseLogger.log('📞 Caller Name: ${message.data['callerName']}', tag: 'NotificationService');
     ReleaseLogger.log('📞 Caller ID: ${message.data['callerId']}', tag: 'NotificationService');
 
+    // ✅ FIXED: Deduplicación para evitar CallKit duplicado
+    final callId = message.data['callId'] ?? message.messageId ?? '';
+    if (_globalProcessedCallIds.contains(callId)) {
+      ReleaseLogger.log('⚠️ CallId $callId ya procesado - SALTANDO para evitar duplicados', tag: 'NotificationService');
+      return;
+    }
+    _globalProcessedCallIds.add(callId);
+
     try {
       final callKit = CallKitService();
       await callKit.showIncomingCall(
-        callId: message.data['callId'] ?? message.messageId ?? '',
+        callId: callId,
         callerName: message.data['callerName'] ?? 'Usuario',
         callerId: message.data['callerId'] ?? message.data['senderId'] ?? '',
         callerPhotoUrl: message.data['callerPhotoURL'] ?? message.data['senderPhotoUrl'],
@@ -98,6 +207,10 @@ class NotificationService {
   // Trackear el chat actual para suprimir notificaciones solo cuando estás dentro de él
   String? _currentChatId;
 
+  // ✅ FIXED: Deduplicación para evitar notificaciones duplicadas
+  final Set<String> _processedCallIds = {};
+  final Set<String> _processedMessageIds = {};
+
   // Stream para notificar videollamadas entrantes
   final _incomingCallController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get incomingCallStream => _incomingCallController.stream;
@@ -120,15 +233,43 @@ class NotificationService {
   }
 
   // Establecer el chat actual (para suprimir notificaciones solo de ese chat)
-  void setCurrentChat(String chatId) {
+  // 🔒 CRITICAL FIX: Cambiar de void async a Future<void> para prevenir race conditions
+  // PROBLEMA: SharedPreferences.setString() toma 50-200ms, pero el caller no esperaba
+  // RESULTADO: FCM background handler verificaba antes de que SharedPreferences se actualizara
+  Future<void> setCurrentChat(String chatId) async {
     _currentChatId = chatId;
     ReleaseLogger.log('📍 Chat actual establecido: $chatId', tag: 'NotificationService');
+
+    // ✅ Persistir para background handler - SÍNCRONO para prevenir race condition
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final currentTime = DateTime.now().millisecondsSinceEpoch;
+
+      await prefs.setString('current_chat_id', chatId);
+      // 🔒 TIMESTAMP FILTER: Guardar cuándo el usuario empezó a ver este chat
+      // Esto permite filtrar notificaciones de mensajes que llegaron mientras veía el chat
+      await prefs.setInt('chat_last_viewed_$chatId', currentTime);
+
+      ReleaseLogger.log('💾 Chat actual guardado: $chatId (timestamp: $currentTime)', tag: 'NotificationService');
+    } catch (e) {
+      ReleaseLogger.error('❌ Error guardando chat actual: $e', tag: 'NotificationService');
+    }
   }
 
   // Limpiar el chat actual (cuando sales del chat)
-  void clearCurrentChat() {
+  // 🔒 CRITICAL FIX: Cambiar de void async a Future<void> para consistencia
+  Future<void> clearCurrentChat() async {
     ReleaseLogger.log('📍 Chat actual limpiado: $_currentChatId', tag: 'NotificationService');
     _currentChatId = null;
+
+    // ✅ Limpiar de SharedPreferences - SÍNCRONO para consistencia
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('current_chat_id');
+      ReleaseLogger.log('🗑️ Chat actual eliminado de SharedPreferences (SYNC)', tag: 'NotificationService');
+    } catch (e) {
+      ReleaseLogger.error('❌ Error limpiando chat actual: $e', tag: 'NotificationService');
+    }
   }
 
   // Helper para upsert de datos de usuario
@@ -198,12 +339,9 @@ class NotificationService {
     if (_isInitialized) return;
 
     try {
-      // 1. Configurar manejador de mensajes en segundo plano
-      // IMPORTANTE: Registrar en iOS Y Android para mostrar CallKit
-      FirebaseMessaging.onBackgroundMessage(
-        _firebaseMessagingBackgroundHandler,
-      );
-      ReleaseLogger.log('✅ Background handler de Flutter registrado', tag: 'NotificationService');
+      // 1. Background handler registration moved to main.dart
+      // IMPORTANTE: El background handler ahora se registra en main.dart después de Firebase.initializeApp
+      ReleaseLogger.log('📝 Background handler registration delegated to main.dart', tag: 'NotificationService');
 
       // 2. Solicitar permisos
       await _requestPermissions();
@@ -416,11 +554,20 @@ class NotificationService {
         ReleaseLogger.log('📞 ${message.data['type']} entrante detectada en FOREGROUND', tag: 'NotificationService');
         ReleaseLogger.log('📞 Mostrando CallKit incluso en foreground para experiencia nativa', tag: 'NotificationService');
 
+        // ✅ FIXED: Deduplicación también en foreground
+        final callId = message.data['callId'] ?? message.messageId ?? '';
+        if (_processedCallIds.contains(callId) || _globalProcessedCallIds.contains(callId)) {
+          ReleaseLogger.log('⚠️ CallId $callId ya procesado en FOREGROUND - SALTANDO para evitar duplicados', tag: 'NotificationService');
+          return;
+        }
+        _processedCallIds.add(callId);
+        _globalProcessedCallIds.add(callId);
+
         try {
           if (Platform.isAndroid) {
             // Android usa CallKit
             await _callKit.showIncomingCall(
-              callId: message.data['callId'] ?? message.messageId ?? '',
+              callId: callId,
               callerName: message.data['callerName'] ?? 'Usuario',
               callerId: message.data['callerId'] ?? message.data['senderId'] ?? '',
               callerPhotoUrl: message.data['callerPhotoURL'] ?? message.data['senderPhotoUrl'],
@@ -440,9 +587,85 @@ class NotificationService {
         }
         return;
       } else {
-        // ✅ NO mostrar notificaciones push cuando la app está en foreground
-        // Las custom notifications (ForegroundMessageListener) se encargan de mostrar los mensajes
-        ReleaseLogger.log('✅ App en foreground - mensaje manejado por custom notifications (no push)', tag: 'NotificationService');
+        // ✅ MOSTRAR notificaciones push también en foreground (excepto si está en el chat)
+        // Aplicar filtros múltiples
+        final chatId = message.data['chatId'];
+        final groupId = message.data['groupId'];
+        final messageType = message.data['type'];
+
+        // Determinar el ID del chat/grupo actual
+        String? targetId;
+        if (messageType == 'group_message' || groupId != null) {
+          targetId = groupId ?? chatId;
+        } else {
+          targetId = chatId;
+        }
+
+        // FILTRO 1: Usuario viendo el chat actualmente
+        if (targetId != null && _currentChatId != null && targetId == _currentChatId) {
+          ReleaseLogger.log('🚫 [Foreground] Usuario está viendo ${messageType == 'group_message' ? 'grupo' : 'chat'} $targetId - NO mostrar notificación', tag: 'NotificationService');
+          return;
+        }
+
+        // FILTRO 2: Chat ya leído (unreadCount = 0) - SOLUCIÓN WHATSAPP
+        ReleaseLogger.log('🔍 [Foreground DEBUG] Iniciando validación unreadCount...', tag: 'NotificationService');
+        ReleaseLogger.log('🔍 [Foreground DEBUG] targetId: $targetId', tag: 'NotificationService');
+        ReleaseLogger.log('🔍 [Foreground DEBUG] messageType: $messageType', tag: 'NotificationService');
+
+        if (targetId != null) {
+          try {
+            // Verificar unreadCount en cache/memoria local
+            final currentUserId = _auth.currentUser?.uid;
+            ReleaseLogger.log('🔍 [Foreground DEBUG] currentUserId: $currentUserId', tag: 'NotificationService');
+
+            if (currentUserId != null) {
+              // Detectar si es mensaje de grupo o chat individual
+              final isGroupMessage = messageType == 'group_message' ||
+                                     message.data['isGroup'] == 'true' ||
+                                     groupId != null ||
+                                     message.data['groupName'] != null;
+
+              // Usar la colección correcta según el tipo de chat
+              final collection = isGroupMessage ? 'groups' : 'chats';
+
+              ReleaseLogger.log('🔍 [Foreground DEBUG] isGroupMessage: $isGroupMessage', tag: 'NotificationService');
+              ReleaseLogger.log('🔍 [Foreground DEBUG] collection: $collection', tag: 'NotificationService');
+              ReleaseLogger.log('🔍 [Foreground DEBUG] Consultando: $collection/$targetId', tag: 'NotificationService');
+
+              final chatDoc = await _firestore.collection(collection).doc(targetId).get();
+              ReleaseLogger.log('🔍 [Foreground DEBUG] chatDoc.exists: ${chatDoc.exists}', tag: 'NotificationService');
+
+              if (chatDoc.exists) {
+                final chatData = chatDoc.data();
+                final unreadCount = chatData?['unreadCount_$currentUserId'] ?? 0;
+
+                ReleaseLogger.log('🔍 [Foreground DEBUG] unreadCount_$currentUserId: $unreadCount', tag: 'NotificationService');
+                ReleaseLogger.log('🔍 [Foreground DEBUG] chatData keys: ${chatData?.keys.toList()}', tag: 'NotificationService');
+
+                if (unreadCount == 0) {
+                  ReleaseLogger.log('🚫 [Foreground] ${isGroupMessage ? 'Grupo' : 'Chat'} $targetId ya leído (unreadCount=0) - NO mostrar notificación', tag: 'NotificationService');
+                  return;
+                } else {
+                  ReleaseLogger.log('✅ [Foreground] ${isGroupMessage ? 'Grupo' : 'Chat'} $targetId tiene $unreadCount mensajes no leídos - mostrando notificación', tag: 'NotificationService');
+                }
+              } else {
+                ReleaseLogger.log('⚠️ [Foreground DEBUG] Documento no encontrado: $collection/$targetId', tag: 'NotificationService');
+              }
+            }
+          } catch (e) {
+            ReleaseLogger.error('Error verificando unreadCount: $e', tag: 'NotificationService');
+            // En caso de error, continuar y mostrar notificación (fail-safe)
+          }
+        }
+
+        // 🔄 MULTI-PLATFORM: iOS usa Flutter, Android usa servicio nativo
+        if (Platform.isIOS) {
+          ReleaseLogger.log('🍎 [Foreground] iOS - mostrando notificación Flutter', tag: 'NotificationService');
+          await _showLocalNotification(message);
+        } else {
+          ReleaseLogger.log('🤖 [Foreground] Android - delegando a servicio nativo', tag: 'NotificationService');
+          // Android nativo maneja las notificaciones con foto del sender
+        }
         return;
       }
     });
@@ -478,16 +701,21 @@ class NotificationService {
       // Obtener tipo de notificación
       final notificationType = message.data['type'] ?? 'unknown';
       final senderId = message.data['senderId'];
+      final chatId = message.data['chatId']; // Para verificar si es del chat actual
 
       ReleaseLogger.log('📨 Procesando notificación local:', tag: 'NotificationService');
       ReleaseLogger.log('   Tipo: $notificationType', tag: 'NotificationService');
       ReleaseLogger.log('   Usuario: ${currentUser.uid.substring(0, 8)}...', tag: 'NotificationService');
+      ReleaseLogger.log('   Chat ID: $chatId', tag: 'NotificationService');
+      ReleaseLogger.log('   Chat actual: $_currentChatId', tag: 'NotificationService');
 
       // Verificar si se debe mostrar la notificación
       final decision = await _filter.shouldSendNotification(
         userId: currentUser.uid,
         notificationType: notificationType,
         senderId: senderId,
+        chatId: chatId,
+        currentChatId: _currentChatId,
       );
 
       if (!decision.shouldSend) {
@@ -667,13 +895,6 @@ class NotificationService {
     } else if (data['type'] == 'chat_message' || data['type'] == 'group_message') {
       ReleaseLogger.log('💬 Notificación de ${data['type'] == 'group_message' ? 'mensaje grupal' : 'chat'} tocada, navegando', tag: 'NotificationService');
 
-      // Marcar el chat como ignorado en el ForegroundMessageListener
-      // para evitar que se muestre un banner custom inmediatamente
-      final chatId = data['chatId'] as String?;
-      if (chatId != null) {
-        ReleaseLogger.log('🔕 Marcando chat $chatId como ignorado en ForegroundMessageListener', tag: 'NotificationService');
-        ForegroundMessageListener().markChatOpenedFromNotification(chatId);
-      }
 
       _chatNotificationTapController.add(data);
     } else if (data['type'] == 'contact_request') {
@@ -698,6 +919,7 @@ class NotificationService {
     required Map<String, dynamic> data,
     String? senderId,
     String? imageUrl,
+    String? chatId, // Para verificar si es del chat actual
   }) async {
     try {
       // Verificar si se debe enviar
@@ -705,6 +927,8 @@ class NotificationService {
         userId: userId,
         notificationType: notificationType,
         senderId: senderId,
+        chatId: chatId,
+        currentChatId: _currentChatId,
       );
 
       if (!decision.shouldSend) {
@@ -911,6 +1135,7 @@ class NotificationService {
         data: data,
         senderId: senderId,
         imageUrl: senderPhotoUrl,
+        chatId: chatId,
       );
 
       if (created) {

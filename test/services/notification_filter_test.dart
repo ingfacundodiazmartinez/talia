@@ -195,4 +195,105 @@ void main() {
       expect(decision.reason, contains('Error'));
     });
   });
+
+  group('🚨 CRITICAL: NotificationFilter - Chat Current Filter', () {
+    test('🔒 NO debe mostrar notificación si usuario está viendo el chat actual', () async {
+      // Arrange
+      when(mockPrefsService.getPreferences()).thenAnswer((_) async => {});
+      when(mockPrefsService.shouldShowNotification('sender456')).thenAnswer((_) async => true);
+
+      const userId = 'user123';
+      const notificationType = 'chat_message';
+      const senderId = 'sender456';
+      const chatId = 'chat_abc_123'; // Chat que está viendo
+      const currentChatId = 'chat_abc_123'; // Mismo chat
+
+      // Act
+      final decision = await filter.shouldSendNotification(
+        userId: userId,
+        notificationType: notificationType,
+        senderId: senderId,
+        chatId: chatId,
+        currentChatId: currentChatId,
+      );
+
+      // Assert
+      expect(decision.shouldSend, isFalse);
+      expect(decision.reason, contains('Usuario está viendo el chat'));
+    });
+
+    test('✅ SÍ debe mostrar notificación si es de un chat diferente', () async {
+      // Arrange
+      when(mockPrefsService.getPreferences()).thenAnswer((_) async => {});
+      when(mockPrefsService.shouldShowNotification('sender456')).thenAnswer((_) async => true);
+
+      const userId = 'user123';
+      const notificationType = 'chat_message';
+      const senderId = 'sender456';
+      const chatId = 'chat_xyz_789'; // Chat diferente
+      const currentChatId = 'chat_abc_123'; // Chat que está viendo
+
+      // Act
+      final decision = await filter.shouldSendNotification(
+        userId: userId,
+        notificationType: notificationType,
+        senderId: senderId,
+        chatId: chatId,
+        currentChatId: currentChatId,
+      );
+
+      // Assert
+      expect(decision.shouldSend, isTrue);
+      expect(decision.reason, contains('Notificación permitida'));
+    });
+
+    test('🚨 EMERGENCIAS SIEMPRE se envían incluso en chat actual', () async {
+      // Arrange
+      when(mockPrefsService.getPreferences()).thenAnswer((_) async => {});
+
+      const userId = 'user123';
+      const notificationType = 'emergency';
+      const senderId = 'sender456';
+      const chatId = 'chat_abc_123'; // Mismo chat
+      const currentChatId = 'chat_abc_123'; // Chat que está viendo
+
+      // Act
+      final decision = await filter.shouldSendNotification(
+        userId: userId,
+        notificationType: notificationType,
+        senderId: senderId,
+        chatId: chatId,
+        currentChatId: currentChatId,
+      );
+
+      // Assert
+      expect(decision.shouldSend, isTrue);
+      expect(decision.reason, contains('Emergencia - alta prioridad'));
+    });
+
+    test('✅ SÍ debe mostrar notificación si no hay chat actual', () async {
+      // Arrange
+      when(mockPrefsService.getPreferences()).thenAnswer((_) async => {});
+      when(mockPrefsService.shouldShowNotification('sender456')).thenAnswer((_) async => true);
+
+      const userId = 'user123';
+      const notificationType = 'chat_message';
+      const senderId = 'sender456';
+      const chatId = 'chat_abc_123';
+      const currentChatId = null; // No está viendo ningún chat
+
+      // Act
+      final decision = await filter.shouldSendNotification(
+        userId: userId,
+        notificationType: notificationType,
+        senderId: senderId,
+        chatId: chatId,
+        currentChatId: currentChatId,
+      );
+
+      // Assert
+      expect(decision.shouldSend, isTrue);
+      expect(decision.reason, contains('Notificación permitida'));
+    });
+  });
 }

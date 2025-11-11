@@ -17,7 +17,6 @@ import 'message_bubble/media_gallery_service.dart';
 import 'message_bubble/message_options_dialog.dart';
 import 'missed_call_bubble.dart';
 import 'answered_call_bubble.dart';
-import '../../forward_message_screen.dart';
 import '../../message_info_screen.dart';
 
 /// Widget que muestra un mensaje individual en el chat
@@ -687,30 +686,13 @@ class _MessageBubbleState extends State<MessageBubble>
     }
   }
 
-  /// Navegar a la pantalla de reenvío de mensaje
+  /// Funcionalidad de reenvío temporalmente deshabilitada
   void _forwardMessage(BuildContext context) {
-    // Crear objeto ChatMessage con los datos actuales
-    final message = ChatMessage(
-      id: widget.messageId,
-      senderId: widget.senderId,
-      text: widget.text ?? '',
-      imageUrl: widget.imageUrl,
-      videoUrl: widget.videoUrl,
-      audioUrl: widget.audioUrl,
-      timestamp: widget.timestamp,
-      type: widget.type ?? 'text',
-      waveformData: widget.waveformData,
-      status: widget.status,
-    );
-
-    // Navegar a la pantalla de reenvío
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (context) => ForwardMessageScreen(
-          message: message,
-          chatId: widget.chatId,
-          contactName: widget.contactName,
-        ),
+    // TODO: Implementar pantalla de reenvío
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Función de reenvío no disponible'),
+        duration: Duration(seconds: 2),
       ),
     );
   }

@@ -1,0 +1,297 @@
+STORY FILTERING ANALYSIS - EXECUTIVE SUMMARY
+=============================================
+
+CRITICAL FINDING:
+The user was correct. Story visibility is controlled by:
+1. APPROVED CONTACTS (bidirectional contact relationships)
+2. PARENT-CHILD relationships (unidirectional authority)
+3. Block status (bidirectional blocking)
+
+NOT by GROUPS (which are for chat, not story visibility).
+
+==============================================================================
+THE CORRECT FILTERING LOGIC
+==============================================================================
+
+A user CAN SEE a story if:
+
+For Regular Contacts:
+  1. Story is from an APPROVED CONTACT (status='approved' in contacts collection)
+  2. No block exists between the users (bidirectional check)
+  3. Story status is 'approved'
+  4. Story is not expired (>24 hours)
+  5. Story visibility is 'temporary' (feed) or 'permanent' (profile)
+  
+For Parent-Child Relationships:
+  1. User is the parent, child is in linkedChildrenIds
+  2. No block exists between them
+  3. Story can be any status: approved, pending, rejected
+  4. Story is not expired
+  
+For Own Stories:
+  1. User always sees their own stories
+  
+A user CANNOT SEE:
+  - Stories from non-contacts
+  - Stories with status='uploading' (except creator)
+  - Expired stories (>24 hours old)
+  - Stories when blocked
+  - Stories with visibility='archived'
+  - GROUPS ARE NOT RELEVANT TO STORY VISIBILITY
+
+==============================================================================
+THE BUG IN CURRENT CODE
+==============================================================================
+
+File: lib/services/story_media_preload_service.dart
+
+PROBLEM:
+  _preloadVisibleGroupStories() queries the 'groups' collection to get
+  group member IDs, then preloads stories from those users.
+  
+  But groups are CHAT GROUPS, not story visibility groups!
+  
+  The actual visibility is determined by ContactRepository.getContactIds()
+  which returns:
+    - Approved bidirectional contacts
+    - Linked children (if parent)
+    - Linked parents (if child)
+  
+  Groups and contacts are NOT the same set of users!
+
+CONSEQUENCE:
+  - Wrong stories may be preloaded (group members who aren't contacts)
+  - Stories that should be shown may not be preloaded (contacts not in groups)
+  - Wasted bandwidth on preloading stories user won't see
+  - Performance degradation
+
+THE FIX:
+  Instead of:
+    final userGroupsQuery = FirebaseFirestore.instance
+        .collection('groups')
+        .where('members', arrayContains: _currentUser!.uid)
+        .get();
+  
+  Use:
+    final contactIds = await _contactRepository.getContactIds();
+  
+  This already implements the correct logic and will match what's actually
+  displayed in the UI.
+
+==============================================================================
+THREE SOURCES OF CONTACTS
+==============================================================================
+
+1. APPROVED BIDIRECTIONAL CONTACTS
+   Collection: contacts
+   Query: where users.arrayContains(currentUserId) AND status='approved'
+   
+   Example: User A and User B approve each other
+   {
+     id: "contact_abc",
+     users: ["userId_a", "userId_b"],  // alphabetically sorted
+     status: "approved"
+   }
+   
+   Both can see each other's APPROVED stories only
+   
+2. LINKED CHILDREN
+   Data: User document with linkedChildrenIds field
+   Example:
+   {
+     id: "parent_123",
+     linkedChildrenIds: ["child_1", "child_2"]
+   }
+   
+   Parent can see ALL stories (approved, pending, rejected)
+   Children can see parent's APPROVED stories only
+   
+3. LINKED PARENTS
+   Reverse query: Find parents where linkedChildrenIds.contains(userId)
+   
+   Parents can see ALL stories from linked child
+   Child can see parent's APPROVED stories
+
+==============================================================================
+STORY STATUS HIERARCHY
+==============================================================================
+
+UPLOADING   - Being uploaded to Storage (only creator sees)
+PENDING     - Waiting for parent approval (only parents see)
+APPROVED    - Visible to approved contacts & parents (feed, 24h)
+REJECTED    - Parent rejected it (shows rejection reason, expires)
+EXPIRED     - Story is >24 hours old (not visible)
+
+Story Visibility Types:
+TEMPORARY   - 24h in feed (default)
+PERMANENT   - Saved to profile (visible indefinitely)
+ARCHIVED    - Hidden from profile (not in feed)
+
+==============================================================================
+BLOCK STATUS
+==============================================================================
+
+Collection: blocked_contacts
+
+Bidirectional check:
+  IF user_a_blocks_user_b EXISTS OR user_b_blocks_user_a EXISTS
+  THEN neither can see stories from the other
+
+Implemented in: StoryStreamManager._getBatchBlockStatuses()
+
+When A blocks B:
+  - A doesn't see B's stories
+  - B doesn't know they're blocked
+  - B can still see A's stories (unless A blocks them back)
+
+==============================================================================
+DATA STRUCTURES
+==============================================================================
+
+Contact Model:
+{
+  id: "contact_123",
+  users: ["user_a", "user_b"],  // sorted
+  user1Name: "User A",
+  user2Name: "User B",
+  status: "approved",  // pending, rejected, revoked
+  addedAt: timestamp,
+  approvedAt: timestamp,
+  ...
+}
+
+Story Model:
+{
+  id: "story_456",
+  userId: "creator_id",
+  status: "approved",  // uploading, pending, rejected, expired
+  visibility: "temporary",  // permanent, archived
+  mediaUrl: "...",
+  mediaType: "video",  // image
+  caption: "...",
+  createdAt: timestamp,
+  expiresAt: timestamp,
+  viewedBy: ["user_a", "user_b"],
+  replies: [...],
+  ...
+}
+
+User Model (Parent relevant fields):
+{
+  id: "user_123",
+  linkedChildrenIds: ["child_1", "child_2"],
+  ...
+}
+
+==============================================================================
+KEY FILES & LOCATIONS
+==============================================================================
+
+1. ContactRepository.getContactIds()
+   File: lib/services/stories/repositories/contact_repository.dart (line 37)
+   Status: CORRECT - Gets approved contacts + parent-child relationships
+   
+2. StoryStreamManager._canUserSeeStoryOptimized()
+   File: lib/services/stories/managers/story_stream_manager.dart (line 470)
+   Status: CORRECT - Implements visibility filtering rules
+   
+3. StoryMediaPreloadService._preloadVisibleGroupStories()
+   File: lib/services/story_media_preload_service.dart (line 216)
+   Status: BROKEN - Uses groups instead of contacts
+   Fix: Replace group query with contactRepository.getContactIds()
+   
+4. StoryRetrievalService.getStoriesFromWhitelist()
+   File: lib/services/stories/services/story_retrieval_service.dart (line 38)
+   Status: CORRECT - Main API entry point
+   
+5. Story model
+   File: lib/models/story.dart
+   Status: CORRECT - Has isVisibleToContacts, isVisibleInProfile, etc.
+   
+6. Contact model
+   File: lib/models/contact.dart
+   Status: CORRECT - Has isApproved, isRejected, etc.
+
+==============================================================================
+FIRESTORE RULES CONFIRMATION
+==============================================================================
+
+firestore.rules validates:
+- Users can only read contacts they're part of
+- Parent-child relationships stored in users.linkedChildrenIds
+- Block relationships checked before displaying stories
+- Stories can only be read by authorized users
+
+This confirms:
+- Contacts = approved bidirectional relationships
+- Parent-child = one-directional via linkedChildrenIds
+- Groups are NOT used for story authorization
+
+==============================================================================
+PERFORMANCE IMPACT
+==============================================================================
+
+Current Bug:
+- Preloads stories from group members (wrong set of users)
+- May preload 20+ stories that user won't see
+- May not preload stories that user should see
+- Wasted bandwidth, slower app
+
+After Fix:
+- Preloads only from actual contacts
+- Matches what's displayed
+- Better performance
+- Correct story feed
+
+==============================================================================
+TESTING SCENARIOS
+==============================================================================
+
+Test 1: Approved Contact
+- Create bidirectional contact between User A and User B
+- A uploads story with status=approved
+- B should see story in feed
+- B opens profile -> should see story
+- B blocks A -> should NOT see A's stories
+- B unblocks A -> should see A's stories again
+
+Test 2: Parent-Child
+- Parent links Child
+- Child uploads story with status=pending
+- Parent should see in approval screen
+- Parent approves -> status=approved
+- Parent can now see in feed
+- Child should see parent's approved stories
+
+Test 3: Groups are Irrelevant
+- Create group with members [user_a, user_b]
+- User A and User B NOT approved contacts
+- User A uploads story with status=approved
+- User B should NOT see story (not approved contact)
+- (Group membership doesn't grant story access)
+
+==============================================================================
+SUMMARY
+==============================================================================
+
+The user was correct:
+1. Stories are filtered by APPROVED CONTACTS (not groups)
+2. Stories are filtered by PARENT-CHILD relationships (not groups)
+3. Stories are filtered by approval status
+4. Groups should NOT be used for story visibility
+
+The bug:
+- StoryMediaPreloadService uses groups for preloading
+- Should use ContactRepository.getContactIds() instead
+
+The impact:
+- Stories may be preloaded unnecessarily
+- Stories may not be preloaded when needed
+- Performance degradation
+- But NOT a security issue (filtering happens elsewhere)
+
+The fix:
+- Replace group-based preloading with contact-based preloading
+- Use existing ContactRepository.getContactIds() method
+- Will align preloading with actual visibility rules
+

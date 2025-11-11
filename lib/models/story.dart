@@ -99,13 +99,36 @@ class Story {
 
   // Factory constructor para crear desde Firestore
   factory Story.fromFirestore(DocumentSnapshot doc) {
-    final data = doc.data() as Map<String, dynamic>;
+    try {
+      final data = doc.data() as Map<String, dynamic>;
 
-    // Parse replies
-    final repliesList = data['replies'] as List<dynamic>? ?? [];
-    final replies = repliesList
-        .map((reply) => StoryReply.fromMap(reply as Map<String, dynamic>))
-        .toList();
+      // Parse replies with robust error handling
+      List<StoryReply> replies = [];
+      try {
+        final repliesData = data['replies'];
+        if (repliesData != null && repliesData is List<dynamic>) {
+          replies = repliesData
+              .where((reply) => reply is Map<String, dynamic>)
+              .map((reply) => StoryReply.fromMap(reply as Map<String, dynamic>))
+              .toList();
+        }
+      } catch (e) {
+        // Silently handle malformed replies data
+        replies = [];
+      }
+
+      // Parse viewedBy with robust error handling
+      List<String> viewedBy = [];
+      try {
+        final viewedByData = data['viewedBy'];
+        if (viewedByData != null) {
+          if (viewedByData is List<dynamic>) {
+            viewedBy = viewedByData.whereType<String>().toList();
+          }
+        }
+      } catch (e) {
+        viewedBy = [];
+      }
 
     return Story(
       id: doc.id,
@@ -115,9 +138,9 @@ class Story {
       mediaUrl: data['mediaUrl'] ?? '',
       mediaType: data['mediaType'] ?? 'image',
       caption: data['caption'],
-      createdAt: (data['createdAt'] as Timestamp).toDate(),
-      expiresAt: (data['expiresAt'] as Timestamp).toDate(),
-      viewedBy: List<String>.from(data['viewedBy'] ?? []),
+      createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      expiresAt: (data['expiresAt'] as Timestamp?)?.toDate() ?? DateTime.now().add(Duration(hours: 24)),
+      viewedBy: viewedBy,
       replies: replies,
       filter: data['filter'],
       status: _parseStoryStatus(data['status']),
@@ -127,6 +150,9 @@ class Story {
       visibility: _parseStoryVisibility(data['visibility']),
       savedToPermanentAt: data['savedToPermanentAt'] != null ? (data['savedToPermanentAt'] as Timestamp).toDate() : null,
     );
+    } catch (e) {
+      throw Exception('Error parsing story ${doc.id}: $e. Data keys: ${(doc.data() as Map<String, dynamic>?)?.keys.toList()}');
+    }
   }
 
   static StoryStatus _parseStoryStatus(dynamic status) {

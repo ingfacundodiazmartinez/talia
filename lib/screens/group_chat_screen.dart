@@ -8,7 +8,6 @@ import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import '../controllers/group_chat_controller.dart';
 import '../notification_service.dart';
-import '../services/foreground_message_listener.dart';
 import '../services/reaction_service.dart';
 import '../services/message_status_helper.dart';
 import '../services/read_receipts_service.dart';
@@ -84,20 +83,25 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     // Agregar observer para lifecycle events (permisos, etc)
     WidgetsBinding.instance.addObserver(this);
 
-    // Establecer el chat actual (grupo) para suprimir notificaciones de este grupo
-    NotificationService().setCurrentChat(widget.groupId);
+    // 🔒 CRITICAL FIX: Inicialización async para evitar race condition
+    _initializeGroupChat();
+  }
 
-    // Establecer el chat actual en ForegroundMessageListener para suprimir custom notifications
-    ForegroundMessageListener().setCurrentOpenChat(widget.groupId);
+  /// Inicializar grupo de forma asíncrona para evitar race condition con notificaciones
+  Future<void> _initializeGroupChat() async {
+    // 🔒 PASO 1: Establecer chat actual SÍNCRONAMENTE antes de inicializar controller
+    // Esto previene que lleguen notificaciones push mientras el usuario ya está en el grupo
+    await NotificationService().setCurrentChat(widget.groupId);
 
-    // 🗑️ Limpiar notificaciones de este grupo al abrirlo
+    // 🗑️ PASO 2: Limpiar notificaciones de este grupo al abrirlo
     NotificationService().clearGroupNotifications(widget.groupId);
 
+    // 🔒 PASO 3: Ahora inicializar controller sabiendo que SharedPreferences ya está actualizado
     _controller = GroupChatController(
       groupId: widget.groupId,
       groupName: widget.groupName,
     );
-    _controller.initialize();
+    await _controller.initialize();
     _scrollController.addListener(_onScroll);
     _messageController.addListener(_onTypingChanged);
 
@@ -125,7 +129,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
 
       if (messageIndex == -1) {
         // Mensaje no encontrado todavía
-        print('⏳ Mensaje $messageId no encontrado en grupo, esperando...');
+        // Mensaje no encontrado todavía
         // Intentar de nuevo después de un tiempo
         Future.delayed(const Duration(milliseconds: 1000), () {
           if (!_hasScrolledToMessage) {
@@ -135,7 +139,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
         return;
       }
 
-      print('✅ Scroll a mensaje $messageId en índice $messageIndex');
+      // Scrolling to message
       _hasScrolledToMessage = true;
 
       // Calcular posición aproximada
@@ -171,11 +175,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
 
   @override
   void dispose() {
-    // Limpiar el chat actual para permitir notificaciones de nuevo
+    // 🔒 NOTA: clearCurrentChat() es async pero no necesitamos await en dispose
+    // Es una operación de limpieza - fire-and-forget está bien aquí
     NotificationService().clearCurrentChat();
-
-    // Limpiar el chat actual en ForegroundMessageListener para permitir custom notifications
-    ForegroundMessageListener().setCurrentOpenChat(null);
 
     WidgetsBinding.instance.removeObserver(this);
     _controller.dispose();
@@ -192,7 +194,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     // Si la app pierde el foco (ej: aparece diálogo de permisos) y estamos grabando,
     // detener la grabación para evitar que quede bloqueada
     if (state == AppLifecycleState.inactive && _isRecording) {
-      print('⚠️ [GroupChatScreen] App inactive mientras grababa - cancelando grabación');
+
       _cancelRecording();
     }
 
@@ -221,9 +223,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     try {
       await _audioRecorder.stop();
       setState(() => _isRecording = false);
-      print('✅ [GroupChatScreen] Grabación cancelada');
+
     } catch (e) {
-      print('❌ [GroupChatScreen] Error cancelando grabación: $e');
+
       setState(() => _isRecording = false);
     }
   }
@@ -382,7 +384,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
       final hasPermission = await _audioRecorder.hasPermission();
 
       if (!hasPermission) {
-        print('⚠️ [GroupChatScreen] No hay permisos de micrófono');
+
         return;
       }
 
@@ -407,7 +409,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
         _audioPath = path;
       });
     } catch (e) {
-      print('❌ Error iniciando grabación: $e');
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -426,11 +428,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
 
       if (path != null && path.isNotEmpty) {
         // 1. Procesar waveform inmediatamente
-        print('🎵 Procesando waveform del audio...');
+
         final AudioProcessingService audioProcessing = AudioProcessingService();
         final File audioFile = File(path);
         final waveformData = await audioProcessing.extractWaveform(audioFile);
-        print('✅ Waveform procesado: ${waveformData.length} puntos');
+
 
         // 2. Enviar con optimistic update (muestra inmediatamente)
         final messageId = await _controller.sendAudioOptimistic(
@@ -448,7 +450,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
         }
       }
     } catch (e) {
-      print('❌ Error deteniendo grabación: $e');
+
     }
   }
 

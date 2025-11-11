@@ -77,7 +77,7 @@ class ReadReceiptsService {
       int alreadyRead = 0;
 
       for (var doc in unreadMessages.docs) {
-        final data = doc.data() as Map<String, dynamic>;
+        final data = doc.data();
         final readBy = List<String>.from(data['readBy'] ?? []);
 
         appLogger.log('📖 [ReadReceipts] Mensaje ${doc.id}:', level: 'INFO');
@@ -112,6 +112,18 @@ class ReadReceiptsService {
       } else {
         appLogger.log('📖 [ReadReceipts] No hay mensajes nuevos para marcar', level: 'INFO');
       }
+
+      // ⚡ CRÍTICO: Resetear unreadCount cuando se marcan mensajes como leídos
+      // PROBLEMA RESUELTO: Sin esto, el badge seguía mostrando 1 mensaje sin leer
+      // aunque todos los mensajes estuvieran marcados como leídos en readBy
+      appLogger.log('📖 [ReadReceipts] 🧹 Reseteando unreadCount para usuario ${currentUser.uid}...', level: 'INFO');
+
+      final chatRef = _firestore.collection(isGroupChat ? 'groups' : 'chats').doc(chatId);
+      await chatRef.update({
+        'unreadCount_${currentUser.uid}': 0,
+      });
+
+      appLogger.log('✅ [ReadReceipts] UnreadCount reseteado a 0 para usuario ${currentUser.uid}', level: 'INFO');
 
       appLogger.log('📖 [ReadReceipts] ========================================', level: 'INFO');
     } catch (e, stackTrace) {

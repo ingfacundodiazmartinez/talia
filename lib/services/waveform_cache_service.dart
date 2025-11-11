@@ -23,7 +23,6 @@ class WaveformCacheService {
     try {
       // 1. Verificar cache en memoria primero
       if (_memoryCache.containsKey(audioUrl)) {
-        print('📦 [WAVEFORM CACHE] Hit en memoria para: ${audioUrl.hashCode}');
         return _memoryCache[audioUrl];
       }
 
@@ -33,7 +32,6 @@ class WaveformCacheService {
       final cachedJson = prefs.getString(key);
 
       if (cachedJson != null) {
-        print('📦 [WAVEFORM CACHE] Hit en disco para: ${audioUrl.hashCode}');
         final List<dynamic> decoded = jsonDecode(cachedJson);
         final waveform = decoded.cast<double>();
 
@@ -43,10 +41,8 @@ class WaveformCacheService {
         return waveform;
       }
 
-      print('❌ [WAVEFORM CACHE] Miss para: ${audioUrl.hashCode}');
       return null;
     } catch (e) {
-      print('❌ [WAVEFORM CACHE] Error leyendo: $e');
       return null;
     }
   }
@@ -54,7 +50,6 @@ class WaveformCacheService {
   /// Guardar waveform en caché
   Future<void> saveWaveform(String audioUrl, List<double> waveformData) async {
     try {
-      print('💾 [WAVEFORM CACHE] Guardando waveform de ${waveformData.length} puntos');
 
       // 1. Guardar en memoria
       _memoryCache[audioUrl] = waveformData;
@@ -69,16 +64,13 @@ class WaveformCacheService {
       // 3. Limpiar cache si es muy grande
       await _cleanupCacheIfNeeded(prefs);
 
-      print('✅ [WAVEFORM CACHE] Guardado exitosamente');
     } catch (e) {
-      print('❌ [WAVEFORM CACHE] Error guardando: $e');
     }
   }
 
   /// Limpiar toda la caché
   Future<void> clearCache() async {
     try {
-      print('🧹 [WAVEFORM CACHE] Limpiando toda la caché');
 
       // Limpiar memoria
       _memoryCache.clear();
@@ -92,9 +84,7 @@ class WaveformCacheService {
         await prefs.remove(key);
       }
 
-      print('✅ [WAVEFORM CACHE] Caché limpiada');
     } catch (e) {
-      print('❌ [WAVEFORM CACHE] Error limpiando caché: $e');
     }
   }
 
@@ -105,7 +95,6 @@ class WaveformCacheService {
       final keys = prefs.getKeys();
       return keys.where((k) => k.startsWith(_cachePrefix)).length;
     } catch (e) {
-      print('❌ [WAVEFORM CACHE] Error obteniendo tamaño: $e');
       return 0;
     }
   }
@@ -123,7 +112,6 @@ class WaveformCacheService {
       final waveformKeys = keys.where((k) => k.startsWith(_cachePrefix)).toList();
 
       if (waveformKeys.length > _maxCacheSize) {
-        print('🧹 [WAVEFORM CACHE] Limpiando cache antigua (${waveformKeys.length} > $_maxCacheSize)');
 
         // Ordenar por timestamp (asumiendo que las keys más viejas tienen timestamps más bajos)
         // Como usamos hashCode, simplemente eliminamos las primeras keys alfabéticamente
@@ -133,22 +121,18 @@ class WaveformCacheService {
         final toRemove = waveformKeys.length - _maxCacheSize;
         for (int i = 0; i < toRemove; i++) {
           await prefs.remove(waveformKeys[i]);
-          print('🗑️ [WAVEFORM CACHE] Eliminada: ${waveformKeys[i]}');
         }
       }
     } catch (e) {
-      print('❌ [WAVEFORM CACHE] Error en cleanup: $e');
     }
   }
 
   /// Precachear waveforms de una lista de URLs (útil para precarga)
   Future<void> precacheWaveforms(List<String> audioUrls) async {
-    print('🔄 [WAVEFORM CACHE] Precacheando ${audioUrls.length} waveforms');
 
     for (final url in audioUrls) {
       final cached = await getWaveform(url);
       if (cached != null) {
-        print('✓ [WAVEFORM CACHE] Ya en caché: ${url.hashCode}');
       }
     }
   }

@@ -32,7 +32,6 @@ class UserProfileCacheService {
         final cacheAge = DateTime.now().difference(_lastUpdated[userId]!);
         if (cacheAge < _cacheDuration) {
           if (kDebugMode) {
-            print('✅ [Cache] Usuario $userId desde caché (${cacheAge.inSeconds}s)');
           }
           return _profileCache[userId];
         }
@@ -40,7 +39,6 @@ class UserProfileCacheService {
 
       // No está en caché o está desactualizado, consultar Firestore
       if (kDebugMode) {
-        print('🔄 [Cache] Consultando Firestore para usuario $userId');
       }
 
       final doc = await _firestore.collection('users').doc(userId).get();
@@ -58,12 +56,10 @@ class UserProfileCacheService {
       return profileData;
     } catch (e) {
       if (kDebugMode) {
-        print('❌ [Cache] Error obteniendo perfil de $userId: $e');
       }
       // Si hay error pero tenemos caché antiguo, retornarlo
       if (_profileCache.containsKey(userId)) {
         if (kDebugMode) {
-          print('⚠️ [Cache] Usando caché antiguo para $userId');
         }
         return _profileCache[userId];
       }
@@ -75,7 +71,6 @@ class UserProfileCacheService {
   Future<void> preloadProfiles(List<String> userIds) async {
     try {
       if (kDebugMode) {
-        print('🔄 [Cache] Pre-cargando ${userIds.length} perfiles...');
       }
 
       // Filtrar los que ya están en caché reciente
@@ -89,13 +84,11 @@ class UserProfileCacheService {
 
       if (needsRefresh.isEmpty) {
         if (kDebugMode) {
-          print('✅ [Cache] Todos los perfiles ya están en caché');
         }
         return;
       }
 
       if (kDebugMode) {
-        print('🔄 [Cache] Consultando ${needsRefresh.length} perfiles nuevos');
       }
 
       // Consultar en paralelo (máximo 10 a la vez para no saturar)
@@ -108,11 +101,9 @@ class UserProfileCacheService {
       }
 
       if (kDebugMode) {
-        print('✅ [Cache] Pre-carga completada');
       }
     } catch (e) {
       if (kDebugMode) {
-        print('❌ [Cache] Error en pre-carga: $e');
       }
     }
   }
@@ -134,7 +125,6 @@ class UserProfileCacheService {
     _lastUpdated.remove(userId);
 
     if (kDebugMode) {
-      print('🗑️ [Cache] Caché invalidado para usuario $userId');
     }
   }
 
@@ -145,7 +135,6 @@ class UserProfileCacheService {
       _lastUpdated[userId] = DateTime.now();
 
       if (kDebugMode) {
-        print('🔄 [Cache] Perfil actualizado en caché: $userId');
       }
     }
   }
@@ -167,7 +156,6 @@ class UserProfileCacheService {
     }
 
     if (kDebugMode) {
-      print('🗑️ [Cache] Limpiadas $toRemove entradas antiguas');
     }
   }
 
@@ -177,7 +165,6 @@ class UserProfileCacheService {
     _lastUpdated.clear();
 
     if (kDebugMode) {
-      print('🗑️ [Cache] Caché completamente limpiado');
     }
   }
 

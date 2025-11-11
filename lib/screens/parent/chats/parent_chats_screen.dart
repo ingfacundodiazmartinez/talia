@@ -266,8 +266,11 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                                               groups: groups,
                                             ),
                                             builder: (context, snapshot) {
+                                              // ✅ CORREGIDO: Solo mostrar spinner en primera carga SIN cache
+                                              // Esto evita el spinner infinito después de videollamadas
                                               if (snapshot.connectionState ==
-                                                  ConnectionState.waiting) {
+                                                      ConnectionState.waiting &&
+                                                  !snapshot.hasData) {
                                                 return Center(
                                                   child:
                                                       CircularProgressIndicator(),

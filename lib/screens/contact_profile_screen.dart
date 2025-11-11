@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../controllers/contact_profile_controller.dart';
 import '../models/contact_user.dart';
 import 'video_call_screen.dart';
 import 'audio_call_screen.dart';
 import '../widgets/profile_photo_viewer.dart';
 import 'child/profile/widgets/media_gallery_widget.dart';
+import '../services/video_call_service.dart';
 
 class ContactProfileScreen extends StatefulWidget {
   final String contactId;
@@ -30,6 +33,8 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
   // Estado UI únicamente
   bool _isBlocked = false;
   bool _isLoadingBlockStatus = true;
+  bool _isStartingVideoCall = false;
+  bool _isStartingAudioCall = false;
   String? _contactAlias;
   ContactUser? _contactUser;
 
@@ -204,26 +209,66 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
   }
 
   Future<void> _startVideoCall() async {
-    if (!mounted) return;
+    // ✅ FIXED: Prevenir múltiples clicks con loading state
+    if (!mounted || _isStartingVideoCall) return;
 
-    // LÓGICA OPTIMISTA: Abrir pantalla inmediatamente
-    // El perfil se cierra automáticamente cuando se retorna de la videollamada
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (context) => VideoCallScreen(
-          callId: DateTime.now().millisecondsSinceEpoch.toString(),
-          receiverId: widget.contactId,
-          remoteName: widget.contactName,
-          isCaller: true,
-          isVideo: true,
-          // Token y credenciales se obtienen en background
+    setState(() {
+      _isStartingVideoCall = true;
+    });
+
+    try {
+      // ✅ FIXED: Primero crear la llamada usando VideoCallService para obtener el callId correcto
+      final videoCallService = VideoCallService();
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
+
+      // Obtener información del usuario actual
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+
+      final userName = userDoc.data()?['name'] ?? 'Usuario';
+
+      // Crear la llamada usando el servicio - esto retorna el callId correcto
+      final callId = await videoCallService.startCall(
+        callerId: user.uid,
+        callerName: userName,
+        receiverId: widget.contactId,
+        receiverName: widget.contactName,
+      );
+
+      // Ahora navegar con el callId correcto que coincide con el documento creado
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => VideoCallScreen(
+            callId: callId, // ✅ FIXED: Usar el callId retornado por el servicio
+            receiverId: widget.contactId,
+            remoteName: widget.contactName,
+            isCaller: true,
+            isVideo: true,
+          ),
         ),
-      ),
-    );
+      );
 
-    // Cerrar el perfil después de que termine la videollamada
-    if (mounted) {
-      Navigator.pop(context);
+      // Cerrar el perfil después de que termine la videollamada
+      if (mounted) {
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      // Manejar errores al iniciar la llamada
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error al iniciar videollamada: $e')),
+        );
+      }
+    } finally {
+      // ✅ FIXED: Restablecer estado loading
+      if (mounted) {
+        setState(() {
+          _isStartingVideoCall = false;
+        });
+      }
     }
   }
 
@@ -318,28 +363,55 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
   Future<void> _startAudioCall() async {
     if (!mounted) return;
 
-    // LÓGICA OPTIMISTA: Abrir pantalla de AUDIO inmediatamente
-    // El perfil se cierra automáticamente cuando se retorna de la llamada
-    final callId = DateTime.now().millisecondsSinceEpoch.toString();
+    try {
+      // ✅ FIXED: Primero crear la llamada usando VideoCallService para obtener el callId correcto
+      final videoCallService = VideoCallService();
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
 
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (context) => AudioCallScreen(
-          callId: callId,
-          // No pasamos credenciales - se obtendrán en background
-          channelName: null,
-          token: null,
-          uid: null,
-          remoteName: widget.contactName,
-          receiverId: widget.contactId, // Necesario para iniciar la llamada
-          isCaller: true,
+      // Obtener información del usuario actual
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+
+      final userName = userDoc.data()?['name'] ?? 'Usuario';
+
+      // Crear la llamada de audio usando el servicio - esto retorna el callId correcto
+      final callId = await videoCallService.startAudioCall(
+        callerId: user.uid,
+        callerName: userName,
+        receiverId: widget.contactId,
+        receiverName: widget.contactName,
+      );
+
+      // Ahora navegar con el callId correcto que coincide con el documento creado
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => AudioCallScreen(
+            callId: callId, // ✅ FIXED: Usar el callId retornado por el servicio
+            // No pasamos credenciales - se obtendrán en background
+            channelName: null,
+            token: null,
+            uid: null,
+            remoteName: widget.contactName,
+            receiverId: widget.contactId, // Necesario para iniciar la llamada
+            isCaller: true,
+          ),
         ),
-      ),
-    );
+      );
 
-    // Cerrar el perfil después de que termine la llamada
-    if (mounted) {
-      Navigator.pop(context);
+      // Cerrar el perfil después de que termine la llamada
+      if (mounted) {
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      // Manejar errores al iniciar la llamada
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error al iniciar llamada de audio: $e')),
+        );
+      }
     }
   }
 
@@ -514,7 +586,7 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
                     children: [
                       Expanded(
                         child: ElevatedButton.icon(
-                          onPressed: _startVideoCall,
+                          onPressed: _isStartingVideoCall ? null : _startVideoCall,
                           style: ElevatedButton.styleFrom(
                             backgroundColor: colorScheme.primary,
                             foregroundColor: Colors.white,
@@ -523,8 +595,15 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
                               borderRadius: BorderRadius.circular(12),
                             ),
                           ),
-                          icon: Icon(Icons.videocam),
-                          label: Text('Video'),
+                          icon: _isStartingVideoCall ? SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                            ),
+                          ) : Icon(Icons.videocam),
+                          label: Text(_isStartingVideoCall ? 'Iniciando...' : 'Video'),
                         ),
                       ),
                       SizedBox(width: 12),

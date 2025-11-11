@@ -26,7 +26,6 @@ class _AnimatedSplashScreenState extends State<AnimatedSplashScreen>
 
     // Ocultar splash nativo al iniciar la animación
     FlutterNativeSplash.remove();
-    print('🎬 Splash nativo ocultado - iniciando animación');
 
     _controller = AnimationController(
       duration: const Duration(milliseconds: 1500),

@@ -18,9 +18,6 @@ void main() {
         const newPattern = 'CloudFunction(replyToStory)';
         const benefit = 'Garantiza moderación automática via trigger moderateMessage';
 
-        print('🔄 [REFACTOR] Old Pattern: $oldPattern');
-        print('🔄 [REFACTOR] New Pattern: $newPattern');
-        print('🔄 [REFACTOR] Benefit: $benefit');
 
         // Test conceptual: el nuevo patrón es mejor
         expect(newPattern, contains('CloudFunction'));
@@ -34,9 +31,6 @@ void main() {
         const oldProblem = 'MessageSendingService bypassed moderation';
         const solution = 'Cloud Function writes to messages collection directly';
 
-        print('🔄 [REFACTOR] Implementation: $implementation');
-        print('🔄 [REFACTOR] Old Problem: $oldProblem');
-        print('🔄 [REFACTOR] Solution: $solution');
 
         expect(implementation, contains('triggers moderateMessage'));
         expect(solution, contains('writes to messages collection'));
@@ -49,9 +43,6 @@ void main() {
         const actionTaken = 'Función eliminada completamente';
         const wrongAction = 'Marcar como @deprecated';
 
-        print('🔄 [REFACTOR] Deprecated Function: $deprecatedFunction');
-        print('🔄 [REFACTOR] Action Taken: $actionTaken');
-        print('🔄 [REFACTOR] Wrong Action: $wrongAction');
 
         expect(actionTaken, contains('eliminada'));
         expect(wrongAction, contains('@deprecated')); // Esto está mal
@@ -72,9 +63,7 @@ void main() {
           'No auto-respuesta',
         ];
 
-        print('🔒 [SECURITY] Server-side validations:');
         for (final validation in securityValidations) {
-          print('   ✅ $validation');
         }
 
         expect(securityValidations.length, 7);
@@ -89,9 +78,6 @@ void main() {
         const benefit = 'Prevents abuse from non-app clients';
         const implementation = 'Firebase Cloud Functions configuration';
 
-        print('🔒 [SECURITY] Feature: $securityFeature');
-        print('🔒 [SECURITY] Benefit: $benefit');
-        print('🔒 [SECURITY] Implementation: $implementation');
 
         expect(securityFeature, contains('consumeAppCheckToken'));
         expect(benefit, contains('abuse'));
@@ -109,11 +95,8 @@ void main() {
 
         const badError = 'Historia abc123 no encontrada para usuario xyz456';
 
-        print('🔒 [SECURITY] Good error messages:');
         for (final error in goodErrors) {
-          print('   ✅ $error');
         }
-        print('🔒 [SECURITY] Bad error example: $badError');
 
         expect(goodErrors.every((error) => !error.contains(RegExp(r'\b[a-f0-9]{6,}\b'))), isTrue);
         expect(badError, contains(RegExp(r'[a-z0-9]{6,}'))); // Contiene IDs
@@ -128,9 +111,6 @@ void main() {
         const activation = 'Automatic on Firestore message creation';
         const coverage = 'All story replies pass through AI moderation';
 
-        print('🤖 [MODERATION] Trigger: $trigger');
-        print('🤖 [MODERATION] Activation: $activation');
-        print('🤖 [MODERATION] Coverage: $coverage');
 
         expect(trigger, 'moderateMessage');
         expect(activation, contains('Automatic'));
@@ -144,9 +124,6 @@ void main() {
         const newPreventBypass = 'Cloud Function always writes to Firestore';
         const guarantee = 'moderateMessage trigger always fires';
 
-        print('🤖 [MODERATION] Old Bypass: $oldBypass');
-        print('🤖 [MODERATION] New Prevention: $newPreventBypass');
-        print('🤖 [MODERATION] Guarantee: $guarantee');
 
         expect(newPreventBypass, contains('always writes'));
         expect(guarantee, contains('always fires'));
@@ -161,9 +138,6 @@ void main() {
         const benefit = 'Clean separation of concerns';
         const implementation = 'StoryUploadManager handles uploads';
 
-        print('📸 [QUALITY] Media Flow: $mediaFlow');
-        print('📸 [QUALITY] Benefit: $benefit');
-        print('📸 [QUALITY] Implementation: $implementation');
 
         expect(mediaFlow, contains('Upload media'));
         expect(mediaFlow, contains('Cloud Function'));
@@ -176,9 +150,6 @@ void main() {
         const purpose = 'Optimistic UI tracking';
         const implementation = 'Generated before Cloud Function call';
 
-        print('🔍 [QUALITY] Feature: $feature');
-        print('🔍 [QUALITY] Purpose: $purpose');
-        print('🔍 [QUALITY] Implementation: $implementation');
 
         expect(feature, contains('UUID'));
         expect(purpose, contains('Optimistic'));
@@ -195,9 +166,7 @@ void main() {
           'internal',
         ];
 
-        print('🔍 [QUALITY] Cloud Function error types:');
         for (final errorType in errorTypes) {
-          print('   ✅ $errorType');
         }
 
         expect(errorTypes, contains('permission-denied'));
@@ -213,9 +182,6 @@ void main() {
         const benefit = 'Automatic scaling and reliability';
         const implementation = 'Each call is independent';
 
-        print('⚡ [PERFORMANCE] Characteristic: $characteristic');
-        print('⚡ [PERFORMANCE] Benefit: $benefit');
-        print('⚡ [PERFORMANCE] Implementation: $implementation');
 
         expect(characteristic, contains('Stateless'));
         expect(benefit, contains('scaling'));
@@ -228,9 +194,6 @@ void main() {
         const benefit = 'Reduced latency and better rate limiting';
         const configuration = 'Firebase Functions regional deployment';
 
-        print('⚡ [PERFORMANCE] Region: $region');
-        print('⚡ [PERFORMANCE] Benefit: $benefit');
-        print('⚡ [PERFORMANCE] Configuration: $configuration');
 
         expect(region, 'us-central1');
         expect(benefit, contains('latency'));
@@ -252,18 +215,12 @@ void main() {
         '✅ Deployment regional optimizado',
       ];
 
-      print('🎯 [REFACTOR SUMMARY] Objetivos cumplidos:');
       for (final objective in objectives) {
-        print('   $objective');
       }
 
       expect(objectives.length, 10);
       expect(objectives.every((obj) => obj.startsWith('✅')), isTrue);
 
-      print('\n🚀 [SUCCESS] Refactorización completada exitosamente');
-      print('   - Historia replies ahora pasan por moderación automática');
-      print('   - Seguridad mejorada con validaciones server-side');
-      print('   - Código limpio sin funciones deprecated');
     });
   });
 }

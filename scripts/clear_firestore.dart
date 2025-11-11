@@ -1,6 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
-import '../lib/firebase_options.dart';
+import 'package:talia/firebase_options.dart';
 
 /// Script para limpiar completamente la base de datos de Firestore
 /// Uso: dart scripts/clear_firestore.dart

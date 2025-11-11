@@ -168,7 +168,6 @@ void main() {
       stopwatch.stop();
 
       // Baseline para comparar después del refactor
-      print('Primera carga tomó: ${stopwatch.elapsedMilliseconds}ms');
       expect(stopwatch.elapsedMilliseconds, lessThan(3000)); // < 3 segundos
     });
 

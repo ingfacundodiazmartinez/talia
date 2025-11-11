@@ -39,7 +39,7 @@ abstract class BaseChatsController {
         .collection('chats')
         .where('participants', arrayContains: userId)
         .orderBy('lastMessageTime', descending: true)
-        .snapshots();
+        .snapshots(includeMetadataChanges: false);
   }
 
   /// Stream de grupos donde el usuario es miembro
@@ -49,12 +49,12 @@ abstract class BaseChatsController {
         .where('members', arrayContains: userId)
         .where('isActive', isEqualTo: true)
         .orderBy('lastActivity', descending: true)
-        .snapshots();
+        .snapshots(includeMetadataChanges: false);
   }
 
   /// Stream de datos de un usuario específico
   Stream<DocumentSnapshot> getUserDataStream(String targetUserId) {
-    return _firestore.collection('users').doc(targetUserId).snapshots();
+    return _firestore.collection('users').doc(targetUserId).snapshots(includeMetadataChanges: false);
   }
 
   /// Obtener datos de usuario (una vez)
@@ -68,16 +68,24 @@ abstract class BaseChatsController {
     }
   }
 
-  /// Forzar reconexión de Firestore (útil para pull-to-refresh)
+  /// ✅ CORREGIDO: Refresh suave sin romper StreamSubscriptions activos
+  ///
+  /// PROBLEMA ANTERIOR: disableNetwork() y enableNetwork() cancelaban TODOS los
+  /// StreamBuilders activos, causando spinner infinito después de videollamadas.
+  ///
+  /// SOLUCIÓN: Firestore ya maneja actualizaciones en tiempo real automáticamente.
+  /// Solo necesitamos un delay para la UX del pull-to-refresh.
   Future<void> forceReconnect() async {
     try {
-      ReleaseLogger.log('Forzando reconexión de Firestore...', tag: 'BaseChats');
-      await _firestore.disableNetwork();
-      await Future.delayed(Duration(milliseconds: 300));
-      await _firestore.enableNetwork();
-      ReleaseLogger.log('Firestore reconectado', tag: 'BaseChats');
+      ReleaseLogger.log('Actualizando lista de chats...', tag: 'BaseChats');
+
+      // ✅ NUEVO: Delay simple para UX sin romper streams
+      // Firestore se actualiza automáticamente con cambios en tiempo real
+      await Future.delayed(Duration(milliseconds: 800));
+
+      ReleaseLogger.log('Lista de chats actualizada', tag: 'BaseChats');
     } catch (e) {
-      ReleaseLogger.error('Error forzando reconexión: $e', tag: 'BaseChats');
+      ReleaseLogger.error('Error actualizando lista: $e', tag: 'BaseChats');
     }
   }
 
@@ -162,7 +170,7 @@ abstract class BaseChatsController {
   /// Stream de datos específicos de un chat
   Stream<DocumentSnapshot> getChatDataStream(String chatId) {
     try {
-      return _firestore.collection('chats').doc(chatId).snapshots();
+      return _firestore.collection('chats').doc(chatId).snapshots(includeMetadataChanges: false);
     } catch (e) {
       ReleaseLogger.error('Error obteniendo stream de chat $chatId: $e', tag: 'BaseChats');
       rethrow;
@@ -178,7 +186,7 @@ abstract class BaseChatsController {
           .collection('messages')
           .orderBy('timestamp', descending: true)
           .limit(1)
-          .snapshots();
+          .snapshots(includeMetadataChanges: false);
     } catch (e) {
       ReleaseLogger.error('Error obteniendo último mensaje del grupo $groupId: $e', tag: 'BaseChats');
       rethrow;
@@ -194,7 +202,7 @@ abstract class BaseChatsController {
           .collection('messages')
           .orderBy('timestamp', descending: true)
           .limit(1)
-          .snapshots();
+          .snapshots(includeMetadataChanges: false);
     } catch (e) {
       ReleaseLogger.error('Error obteniendo último mensaje del chat $chatId: $e', tag: 'BaseChats');
       rethrow;

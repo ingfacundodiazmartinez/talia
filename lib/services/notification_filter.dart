@@ -28,6 +28,8 @@ class NotificationFilter {
     required String userId,
     required String notificationType,
     String? senderId, // Para verificar excepciones de DND
+    String? chatId, // Para verificar si el usuario está viendo este chat
+    String? currentChatId, // El chat que el usuario está viendo actualmente
   }) async {
     try {
       // 1. Las emergencias SIEMPRE se envían
@@ -38,10 +40,18 @@ class NotificationFilter {
         );
       }
 
-      // 2. Obtener preferencias del usuario
+      // 2. ✅ FILTRO CHAT ACTUAL: No mostrar notificación si el usuario está viendo el chat
+      if (chatId != null && currentChatId != null && chatId == currentChatId) {
+        return NotificationDecision(
+          shouldSend: false,
+          reason: 'Usuario está viendo el chat',
+        );
+      }
+
+      // 3. Obtener preferencias del usuario
       final prefs = await _prefsService.getPreferences();
 
-      // 3. Verificar si el tipo de notificación está habilitado
+      // 4. Verificar si el tipo de notificación está habilitado
       final preferenceKey = NotificationTypes.getPreferenceKey(notificationType);
 
       if (preferenceKey != null) {
@@ -49,13 +59,6 @@ class NotificationFilter {
         final isEnabled = prefValue is bool ? prefValue : true;
 
         if (!isEnabled) {
-          _logDecision(
-            userId: userId,
-            notificationType: notificationType,
-            decision: false,
-            reason: 'Tipo de notificación deshabilitado ($preferenceKey)',
-          );
-
           return NotificationDecision(
             shouldSend: false,
             reason: 'Tipo de notificación deshabilitado',
@@ -63,18 +66,11 @@ class NotificationFilter {
         }
       }
 
-      // 4. Verificar modo No Molestar
+      // 5. Verificar modo No Molestar
       if (senderId != null) {
         final shouldShow = await _prefsService.shouldShowNotification(senderId);
 
         if (!shouldShow) {
-          _logDecision(
-            userId: userId,
-            notificationType: notificationType,
-            decision: false,
-            reason: 'Modo No Molestar activo',
-          );
-
           return NotificationDecision(
             shouldSend: false,
             reason: 'Modo No Molestar activo',
@@ -82,21 +78,12 @@ class NotificationFilter {
         }
       }
 
-      // 5. Todas las verificaciones pasaron
-      _logDecision(
-        userId: userId,
-        notificationType: notificationType,
-        decision: true,
-        reason: 'Todas las verificaciones pasadas',
-      );
-
+      // 6. Todas las verificaciones pasaron
       return NotificationDecision(
         shouldSend: true,
         reason: 'Notificación permitida',
       );
     } catch (e) {
-      print('❌ Error verificando filtros de notificación: $e');
-
       // En caso de error, permitir la notificación (fail-safe)
       return NotificationDecision(
         shouldSend: true,
@@ -121,8 +108,6 @@ class NotificationFilter {
         inAppSoundEnabled: inAppValue is bool ? inAppValue : true,
       );
     } catch (e) {
-      print('⚠️ Error obteniendo configuración de sonido: $e');
-
       // Valores por defecto en caso de error
       return NotificationSoundConfig(
         soundEnabled: true,
@@ -130,21 +115,6 @@ class NotificationFilter {
         inAppSoundEnabled: true,
       );
     }
-  }
-
-  /// Registra la decisión en logs (útil para debugging)
-  void _logDecision({
-    required String userId,
-    required String notificationType,
-    required bool decision,
-    required String reason,
-  }) {
-    final emoji = decision ? '✅' : '🚫';
-    final userIdDisplay = userId.length > 8 ? userId.substring(0, 8) : userId;
-    print('$emoji Notificación para usuario $userIdDisplay...:');
-    print('   Tipo: $notificationType');
-    print('   Decisión: ${decision ? 'ENVIAR' : 'BLOQUEAR'}');
-    print('   Razón: $reason');
   }
 
   /// Registra estadísticas de notificaciones bloqueadas (opcional para analytics)
@@ -163,7 +133,6 @@ class NotificationFilter {
       });
     } catch (e) {
       // Silencioso - analytics no debe romper el flujo
-      print('⚠️ Error registrando notificación bloqueada: $e');
     }
   }
 }

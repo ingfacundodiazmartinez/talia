@@ -93,11 +93,11 @@ class ParentMainShellController {
       _roleChangeSubscription = _firestore
           .collection('users')
           .doc(currentUserId)
-          .snapshots()
+          .snapshots(includeMetadataChanges: false)
           .listen((snapshot) {
         try {
           if (snapshot.exists) {
-            final data = snapshot.data() as Map<String, dynamic>?;
+            final data = snapshot.data();
             final role = data?['role'] as String?;
 
             ReleaseLogger.log('Role changed to: $role', tag: 'ParentMainShell');
@@ -163,7 +163,7 @@ class ParentMainShellController {
     return _firestore
         .collection('groupInvitations')
         .where('status', isEqualTo: 'pending_approvals')
-        .snapshots()
+        .snapshots(includeMetadataChanges: false)
         .map((snapshot) => snapshot.docs.length);
   }
 
@@ -176,12 +176,10 @@ class ParentMainShellController {
       throw Exception('Usuario no autenticado');
     }
 
-    print('🔍 [ParentMainShell] getCurrentUserStream llamado - usando cache: ${_cachedUserDataStream != null}, userId: $userId');
-
     _cachedUserDataStream ??= _firestore
         .collection('users')
         .doc(userId)
-        .snapshots()
+        .snapshots(includeMetadataChanges: false)
         .asBroadcastStream(); // Permite múltiples subscripciones
 
     return _cachedUserDataStream!;
@@ -199,7 +197,7 @@ class ParentMainShellController {
           NotificationTypes.whitelistChange,
           NotificationTypes.groupPermissionRequest
         ])
-        .snapshots()
+        .snapshots(includeMetadataChanges: false)
         .map((snapshot) => snapshot.docs.length);
   }
 
@@ -208,43 +206,26 @@ class ParentMainShellController {
     return _firestore
         .collection('chats')
         .where('participants', arrayContains: parentId)
-        .snapshots()
+        .snapshots(includeMetadataChanges: false)
         .map((snapshot) {
       int unreadCount = 0;
       for (var doc in snapshot.docs) {
         try {
-          final data = doc.data() as Map<String, dynamic>;
-          final lastMessageField = data['lastMessage'];
+          final data = doc.data();
 
-          // ✅ OPTIMIZACIÓN: Verificar tipo antes de cast para evitar errores
-          Map<String, dynamic>? lastMessage;
-          if (lastMessageField is Map<String, dynamic>) {
-            lastMessage = lastMessageField;
-          } else if (lastMessageField is String) {
-            // Si es un String, saltear este documento (formato legacy o corrupto)
-            ReleaseLogger.log('lastMessage es String en vez de Map en chat ${doc.id}, saltando', tag: 'ParentMainShell');
-            continue;
-          } else if (lastMessageField != null) {
-            // Si es algún otro tipo, log y saltar
-            ReleaseLogger.log('lastMessage tiene tipo inesperado: ${lastMessageField.runtimeType} en chat ${doc.id}', tag: 'ParentMainShell');
-            continue;
-          }
+          // ✅ USAR CONTADORES AUTOMÁTICOS DE FIRESTORE en lugar de calcular manualmente
+          // Los Firebase Functions incrementan automáticamente este campo
+          final chatUnreadCount = data['unreadCount_$parentId'] as int? ?? 0;
+          unreadCount += chatUnreadCount;
 
-          if (lastMessage != null) {
-            final senderId = lastMessage['senderId'] as String?;
-            final isRead = lastMessage['isRead'] as bool? ?? true;
 
-            // Solo contar como no leído si no lo envié yo y no está leído
-            if (senderId != parentId && !isRead) {
-              unreadCount++;
-            }
-          }
         } catch (e) {
           ReleaseLogger.error('Error procesando chat ${doc.id}: $e', tag: 'ParentMainShell');
           // Continuar con el siguiente documento
           continue;
         }
       }
+
       return unreadCount;
     });
   }
@@ -255,7 +236,7 @@ class ParentMainShellController {
         .collection('story_approval_requests')
         .where('parentId', isEqualTo: parentId)
         .where('status', isEqualTo: 'pending')
-        .snapshots()
+        .snapshots(includeMetadataChanges: false)
         .map((snapshot) => snapshot.docs.length);
   }
 
@@ -268,7 +249,7 @@ class ParentMainShellController {
     return _firestore
         .collection('emergencies')
         .where('childId', whereIn: childrenIds)
-        .snapshots()
+        .snapshots(includeMetadataChanges: false)
         .map((snapshot) => snapshot.docs.length);
   }
 

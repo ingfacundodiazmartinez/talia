@@ -22,7 +22,7 @@ class ProfileHeader extends StatelessWidget {
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: isDarkMode
-                ? colorScheme.surfaceVariant.withValues(alpha: 0.3)
+                ? colorScheme.surfaceContainerHighest.withValues(alpha: 0.3)
                 : Colors.white.withValues(alpha: 0.2),
             boxShadow: [
               BoxShadow(

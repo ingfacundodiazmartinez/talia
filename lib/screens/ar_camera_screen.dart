@@ -68,7 +68,6 @@ class _ARCameraScreenState extends State<ARCameraScreen>
     try {
       final cameras = await availableCameras();
       if (cameras.isEmpty) {
-        print('❌ No cameras available');
         return;
       }
 
@@ -99,7 +98,6 @@ class _ARCameraScreenState extends State<ARCameraScreen>
         _startFaceDetection();
       }
     } catch (e) {
-      print('❌ Error initializing camera: $e');
     }
   }
 
@@ -133,8 +131,6 @@ class _ARCameraScreenState extends State<ARCameraScreen>
           }
         });
       }
-    } catch (e) {
-      print('❌ Error processing frame: $e');
     } finally {
       _isProcessing = false;
     }
@@ -164,7 +160,6 @@ class _ARCameraScreenState extends State<ARCameraScreen>
         Navigator.pop(context, image.path);
       }
     } catch (e) {
-      print('❌ Error taking picture: $e');
     }
   }
 
@@ -482,7 +477,6 @@ class _ARCameraScreenState extends State<ARCameraScreen>
         _startFaceDetection();
       }
     } catch (e) {
-      print('❌ Error switching camera: $e');
     }
   }
 }

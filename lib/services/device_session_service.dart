@@ -48,7 +48,6 @@ class DeviceSessionService {
       _currentDeviceId = deviceId;
       return deviceId;
     } catch (e) {
-      print('❌ Error obteniendo device ID: $e');
       _currentDeviceId = 'fallback_${DateTime.now().millisecondsSinceEpoch}';
       return _currentDeviceId!;
     }
@@ -75,7 +74,6 @@ class DeviceSessionService {
         };
       }
     } catch (e) {
-      print('❌ Error obteniendo info del dispositivo: $e');
     }
 
     return {
@@ -99,10 +97,7 @@ class DeviceSessionService {
         'lastLoginDeviceId': deviceId,
       }, SetOptions(merge: true));
 
-      print('✅ Sesión de dispositivo registrada: $deviceId');
-      print('   Dispositivo: ${deviceInfo['platform']} ${deviceInfo['model']}');
     } catch (e) {
-      print('❌ Error registrando sesión de dispositivo: $e');
       rethrow;
     }
   }
@@ -131,9 +126,6 @@ class DeviceSessionService {
 
       // Si hay un dispositivo activo diferente al actual, cerrar sesión
       if (activeDeviceId != null && activeDeviceId != currentDeviceId) {
-        print('🔒 Sesión detectada en otro dispositivo: $activeDeviceId');
-        print('   Dispositivo actual: $currentDeviceId');
-        print('   Cerrando sesión...');
 
         _isCheckingSession = true;
 
@@ -215,9 +207,7 @@ class DeviceSessionService {
       // Cerrar sesión de Firebase Auth
       await _auth.signOut();
 
-      print('✅ Sesión cerrada en dispositivo actual');
     } catch (e) {
-      print('❌ Error cerrando sesión: $e');
     }
   }
 
@@ -236,7 +226,6 @@ class DeviceSessionService {
 
       return activeDeviceId == currentDeviceId;
     } catch (e) {
-      print('❌ Error verificando dispositivo activo: $e');
       return false;
     }
   }

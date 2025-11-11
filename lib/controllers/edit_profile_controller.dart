@@ -3,7 +3,6 @@ import 'package:cloud_functions/cloud_functions.dart';
 import '../models/parent.dart';
 import '../models/user.dart';
 import '../services/image_service.dart';
-import '../services/user_role_service.dart';
 import '../utils/release_logger.dart';
 
 /// Controller para manejar la lógica de edición de perfil
@@ -16,7 +15,6 @@ import '../utils/release_logger.dart';
 class EditProfileController {
   late final String userId;
   final ImageService _imageService;
-  final UserRoleService _roleService;
   final firebase_auth.FirebaseAuth _auth;
 
   Parent? _parent;
@@ -32,10 +30,8 @@ class EditProfileController {
 
   EditProfileController({
     ImageService? imageService,
-    UserRoleService? roleService,
     firebase_auth.FirebaseAuth? auth,
   }) : _imageService = imageService ?? ImageService(),
-       _roleService = roleService ?? UserRoleService(),
        _auth = auth ?? firebase_auth.FirebaseAuth.instance;
 
   /// Inicializa el controller cargando datos del usuario
@@ -61,9 +57,7 @@ class EditProfileController {
 
   /// Carga los datos actualizados del usuario
   Future<Map<String, dynamic>?> loadUserData() async {
-    if (_parent == null) {
-      _parent = Parent(id: userId, name: '');
-    }
+    _parent ??= Parent(id: userId, name: '');
 
     _userData = await _parent!.getUserData();
     return _userData;

@@ -121,12 +121,10 @@ class FaceFilterService {
 
     _faceDetector = FaceDetector(options: options);
     _isInitialized = true;
-    print('🎭 Face Filter Service initialized');
   }
 
   void setFilter(FilterType filter) {
     _currentFilter = filter;
-    print('🎭 Filter changed to: ${filter.name}');
   }
 
   Future<void> processImage(
@@ -143,10 +141,8 @@ class FaceFilterService {
       _detectedFaces = faces;
 
       if (faces.isNotEmpty) {
-        print('🎭 Detected ${faces.length} face(s)');
       }
     } catch (e) {
-      print('❌ Error processing face detection: $e');
     }
   }
 
@@ -189,7 +185,6 @@ class FaceFilterService {
 
       return InputImage.fromBytes(bytes: bytes, inputImageData: inputImageData);
     } catch (e) {
-      print('❌ Error converting camera image: $e');
       return null;
     }
   }
@@ -222,7 +217,6 @@ class FaceFilterService {
     if (_isInitialized) {
       _faceDetector.close();
       _isInitialized = false;
-      print('🎭 Face Filter Service disposed');
     }
   }
 }

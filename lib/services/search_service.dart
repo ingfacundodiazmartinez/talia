@@ -64,7 +64,6 @@ class SearchService {
 
       return results;
     } catch (e) {
-      print('❌ Error buscando en mensajes del chat $chatId: $e');
       return [];
     }
   }

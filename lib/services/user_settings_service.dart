@@ -17,7 +17,6 @@ class UserSettingsService {
           .get();
       return doc.data() ?? {};
     } catch (e) {
-      print('Error loading settings: $e');
       return {};
     }
   }
@@ -29,7 +28,6 @@ class UserSettingsService {
         'updatedAt': FieldValue.serverTimestamp(),
       });
     } catch (e) {
-      print('Error updating setting: $e');
       rethrow;
     }
   }
@@ -46,7 +44,6 @@ class UserSettingsService {
       // Usar sendReadReceipts como campo principal
       return data?['sendReadReceipts'] ?? true;
     } catch (e) {
-      print('Error checking sendReadReceipts: $e');
       return true; // Default to true en caso de error
     }
   }

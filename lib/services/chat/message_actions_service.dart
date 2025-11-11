@@ -44,7 +44,6 @@ class MessageActionsService {
         final difference = now.difference(messageTime);
 
         if (difference.inMinutes >= 5) {
-          print('⚠️ No se puede eliminar: Han pasado más de 5 minutos');
           return false;
         }
       }
@@ -60,10 +59,8 @@ class MessageActionsService {
           .doc(messageId)
           .delete();
 
-      print('✅ Mensaje eliminado exitosamente');
       return true;
     } catch (e) {
-      print('❌ Error eliminando mensaje: $e');
       return false;
     }
   }
@@ -83,10 +80,8 @@ class MessageActionsService {
       // Limpiar cache
       await _cacheService.clearChat(chatId);
 
-      print('🧹 Chat limpiado exitosamente');
       return true;
     } catch (e) {
-      print('❌ Error limpiando chat: $e');
       return false;
     }
   }
@@ -102,7 +97,6 @@ class MessageActionsService {
       final chatDoc = await chatRef.get();
 
       if (!chatDoc.exists) {
-        print('💬 Chat vacío, no hay mensajes que marcar como leídos');
         return;
       }
 
@@ -113,7 +107,6 @@ class MessageActionsService {
           .get();
 
       if (messagesSnapshot.docs.isEmpty) {
-        print('💬 No hay mensajes en el chat, nada que marcar como leído');
         return;
       }
 
@@ -125,14 +118,8 @@ class MessageActionsService {
 
       // Luego marcar como leídos
       await _readReceiptsService.markMessagesAsSeen(chatId: chatId);
-
-      print('✅ Mensajes marcados como leídos');
     } catch (e) {
-      if (e.toString().contains('permission-denied')) {
-        print('💬 Chat vacío, nada que marcar como leído');
-      } else {
-        print('❌ Error marcando mensajes como leídos: $e');
-      }
+      // Error silencioso
     }
   }
 
@@ -152,7 +139,6 @@ class MessageActionsService {
 
       final messageDoc = await messageRef.get();
       if (!messageDoc.exists) {
-        print('❌ Mensaje no encontrado');
         return;
       }
 
@@ -165,9 +151,8 @@ class MessageActionsService {
       reactions[currentUserId] = reaction;
 
       await messageRef.update({'reactions': reactions});
-      print('✅ Reacción agregada: $reaction');
     } catch (e) {
-      print('❌ Error agregando reacción: $e');
+      // Error silencioso
     }
   }
 
@@ -186,7 +171,6 @@ class MessageActionsService {
 
       final messageDoc = await messageRef.get();
       if (!messageDoc.exists) {
-        print('❌ Mensaje no encontrado');
         return;
       }
 
@@ -199,9 +183,8 @@ class MessageActionsService {
       reactions.remove(currentUserId);
 
       await messageRef.update({'reactions': reactions});
-      print('✅ Reacción eliminada');
     } catch (e) {
-      print('❌ Error eliminando reacción: $e');
+      // Error silencioso
     }
   }
 
@@ -222,10 +205,8 @@ class MessageActionsService {
         'editedAt': FieldValue.serverTimestamp(),
       });
 
-      print('✅ Mensaje editado exitosamente');
       return true;
     } catch (e) {
-      print('❌ Error editando mensaje: $e');
       return false;
     }
   }

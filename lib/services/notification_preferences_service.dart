@@ -32,7 +32,6 @@ class NotificationPreferencesService {
       }
       return defaultPreferences();
     } catch (e) {
-      print('Error loading notification preferences: $e');
       return defaultPreferences();
     }
   }
@@ -76,7 +75,6 @@ class NotificationPreferencesService {
             'updatedAt': FieldValue.serverTimestamp(),
           }, SetOptions(merge: true));
     } catch (e) {
-      print('Error updating preference $key: $e');
       throw Exception('Error al actualizar preferencia');
     }
   }
@@ -92,7 +90,6 @@ class NotificationPreferencesService {
           .doc(_currentUserId)
           .set(preferences, SetOptions(merge: true));
     } catch (e) {
-      print('Error updating preferences: $e');
       throw Exception('Error al actualizar preferencias');
     }
   }

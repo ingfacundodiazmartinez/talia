@@ -18,8 +18,8 @@ class GroupChatService {
   final ChatPermissionService _permissionService = ChatPermissionService();
 
   // Cache en memoria para grupos del usuario
-  Map<String, List<GroupChat>> _cachedUserGroups = {};
-  Map<String, DateTime> _lastGroupsCacheUpdate = {};
+  final Map<String, List<GroupChat>> _cachedUserGroups = {};
+  final Map<String, DateTime> _lastGroupsCacheUpdate = {};
 
   // Crear nuevo grupo
   Future<GroupCreationResult> createGroup({

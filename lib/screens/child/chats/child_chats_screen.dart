@@ -833,7 +833,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
                                       !isBlocked &&
                                       !isRevoked) ...[
                                     MessageStatusIndicator(
-                                      status: lastMessageStatus!,
+                                      status: lastMessageStatus,
                                       moderationStatus: lastMessageModerationStatus,
                                       size: 12,
                                     ),

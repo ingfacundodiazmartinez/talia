@@ -41,7 +41,7 @@ class _ChildSettingsScreenState extends State<ChildSettingsScreen> {
         });
       }
     } catch (e) {
-      print('Error loading settings: $e');
+      // Error loading settings - silent
     }
   }
 
@@ -229,7 +229,7 @@ class _ChildSettingsScreenState extends State<ChildSettingsScreen> {
             color: colorScheme.onSurfaceVariant,
           ),
         ),
-        activeColor: colorScheme.primary,
+        activeThumbColor: colorScheme.primary,
       ),
     );
   }

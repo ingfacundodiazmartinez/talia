@@ -82,7 +82,7 @@ class FirebaseService {
         .snapshots()
         .map((snapshot) {
       if (!snapshot.exists) return <String>[];
-      final userData = snapshot.data() as Map<String, dynamic>?;
+      final userData = snapshot.data();
       return List<String>.from(userData?['linkedChildrenIds'] ?? []);
     });
   }
@@ -218,7 +218,7 @@ class FirebaseService {
 
     // Verificar que contactId esté en la lista de usuarios
     for (var doc in query.docs) {
-      final data = doc.data() as Map<String, dynamic>;
+      final data = doc.data();
       final users = List<String>.from(data['users'] ?? []);
       if (users.contains(contactId)) {
         return true;
@@ -272,7 +272,6 @@ class FirebaseService {
 
         if (!approved) {
           final reason = result.data['reason'] as String? ?? 'Contenido inapropiado detectado';
-          final severity = result.data['severity'] as String? ?? 'medium';
 
           ReleaseLogger.log('🚫 Mensaje bloqueado por moderación: $reason', tag: 'FirebaseService');
 
@@ -325,29 +324,17 @@ class FirebaseService {
         .collection('messages')
         .add(messageData);
 
-    // Preparar texto del último mensaje según tipo
-    String lastMessageText = text;
-    switch (type) {
-      case 'image':
-        lastMessageText = '📷 Imagen';
-        break;
-      case 'video':
-        lastMessageText = '🎥 Video';
-        break;
-      case 'audio':
-        lastMessageText = '🎤 Audio';
-        break;
-      case 'file':
-        lastMessageText = '📄 ${fileName ?? 'Archivo'}';
-        break;
-    }
+    // 🔒 SEGURIDAD: NO actualizar lastMessage desde frontend para evitar bypass de filtros
+    // NOTA: Las reglas de Firestore ahora bloquean esto completamente
+    // Solo Cloud Functions deben actualizar lastMessage después de validación completa
+    ReleaseLogger.log('🔒 [SEGURIDAD] lastMessage se actualizará por Cloud Function después de validación', tag: 'FirebaseService');
 
-    // Actualizar último mensaje del chat
+    // Solo actualizar participants si el chat no existe (merge: true evita sobreescribir otros campos)
     await _firestore.collection('chats').doc(chatId).set({
       'participants': [senderId, receiverId],
-      'lastMessage': lastMessageText,
-      'lastMessageTime': FieldValue.serverTimestamp(),
-      'lastMessageSender': senderId,
+      // 'lastMessage': NO ACTUALIZAR - Bloqueado por seguridad
+      // 'lastMessageTime': NO ACTUALIZAR - Bloqueado por seguridad
+      // 'lastMessageSender': NO ACTUALIZAR - Bloqueado por seguridad
     }, SetOptions(merge: true));
   }
 

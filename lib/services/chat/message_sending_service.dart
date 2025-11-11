@@ -9,7 +9,6 @@ import '../media_service.dart';
 import '../media_compression_service.dart';
 import '../sound_service.dart';
 import '../audio_processing_service.dart';
-import '../network_status_service.dart';
 import '../offline_queue_service.dart';
 
 /// Servicio para envío de mensajes (texto, media, audio)
@@ -54,7 +53,6 @@ class MessageSendingService {
         moderationEnabled = chatDoc.data()?['moderationEnabled'] ?? false;
       }
     } catch (e) {
-      print('⚠️ No se pudo verificar moderación del chat (probablemente no existe aún): $e');
       // Continuar sin moderación del chat si hay error
     }
 
@@ -78,12 +76,10 @@ class MessageSendingService {
                 moderationSettings[currentUserId] as Map<String, dynamic>?;
             if (senderSettings != null && senderSettings['enabled'] == true) {
               moderationEnabled = true;
-              print('🔒 Usuario emisor tiene moderación activa');
             }
           }
         }
       } catch (e) {
-        print('⚠️ No se pudo verificar moderación del contacto: $e');
         // Continuar sin moderación del contacto si hay error
       }
     }
@@ -91,8 +87,6 @@ class MessageSendingService {
     // 3. Verificar moderación si está activada
     String? tempId;
     if (moderationEnabled) {
-      print('🔒 Moderación activa, verificando mensaje...');
-
       tempId = const Uuid().v4();
       final functions = FirebaseFunctions.instance;
       final result = await functions.httpsCallable('checkMessageBeforeSending').call({
@@ -107,28 +101,14 @@ class MessageSendingService {
       if (!approved) {
         final reason =
             result.data['reason'] as String? ?? 'Contenido inapropiado detectado';
-        print('🚫 Mensaje bloqueado: $reason');
         throw Exception(reason);
       }
-
-      print('✅ Mensaje aprobado por moderación');
     }
 
-    // 4. Actualización optimista del lastMessage (solo para el sender)
-    try {
-      await _firestore.collection('chats').doc(chatId).update({
-        'lastMessage': text,
-        'lastMessageTime': FieldValue.serverTimestamp(),
-        'lastMessageSender': currentUserId,
-      });
-      print('✅ [Optimistic] lastMessage actualizado localmente');
-    } catch (e) {
-      print('⚠️ [Optimistic] Error actualizando lastMessage (probablemente chat no existe): $e');
-      // Continuar - la Cloud Function creará el chat
-    }
+    // 🔒 SEGURIDAD: NO actualizar lastMessage desde frontend para evitar bypass de filtros
+    // La Cloud Function actualizará lastMessage DESPUÉS de validar el contenido
 
     // 5. Enviar mensaje via Cloud Function
-    print('📤 [MessageSendingService] Llamando Cloud Function sendChatMessage');
     final functions = FirebaseFunctions.instance;
     final result = await functions.httpsCallable('sendChatMessage').call({
       'chatId': chatId,
@@ -136,7 +116,6 @@ class MessageSendingService {
       if (replyTo != null) 'replyTo': replyTo,
       if (localId != null) 'localId': localId, // ✅ Enviar localId a Cloud Function
     }).timeout(_sendTimeout);
-    print('📥 [MessageSendingService] Respuesta de Cloud Function: ${result.data}');
 
     final success = result.data['success'] as bool;
     if (!success) {
@@ -144,7 +123,6 @@ class MessageSendingService {
     }
 
     final messageId = result.data['messageId'] as String;
-    print('✅ Mensaje enviado: $text');
     return messageId;
   }
 
@@ -165,21 +143,15 @@ class MessageSendingService {
 
     if (image == null) throw Exception('No se seleccionó imagen');
 
-    print('📷 Imagen seleccionada: ${image.path}');
-
     // 2. Comprimir imagen
     final MediaCompressionService compressionService = MediaCompressionService();
     final File originalFile = File(image.path);
 
-    print('⏳ Comprimiendo imagen...');
     final File? compressedFile = await compressionService.compressImage(originalFile);
 
     if (compressedFile == null) {
       throw Exception('La imagen es muy grande o no se pudo comprimir');
     }
-
-    final sizeMB = await compressionService.getFileSizeMB(compressedFile);
-    print('✅ Imagen comprimida: ${sizeMB.toStringAsFixed(2)} MB');
 
     // 3. Subir imagen comprimida
     final imageUrl = await _mediaService.uploadImageFile(
@@ -190,18 +162,8 @@ class MessageSendingService {
 
     if (imageUrl == null) throw Exception('Error subiendo imagen');
 
-    // 4. Actualización optimista del lastMessage (solo para el sender)
-    try {
-      await _firestore.collection('chats').doc(chatId).update({
-        'lastMessage': '📷 Imagen',
-        'lastMessageTime': FieldValue.serverTimestamp(),
-        'lastMessageSender': currentUserId,
-      });
-      print('✅ [Optimistic] lastMessage actualizado localmente');
-    } catch (e) {
-      print('⚠️ [Optimistic] Error actualizando lastMessage (probablemente chat no existe): $e');
-      // Continuar - la Cloud Function creará el chat
-    }
+    // 🔒 SEGURIDAD: NO actualizar lastMessage desde frontend para evitar bypass de filtros
+    // La Cloud Function actualizará lastMessage DESPUÉS de validar el contenido
 
     // 5. Enviar via Cloud Function
     final functions = FirebaseFunctions.instance;
@@ -216,7 +178,6 @@ class MessageSendingService {
     }
 
     final messageId = result.data['messageId'] as String;
-    print('✅ Imagen enviada');
     return messageId;
   }
 
@@ -252,9 +213,7 @@ class MessageSendingService {
         'lastMessageTime': FieldValue.serverTimestamp(),
         'lastMessageSender': currentUserId,
       });
-      print('✅ [Optimistic] lastMessage actualizado localmente');
     } catch (e) {
-      print('⚠️ [Optimistic] Error actualizando lastMessage (probablemente chat no existe): $e');
       // Continuar - la Cloud Function creará el chat
     }
 
@@ -271,7 +230,6 @@ class MessageSendingService {
     }
 
     final messageId = result.data['messageId'] as String;
-    print('✅ Video enviado');
     return messageId;
   }
 
@@ -281,8 +239,6 @@ class MessageSendingService {
     required String currentUserId,
     required String audioPath,
   }) async {
-    print('🎤 Audio seleccionado: $audioPath');
-
     // 1. Validar tamaño del audio
     final MediaCompressionService compressionService = MediaCompressionService();
     final File audioFile = File(audioPath);
@@ -293,10 +249,8 @@ class MessageSendingService {
     }
 
     // 2. Procesar waveform
-    print('🎵 Procesando waveform del audio...');
     final AudioProcessingService audioProcessing = AudioProcessingService();
     final waveformData = await audioProcessing.extractWaveform(validatedAudio);
-    print('✅ Waveform procesado: ${waveformData.length} puntos');
 
     // 3. Subir audio
     final audioUrl = await _mediaService.uploadAudioFile(
@@ -314,9 +268,7 @@ class MessageSendingService {
         'lastMessageTime': FieldValue.serverTimestamp(),
         'lastMessageSender': currentUserId,
       });
-      print('✅ [Optimistic] lastMessage actualizado localmente');
     } catch (e) {
-      print('⚠️ [Optimistic] Error actualizando lastMessage (probablemente chat no existe): $e');
       // Continuar - la Cloud Function creará el chat
     }
 
@@ -334,7 +286,6 @@ class MessageSendingService {
     }
 
     final messageId = result.data['messageId'] as String;
-    print('✅ Audio enviado con waveform');
     return messageId;
   }
 
@@ -373,7 +324,6 @@ class MessageSendingService {
     }
 
     final messageId = result.data['messageId'] as String;
-    print('✅ Mensaje reenviado');
     return messageId;
   }
 
@@ -383,8 +333,6 @@ class MessageSendingService {
     required String messageId,
     required String newText,
   }) async {
-    print('🔄 Actualizando mensaje bloqueado ${messageId.substring(0, 8)}...');
-
     final functions = FirebaseFunctions.instance;
     final result = await functions.httpsCallable('checkMessageBeforeSending').call({
       'chatId': chatId,
@@ -398,11 +346,8 @@ class MessageSendingService {
     if (!approved) {
       final reason =
           result.data['reason'] as String? ?? 'Contenido inapropiado detectado';
-      print('🚫 Mensaje re-bloqueado: $reason');
       throw Exception(reason);
     }
-
-    print('✅ Mensaje actualizado y aprobado');
   }
 
   /// Encolar mensaje para envío offline
@@ -413,8 +358,6 @@ class MessageSendingService {
     required String tempId,
     Map<String, dynamic>? replyTo,
   }) async {
-    print('📴 Sin conexión - encolando mensaje para envío posterior');
-
     await OfflineQueueService().enqueueOperation(
       type: OfflineQueueService.OP_SEND_MESSAGE,
       data: {

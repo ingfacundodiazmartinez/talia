@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
-import '../../../lib/services/stories/repositories/story_repository.dart';
-import '../../../lib/services/stories/managers/story_stream_manager.dart';
-import '../../../lib/services/stories/repositories/contact_repository.dart';
-import '../../../lib/services/stories/managers/story_cache_manager.dart';
-import '../../../lib/models/story.dart';
+import 'package:talia/services/stories/repositories/story_repository.dart';
+import 'package:talia/services/stories/managers/story_stream_manager.dart';
+import 'package:talia/services/stories/repositories/contact_repository.dart';
+import 'package:talia/services/stories/managers/story_cache_manager.dart';
+import 'package:talia/models/story.dart';
 import 'test_firebase_setup.dart';
 import 'test_mocks.dart';
 import 'test_helpers.dart';

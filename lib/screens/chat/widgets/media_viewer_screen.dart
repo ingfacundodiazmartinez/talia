@@ -68,7 +68,7 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
           setState(() {});
         }
       } catch (e) {
-        print('Error inicializando video: $e');
+        // Error initializing video - silent
       }
     }
   }

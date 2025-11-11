@@ -108,12 +108,10 @@ class AccountDeletionService {
           try {
             await item.delete();
           } catch (e) {
-            print('Error eliminando imagen ${item.name}: $e');
           }
         }
       }
     } catch (e) {
-      print('Error eliminando imágenes de Storage: $e');
       // No lanzar error aquí para no bloquear la eliminación de la cuenta
     }
   }

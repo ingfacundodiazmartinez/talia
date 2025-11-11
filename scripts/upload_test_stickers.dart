@@ -4,7 +4,7 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
-import '../lib/firebase_options.dart';
+import 'package:talia/firebase_options.dart';
 
 /// Script para subir stickers de prueba a Firebase Storage
 /// Uso: dart run scripts/upload_test_stickers.dart
@@ -106,18 +106,18 @@ void main() async {
       print('[$i/${testStickers.length}] ${sticker['emoji']} Procesando: $name...');
 
       // URL de Twemoji (CDN público de Twitter)
-      final url = 'https://em-content.zobj.net/thumbs/120/twitter/351/${code}.png';
+      final url = 'https://em-content.zobj.net/thumbs/120/twitter/351/$code.png';
 
       // Descargar imagen
       final response = await http.get(Uri.parse(url));
 
       if (response.statusCode == 200) {
         // Guardar temporalmente
-        final tempFile = File('${stickersDir.path}/${name}.png');
+        final tempFile = File('${stickersDir.path}/$name.png');
         await tempFile.writeAsBytes(response.bodyBytes);
 
         // Subir a Firebase Storage
-        final storageRef = storage.ref().child('stickers/$category/${name}.png');
+        final storageRef = storage.ref().child('stickers/$category/$name.png');
         await storageRef.putFile(tempFile);
         final downloadUrl = await storageRef.getDownloadURL();
 
@@ -151,7 +151,7 @@ void main() async {
     await Future.delayed(Duration(milliseconds: 500));
   }
 
-  print('\n' + '=' * 50);
+  print('\n${'=' * 50}');
   print('✅ Proceso completado!');
   print('   Exitosos: $successCount');
   print('   Errores: $errorCount');

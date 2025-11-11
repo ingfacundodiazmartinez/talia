@@ -1,5 +1,4 @@
 import 'package:firebase_analytics/firebase_analytics.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 
 /// Servicio centralizado para Firebase Analytics
@@ -29,13 +28,10 @@ class AnalyticsService {
       _initialized = true;
 
       if (kDebugMode) {
-        print('📊 [Analytics] Inicializado (deshabilitado en debug)');
       } else {
-        print('📊 [Analytics] Inicializado y habilitado');
       }
     } catch (e) {
       if (kDebugMode) {
-        print('❌ [Analytics] Error inicializando: $e');
       }
     }
   }
@@ -58,11 +54,9 @@ class AnalyticsService {
       }
 
       if (kDebugMode) {
-        print('👤 [Analytics] Usuario configurado: $userId');
       }
     } catch (e) {
       if (kDebugMode) {
-        print('❌ [Analytics] Error configurando usuario: $e');
       }
     }
   }
@@ -74,11 +68,9 @@ class AnalyticsService {
     try {
       await _analytics.setUserId(id: null);
       if (kDebugMode) {
-        print('🗑️ [Analytics] Datos de usuario limpiados');
       }
     } catch (e) {
       if (kDebugMode) {
-        print('❌ [Analytics] Error limpiando datos: $e');
       }
     }
   }
@@ -264,7 +256,6 @@ class AnalyticsService {
   Future<void> _logEvent(String name, [Map<String, dynamic>? parameters]) async {
     if (!_initialized) {
       if (kDebugMode) {
-        print('⚠️ [Analytics] No inicializado, omitiendo evento: $name');
       }
       return;
     }
@@ -281,11 +272,9 @@ class AnalyticsService {
       );
 
       if (kDebugMode) {
-        print('📊 [Analytics] Evento: $name ${parameters != null ? parameters.toString() : ""}');
       }
     } catch (e) {
       if (kDebugMode) {
-        print('❌ [Analytics] Error logging evento $name: $e');
       }
     }
   }

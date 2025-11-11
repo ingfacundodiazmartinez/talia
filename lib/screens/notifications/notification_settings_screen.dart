@@ -41,7 +41,7 @@ class _NotificationSettingsScreenState
         });
       }
     } catch (e) {
-      print('Error checking user role: $e');
+      // Error checking user role - silent
     }
   }
 
@@ -257,7 +257,7 @@ class _NotificationSettingsScreenState
         ),
         value: value,
         onChanged: onChanged,
-        activeColor: colorScheme.primary,
+        activeThumbColor: colorScheme.primary,
       ),
     );
   }

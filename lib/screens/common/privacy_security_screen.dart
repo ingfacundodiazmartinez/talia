@@ -43,7 +43,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
         _allowScreenshots = data['allowScreenshots'] ?? false;
       });
     } catch (e) {
-      print('Error loading settings: $e');
+      // Error loading settings - silent
     }
   }
 
@@ -272,7 +272,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
           ),
         ),
         subtitle: Text(subtitle, style: TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant)),
-        activeColor: colorScheme.primary,
+        activeThumbColor: colorScheme.primary,
         activeTrackColor: colorScheme.primary.withValues(alpha: 0.5),
       ),
     );
@@ -530,7 +530,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
             Text('Seleccionar Backup'),
           ],
         ),
-        content: Container(
+        content: SizedBox(
           width: double.maxFinite,
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -787,7 +787,6 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
 
   /// Muestra el flujo para habilitar 2FA
   void _showEnable2FAFlow() async {
-    print('🔐 Iniciando flujo de 2FA...');
     try {
       await showDialog(
         context: context,
@@ -799,7 +798,6 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
         ),
       );
     } catch (e) {
-      print('❌ Error en flujo de 2FA: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

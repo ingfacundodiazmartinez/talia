@@ -38,7 +38,6 @@ class ProfileCompletionService {
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) {
-        print('❌ Usuario no autenticado al intentar subir imagen');
         return null;
       }
 
@@ -46,17 +45,14 @@ class ProfileCompletionService {
       await user.reload();
       final refreshedUser = FirebaseAuth.instance.currentUser;
       if (refreshedUser == null) {
-        print('❌ Usuario no disponible después de reload');
         return null;
       }
 
       // Get ID token to ensure Storage has access
       final idToken = await refreshedUser.getIdToken(true);
-      print('🔑 ID Token obtenido: ${idToken?.substring(0, 20)}...');
 
       // Give time for Storage SDK to update its token cache
       await Future.delayed(Duration(milliseconds: 500));
-      print('⏱️ Esperando propagación del token al SDK de Storage...');
 
       // Create unique reference for the image
       final storageRef = FirebaseStorage.instance
@@ -64,7 +60,6 @@ class ProfileCompletionService {
           .child('profile_images')
           .child('$userId.jpg');
 
-      print('📁 Subiendo a: profile_images/$userId.jpg');
 
       // Upload the image
       final uploadTask = storageRef.putFile(profileImage);
@@ -72,11 +67,9 @@ class ProfileCompletionService {
 
       // Get download URL
       final downloadUrl = await snapshot.ref.getDownloadURL();
-      print('📸 Imagen subida exitosamente: $downloadUrl');
 
       return downloadUrl;
     } catch (e) {
-      print('❌ Error subiendo imagen: $e');
       return null;
     }
   }
@@ -130,23 +123,17 @@ class ProfileCompletionService {
       // Upload profile image if provided
       String? profileImageUrl;
       if (profileImage != null) {
-        print('📤 Iniciando subida de imagen...');
         profileImageUrl = await uploadProfileImage(profileImage, userId);
-        print('📸 URL de imagen obtenida: $profileImageUrl');
       } else if (existingPhotoURL != null) {
         profileImageUrl = existingPhotoURL;
-        print('🔄 Usando foto existente: $profileImageUrl');
       }
 
       // Calculate age and determine role
       final age = calculateAge(birthDate);
-      print('📊 [CompleteProfile] Edad calculada: $age');
 
       final role = await _roleService.determineUserRole(userId, age);
-      print('👤 [CompleteProfile] Rol determinado: $role');
 
       // Check if user already exists
-      print('🔍 [CompleteProfile] Verificando si usuario existe en Firestore...');
       final userDoc = await FirebaseFirestore.instance
           .collection('users')
           .doc(userId)
@@ -155,22 +142,18 @@ class ProfileCompletionService {
       final exists = userDoc.exists;
       final userData = userDoc.data();
       final hasAnyData = userData != null && userData.isNotEmpty;
-      print('📄 [CompleteProfile] Documento existe: $exists, tiene datos: $hasAnyData');
 
       if (hasAnyData) {
-        print('   Datos actuales: name=${userData!['name']}, role=${userData['role']}, createdAt=${userData['createdAt']}');
       }
 
       if (exists && hasAnyData) {
         // Update existing user using Cloud Function (has admin permissions to update 'role')
-        print('📝 [CompleteProfile] Actualizando usuario existente via Cloud Function...');
         try {
           // Primero actualizar la foto de perfil si existe
           if (profileImageUrl != null) {
             await FirebaseFirestore.instance.collection('users').doc(userId).set({
               'photoURL': profileImageUrl,
             }, SetOptions(merge: true));
-            print('✅ [CompleteProfile] Foto de perfil actualizada');
           }
 
           // Normalizar fecha a UTC mediodía para evitar problemas de timezone
@@ -194,17 +177,14 @@ class ProfileCompletionService {
           final newRole = response['role'] as String?;
 
           if (success) {
-            print('✅ [CompleteProfile] Usuario actualizado exitosamente via Cloud Function con rol: $newRole');
           } else {
             throw Exception('Cloud Function retornó success=false');
           }
         } catch (e) {
-          print('❌ [CompleteProfile] Error al actualizar usuario: $e');
           rethrow;
         }
       } else {
         // Create new user
-        print('📝 [CompleteProfile] Creando nuevo usuario con todos los campos...');
         try {
           // Normalizar fecha a UTC mediodía para evitar problemas de timezone
           final normalizedDate = DateTime.utc(
@@ -225,9 +205,7 @@ class ProfileCompletionService {
             'isOnline': true,
             'lastSeen': FieldValue.serverTimestamp(),
           });
-          print('✅ [CompleteProfile] Usuario creado exitosamente');
         } catch (e) {
-          print('❌ [CompleteProfile] Error al crear usuario: $e');
           rethrow;
         }
       }
@@ -242,14 +220,12 @@ class ProfileCompletionService {
           .get();
       final finalRole = finalUserDoc.data()?['role'] as String? ?? role;
 
-      print('✅ Perfil completado exitosamente con rol final: $finalRole');
 
       return ProfileCompletionResult(
         success: true,
         role: finalRole,
       );
     } catch (e) {
-      print('❌ Error completando perfil: $e');
       return ProfileCompletionResult(
         success: false,
         error: e.toString(),
@@ -316,7 +292,6 @@ class ProfileCompletionService {
       if (documentExists) {
         // Document exists but is incomplete - use UPDATE to avoid touching 'role' field
         final existingRole = userData?['role'] ?? 'child';
-        print('📝 Actualizando documento existente (role: $existingRole) sin modificar campo "role"');
 
         await FirebaseFirestore.instance.collection('users').doc(userId).update({
           'name': 'Usuario',
@@ -337,7 +312,6 @@ class ProfileCompletionService {
       } else {
         // Document doesn't exist - use SET to create it with role
         final role = await _roleService.determineUserRole(userId, defaultAge);
-        print('📝 Creando nuevo documento con role: $role');
 
         await FirebaseFirestore.instance.collection('users').doc(userId).set({
           'name': 'Usuario',
@@ -358,7 +332,6 @@ class ProfileCompletionService {
         );
       }
     } catch (e) {
-      print('❌ Error en skip: $e');
       return ProfileCompletionResult(
         success: false,
         error: e.toString(),
@@ -369,25 +342,17 @@ class ProfileCompletionService {
   // Load existing user data
   Future<Map<String, dynamic>?> loadExistingUserData(String userId) async {
     try {
-      print('🔍 [ProfileService] Consultando Firestore para userId: $userId');
 
       final doc = await FirebaseFirestore.instance
           .collection('users')
           .doc(userId)
           .get();
 
-      print('📄 [ProfileService] Documento obtenido: exists=${doc.exists}');
 
       if (doc.exists) {
         final data = doc.data();
-        print('📊 [ProfileService] Data del documento: ${data != null ? "Sí tiene data" : "Data es null"}');
 
         if (data != null) {
-          print('   - name: ${data['name']}');
-          print('   - birthDate: ${data['birthDate']}');
-          print('   - photoURL: ${data['photoURL'] != null ? "presente" : "ausente"}');
-          print('   - role: ${data['role']}');
-          print('   - createdAt: ${data['createdAt']}');
 
           DateTime? birthDate;
           if (data['birthDate'] != null) {
@@ -414,15 +379,11 @@ class ProfileCompletionService {
             'photoURL': data['photoURL'],
           };
         } else {
-          print('⚠️ [ProfileService] Documento existe pero data() es null');
         }
       } else {
-        print('❌ [ProfileService] Documento NO existe en Firestore');
       }
       return null;
     } catch (e, stackTrace) {
-      print('❌ [ProfileService] Error loading existing user data: $e');
-      print('   Stack trace: $stackTrace');
       return null;
     }
   }
@@ -432,10 +393,8 @@ class ProfileCompletionService {
     try {
       final result = await _deviceService.registerDeviceForUser(userId);
       if (!result.isSuccess) {
-        print('⚠️ Advertencia registrando dispositivo: ${result.error}');
       }
     } catch (e) {
-      print('❌ Error registrando dispositivo: $e');
     }
   }
 }

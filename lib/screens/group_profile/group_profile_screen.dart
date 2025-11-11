@@ -595,7 +595,8 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
 
   Future<void> _startVideoCall(String userId, String userName) async {
     try {
-      await _videoCallService.startCall(
+      // ✅ FIXED: Capturar el callId retornado por el servicio
+      final callId = await _videoCallService.startCall(
         callerId: _controller.currentUserId,
         callerName: 'Yo', // El controller podría proveer esto
         receiverId: userId,
@@ -607,7 +608,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
           context,
           MaterialPageRoute(
             builder: (context) => VideoCallScreen(
-              callId: DateTime.now().millisecondsSinceEpoch.toString(),
+              callId: callId, // ✅ FIXED: Usar el callId retornado por el servicio
               isCaller: true,
               remoteName: userName,
               receiverId: userId,

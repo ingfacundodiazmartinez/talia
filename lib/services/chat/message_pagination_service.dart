@@ -34,18 +34,9 @@ class MessagePaginationService {
     required String chatId,
   }) async {
     try {
-      print('📦 Cargando mensajes desde cache...');
       final cachedMessages = await _cacheService.getMessages(chatId);
-
-      if (cachedMessages.isNotEmpty) {
-        print('📥 Cache: ${cachedMessages.length} mensajes');
-        return cachedMessages;
-      } else {
-        print('📥 Cache vacío');
-        return [];
-      }
+      return cachedMessages;
     } catch (e) {
-      print('❌ Error cargando cache: $e');
       return [];
     }
   }
@@ -60,17 +51,12 @@ class MessagePaginationService {
       final chatDoc = await _firestore.collection('chats').doc(chatId).get();
 
       if (!chatDoc.exists) {
-        print('💬 Chat vacío (documento no existe), iniciando sin mensajes');
         _hasMoreMessages = false;
         return [];
       }
 
       final chatData = chatDoc.data();
       _clearedAtTimestamp = chatData?['clearedAt_$currentUserId'] as Timestamp?;
-
-      if (_clearedAtTimestamp != null) {
-        print('🧹 Chat limpiado en: ${_clearedAtTimestamp!.toDate()}');
-      }
 
       // Cargar mensajes con filtro de clearedAt en Firestore
       var query = _firestore
@@ -82,7 +68,6 @@ class MessagePaginationService {
       // Filtrar por clearedAt en el servidor (más eficiente)
       if (_clearedAtTimestamp != null) {
         query = query.where('timestamp', isGreaterThan: _clearedAtTimestamp);
-        print('🔍 Filtrando mensajes después de: ${_clearedAtTimestamp!.toDate()}');
       }
 
       final snapshot = await query.limit(_messagesPerPage).get();
@@ -101,10 +86,8 @@ class MessagePaginationService {
           .where((message) => _shouldIncludeByModeration(message, currentUserId))
           .toList();
 
-      print('📥 Cargados ${messages.length} mensajes de Firestore');
       return messages;
     } catch (e) {
-      print('❌ Error cargando mensajes iniciales: $e');
       return [];
     }
   }
@@ -115,12 +98,10 @@ class MessagePaginationService {
     required String currentUserId,
   }) async {
     if (!_hasMoreMessages || _lastDocument == null) {
-      print('📄 No hay más mensajes para cargar');
       return [];
     }
 
     try {
-      print('📄 Cargando más mensajes antiguos...');
 
       var query = _firestore
           .collection('chats')
@@ -138,7 +119,6 @@ class MessagePaginationService {
 
       if (snapshot.docs.isEmpty) {
         _hasMoreMessages = false;
-        print('📄 No hay más mensajes');
         return [];
       }
 
@@ -152,10 +132,8 @@ class MessagePaginationService {
           .where((message) => _shouldIncludeByModeration(message, currentUserId))
           .toList();
 
-      print('📄 Cargados ${messages.length} mensajes adicionales');
       return messages;
     } catch (e) {
-      print('❌ Error cargando más mensajes: $e');
       return [];
     }
   }
@@ -167,7 +145,6 @@ class MessagePaginationService {
     if (message.senderId != currentUserId) {
       if (message.moderationStatus != ModerationStatus.approved &&
           message.moderationStatus != ModerationStatus.blocked) {
-        print('🔒 Ignorando mensaje pendiente: ${message.id}');
         return false;
       }
     }
@@ -183,7 +160,7 @@ class MessagePaginationService {
     try {
       await _cacheService.saveMessages(chatId, messages);
     } catch (e) {
-      print('❌ Error guardando en cache: $e');
+      // Error silencioso
     }
   }
 

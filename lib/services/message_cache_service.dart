@@ -25,12 +25,10 @@ class MessageCacheService {
     try {
       await Hive.initFlutter();
       _messagesBox = await Hive.openBox(_boxName);
-      print('✅ [MessageCacheService] Inicializado correctamente');
 
       // Ejecutar limpieza de mensajes viejos (si es necesario)
       await _checkAndCleanupOldMessages();
     } catch (e) {
-      print('❌ [MessageCacheService] Error inicializando: $e');
     }
   }
 
@@ -45,17 +43,14 @@ class MessageCacheService {
 
       // Si no hay registro o han pasado más de 24 horas, ejecutar limpieza
       if (lastCleanup == null || (now - lastCleanup) > 24 * 60 * 60 * 1000) {
-        print('🧹 [MessageCacheService] Ejecutando limpieza programada...');
         await cleanupOldMessages();
 
         // Guardar timestamp de esta limpieza
         await _messagesBox!.put(lastCleanupKey, now);
       } else {
         final nextCleanup = Duration(milliseconds: 24 * 60 * 60 * 1000 - (now - lastCleanup));
-        print('⏭️ [MessageCacheService] Próxima limpieza en ${nextCleanup.inHours} horas');
       }
     } catch (e) {
-      print('❌ [MessageCacheService] Error verificando limpieza: $e');
     }
   }
 
@@ -87,7 +82,6 @@ class MessageCacheService {
       // Limpiar mensajes viejos si excedemos el límite
       await _cleanOldMessages(chatId);
     } catch (e) {
-      print('❌ [MessageCacheService] Error guardando mensaje: $e');
     }
   }
 
@@ -121,9 +115,7 @@ class MessageCacheService {
       await _messagesBox!.putAll(entries);
       await _cleanOldMessages(chatId);
 
-      print('✅ [MessageCacheService] Guardados ${messages.length} mensajes para chat $chatId');
     } catch (e) {
-      print('❌ [MessageCacheService] Error guardando mensajes: $e');
     }
   }
 
@@ -149,10 +141,8 @@ class MessageCacheService {
         return bTime.compareTo(aTime);
       });
 
-      print('📥 [MessageCacheService] Recuperados ${messages.length} mensajes del cache para chat $chatId');
       return messages;
     } catch (e) {
-      print('❌ [MessageCacheService] Error recuperando mensajes: $e');
       return [];
     }
   }
@@ -174,7 +164,6 @@ class MessageCacheService {
         await _messagesBox!.put(key, data);
       }
     } catch (e) {
-      print('❌ [MessageCacheService] Error actualizando estado: $e');
     }
   }
 
@@ -186,7 +175,6 @@ class MessageCacheService {
       final key = '${chatId}_$messageId';
       await _messagesBox!.delete(key);
     } catch (e) {
-      print('❌ [MessageCacheService] Error eliminando mensaje: $e');
     }
   }
 
@@ -204,10 +192,8 @@ class MessageCacheService {
           await deleteMessage(chatId, message.id);
         }
 
-        print('🗑️ [MessageCacheService] Eliminados ${toDelete.length} mensajes viejos');
       }
     } catch (e) {
-      print('❌ [MessageCacheService] Error limpiando mensajes viejos: $e');
     }
   }
 
@@ -224,9 +210,7 @@ class MessageCacheService {
         await _messagesBox!.delete(key);
       }
 
-      print('🗑️ [MessageCacheService] Cache limpiado para chat $chatId');
     } catch (e) {
-      print('❌ [MessageCacheService] Error limpiando cache: $e');
     }
   }
 
@@ -306,12 +290,9 @@ class MessageCacheService {
       }
 
       if (deletedCount > 0) {
-        print('🗑️ [MessageCacheService] Limpiados $deletedCount mensajes más viejos de $daysToKeep días');
       } else {
-        print('✅ [MessageCacheService] No hay mensajes viejos que limpiar');
       }
     } catch (e) {
-      print('❌ [MessageCacheService] Error limpiando mensajes viejos: $e');
     }
   }
 
@@ -357,10 +338,8 @@ class MessageCacheService {
       // Limitar resultados
       final limitedMessages = mediaMessages.take(limit).toList();
 
-      print('📸 [MessageCacheService] Recuperados ${limitedMessages.length} medios del usuario $userId desde cache');
       return limitedMessages;
     } catch (e) {
-      print('❌ [MessageCacheService] Error recuperando medios del usuario: $e');
       return [];
     }
   }
@@ -411,10 +390,8 @@ class MessageCacheService {
       // Limitar resultados
       final limitedMessages = mediaMessages.take(limit).toList();
 
-      print('📸 [MessageCacheService] Recuperados ${limitedMessages.length} medios del chat $chatId desde cache');
       return limitedMessages;
     } catch (e) {
-      print('❌ [MessageCacheService] Error recuperando medios del chat: $e');
       return [];
     }
   }

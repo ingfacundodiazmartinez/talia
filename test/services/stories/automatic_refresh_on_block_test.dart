@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
-import '../../../lib/services/stories/repositories/contact_repository.dart';
-import '../../../lib/services/stories/managers/story_stream_manager.dart';
-import '../../../lib/services/stories/repositories/story_repository.dart';
-import '../../../lib/services/stories/managers/story_cache_manager.dart';
-import '../../../lib/services/block_status_cache_service.dart';
+import 'package:talia/services/stories/repositories/contact_repository.dart';
+import 'package:talia/services/stories/managers/story_stream_manager.dart';
+import 'package:talia/services/stories/repositories/story_repository.dart';
+import 'package:talia/services/stories/managers/story_cache_manager.dart';
+import 'package:talia/services/block_status_cache_service.dart';
 import 'test_firebase_setup.dart';
 import 'test_helpers.dart';
 import 'test_mocks.dart';
@@ -86,7 +86,6 @@ void main() {
       expect(storiesAfterBlock.any((us) => us.userId == 'user1'), isFalse);
       expect(storiesAfterBlock.any((us) => us.userId == 'user2'), isTrue);
 
-      print('✅ [AutoRefreshTest] Historias de user1 removidas automáticamente después del bloqueo');
     });
 
     test('Automatic refresh: Stories restored when user is unblocked', () async {
@@ -117,7 +116,6 @@ void main() {
       // En una implementación real, esto recargará solo las historias de user1
       // sin afectar el resto del cache
 
-      print('✅ [AutoRefreshTest] Recarga granular triggereada después del desbloqueo');
     });
 
     test('Block status change stream: Events are emitted correctly', () async {
@@ -154,7 +152,6 @@ void main() {
 
       await subscription.cancel();
 
-      print('✅ [AutoRefreshTest] Eventos de cambio de bloqueo emitidos correctamente');
     });
 
     test('Bidirectional blocking: Both users receive block notifications', () async {
@@ -204,7 +201,6 @@ void main() {
 
       await subscription.cancel();
 
-      print('✅ [AutoRefreshTest] Notificaciones bidireccionales funcionan correctamente');
     });
 
     test('StoryCacheManager: removeStoriesByUserId works correctly', () {
@@ -246,7 +242,6 @@ void main() {
       expect(storiesAfterRemoval.any((us) => us.userId == 'user2'), isFalse);
       expect(storiesAfterRemoval.any((us) => us.userId == 'user3'), isTrue);
 
-      print('✅ [AutoRefreshTest] removeStoriesByUserId funciona correctamente');
     });
 
     test('Parent-child cache: Invalidation is granular for blocked user', () {
@@ -264,7 +259,6 @@ void main() {
       final metricsAfterBlock = storyStreamManager.getMetrics();
       expect(metricsAfterBlock, isA<Map<String, dynamic>>());
 
-      print('✅ [AutoRefreshTest] Invalidación granular del cache padre-hijo');
     });
 
     tearDown(() async {

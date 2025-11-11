@@ -22,7 +22,7 @@ class EmergencyDetailController {
   final EmergencyService _emergencyService;
 
   // State
-  List<LatLng> _locationPoints = [];
+  final List<LatLng> _locationPoints = [];
   bool _isResolving = false;
 
   // Subscriptions

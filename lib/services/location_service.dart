@@ -28,7 +28,6 @@ class LocationService {
     // Verificar si el servicio de ubicación está habilitado
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      print('❌ Servicio de ubicación deshabilitado');
       return false;
     }
 
@@ -38,17 +37,14 @@ class LocationService {
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
       if (permission == LocationPermission.denied) {
-        print('❌ Permisos de ubicación denegados');
         return false;
       }
     }
 
     if (permission == LocationPermission.deniedForever) {
-      print('❌ Permisos de ubicación denegados permanentemente');
       return false;
     }
 
-    print('✅ Permisos de ubicación concedidos');
     return true;
   }
 
@@ -58,15 +54,12 @@ class LocationService {
       final hasPermission = await requestLocationPermission();
       if (!hasPermission) return null;
 
-      print('📍 Obteniendo ubicación actual...');
       final position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
       );
 
-      print('✅ Ubicación obtenida: ${position.latitude}, ${position.longitude}');
       return position;
     } catch (e) {
-      print('❌ Error obteniendo ubicación: $e');
       return null;
     }
   }
@@ -74,7 +67,6 @@ class LocationService {
   // Iniciar tracking de ubicación
   Future<void> startLocationTracking() async {
     if (_isTracking) {
-      print('⚠️ Tracking de ubicación ya está activo');
       return;
     }
 
@@ -83,12 +75,10 @@ class LocationService {
 
     final user = _auth.currentUser;
     if (user == null) {
-      print('❌ Usuario no autenticado');
       return;
     }
 
     _isTracking = true;
-    print('🚀 Iniciando tracking de ubicación...');
 
     // Actualizar ubicación inmediatamente
     final initialPosition = await getCurrentLocation();
@@ -114,11 +104,9 @@ class LocationService {
       locationSettings: _locationSettings,
     ).listen(
       (Position position) {
-        print('📍 Nueva posición detectada: ${position.latitude}, ${position.longitude}');
         _updateLocationInFirestore(position);
       },
       onError: (error) {
-        print('❌ Error en stream de ubicación: $error');
       },
     );
   }
@@ -128,7 +116,6 @@ class LocationService {
     _isTracking = false;
     _positionStream?.cancel();
     _locationUpdateTimer?.cancel();
-    print('⏹️ Tracking de ubicación detenido');
   }
 
   // Actualizar ubicación en Firestore
@@ -150,7 +137,6 @@ class LocationService {
         'lastUpdate': DateTime.now().toIso8601String(),
       }, SetOptions(merge: true));
 
-      print('💾 Última ubicación guardada en Firestore');
 
       // Solo guardar historial si hay una emergencia ACTIVA
       final activeEmergency = await _firestore
@@ -176,10 +162,8 @@ class LocationService {
           'date': DateTime.now().toIso8601String(),
         });
 
-        print('🆘 Ubicación de emergencia guardada en tracking');
       }
     } catch (e) {
-      print('❌ Error guardando ubicación: $e');
     }
   }
 
@@ -206,7 +190,6 @@ class LocationService {
         };
       }).toList();
     } catch (e) {
-      print('❌ Error obteniendo historial: $e');
       return [];
     }
   }
@@ -220,9 +203,7 @@ class LocationService {
   Future<void> enableBackgroundTracking() async {
     try {
       await _backgroundService.initialize();
-      print('✅ Background tracking habilitado');
     } catch (e) {
-      print('❌ Error habilitando background tracking: $e');
     }
   }
 
@@ -230,9 +211,7 @@ class LocationService {
   Future<void> startBackgroundTracking() async {
     try {
       await _backgroundService.startBackgroundTracking();
-      print('✅ Background tracking iniciado');
     } catch (e) {
-      print('❌ Error iniciando background tracking: $e');
     }
   }
 
@@ -240,9 +219,7 @@ class LocationService {
   Future<void> stopBackgroundTracking() async {
     try {
       await _backgroundService.stopBackgroundTracking();
-      print('✅ Background tracking detenido');
     } catch (e) {
-      print('❌ Error deteniendo background tracking: $e');
     }
   }
 

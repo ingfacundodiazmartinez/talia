@@ -78,7 +78,6 @@ class BlockStatusCacheService {
         final cacheAge = DateTime.now().difference(_lastUpdated[cacheKey]!);
         if (cacheAge < _cacheDuration) {
           if (kDebugMode) {
-            print('✅ [BlockCache] Estado desde caché: $cacheKey = ${_blockStatusCache[cacheKey]}');
           }
           return _blockStatusCache[cacheKey]!;
         }
@@ -86,7 +85,6 @@ class BlockStatusCacheService {
 
       // Consultar Firestore
       if (kDebugMode) {
-        print('🔄 [BlockCache] Consultando Firestore para $cacheKey');
       }
 
       final snapshot = await _firestore
@@ -104,7 +102,6 @@ class BlockStatusCacheService {
       return isBlocked;
     } catch (e) {
       if (kDebugMode) {
-        print('❌ [BlockCache] Error verificando bloqueo: $e');
       }
       // En caso de error, usar caché antiguo si existe
       final cacheKey = '${blockerId}_$blockedId';
@@ -122,7 +119,6 @@ class BlockStatusCacheService {
 
     try {
       if (kDebugMode) {
-        print('🔄 [BlockCache] Pre-cargando ${contactIds.length} estados de bloqueo...');
       }
 
       // Filtrar los que necesitan actualización
@@ -137,7 +133,6 @@ class BlockStatusCacheService {
 
       if (needsRefresh.isEmpty) {
         if (kDebugMode) {
-          print('✅ [BlockCache] Todos los estados ya en caché');
         }
         return;
       }
@@ -160,11 +155,9 @@ class BlockStatusCacheService {
       }
 
       if (kDebugMode) {
-        print('✅ [BlockCache] Pre-carga completada: ${blockedIds.length} bloqueados');
       }
     } catch (e) {
       if (kDebugMode) {
-        print('❌ [BlockCache] Error en pre-carga: $e');
       }
     }
   }
@@ -196,7 +189,6 @@ class BlockStatusCacheService {
     }
 
     if (kDebugMode) {
-      print('🗑️ [BlockCache] Caché invalidado para contacto $contactId');
     }
   }
 
@@ -216,8 +208,6 @@ class BlockStatusCacheService {
     ));
 
     if (kDebugMode) {
-      print('🔄 [BlockCache] Estado actualizado: $cacheKey = $isBlocked');
-      print('📡 [BlockCache] Evento emitido para contacto $contactId');
     }
   }
 
@@ -236,7 +226,6 @@ class BlockStatusCacheService {
     }
 
     if (kDebugMode) {
-      print('🗑️ [BlockCache] Limpiadas $toRemove entradas antiguas');
     }
   }
 
@@ -246,7 +235,6 @@ class BlockStatusCacheService {
     _lastUpdated.clear();
 
     if (kDebugMode) {
-      print('🗑️ [BlockCache] Caché completamente limpiado');
     }
   }
 
@@ -276,7 +264,6 @@ class BlockStatusCacheService {
     _stopFirestoreListener(); // Detener listener anterior si existe
 
     if (kDebugMode) {
-      print('🔄 [BlockCache] Iniciando listener de bloqueos para usuario: $userId');
     }
 
     // Escuchar cambios donde YO soy bloqueado por otros (blockedUserId == userId)
@@ -311,7 +298,6 @@ class BlockStatusCacheService {
       },
       onError: (error) {
         if (kDebugMode) {
-          print('❌ [BlockCache] Error en listener de Firestore: $error');
         }
       },
     );
@@ -343,8 +329,6 @@ class BlockStatusCacheService {
     if (kDebugMode) {
       final action = isBlocked ? 'bloqueó' : 'desbloqueó';
       final direction = isBlockedBy ? 'me $action' : 'bloqueé a';
-      print('📡 [BlockCache] Firestore detectó: $contactId $direction $userId');
-      print('🔄 [BlockCache] Evento emitido para contacto: $contactId');
     }
   }
 
@@ -355,7 +339,6 @@ class BlockStatusCacheService {
     clearCache();
 
     if (kDebugMode) {
-      print('🗑️ [BlockCache] Servicio disposado');
     }
   }
 }

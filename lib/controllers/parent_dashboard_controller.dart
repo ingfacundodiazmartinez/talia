@@ -10,7 +10,6 @@ import '../services/user_role_service.dart';
 import '../services/callkit_service.dart';
 import '../services/voip_service.dart';
 import '../models/parent.dart';
-import '../models/child.dart';
 import '../screens/emergency_detail_screen.dart';
 import '../utils/release_logger.dart';
 
@@ -70,8 +69,6 @@ class ParentDashboardController {
   /// Get user data stream for display purposes
   /// ✅ OPTIMIZADO: Usa cache para evitar múltiples listeners al mismo documento
   Stream<DocumentSnapshot> getUserDataStream() {
-    print('🔍 [ParentDashboard] getUserDataStream llamado - usando cache: ${_cachedUserDataStream != null}');
-
     _cachedUserDataStream ??= FirebaseFirestore.instance
         .collection('users')
         .doc(parentId)
@@ -84,16 +81,12 @@ class ParentDashboardController {
   /// Get linked children IDs stream
   /// ✅ OPTIMIZADO: Deriva del stream principal para evitar duplicación Y usa cache propio
   Stream<List<String>> getLinkedChildrenIdsStream() {
-    print('🔍 [ParentDashboard] getLinkedChildrenIdsStream llamado - usando cache: ${_cachedLinkedChildrenIdsStream != null}');
-
     _cachedLinkedChildrenIdsStream ??= getUserDataStream().map((snapshot) {
       if (!snapshot.exists) {
-        print('🔍 [ParentDashboard] Documento usuario no existe');
         return <String>[];
       }
       final userData = snapshot.data() as Map<String, dynamic>;
       final childrenIds = List<String>.from(userData['linkedChildrenIds'] ?? []);
-      print('🔍 [ParentDashboard] Retornando ${childrenIds.length} hijos: $childrenIds');
       return childrenIds;
     }).asBroadcastStream(); // ✅ CRÍTICO: Permite múltiples subscripciones
 
@@ -283,7 +276,7 @@ class ParentDashboardController {
         return;
       }
 
-      final data = snapshot.data() as Map<String, dynamic>?;
+      final data = snapshot.data();
       final status = data?['status'];
 
       ReleaseLogger.log('Status de $callId cambió a: $status', tag: 'ParentDashboard');

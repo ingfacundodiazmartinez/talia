@@ -23,9 +23,7 @@ class SoundService {
       await _player.setReleaseMode(ReleaseMode.stop);
       await _player.setVolume(0.3); // Volumen sutil
       _initialized = true;
-      print('🔊 [SoundService] Inicializado');
     } catch (e) {
-      print('⚠️ [SoundService] Error inicializando: $e');
     }
   }
 
@@ -41,10 +39,8 @@ class SoundService {
         volume: 0.2,
       );
 
-      print('🔊 [SoundService] Reproduciendo sonido de envío');
     } catch (e) {
       // Si falla, intentar con URL de WhatsApp (backup)
-      print('⚠️ [SoundService] Error reproduciendo sonido de envío: $e');
     }
   }
 
@@ -58,9 +54,7 @@ class SoundService {
         volume: 0.25,
       );
 
-      print('🔊 [SoundService] Reproduciendo sonido de recepción');
     } catch (e) {
-      print('⚠️ [SoundService] Error reproduciendo sonido de recepción: $e');
     }
   }
 

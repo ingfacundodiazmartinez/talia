@@ -49,7 +49,6 @@ class ChatStateService {
 
       // Si el ID cambió, eliminar el viejo del cache
       if (oldId != newMessage.id) {
-        print('🔄 Actualizando mensaje: $oldId -> ${newMessage.id}');
         await _cacheService.deleteMessage(chatId, oldId);
       }
 
@@ -73,11 +72,6 @@ class ChatStateService {
     required List<ChatMessage> newMessages,
     required String currentUserId,
   }) async {
-    int addedCount = 0;
-    int updatedCount = 0;
-    int skippedCount = 0;
-    int replacedPendingCount = 0;
-
     for (final message in newMessages) {
       final index = _messages.indexWhere((m) => m.id == message.id);
 
@@ -88,17 +82,14 @@ class ChatStateService {
           if (pendingIndex != -1) {
             // Reemplazar mensaje pendiente con el confirmado
             final pendingMessage = _messages[pendingIndex];
-            print('🔄 Reemplazando mensaje pendiente ${pendingMessage.id} con ${message.id}');
             _messages[pendingIndex] = message;
             _pendingMessages.removeWhere((m) => m.id == pendingMessage.id);
-            replacedPendingCount++;
             continue;
           }
         }
 
         // Mensaje nuevo
         _messages.add(message);
-        addedCount++;
       } else {
         // Mensaje existente - actualizar solo si es necesario
         final existingMessage = _messages[index];
@@ -107,17 +98,12 @@ class ChatStateService {
         if (message.senderId != currentUserId ||
             _hasImportantChanges(existingMessage, message)) {
           _messages[index] = message;
-          updatedCount++;
-        } else {
-          skippedCount++;
         }
       }
     }
 
     _sortMessages();
     await _cacheService.saveMessages(chatId, _messages);
-
-    print('📊 Merge: $addedCount nuevos, $updatedCount actualizados, $skippedCount omitidos, $replacedPendingCount pendientes reemplazados');
   }
 
   /// Encontrar mensaje pendiente que coincida con el mensaje de Firestore
@@ -130,7 +116,6 @@ class ChatStateService {
         _pendingMessages.any((p) => p.id == m.id)
       );
       if (index != -1) {
-        print('✅ Mensaje pendiente encontrado por localId: ${firestoreMessage.localId}');
         return index;
       }
     }

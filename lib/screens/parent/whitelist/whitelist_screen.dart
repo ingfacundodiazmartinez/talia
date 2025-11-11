@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../controllers/whitelist_controller.dart';
+import '../../../utils/release_logger.dart';
 import '../../../models/contact_request.dart';
 import '../../../models/permission_request.dart';
 import '../../../theme_service.dart';
@@ -32,7 +33,7 @@ class _WhitelistScreenState extends State<WhitelistScreen>
   final TextEditingController _searchController = TextEditingController();
   final ValueNotifier<String> _searchQuery = ValueNotifier<String>('');
 
-  List<Map<String, dynamic>> _currentPendingRequests = [];
+  final List<Map<String, dynamic>> _currentPendingRequests = [];
 
   @override
   bool get wantKeepAlive => true;
@@ -640,7 +641,7 @@ class _WhitelistScreenState extends State<WhitelistScreen>
             }
           }
         } catch (e) {
-          print('❌ Error verificando grupos compartidos: $e');
+          ReleaseLogger.error('Error verificando grupos compartidos: $e', tag: 'WhitelistScreen');
         }
       }
     }

@@ -155,7 +155,7 @@ class DeepARService {
 
     try {
       ReleaseLogger.log('🎬 Iniciando grabación: $outputPath', tag: 'DeepARService');
-      ReleaseLogger.log('📏 Dimensiones de grabación: ${width}x${height} (aspect ratio: ${width/height})', tag: 'DeepARService');
+      ReleaseLogger.log('📏 Dimensiones de grabación: ${width}x$height (aspect ratio: ${width/height})', tag: 'DeepARService');
 
       final result = await _channel.invokeMethod('startRecording', {
         'outputPath': outputPath,
@@ -353,11 +353,11 @@ class DeepARPreview extends StatelessWidget {
   final double? height;
 
   const DeepARPreview({
-    Key? key,
+    super.key,
     this.onPlatformViewCreated,
     this.width,
     this.height,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {

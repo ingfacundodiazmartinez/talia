@@ -60,7 +60,6 @@ class GroupInvitationService {
           'members': FieldValue.arrayUnion([invitedChildId]),
         });
 
-        print('✅ Padre/Adulto agregado directamente al grupo: $invitedChildId');
 
         return {
           'success': true,
@@ -88,7 +87,6 @@ class GroupInvitationService {
           'members': FieldValue.arrayUnion([invitedChildId]),
         });
 
-        print('✅ Niño agregado directamente al grupo (no requiere aprobaciones): $invitedChildId');
 
         return {
           'success': true,
@@ -123,7 +121,6 @@ class GroupInvitationService {
         },
       });
 
-      print('✅ Invitación creada (requiere aprobaciones): ${invitationRef.id}');
 
       // Enviar notificaciones push
       await _sendInvitationNotifications(
@@ -140,7 +137,6 @@ class GroupInvitationService {
         'requiresApprovals': true,
       };
     } catch (e) {
-      print('❌ Error creando invitación: $e');
       return {'success': false, 'error': e.toString()};
     }
   }
@@ -195,7 +191,6 @@ class GroupInvitationService {
 
       return false;
     } catch (e) {
-      print('❌ Error verificando contactos: $e');
       return false;
     }
   }
@@ -241,12 +236,10 @@ class GroupInvitationService {
         await _createContactApproval(invitedChildId, memberId);
       }
 
-      print('✅ Padre del invitado aprobó invitación: $invitationId');
 
       // El Cloud Function procesará si todos aprobaron
       return {'success': true};
     } catch (e) {
-      print('❌ Error aprobando invitación: $e');
       return {'success': false, 'error': e.toString()};
     }
   }
@@ -291,12 +284,10 @@ class GroupInvitationService {
         'requiredApprovals.$memberId.approvedAt': FieldValue.serverTimestamp(),
       });
 
-      print('✅ Padre de miembro aprobó contacto: $memberId en invitación $invitationId');
 
       // El Cloud Function procesará si todos aprobaron
       return {'success': true};
     } catch (e) {
-      print('❌ Error aprobando contacto de miembro: $e');
       return {'success': false, 'error': e.toString()};
     }
   }
@@ -328,10 +319,8 @@ class GroupInvitationService {
         });
       }
 
-      print('✅ Invitación rechazada: $invitationId');
       return {'success': true};
     } catch (e) {
-      print('❌ Error rechazando invitación: $e');
       return {'success': false, 'error': e.toString()};
     }
   }
@@ -365,7 +354,6 @@ class GroupInvitationService {
         });
       }
     } catch (e) {
-      print('❌ Error creando aprobación de contacto: $e');
     }
   }
 
@@ -440,9 +428,7 @@ class GroupInvitationService {
         });
       }
 
-      print('✅ Notificaciones enviadas para invitación $invitationId');
     } catch (e) {
-      print('❌ Error enviando notificaciones: $e');
     }
   }
 
@@ -456,7 +442,6 @@ class GroupInvitationService {
 
       return {'success': true};
     } catch (e) {
-      print('❌ Error cancelando invitación: $e');
       return {'success': false, 'error': e.toString()};
     }
   }

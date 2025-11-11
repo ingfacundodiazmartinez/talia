@@ -1,6 +1,7 @@
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const { sendInstantPushNotification } = require("./notifications");
 const { checkRateLimit, RATE_LIMITS } = require("./helpers");
 
 // ═══════════════════════════════════════════════════════════════
@@ -164,17 +165,11 @@ exports.incrementUnreadCount = onDocumentCreated(
         return null;
       }
 
-      console.log(`✅ Contacto válido. Incrementando contador para ${receiverId}...`);
+      console.log(`✅ Contacto válido. Enviando notificación a ${receiverId}...`);
 
-      // Incrementar contador de mensajes sin leer para el receptor
-      // NOTA: Si el receptor tiene el chat abierto, el contador se resetea
-      // automáticamente cuando el cliente marca los mensajes como leídos
-      const unreadField = `unreadCount_${receiverId}`;
-      await chatRef.update({
-        [unreadField]: FieldValue.increment(1),
-      });
-
-      console.log(`✅ Contador actualizado: ${unreadField} +1`);
+      // ❌ INCREMENTO ELIMINADO - El cliente ahora es responsable de actualizar contadores
+      // La lógica de unread count se maneja completamente en el stream detector de mensajes
+      console.log(`✅ Notificación enviada (sin incremento automático de contador)`);
 
       return null;
     } catch (error) {
@@ -295,35 +290,31 @@ exports.incrementGroupUnreadCount = onDocumentCreated(
       for (const memberId of members) {
         if (memberId !== senderId) {
           try {
-            // Incrementar contador de no leídos para este miembro
-            groupUpdateData[`unreadCount_${memberId}`] = FieldValue.increment(1);
+            // ❌ INCREMENTO ELIMINADO - El cliente ahora es responsable de actualizar contadores
+            // La lógica de unread count se maneja completamente en el stream detector de mensajes
 
-            // Crear notificación
-            await db.collection("notifications").add({
-              userId: memberId,
-              senderId: senderId,
-              type: "group_message",
-              title: `💬 ${groupName}`,
-              body: `${senderName}: ${messagePreview}`,
-              priority: "normal",
-              chatId: groupId,
-              messageId: messageId,
-              isGroup: true,
-              groupName: groupName,
-              pushSent: false, // Para que sendNotificationOnCreate envíe el push
-              timestamp: FieldValue.serverTimestamp(),
-              data: {
-                type: "group_message",
-                chatId: groupId,
-                messageId: messageId,
-                senderId: senderId,
-                senderName: senderName,
-                groupName: groupName,
-                text: messagePreview,
-                isGroup: true,
-              },
-            });
-            console.log(`🔔 [incrementGroupUnreadCount] Notificación creada para miembro: ${memberId}`);
+            // 📱 ENVÍO DIRECTO DE PUSH - sin crear documento en Firestore
+            try {
+              const pushResult = await sendInstantPushNotification.handler({
+                data: {
+                  userId: memberId,
+                  type: "group_message",
+                  title: `💬 ${groupName}`,
+                  body: `${senderName}: ${messagePreview}`,
+                  chatId: groupId,
+                  messageId: messageId,
+                  senderId: senderId,
+                  senderName: senderName,
+                  groupName: groupName,
+                  isGroup: true,
+                },
+                auth: null // Llamada interna, no requiere auth
+              });
+              console.log(`🔔 [incrementGroupUnreadCount] Push directo enviado para miembro: ${memberId}, resultado:`, pushResult.data);
+            } catch (pushError) {
+              console.error(`❌ [incrementGroupUnreadCount] Error enviando push directo para ${memberId}:`, pushError);
+              // No fallar por error de push individual
+            }
           } catch (notificationError) {
             console.error(`❌ [incrementGroupUnreadCount] Error creando notificación para ${memberId}:`, notificationError);
             // No fallar por error de notificación individual
@@ -331,8 +322,13 @@ exports.incrementGroupUnreadCount = onDocumentCreated(
         }
       }
 
-      // Actualizar documento del grupo con todos los contadores
-      await groupRef.update(groupUpdateData);
+      // ✅ ACTUALIZAR SOLO METADATA DEL GRUPO (sin contadores automáticos)
+      // Los contadores se manejan desde el cliente
+      await groupRef.update({
+        lastMessage: groupUpdateData.lastMessage,
+        lastMessageTime: groupUpdateData.lastMessageTime,
+        lastMessageSender: groupUpdateData.lastMessageSender,
+      });
 
       console.log(`✅ Grupo ${groupId} actualizado con ${members.length - 1} notificaciones enviadas`);
 
@@ -506,11 +502,9 @@ exports.sendChatMessage = onCall(
 
         await chatRef.update(lastMessageData);
 
-        // Incrementar unreadCount para el receiver
-        const unreadField = `unreadCount_${receiverId}`;
-        await chatRef.update({
-          [unreadField]: FieldValue.increment(1),
-        });
+        // ❌ INCREMENTO ELIMINADO - El cliente ahora es responsable de actualizar contadores
+        // La lógica de unread count se maneja completamente en el stream detector de mensajes
+        console.log(`✅ Mensaje enviado sin incremento automático - cliente manejará contadores`);
 
         console.log(`✅ [sendChatMessage] Mensaje enviado exitosamente: ${messageRef.id}`);
 
@@ -613,16 +607,17 @@ exports.sendGroupMessage = onCall(
           updatedAt: FieldValue.serverTimestamp(),
         };
 
-        // Incrementar unreadCount para cada miembro excepto el sender
-        members.forEach((memberId) => {
-          if (memberId !== senderId) {
-            groupUpdateData[`unreadCount_${memberId}`] = FieldValue.increment(1);
-          }
-        });
+        // ❌ INCREMENTO ELIMINADO - El cliente ahora es responsable de actualizar contadores
+        // La lógica de unread count se maneja completamente en el stream detector de mensajes
+        // members.forEach((memberId) => {
+        //   if (memberId !== senderId) {
+        //     groupUpdateData[`unreadCount_${memberId}`] = FieldValue.increment(1);
+        //   }
+        // });
 
         await groupRef.update(groupUpdateData);
 
-        // ✅ Notificaciones ahora se crean automáticamente via incrementGroupUnreadCount trigger
+        // ✅ Contadores y notificaciones manejados por el cliente via stream detector
         console.log(`✅ [sendGroupMessage] Mensaje enviado exitosamente: ${messageRef.id}`);
 
         return {

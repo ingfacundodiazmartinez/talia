@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../../../services/two_factor_auth_service.dart';
+import '../../../utils/release_logger.dart';
 
 /// Widget para el flujo de habilitación de 2FA
 class Enable2FADialog extends StatefulWidget {
@@ -28,7 +29,6 @@ class _Enable2FADialogState extends State<Enable2FADialog> {
   @override
   void initState() {
     super.initState();
-    print('🔐 Enable2FADialog initState llamado');
     // Ejecutar después de que el widget esté construido
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _generateSecretAndQR();
@@ -43,35 +43,24 @@ class _Enable2FADialogState extends State<Enable2FADialog> {
 
   /// Genera el secreto y QR al iniciar
   Future<void> _generateSecretAndQR() async {
-    print('🔐 Generando secreto y QR...');
     setState(() => _isLoading = true);
 
     try {
-      print('🔐 Generando secreto TOTP...');
       _secret = _twoFactorService.generateSecret();
-      print('✅ Secreto generado: ${_secret?.substring(0, 8)}...');
 
-      print('🔐 Generando URI de QR...');
       final userIdentifier = _auth.currentUser?.email ??
                             _auth.currentUser?.phoneNumber ??
                             _auth.currentUser?.uid ??
                             'Usuario Talia';
-      print('📱 Identificador de usuario: $userIdentifier');
 
       _qrCodeUri = _twoFactorService.generateQRCodeUri(
         secret: _secret!,
         email: userIdentifier,
       );
-      print('✅ QR URI generado: ${_qrCodeUri?.substring(0, 30)}...');
 
-      print('🔐 Generando códigos de recuperación...');
       _recoveryCodes = _twoFactorService.generateRecoveryCodes();
-      print('✅ ${_recoveryCodes?.length} códigos generados');
-
-      print('✅ 2FA setup completado exitosamente');
     } catch (e, stackTrace) {
-      print('❌ Error generando datos 2FA: $e');
-      print('Stack trace: $stackTrace');
+      ReleaseLogger.error('Error generando datos 2FA: $e\nStack: $stackTrace', tag: 'Enable2FADialog');
 
       if (mounted) {
         Navigator.pop(context);
@@ -92,7 +81,6 @@ class _Enable2FADialogState extends State<Enable2FADialog> {
 
   @override
   Widget build(BuildContext context) {
-    print('🔐 Enable2FADialog build - step: $_step, loading: $_isLoading');
     final colorScheme = Theme.of(context).colorScheme;
 
     return PopScope(

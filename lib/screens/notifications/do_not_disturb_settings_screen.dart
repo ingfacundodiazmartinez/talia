@@ -88,7 +88,7 @@ class _DoNotDisturbSettingsScreenState
                 setState(() => _dndEnabled = value);
                 await _saveSettings();
               },
-              activeColor: colorScheme.primary,
+              activeThumbColor: colorScheme.primary,
             ),
           ),
 
@@ -248,7 +248,7 @@ class _DoNotDisturbSettingsScreenState
                     );
                   },
                 );
-              }).toList(),
+              }),
 
             SizedBox(height: 24),
 
@@ -499,7 +499,7 @@ class _DoNotDisturbSettingsScreenState
 
       return contacts;
     } catch (e) {
-      print('Error getting contacts: $e');
+      // Error getting contacts - return empty list
       return [];
     }
   }
@@ -529,7 +529,7 @@ class _DoNotDisturbSettingsScreenState
         'dndExceptions': _exceptions,
       });
     } catch (e) {
-      print('Error saving settings: $e');
+      // Error saving settings
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Error al guardar configuración'),

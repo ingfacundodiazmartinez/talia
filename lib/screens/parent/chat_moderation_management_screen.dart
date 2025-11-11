@@ -600,12 +600,6 @@ class _ContactTileWidgetState extends State<_ContactTileWidget> with AutomaticKe
       // Extraer los IDs de los participantes del chatId
       final participantIds = chatId.split('_');
 
-      print('🔧 Toggle Moderation - chatId: $chatId');
-      print('🔧 participantIds: $participantIds');
-      print('🔧 enabled: $enabled (type: ${enabled.runtimeType})');
-      print('🔧 level: $level');
-      print('🔧 currentUserId: $currentUserId');
-
       // Asegurar que el documento del chat existe con los campos necesarios
       final updateData = {
         'participants': participantIds, // Necesario para las reglas de seguridad
@@ -616,14 +610,10 @@ class _ContactTileWidgetState extends State<_ContactTileWidget> with AutomaticKe
         'updatedAt': FieldValue.serverTimestamp(),
       };
 
-      print('🔧 Data to update: $updateData');
-
       await firestore.collection('chats').doc(chatId).set(
         updateData,
         SetOptions(merge: true),
       );
-
-      print('✅ Update successful!');
 
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -638,7 +628,6 @@ class _ContactTileWidgetState extends State<_ContactTileWidget> with AutomaticKe
         );
       }
     } catch (e) {
-      print('❌ Error actualizando moderación: $e');
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -662,8 +651,6 @@ class _ContactTileWidgetState extends State<_ContactTileWidget> with AutomaticKe
         'updatedAt': FieldValue.serverTimestamp(),
       });
 
-      print('✅ Nivel de moderación actualizado: $level');
-
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -673,7 +660,6 @@ class _ContactTileWidgetState extends State<_ContactTileWidget> with AutomaticKe
         );
       }
     } catch (e) {
-      print('❌ Error actualizando nivel: $e');
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

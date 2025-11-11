@@ -39,7 +39,7 @@ class MediaGalleryWidget extends StatelessWidget {
         }
 
         if (snapshot.hasError) {
-          print('❌ Error cargando galería de medios: ${snapshot.error}');
+          // Error loading media gallery - handled by UI
           return const SizedBox.shrink();
         }
 
@@ -134,7 +134,7 @@ class MediaGalleryWidget extends StatelessWidget {
 
       return [];
     } catch (e) {
-      print('❌ Error obteniendo medios del cache: $e');
+      // Error getting media from cache - return empty list
       return [];
     }
   }

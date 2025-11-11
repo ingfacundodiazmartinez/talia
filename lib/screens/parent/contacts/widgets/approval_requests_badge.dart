@@ -27,7 +27,7 @@ class ApprovalRequestsBadge extends StatelessWidget {
       builder: (context, snapshot) {
         // Manejar error de permisos gracefully
         if (snapshot.hasError) {
-          print('⚠️ Error leyendo solicitudes de aprobación: ${snapshot.error}');
+          // Error reading approval requests - handled by UI
         }
 
         final pendingCount = snapshot.hasData ? snapshot.data!.docs.length : 0;

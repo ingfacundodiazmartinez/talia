@@ -182,28 +182,50 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     try {
       final currentUserStories = widget.allUserStories[_currentUserIndex];
       final stories = _getStoriesForUser(currentUserStories);
+      final upcomingStories = <Story>[];
 
-      // Precargar la siguiente historia del mismo usuario
-      if (_currentStoryIndex < stories.length - 1) {
-        final nextStory = stories[_currentStoryIndex + 1];
-        if (nextStory.mediaType == 'image') {
-          precacheImage(CachedNetworkImageProvider(nextStory.mediaUrl), context);
+      // ✅ MEJORADO: Precargar las próximas 3 historias del mismo usuario
+      final remainingStoriesInCurrentUser = stories.sublist(_currentStoryIndex + 1);
+      final nextStoriesFromCurrentUser = remainingStoriesInCurrentUser.take(3).toList();
+
+      for (final story in nextStoriesFromCurrentUser) {
+        upcomingStories.add(story);
+        // ✅ MANTENER COMPATIBILIDAD: Seguir usando precacheImage para imágenes inmediatas
+        if (story.mediaType == 'image') {
+          precacheImage(CachedNetworkImageProvider(story.mediaUrl), context);
           _controller.logStoryPreloading('siguiente historia del mismo usuario');
         }
       }
 
-      // Precargar la primera historia del siguiente usuario
-      if (_currentUserIndex < widget.allUserStories.length - 1) {
-        final nextUserStories = widget.allUserStories[_currentUserIndex + 1];
-        final nextUserStoriesList = _getStoriesForUser(nextUserStories);
-        if (nextUserStoriesList.isNotEmpty) {
-          final firstStoryOfNextUser = nextUserStoriesList[0];
-          if (firstStoryOfNextUser.mediaType == 'image') {
-            precacheImage(CachedNetworkImageProvider(firstStoryOfNextUser.mediaUrl), context);
-            _controller.logStoryPreloading('primera historia del siguiente usuario');
+      // ✅ MEJORADO: Si no hay suficientes historias del usuario actual, precargar historias de próximos usuarios
+      if (upcomingStories.length < 3) {
+        final remainingSlots = 3 - upcomingStories.length;
+
+        for (int userIndex = _currentUserIndex + 1;
+             userIndex < widget.allUserStories.length && upcomingStories.length < 3;
+             userIndex++) {
+
+          final nextUserStories = widget.allUserStories[userIndex];
+          final nextUserStoriesList = _getStoriesForUser(nextUserStories);
+
+          final storiesFromThisUser = nextUserStoriesList.take(remainingSlots - (upcomingStories.length - nextStoriesFromCurrentUser.length)).toList();
+
+          for (final story in storiesFromThisUser) {
+            upcomingStories.add(story);
+            // ✅ MANTENER COMPATIBILIDAD: Seguir usando precacheImage para imágenes de próximos usuarios
+            if (story.mediaType == 'image') {
+              precacheImage(CachedNetworkImageProvider(story.mediaUrl), context);
+              _controller.logStoryPreloading('primera historia de próximo usuario');
+            }
           }
         }
       }
+
+      // Media preloading is now handled automatically by StoryOrchestrator via background streams
+      if (upcomingStories.isNotEmpty) {
+        _controller.logStoryPreloading('${upcomingStories.length} próximas historias detectadas para preload automático');
+      }
+
     } catch (e) {
       _controller.logPreloadError(e);
     }

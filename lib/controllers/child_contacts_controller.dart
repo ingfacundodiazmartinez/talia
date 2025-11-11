@@ -135,7 +135,7 @@ class ChildContactsController {
         ReleaseLogger.warning('Usuario $userId no existe', tag: 'ChildContacts');
         return null;
       }
-      return doc.data() as Map<String, dynamic>?;
+      return doc.data();
     } catch (e) {
       ReleaseLogger.error('Error obteniendo datos de usuario $userId: $e', tag: 'ChildContacts');
       return null;

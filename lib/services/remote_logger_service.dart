@@ -112,7 +112,7 @@ class RemoteLoggerService {
     // Sobrescribir con nuestra versión
     debugPrint = (String? message, {int? wrapWidth}) {
       // Llamar a la original para mantener el comportamiento normal
-      originalDebugPrint?.call(message, wrapWidth: wrapWidth);
+      originalDebugPrint.call(message, wrapWidth: wrapWidth);
 
       // Enviar al backend si debug está habilitado
       if (message != null) {

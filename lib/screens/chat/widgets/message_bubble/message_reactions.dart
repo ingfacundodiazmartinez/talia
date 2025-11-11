@@ -46,8 +46,6 @@ class MessageReactions extends StatelessWidget {
       }
     });
 
-    print('🔄 Reacciones normalizadas: $normalizedReactions');
-
     return Wrap(
       spacing: 4,
       runSpacing: 4,
@@ -63,7 +61,6 @@ class MessageReactions extends StatelessWidget {
           // En grupos: tap para ver quién reaccionó, long press para toggle
           // En chats 1:1: tap para toggle
           onTap: () {
-            print('🎯 [Reaction] Tap detectado en reacción: $reaction');
             if (isGroupChat) {
               // Mostrar quién reaccionó
               showReactionsDetail(

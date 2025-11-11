@@ -18,16 +18,13 @@ class MediaService {
       final String fileName = '${DateTime.now().millisecondsSinceEpoch}_${path.basename(imageFile.path)}';
       final String storagePath = 'chats/$chatId/images/$fileName';
 
-      print('📤 Subiendo imagen a: $storagePath');
 
       final UploadTask uploadTask = _storage.ref(storagePath).putFile(imageFile);
       final TaskSnapshot snapshot = await uploadTask;
       final String downloadUrl = await snapshot.ref.getDownloadURL();
 
-      print('✅ Imagen subida exitosamente');
       return downloadUrl;
     } catch (e) {
-      print('❌ Error subiendo imagen: $e');
       return null;
     }
   }
@@ -42,16 +39,13 @@ class MediaService {
       final String fileName = '${DateTime.now().millisecondsSinceEpoch}_${path.basename(videoFile.path)}';
       final String storagePath = 'chats/$chatId/videos/$fileName';
 
-      print('📤 Subiendo video a: $storagePath');
 
       final UploadTask uploadTask = _storage.ref(storagePath).putFile(videoFile);
       final TaskSnapshot snapshot = await uploadTask;
       final String downloadUrl = await snapshot.ref.getDownloadURL();
 
-      print('✅ Video subido exitosamente');
       return downloadUrl;
     } catch (e) {
-      print('❌ Error subiendo video: $e');
       return null;
     }
   }
@@ -66,16 +60,13 @@ class MediaService {
       final String fileName = '${DateTime.now().millisecondsSinceEpoch}_audio.m4a';
       final String storagePath = 'chats/$chatId/audios/$fileName';
 
-      print('📤 Subiendo audio a: $storagePath');
 
       final UploadTask uploadTask = _storage.ref(storagePath).putFile(audioFile);
       final TaskSnapshot snapshot = await uploadTask;
       final String downloadUrl = await snapshot.ref.getDownloadURL();
 
-      print('✅ Audio subido exitosamente');
       return downloadUrl;
     } catch (e) {
-      print('❌ Error subiendo audio: $e');
       return null;
     }
   }
@@ -98,7 +89,6 @@ class MediaService {
         'extension': file.extension,
       };
     } catch (e) {
-      print('Error seleccionando archivo: $e');
       return null;
     }
   }
@@ -121,7 +111,6 @@ class MediaService {
 
       return downloadUrl;
     } catch (e) {
-      print('Error subiendo archivo: $e');
       return null;
     }
   }
@@ -153,7 +142,6 @@ class MediaService {
         userId: userId,
       );
     } catch (e) {
-      print('Error subiendo imagen: $e');
       return null;
     }
   }
@@ -178,7 +166,6 @@ class MediaService {
         userId: userId,
       );
     } catch (e) {
-      print('Error subiendo video: $e');
       return null;
     }
   }
@@ -197,7 +184,6 @@ class MediaService {
         userId: userId,
       );
     } catch (e) {
-      print('Error subiendo audio: $e');
       return null;
     }
   }

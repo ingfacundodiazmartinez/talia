@@ -4,6 +4,7 @@ import '../../services/two_factor_auth_service.dart';
 import '../../services/two_factor_session_service.dart';
 import '../parent/parent_main_shell.dart';
 import '../child/child_main_shell.dart';
+import '../../utils/release_logger.dart';
 
 /// Pantalla de verificación de código 2FA
 ///
@@ -66,9 +67,6 @@ class _TwoFactorVerificationScreenState
       if (_useRecoveryCode) {
         // Verificar código de recuperación
         isValid = await _twoFactorService.verifyRecoveryCode(userId, code);
-        if (isValid) {
-          print('✅ Código de recuperación válido');
-        }
       } else {
         // Verificar código TOTP
         final secret = await _twoFactorService.get2FASecret(userId);
@@ -76,9 +74,6 @@ class _TwoFactorVerificationScreenState
           throw Exception('No se encontró el secreto 2FA');
         }
         isValid = _twoFactorService.verifyTOTPCode(secret, code);
-        if (isValid) {
-          print('✅ Código TOTP válido');
-        }
       }
 
       if (isValid) {
@@ -121,7 +116,7 @@ class _TwoFactorVerificationScreenState
         );
       }
     } catch (e) {
-      print('❌ Error verificando código 2FA: $e');
+      ReleaseLogger.error('Error verificando código 2FA: $e', tag: 'TwoFactorVerificationScreen');
       setState(() {
         _errorMessage = 'Error al verificar código. Intenta nuevamente.';
       });
@@ -141,7 +136,7 @@ class _TwoFactorVerificationScreenState
         Navigator.of(context).pop();
       }
     } catch (e) {
-      print('❌ Error al cerrar sesión: $e');
+      ReleaseLogger.error('Error al cerrar sesión: $e', tag: 'TwoFactorVerificationScreen');
     }
   }
 

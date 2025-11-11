@@ -64,7 +64,6 @@ class ContactRequestService {
         isAdultOrParent: isAdultOrParent,
       );
     } catch (e) {
-      print('Error obteniendo información de rol de usuario: $e');
       return null;
     }
   }
@@ -88,10 +87,8 @@ class ContactRequestService {
     required String contactName,
     required String contactEmail,
   }) async {
-    print('🚀 Iniciando sendContactRequest para $contactName');
 
     try {
-      print('📞 Llamando a Cloud Function createContactRequest...');
 
       final callable = _functions.httpsCallable('createContactRequest');
       final response = await callable.call({
@@ -103,7 +100,6 @@ class ContactRequestService {
       });
 
       final data = response.data as Map<String, dynamic>;
-      print('✅ Cloud Function ejecutada: ${data['status']}, pending: ${data['pendingCount']}');
 
       return ContactRequestResult(
         success: true,
@@ -111,7 +107,6 @@ class ContactRequestService {
         pendingCount: data['pendingCount'] ?? 0,
       );
     } catch (e) {
-      print('❌ Error en sendContactRequest: $e');
       return ContactRequestResult(
         success: false,
         status: 'error',
@@ -144,7 +139,6 @@ class ContactRequestService {
 
       return null; // Código válido
     } catch (e) {
-      print('❌ Error validando código de contacto: $e');
       return 'Error validando código: $e';
     }
   }

@@ -146,7 +146,6 @@ class DataExportService {
 
     if (!await backupsDir.exists()) {
       await backupsDir.create(recursive: true);
-      print('📁 [CacheExport] Creado directorio de backups: ${backupsDir.path}');
     }
 
     return backupsDir;
@@ -168,7 +167,6 @@ class DataExportService {
       }
 
       onProgress?.call(0.1);
-      print('📦 [CacheExport] Iniciando exportación de cache...');
 
       // 1. Obtener datos del cache
       final messagesBox = await Hive.openBox(_cacheBoxName);
@@ -185,7 +183,6 @@ class DataExportService {
       }
 
       onProgress?.call(0.3);
-      print('📊 [CacheExport] Recopilados ${allData.length} mensajes del cache');
 
       // 2. Crear estructura de exportación con metadata
       final exportData = {
@@ -201,7 +198,6 @@ class DataExportService {
       // 3. Convertir a JSON
       final jsonData = json.encode(exportData);
       final jsonBytes = utf8.encode(jsonData);
-      print('💾 [CacheExport] Tamaño del backup: ${(jsonBytes.length / 1024 / 1024).toStringAsFixed(2)} MB');
 
       onProgress?.call(0.6);
 
@@ -220,11 +216,9 @@ class DataExportService {
       await file.writeAsBytes(encryptedData);
 
       onProgress?.call(1.0);
-      print('✅ [CacheExport] Backup creado exitosamente: $filePath');
 
       return filePath;
     } catch (e) {
-      print('❌ [CacheExport] Error exportando cache: $e');
       return null;
     }
   }
@@ -247,7 +241,6 @@ class DataExportService {
       }
 
       onProgress?.call(0.1);
-      print('📥 [CacheImport] Iniciando importación desde: $filePath');
 
       // 1. Leer archivo
       final file = File(filePath);
@@ -276,15 +269,9 @@ class DataExportService {
       }
 
       onProgress?.call(0.5);
-      print('📊 [CacheImport] Versión del backup: ${importData['version']}');
-      print('📊 [CacheImport] Fecha de exportación: ${importData['exportDate']}');
-      print('📊 [CacheImport] Mensajes a importar: ${importData['messageCount']}');
 
       // 5. Verificar que el backup sea del mismo usuario
       if (importData['userId'] != _currentUserId) {
-        print('⚠️ [CacheImport] Advertencia: El backup es de un usuario diferente');
-        print('   Backup userId: ${importData['userId']}');
-        print('   Current userId: $_currentUserId');
       }
 
       onProgress?.call(0.6);
@@ -308,11 +295,9 @@ class DataExportService {
       }
 
       onProgress?.call(1.0);
-      print('✅ [CacheImport] Importados $importedCount mensajes correctamente');
 
       return true;
     } catch (e) {
-      print('❌ [CacheImport] Error importando cache: $e');
       return false;
     }
   }
@@ -343,10 +328,8 @@ class DataExportService {
         ));
       }
 
-      print('📋 [CacheExport] Encontrados ${backupInfoList.length} backups');
       return backupInfoList;
     } catch (e) {
-      print('❌ [CacheExport] Error listando backups: $e');
       return [];
     }
   }
@@ -361,10 +344,8 @@ class DataExportService {
           subject: 'Talia Backup',
           text: 'Backup encriptado de Talia - Guarda este archivo de forma segura',
         );
-        print('📤 [CacheExport] Compartiendo archivo: $filePath');
       }
     } catch (e) {
-      print('❌ [CacheExport] Error compartiendo archivo: $e');
     }
   }
 
@@ -387,7 +368,6 @@ class DataExportService {
         'lastModified': lastModified.toIso8601String(),
       };
     } catch (e) {
-      print('❌ [CacheExport] Error obteniendo info del backup: $e');
       return null;
     }
   }
@@ -398,12 +378,10 @@ class DataExportService {
       final file = File(filePath);
       if (await file.exists()) {
         await file.delete();
-        print('🗑️ [CacheExport] Backup eliminado: $filePath');
         return true;
       }
       return false;
     } catch (e) {
-      print('❌ [CacheExport] Error eliminando backup: $e');
       return false;
     }
   }
@@ -468,7 +446,6 @@ class DataExportService {
 
       return decrypted;
     } catch (e) {
-      print('❌ [Decrypt] Error desencriptando: $e');
       return null;
     }
   }

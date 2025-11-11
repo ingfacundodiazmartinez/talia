@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:talia/services/remote_logger_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
+
+import '../controllers/reported_messages_controller.dart';
 
 /// Pantalla para ver y gestionar mensajes que el usuario reportó como ofensivos
 ///
@@ -22,8 +22,20 @@ class ReportedMessagesScreen extends StatefulWidget {
 }
 
 class _ReportedMessagesScreenState extends State<ReportedMessagesScreen> {
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final String currentUserId = FirebaseAuth.instance.currentUser?.uid ?? '';
+  late ReportedMessagesController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = ReportedMessagesController(chatId: widget.chatId);
+    _controller.addListener(() => setState(() {}));
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -35,81 +47,30 @@ class _ReportedMessagesScreenState extends State<ReportedMessagesScreen> {
         backgroundColor: colorScheme.surface,
       ),
       body: StreamBuilder<QuerySnapshot>(
-        stream: _getAllReportedMessages(),
+        stream: _controller.watchReportedMessages(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
 
           if (snapshot.hasError) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.error_outline, size: 64, color: colorScheme.error),
-                  const SizedBox(height: 16),
-                  Text(
-                    'Error cargando mensajes',
-                    style: TextStyle(color: colorScheme.onSurface),
-                  ),
-                ],
-              ),
-            );
+            return _buildErrorState(colorScheme, 'Error cargando mensajes reportados');
           }
 
-          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    Icons.check_circle_outline,
-                    size: 64,
-                    color: colorScheme.primary.withOpacity(0.5),
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'No has reportado ningún mensaje',
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: colorScheme.onSurface.withOpacity(0.6),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 32),
-                    child: Text(
-                      'Los mensajes que reportes como ofensivos aparecerán aquí',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: colorScheme.onSurface.withOpacity(0.4),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            );
-          }
+          final docs = snapshot.data?.docs ?? [];
 
-          final reportedMessages = snapshot.data!.docs;
+          if (docs.isEmpty) {
+            return _buildEmptyState(colorScheme);
+          }
 
           return ListView.builder(
             padding: const EdgeInsets.all(16),
-            itemCount: reportedMessages.length,
+            itemCount: docs.length,
             itemBuilder: (context, index) {
-              final doc = reportedMessages[index];
-              final data = doc.data() as Map<String, dynamic>;
+              final doc = docs[index];
+              final reportedMessage = ReportedMessage.fromFirestore(doc);
 
-              return _ReportedMessageCard(
-                documentId: doc.id,
-                chatId: widget.chatId,
-                messageId: data['messageId'] ?? '',
-                messageText: data['messageText'] ?? '',
-                reportedAt: data['reportedAt'] as Timestamp?,
-                senderName: data['senderName'] ?? 'Usuario',
-                onUnblock: () => _unblockMessage(doc.id, widget.chatId, data['messageId'] ?? ''),
-              );
+              return _buildReportedMessageCard(reportedMessage, colorScheme);
             },
           );
         },
@@ -117,141 +78,115 @@ class _ReportedMessagesScreenState extends State<ReportedMessagesScreen> {
     );
   }
 
-  /// Obtener todos los mensajes reportados por el usuario en este chat
-  Stream<QuerySnapshot> _getAllReportedMessages() {
-    return _firestore
-        .collection('chats')
-        .doc(widget.chatId)
-        .collection('reported_messages')
-        .where('reportedBy', isEqualTo: currentUserId)
-        .orderBy('reportedAt', descending: true)
-        .snapshots();
+  Widget _buildErrorState(ColorScheme colorScheme, String message) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.error_outline, size: 64, color: colorScheme.error),
+          const SizedBox(height: 16),
+          Text(
+            'Error',
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+              color: colorScheme.error,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: TextStyle(color: colorScheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: 16),
+          OutlinedButton(
+            onPressed: () => setState(() {}),
+            child: const Text('Reintentar'),
+          ),
+        ],
+      ),
+    );
   }
 
-  /// Desbloquear un mensaje reportado (eliminarlo de la lista de reportados)
-  Future<void> _unblockMessage(String docId, String chatId, String messageId) async {
-    try {
-      final shouldUnblock = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('¿Desbloquear mensaje?'),
-          content: const Text(
-            'Este mensaje ya no será considerado como ofensivo por la IA. '
-            'Podrás volver a reportarlo si cambias de opinión.',
+  Widget _buildEmptyState(ColorScheme colorScheme) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.check_circle_outline, size: 64, color: colorScheme.primary),
+          const SizedBox(height: 16),
+          Text(
+            'Sin mensajes reportados',
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+              color: colorScheme.onSurface,
+            ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancelar'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Desbloquear'),
-            ),
-          ],
-        ),
-      );
-
-      if (shouldUnblock == true) {
-        // Eliminar el documento de reported_messages usando su ID directamente
-        await _firestore
-            .collection('chats')
-            .doc(chatId)
-            .collection('reported_messages')
-            .doc(docId)
-            .delete();
-
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('✅ Mensaje desbloqueado'),
-              duration: Duration(seconds: 2),
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      appLogger.log('❌ Error desbloqueando mensaje: $e', level: 'ERROR');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('❌ Error al desbloquear el mensaje'),
-            duration: Duration(seconds: 2),
+          const SizedBox(height: 8),
+          Text(
+            'No has reportado ningún mensaje en este chat.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: colorScheme.onSurfaceVariant),
           ),
-        );
-      }
-    }
+        ],
+      ),
+    );
   }
-}
 
-/// Card que muestra un mensaje reportado individual
-class _ReportedMessageCard extends StatelessWidget {
-  final String documentId;
-  final String chatId;
-  final String messageId;
-  final String messageText;
-  final Timestamp? reportedAt;
-  final String senderName;
-  final VoidCallback onUnblock;
-
-  const _ReportedMessageCard({
-    required this.documentId,
-    required this.chatId,
-    required this.messageId,
-    required this.messageText,
-    required this.reportedAt,
-    required this.senderName,
-    required this.onUnblock,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
-
-    String formattedDate = 'Fecha desconocida';
-    if (reportedAt != null) {
-      final date = reportedAt!.toDate();
-      formattedDate = DateFormat('d MMM yyyy, HH:mm').format(date);
-    }
-
+  Widget _buildReportedMessageCard(ReportedMessage reportedMessage, ColorScheme colorScheme) {
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
-      elevation: isDarkMode ? 2 : 1,
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header: sender y fecha
+            // Header con información del remitente y fecha
             Row(
               children: [
-                Icon(
-                  Icons.report,
-                  size: 20,
-                  color: colorScheme.error,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
+                CircleAvatar(
+                  radius: 16,
+                  backgroundColor: colorScheme.primary,
                   child: Text(
-                    'Mensaje de $senderName',
+                    reportedMessage.senderName.isNotEmpty
+                        ? reportedMessage.senderName[0].toUpperCase()
+                        : 'U',
                     style: TextStyle(
+                      color: colorScheme.onPrimary,
+                      fontSize: 12,
                       fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                      color: colorScheme.onSurface,
                     ),
                   ),
                 ),
-                Text(
-                  formattedDate,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: colorScheme.onSurface.withOpacity(0.6),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        reportedMessage.senderName,
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      Text(
+                        'Reportado el ${DateFormat('dd/MM/yyyy HH:mm').format(reportedMessage.reportedAt)}',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
                   ),
+                ),
+                Icon(
+                  Icons.flag,
+                  color: colorScheme.error,
+                  size: 20,
                 ),
               ],
             ),
-            const SizedBox(height: 12),
+
+            const SizedBox(height: 16),
 
             // Contenido del mensaje
             Container(
@@ -265,26 +200,56 @@ class _ReportedMessageCard extends StatelessWidget {
                   width: 1,
                 ),
               ),
-              child: Text(
-                messageText.isEmpty ? '[Sin texto]' : messageText,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: colorScheme.onErrorContainer,
-                  fontStyle: messageText.isEmpty ? FontStyle.italic : FontStyle.normal,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Mensaje reportado:',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onErrorContainer,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  _buildMessageContent(reportedMessage, colorScheme),
+                ],
               ),
             ),
+
             const SizedBox(height: 12),
 
-            // Botón de desbloquear
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton.icon(
-                onPressed: onUnblock,
-                icon: const Icon(Icons.lock_open, size: 18),
-                label: const Text('Desbloquear'),
-                style: TextButton.styleFrom(
+            // Razón del reporte
+            if (reportedMessage.reportReason.isNotEmpty) ...[
+              Text(
+                'Motivo: ${reportedMessage.reportReason}',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+
+            // Botón para desbloquear
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _controller.isLoading
+                    ? null
+                    : () => _unblockMessage(reportedMessage),
+                icon: _controller.isLoading
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.restore),
+                label: Text(
+                  _controller.isLoading ? 'Desbloqueando...' : 'Desbloquear mensaje',
+                ),
+                style: OutlinedButton.styleFrom(
                   foregroundColor: colorScheme.primary,
+                  side: BorderSide(color: colorScheme.primary),
                 ),
               ),
             ),
@@ -292,5 +257,105 @@ class _ReportedMessageCard extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  Widget _buildMessageContent(ReportedMessage reportedMessage, ColorScheme colorScheme) {
+    switch (reportedMessage.messageType) {
+      case 'text':
+        return Text(
+          reportedMessage.messageContent,
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+            color: colorScheme.onErrorContainer,
+          ),
+        );
+      case 'image':
+        return Row(
+          children: [
+            Icon(
+              Icons.image,
+              color: colorScheme.onErrorContainer,
+              size: 16,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'Imagen',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: colorScheme.onErrorContainer,
+              ),
+            ),
+          ],
+        );
+      case 'audio':
+        return Row(
+          children: [
+            Icon(
+              Icons.audiotrack,
+              color: colorScheme.onErrorContainer,
+              size: 16,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'Audio',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: colorScheme.onErrorContainer,
+              ),
+            ),
+          ],
+        );
+      case 'video':
+        return Row(
+          children: [
+            Icon(
+              Icons.videocam,
+              color: colorScheme.onErrorContainer,
+              size: 16,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'Video',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: colorScheme.onErrorContainer,
+              ),
+            ),
+          ],
+        );
+      default:
+        return Text(
+          'Archivo multimedia',
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+            color: colorScheme.onErrorContainer,
+          ),
+        );
+    }
+  }
+
+  Future<void> _unblockMessage(ReportedMessage reportedMessage) async {
+    try {
+      await _controller.unblockMessage(
+        reportedMessage.id,
+        widget.chatId,
+        reportedMessage.messageId,
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Mensaje desbloqueado correctamente'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al desbloquear: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
   }
 }

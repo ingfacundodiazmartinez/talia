@@ -95,7 +95,7 @@ const storyApproval = require("./story-approval");
 // ═══════════════════════════════════════════════════════════════
 
 // Notificaciones
-exports.sendNotificationOnCreate = notifications.sendNotificationOnCreate;
+// exports.sendNotificationOnCreate = notifications.sendNotificationOnCreate; // ❌ DESACTIVADA - causa duplicación
 exports.sendInstantPushNotification = notifications.sendInstantPushNotification;
 
 // Videollamadas

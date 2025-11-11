@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
+import '../../../utils/release_logger.dart';
 import '../../../link_parent_child.dart';
 import '../../common/child_settings_screen.dart';
 import '../../common/help_support_screen.dart';
@@ -280,15 +281,13 @@ class _ChildProfileScreenState extends State<ChildProfileScreen> {
       // El ImageService maneja la selección y LUEGO procesa
       // NO mostrar loading todavía - esperar a que el usuario seleccione
 
-      final String? downloadUrl = await _controller.pickAndUploadImage(
+      await _controller.pickAndUploadImage(
         source,
         scaffoldContext,
       );
 
       // Si llegamos aquí, la imagen se procesó exitosamente
       // El diálogo de loading se maneja dentro de ImageService
-
-      // Image uploaded successfully
     } catch (e) {
       // Si hay error, mostrar mensaje
       final errorMessage = ChildProfileController.getErrorMessage(e, source);
@@ -370,14 +369,12 @@ class _ChildProfileScreenState extends State<ChildProfileScreen> {
 
     if (confirm == true) {
       try {
-        print('🚪 Cerrando sesión...');
         await _controller.logout();
-        print('✅ Sesión cerrada - AuthWrapper detectará el cambio automáticamente');
 
         // NO hacer navegación manual - AuthWrapper detectará el signOut
         // y mostrará AuthScreen automáticamente
       } catch (e) {
-        print('❌ Error cerrando sesión: $e');
+        ReleaseLogger.error('Error cerrando sesión: $e', tag: 'ChildProfileScreen');
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(

@@ -56,7 +56,6 @@ class TypingIndicatorService {
             .delete();
       }
     } catch (e) {
-      print('Error actualizando indicador de escritura: $e');
     }
   }
 

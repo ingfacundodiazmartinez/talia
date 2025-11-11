@@ -31,7 +31,6 @@ class StoryCleanupService {
   // Limpiar historias expiradas
   Future<void> _cleanupExpiredStories() async {
     try {
-      print('🧹 Iniciando limpieza de historias expiradas...');
 
       final now = DateTime.now();
       final expiredStoriesQuery = await _firestore
@@ -40,11 +39,9 @@ class StoryCleanupService {
           .get();
 
       if (expiredStoriesQuery.docs.isEmpty) {
-        print('✅ No hay historias expiradas para limpiar');
         return;
       }
 
-      print('🗑️ Encontradas ${expiredStoriesQuery.docs.length} historias expiradas');
 
       int deletedFiles = 0;
       int deletedDocs = 0;
@@ -61,7 +58,6 @@ class StoryCleanupService {
               await storageRef.delete();
               deletedFiles++;
             } catch (e) {
-              print('⚠️ Error eliminando archivo de Storage para historia ${storyDoc.id}: $e');
             }
           }
 
@@ -70,21 +66,17 @@ class StoryCleanupService {
           deletedDocs++;
 
         } catch (e) {
-          print('❌ Error eliminando historia ${storyDoc.id}: $e');
         }
       }
 
-      print('✅ Limpieza completada: $deletedDocs documentos y $deletedFiles archivos eliminados');
 
     } catch (e) {
-      print('❌ Error en limpieza automática de historias: $e');
     }
   }
 
   // Limpiar historias de un usuario específico (cuando se elimina cuenta)
   Future<void> cleanupUserStories(String userId) async {
     try {
-      print('🧹 Limpiando historias del usuario: $userId');
 
       final userStoriesQuery = await _firestore
           .collection('stories')
@@ -102,7 +94,6 @@ class StoryCleanupService {
               final storageRef = _storage.refFromURL(mediaUrl);
               await storageRef.delete();
             } catch (e) {
-              print('Error eliminando archivo de Storage: $e');
             }
           }
 
@@ -110,14 +101,11 @@ class StoryCleanupService {
           await storyDoc.reference.delete();
 
         } catch (e) {
-          print('Error eliminando historia ${storyDoc.id}: $e');
         }
       }
 
-      print('✅ Historias del usuario $userId eliminadas');
 
     } catch (e) {
-      print('❌ Error limpiando historias del usuario $userId: $e');
     }
   }
 
@@ -152,7 +140,6 @@ class StoryCleanupService {
       };
 
     } catch (e) {
-      print('Error obteniendo estadísticas de historias: $e');
       return {
         'active': 0,
         'expired': 0,

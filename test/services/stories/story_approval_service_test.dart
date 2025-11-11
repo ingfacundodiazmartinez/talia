@@ -1,8 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import '../../../lib/services/stories/services/story_approval_service.dart';
-import '../../../lib/services/stories/repositories/story_repository.dart';
-import '../../../lib/services/stories/managers/story_cache_manager.dart';
+import 'package:talia/services/stories/services/story_approval_service.dart';
+import 'package:talia/services/stories/repositories/story_repository.dart';
+import 'package:talia/services/stories/managers/story_cache_manager.dart';
 
 import 'test_firebase_setup.dart';
 

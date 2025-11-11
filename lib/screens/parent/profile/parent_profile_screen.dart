@@ -308,7 +308,7 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
           trailing: Switch(
             value: false,
             onChanged: null, // Disabled while loading
-            activeColor: colorScheme.primary,
+            activeThumbColor: colorScheme.primary,
           ),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
@@ -354,7 +354,7 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
             trailing: Switch(
               value: autoApprovalEnabled,
               onChanged: _toggleAutoApproval,
-              activeColor: colorScheme.primary,
+              activeThumbColor: colorScheme.primary,
             ),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),
@@ -393,7 +393,7 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
         trailing: Switch(
           value: themeService.isDarkMode,
           onChanged: _toggleTheme,
-          activeColor: colorScheme.primary,
+          activeThumbColor: colorScheme.primary,
         ),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12),

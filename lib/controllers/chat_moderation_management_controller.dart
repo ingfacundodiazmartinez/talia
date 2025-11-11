@@ -40,7 +40,7 @@ class ChatModerationManagementController {
           .get();
 
       if (userDoc.exists) {
-        final userData = userDoc.data() as Map<String, dynamic>?;
+        final userData = userDoc.data();
         final linkedChildrenIds = List<String>.from(userData?['linkedChildrenIds'] ?? []);
 
         ReleaseLogger.log('Encontrados ${linkedChildrenIds.length} hijos vinculados', tag: 'ChatModeration');

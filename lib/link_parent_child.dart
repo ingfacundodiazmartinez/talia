@@ -8,6 +8,7 @@ import 'dart:io';
 import 'dart:math';
 import 'services/user_role_service.dart';
 import 'widgets/location_permission_dialog.dart';
+import 'utils/release_logger.dart';
 
 // ================ PANTALLA PARA PADRES ================
 class GenerateLinkCodeScreen extends StatefulWidget {
@@ -54,7 +55,7 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
         }
       }
     } catch (e) {
-      print('Error checking existing code: $e');
+      ReleaseLogger.error('Error checking existing code: $e', tag: 'LinkParentChild');
     }
   }
 
@@ -439,7 +440,7 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
           .get();
 
       if (existingLink.docs.isNotEmpty) {
-        print('⚠️ Ya existe un vínculo activo entre este padre e hijo');
+        ReleaseLogger.log('Ya existe un vínculo activo entre este padre e hijo', tag: 'LinkParentChild');
         Navigator.of(context).pop(false);
         return;
       }
@@ -450,7 +451,7 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
 
       if (existingParents.isNotEmpty && !existingParents.contains(parentId)) {
         // Ya tiene un padre - requiere aprobación del primer padre
-        print('⚠️ El niño ya tiene un padre. Creando solicitud de aprobación...');
+        ReleaseLogger.log('El niño ya tiene un padre. Creando solicitud de aprobación...', tag: 'LinkParentChild');
 
         await _createParentApprovalRequest(
           childId: childId,
@@ -463,7 +464,7 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
         return;
       }
 
-      print('🔗 Vinculando hijo $childId con padre $parentId');
+      ReleaseLogger.log('Vinculando hijo $childId con padre $parentId', tag: 'LinkParentChild');
 
       // 🔒 SEGURIDAD: Usar Cloud Function para crear vínculo
       // Las Firestore rules ahora bloquean la escritura directa
@@ -476,14 +477,12 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
         });
 
         if (result.data['success'] == true) {
-          print('✅ Vínculo creado por Cloud Function');
-          print('   Padre: ${result.data['parentName']}');
-          print('   Hijo: ${result.data['childName']}');
+          ReleaseLogger.log('Vínculo creado por Cloud Function - Padre: ${result.data['parentName']}, Hijo: ${result.data['childName']}', tag: 'LinkParentChild');
         } else {
           throw Exception('Error en Cloud Function: ${result.data['message'] ?? 'Unknown error'}');
         }
       } catch (e) {
-        print('❌ Error al llamar Cloud Function: $e');
+        ReleaseLogger.error('Error al llamar Cloud Function: $e', tag: 'LinkParentChild');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('❌ Error al crear vínculo: $e'),
@@ -530,8 +529,12 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
       }
       */
 
+      // NOTA: Código de notificación de contactos migrados deshabilitado
+      // La colección 'whitelist' fue eliminada del sistema
+      // Se mantiene el código comentado para referencia histórica
+      /*
       int migratedCount = 0;
-      if (false && migratedCount > 0) {
+      if (migratedCount > 0) {
         // Notificar al padre sobre los contactos migrados
         await _firestore.collection('notifications').add({
           'userId': parentId,
@@ -546,8 +549,9 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
             'contactCount': migratedCount,
           },
         });
-        print('✅ Notificación enviada al padre sobre $migratedCount contactos migrados');
+        ReleaseLogger.log('Notificación enviada al padre sobre contactos migrados', tag: 'LinkParentChild');
       }
+      */
 
       // Actualizar rol del hijo (ahora es child porque tiene padre)
       final userDoc = await _firestore.collection('users').doc(childId).get();
@@ -580,12 +584,12 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
         'role': newRole,
         'linkedAt': FieldValue.serverTimestamp(),
       });
-      print('✅ Rol del hijo actualizado a: $newRole');
+      ReleaseLogger.log('Rol del hijo actualizado a: $newRole', tag: 'LinkParentChild');
 
       // Actualizar rol del padre (de adult a parent si corresponde)
       final parentDoc = await _firestore.collection('users').doc(parentId).get();
       if (parentDoc.exists) {
-        final parentData = parentDoc.data() as Map<String, dynamic>?;
+        final parentData = parentDoc.data();
         final parentRole = parentData?['role'] ?? 'adult';
 
         // Si el padre es 'adult', cambiarlo a 'parent'
@@ -594,7 +598,7 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
             'role': 'parent',
             'updatedAt': FieldValue.serverTimestamp(),
           });
-          print('✅ Rol del padre actualizado de adult a parent');
+          ReleaseLogger.log('Rol del padre actualizado de adult a parent', tag: 'LinkParentChild');
         }
       }
 
@@ -613,7 +617,7 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
         final locationAlwaysStatus = await Permission.locationAlways.status;
 
         if (!locationAlwaysStatus.isGranted) {
-          print('📍 Solicitando permisos de ubicación para el niño (permisos no concedidos)');
+          ReleaseLogger.log('Solicitando permisos de ubicación para el niño (permisos no concedidos)', tag: 'LinkParentChild');
 
           // En iOS: solicitar directamente sin mostrar diálogo personalizado
           // En Android: mostrar diálogo explicativo primero
@@ -626,7 +630,7 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
             await LocationPermissionDialog.show(context);
           }
         } else {
-          print('✅ Permisos de ubicación ya concedidos, omitiendo solicitud');
+          ReleaseLogger.log('Permisos de ubicación ya concedidos, omitiendo solicitud', tag: 'LinkParentChild');
         }
       }
 
@@ -685,9 +689,9 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
         },
       });
 
-      print('✅ Solicitud de aprobación creada y notificación enviada');
+      ReleaseLogger.log('Solicitud de aprobación creada y notificación enviada', tag: 'LinkParentChild');
     } catch (e) {
-      print('❌ Error creando solicitud de aprobación: $e');
+      ReleaseLogger.error('Error creando solicitud de aprobación: $e', tag: 'LinkParentChild');
       rethrow;
     }
   }

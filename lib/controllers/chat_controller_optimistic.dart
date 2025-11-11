@@ -11,7 +11,6 @@ import '../notification_service.dart';
 import '../services/typing_indicator_service.dart';
 import '../utils/release_logger.dart';
 import '../services/sound_service.dart';
-import '../services/user_profile_cache_service.dart';
 import '../services/block_service.dart';
 import '../services/chat/message_sending_service.dart';
 import '../services/chat/message_pagination_service.dart';
@@ -299,6 +298,10 @@ class ChatControllerOptimistic extends ChangeNotifier {
             );
 
             _handleRealtimeMessage(newMessage, change.type);
+          } else if (change.type == DocumentChangeType.removed) {
+            // ✅ FIXED: Handle message deletion sync
+            final messageId = change.doc.id;
+            _handleMessageDeleted(messageId);
           }
         }
       },
@@ -770,6 +773,24 @@ class ChatControllerOptimistic extends ChangeNotifier {
     }
 
     return success;
+  }
+
+  /// Handle message deletion from real-time listener
+  /// This is called when another user deletes a message from Firestore
+  void _handleMessageDeleted(String messageId) {
+    try {
+      ReleaseLogger.log('🗑️ [Sync] Mensaje eliminado remotamente: $messageId', tag: 'ChatController');
+
+      // Remove from local state and cache (handled internally by _stateService)
+      _stateService.removeMessage(messageId);
+
+      // Notify UI to update
+      notifyListeners();
+
+      ReleaseLogger.log('✅ [Sync] Mensaje eliminado de UI y cache local', tag: 'ChatController');
+    } catch (e) {
+      ReleaseLogger.error('❌ [Sync] Error eliminando mensaje $messageId: $e', tag: 'ChatController');
+    }
   }
 
   /// Limpiar chat

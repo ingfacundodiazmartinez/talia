@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:video_player/video_player.dart';
 import '../../services/story_service_refactored.dart';
 
@@ -85,7 +84,7 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
           await _videoController!.dispose();
           _videoController = null;
         } catch (e) {
-          print('❌ Error limpiando video controller: $e');
+          // Error cleaning up video controller - silent cleanup
         }
       }
 

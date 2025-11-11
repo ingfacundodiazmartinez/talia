@@ -76,7 +76,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             value: _themeService.isDarkMode,
-            activeColor: colorScheme.primary,
+            activeThumbColor: colorScheme.primary,
             onChanged: (bool value) async {
               await _themeService.toggleTheme();
             },

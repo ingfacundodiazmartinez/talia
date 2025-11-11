@@ -148,12 +148,21 @@ service cloud.firestore {
         return changedKeys.hasAny(['moderationEnabled', 'moderationParentId', 'moderationEnabledAt', 'moderationLevel']);
       }
 
+      // 🔒 FUNCIÓN DE SEGURIDAD: Verificar si se están actualizando campos críticos que solo Cloud Functions pueden modificar
+      function isUpdatingCriticalChatFields() {
+        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+        // CAMPOS CRÍTICOS que solo Cloud Functions pueden actualizar para prevenir bypass de filtros
+        let criticalFields = ['lastMessage', 'lastMessageTime', 'lastMessageSender'];
+        return changedKeys.hasAny(criticalFields);
+      }
+
       // Permitir actualizar si:
-      // 1. El usuario es participante Y NO está tocando campos de moderación, O
+      // 1. El usuario es participante Y NO está tocando campos críticos Y NO está tocando campos de moderación, O
       // 2. El usuario es padre de uno de los participantes Y solo está actualizando campos de moderación, O
       // 3. El usuario es participante Y solo está actualizando sus propios campos de archivado, O
       // 4. El usuario es participante Y solo está actualizando su propio contador de no leídos
-      allow update: if request.auth != null && (
+      // 🔒 NUEVO: Prohibir actualización de lastMessage, lastMessageTime, lastMessageSender desde frontend
+      allow update: if request.auth != null && !isUpdatingCriticalChatFields() && (
         (request.auth.uid in resource.data.participants && !isUpdatingModerationFields()) ||
         (isParentOfParticipant() &&
          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['moderationEnabled', 'moderationParentId', 'moderationEnabledAt', 'moderationLevel', 'updatedAt', 'participants'])) ||
@@ -566,10 +575,18 @@ service cloud.firestore {
       allow create: if request.auth != null &&
         request.auth.uid in request.resource.data.members;
 
+      // 🔒 FUNCIÓN DE SEGURIDAD: Verificar si se están actualizando campos críticos que solo Cloud Functions pueden modificar
+      function isUpdatingCriticalGroupFields() {
+        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+        // CAMPOS CRÍTICOS que solo Cloud Functions pueden actualizar para prevenir bypass de filtros
+        let criticalFields = ['lastMessage', 'lastMessageTime', 'lastMessageSender'];
+        return changedKeys.hasAny(criticalFields);
+      }
+
       // Permitir actualizar si:
-      // 1. Eres miembro actual (estás en members nuevo), O
-      // 2. Eras miembro antes (para permitir salir del grupo)
-      allow update: if request.auth != null && (
+      // 1. NO está tocando campos críticos Y (eres miembro actual O eras miembro antes)
+      // 🔒 NUEVO: Prohibir actualización de lastMessage, lastMessageTime, lastMessageSender desde frontend
+      allow update: if request.auth != null && !isUpdatingCriticalGroupFields() && (
         request.auth.uid in request.resource.data.members ||
         request.auth.uid in resource.data.members
       );
@@ -708,23 +725,12 @@ service cloud.firestore {
                exists(/databases/$(database)/documents/parent_children/$(callerId + '_' + request.auth.uid));
       }
 
-      // Función auxiliar para verificar si el usuario es participante de una llamada grupal
-      // Verifica manualmente los primeros 20 índices del array de participantes
+      // ✅ FUNCIÓN CORREGIDA: Usar participantIds en lugar de verificación manual
+      // Este array contiene solo UIDs para queries eficientes con array-contains
       function isGroupCallParticipant() {
-        let participants = resource.data.participants;
         return resource.data.isGroupCall == true &&
-               participants != null &&
-               participants.size() > 0 &&
-               (participants.size() > 0 && participants[0].userId == request.auth.uid ||
-                participants.size() > 1 && participants[1].userId == request.auth.uid ||
-                participants.size() > 2 && participants[2].userId == request.auth.uid ||
-                participants.size() > 3 && participants[3].userId == request.auth.uid ||
-                participants.size() > 4 && participants[4].userId == request.auth.uid ||
-                participants.size() > 5 && participants[5].userId == request.auth.uid ||
-                participants.size() > 6 && participants[6].userId == request.auth.uid ||
-                participants.size() > 7 && participants[7].userId == request.auth.uid ||
-                participants.size() > 8 && participants[8].userId == request.auth.uid ||
-                participants.size() > 9 && participants[9].userId == request.auth.uid);
+               resource.data.participantIds != null &&
+               request.auth.uid in resource.data.participantIds;
       }
 
       // Función auxiliar para verificar si el usuario está en el array participantIds

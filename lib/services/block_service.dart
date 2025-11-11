@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'block_status_cache_service.dart';
+import 'stories/story_orchestrator.dart';
 
 class BlockService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -24,8 +25,9 @@ class BlockService {
       // Notificar al cache service para triggear el refresh automático
       _blockStatusCache.updateBlockStatus(contactId, true);
 
-      print('🚫 Usuario $contactId bloqueado exitosamente');
-      print('📡 Evento de bloqueo emitido para actualización automática de historias');
+      // Notificar al servicio de preload para invalidar cache
+      await _notifyStoryPreloadService();
+
     } catch (e) {
       throw Exception('Error bloqueando contacto: $e');
     }
@@ -52,8 +54,9 @@ class BlockService {
       // Notificar al cache service para triggear el refresh automático
       _blockStatusCache.updateBlockStatus(contactId, false);
 
-      print('✅ Usuario $contactId desbloqueado exitosamente');
-      print('📡 Evento de desbloqueo emitido para actualización automática de historias');
+      // Notificar al servicio de preload para invalidar cache
+      await _notifyStoryPreloadService();
+
     } catch (e) {
       throw Exception('Error desbloqueando contacto: $e');
     }
@@ -74,7 +77,6 @@ class BlockService {
 
       return blockQuery.docs.isNotEmpty;
     } catch (e) {
-      print('Error verificando bloqueo: $e');
       return false;
     }
   }
@@ -108,7 +110,6 @@ class BlockService {
 
       return blockQuery.docs.isNotEmpty;
     } catch (e) {
-      print('Error verificando si fue bloqueado: $e');
       return false;
     }
   }
@@ -158,7 +159,6 @@ class BlockService {
           .map((doc) => doc.data()['blockedUserId'] as String)
           .toList();
     } catch (e) {
-      print('Error obteniendo contactos bloqueados: $e');
       return [];
     }
   }
@@ -174,8 +174,18 @@ class BlockService {
 
       return blocked && blockedBy;
     } catch (e) {
-      print('Error verificando bloqueo mutuo: $e');
       return false;
+    }
+  }
+
+  // Helper privado para notificar al sistema de historias sobre cambios de bloqueo
+  Future<void> _notifyStoryPreloadService() async {
+    try {
+      // Forzar refresh del cache de historias cuando cambian las relaciones de bloqueo
+      StoryOrchestrator().forceRefreshCache();
+    } catch (e) {
+      // Fallar silenciosamente - no interrumpir el bloqueo/desbloqueo
+      // por problemas con el sistema de historias
     }
   }
 }

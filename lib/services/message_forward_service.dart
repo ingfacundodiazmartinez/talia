@@ -67,13 +67,11 @@ class MessageForwardService {
         }
       }
 
-      print('✅ ${originalMessages.length} mensajes reenviados a $forwardedCount chats');
       return {
         'success': true,
         'forwardedCount': forwardedCount,
       };
     } catch (e) {
-      print('❌ Error reenviando mensajes: $e');
       return {
         'success': false,
         'forwardedCount': 0,
@@ -138,13 +136,11 @@ class MessageForwardService {
         }
       }
 
-      print('✅ Mensaje reenviado a $forwardedCount chats');
       return {
         'success': true,
         'forwardedCount': forwardedCount,
       };
     } catch (e) {
-      print('❌ Error reenviando mensaje: $e');
       return {
         'success': false,
         'forwardedCount': 0,
@@ -161,8 +157,6 @@ class MessageForwardService {
     String? originalChatId,
     String? originalContactName,
   }) async {
-    print('📤 FORWARD TO CHAT: originalContactName recibido = "$originalContactName"');
-
     // Crear nuevo mensaje basado en el original
     final newMessage = {
       'senderId': senderId,
@@ -180,9 +174,6 @@ class MessageForwardService {
     }
     if (originalContactName != null) {
       newMessage['originalContactName'] = originalContactName;
-      print('✅ FORWARD TO CHAT: Guardando originalContactName = "$originalContactName" en Firestore');
-    } else {
-      print('⚠️ FORWARD TO CHAT: originalContactName es null, NO se guardará en Firestore!');
     }
 
     // Copiar campos opcionales si existen
@@ -209,14 +200,9 @@ class MessageForwardService {
         .collection('messages')
         .add(newMessage);
 
-    // Actualizar el último mensaje del chat
-    await _firestore.collection('chats').doc(chatId).update({
-      'lastMessage': originalMessage.text,
-      'lastMessageTimestamp': FieldValue.serverTimestamp(),
-      'lastMessageSenderId': senderId,
-    });
-
-    print('✅ Mensaje reenviado a chat: $chatId');
+    // 🔒 SEGURIDAD: NO actualizar lastMessage desde frontend para evitar bypass de filtros
+    // CRÍTICO: Reenviar mensajes podría contener contenido ofensivo
+    // Solo Cloud Functions deben actualizar lastMessage después de validación
   }
 
   /// Reenvía un mensaje a un chat grupal
@@ -227,8 +213,6 @@ class MessageForwardService {
     String? originalChatId,
     String? originalContactName,
   }) async {
-    print('📤 FORWARD TO GROUP: originalContactName recibido = "$originalContactName"');
-
     // Crear nuevo mensaje basado en el original
     final newMessage = {
       'senderId': senderId,
@@ -246,9 +230,6 @@ class MessageForwardService {
     }
     if (originalContactName != null) {
       newMessage['originalContactName'] = originalContactName;
-      print('✅ FORWARD TO GROUP: Guardando originalContactName = "$originalContactName" en Firestore');
-    } else {
-      print('⚠️ FORWARD TO GROUP: originalContactName es null, NO se guardará en Firestore!');
     }
 
     // Copiar campos opcionales si existen
@@ -281,7 +262,5 @@ class MessageForwardService {
       'lastMessageTimestamp': FieldValue.serverTimestamp(),
       'lastMessageSenderId': senderId,
     });
-
-    print('✅ Mensaje reenviado a grupo: $groupId');
   }
 }

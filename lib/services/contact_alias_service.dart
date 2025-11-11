@@ -14,7 +14,7 @@ class ContactAliasService {
       final userDoc = await _firestore.collection('users').doc(currentUser.uid).get();
       if (!userDoc.exists) return realName;
 
-      final userData = userDoc.data() as Map<String, dynamic>?;
+      final userData = userDoc.data();
       if (userData == null) return realName;
 
       final aliases = userData['contactAliases'] as Map<String, dynamic>?;
@@ -24,7 +24,6 @@ class ContactAliasService {
 
       return realName;
     } catch (e) {
-      print('⚠️ Error obteniendo alias para contacto $contactId: $e');
       return realName;
     }
   }
@@ -41,7 +40,7 @@ class ContactAliasService {
         .map((snapshot) {
       if (!snapshot.exists) return realName;
 
-      final userData = snapshot.data() as Map<String, dynamic>?;
+      final userData = snapshot.data();
       if (userData == null) return realName;
 
       final aliases = userData['contactAliases'] as Map<String, dynamic>?;
@@ -64,10 +63,7 @@ class ContactAliasService {
           contactId: alias,
         },
       }, SetOptions(merge: true));
-
-      print('✅ Alias "$alias" guardado para contacto $contactId');
     } catch (e) {
-      print('❌ Error guardando alias: $e');
       rethrow;
     }
   }
@@ -81,10 +77,7 @@ class ContactAliasService {
       await _firestore.collection('users').doc(currentUser.uid).update({
         'contactAliases.$contactId': FieldValue.delete(),
       });
-
-      print('✅ Alias eliminado para contacto $contactId');
     } catch (e) {
-      print('❌ Error eliminando alias: $e');
       rethrow;
     }
   }

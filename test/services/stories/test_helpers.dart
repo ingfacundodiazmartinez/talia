@@ -1,7 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
 import 'package:firebase_auth_mocks/firebase_auth_mocks.dart';
-import '../../../lib/models/story.dart';
+import 'package:talia/models/story.dart';
 import 'test_firebase_setup.dart';
 
 /// Helpers centralizados para tests de stories

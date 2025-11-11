@@ -26,16 +26,8 @@ class PerformanceService {
       await _performance.setPerformanceCollectionEnabled(!kDebugMode);
 
       _initialized = true;
-
-      if (kDebugMode) {
-        print('⚡ [Performance] Inicializado (deshabilitado en debug)');
-      } else {
-        print('⚡ [Performance] Inicializado y habilitado');
-      }
     } catch (e) {
-      if (kDebugMode) {
-        print('❌ [Performance] Error inicializando: $e');
-      }
+      // Silently handle error
     }
   }
 
@@ -49,23 +41,14 @@ class PerformanceService {
 
     try {
       if (_activeTraces.containsKey(traceName)) {
-        if (kDebugMode) {
-          print('⚠️ [Performance] Trace ya existe: $traceName');
-        }
         return;
       }
 
-      final trace = await _performance.newTrace(traceName);
+      final trace = _performance.newTrace(traceName);
       await trace.start();
       _activeTraces[traceName] = trace;
-
-      if (kDebugMode) {
-        print('▶️ [Performance] Trace iniciado: $traceName');
-      }
     } catch (e) {
-      if (kDebugMode) {
-        print('❌ [Performance] Error iniciando trace $traceName: $e');
-      }
+      // Silently handle error
     }
   }
 
@@ -76,22 +59,13 @@ class PerformanceService {
     try {
       final trace = _activeTraces[traceName];
       if (trace == null) {
-        if (kDebugMode) {
-          print('⚠️ [Performance] Trace no encontrado: $traceName');
-        }
         return;
       }
 
       await trace.stop();
       _activeTraces.remove(traceName);
-
-      if (kDebugMode) {
-        print('⏹️ [Performance] Trace detenido: $traceName');
-      }
     } catch (e) {
-      if (kDebugMode) {
-        print('❌ [Performance] Error deteniendo trace $traceName: $e');
-      }
+      // Silently handle error
     }
   }
 
@@ -105,9 +79,7 @@ class PerformanceService {
         trace.putAttribute(attribute, value);
       }
     } catch (e) {
-      if (kDebugMode) {
-        print('❌ [Performance] Error agregando atributo: $e');
-      }
+      // Silently handle error
     }
   }
 
@@ -121,9 +93,7 @@ class PerformanceService {
         trace.incrementMetric(metricName, value);
       }
     } catch (e) {
-      if (kDebugMode) {
-        print('❌ [Performance] Error incrementando métrica: $e');
-      }
+      // Silently handle error
     }
   }
 
@@ -203,9 +173,6 @@ class PerformanceService {
     try {
       return _performance.newHttpMetric(url, method);
     } catch (e) {
-      if (kDebugMode) {
-        print('❌ [Performance] Error creando HttpMetric: $e');
-      }
       return null;
     }
   }
@@ -249,21 +216,9 @@ class PerformanceService {
       return function();
     }
 
-    // Para funciones síncronas, usar stopwatch manual
-    final stopwatch = Stopwatch()..start();
-
     try {
-      final result = function();
-      stopwatch.stop();
-
-      // Log el tiempo si es necesario
-      if (kDebugMode) {
-        print('⏱️ [Performance] $traceName: ${stopwatch.elapsedMilliseconds}ms');
-      }
-
-      return result;
+      return function();
     } catch (e) {
-      stopwatch.stop();
       rethrow;
     }
   }

@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Servicio para gestionar configuraciones de accesibilidad
@@ -49,11 +48,6 @@ class AccessibilityService {
     _boldText = _prefs!.getBool(_keyBoldText) ?? false;
 
     _initialized = true;
-    print('♿ [Accessibility] Servicio inicializado');
-    print('   - Text scale: $_textScale');
-    print('   - High contrast: $_highContrast');
-    print('   - Reduce animations: $_reduceAnimations');
-    print('   - Bold text: $_boldText');
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -64,28 +58,24 @@ class AccessibilityService {
     if (!_initialized) return;
     _textScale = scale.clamp(0.8, 2.0); // Límite entre 80% y 200%
     await _prefs!.setDouble(_keyTextScale, _textScale);
-    print('♿ [Accessibility] Text scale: $_textScale');
   }
 
   Future<void> setHighContrast(bool enabled) async {
     if (!_initialized) return;
     _highContrast = enabled;
     await _prefs!.setBool(_keyHighContrast, enabled);
-    print('♿ [Accessibility] High contrast: $enabled');
   }
 
   Future<void> setReduceAnimations(bool enabled) async {
     if (!_initialized) return;
     _reduceAnimations = enabled;
     await _prefs!.setBool(_keyReduceAnimations, enabled);
-    print('♿ [Accessibility] Reduce animations: $enabled');
   }
 
   Future<void> setBoldText(bool enabled) async {
     if (!_initialized) return;
     _boldText = enabled;
     await _prefs!.setBool(_keyBoldText, enabled);
-    print('♿ [Accessibility] Bold text: $enabled');
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -162,7 +152,6 @@ class AccessibilityService {
     await setHighContrast(false);
     await setReduceAnimations(false);
     await setBoldText(false);
-    print('♿ [Accessibility] Reset to defaults');
   }
 }
 

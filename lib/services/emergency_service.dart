@@ -288,24 +288,30 @@ class EmergencyService {
   }
 
   // Obtener lista de padres/tutores
-  // ⚠️ CORREGIDO: Busca padres en TODOS los documentos users que tengan al childId en linkedChildrenIds
+  // ✅ CORREGIDO: Usar colección parent_children (misma lógica que Cloud Function)
   Future<List<Map<String, dynamic>>> _getParents(String childId) async {
     try {
-      // Buscar todos los usuarios que tengan este childId en su array linkedChildrenIds
-      final usersSnapshot = await _firestore
-          .collection('users')
-          .where('linkedChildrenIds', arrayContains: childId)
+      // Buscar padres vinculados en la colección parent_children
+      final parentLinks = await _firestore
+          .collection('parent_children')
+          .where('childId', isEqualTo: childId)
+          .where('status', isEqualTo: 'approved')
           .get();
 
       List<Map<String, dynamic>> parents = [];
 
-      for (var userDoc in usersSnapshot.docs) {
-        final parentData = userDoc.data();
-        parentData['id'] = userDoc.id;
-        parents.add(parentData);
+      for (var parentLink in parentLinks.docs) {
+        final parentId = parentLink.data()['parentId'] as String;
+        final parentDoc = await _firestore.collection('users').doc(parentId).get();
+
+        if (parentDoc.exists) {
+          final parentData = parentDoc.data()!;
+          parentData['id'] = parentDoc.id;
+          parents.add(parentData);
+        }
       }
 
-      ReleaseLogger.log('✅ Encontrados ${parents.length} padres para notificar', tag: 'EmergencyService');
+      ReleaseLogger.log('✅ Encontrados ${parents.length} padres vinculados desde parent_children', tag: 'EmergencyService');
       return parents;
     } catch (e) {
       ReleaseLogger.error('❌ Error obteniendo padres: $e', tag: 'EmergencyService');
@@ -541,21 +547,21 @@ class EmergencyService {
   // Cached streams por parentId para evitar crear nuevos streams en cada call
   final Map<String, Stream<QuerySnapshot>> _cachedEmergencyStreams = {};
 
+  // Limpiar cache de streams para forzar recreación con nueva lógica
+  void clearEmergencyStreamsCache() {
+    _cachedEmergencyStreams.clear();
+    ReleaseLogger.log('🗑️ [EmergencyService] Cache de streams limpiado - se recrearán con nueva lógica', tag: 'EmergencyService');
+  }
+
   // Obtener emergencias activas para TODOS los hijos de un padre
   // ✅ CORREGIDO: Retorna el mismo stream object para evitar infinite rebuilds
   Stream<QuerySnapshot> getActiveEmergenciesForParent(String parentId) {
-    print('🔍 [EmergencyService] getActiveEmergenciesForParent llamado - parentId: $parentId');
-    print('🔍 [EmergencyService] Cache keys actuales: ${_cachedEmergencyStreams.keys.toList()}');
-    print('🔍 [EmergencyService] Cache contiene parentId? ${_cachedEmergencyStreams.containsKey(parentId)}');
-
     // ✅ Usar cache para retornar el mismo stream object
     if (_cachedEmergencyStreams.containsKey(parentId)) {
-      print('📋 [EmergencyService] ✅ USANDO CACHE para padre: $parentId');
       ReleaseLogger.log('📋 [EmergencyService] Usando stream cacheado para padre: $parentId', tag: 'EmergencyService');
       return _cachedEmergencyStreams[parentId]!;
     }
 
-    print('🚨 [EmergencyService] ❌ CREANDO NUEVO STREAM para padre: $parentId');
     ReleaseLogger.log('🚨 [EmergencyService] Creando nuevo stream para padre: $parentId', tag: 'EmergencyService');
 
     // ✅ CORREGIDO: Convertir Future<Stream> en Stream usando asyncExpand y hacer broadcast
@@ -565,7 +571,6 @@ class EmergencyService {
 
     // ✅ Cachear el stream
     _cachedEmergencyStreams[parentId] = stream;
-    print('🔍 [EmergencyService] Stream cacheado. Cache keys después: ${_cachedEmergencyStreams.keys.toList()}');
 
     return stream;
   }
@@ -575,25 +580,27 @@ class EmergencyService {
     ReleaseLogger.log('🚨 [EmergencyService] Creando stream estable para padre: $parentId', tag: 'EmergencyService');
 
     try {
-      // ✅ CORREGIDO: Obtener childrenIds una sola vez con await
-      final parentSnapshot = await _firestore.collection('users').doc(parentId).get();
+      // ✅ CORREGIDO: Usar colección parent_children (misma lógica que Cloud Function)
+      // Buscar hijos vinculados en la colección parent_children
+      final parentLinks = await _firestore
+          .collection('parent_children')
+          .where('parentId', isEqualTo: parentId)
+          .where('status', isEqualTo: 'approved')
+          .get();
 
-      if (!parentSnapshot.exists) {
-        ReleaseLogger.log('⚠️ [EmergencyService] Usuario padre $parentId no existe', tag: 'EmergencyService');
-        // Retornar stream vacío estable
-        return _firestore.collection('emergencies').where('childId', isEqualTo: 'no_parent').snapshots();
-      }
-
-      final parentData = parentSnapshot.data() as Map<String, dynamic>?;
-      final childrenIds = List<String>.from(parentData?['linkedChildrenIds'] ?? []);
-
-      ReleaseLogger.log('🔍 [EmergencyService] linkedChildrenIds: ${childrenIds.length} hijos', tag: 'EmergencyService');
-
-      if (childrenIds.isEmpty) {
-        ReleaseLogger.log('⚠️ [EmergencyService] No se encontraron hijos para el padre $parentId', tag: 'EmergencyService');
+      if (parentLinks.docs.isEmpty) {
+        ReleaseLogger.log('⚠️ [EmergencyService] No se encontraron hijos vinculados para el padre $parentId', tag: 'EmergencyService');
         // Retornar stream vacío estable
         return _firestore.collection('emergencies').where('childId', isEqualTo: 'no_children').snapshots();
       }
+
+      // Extraer los childIds de los documentos parent_children
+      final childrenIds = parentLinks.docs
+          .map((doc) => doc.data()['childId'] as String)
+          .toList();
+
+      ReleaseLogger.log('🔍 [EmergencyService] Hijos vinculados desde parent_children: ${childrenIds.length} hijos', tag: 'EmergencyService');
+      ReleaseLogger.log('🔍 [EmergencyService] ChildIds: $childrenIds', tag: 'EmergencyService');
 
       ReleaseLogger.log('📡 [EmergencyService] Escuchando emergencias de ${childrenIds.length} hijos: $childrenIds', tag: 'EmergencyService');
 

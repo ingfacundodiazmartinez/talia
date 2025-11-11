@@ -19,7 +19,6 @@ class UserRoleService {
     try {
       // Si edad < 18, siempre es child
       if (age < 18) {
-        print('👶 Usuario $userId es child por edad < 18');
         return 'child';
       }
 
@@ -27,7 +26,6 @@ class UserRoleService {
       final hasParent = await hasParentLink(userId);
 
       if (hasParent) {
-        print('👶 Usuario $userId es child porque tiene padre asociado');
         return 'child';
       }
 
@@ -36,15 +34,12 @@ class UserRoleService {
       final currentRole = userDoc.data()?['role'];
 
       if (currentRole == 'parent') {
-        print('👨‍👩‍👧 Usuario $userId mantiene rol parent');
         return 'parent';
       }
 
       // Por defecto: adult
-      print('👤 Usuario $userId es adult (edad >= 18 y sin padre)');
       return 'adult';
     } catch (e) {
-      print('❌ Error determinando rol del usuario $userId: $e');
       // En caso de error, default a adult si >= 18, child si < 18
       return age < 18 ? 'child' : 'adult';
     }
@@ -62,7 +57,6 @@ class UserRoleService {
 
       return links.docs.isNotEmpty;
     } catch (e) {
-      print('❌ Error verificando vínculo padre-hijo para $userId: $e');
       return false;
     }
   }
@@ -80,7 +74,6 @@ class UserRoleService {
 
       return links.docs.isNotEmpty;
     } catch (e) {
-      print('❌ Error verificando vínculo específico padre-hijo: $e');
       return false;
     }
   }
@@ -96,7 +89,6 @@ class UserRoleService {
 
       return usersSnapshot.docs.map((doc) => doc.id).toList();
     } catch (e) {
-      print('❌ Error obteniendo padres vinculados para $userId: $e');
       return [];
     }
   }
@@ -106,23 +98,19 @@ class UserRoleService {
   /// por seguridad (evita permitir list queries en parent_children)
   Future<List<String>> getLinkedChildren(String parentId) async {
     try {
-      print('🔍 Consultando hijos vinculados para padre: $parentId');
 
       final userDoc = await _firestore.collection('users').doc(parentId).get();
 
       if (!userDoc.exists) {
-        print('⚠️ Usuario $parentId no existe');
         return [];
       }
 
       final userData = userDoc.data() as Map<String, dynamic>;
       final linkedChildrenIds = List<String>.from(userData['linkedChildrenIds'] ?? []);
 
-      print('✅ Retornando ${linkedChildrenIds.length} hijos: $linkedChildrenIds');
 
       return linkedChildrenIds;
     } catch (e) {
-      print('❌ Error obteniendo hijos vinculados para $parentId: $e');
       return [];
     }
   }
@@ -137,10 +125,8 @@ class UserRoleService {
         'updatedAt': FieldValue.serverTimestamp(),
       });
 
-      print('✅ Rol actualizado para usuario $userId: $newRole');
       return true;
     } catch (e) {
-      print('❌ Error actualizando rol del usuario $userId: $e');
       return false;
     }
   }

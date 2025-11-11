@@ -60,7 +60,7 @@ class ChatClearService {
       final chatDoc = await _firestore.collection('chats').doc(chatId).get();
       if (!chatDoc.exists) return null;
 
-      final data = chatDoc.data() as Map<String, dynamic>?;
+      final data = chatDoc.data();
       return data?['clearedAt_$userId'] as Timestamp?;
     } catch (e) {
       appLogger.log('❌ Error obteniendo clearedAt: $e', level: 'ERROR');

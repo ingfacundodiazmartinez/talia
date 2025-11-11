@@ -4,6 +4,7 @@
 /// Para ejecutar este script, copia el contenido del map testStickers
 /// y créalo manualmente en Firestore Console, o usa este código en una
 /// función temporal dentro de la app.
+library;
 
 final testStickersDirect = [
   // Categoría: Emociones

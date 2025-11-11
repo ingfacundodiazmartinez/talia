@@ -8,9 +8,9 @@ class PremiumPaywallDialog extends StatelessWidget {
   final PremiumFeature feature;
 
   const PremiumPaywallDialog({
-    Key? key,
+    super.key,
     required this.feature,
-  }) : super(key: key);
+  });
 
   /// Mostrar el paywall dialog
   static Future<void> show(
@@ -205,10 +205,10 @@ class PremiumBadge extends StatelessWidget {
   final bool mini;
 
   const PremiumBadge({
-    Key? key,
+    super.key,
     required this.requiredTier,
     this.mini = false,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {

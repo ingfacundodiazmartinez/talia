@@ -34,7 +34,6 @@ class OnlineStatusService with WidgetsBindingObserver {
     // Iniciar heartbeat cada 30 segundos para mantener estado online
     _startHeartbeat();
 
-    print('✅ OnlineStatusService inicializado');
   }
 
   /// Iniciar heartbeat para mantener estado online mientras la app está activa
@@ -63,7 +62,6 @@ class OnlineStatusService with WidgetsBindingObserver {
     try {
       // ✅ OPTIMIZACIÓN: Solo actualizar si el estado realmente cambió
       if (_lastOnlineState == isOnline) {
-        print('⏭️ Estado online sin cambios ($isOnline), omitiendo update');
         return;
       }
 
@@ -83,9 +81,7 @@ class OnlineStatusService with WidgetsBindingObserver {
       _lastOnlineUpdate = DateTime.now();
       _lastOnlineState = isOnline; // ✅ Recordar el último estado
 
-      print('${isOnline ? '🟢' : '⚫'} Estado online actualizado: $finalOnlineStatus (era: ${_lastOnlineState == null ? 'null' : (!isOnline).toString()})');
     } catch (e) {
-      print('❌ Error actualizando estado online: $e');
     }
   }
 
@@ -117,7 +113,6 @@ class OnlineStatusService with WidgetsBindingObserver {
 
       _lastOnlineUpdate = DateTime.now();
 
-      print('💓 Heartbeat actualizado (sin rebuilds del dashboard)');
     } catch (e) {
       // No imprimir error para evitar spam en logs
       // print('⚠️ Error actualizando lastSeen: $e');
@@ -127,7 +122,6 @@ class OnlineStatusService with WidgetsBindingObserver {
   /// Callback cuando cambia el estado de la app
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    print('📱 App lifecycle cambió: $state');
 
     switch (state) {
       case AppLifecycleState.resumed:
@@ -181,6 +175,5 @@ class OnlineStatusService with WidgetsBindingObserver {
     _setOnlineStatus(false);
     _isInitialized = false;
 
-    print('🛑 OnlineStatusService disposed');
   }
 }

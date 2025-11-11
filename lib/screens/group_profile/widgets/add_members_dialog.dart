@@ -76,7 +76,7 @@ class _AddMembersDialogState extends State<AddMembersDialog> {
         _isLoading = false;
       });
     } catch (e) {
-      print('❌ Error cargando contactos: $e');
+      // Error loading contacts - silent
       setState(() => _isLoading = false);
     }
   }
@@ -111,7 +111,7 @@ class _AddMembersDialogState extends State<AddMembersDialog> {
         Navigator.pop(context, true);
       }
     } catch (e) {
-      print('❌ Error agregando miembros: $e');
+      // Error adding members
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

@@ -202,7 +202,7 @@ class StickersService {
     required String name,
   }) async {
     try {
-      final fileName = '${DateTime.now().millisecondsSinceEpoch}_${name}';
+      final fileName = '${DateTime.now().millisecondsSinceEpoch}_$name';
       final ref = _storage.ref().child('stickers/$category/$fileName');
 
       debugPrint('⬆️ Subiendo sticker: $fileName');

@@ -14,20 +14,15 @@ class AutoApprovalService {
 
   /// Inicializar el servicio de aprobación automática para un padre
   Future<void> startAutoApprovalForParent(String parentId) async {
-    print(
-      '🤖 Iniciando servicio de aprobación automática para padre: $parentId',
-    );
 
     // Obtener lista de hijos del padre
     final userRoleService = UserRoleService();
     final childrenIds = await userRoleService.getLinkedChildren(parentId);
 
     if (childrenIds.isEmpty) {
-      print('⚠️ No hay hijos vinculados a este padre');
       return;
     }
 
-    print('👶 Escuchando solicitudes para ${childrenIds.length} hijo(s)');
 
     // Escuchar solicitudes de contacto para cada hijo
     for (final childId in childrenIds) {
@@ -79,9 +74,6 @@ class AutoApprovalService {
     required String parentId,
   }) async {
     try {
-      print(
-        '🔍 Verificando configuración de aprobación automática para padre: $parentId',
-      );
 
       // Verificar si el padre tiene habilitada la aprobación automática
       final parentSettingsDoc = await _firestore
@@ -90,9 +82,6 @@ class AutoApprovalService {
           .get();
 
       if (!parentSettingsDoc.exists) {
-        print(
-          '⚙️ No hay configuración para este padre, saltando aprobación automática',
-        );
         return;
       }
 
@@ -100,13 +89,9 @@ class AutoApprovalService {
       final autoApproveEnabled = settings['autoApproveRequests'] ?? false;
 
       if (!autoApproveEnabled) {
-        print('🔒 Aprobación automática deshabilitada para este padre');
         return;
       }
 
-      print(
-        '✅ Aprobación automática habilitada, procesando solicitud: $requestId',
-      );
 
       // Procesar la aprobación automática
       await _autoApproveContact(
@@ -117,7 +102,6 @@ class AutoApprovalService {
         parentId: parentId,
       );
     } catch (e) {
-      print('❌ Error en aprobación automática: $e');
     }
   }
 
@@ -130,19 +114,14 @@ class AutoApprovalService {
     required String parentId,
   }) async {
     try {
-      print(
-        '🤖 Aprobando automáticamente contacto: $contactName para hijo: $childId',
-      );
 
       // Usar Cloud Function para aprobar
-      print('📞 Llamando a Cloud Function updateContactRequestStatus (auto-approval)...');
       final callable = FirebaseFunctions.instance.httpsCallable('updateContactRequestStatus');
       await callable.call({
         'requestId': requestId,
         'status': 'approved',
       });
 
-      print('✅ Cloud Function ejecutada exitosamente (auto-approval)');
 
       // Obtener datos de la solicitud para procesar invitaciones de grupo
       final requestDoc = await _firestore.collection('contact_requests').doc(requestId).get();
@@ -158,7 +137,6 @@ class AutoApprovalService {
             childId,
             contactId,
           );
-          print('🔄 Procesando invitaciones de grupo pendientes...');
         }
       }
 
@@ -175,7 +153,6 @@ class AutoApprovalService {
         contactName: contactName,
       );
     } catch (e) {
-      print('❌ Error en aprobación automática de contacto: $e');
     }
   }
 
@@ -186,9 +163,6 @@ class AutoApprovalService {
     required String parentId,
   }) async {
     try {
-      print(
-        '🔍 Verificando configuración de auto-aprobación para solicitud de grupo: $requestId',
-      );
 
       // Verificar si el padre tiene habilitada la aprobación automática
       final parentSettingsDoc = await _firestore
@@ -197,7 +171,6 @@ class AutoApprovalService {
           .get();
 
       if (!parentSettingsDoc.exists) {
-        print('⚙️ No hay configuración para este padre, saltando auto-aprobación');
         return;
       }
 
@@ -205,11 +178,9 @@ class AutoApprovalService {
       final autoApproveEnabled = settings['autoApproveRequests'] ?? false;
 
       if (!autoApproveEnabled) {
-        print('🔒 Auto-aprobación deshabilitada para este padre');
         return;
       }
 
-      print('✅ Auto-aprobación habilitada, procesando solicitud de grupo: $requestId');
 
       final childId = requestData['childId'];
       final contactInfo = requestData['contactToApprove'] as Map<String, dynamic>?;
@@ -217,7 +188,6 @@ class AutoApprovalService {
       final contactName = contactInfo?['name'] ?? 'Usuario';
 
       if (contactId == null) {
-        print('❌ No se encontró contactId en la solicitud');
         return;
       }
 
@@ -259,7 +229,6 @@ class AutoApprovalService {
           'approvedForGroup': true,
         });
         contactDocId = newContact.id;
-        print('✅ Nuevo contacto creado para grupo: $contactDocId');
       } else {
         // Actualizar existente a approved
         await _firestore.collection('contacts').doc(contactDocId).update({
@@ -267,7 +236,6 @@ class AutoApprovalService {
           'approvedForGroup': true,
           'autoApproved': true,
         });
-        print('✅ Contacto existente actualizado: $contactDocId');
       }
 
       // Actualizar solicitud a aprobada
@@ -277,7 +245,6 @@ class AutoApprovalService {
         'autoApproved': true,
       });
 
-      print('✅ Permiso de grupo aprobado automáticamente');
 
       // Procesar invitaciones de grupo pendientes
       final groupChatService = GroupChatService();
@@ -286,7 +253,6 @@ class AutoApprovalService {
         contactId,
       );
 
-      print('🔄 Procesando invitaciones de grupo pendientes...');
 
       // Enviar notificación al padre informando de la auto-aprobación
       await _notificationService.sendAutoApprovalNotification(
@@ -295,7 +261,6 @@ class AutoApprovalService {
         contactName: contactName,
       );
     } catch (e) {
-      print('❌ Error en auto-aprobación de permiso de grupo: $e');
 
       // En caso de error, marcar la solicitud con error para revisión manual
       await _firestore.collection('permission_requests').doc(requestId).update({
@@ -307,7 +272,6 @@ class AutoApprovalService {
 
   /// Detener el servicio de aprobación automática
   void stopAutoApproval() {
-    print('🛑 Deteniendo servicio de aprobación automática');
     // Los listeners se pueden cancelar si se almacenan las referencias
     // Por ahora, el listener se mantendrá activo mientras la app esté abierta
   }

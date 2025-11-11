@@ -24,7 +24,6 @@ class CharacterService {
 
       return snapshot.docs.map((doc) => Character.fromFirestore(doc)).toList();
     } catch (e) {
-      print('❌ Error obteniendo personajes: $e');
       return [];
     }
   }
@@ -41,7 +40,6 @@ class CharacterService {
 
       return snapshot.docs.map((doc) => Character.fromFirestore(doc)).toList();
     } catch (e) {
-      print('❌ Error obteniendo personajes por categoría: $e');
       return [];
     }
   }
@@ -75,8 +73,6 @@ class CharacterService {
     Function(String status)? onStatusUpdate,
   }) async {
     try {
-      print('🎭 Iniciando transformación con progreso real-time - personaje $characterId');
-      print('📸 Imagen original: $imageUrl');
 
       // 1. Crear predicción (retorna inmediatamente con statusDocId)
       onProgress?.call(0.05);
@@ -94,7 +90,6 @@ class CharacterService {
 
       final statusDocId = createResult.data['statusDocId'] as String;
       final characterName = createResult.data['characterName'] as String?;
-      print('✅ Predicción creada - escuchando documento: $statusDocId');
 
       // 2. Escuchar cambios en Firestore en tiempo real
       final statusDoc = _firestore
@@ -108,7 +103,6 @@ class CharacterService {
       subscription = statusDoc.snapshots().listen(
         (snapshot) {
           if (!snapshot.exists) {
-            print('⚠️ Documento de estado no existe');
             return;
           }
 
@@ -119,7 +113,6 @@ class CharacterService {
           final progress = (data['progress'] as num?)?.toDouble() ?? 0.0;
           final message = data['message'] as String?;
 
-          print('📊 Estado actualizado: $status ($progress)');
 
           // Notificar progreso
           if (onProgress != null) {
@@ -135,7 +128,6 @@ class CharacterService {
           if (status == 'succeeded') {
             final outputUrl = data['outputUrl'] as String?;
             if (outputUrl != null) {
-              print('✅ Transformación completada: $outputUrl');
               subscription.cancel();
               if (!completer.isCompleted) {
                 completer.complete(outputUrl);
@@ -143,27 +135,23 @@ class CharacterService {
             }
           } else if (status == 'failed') {
             final error = data['error'] as String? ?? 'Error desconocido';
-            print('❌ Transformación falló: $error');
             subscription.cancel();
             if (!completer.isCompleted) {
               completer.completeError(Exception('Transformación falló: $error'));
             }
           } else if (status == 'timeout') {
             final error = data['error'] as String? ?? 'Timeout';
-            print('⏰ Transformación timeout: $error');
             subscription.cancel();
             if (!completer.isCompleted) {
               completer.completeError(Exception('Timeout: $error'));
             }
           } else if (status == 'error') {
             final error = data['error'] as String? ?? 'Error durante procesamiento';
-            print('❌ Error en transformación: $error');
             subscription.cancel();
             if (!completer.isCompleted) {
               completer.completeError(Exception(error));
             }
           } else if (status == 'canceled') {
-            print('⚠️ Transformación cancelada');
             subscription.cancel();
             if (!completer.isCompleted) {
               completer.completeError(Exception('Transformación cancelada'));
@@ -171,7 +159,6 @@ class CharacterService {
           }
         },
         onError: (error) {
-          print('❌ Error en listener de Firestore: $error');
           subscription.cancel();
           if (!completer.isCompleted) {
             completer.completeError(error);
@@ -188,7 +175,6 @@ class CharacterService {
         },
       );
     } catch (e) {
-      print('❌ Error transformando imagen: $e');
       rethrow;
     }
   }
@@ -206,8 +192,6 @@ class CharacterService {
     required String characterId,
   }) async {
     try {
-      print('🎭 Iniciando transformación con personaje $characterId');
-      print('📸 Imagen original: $imageUrl');
 
       // Configurar timeout de 2 minutos (120 segundos)
       final callable = _functions.httpsCallable(
@@ -223,11 +207,9 @@ class CharacterService {
       });
 
       final transformedUrl = result.data['transformedImageUrl'] as String;
-      print('✅ Transformación completada: $transformedUrl');
 
       return transformedUrl;
     } catch (e) {
-      print('❌ Error transformando imagen: $e');
       rethrow;
     }
   }
@@ -239,10 +221,8 @@ class CharacterService {
           .collection('characters')
           .add(character.toMap());
 
-      print('✅ Personaje agregado: ${docRef.id}');
       return docRef.id;
     } catch (e) {
-      print('❌ Error agregando personaje: $e');
       rethrow;
     }
   }
@@ -255,9 +235,7 @@ class CharacterService {
           .doc(characterId)
           .update(updates);
 
-      print('✅ Personaje actualizado: $characterId');
     } catch (e) {
-      print('❌ Error actualizando personaje: $e');
       rethrow;
     }
   }
@@ -270,9 +248,7 @@ class CharacterService {
           .doc(characterId)
           .delete();
 
-      print('✅ Personaje eliminado: $characterId');
     } catch (e) {
-      print('❌ Error eliminando personaje: $e');
       rethrow;
     }
   }

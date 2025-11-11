@@ -1,8 +1,5 @@
-import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:firebase_auth_mocks/firebase_auth_mocks.dart';
-import '../../../lib/services/stories/repositories/story_repository.dart';
-import '../../../lib/models/story.dart';
+import 'package:talia/services/stories/repositories/story_repository.dart';
 import 'test_firebase_setup.dart';
 import 'test_helpers.dart';
 

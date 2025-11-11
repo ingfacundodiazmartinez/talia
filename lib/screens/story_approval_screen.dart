@@ -1,6 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import '../models/story.dart';
 import '../services/story_service_refactored.dart';
 import '../services/story_upload_progress_service.dart';
 import '../services/unread_messages_service.dart';
@@ -626,24 +624,7 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen> with SingleTi
       // Actualizar badge del ícono de la app
       await UnreadMessagesService().updateBadgeCount();
     } catch (e) {
-      print('❌ Error aprobando historia: $e');
-      // Solo mostrar error si realmente falló la aprobación
-      // Verificar si la historia fue aprobada a pesar del error
-      try {
-        final storyDoc = await FirebaseFirestore.instance
-            .collection('stories')
-            .doc(story.id)
-            .get();
-
-        if (storyDoc.exists && storyDoc.data()?['status'] == 'approved') {
-          // La historia fue aprobada exitosamente, no mostrar error
-          return;
-        }
-      } catch (_) {
-        // Si no podemos verificar, asumir que hubo un error real
-      }
-
-      // Solo si realmente falló, mostrar el error
+      // Error manejado por service - no verificar Firebase directamente aquí
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

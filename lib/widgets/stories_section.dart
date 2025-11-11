@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:permission_handler/permission_handler.dart';
-import '../models/story.dart';
 import '../services/story_service_refactored.dart';
 import '../services/story_upload_progress_service.dart';
 import '../screens/story_camera_screen.dart';

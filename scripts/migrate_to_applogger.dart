@@ -76,12 +76,10 @@ Future<MigrationResult> _migrateFile(File file) async {
 
     if (firstImport != null) {
       final insertPos = firstImport.end;
-      content = content.substring(0, insertPos) +
-                "\nimport 'package:talia/services/remote_logger_service.dart';" +
-                content.substring(insertPos);
+      content = "${content.substring(0, insertPos)}\nimport 'package:talia/services/remote_logger_service.dart';${content.substring(insertPos)}";
     } else {
       // No imports found, add at top
-      content = "import 'package:talia/services/remote_logger_service.dart';\n\n" + content;
+      content = "import 'package:talia/services/remote_logger_service.dart';\n\n$content";
     }
   }
 

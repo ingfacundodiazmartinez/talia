@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../services/child_profile_service.dart';
 import '../services/image_service.dart';
+import '../utils/release_logger.dart';
 
 /// Controller que maneja la lógica del perfil de usuario child
 class ChildProfileController {
@@ -25,7 +26,7 @@ class ChildProfileController {
       );
       return downloadUrl;
     } catch (e) {
-      print('Error en pickAndUploadImage: $e');
+      ReleaseLogger.error('Error en pickAndUploadImage: $e', tag: 'ChildProfileController');
       rethrow;
     }
   }
@@ -35,7 +36,7 @@ class ChildProfileController {
     try {
       await _imageService.deleteProfileImage();
     } catch (e) {
-      print('Error eliminando foto de perfil: $e');
+      ReleaseLogger.error('Error eliminando foto de perfil: $e', tag: 'ChildProfileController');
       rethrow;
     }
   }
@@ -45,7 +46,7 @@ class ChildProfileController {
     try {
       await _profileService.logout(userId);
     } catch (e) {
-      print('Error durante logout: $e');
+      ReleaseLogger.error('Error durante logout: $e', tag: 'ChildProfileController');
       rethrow;
     }
   }

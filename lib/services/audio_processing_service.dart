@@ -8,7 +8,6 @@ class AudioProcessingService {
   /// Returns una lista de valores normalizados entre 0 y 1
   Future<List<double>> extractWaveform(File audioFile) async {
     try {
-      print('🎵 [AUDIO PROCESSING] Extrayendo waveform de ${audioFile.path}');
 
       // Crear controller para extraer waveform
       final controller = PlayerController();
@@ -20,10 +19,8 @@ class AudioProcessingService {
           noOfSamples: 35, // 35 barras para buena visualización
         );
 
-        print('📊 [AUDIO PROCESSING] Extraídos ${waveData.length} puntos');
 
         if (waveData.isEmpty) {
-          print('⚠️ [AUDIO PROCESSING] Waveform vacío, usando datos por defecto');
           return _generateDefaultWaveform();
         }
 
@@ -36,7 +33,6 @@ class AudioProcessingService {
         final range = (maxVal - minVal).toDouble();
 
         if (range == 0) {
-          print('⚠️ [AUDIO PROCESSING] Range es 0, usando datos por defecto');
           return _generateDefaultWaveform();
         }
 
@@ -53,14 +49,12 @@ class AudioProcessingService {
           return (powered * 0.8 + 0.2).clamp(0.2, 1.0);
         }).toList();
 
-        print('✅ [AUDIO PROCESSING] Waveform procesado: ${amplified.length} puntos');
         return amplified;
       } finally {
         // Siempre limpiar el controller
         controller.dispose();
       }
     } catch (e) {
-      print('❌ [AUDIO PROCESSING] Error extrayendo waveform: $e');
       // En caso de error, retornar waveform por defecto
       return _generateDefaultWaveform();
     }
@@ -91,7 +85,6 @@ class AudioProcessingService {
         controller.dispose();
       }
     } catch (e) {
-      print('❌ [AUDIO PROCESSING] Error obteniendo duración: $e');
       return null;
     }
   }

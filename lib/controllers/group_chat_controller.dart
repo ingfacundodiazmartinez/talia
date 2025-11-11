@@ -8,7 +8,6 @@ import '../notification_service.dart';
 import '../services/typing_indicator_service.dart';
 import '../services/media_service.dart';
 import '../services/media_compression_service.dart';
-import '../services/audio_processing_service.dart';
 import '../utils/release_logger.dart';
 
 /// Controller que maneja la lógica de un chat grupal
@@ -364,23 +363,13 @@ class GroupChatController {
     }
   }
 
-  /// Actualizar documento del grupo
+  /// 🔒 DEPRECADO - INSEGURO: Actualizar documento del grupo
+  /// Esta función permite bypass de filtros de contenido
+  /// Solo Cloud Functions deben actualizar lastMessage después de validación
+  @Deprecated('❌ INSEGURO: Solo Cloud Functions pueden actualizar lastMessage después de validación')
   Future<void> _updateGroupDocument(String lastMessage) async {
-    // Preparar mapa de actualización
-    final updateData = <String, dynamic>{
-      'lastMessage': lastMessage,
-      'lastMessageTime': FieldValue.serverTimestamp(),
-      'lastMessageSender': currentUserId,
-    };
-
-    // Incrementar contador de no leídos para cada miembro (excepto el remitente)
-    for (final memberId in _memberIds) {
-      if (memberId != currentUserId) {
-        updateData['unreadCount_$memberId'] = FieldValue.increment(1);
-      }
-    }
-
-    await _firestore.collection('groups').doc(groupId).update(updateData);
+    // 🚨 FUNCIÓN BLOQUEADA POR SEGURIDAD
+    throw Exception('🔒 FUNCIÓN BLOQUEADA: _updateGroupDocument es insegura. El contenido "$lastMessage" podría ser ofensivo y bypassear filtros. Solo Cloud Functions pueden actualizar lastMessage después de validación.');
   }
 
   /// Enviar notificaciones a todos los miembros (excepto el remitente)

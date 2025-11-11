@@ -151,9 +151,7 @@ class _GroupInvitationsScreenState extends State<GroupInvitationsScreen> {
     final alreadyApproved = invitedParentApproval['status'] == 'approved';
 
     // Calcular tiempo restante
-    final timeRemaining = expiresAt != null
-        ? expiresAt.difference(DateTime.now())
-        : null;
+    final timeRemaining = expiresAt?.difference(DateTime.now());
 
     return FutureBuilder<Map<String, String>>(
       future: _loadMemberNames(requiredApprovals.keys.toList(), invitedChildId),

@@ -1,5 +1,6 @@
 import 'dart:async';
 import '../../../models/story.dart';
+import '../services/story_media_preload_service.dart';
 
 /// Manager para gestión inteligente de cache de historias
 ///
@@ -26,8 +27,13 @@ class StoryCacheManager {
   final StreamController<List<UserStories>> _cacheChangesController =
       StreamController<List<UserStories>>.broadcast();
 
+  // Media preload service
+  final StoryMediaPreloadService _mediaPreloadService = StoryMediaPreloadService();
+
   // Constructor
-  StoryCacheManager();
+  StoryCacheManager() {
+    _mediaPreloadService.initialize();
+  }
 
   // ═══════════════════════════════════════════════════════════════
   // PUBLIC API - CACHE OPERATIONS
@@ -48,6 +54,9 @@ class StoryCacheManager {
   void updateCache(List<UserStories> stories) {
     _cachedStories = List.from(stories); // Crear copia defensiva
     _lastCacheUpdate = DateTime.now();
+
+    // Trigger media preloading for new stories
+    _mediaPreloadService.preloadStoriesFromCache(stories);
 
     // Notificar cambios
     _notifyCacheChange();
@@ -478,6 +487,7 @@ class StoryCacheManager {
     _cacheChangesController.close();
     _cachedStories = null;
     _optimisticCache.clear();
+    _mediaPreloadService.dispose();
     resetMetrics();
   }
 }

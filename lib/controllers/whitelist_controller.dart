@@ -436,7 +436,7 @@ class WhitelistController {
         .snapshots()
         .map((snapshot) {
       if (!snapshot.exists) return <String>[];
-      final userData = snapshot.data() as Map<String, dynamic>?;
+      final userData = snapshot.data();
       return List<String>.from(userData?['linkedChildrenIds'] ?? []);
     });
   }

@@ -225,7 +225,7 @@ class _FlutterCameraViewState extends State<FlutterCameraView> {
       // );
 
       // Opción B: AspectRatio con el aspectRatio corregido (portrait)
-      return Container(
+      return SizedBox(
         width: double.infinity,
         height: double.infinity,
         child: Center(

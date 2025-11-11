@@ -72,7 +72,6 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen>
   @override
   Widget build(BuildContext context) {
     super.build(context); // Necesario para AutomaticKeepAliveClientMixin
-    print('🏠 ParentDashboardScreen - REBUILDING (esto debería aparecer raramente)');
     return _buildDashboard();
   }
 
@@ -99,7 +98,6 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen>
                   StreamBuilder<DocumentSnapshot>(
                     stream: _controller.getUserDataStream(),
                     builder: (context, snapshot) {
-                      print('🏠 Dashboard StreamBuilder - getUserDataStream rebuilding');
                       final userData =
                           snapshot.data?.data() as Map<String, dynamic>?;
                       final userName =
@@ -187,10 +185,7 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen>
         StreamBuilder<List<String>>(
           stream: _controller.getLinkedChildrenIdsStream(),
           builder: (context, snapshot) {
-            print('🏠 [ParentDashboard] StreamBuilder Children - connectionState: ${snapshot.connectionState}, hasData: ${snapshot.hasData}');
-
             if (snapshot.connectionState == ConnectionState.waiting) {
-              print('🏠 [ParentDashboard] Mostrando CircularProgressIndicator');
               return Center(
                 child: CircularProgressIndicator(
                   color: Theme.of(context).colorScheme.primary,
@@ -199,18 +194,14 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen>
             }
 
             final linkedChildren = snapshot.data ?? [];
-            print('🏠 [ParentDashboard] linkedChildren: ${linkedChildren.length} hijos: $linkedChildren');
 
             if (linkedChildren.isEmpty) {
-              print('🏠 [ParentDashboard] No hay hijos vinculados - mostrando NoChildrenCard');
               return NoChildrenCard();
             }
 
-            print('🏠 [ParentDashboard] Construyendo Column con ${linkedChildren.length} ChildDashboardCard(s) y PendingStoriesCard');
             return Column(
               children: [
                 ...linkedChildren.map((childId) {
-                  print('🏠 [ParentDashboard] Creando ChildDashboardCard para: $childId');
                   return ChildDashboardCard(childId: childId);
                 }),
                 SizedBox(height: 12),

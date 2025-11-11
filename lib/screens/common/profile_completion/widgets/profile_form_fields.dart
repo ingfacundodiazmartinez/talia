@@ -39,7 +39,7 @@ class ProfileFormFields extends StatelessWidget {
               borderSide: BorderSide.none,
             ),
             filled: true,
-            fillColor: colorScheme.surfaceVariant,
+            fillColor: colorScheme.surfaceContainerHighest,
           ),
           validator: (value) {
             if (value == null || value.trim().isEmpty) {
@@ -68,7 +68,7 @@ class ProfileFormFields extends StatelessWidget {
           child: Container(
             padding: EdgeInsets.symmetric(horizontal: 12, vertical: 16),
             decoration: BoxDecoration(
-              color: colorScheme.surfaceVariant,
+              color: colorScheme.surfaceContainerHighest,
               borderRadius: BorderRadius.circular(12),
             ),
             child: Row(

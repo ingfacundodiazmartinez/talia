@@ -357,11 +357,11 @@ class ChatMessage {
       originalText: originalText ?? this.originalText,
       waveformData: waveformData ?? this.waveformData,
       // Preservar campos de reenvío
-      isForwarded: this.isForwarded,
-      originalSenderId: this.originalSenderId,
-      originalChatId: this.originalChatId,
-      originalContactName: this.originalContactName,
-      localId: this.localId, // ✅ Preservar localId en copyWith
+      isForwarded: isForwarded,
+      originalSenderId: originalSenderId,
+      originalChatId: originalChatId,
+      originalContactName: originalContactName,
+      localId: localId, // ✅ Preservar localId en copyWith
     );
   }
 

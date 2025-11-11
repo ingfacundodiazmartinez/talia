@@ -43,17 +43,12 @@ class ChatService {
         'deletedAt_${participants[1]}': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
-      print('🗑️ Chat marcado como eliminado (soft delete) para ambos participantes: $participants');
-
       // Crear automáticamente un nuevo chat entre los mismos participantes
       final otherUserId = participants.firstWhere((id) => id != user.uid);
       final newChatId = await createNewChat(user.uid, otherUserId);
 
-      print('✅ Nuevo chat creado automáticamente: $newChatId');
-
       return newChatId;
     } catch (e) {
-      print('❌ Error eliminando chat: $e');
       throw Exception('Error eliminando chat: $e');
     }
   }
@@ -76,11 +71,7 @@ class ChatService {
       await chatRef.set({
         'clearedAt_${user.uid}': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
-
-      print('🧹 Chat limpiado para usuario: ${user.uid}');
-      print('   Los mensajes anteriores a este timestamp no se mostrarán');
     } catch (e) {
-      print('❌ Error limpiando chat: $e');
       throw Exception('Error limpiando chat: $e');
     }
   }
@@ -101,7 +92,6 @@ class ChatService {
       // Si deletedBy no está vacío, el chat está eliminado
       return deletedBy.isNotEmpty;
     } catch (e) {
-      print('❌ Error verificando si chat está eliminado: $e');
       return false;
     }
   }
@@ -116,7 +106,6 @@ class ChatService {
 
     // Emitir cache inmediatamente si existe
     if (_cachedUserChats != null) {
-      print('📦 Emitiendo chats desde cache');
       yield _cachedUserChats!;
     }
 
@@ -130,7 +119,6 @@ class ChatService {
       _cachedUserChats = snapshot;
       _lastCacheUpdate = DateTime.now();
 
-      print('🔄 Chats actualizados desde Firestore (${snapshot.docs.length} chats)');
       yield snapshot;
     }
   }
@@ -181,10 +169,7 @@ class ChatService {
         'deletedBy': FieldValue.arrayRemove([user.uid]),
         'deletedAt_${user.uid}': FieldValue.delete(),
       });
-
-      print('♻️ Chat restaurado para usuario: ${user.uid}');
     } catch (e) {
-      print('❌ Error restaurando chat: $e');
       throw Exception('Error restaurando chat: $e');
     }
   }
@@ -209,10 +194,7 @@ class ChatService {
       batch.delete(chatRef);
 
       await batch.commit();
-
-      print('🗑️ Chat eliminado permanentemente (hard delete): $chatId');
     } catch (e) {
-      print('❌ Error eliminando chat permanentemente: $e');
       throw Exception('Error eliminando chat permanentemente: $e');
     }
   }
@@ -247,7 +229,7 @@ class ChatService {
       List<QueryDocumentSnapshot> validChats = [];
 
       for (var chatDoc in chatsQuery.docs) {
-        final chatData = chatDoc.data() as Map<String, dynamic>;
+        final chatData = chatDoc.data();
         final participants = List<String>.from(chatData['participants'] ?? []);
         final deletedBy = List<String>.from(chatData['deletedBy'] ?? []);
 
@@ -281,7 +263,6 @@ class ChatService {
 
       return validChats.first;
     } catch (e) {
-      print('❌ Error obteniendo chat activo: $e');
       return null;
     }
   }
@@ -293,13 +274,14 @@ class ChatService {
     await _firestore.collection('chats').doc(newChatId).set({
       'participants': [userId1, userId2],
       'createdAt': FieldValue.serverTimestamp(),
-      'lastMessageTime': FieldValue.serverTimestamp(),
-      'lastMessage': '',
-      'lastMessageSender': '',
+      // 🔒 SEGURIDAD: NO establecer lastMessage desde frontend
+      // Cloud Functions establecerán estos campos cuando se envíe el primer mensaje
+      // 'lastMessageTime': FieldValue.serverTimestamp(),  // NO ESTABLECER
+      // 'lastMessage': '',  // NO ESTABLECER - Bloqueado por seguridad
+      // 'lastMessageSender': '',  // NO ESTABLECER - Bloqueado por seguridad
       'deletedBy': [],
     });
 
-    print('✅ Nuevo chat creado: $newChatId');
     return newChatId;
   }
 }

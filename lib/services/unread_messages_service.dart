@@ -22,7 +22,6 @@ class UnreadMessagesService {
 
       return unreadCount is int ? unreadCount : 0;
     } catch (e) {
-      print('❌ Error obteniendo unreadCount: $e');
       return 0;
     }
   }
@@ -54,10 +53,8 @@ class UnreadMessagesService {
       await chatRef.update({
         'unreadCount_$recipientUserId': FieldValue.increment(1),
       });
-
-      print('📬 Incrementado unreadCount para usuario $recipientUserId en chat $chatId');
     } catch (e) {
-      print('❌ Error incrementando unreadCount: $e');
+      // Silently handle error
     }
   }
 
@@ -73,12 +70,10 @@ class UnreadMessagesService {
         'unreadCount_${user.uid}': 0,
       });
 
-      print('✅ Mensajes marcados como leídos en chat $chatId');
-
       // Actualizar badge después de marcar como leído
       await updateBadgeCount();
     } catch (e) {
-      print('❌ Error marcando mensajes como leídos: $e');
+      // Silently handle error
     }
   }
 
@@ -107,7 +102,6 @@ class UnreadMessagesService {
 
       return totalUnread;
     } catch (e) {
-      print('❌ Error obteniendo total de mensajes sin leer: $e');
       return 0;
     }
   }
@@ -120,7 +114,7 @@ class UnreadMessagesService {
     return _firestore
         .collection('chats')
         .where('participants', arrayContains: user.uid)
-        .snapshots()
+        .snapshots(includeMetadataChanges: false)
         .map((snapshot) {
       int totalUnread = 0;
 
@@ -152,7 +146,7 @@ class UnreadMessagesService {
       // 2. Obtener IDs de hijos vinculados (solo para padres)
       // ⚠️ CORREGIDO: Lee desde /users/{parentId}.linkedChildrenIds por seguridad
       final userDoc = await _firestore.collection('users').doc(user.uid).get();
-      final userData = userDoc.data() as Map<String, dynamic>?;
+      final userData = userDoc.data();
       final childrenIds = List<String>.from(userData?['linkedChildrenIds'] ?? []);
 
       // 3. Contar historias pendientes de los hijos
@@ -197,16 +191,12 @@ class UnreadMessagesService {
       if (isSupported) {
         if (totalBadgeCount > 0) {
           await AppBadgePlus.updateBadge(totalBadgeCount);
-          print('🔔 Badge del ícono actualizado: $totalBadgeCount ($totalUnreadMessages chats + $pendingStoriesCount historias + $unresolvedEmergenciesCount emergencias + $contactRequestsCount contactos)');
         } else {
           await AppBadgePlus.updateBadge(0);
-          print('🔔 Badge del ícono removido (no hay mensajes ni notificaciones)');
         }
-      } else {
-        print('⚠️ Este dispositivo no soporta app badges');
       }
     } catch (e) {
-      print('❌ Error actualizando badge del ícono: $e');
+      // Silently handle error
     }
   }
 
@@ -216,7 +206,6 @@ class UnreadMessagesService {
     if (user == null) return;
 
     watchTotalUnreadCount().listen((totalUnread) {
-      print('🔔 Total de mensajes sin leer: $totalUnread');
       updateBadgeCount();
     });
   }

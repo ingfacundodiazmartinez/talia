@@ -32,17 +32,14 @@ class FavoriteService {
       if (favoriteDoc.exists) {
         // Ya está marcado como favorito, desmarcarlo
         await favoriteRef.delete();
-        print('⭐ Favorito eliminado: $messageId');
       } else {
         // No está marcado, agregarlo
         await favoriteRef.set({
           'userId': currentUserId,
           'timestamp': FieldValue.serverTimestamp(),
         });
-        print('⭐ Favorito agregado: $messageId');
       }
     } catch (e) {
-      print('❌ Error al cambiar favorito: $e');
       rethrow;
     }
   }
@@ -69,7 +66,6 @@ class FavoriteService {
 
       return favoriteDoc.exists;
     } catch (e) {
-      print('❌ Error verificando favorito: $e');
       return false;
     }
   }
@@ -110,7 +106,6 @@ class FavoriteService {
         }
       }
 
-      print('📋 [Favorites] Encontrados ${favoriteMessages.length} mensajes favoritos');
       return favoriteMessages;
     });
   }
@@ -163,7 +158,6 @@ class FavoriteService {
 
       return favoriteMessages;
     } catch (e) {
-      print('❌ Error obteniendo mensajes favoritos: $e');
       return [];
     }
   }

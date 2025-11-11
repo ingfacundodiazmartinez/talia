@@ -23,7 +23,6 @@ class ChildProfileService {
       if (!doc.exists) return null;
       return doc.data();
     } catch (e) {
-      print('Error obteniendo datos de usuario: $e');
       return null;
     }
   }
@@ -42,9 +41,8 @@ class ChildProfileService {
     try {
       final doc = await _firestore.collection('users').doc(parentId).get();
       if (!doc.exists) return null;
-      return doc.data() as Map<String, dynamic>?;
+      return doc.data();
     } catch (e) {
-      print('Error obteniendo datos de padre: $e');
       return null;
     }
   }
@@ -75,12 +73,11 @@ class ChildProfileService {
         'lastSeen': FieldValue.serverTimestamp(),
         'fcmToken': null,
         'voipToken': null, // Limpiar también el token VoIP
-      }).catchError((e) => print('Error actualizando estado: $e'));
+      }).catchError((e) => null); // Silently handle error
 
       // Cerrar sesión
       await _auth.signOut();
     } catch (e) {
-      print('Error al cerrar sesión: $e');
       rethrow;
     }
   }
@@ -107,7 +104,6 @@ class ChildProfileService {
 
       return snapshot.docs.isNotEmpty;
     } catch (e) {
-      print('Error verificando vinculación: $e');
       return false;
     }
   }

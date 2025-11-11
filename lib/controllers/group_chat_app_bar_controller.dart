@@ -127,10 +127,21 @@ class GroupChatAppBarController {
       }
 
       final members = List<String>.from(groupData['members'] ?? []);
-      final participantIds = members.where((id) => id != currentUserId).toList();
+      final allParticipants = members.where((id) => id != currentUserId).toList();
 
-      if (participantIds.isEmpty) {
+      if (allParticipants.isEmpty) {
         throw 'No hay otros miembros en el grupo';
+      }
+
+      // ✅ LÍMITE MÁXIMO: 6 participantes por llamada (excluyendo al caller)
+      final participantIds = allParticipants.take(6).toList();
+      final excludedCount = allParticipants.length - participantIds.length;
+
+      if (excludedCount > 0) {
+        ReleaseLogger.log(
+          'Límite de llamada grupal: Invitando a ${participantIds.length} de ${allParticipants.length} miembros',
+          tag: 'GroupChatAppBar'
+        );
       }
 
       // Obtener nombre del usuario actual

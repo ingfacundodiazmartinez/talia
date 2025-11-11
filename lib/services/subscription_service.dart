@@ -1,7 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart';
 
 /// Servicio para gestionar suscripciones premium
 /// Maneja la verificación de estado premium, compra de suscripciones,
@@ -26,7 +25,6 @@ class SubscriptionService {
     try {
       final user = _auth.currentUser;
       if (user == null) {
-        print('⚠️ [SubscriptionService] Usuario no autenticado');
         return PremiumStatus.free();
       }
 
@@ -36,11 +34,8 @@ class SubscriptionService {
           _cachedStatus != null &&
           _cacheTimestamp != null &&
           now.difference(_cacheTimestamp!) < _cacheDuration) {
-        print('✅ [SubscriptionService] Usando caché de premium status');
         return _cachedStatus!;
       }
-
-      print('🔍 [SubscriptionService] Verificando premium status desde servidor...');
 
       // Llamar a Cloud Function
       final result = await _functions
@@ -62,10 +57,8 @@ class SubscriptionService {
       _cachedStatus = status;
       _cacheTimestamp = now;
 
-      print('✅ [SubscriptionService] Premium status: ${status.tier.name}');
       return status;
     } catch (e) {
-      print('❌ [SubscriptionService] Error verificando premium: $e');
       // En caso de error, retornar free tier por seguridad
       return PremiumStatus.free();
     }
@@ -99,8 +92,6 @@ class SubscriptionService {
         throw Exception('Usuario no autenticado');
       }
 
-      print('💳 [SubscriptionService] Creando checkout session: $tier');
-
       final params = {
         'tier': tier.name,
         'provider': provider,
@@ -125,7 +116,6 @@ class SubscriptionService {
         trialDays: data['trialDays'] as int?,
       );
     } catch (e) {
-      print('❌ [SubscriptionService] Error creando checkout: $e');
       rethrow;
     }
   }
@@ -137,8 +127,6 @@ class SubscriptionService {
       if (user == null) {
         throw Exception('Usuario no autenticado');
       }
-
-      print('🚫 [SubscriptionService] Cancelando suscripción...');
 
       final result = await _functions
           .httpsCallable('cancelSubscription')
@@ -158,7 +146,6 @@ class SubscriptionService {
             : null,
       );
     } catch (e) {
-      print('❌ [SubscriptionService] Error cancelando suscripción: $e');
       rethrow;
     }
   }
@@ -171,8 +158,6 @@ class SubscriptionService {
     required int durationMonths,
   }) async {
     try {
-      print('🎁 [SubscriptionService] Activando premium manual...');
-
       await _functions
           .httpsCallable('activatePremium')
           .call({
@@ -185,10 +170,7 @@ class SubscriptionService {
       // Invalidar caché
       _cachedStatus = null;
       _cacheTimestamp = null;
-
-      print('✅ [SubscriptionService] Premium activado manualmente');
     } catch (e) {
-      print('❌ [SubscriptionService] Error activando premium: $e');
       rethrow;
     }
   }
@@ -234,7 +216,6 @@ class SubscriptionService {
   void invalidateCache() {
     _cachedStatus = null;
     _cacheTimestamp = null;
-    print('🔄 [SubscriptionService] Caché invalidado');
   }
 }
 

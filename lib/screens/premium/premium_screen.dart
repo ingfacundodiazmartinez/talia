@@ -5,7 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 /// Pantalla principal de Premium
 /// Muestra los planes disponibles, beneficios y permite suscribirse
 class PremiumScreen extends StatefulWidget {
-  const PremiumScreen({Key? key}) : super(key: key);
+  const PremiumScreen({super.key});
 
   @override
   State<PremiumScreen> createState() => _PremiumScreenState();
@@ -33,7 +33,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
         _isLoading = false;
       });
     } catch (e) {
-      print('Error cargando status: $e');
+      // Error loading status - silent
       setState(() => _isLoading = false);
     }
   }
@@ -203,9 +203,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
 
   Widget _buildCurrentPremiumHeader() {
     final status = _currentStatus!;
-    final daysLeft = status.expiresAt != null
-        ? status.expiresAt!.difference(DateTime.now()).inDays
-        : null;
+    final daysLeft = status.expiresAt?.difference(DateTime.now()).inDays;
 
     return Container(
       width: double.infinity,
@@ -499,7 +497,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
                 ],
               ),
             );
-          }).toList(),
+          }),
           const SizedBox(height: 10),
           if (_selectedTier == SubscriptionTier.premium ||
               _selectedTier == SubscriptionTier.premiumPlus) ...[

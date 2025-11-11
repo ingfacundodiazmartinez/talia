@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dashboard/parent_dashboard_screen.dart';
 import 'chats/parent_chats_screen.dart';
 import 'contacts/parent_contacts_screen.dart';
@@ -343,8 +342,7 @@ class _ParentMainShellState extends State<ParentMainShell> {
       // Ocultar bottom nav bar cuando hay rutas anidadas (ej: chat abierto)
       bottomNavigationBar: _hasNestedRoute ? null : _buildBottomNavigationBar(),
       // ✅ CORRECTO: Usar controller para datos de floating action button
-      floatingActionButton: currentUserId != null
-          ? StreamBuilder<int>(
+      floatingActionButton: StreamBuilder<int>(
               stream: _controller.getPendingGroupInvitationsStream(),
               builder: (context, snapshot) {
                 final count = snapshot.data ?? 0;
@@ -361,13 +359,12 @@ class _ParentMainShellState extends State<ParentMainShell> {
                         ),
                       );
                     },
-                    child: const Icon(Icons.group_add),
                     tooltip: 'Invitaciones a Grupos ($count)',
+                    child: const Icon(Icons.group_add),
                   ),
                 );
               },
-            )
-          : null,
+            ),
       ),
     );
   }
@@ -393,15 +390,12 @@ class _ParentMainShellState extends State<ParentMainShell> {
     return StreamBuilder<BottomNavData>(
       stream: _bottomNavDataStream!,
       builder: (context, snapshot) {
-        print('🏠 ÚNICO StreamBuilder - rebuilding');
-
         if (!snapshot.hasData) {
           // Mientras no tengamos datos, mostrar sin badges
           return _buildBottomNavBar(colorScheme, showLabels, 0, 0, 0);
         }
 
         final data = snapshot.data!;
-        print('🏠 ÚNICO StreamBuilder - datos: dashboard=${data.dashboardBadgeCount}, chats=${data.unreadChatsCount}, notif=${data.unreadNotificationsCount}');
 
         return _buildBottomNavBar(
           colorScheme,
@@ -491,8 +485,6 @@ class _ParentMainShellState extends State<ParentMainShell> {
 
   /// ✅ OPTIMIZACIÓN: Inicializar stream combinado para evitar 5 StreamBuilders anidados
   void _initializeCombinedStream() {
-    print('🏠 Inicializando stream combinado del BottomNavigationBar');
-
     _bottomNavDataController = StreamController<BottomNavData>.broadcast();
     _bottomNavDataStream = _bottomNavDataController!.stream;
     _subscriptions = [];
@@ -504,7 +496,7 @@ class _ParentMainShellState extends State<ParentMainShell> {
     int currentUnreadChats = 0;
     int currentUnreadNotifications = 0;
 
-    void _emitCombinedData() {
+    void emitCombinedData() {
       if (!_bottomNavDataController!.isClosed) {
         final data = BottomNavData(
           childrenIds: currentChildrenIds,
@@ -514,18 +506,16 @@ class _ParentMainShellState extends State<ParentMainShell> {
           unreadNotificationsCount: currentUnreadNotifications,
         );
         _bottomNavDataController!.add(data);
-        print('🏠 Stream combinado emitido: dashboard=${data.dashboardBadgeCount}, chats=${data.unreadChatsCount}, notif=${data.unreadNotificationsCount}');
       }
     }
 
     // 1. Escuchar cambios en datos del usuario (linkedChildrenIds)
     _subscriptions!.add(
       _controller.getCurrentUserStream().listen((userSnapshot) {
-        print('🏠 Stream 1/5 - getCurrentUserStream cambió');
         if (userSnapshot.exists) {
           final userData = userSnapshot.data() as Map<String, dynamic>?;
           currentChildrenIds = List<String>.from(userData?['linkedChildrenIds'] ?? []);
-          _emitCombinedData();
+          emitCombinedData();
         }
       })
     );
@@ -533,43 +523,38 @@ class _ParentMainShellState extends State<ParentMainShell> {
     // 2. Escuchar cambios en historias pendientes
     _subscriptions!.add(
       _controller.getPendingStoryRequestsStream().listen((count) {
-        print('🏠 Stream 2/5 - getPendingStoryRequestsStream cambió: $count');
         currentPendingStories = count;
-        _emitCombinedData();
+        emitCombinedData();
       })
     );
 
     // 3. Escuchar cambios en emergencias activas
     _subscriptions!.add(
       _controller.getActiveEmergenciesStream(currentChildrenIds).listen((count) {
-        print('🏠 Stream 3/5 - getActiveEmergenciesStream cambió: $count');
         currentEmergencies = count;
-        _emitCombinedData();
+        emitCombinedData();
       })
     );
 
     // 4. Escuchar cambios en chats no leídos
     _subscriptions!.add(
       _controller.getUnreadChatsStream().listen((count) {
-        print('🏠 Stream 4/5 - getUnreadChatsStream cambió: $count');
         currentUnreadChats = count;
-        _emitCombinedData();
+        emitCombinedData();
       })
     );
 
     // 5. Escuchar cambios en notificaciones no leídas
     _subscriptions!.add(
       _controller.getUnreadNotificationsStream().listen((count) {
-        print('🏠 Stream 5/5 - getUnreadNotificationsStream cambió: $count');
         currentUnreadNotifications = count;
-        _emitCombinedData();
+        emitCombinedData();
       })
     );
   }
 
   /// ✅ OPTIMIZACIÓN: Disponer stream combinado
   void _disposeCombinedStream() {
-    print('🏠 Disponiendo stream combinado del BottomNavigationBar');
     _subscriptions?.forEach((sub) => sub.cancel());
     _subscriptions?.clear();
     _bottomNavDataController?.close();

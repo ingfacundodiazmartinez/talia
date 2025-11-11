@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import '../controllers/chat_controller_optimistic.dart';
 import '../notification_service.dart';
-import '../services/foreground_message_listener.dart';
 import '../services/reaction_service.dart';
+import '../services/video_call_service.dart';
 import '../widgets/reaction_picker.dart';
 import 'chat/widgets/chat_app_bar.dart';
 import 'chat/widgets/chat_input_bar.dart';
@@ -53,7 +54,8 @@ class ChatDetailScreen extends StatefulWidget {
 class _ChatDetailScreenState extends State<ChatDetailScreen>
     with WidgetsBindingObserver, MediaHandlersMixin {
   // Controller
-  late ChatControllerOptimistic _controller;
+  ChatControllerOptimistic? _controller;
+  bool _isControllerInitialized = false;
 
   // UI Controllers
   final TextEditingController _messageController = TextEditingController();
@@ -73,8 +75,14 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   bool _hasScrolledToMessage = false;
   Map<String, dynamic>? _editingBlockedMessage;
 
+  // Controller getter required by MediaHandlersMixin
   @override
-  ChatControllerOptimistic get controller => _controller;
+  ChatControllerOptimistic get controller {
+    if (_controller == null) {
+      throw StateError('Controller accessed before initialization');
+    }
+    return _controller!;
+  }
 
   @override
   void initState() {
@@ -82,40 +90,58 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     // ReleaseLogger.log('Inicializando ChatDetailScreen para chatId: ${widget.chatId}', tag: 'ChatDetail');
 
     WidgetsBinding.instance.addObserver(this);
-    NotificationService().setCurrentChat(widget.chatId);
-    ForegroundMessageListener().setCurrentOpenChat(widget.chatId);
 
-    // 🗑️ Limpiar notificaciones de este chat al abrirlo
+    // 🔒 CRITICAL FIX: Inicialización async para evitar race condition
+    _initializeChat();
+  }
+
+  /// Inicializar chat de forma asíncrona para evitar race condition con notificaciones
+  Future<void> _initializeChat() async {
+    // 🔒 PASO 1: Establecer chat actual SÍNCRONAMENTE antes de inicializar controller
+    // Esto previene que lleguen notificaciones push mientras el usuario ya está en el chat
+    await NotificationService().setCurrentChat(widget.chatId);
+
+    // 🗑️ PASO 2: Limpiar notificaciones de este chat al abrirlo
     NotificationService().clearChatNotifications(widget.chatId);
 
+    // 🔒 PASO 3: Ahora inicializar controller sabiendo que SharedPreferences ya está actualizado
     _controller = ChatControllerOptimistic(
       chatId: widget.chatId,
       contactId: widget.contactId,
       contactName: widget.contactName,
     );
-    _controller.initialize();
-    _controller.addListener(_onControllerChanged);
+    await _controller!.initialize();
+    _controller!.addListener(_onControllerChanged);
     _messageController.addListener(_onTypingChanged);
     _scrollController.addListener(_onScroll);
-    _controller.markChatAsRead();
+    _controller!.markChatAsRead();
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (widget.scrollToMessageId != null) {
-        _scrollToSpecificMessage(widget.scrollToMessageId!);
-      } else {
-        _scrollToBottom(animate: false);
-      }
-    });
+    // 🔒 CRITICAL FIX: Marcar controller como inicializado y triggear rebuild
+    if (mounted) {
+      setState(() {
+        _isControllerInitialized = true;
+      });
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (widget.scrollToMessageId != null) {
+          _scrollToSpecificMessage(widget.scrollToMessageId!);
+        } else {
+          _scrollToBottom(animate: false);
+        }
+      });
+    }
   }
 
   @override
   void dispose() {
     // ReleaseLogger.log('Disposing ChatDetailScreen para chatId: ${widget.chatId}', tag: 'ChatDetail');
+
+    // 🔒 NOTA: clearCurrentChat() es async pero no necesitamos await en dispose
+    // Es una operación de limpieza - fire-and-forget está bien aquí
     NotificationService().clearCurrentChat();
-    ForegroundMessageListener().setCurrentOpenChat(null);
     WidgetsBinding.instance.removeObserver(this);
-    _controller.removeListener(_onControllerChanged);
-    _controller.dispose();
+    _controller?.removeListener(_onControllerChanged);
+    _controller?.dispose();
     _messageController.removeListener(_onTypingChanged);
     _messageController.dispose();
     _scrollController.removeListener(_onScroll);
@@ -148,17 +174,17 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   }
 
   void _onTypingChanged() {
-    _controller.setTyping(_messageController.text.isNotEmpty);
+    _controller?.setTyping(_messageController.text.isNotEmpty);
   }
 
   void _onScroll() {
-    if (!_scrollController.hasClients) return;
+    if (!_scrollController.hasClients || _controller == null) return;
 
     final maxScroll = _scrollController.position.maxScrollExtent;
     final currentScroll = _scrollController.position.pixels;
 
     if (currentScroll >= maxScroll * 0.8) {
-      _controller.loadMoreMessages();
+      _controller!.loadMoreMessages();
     }
   }
 
@@ -180,7 +206,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   void _scrollToSpecificMessage(String messageId) {
     if (!_scrollController.hasClients || _hasScrolledToMessage) return;
 
-    final messageIndex = _controller.messages.indexWhere((msg) => msg.id == messageId);
+    final messageIndex = _controller?.messages.indexWhere((msg) => msg.id == messageId) ?? -1;
 
     if (messageIndex == -1) {
       // ReleaseLogger.log('Mensaje $messageId no encontrado aún', tag: 'ChatDetail');
@@ -213,7 +239,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   }
 
   Future<void> _handleSendMessage() async {
-    if (_controller.isBlocked || _controller.isBlockedBy) {
+    if (_controller?.isBlocked == true || _controller?.isBlockedBy == true) {
       _showBlockedSnackbar();
       return;
     }
@@ -238,9 +264,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
       }
 
       if (editingMessageId != null) {
-        await _controller.updateBlockedMessage(editingMessageId, text);
+        await _controller!.updateBlockedMessage(editingMessageId, text);
       } else {
-        await _controller.sendTextMessage(text: text, replyTo: replyToCapture);
+        await _controller!.sendTextMessage(text: text, replyTo: replyToCapture);
       }
     } catch (e) {
       _handleSendError(e, text);
@@ -256,7 +282,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          _controller.isBlocked
+          _controller?.isBlocked == true
               ? 'No puedes enviar mensajes a este contacto porque lo has bloqueado'
               : 'Este contacto te ha bloqueado',
         ),
@@ -271,7 +297,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     _messageController.text = text;
     final dialogContent = error.toString().replaceFirst('Exception: ', '');
 
-    _controller.getCurrentUserData().then((userData) {
+    _controller?.getCurrentUserData().then((userData) {
       final isParent = userData?['isParent'] ?? true;
 
       final title = isParent ? 'Mensaje bloqueado' : 'Mensaje no permitido';
@@ -366,10 +392,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
 
       if (path != null && path.isNotEmpty) {
         // 1. Crear burbuja optimista inmediatamente con waveform real
-        await _controller.createOptimisticAudioBubble(path);
+        await _controller!.createOptimisticAudioBubble(path);
 
         // 2. Subir en background
-        _controller.processAndUploadAudio(path).catchError((e) {
+        _controller!.processAndUploadAudio(path).catchError((e) {
           // ReleaseLogger.error('Error subiendo audio en background: $e', tag: 'ChatDetail');
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -462,7 +488,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   }
 
   Future<void> _handleDeleteMessage(String messageId, Timestamp? timestamp) async {
-    final success = await _controller.deleteMessage(messageId, timestamp);
+    final success = await _controller!.deleteMessage(messageId, timestamp);
 
     if (mounted && !success) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -486,7 +512,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   }
 
   Future<void> _handleClearChat() async {
-    final success = await _controller.clearChat();
+    final success = await _controller!.clearChat();
 
     if (mounted && !success) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -501,7 +527,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   Future<void> _forwardSelectedMessages(BuildContext context) async {
     if (_selectedMessageIds.isEmpty) return;
 
-    final selectedMessages = _controller.messages
+    final selectedMessages = _controller!.messages
         .where((msg) => _selectedMessageIds.contains(msg.id))
         .toList();
 
@@ -522,26 +548,59 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   }
 
   Future<void> _handleCallBack(String callType) async {
-    try {
-      // ReleaseLogger.log('Devolviendo llamada ($callType) a ${widget.contactName}', tag: 'ChatDetail');
+    if (!mounted) return;
 
-      if (mounted) {
-        if (callType == 'audio') {
+    try {
+      // ✅ FIXED: Primero crear la llamada usando VideoCallService para obtener el callId correcto
+      final videoCallService = VideoCallService();
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
+
+      // Obtener información del usuario actual
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+
+      final userName = userDoc.data()?['name'] ?? 'Usuario';
+
+      if (callType == 'audio') {
+        // Crear la llamada de audio usando el servicio - esto retorna el callId correcto
+        final callId = await videoCallService.startAudioCall(
+          callerId: user.uid,
+          callerName: userName,
+          receiverId: widget.contactId,
+          receiverName: widget.contactName,
+        );
+
+        // Ahora navegar con el callId correcto que coincide con el documento creado
+        if (mounted) {
           Navigator.of(context, rootNavigator: true).push(
             MaterialPageRoute(
               builder: (context) => AudioCallScreen(
-                callId: DateTime.now().millisecondsSinceEpoch.toString(),
+                callId: callId, // ✅ FIXED: Usar el callId retornado por el servicio
                 receiverId: widget.contactId,
                 remoteName: widget.contactName,
                 isCaller: true,
               ),
             ),
           );
-        } else {
+        }
+      } else {
+        // Crear la llamada de video usando el servicio - esto retorna el callId correcto
+        final callId = await videoCallService.startCall(
+          callerId: user.uid,
+          callerName: userName,
+          receiverId: widget.contactId,
+          receiverName: widget.contactName,
+        );
+
+        // Ahora navegar con el callId correcto que coincide con el documento creado
+        if (mounted) {
           Navigator.of(context, rootNavigator: true).push(
             MaterialPageRoute(
               builder: (context) => VideoCallScreen(
-                callId: DateTime.now().millisecondsSinceEpoch.toString(),
+                callId: callId, // ✅ FIXED: Usar el callId retornado por el servicio
                 receiverId: widget.contactId,
                 remoteName: widget.contactName,
                 isCaller: true,
@@ -552,13 +611,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
         }
       }
     } catch (e) {
-      // ReleaseLogger.error('Error devolviendo llamada: $e', tag: 'ChatDetail');
+      // Manejar errores al iniciar la llamada
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al devolver llamada: $e'),
-            backgroundColor: Colors.red,
-          ),
+          SnackBar(content: Text('Error al devolver llamada ($callType): $e')),
         );
       }
     }
@@ -568,6 +624,15 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
 
   @override
   Widget build(BuildContext context) {
+    // 🔒 CRITICAL FIX: Mostrar loading hasta que controller esté inicializado
+    if (!_isControllerInitialized) {
+      return const Scaffold(
+        body: Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+
     return Scaffold(
       appBar: _isSelectionMode
           ? ChatSelectionBarWidget(
@@ -583,7 +648,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
           : ChatAppBar(
               contactId: widget.contactId,
               contactName: widget.contactName,
-              contactPhotoURL: _controller.contactPhotoURL,
+              contactPhotoURL: _controller?.contactPhotoURL ?? '',
               chatId: widget.chatId,
               onTap: () {
                 Navigator.of(context).push(
@@ -605,10 +670,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
               Expanded(
                 child: SafeArea(child: _buildMessagesList()),
               ),
-              if (_controller.isBlocked || _controller.isBlockedBy)
+              if (_controller?.isBlocked == true || _controller?.isBlockedBy == true)
                 BlockedMessageBar(
-                  isBlocked: _controller.isBlocked,
-                  isBlockedBy: _controller.isBlockedBy,
+                  isBlocked: _controller?.isBlocked ?? false,
+                  isBlockedBy: _controller?.isBlockedBy ?? false,
                 ),
               if (_replyingTo != null) _buildReplyBar(),
               if (_editingBlockedMessage != null) _buildEditingBar(),
@@ -632,7 +697,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
 
   Widget _buildMessagesList() {
     return MessageListWidget(
-      controller: _controller,
+      controller: _controller!,
       scrollController: _scrollController,
       chatId: widget.chatId,
       contactName: widget.contactName,
@@ -694,7 +759,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   }
 
   Widget _buildInputBar() {
-    if (_controller.isBlocked || _controller.isBlockedBy) {
+    if (_controller?.isBlocked == true || _controller?.isBlockedBy == true) {
       return const SizedBox.shrink();
     }
 

@@ -263,7 +263,7 @@ class FavoritesView extends StatelessWidget {
           favoriteMessages.add(message);
         }
       } catch (e) {
-        print('❌ Error verificando favorito para mensaje ${doc.id}: $e');
+        // Error checking favorite status for message - silent
       }
     }
 

@@ -84,7 +84,7 @@ class ChatArchiveService {
       final chatDoc = await _firestore.collection('chats').doc(chatId).get();
       if (!chatDoc.exists) return false;
 
-      final data = chatDoc.data() as Map<String, dynamic>?;
+      final data = chatDoc.data();
       return data?['archived_$userId'] ?? false;
     } catch (e) {
       appLogger.log('❌ Error verificando si el chat está archivado: $e', level: 'ERROR');
@@ -99,7 +99,7 @@ class ChatArchiveService {
   }) {
     return _firestore.collection('chats').doc(chatId).snapshots().map((snapshot) {
       if (!snapshot.exists) return false;
-      final data = snapshot.data() as Map<String, dynamic>?;
+      final data = snapshot.data();
       return data?['archived_$userId'] ?? false;
     });
   }

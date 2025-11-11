@@ -24,11 +24,10 @@ class ContactService {
         .handleError((error) {
           // Ignorar errores de permisos silenciosamente
           // Esto ocurre cuando el documento no existe aún
-          print('⚠️ Error escuchando blocked_chats/$chatId: $error');
         })
         .map((snapshot) {
           if (snapshot.exists) {
-            final data = snapshot.data() as Map<String, dynamic>?;
+            final data = snapshot.data();
             return data?['isActive'] ?? false;
           }
           return false;
@@ -58,7 +57,6 @@ class ContactService {
 
       return false;
     } catch (e) {
-      print('❌ Error verificando si contacto está revocado: $e');
       return false;
     }
   }
@@ -79,7 +77,6 @@ class ContactService {
 
       return null;
     } catch (e) {
-      print('❌ Error buscando usuario por teléfono: $e');
       return null;
     }
   }
@@ -93,7 +90,6 @@ class ContactService {
       }
       return null;
     } catch (e) {
-      print('❌ Error obteniendo datos de usuario $userId: $e');
       return null;
     }
   }
@@ -110,7 +106,6 @@ class ContactService {
 
       return contactQuery.docs;
     } catch (e) {
-      print('❌ Error obteniendo contactos del usuario $userId: $e');
       return [];
     }
   }
@@ -145,14 +140,10 @@ class ContactService {
             'status': 'deleted',
             'deletedAt': FieldValue.serverTimestamp(),
           });
-          print('✅ Contacto $contactId eliminado exitosamente');
           return;
         }
       }
-
-      print('⚠️ Contacto no encontrado');
     } catch (e) {
-      print('❌ Error eliminando contacto: $e');
       rethrow;
     }
   }

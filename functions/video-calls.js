@@ -75,6 +75,8 @@ exports.generateAgoraToken = onCall(
     const { channelName, uid } = request.data;
 
     console.log(`📺 Generando token para canal: ${channelName}, UID: ${uid}`);
+    console.log(`🔧 App ID usado: ${AGORA_APP_ID}`);
+    console.log(`🔐 Certificate presente: ${AGORA_APP_CERTIFICATE ? '✅ SI' : '❌ NO'}`);
 
     try {
       // Tiempo de expiración del token: 24 horas
@@ -82,7 +84,19 @@ exports.generateAgoraToken = onCall(
       const currentTimestamp = Math.floor(Date.now() / 1000);
       const privilegeExpiredTs = currentTimestamp + expirationTimeInSeconds;
 
+      console.log(`⏰ Configuración de expiración:`);
+      console.log(`   - Current timestamp: ${currentTimestamp}`);
+      console.log(`   - Expiration seconds: ${expirationTimeInSeconds}`);
+      console.log(`   - Expires at: ${privilegeExpiredTs}`);
+
       // Generar token con privilegios de publicador
+      console.log(`🎫 Ejecutando RtcTokenBuilder.buildTokenWithUid con:`);
+      console.log(`   - AGORA_APP_ID: ${AGORA_APP_ID}`);
+      console.log(`   - channelName: ${channelName}`);
+      console.log(`   - uid: ${uid}`);
+      console.log(`   - role: PUBLISHER`);
+      console.log(`   - privilegeExpiredTs: ${privilegeExpiredTs}`);
+
       const token = RtcTokenBuilder.buildTokenWithUid(
         AGORA_APP_ID,
         AGORA_APP_CERTIFICATE,
@@ -92,16 +106,38 @@ exports.generateAgoraToken = onCall(
         privilegeExpiredTs
       );
 
-      console.log(`✅ Token generado exitosamente`);
-      console.log(`⏰ Expira en ${expirationTimeInSeconds} segundos`);
+      console.log(`✅ Token generado exitosamente!`);
+      console.log(`📏 Token length: ${token.length}`);
+      console.log(`🎫 Token prefix: ${token.substring(0, 30)}...`);
+      console.log(`⏰ Expira en ${expirationTimeInSeconds} segundos (${new Date(privilegeExpiredTs * 1000).toISOString()})`);
 
-      return {
+      // Validar que el token no esté vacío
+      if (!token || token.length === 0) {
+        throw new Error('Token generado está vacío');
+      }
+
+      // Validar formato básico del token
+      if (token.length < 100) {
+        console.warn(`⚠️ Token sospechosamente corto: ${token.length} caracteres`);
+      }
+
+      const response = {
         token: token,
         appId: AGORA_APP_ID,
         uid: uid,
         channelName: channelName,
         expiresAt: privilegeExpiredTs,
       };
+
+      console.log(`📤 Respuesta enviada al cliente:`, {
+        tokenLength: token.length,
+        appId: response.appId,
+        uid: response.uid,
+        channelName: response.channelName,
+        expiresAt: response.expiresAt,
+      });
+
+      return response;
     } catch (error) {
       console.error(`❌ Error generando token de Agora:`, error);
       // Re-throw HttpsError as-is, wrap others

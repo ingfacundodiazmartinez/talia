@@ -21,7 +21,7 @@ import 'screens/chat_moderation_settings_screen.dart';
 import 'screens/parent/chat_moderation_management_screen.dart';
 import 'screens/audio_call_screen.dart';
 import 'screens/video_call_screen.dart';
-import 'screens/animated_splash_screen.dart';
+import 'screens/common/incoming_call_screen.dart';
 import 'screens/splash_wrapper.dart';
 import 'notification_service.dart';
 import 'theme_service.dart';
@@ -36,13 +36,13 @@ import 'services/device_session_service.dart';
 import 'services/online_status_service.dart';
 import 'services/screenshot_protection_service.dart';
 import 'services/voip_service.dart';
+import 'services/app_state_service.dart';
 import 'services/analytics_service.dart';
 import 'services/performance_service.dart';
 import 'services/snackbar_service.dart';
 import 'services/network_status_service.dart';
 import 'services/offline_queue_service.dart';
 import 'services/accessibility_service.dart';
-import 'services/foreground_message_listener.dart';
 import 'services/stickers_service.dart';
 import 'services/unread_messages_service.dart';
 import 'services/ad_service.dart';
@@ -82,8 +82,7 @@ void main() async {
 
   // 🕐 TIMESTAMP único para identificar logs de esta sesión
   final sessionTimestamp = DateTime.now().millisecondsSinceEpoch;
-  print('⏰ [APP_START_${sessionTimestamp}] 🚀 Iniciando aplicación Talia...');
-  ReleaseLogger.log('🚀 Iniciando aplicación Talia...', tag: 'MainApp');
+  ReleaseLogger.log('APP_START_$sessionTimestamp - Iniciando aplicación Talia...', tag: 'MainApp');
 
   // 🚀 CACHE INITIALIZATION: MessageCacheService primero (inicializa Hive)
   ReleaseLogger.log('🚀 Inicializando MessageCacheService...', tag: 'MainApp');
@@ -109,6 +108,18 @@ void main() async {
     ReleaseLogger.log('✅ Firebase ya estaba inicializado', tag: 'MainApp');
   }
 
+  // 🚨 CRITICAL: Registrar background handler DESPUÉS de Firebase.initializeApp
+  // ANTES de runApp() para que funcione correctamente
+  //
+  // PROBLEMA RESUELTO: Los handlers FCM no se ejecutaban porque estaban registrados
+  // dentro de NotificationService.initialize(), pero Flutter requiere que se registren
+  // aquí en main.dart para el manejo correcto de notificaciones en background.
+  //
+  // SOLUCIÓN: firebaseMessagingBackgroundHandler ahora está definido como función
+  // top-level en notification_service.dart con @pragma('vm:entry-point')
+  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+  ReleaseLogger.log('✅ Background message handler registrado en main.dart', tag: 'MainApp');
+
   // Ahora DashboardCacheService puede usar Hive Y Firebase (remote logger)
   try {
     await DashboardCacheService().initialize();
@@ -120,42 +131,42 @@ void main() async {
     );
   }
 
+  // 📱 CRÍTICO: Inicializar AppStateService para detectar foreground/background
+  // Esto es esencial para manejar correctamente las notificaciones de videollamadas
+  try {
+    AppStateService().initialize();
+    ReleaseLogger.log('✅ AppStateService inicializado', tag: 'MainApp');
+  } catch (e) {
+    ReleaseLogger.error(
+      '❌ Error inicializando AppStateService: $e',
+      tag: 'MainApp',
+    );
+  }
+
   // ✅ CRÍTICO: Inicializar StoryService manualmente si el usuario ya está autenticado
   // authStateChanges() solo se dispara en CAMBIOS, no en estados existentes
-  print(
-    '[MainApp] 🎬 Verificando usuario autenticado para inicializar StoryService...',
-  );
+  ReleaseLogger.log('Verificando usuario autenticado para inicializar StoryService...', tag: 'MainApp');
   final currentUser = firebase_auth.FirebaseAuth.instance.currentUser;
   if (currentUser != null) {
-    print(
-      '[MainApp] 🎬 Usuario ya autenticado: ${currentUser.uid} - inicializando StoryService manualmente...',
-    );
     ReleaseLogger.log(
-      '🎬 Usuario ya autenticado, inicializando StoryService manualmente',
+      'Usuario ya autenticado: ${currentUser.uid} - inicializando StoryService manualmente',
       tag: 'MainApp',
     );
     try {
       await StoryService().startBackgroundCacheUpdates();
-      print(
-        '[MainApp] 🎬 ✅ StoryService inicializado manualmente para usuario autenticado',
-      );
       ReleaseLogger.log(
-        '✅ StoryService inicializado manualmente',
+        'StoryService inicializado manualmente',
         tag: 'MainApp',
       );
     } catch (e) {
-      print('[MainApp] 🎬 ❌ Error inicializando StoryService manualmente: $e');
       ReleaseLogger.error(
-        '❌ Error inicializando StoryService manualmente: $e',
+        'Error inicializando StoryService manualmente: $e',
         tag: 'MainApp',
       );
     }
   } else {
-    print(
-      '[MainApp] 🎬 No hay usuario autenticado - StoryService se inicializará con authStateChanges()',
-    );
     ReleaseLogger.log(
-      '🎬 No hay usuario autenticado - esperando authStateChanges()',
+      'No hay usuario autenticado - StoryService se inicializará con authStateChanges()',
       tag: 'MainApp',
     );
   }
@@ -188,23 +199,17 @@ void main() async {
       '📍 Stack trace: ${errorDetails.stack}',
       tag: 'MainApp',
     );
-    print('🔍 FLUTTER ERROR DEBUG:');
-    print('   Exception: ${errorDetails.exception}');
-    print('   Library: ${errorDetails.library}');
-    print('   Context: ${errorDetails.context}');
-    print('   Stack trace: ${errorDetails.stack}');
-    print('🔍 END FLUTTER ERROR DEBUG');
+    ReleaseLogger.error(
+      'FLUTTER ERROR DEBUG - Exception: ${errorDetails.exception}, Library: ${errorDetails.library}, Context: ${errorDetails.context}',
+      tag: 'MainApp',
+    );
   };
 
   // Capturar errores asíncronos fuera del framework Flutter
   PlatformDispatcher.instance.onError = (error, stack) {
     FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
-    ReleaseLogger.error('❌ Error asíncrono capturado: $error', tag: 'MainApp');
-    ReleaseLogger.error('📍 Stack trace: $stack', tag: 'MainApp');
-    print('🔍 ASYNC ERROR DEBUG:');
-    print('   Error: $error');
-    print('   Stack trace: $stack');
-    print('🔍 END ASYNC ERROR DEBUG');
+    ReleaseLogger.error('Error asíncrono capturado: $error', tag: 'MainApp');
+    ReleaseLogger.error('Stack trace: $stack', tag: 'MainApp');
     return true;
   };
 
@@ -476,19 +481,69 @@ Future<void> _initializeHeavyServicesInBackground() async {
 
     // VoIP Service (solo iOS, para llamadas)
     () async {
+      ReleaseLogger.log('Verificando plataforma iOS - Platform.isIOS = ${Platform.isIOS}', tag: 'VoIPDebug');
+
       if (Platform.isIOS) {
+        ReleaseLogger.log('Ejecutando en iOS - iniciando VoIP Service...', tag: 'VoIPDebug');
+
         try {
           await VoIPService().initialize();
           ReleaseLogger.log(
-            '✅ VoIP Service inicializado en background (iOS)',
+            'VoIP Service inicializado en background (iOS)',
             tag: 'BackgroundInit',
           );
+
+          // ✅ CRÍTICO: Debug adicional para verificar estado del token VoIP
+          ReleaseLogger.log('Verificando estado token VoIP post-inicialización...', tag: 'VoIPDebug');
+          try {
+            final user = firebase_auth.FirebaseAuth.instance.currentUser;
+            ReleaseLogger.log('Usuario autenticado: ${user?.uid ?? "null"}', tag: 'VoIPDebug');
+
+            if (user != null) {
+              // Verificar token en Firestore
+              final userDoc = await FirebaseFirestore.instance
+                  .collection('users')
+                  .doc(user.uid)
+                  .get();
+
+              if (userDoc.exists) {
+                final data = userDoc.data() as Map<String, dynamic>;
+                final voipToken = data['voipToken'] as String?;
+                final tokenUpdatedAt = data['voipTokenUpdatedAt'];
+
+                ReleaseLogger.log('VoIP Token existe: ${voipToken != null}', tag: 'VoIPDebug');
+                if (voipToken != null) {
+                  ReleaseLogger.log('Token (primeros 20): ${voipToken.length > 20 ? voipToken.substring(0, 20) + '...' : voipToken}', tag: 'VoIPDebug');
+                  ReleaseLogger.log('Token actualizado: $tokenUpdatedAt', tag: 'VoIPDebug');
+                } else {
+                  ReleaseLogger.error('NO HAY TOKEN VOIP - Intentando forzar solicitud de token...', tag: 'VoIPDebug');
+
+                  // Forzar solicitud manual de token VoIP
+                  const platform = MethodChannel('com.talia.chat/voip');
+                  try {
+                    await platform.invokeMethod('requestVoIPToken');
+                    ReleaseLogger.log('Solicitud manual enviada a iOS', tag: 'VoIPDebug');
+                  } catch (platformError) {
+                    ReleaseLogger.error('Error llamando método nativo: $platformError', tag: 'VoIPDebug');
+                  }
+                }
+              } else {
+                ReleaseLogger.error('Documento de usuario no existe', tag: 'VoIPDebug');
+              }
+            } else {
+              ReleaseLogger.log('Usuario no autenticado en momento de inicialización VoIP', tag: 'VoIPDebug');
+            }
+          } catch (debugError) {
+            ReleaseLogger.error('Error en verificación post-inicialización: $debugError', tag: 'VoIPDebug');
+          }
         } catch (e) {
           ReleaseLogger.error(
-            '❌ Error inicializando VoIP Service: $e',
+            'Error inicializando VoIP Service: $e',
             tag: 'BackgroundInit',
           );
         }
+      } else {
+        ReleaseLogger.log('Plataforma no es iOS, saltando VoIP', tag: 'VoIPDebug');
       }
     }(),
 
@@ -522,6 +577,8 @@ Future<void> _initializeHeavyServicesInBackground() async {
         }
       }
     }(),
+
+    // Media preloading is now handled by StoryOrchestrator via background streams
   ]);
 
   ReleaseLogger.log(
@@ -541,6 +598,11 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
   StreamSubscription<Map<String, dynamic>>? _incomingCallSubscription;
   StreamSubscription<DocumentSnapshot>? _userRoleSubscription;
   StreamSubscription<Map<String, dynamic>>? _pendingCallSubscription;
+  StreamSubscription<QuerySnapshot>? _foregroundCallSubscription;
+
+  // ✅ PREVENCIÓN DE LOOPS: Set para rastrear llamadas ya procesadas
+  final Set<String> _processedForegroundCalls = {};
+  StreamSubscription<firebase_auth.User?>? _authSubscription; // ✅ NUEVO: listener auth independiente
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   String? _currentUserRole;
 
@@ -551,6 +613,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
     _setupIncomingCallListener();
     _setupRoleListener();
     _setupPendingCallListener(); // Escuchar llamadas pendientes de VoIP
+    _setupForegroundCallListener(); // ✅ NUEVO: Escuchar llamadas en foreground via Firestore
     _checkPendingCall(); // Verificar llamadas pendientes al iniciar
   }
 
@@ -560,6 +623,8 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
     _incomingCallSubscription?.cancel();
     _userRoleSubscription?.cancel();
     _pendingCallSubscription?.cancel();
+    _foregroundCallSubscription?.cancel(); // ✅ NUEVO: Limpiar foreground listener
+    _authSubscription?.cancel(); // ✅ NUEVO: Limpiar auth listener independiente
     super.dispose();
   }
 
@@ -571,10 +636,6 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
       // App regresó de background, verificar llamadas pendientes
       _checkPendingCall();
 
-      // Marcar en ForegroundMessageListener que la app volvió del background
-      // Esto suprime banners custom por unos segundos para evitar mostrar notificaciones
-      // cuando el usuario abre la app manualmente después de recibir notificaciones
-      ForegroundMessageListener().markAppResumedFromBackground();
 
       // ℹ️ Firestore maneja automáticamente la reconexión cuando la app se reanuda.
       // NO forzar disableNetwork/enableNetwork porque cancela todos los StreamBuilders
@@ -666,6 +727,133 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
     }
   }
 
+  /// ✅ Configurar listener para detectar llamadas en foreground
+  void _setupForegroundCallListener() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _configureForegroundListenerWhenReady();
+    });
+  }
+
+  /// ✅ Configurar listener cuando la app esté lista
+  Future<void> _configureForegroundListenerWhenReady() async {
+    await Future.delayed(Duration(seconds: 2));
+
+    final currentUser = firebase_auth.FirebaseAuth.instance.currentUser;
+    if (currentUser != null) {
+      await _startSimpleForegroundListener(currentUser.uid);
+    }
+  }
+
+  /// ✅ Listener para llamadas en foreground
+  Future<void> _startSimpleForegroundListener(String userId) async {
+    try {
+      _foregroundCallSubscription = FirebaseFirestore.instance
+          .collection('video_calls')
+          .where('receiverId', isEqualTo: userId)
+          .where('status', isEqualTo: 'ringing')
+          .snapshots()
+          .listen((snapshot) {
+            for (final change in snapshot.docChanges) {
+              if (change.type == DocumentChangeType.added) {
+                final callData = change.doc.data() as Map<String, dynamic>;
+                final callId = change.doc.id;
+
+                // ✅ PREVENCIÓN DE LOOPS: Verificar si ya procesamos esta llamada
+                if (_processedForegroundCalls.contains(callId)) {
+                  continue;
+                }
+
+                // ✅ MARCAR COMO PROCESADA ANTES de manejar
+                _processedForegroundCalls.add(callId);
+
+                // Procesar inmediatamente
+                _handleSimpleForegroundCall(callId, callData);
+
+                // ✅ LIMPIEZA AUTOMÁTICA: Remover después de 2 minutos para evitar memory leaks
+                Future.delayed(Duration(minutes: 2), () {
+                  _processedForegroundCalls.remove(callId);
+                });
+              }
+            }
+          }, onError: (error) {
+            ReleaseLogger.error('❌ Error en foreground call listener: $error', tag: 'ForegroundCall');
+          });
+
+    } catch (e) {
+      ReleaseLogger.error('❌ Error configurando foreground listener: $e', tag: 'ForegroundCall');
+    }
+  }
+
+  /// ✅ Procesar llamada entrante en foreground
+  Future<void> _handleSimpleForegroundCall(String callId, Map<String, dynamic> callData) async {
+    try {
+      final callType = callData['callType'] as String? ?? 'video';
+      final callerName = callData['callerName'] as String? ?? 'Usuario desconocido';
+      final callerId = callData['callerId'] as String? ?? '';
+      final channelName = callData['channelName'] as String?;
+      final isEmergency = callData['isEmergency'] == true;
+
+      // 📱 CRÍTICO: Verificar si la app está REALMENTE en foreground
+      // Esto previene conflictos entre VoIP/CallKit y IncomingCallScreen
+      final isAppInForeground = AppStateService().isAppInForeground();
+
+      ReleaseLogger.log(
+        '📱 [FOREGROUND CALL] App estado: ${isAppInForeground ? "FOREGROUND" : "BACKGROUND"}',
+        tag: 'ForegroundCall'
+      );
+
+      if (!isAppInForeground) {
+        ReleaseLogger.log(
+          '⬇️ [FOREGROUND CALL] App en background - saltando IncomingCallScreen (VoIP/CallKit se encargará)',
+          tag: 'ForegroundCall'
+        );
+        return;
+      }
+
+      // 🔄 CRÍTICO: Verificar si VoIP ya está manejando esta llamada
+      // Esto previene dobles pantallas cuando usuario contesta desde VoIP y app abre después
+      if (VoIPService().isCallHandledByVoIP(callId)) {
+        ReleaseLogger.log(
+          '📞 [FOREGROUND CALL] Llamada $callId ya siendo manejada por VoIP - saltando IncomingCallScreen',
+          tag: 'ForegroundCall'
+        );
+        return;
+      }
+
+      // Solo proceder si la app está en foreground Y es iOS
+      if (Platform.isIOS && _navigatorKey.currentContext != null) {
+        ReleaseLogger.log(
+          '✅ [FOREGROUND CALL] Mostrando IncomingCallScreen para llamada $callId',
+          tag: 'ForegroundCall'
+        );
+
+        Navigator.of(_navigatorKey.currentContext!).push(
+          MaterialPageRoute(
+            builder: (context) => IncomingCallScreen(
+              callId: callId,
+              callerName: callerName,
+              callerId: callerId,
+              callerPhotoUrl: callData['callerPhotoURL'] as String?,
+              callType: callType,
+              channelName: channelName,
+              token: callData['token'] as String?,
+              uid: (callData['uid'] as int?),
+              isEmergency: isEmergency,
+            ),
+          ),
+        );
+      } else if (Platform.isIOS) {
+        ReleaseLogger.error('❌ NavigatorKey context es null al procesar llamada iOS', tag: 'ForegroundCall');
+      } else {
+        ReleaseLogger.log('📱 [FOREGROUND CALL] Android - CallKit maneja el flujo completo', tag: 'ForegroundCall');
+      }
+
+    } catch (e) {
+      ReleaseLogger.error('❌ Error procesando llamada foreground: $e', tag: 'ForegroundCall');
+    }
+  }
+
+
   void _setupRoleListener() {
     firebase_auth.FirebaseAuth.instance.authStateChanges().listen((user) {
       ReleaseLogger.log(
@@ -674,10 +862,6 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
       if (user != null) {
         ReleaseLogger.log('✅Usuario autenticado: ${user.uid}');
 
-        // Inicializar ForegroundMessageListener para notificaciones en tiempo real
-        ReleaseLogger.log('🔔Inicializando ForegroundMessageListener...');
-        ForegroundMessageListener().initialize(_navigatorKey);
-        ReleaseLogger.log('✅ForegroundMessageListener inicializado');
 
         // Inicializar protección de screenshots
         ReleaseLogger.log('📸 Inicializando ScreenshotProtectionService...');
@@ -877,7 +1061,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
                 return;
               }
 
-              final data = snapshot.data() as Map<String, dynamic>?;
+              final data = snapshot.data();
               final status = data?['status'];
 
               if (status == 'cancelled') {
@@ -909,21 +1093,40 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
       // ANDROID: Determinar si la llamada fue aceptada desde CallKit en background
       // o si es una llamada entrante en foreground que debe mostrar el diálogo
 
+      // 🔍 DEBUGGING DETALLADO: Analizar estructura completa de callData
+      ReleaseLogger.log('🔍 [CALLKIT_DEBUG] ════════════════════════════════════');
+      ReleaseLogger.log('🔍 [CALLKIT_DEBUG] CallData recibido completo:');
+      ReleaseLogger.log('🔍 [CALLKIT_DEBUG] ${callData.toString()}');
+      ReleaseLogger.log('🔍 [CALLKIT_DEBUG] ────────────────────────────────────');
+      ReleaseLogger.log('🔍 [CALLKIT_DEBUG] Keys disponibles:');
+      callData.forEach((key, value) {
+        ReleaseLogger.log('🔍 [CALLKIT_DEBUG]   "$key": ${value.runtimeType} = $value');
+      });
+      ReleaseLogger.log('🔍 [CALLKIT_DEBUG] ════════════════════════════════════');
+
       // Si la llamada viene de CallKit acceptance (background), debe incluir 'id' en lugar de 'callId'
       // porque flutter_callkit_incoming usa 'id' como key
       final hasId = callData.containsKey('id');
+      final hasCallId = callData.containsKey('callId');
       final hasFromFirestore = callData.containsKey('fromFirestore');
-      final hasFromNotificationTap = callData.containsKey(
-        'fromNotificationTap',
-      );
+      final hasFromNotificationTap = callData.containsKey('fromNotificationTap');
+      final hasExtra = callData.containsKey('extra');
+      final hasNameCaller = callData.containsKey('nameCaller');
+      final hasNumber = callData.containsKey('number');
+
+      // ✅ LÓGICA MEJORADA: Múltiples formas de detectar CallKit acceptance
       final isFromCallKitAcceptance =
           hasId && !hasFromFirestore && !hasFromNotificationTap;
 
-      ReleaseLogger.log('🔍Detectando origen del evento:');
-      ReleaseLogger.log('   hasId: $hasId');
-      ReleaseLogger.log('   hasFromFirestore: $hasFromFirestore');
-      ReleaseLogger.log('   hasFromNotificationTap: $hasFromNotificationTap');
-      ReleaseLogger.log('   isFromCallKitAcceptance: $isFromCallKitAcceptance');
+      ReleaseLogger.log('🔍 [CALLKIT_DEBUG] Detectando origen del evento:');
+      ReleaseLogger.log('🔍 [CALLKIT_DEBUG]   hasId: $hasId');
+      ReleaseLogger.log('🔍 [CALLKIT_DEBUG]   hasCallId: $hasCallId');
+      ReleaseLogger.log('🔍 [CALLKIT_DEBUG]   hasFromFirestore: $hasFromFirestore');
+      ReleaseLogger.log('🔍 [CALLKIT_DEBUG]   hasFromNotificationTap: $hasFromNotificationTap');
+      ReleaseLogger.log('🔍 [CALLKIT_DEBUG]   hasExtra: $hasExtra');
+      ReleaseLogger.log('🔍 [CALLKIT_DEBUG]   hasNameCaller: $hasNameCaller');
+      ReleaseLogger.log('🔍 [CALLKIT_DEBUG]   hasNumber: $hasNumber');
+      ReleaseLogger.log('🔍 [CALLKIT_DEBUG]   isFromCallKitAcceptance: $isFromCallKitAcceptance');
 
       if (isFromCallKitAcceptance) {
         // Usuario aceptó desde CallKit en background - navegar directamente a VideoCallScreen
@@ -1146,7 +1349,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(
-                  'Error al conectar la llamada: ${e.toString().length > 60 ? e.toString().substring(0, 60) + '...' : e}',
+                  'Error al conectar la llamada: ${e.toString().length > 60 ? '${e.toString().substring(0, 60)}...' : e}',
                 ),
                 backgroundColor: Colors.red,
                 duration: const Duration(seconds: 5),
@@ -1156,12 +1359,23 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
         }
       } else {
         // Las llamadas se manejan completamente por CallKit (Android) y VoIP (iOS)
+        ReleaseLogger.log('🔍 [CALLKIT_DEBUG] ❌ NO se detectó como CallKit acceptance');
+        ReleaseLogger.log('🔍 [CALLKIT_DEBUG] Esto significa que:');
+        ReleaseLogger.log('🔍 [CALLKIT_DEBUG] - O la app está en foreground');
+        ReleaseLogger.log('🔍 [CALLKIT_DEBUG] - O los datos no coinciden con CallKit acceptance');
+        ReleaseLogger.log('🔍 [CALLKIT_DEBUG] - CallKit/VoIP debe manejar la navegación');
         ReleaseLogger.log(
-          '✅Llamada detectada en foreground - CallKit/VoIP debe manejarla',
+          '🔍 [CALLKIT_DEBUG] ℹ️ No se navega a VideoCallScreen desde aquí',
         );
-        ReleaseLogger.log(
-          'ℹ️No se muestra diálogo de Flutter - solo notificaciones nativas',
-        );
+
+        // ✅ POSIBLE PROBLEMA: Si la app se abre desde background por CallKit
+        // pero no se detecta correctamente, la llamada nunca llegará a VideoCallScreen
+        if (Platform.isAndroid && (hasId || hasNameCaller || hasNumber)) {
+          ReleaseLogger.log('🔍 [CALLKIT_DEBUG] ⚠️ POSIBLE PROBLEMA DETECTADO:');
+          ReleaseLogger.log('🔍 [CALLKIT_DEBUG] App abierta en Android con datos que parecen CallKit');
+          ReleaseLogger.log('🔍 [CALLKIT_DEBUG] pero no se detectó como CallKit acceptance');
+          ReleaseLogger.log('🔍 [CALLKIT_DEBUG] Esto puede causar que la navegación no funcione');
+        }
       }
     });
   }
@@ -1407,7 +1621,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
               );
 
               // Verificar si tiene 2FA habilitado
-              final has2FA = userData?['twoFactorEnabled'] ?? false;
+              final has2FA = userData['twoFactorEnabled'] ?? false;
 
               if (has2FA) {
                 ReleaseLogger.log('🔐Usuario tiene 2FA habilitado');

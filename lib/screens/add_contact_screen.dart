@@ -357,7 +357,6 @@ class _AddContactScreenState extends State<AddContactScreen>
 
       // Solicitud enviada - sin mensaje de confirmación
     } catch (e) {
-      print('Error en _sendContactRequest: $e');
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(

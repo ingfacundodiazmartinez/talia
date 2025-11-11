@@ -218,7 +218,7 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
                                     );
                                   },
                                 );
-                              }).toList(),
+                              }),
                             ],
                           ],
                         );
@@ -506,7 +506,7 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
                                     ],
                                   ),
                                 );
-                              }).toList(),
+                              }),
                             // Padres del otro usuario
                             if (hasOtherParents)
                               ...otherParentRequests.map((req) {
@@ -542,7 +542,7 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
                                     ],
                                   ),
                                 );
-                              }).toList(),
+                              }),
                           ],
                         ),
                       ],

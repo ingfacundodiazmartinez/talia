@@ -11,25 +11,18 @@ class ContactUser extends User {
   final String? alias; // Alias personalizado que el usuario actual le puso
 
   ContactUser({
-    required String id,
-    required String name,
-    DateTime? birthDate,
-    String? photoURL,
-    bool? isOnline,
-    String? role,
+    required super.id,
+    required super.name,
+    super.birthDate,
+    super.photoURL,
+    super.isOnline,
+    super.role,
     this.phone,
     this.email,
     this.createdAt,
     this.lastSeen,
     this.alias,
-  }) : super(
-          id: id,
-          name: name,
-          birthDate: birthDate,
-          photoURL: photoURL,
-          isOnline: isOnline,
-          role: role,
-        );
+  });
 
   /// Factory para crear desde datos de Firestore
   factory ContactUser.fromFirestore(Map<String, dynamic> data, String id, {String? customAlias}) {

@@ -33,25 +33,18 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
   }
 
   Future<void> _loadChild() async {
-    print('🧒 [ChildDashboardCard] Iniciando carga para childId: ${widget.childId}');
-
     // 1. Intentar cargar desde cache primero (instantáneo)
     final cachedChild = await _cacheService.getChild(widget.childId);
     if (cachedChild != null && mounted) {
-      print('🧒 [ChildDashboardCard] Child cargado desde cache: ${cachedChild.name}');
       setState(() {
         _cachedChild = cachedChild;
       });
-    } else {
-      print('🧒 [ChildDashboardCard] No hay datos en cache para childId: ${widget.childId}');
     }
 
     // 2. Cargar desde Firestore en segundo plano
     try {
-      print('🧒 [ChildDashboardCard] Cargando desde Firestore...');
       final freshChild = await Child.getById(widget.childId);
       if (freshChild != null) {
-        print('🧒 [ChildDashboardCard] Child cargado desde Firestore: ${freshChild.name}');
         // 3. Actualizar cache con datos frescos
         await _cacheService.saveChild(freshChild);
 
@@ -61,11 +54,9 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
             _cachedChild = freshChild;
           });
         }
-      } else {
-        print('❌ [ChildDashboardCard] Child no encontrado en Firestore: ${widget.childId}');
       }
     } catch (e) {
-      print('❌ [ChildDashboardCard] Error cargando child: $e');
+      // Error loading child - silent (will use cached data if available)
     }
   }
 
@@ -323,8 +314,6 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
         if (snapshot.hasData) {
           final notifications = snapshot.data!.docs;
 
-          print('🔔 [NotificationsBadge] Total notificaciones no leídas: ${notifications.length}');
-
           for (final doc in notifications) {
             final data = doc.data() as Map<String, dynamic>;
             final notifData = data['data'] as Map<String, dynamic>?;
@@ -341,11 +330,8 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
 
             if (isRelated) {
               unreadCount++;
-              print('🔔 [NotificationsBadge] Notificación relacionada con ${child.name}: tipo=${data['type']}, childId=${notifData?['childId']}, senderId=${data['senderId']}');
             }
           }
-
-          print('🔔 [NotificationsBadge] Total para ${child.name}: $unreadCount');
         }
 
         return Material(

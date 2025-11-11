@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import '../../../lib/services/stories/services/story_viewing_service.dart';
-import '../../../lib/services/stories/repositories/story_repository.dart';
+import 'package:talia/services/stories/services/story_viewing_service.dart';
+import 'package:talia/services/stories/repositories/story_repository.dart';
 import 'test_firebase_setup.dart';
 import 'test_helpers.dart';
 
@@ -58,7 +58,6 @@ void main() {
         testServices.user.uid,
       );
 
-      print('✅ [ViewingPermissionTest] Usuario puede marcar sus propias historias como vistas');
     });
 
     test('Should verify Firestore rules updated for viewing permissions', () async {
@@ -89,7 +88,6 @@ void main() {
         testServices.user.uid,
       );
 
-      print('✅ [ViewingPermissionTest] Reglas de Firestore actualizadas correctamente');
     });
 
     test('Should handle story viewing efficiently without cache invalidation', () async {
@@ -119,7 +117,6 @@ void main() {
         testServices.user.uid,
       );
 
-      print('✅ [ViewingPermissionTest] No hay invalidación de cache al marcar historia como vista');
     });
 
     tearDown(() async {

@@ -15,19 +15,15 @@ class ChatPermissionService {
   /// 3. Niño-niño: Requiere aprobación BIDIRECCIONAL de ambos padres
   Future<ChatPermissionResult> canUsersChat(String userA, String userB) async {
     try {
-      print('🔍 Verificando permisos de chat entre $userA y $userB');
-
       // CASO ESPECIAL 1: Verificar si es una conversación padre-hijo
       final isParentChildChat = await _isParentChildRelationship(userA, userB);
       if (isParentChildChat) {
-        print('👨‍👧‍👦 Conversación padre-hijo detectada: Permitida automáticamente');
         return ChatPermissionResult.allowed();
       }
 
       // CASO ESPECIAL 2: Verificar si ambos son adultos/padres que son contactos
       final areAdultContacts = await _areAdultContacts(userA, userB);
       if (areAdultContacts) {
-        print('👥 Conversación entre adultos/padres contactos: Permitida automáticamente');
         return ChatPermissionResult.allowed();
       }
 
@@ -44,8 +40,6 @@ class ChatPermissionService {
         contactId: userA,
       );
 
-      print('📊 Permisos: A->B: $permissionAtoB, B->A: $permissionBtoA');
-
       if (permissionAtoB && permissionBtoA) {
         return ChatPermissionResult.allowed();
       } else {
@@ -54,7 +48,6 @@ class ChatPermissionService {
         );
       }
     } catch (e) {
-      print('❌ Error verificando permisos de chat: $e');
       return ChatPermissionResult.error('Error verificando permisos: $e');
     }
   }
@@ -94,14 +87,12 @@ class ChatPermissionService {
         final data = doc.data();
         final users = List<String>.from(data['users'] ?? []);
         if (users.contains(userB)) {
-          print('✅ Ambos usuarios son adultos/padres y son contactos');
           return true;
         }
       }
 
       return false;
     } catch (e) {
-      print('❌ Error verificando si son adultos contactos: $e');
       return false;
     }
   }
@@ -112,20 +103,17 @@ class ChatPermissionService {
       // Verificar si userA es padre de userB
       final isAParentOfB = await _isParentOf(userA, userB);
       if (isAParentOfB) {
-        print('👨‍👧 $userA es padre de $userB');
         return true;
       }
 
       // Verificar si userB es padre de userA
       final isBParentOfA = await _isParentOf(userB, userA);
       if (isBParentOfA) {
-        print('👨‍👧 $userB es padre de $userA');
         return true;
       }
 
       return false;
     } catch (e) {
-      print('❌ Error verificando relación padre-hijo: $e');
       return false;
     }
   }
@@ -146,7 +134,6 @@ class ChatPermissionService {
 
       return false;
     } catch (e) {
-      print('❌ Error verificando si es padre: $e');
       return false;
     }
   }
@@ -167,7 +154,6 @@ class ChatPermissionService {
 
       return contactRequestQuery.docs.isNotEmpty;
     } catch (e) {
-      print('❌ Error verificando aprobación del padre: $e');
       return false;
     }
   }
@@ -203,7 +189,6 @@ class ChatPermissionService {
   /// Verificar permisos para múltiples usuarios (para grupos)
   Future<GroupChatPermissionResult> canUsersFormGroup(List<String> userIds) async {
     try {
-      print('🔍 Verificando permisos de grupo para ${userIds.length} usuarios');
 
       final allowedPairs = <String>[];
       final deniedPairs = <String>[];
@@ -238,7 +223,6 @@ class ChatPermissionService {
         allowedUsers: allPairsAllowed ? userIds : _getFullyApprovedUsers(userIds, allowedPairs),
       );
     } catch (e) {
-      print('❌ Error verificando permisos de grupo: $e');
       return GroupChatPermissionResult(
         allUsersCanChat: false,
         allowedPairs: [],
@@ -311,10 +295,8 @@ class ChatPermissionService {
         }
       }
 
-      print('✅ Usuario $userId tiene ${validContacts.length} contactos válidos para grupos');
       return validContacts.toList();
     } catch (e) {
-      print('❌ Error obteniendo contactos: $e');
       return [];
     }
   }
@@ -350,7 +332,6 @@ class ChatPermissionService {
   /// Verificar si un chat específico es válido (ambos usuarios pueden chatear)
   Future<bool> isChatValid(String chatId, List<String> participants) async {
     if (participants.length != 2) {
-      print('❌ Chat inválido: debe tener exactamente 2 participantes');
       return false;
     }
 
@@ -363,7 +344,6 @@ class ChatPermissionService {
     for (final memberId in existingMembers) {
       final result = await canUsersChat(userId, memberId);
       if (!result.isAllowed) {
-        print('❌ Usuario $userId no puede unirse: falta permiso con $memberId');
         return false;
       }
     }

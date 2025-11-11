@@ -290,7 +290,7 @@ class ChildHomeController {
         return;
       }
 
-      final data = snapshot.data() as Map<String, dynamic>?;
+      final data = snapshot.data();
       final status = data?['status'];
 
       ReleaseLogger.log('Status de $callId cambió a: $status', tag: 'ChildHomeController');

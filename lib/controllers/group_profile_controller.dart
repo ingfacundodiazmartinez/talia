@@ -4,7 +4,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:cloud_functions/cloud_functions.dart';
-import '../services/group_service.dart';
 import '../services/contact_alias_service.dart';
 import '../utils/release_logger.dart';
 
@@ -20,7 +19,6 @@ class GroupProfileController {
   final String groupId;
 
   // Servicios privados
-  final GroupService _groupService;
   final ContactAliasService _aliasService;
   final FirebaseFirestore _firestore;
   final firebase_auth.FirebaseAuth _auth;
@@ -52,14 +50,12 @@ class GroupProfileController {
   // Constructor
   GroupProfileController({
     required this.groupId,
-    GroupService? groupService,
     ContactAliasService? aliasService,
     FirebaseFirestore? firestore,
     firebase_auth.FirebaseAuth? auth,
     FirebaseStorage? storage,
     FirebaseFunctions? functions,
-  }) : _groupService = groupService ?? GroupService(),
-       _aliasService = aliasService ?? ContactAliasService(),
+  }) : _aliasService = aliasService ?? ContactAliasService(),
        _firestore = firestore ?? FirebaseFirestore.instance,
        _auth = auth ?? firebase_auth.FirebaseAuth.instance,
        _storage = storage ?? FirebaseStorage.instance,

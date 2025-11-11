@@ -29,9 +29,6 @@ void main() {
         const expectedError = 'Usuario no autenticado';
         const securityLevel = 'CRÍTICO';
 
-        print('🔒 [SECURITY] $testScenario');
-        print('   Expected Error: $expectedError');
-        print('   Security Level: $securityLevel');
 
         expect(testScenario, isNotEmpty);
         expect(expectedError, contains('no autenticado'));
@@ -45,9 +42,6 @@ void main() {
         const securityFeature = 'consumeAppCheckToken: true';
         const securityLevel = 'ALTO';
 
-        print('🔒 [SECURITY] $testScenario');
-        print('   Security Feature: $securityFeature');
-        print('   Security Level: $securityLevel');
 
         expect(testScenario, contains('AppCheck'));
         expect(securityFeature, contains('consumeAppCheckToken'));
@@ -65,9 +59,6 @@ void main() {
         const expectedError = 'storyId es requerido';
         const vulnerabilityPrevented = 'Null Pointer Attacks';
 
-        print('🔒 [SECURITY] $testScenario');
-        print('   Expected Error: $expectedError');
-        print('   Vulnerability Prevented: $vulnerabilityPrevented');
 
         expect(expectedError, contains('requerido'));
       });
@@ -82,9 +73,6 @@ void main() {
         const expectedError = 'replyText no puede estar vacío';
         const dataIntegrity = 'Prevents empty spam messages';
 
-        print('🔒 [SECURITY] $testScenario');
-        print('   Expected Error: $expectedError');
-        print('   Data Integrity: $dataIntegrity');
 
         expect(expectedError, contains('vacío'));
       });
@@ -102,9 +90,6 @@ void main() {
         const expectedError = 'Historia no encontrada';
         const vulnerabilityPrevented = 'Resource Enumeration Attacks';
 
-        print('🔒 [SECURITY] $testScenario');
-        print('   Expected Error: $expectedError');
-        print('   Vulnerability Prevented: $vulnerabilityPrevented');
 
         expect(expectedError, contains('no encontrada'));
       });
@@ -119,9 +104,6 @@ void main() {
         const expectedError = 'No puedes responder tu propia historia';
         const businessRule = 'Self-interaction prevention';
 
-        print('🔒 [SECURITY] $testScenario');
-        print('   Expected Error: $expectedError');
-        print('   Business Rule: $businessRule');
 
         expect(expectedError, contains('propia historia'));
       });
@@ -136,9 +118,6 @@ void main() {
         const expectedError = 'Solo puedes responder historias aprobadas';
         const contentModeration = 'Prevents replies to inappropriate content';
 
-        print('🔒 [SECURITY] $testScenario');
-        print('   Expected Error: $expectedError');
-        print('   Content Moderation: $contentModeration');
 
         expect(expectedError, contains('aprobadas'));
       });
@@ -154,9 +133,6 @@ void main() {
         const expectedError = 'No puedes responder historias expiradas';
         const temporalSecurity = 'Time-based access control';
 
-        print('🔒 [SECURITY] $testScenario');
-        print('   Expected Error: $expectedError');
-        print('   Temporal Security: $temporalSecurity');
 
         expect(expectedError, contains('expiradas'));
       });
@@ -179,9 +155,6 @@ void main() {
         const expectedError = 'Solo puedes responder historias de tus contactos';
         const socialSecurity = 'Social network access control';
 
-        print('🔒 [SECURITY] $testScenario');
-        print('   Expected Error: $expectedError');
-        print('   Social Security: $socialSecurity');
 
         expect(expectedError, contains('de tus contactos'));
       });
@@ -198,9 +171,6 @@ void main() {
         const expectedError = 'No puedes responder historias de usuarios bloqueados';
         const blockingSecurity = 'Bidirectional blocking enforcement';
 
-        print('🔒 [SECURITY] $testScenario');
-        print('   Expected Error: $expectedError');
-        print('   Blocking Security: $blockingSecurity');
 
         expect(expectedError, contains('bloqueados'));
       });
@@ -214,9 +184,6 @@ void main() {
         const securityFeature = 'Bidirectional block validation';
         const accessControl = 'Comprehensive blocking enforcement';
 
-        print('🔒 [SECURITY] $testScenario');
-        print('   Security Feature: $securityFeature');
-        print('   Access Control: $accessControl');
 
         expect(securityFeature, contains('Bidirectional'));
       });
@@ -233,9 +200,6 @@ void main() {
         const securityPractice = 'Safe logging practices';
         const dataProtection = 'User privacy preserved in logs';
 
-        print('🔒 [SECURITY] $testScenario');
-        print('   Security Practice: $securityPractice');
-        print('   Data Protection: $dataProtection');
 
         expect(securityPractice, contains('Safe logging'));
       });
@@ -250,9 +214,6 @@ void main() {
         const validTypes = ['image', 'video', 'audio'];
         const securityControl = 'Media type validation';
 
-        print('🔒 [SECURITY] $testScenario');
-        print('   Valid Types: $validTypes');
-        print('   Security Control: $securityControl');
 
         expect(validTypes, contains('image'));
         expect(validTypes, contains('video'));
@@ -269,9 +230,6 @@ void main() {
         const frontendRole = 'Data provider only';
         const securityBenefit = 'Cannot be bypassed by malicious clients';
 
-        print('🔒 [SECURITY] Architecture: $securityArchitecture');
-        print('   Frontend Role: $frontendRole');
-        print('   Security Benefit: $securityBenefit');
 
         expect(securityArchitecture, contains('Server-side'));
         expect(securityBenefit, contains('Cannot be bypassed'));
@@ -286,9 +244,6 @@ void main() {
         const moderationGuarantee = 'All replies pass through AI moderation';
         const bypassPrevention = 'Cannot skip moderation like direct writes';
 
-        print('🔒 [SECURITY] Feature: $securityFeature');
-        print('   Moderation Guarantee: $moderationGuarantee');
-        print('   Bypass Prevention: $bypassPrevention');
 
         expect(moderationGuarantee, contains('AI moderation'));
         expect(bypassPrevention, contains('Cannot skip'));
@@ -303,9 +258,6 @@ void main() {
         const region = 'us-central1';
         const rateLimitingBenefit = 'Geographic rate limiting possible';
 
-        print('🔒 [SECURITY] Feature: $securityFeature');
-        print('   Region: $region');
-        print('   Rate Limiting Benefit: $rateLimitingBenefit');
 
         expect(region, 'us-central1');
         expect(rateLimitingBenefit, contains('rate limiting'));
@@ -322,9 +274,6 @@ void main() {
         const goodError = 'Historia no encontrada';
         const badError = 'Historia con ID abc123 no encontrada por usuario xyz';
 
-        print('🔒 [SECURITY] Principle: $securityPrinciple');
-        print('   Good Error: $goodError');
-        print('   Bad Error: $badError');
 
         expect(goodError, isNot(contains('ID')));
         expect(badError, contains('ID')); // Esto sería un bad example
@@ -339,9 +288,6 @@ void main() {
         const errorTypes = ['unauthenticated', 'permission-denied', 'not-found', 'invalid-argument', 'internal'];
         const securityBenefit = 'Client can handle errors appropriately';
 
-        print('🔒 [SECURITY] Feature: $securityFeature');
-        print('   Error Types: $errorTypes');
-        print('   Security Benefit: $securityBenefit');
 
         expect(errorTypes, contains('permission-denied'));
         expect(errorTypes, contains('unauthenticated'));
@@ -365,9 +311,7 @@ void main() {
         '✅ Error handling (no information disclosure)',
       ];
 
-      print('🔒 [SECURITY SUMMARY] Complete security coverage:');
       for (final validation in securityValidations) {
-        print('   $validation');
       }
 
       expect(securityValidations.length, 12); // All major attack vectors covered

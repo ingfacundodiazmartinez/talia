@@ -8,10 +8,10 @@ class StoryNativeAdWidget extends StatefulWidget {
   final VoidCallback? onAdCompleted;
 
   const StoryNativeAdWidget({
-    Key? key,
+    super.key,
     required this.nativeAd,
     this.onAdCompleted,
-  }) : super(key: key);
+  });
 
   @override
   State<StoryNativeAdWidget> createState() => _StoryNativeAdWidgetState();

@@ -57,7 +57,6 @@ class DeviceManagementService {
         lastActiveAt: DateTime.now(),
       );
     } catch (e) {
-      print('❌ Error obteniendo información del dispositivo: $e');
       throw Exception('No se pudo obtener información del dispositivo');
     }
   }
@@ -73,7 +72,6 @@ class DeviceManagementService {
   // Registrar dispositivo para un usuario
   Future<DeviceRegistrationResult> registerDeviceForUser(String userId) async {
     try {
-      print('📱 Registrando dispositivo para usuario: $userId');
 
       final deviceInfo = await getDeviceInfo();
       final userDevicesRef = _firestore
@@ -95,7 +93,6 @@ class DeviceManagementService {
           'isActive': true,
         });
 
-        print('✅ Dispositivo ya registrado, actualizado');
         return DeviceRegistrationResult.success(deviceInfo);
       }
 
@@ -107,7 +104,6 @@ class DeviceManagementService {
       if (activeDevices.docs.isNotEmpty) {
         // Ya hay un dispositivo activo
         final activeDevice = activeDevices.docs.first.data();
-        print('❌ Ya existe un dispositivo activo para este usuario');
 
         return DeviceRegistrationResult.deviceAlreadyActive(
           activeDeviceName:
@@ -122,7 +118,6 @@ class DeviceManagementService {
         userId,
       );
       if (deviceConflict != null) {
-        print('❌ Dispositivo ya está en uso por otro usuario');
         return DeviceRegistrationResult.deviceInUseByOtherUser(deviceConflict);
       }
 
@@ -142,10 +137,8 @@ class DeviceManagementService {
       // Guardar localmente para verificaciones rápidas
       await _saveDeviceLocally(userId, deviceInfo);
 
-      print('✅ Dispositivo registrado exitosamente');
       return DeviceRegistrationResult.success(deviceInfo);
     } catch (e) {
-      print('❌ Error registrando dispositivo: $e');
       return DeviceRegistrationResult.error(
         'Error registrando dispositivo: $e',
       );
@@ -184,7 +177,6 @@ class DeviceManagementService {
 
       return null;
     } catch (e) {
-      print('❌ Error verificando conflicto de dispositivo: $e');
       return null;
     }
   }
@@ -195,7 +187,6 @@ class DeviceManagementService {
     String newDeviceFingerprint,
   ) async {
     try {
-      print('🔄 Forzando cambio de dispositivo para usuario: $userId');
 
       final userDevicesRef = _firestore
           .collection('users')
@@ -222,7 +213,6 @@ class DeviceManagementService {
       final result = await registerDeviceForUser(userId);
       return result.isSuccess;
     } catch (e) {
-      print('❌ Error forzando cambio de dispositivo: $e');
       return false;
     }
   }
@@ -240,7 +230,6 @@ class DeviceManagementService {
         deviceInfo.deviceFingerprint,
       );
       if (!localAuth) {
-        print('❌ Dispositivo no autorizado localmente');
         return DeviceAuthorizationResult.unauthorized();
       }
 
@@ -256,7 +245,6 @@ class DeviceManagementService {
           .get();
 
       if (deviceQuery.docs.isEmpty) {
-        print('❌ Dispositivo no autorizado en Firebase');
         await _clearLocalAuthorization();
         return DeviceAuthorizationResult.unauthorized();
       }
@@ -266,10 +254,8 @@ class DeviceManagementService {
         'lastActiveAt': FieldValue.serverTimestamp(),
       });
 
-      print('✅ Dispositivo autorizado');
       return DeviceAuthorizationResult.authorized();
     } catch (e) {
-      print('❌ Error verificando autorización: $e');
       return DeviceAuthorizationResult.error(
         'Error verificando autorización: $e',
       );
@@ -298,10 +284,8 @@ class DeviceManagementService {
       }
 
       await _clearLocalAuthorization();
-      print('✅ Dispositivo desautorizado');
       return true;
     } catch (e) {
-      print('❌ Error desautorizando dispositivo: $e');
       return false;
     }
   }
@@ -320,7 +304,6 @@ class DeviceManagementService {
         DateTime.now().millisecondsSinceEpoch,
       );
     } catch (e) {
-      print('❌ Error guardando autorización local: $e');
     }
   }
 
@@ -355,7 +338,6 @@ class DeviceManagementService {
 
       return true;
     } catch (e) {
-      print('❌ Error verificando autorización local: $e');
       return false;
     }
   }
@@ -368,7 +350,6 @@ class DeviceManagementService {
       await prefs.remove('authorized_device_fingerprint');
       await prefs.remove('authorization_timestamp');
     } catch (e) {
-      print('❌ Error limpiando autorización local: $e');
     }
   }
 
@@ -389,7 +370,6 @@ class DeviceManagementService {
         return DeviceInfo.fromFirestore(data, doc.id);
       }).toList();
     } catch (e) {
-      print('❌ Error obteniendo dispositivos del usuario: $e');
       return [];
     }
   }

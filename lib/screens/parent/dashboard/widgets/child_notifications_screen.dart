@@ -42,8 +42,8 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
     _controller.initialize();
 
     _scrollController.addListener(_onScroll);
-    // Marcar notificaciones visibles como leídas después de 2 segundos
-    Future.delayed(Duration(seconds: 2), () => _controller.markVisibleNotificationsAsRead());
+    // ❌ REMOVED: Automatic read marking was causing false read receipts
+    // Only mark as read when user explicitly taps notifications
   }
 
   @override

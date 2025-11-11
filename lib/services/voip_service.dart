@@ -7,9 +7,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'video_call_service.dart';
-import 'package:flutter/material.dart';
-import '../screens/video_call_screen.dart';
-import '../screens/audio_call_screen.dart';
+import 'app_state_service.dart';
 import '../utils/release_logger.dart';
 
 class VoIPService {
@@ -30,6 +28,26 @@ class VoIPService {
     return _pendingCallNotifier!.stream;
   }
 
+  // 🔄 COORDINACIÓN: Track de llamadas activas desde VoIP/CallKit
+  final Set<String> _voipActiveCallIds = <String>{};
+
+  /// Verificar si una llamada está siendo manejada por VoIP/CallKit
+  bool isCallHandledByVoIP(String callId) {
+    return _voipActiveCallIds.contains(callId);
+  }
+
+  /// Marcar llamada como manejada por VoIP (para evitar IncomingCallScreen)
+  void markCallAsVoIPHandled(String callId) {
+    _voipActiveCallIds.add(callId);
+    ReleaseLogger.log('📞 [VOIP COORDINATION] Llamada $callId marcada como manejada por VoIP', tag: 'VoIPService');
+  }
+
+  /// Desmarcar llamada cuando termine
+  void unmarkVoIPCall(String callId) {
+    _voipActiveCallIds.remove(callId);
+    ReleaseLogger.log('📞 [VOIP COORDINATION] Llamada $callId desmarcada de VoIP', tag: 'VoIPService');
+  }
+
   // 🔒 LIFECYCLE MANAGEMENT para prevenir memory leaks
   bool _isInitialized = false;
   bool get isInitialized => _isInitialized;
@@ -40,6 +58,8 @@ class VoIPService {
       // 🔒 Prevenir re-inicialización innecesaria
       if (_isInitialized) {
         ReleaseLogger.log('📱 VoIP Service ya estaba inicializado', tag: 'VoIPService');
+        // ✅ CRÍTICO: Aún verificar estado del token en reinicializaciones
+        await _validateExistingVoIPToken();
         return;
       }
 
@@ -51,6 +71,9 @@ class VoIPService {
       // Escuchar eventos de CallKit (con cleanup previo por seguridad)
       _callEventSubscription?.cancel();
       _callEventSubscription = FlutterCallkitIncoming.onEvent.listen(_handleCallKitEvent);
+
+      // ✅ INTELIGENTE: Solo validar token existente, no forzar refresh inmediato
+      await _validateExistingVoIPToken();
 
       _isInitialized = true;
 
@@ -298,6 +321,9 @@ class VoIPService {
       final callType = extra['callType'] as String?;
       final isEmergency = extra['isEmergency'] == 'true';
 
+      // 📞 CRÍTICO: Marcar como manejada por VoIP para evitar conflictos
+      markCallAsVoIPHandled(callId);
+
       ReleaseLogger.log('📞 [CallKit] Procesando llamada aceptada:', tag: 'VoIPService');
       ReleaseLogger.log('   - Call ID: $callId', tag: 'VoIPService');
       ReleaseLogger.log('   - Channel: $channelName', tag: 'VoIPService');
@@ -356,10 +382,26 @@ class VoIPService {
       final extra = data['extra'] as Map<String, dynamic>;
       final callId = extra['callId'] as String;
 
+      // ✅ CRÍTICO: Rechazar en Firestore
       await VideoCallService().rejectCall(callId);
       ReleaseLogger.log('✅ [CallKit] Llamada rechazada en Firestore', tag: 'VoIPService');
+
+      // ✅ FIX: Cerrar CallKit UI inmediatamente después del rechazo
+      await notifyCallEnded(callId);
+      ReleaseLogger.log('✅ [CallKit] CallKit UI cerrado tras rechazo', tag: 'VoIPService');
+
     } catch (e) {
       ReleaseLogger.error('❌ [CallKit] Error manejando rechazo: $e', tag: 'VoIPService');
+
+      // ✅ FALLBACK: Incluso si hay error, intentar cerrar CallKit
+      if (data?['extra']?['callId'] != null) {
+        try {
+          await notifyCallEnded(data!['extra']['callId']);
+          ReleaseLogger.log('✅ [CallKit] CallKit cerrado en fallback tras error', tag: 'VoIPService');
+        } catch (fallbackError) {
+          ReleaseLogger.error('❌ [CallKit] Error en fallback: $fallbackError', tag: 'VoIPService');
+        }
+      }
     }
   }
 
@@ -396,9 +438,171 @@ class VoIPService {
   Future<void> notifyCallEnded(String callId) async {
     try {
       await _voipChannel.invokeMethod('endCallKit', {'callId': callId});
+
+      // 🔄 CLEANUP: Desmarcar llamada del tracking VoIP
+      unmarkVoIPCall(callId);
+
       ReleaseLogger.log('✅ [VoIP] Notificado a iOS que la llamada terminó: $callId', tag: 'VoIPService');
     } catch (e) {
       ReleaseLogger.error('❌ [VoIP] Error notificando fin de llamada a iOS: $e', tag: 'VoIPService');
+    }
+  }
+
+  /// ✅ CRÍTICO: Validar estado del token VoIP existente
+  /// Verifica si el token actual en Firestore está funcionando correctamente
+  Future<void> _validateExistingVoIPToken() async {
+    try {
+      final userId = _auth.currentUser?.uid;
+      if (userId == null) return;
+
+      ReleaseLogger.log('🔍 [VoIP_TOKEN_DEBUG] Validando token VoIP existente...', tag: 'VoIPService');
+
+      final userDoc = await _firestore.collection('users').doc(userId).get();
+      if (userDoc.exists) {
+        final data = userDoc.data() as Map<String, dynamic>;
+        final voipToken = data['voipToken'] as String?;
+        final tokenUpdatedAt = data['voipTokenUpdatedAt'] as Timestamp?;
+        final refreshNeeded = data['voipTokenRefreshNeeded'] as bool?;
+
+        if (voipToken != null && voipToken.isNotEmpty) {
+          // ✅ SIMPLE: Token existe → mantenerlo (Apple dice que no expiran por tiempo)
+          ReleaseLogger.log('✅ [VoIP_TOKEN_DEBUG] Token existente encontrado: ${voipToken.substring(0, 20)}...', tag: 'VoIPService');
+          ReleaseLogger.log('✅ [VoIP_TOKEN_DEBUG] Manteniendo token existente - no expira por tiempo según Apple', tag: 'VoIPService');
+        } else {
+          ReleaseLogger.log('❌ [VoIP_TOKEN_DEBUG] No hay token VoIP - solicitando uno nuevo', tag: 'VoIPService');
+          await _requestFreshVoIPToken();
+        }
+      } else {
+        ReleaseLogger.log('❌ [VoIP_TOKEN_DEBUG] Documento de usuario no existe', tag: 'VoIPService');
+        await _requestFreshVoIPToken();
+      }
+    } catch (e) {
+      ReleaseLogger.error('❌ [VoIP_TOKEN_DEBUG] Error validando token: $e', tag: 'VoIPService');
+      // En caso de error, intentar obtener un token fresco
+      await _requestFreshVoIPToken();
+    }
+  }
+
+  /// ✅ CRÍTICO: Solicitar token VoIP fresco desde iOS
+  /// Fuerza al lado nativo a re-registrarse para VoIP y generar un nuevo token
+  Future<void> _requestFreshVoIPToken() async {
+    try {
+      ReleaseLogger.log('🔄 [VoIP_TOKEN_DEBUG] Solicitando token VoIP fresco desde iOS...', tag: 'VoIPService');
+
+      // ✅ ROBUST TOKEN REFRESH: Almacenar token anterior para comparación
+      final userId = _auth.currentUser?.uid;
+      if (userId == null) {
+        ReleaseLogger.log('❌ [VoIP_TOKEN_DEBUG] Usuario no autenticado - no se puede solicitar token', tag: 'VoIPService');
+        return;
+      }
+
+      String? previousToken;
+      try {
+        final userDoc = await _firestore.collection('users').doc(userId).get();
+        if (userDoc.exists) {
+          final data = userDoc.data() as Map<String, dynamic>;
+          previousToken = data['voipToken'] as String?;
+        }
+      } catch (e) {
+        ReleaseLogger.log('⚠️ [VoIP_TOKEN_DEBUG] No se pudo obtener token anterior: $e', tag: 'VoIPService');
+      }
+
+      // Llamar al método nativo para re-registrar VoIP push notifications
+      await _voipChannel.invokeMethod('requestVoIPToken');
+      ReleaseLogger.log('✅ [VoIP_TOKEN_DEBUG] Solicitud enviada a iOS - esperando callback...', tag: 'VoIPService');
+
+      // ✅ ROBUST WAIT: Esperar con verificación de token actualizado
+      const maxRetries = 5;
+      const retryDelay = Duration(seconds: 2);
+
+      for (int attempt = 1; attempt <= maxRetries; attempt++) {
+        ReleaseLogger.log('🔍 [VoIP_TOKEN_DEBUG] Intento $attempt/$maxRetries - verificando nuevo token...', tag: 'VoIPService');
+
+        await Future.delayed(retryDelay);
+
+        try {
+          final userDoc = await _firestore.collection('users').doc(userId).get();
+          if (userDoc.exists) {
+            final data = userDoc.data() as Map<String, dynamic>;
+            final currentToken = data['voipToken'] as String?;
+            final tokenUpdatedAt = data['voipTokenUpdatedAt'] as Timestamp?;
+
+            // Verificar si hay un nuevo token (diferente al anterior)
+            if (currentToken != null &&
+                currentToken != previousToken &&
+                tokenUpdatedAt != null) {
+
+              // Verificar que el token sea reciente (menos de 30 segundos)
+              final tokenAge = DateTime.now().difference(tokenUpdatedAt.toDate());
+              if (tokenAge.inSeconds < 30) {
+                ReleaseLogger.log('✅ [VoIP_TOKEN_DEBUG] Nuevo token recibido exitosamente en intento $attempt', tag: 'VoIPService');
+                ReleaseLogger.log('✅ [VoIP_TOKEN_DEBUG] Token: ${currentToken.substring(0, 20)}... (edad: ${tokenAge.inSeconds}s)', tag: 'VoIPService');
+                return; // ¡Éxito!
+              }
+            }
+          }
+        } catch (e) {
+          ReleaseLogger.log('⚠️ [VoIP_TOKEN_DEBUG] Error verificando token en intento $attempt: $e', tag: 'VoIPService');
+        }
+
+        // Si no es el último intento, intentar solicitar token de nuevo
+        if (attempt < maxRetries) {
+          ReleaseLogger.log('🔄 [VoIP_TOKEN_DEBUG] Token no recibido, reintentando solicitud...', tag: 'VoIPService');
+          try {
+            await _voipChannel.invokeMethod('requestVoIPToken');
+          } catch (e) {
+            ReleaseLogger.log('❌ [VoIP_TOKEN_DEBUG] Error en reintento $attempt: $e', tag: 'VoIPService');
+          }
+        }
+      }
+
+      // Si llegamos aquí, no se recibió un token válido
+      ReleaseLogger.error('❌ [VoIP_TOKEN_DEBUG] FAILED: No se recibió token válido después de $maxRetries intentos', tag: 'VoIPService');
+
+      // ✅ FALLBACK: Marcar que necesitamos reintentarlo en la próxima inicialización
+      await _markTokenRefreshNeeded();
+
+    } catch (e) {
+      ReleaseLogger.error('❌ [VoIP_TOKEN_DEBUG] Error solicitando token fresco: $e', tag: 'VoIPService');
+
+      // ⚠️ CRÍTICO: Si el método nativo falla, significa que el lado iOS no está implementado
+      // o hay un problema en la comunicación Flutter-iOS
+      ReleaseLogger.error('🚨 [VoIP_TOKEN_DEBUG] PROBLEMA CRÍTICO: Método requestVoIPToken no disponible en iOS', tag: 'VoIPService');
+      ReleaseLogger.error('🚨 [VoIP_TOKEN_DEBUG] Esto puede explicar por qué los tokens se invalidan', tag: 'VoIPService');
+
+      // ✅ FALLBACK: Marcar para reintento
+      await _markTokenRefreshNeeded();
+    }
+  }
+
+  /// ✅ FALLBACK: Marcar que se necesita refrescar el token en la próxima inicialización
+  Future<void> _markTokenRefreshNeeded() async {
+    try {
+      final userId = _auth.currentUser?.uid;
+      if (userId != null) {
+        await _firestore.collection('users').doc(userId).update({
+          'voipTokenRefreshNeeded': true,
+          'lastTokenRefreshAttempt': FieldValue.serverTimestamp(),
+        });
+        ReleaseLogger.log('✅ [VoIP_TOKEN_DEBUG] Marcado para refresh en próxima inicialización', tag: 'VoIPService');
+      }
+    } catch (e) {
+      ReleaseLogger.error('❌ [VoIP_TOKEN_DEBUG] Error marcando token para refresh: $e', tag: 'VoIPService');
+    }
+  }
+
+  /// ✅ HELPER: Limpiar flag de refresh después de intentar
+  Future<void> _clearTokenRefreshFlag() async {
+    try {
+      final userId = _auth.currentUser?.uid;
+      if (userId != null) {
+        await _firestore.collection('users').doc(userId).update({
+          'voipTokenRefreshNeeded': FieldValue.delete(),
+        });
+        ReleaseLogger.log('✅ [VoIP_TOKEN_DEBUG] Flag de refresh limpiado', tag: 'VoIPService');
+      }
+    } catch (e) {
+      ReleaseLogger.error('❌ [VoIP_TOKEN_DEBUG] Error limpiando flag: $e', tag: 'VoIPService');
     }
   }
 

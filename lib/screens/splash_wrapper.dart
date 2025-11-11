@@ -40,22 +40,18 @@ class _SplashWrapperState extends State<SplashWrapper> {
           _shouldShowSplash = true;
           _isLoading = false;
         });
-        print('🎬 Primera vez abriendo la app - mostrando splash');
         // No ocultar el splash nativo aún, dejarlo para el AnimatedSplashScreen
       } else {
         // Ya vio el splash antes - ocultar splash nativo inmediatamente
         FlutterNativeSplash.remove();
-        print('✅ Splash nativo ocultado inmediatamente (no es primera vez)');
 
         setState(() {
           _shouldShowSplash = false;
           _isLoading = false;
         });
-        print('✅ App ya fue abierta antes - saltando splash animado');
       }
     } catch (e) {
-      print('❌ Error verificando primera vez: $e');
-      // En caso de error, mostrar splash para estar seguros
+      // Error checking first time - show splash to be safe
       setState(() {
         _shouldShowSplash = true;
         _isLoading = false;

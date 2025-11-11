@@ -24,7 +24,6 @@ class ThemeService extends ChangeNotifier {
         notifyListeners();
       }
     } catch (e) {
-      print('⚠️ Error cargando tema: $e');
     }
   }
 
@@ -36,9 +35,7 @@ class ThemeService extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_themeModeKey, mode.toString());
 
-      print('✅ Tema cambiado a: $mode');
     } catch (e) {
-      print('❌ Error guardando tema: $e');
     }
   }
 

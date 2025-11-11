@@ -117,13 +117,6 @@ class MessageListWidget extends StatelessWidget {
         '${message.effectiveTimestamp.hour}:${message.effectiveTimestamp.minute.toString().padLeft(2, '0')}';
     final isSelected = selectedMessageIds.contains(message.id);
 
-    // Debug forwarding fields
-    if (message.isForwarded) {
-      print(
-        '🔨 Construyendo MessageBubble(${message.id.substring(0, 8)}...): isForwarded=${message.isForwarded}, originalContactName="${message.originalContactName}"',
-      );
-    }
-
     // Verificar si necesitamos mostrar separador de fecha
     final bool showDateSeparator = _shouldShowDateSeparator(index);
 

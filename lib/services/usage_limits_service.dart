@@ -43,7 +43,6 @@ class UsageLimitsService {
       // Verificar si no ha superado el límite
       return count < CHARACTER_TRANSFORM_MONTHLY_LIMIT;
     } catch (e) {
-      print('❌ Error verificando límite de transformaciones: $e');
       return false;
     }
   }
@@ -93,7 +92,6 @@ class UsageLimitsService {
         'remaining': CHARACTER_TRANSFORM_MONTHLY_LIMIT - count,
       };
     } catch (e) {
-      print('❌ Error obteniendo uso de transformaciones: $e');
       return {
         'count': 0,
         'limit': CHARACTER_TRANSFORM_MONTHLY_LIMIT,
@@ -139,9 +137,7 @@ class UsageLimitsService {
         }
       }
 
-      print('✅ Contador de transformaciones incrementado');
     } catch (e) {
-      print('❌ Error incrementando contador de transformaciones: $e');
     }
   }
 
@@ -175,7 +171,6 @@ class UsageLimitsService {
       // Verificar si no ha superado el límite
       return count < FACE_SWAP_MONTHLY_LIMIT;
     } catch (e) {
-      print('❌ Error verificando límite de face swap: $e');
       return false;
     }
   }
@@ -225,7 +220,6 @@ class UsageLimitsService {
         'remaining': FACE_SWAP_MONTHLY_LIMIT - count,
       };
     } catch (e) {
-      print('❌ Error obteniendo uso de face swap: $e');
       return {
         'count': 0,
         'limit': FACE_SWAP_MONTHLY_LIMIT,
@@ -271,9 +265,7 @@ class UsageLimitsService {
         }
       }
 
-      print('✅ Contador de face swap incrementado');
     } catch (e) {
-      print('❌ Error incrementando contador de face swap: $e');
     }
   }
 }

@@ -67,10 +67,13 @@ class ContactRepository {
       // CRÍTICO: Agregar el usuario actual para que pueda ver sus propias historias
       contactIds.add(user.uid);
 
-      // Actualizar cache
-      _updateCache(contactIds);
+      // 4. Filtrar contactos bloqueados (bidireccional)
+      final nonBlockedContacts = await _filterOutBlockedContacts(contactIds);
 
-      return contactIds;
+      // Actualizar cache
+      _updateCache(nonBlockedContacts);
+
+      return nonBlockedContacts;
     } catch (e) {
       throw Exception('Error obteniendo contactos: $e');
     }
@@ -80,6 +83,15 @@ class ContactRepository {
   void invalidateContactsCache() {
     _cachedContactIds = null;
     _lastContactsCacheUpdate = null;
+  }
+
+  /// Invalidar cache cuando cambian relaciones de bloqueo
+  ///
+  /// Debe ser llamado cuando:
+  /// 1. El usuario bloquea/desbloquea a alguien
+  /// 2. Alguien bloquea/desbloquea al usuario
+  void invalidateCacheOnBlockingChange() {
+    invalidateContactsCache();
   }
 
   /// Obtener padres vinculados (método público)
@@ -382,6 +394,99 @@ class ContactRepository {
       return false;
     } catch (e) {
       throw Exception('Error verificando relación padre-hijo: $e');
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // BLOCKED CONTACTS FILTERING
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Filtrar contactos bloqueados bidireccionales
+  ///
+  /// Elimina de la lista cualquier contacto que:
+  /// 1. El usuario actual haya bloqueado
+  /// 2. Que haya bloqueado al usuario actual
+  ///
+  /// MANTIENE: El propio usuario (para ver sus historias)
+  Future<Set<String>> _filterOutBlockedContacts(Set<String> contactIds) async {
+    final user = _auth.currentUser;
+    if (user == null || contactIds.isEmpty) {
+      return contactIds;
+    }
+
+    try {
+      final nonBlockedContacts = <String>{};
+
+      // Siempre mantener al usuario actual (puede ver sus propias historias)
+      if (contactIds.contains(user.uid)) {
+        nonBlockedContacts.add(user.uid);
+      }
+
+      // Filtrar otros contactos
+      final otherContacts = contactIds.where((id) => id != user.uid).toList();
+
+      if (otherContacts.isEmpty) {
+        return nonBlockedContacts;
+      }
+
+      // OPTIMIZACIÓN: Obtener listas de bloqueados en paralelo
+      final futures = [
+        // Contactos que el usuario actual ha bloqueado
+        _getBlockedContactIds(user.uid),
+        // Contactos que han bloqueado al usuario actual
+        _getContactsWhoBlockedUser(user.uid),
+      ];
+
+      final results = await Future.wait(futures);
+      final blockedByMe = results[0];
+      final whoBlockedMe = results[1];
+
+      // Combinar ambas listas de bloqueados
+      final allBlockedContacts = <String>{...blockedByMe, ...whoBlockedMe};
+
+      // Agregar solo contactos no bloqueados
+      for (final contactId in otherContacts) {
+        if (!allBlockedContacts.contains(contactId)) {
+          nonBlockedContacts.add(contactId);
+        }
+      }
+
+      return nonBlockedContacts;
+    } catch (e) {
+      // En caso de error, devolver la lista original (fail-safe)
+      throw Exception('Error filtrando contactos bloqueados: $e');
+    }
+  }
+
+  /// Obtener IDs de contactos bloqueados por el usuario
+  Future<Set<String>> _getBlockedContactIds(String userId) async {
+    try {
+      final blockSnapshot = await _firestore
+          .collection('blocked_contacts')
+          .where('userId', isEqualTo: userId)
+          .get();
+
+      return blockSnapshot.docs
+          .map((doc) => doc.data()['blockedUserId'] as String)
+          .toSet();
+    } catch (e) {
+      throw Exception('Error obteniendo contactos bloqueados: $e');
+    }
+  }
+
+  /// Obtener IDs de contactos que han bloqueado al usuario
+  Future<Set<String>> _getContactsWhoBlockedUser(String userId) async {
+    try {
+      final blockSnapshot = await _firestore
+          .collection('blocked_contacts')
+          .where('blockedUserId', isEqualTo: userId)
+          .get();
+
+      return blockSnapshot.docs
+          .map((doc) => doc.data()['userId'] as String)
+          .toSet();
+    } catch (e) {
+      throw Exception('Error obteniendo contactos que me bloquearon: $e');
     }
   }
 

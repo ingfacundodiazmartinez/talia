@@ -86,12 +86,10 @@ class NetworkStatusService {
     // Ejecutar callbacks si cambió el estado
     if (wasConnected != _isConnected) {
       if (_isConnected) {
-        print('✅ [Network] Conexión restaurada');
         for (final callback in _onConnectedCallbacks) {
           callback();
         }
       } else {
-        print('❌ [Network] Conexión perdida');
         for (final callback in _onDisconnectedCallbacks) {
           callback();
         }

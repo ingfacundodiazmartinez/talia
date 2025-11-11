@@ -83,6 +83,36 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             return
         }
 
+        // ✅ FILTRO CHAT ACTUAL: Verificar si el usuario está viendo este chat
+        Log.e(TAG, "🔍 [FILTRO] Iniciando verificación de chat actual...")
+        val messageChatId = data["chatId"]
+        Log.e(TAG, "🔍 [FILTRO] Chat ID del mensaje: $messageChatId")
+
+        if (messageChatId != null) {
+            val sharedPrefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+            Log.e(TAG, "🔍 [FILTRO] SharedPreferences obtenidas")
+
+            // Intentar diferentes formatos de clave
+            val currentChatId1 = sharedPrefs.getString("flutter.current_chat_id", null)
+            val currentChatId2 = sharedPrefs.getString("current_chat_id", null)
+
+            Log.e(TAG, "🔍 [FILTRO] current_chat_id (flutter.): $currentChatId1")
+            Log.e(TAG, "🔍 [FILTRO] current_chat_id (directo): $currentChatId2")
+
+            val currentChatId = currentChatId1 ?: currentChatId2
+
+            if (currentChatId != null && currentChatId == messageChatId) {
+                Log.e(TAG, "🚫 [FILTRO] Usuario está viendo chat $messageChatId - NO mostrar notificación nativa")
+                return
+            } else if (currentChatId != null) {
+                Log.e(TAG, "📱 [FILTRO] Usuario en chat $currentChatId, notificación de chat $messageChatId - permitida")
+            } else {
+                Log.e(TAG, "📱 [FILTRO] No hay chat actual - notificación permitida")
+            }
+        } else {
+            Log.e(TAG, "⚠️ [FILTRO] No hay chatId en los datos - permitiendo notificación")
+        }
+
         // Solo mostrar notificaciones para mensajes de chat
         Log.e(TAG, "💬 Mensaje de chat - mostrando notificación nativa")
         showNotification(title, body, senderPhotoUrl, data)

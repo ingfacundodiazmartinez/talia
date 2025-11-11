@@ -67,7 +67,6 @@ class ImageMessageContent extends StatelessWidget {
                     borderRadius: BorderRadius.circular(8),
                     child: Builder(
                       builder: (context) {
-                        print('🖼️ [DEBUG] Intentando cargar imagen: $imageUrl');
                         return CachedNetworkImage(
                           imageUrl: imageUrl!,
                           // Usar imageBuilder para controlar el aspect ratio

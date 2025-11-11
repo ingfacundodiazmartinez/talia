@@ -31,9 +31,7 @@ class ContactsSyncService {
 
   /// Inicializar cache de Hive
   Future<void> initialize() async {
-    if (_cacheBox == null) {
-      _cacheBox = await Hive.openBox(_cacheBoxName);
-    }
+    _cacheBox ??= await Hive.openBox(_cacheBoxName);
   }
 
   /// Sincronizar contactos del dispositivo con Firestore
@@ -131,7 +129,7 @@ class ContactsSyncService {
           'lastContactsSync': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
 
-      } catch (e, stackTrace) {
+      } catch (e) {
         return;
       }
 
@@ -248,7 +246,7 @@ class ContactsSyncService {
 
       // Comparar
       final cachedSet = Set<String>.from(cachedNumbers.map((e) => e.toString()));
-      return !currentNumbers.difference(cachedSet).isEmpty;
+      return currentNumbers.difference(cachedSet).isNotEmpty;
     } catch (e) {
       return false;
     }

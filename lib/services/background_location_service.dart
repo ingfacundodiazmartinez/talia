@@ -31,11 +31,9 @@ class BackgroundLocationService {
 
     // Solo inicializar en Android
     if (!Platform.isAndroid) {
-      print('ℹ️ Background Location Service solo disponible en Android');
       return;
     }
 
-    print('🚀 Inicializando Background Location Service...');
 
     // Inicializar notificaciones
     await _initializeNotifications();
@@ -44,7 +42,6 @@ class BackgroundLocationService {
     await _initializeWorkManager();
 
     _isInitialized = true;
-    print('✅ Background Location Service inicializado');
   }
 
   // Inicializar notificaciones persistentes (Android)
@@ -55,7 +52,6 @@ class BackgroundLocationService {
     );
 
     await _notifications.initialize(settings);
-    print('✅ Notificaciones inicializadas para Android');
   }
 
   // Inicializar WorkManager (Android)
@@ -65,9 +61,7 @@ class BackgroundLocationService {
         callbackDispatcher,
         isInDebugMode: false, // Cambiar a true para debug
       );
-      print('✅ WorkManager inicializado');
     } catch (e) {
-      print('❌ Error inicializando WorkManager: $e');
     }
   }
 
@@ -76,7 +70,6 @@ class BackgroundLocationService {
   Future<void> startBackgroundTracking() async {
     // Solo funciona en Android
     if (!Platform.isAndroid) {
-      print('ℹ️ Background tracking solo disponible en Android');
       return;
     }
 
@@ -85,12 +78,10 @@ class BackgroundLocationService {
     }
 
     if (_isTracking) {
-      print('⚠️ Background tracking ya está activo');
       return;
     }
 
     _isTracking = true;
-    print('🚀 Iniciando background tracking...');
 
     // Guardar userId para uso en background
     await saveCurrentUserId();
@@ -101,7 +92,6 @@ class BackgroundLocationService {
     // Programar tareas de background
     await _scheduleBackgroundTasks();
 
-    print('✅ Background tracking iniciado');
   }
 
   // Detener tracking en background
@@ -114,7 +104,6 @@ class BackgroundLocationService {
     // Ocultar notificación
     await _notifications.cancel(1);
 
-    print('⏹️ Background tracking detenido');
   }
 
   // Programar tareas de background usando WorkManager (Android)
@@ -133,9 +122,7 @@ class BackgroundLocationService {
         ),
       );
 
-      print('📅 Tareas de background programadas con WorkManager');
     } catch (e) {
-      print('❌ Error programando tareas de background: $e');
     }
   }
 
@@ -168,13 +155,11 @@ class BackgroundLocationService {
   // Actualizar ubicación en background (método estático para isolates)
   static Future<void> _updateLocationInBackground() async {
     try {
-      print('📍 Actualizando ubicación en background...');
 
       // Verificar permisos
       LocationPermission permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied ||
           permission == LocationPermission.deniedForever) {
-        print('❌ Sin permisos de ubicación');
         return;
       }
 
@@ -190,12 +175,9 @@ class BackgroundLocationService {
         _lastKnownPosition = position;
         _lastUpdateTime = DateTime.now();
       } else {
-        print('📍 Ubicación sin cambios significativos, omitiendo actualización');
       }
 
-      print('✅ Ubicación actualizada en background');
     } catch (e) {
-      print('❌ Error actualizando ubicación en background: $e');
     }
   }
 
@@ -207,7 +189,6 @@ class BackgroundLocationService {
       final String? userId = prefs.getString('current_user_id');
 
       if (userId == null) {
-        print('❌ No se encontró userId en SharedPreferences');
         return;
       }
 
@@ -223,9 +204,7 @@ class BackgroundLocationService {
         'source': 'background',
       }, SetOptions(merge: true));
 
-      print('💾 Ubicación guardada en Firestore desde background');
     } catch (e) {
-      print('❌ Error guardando en Firestore desde background: $e');
     }
   }
 
@@ -236,10 +215,8 @@ class BackgroundLocationService {
       if (user != null) {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('current_user_id', user.uid);
-        print('💾 UserId guardado para background: ${user.uid}');
       }
     } catch (e) {
-      print('❌ Error guardando userId: $e');
     }
   }
 
@@ -284,7 +261,6 @@ class BackgroundLocationService {
 // Callback dispatcher para WorkManager (debe ser función top-level)
 void callbackDispatcher() {
   wm.Workmanager().executeTask((task, inputData) async {
-    print('🔄 Ejecutando tarea de background: $task');
 
     try {
       switch (task) {
@@ -292,12 +268,10 @@ void callbackDispatcher() {
           await BackgroundLocationService._updateLocationInBackground();
           break;
         default:
-          print('⚠️ Tarea desconocida: $task');
       }
 
       return Future.value(true);
     } catch (e) {
-      print('❌ Error en tarea de background: $e');
       return Future.value(false);
     }
   });
@@ -317,7 +291,6 @@ class AppStateService {
   }
 
   void _onAppStateChanged(AppLifecycleState state) {
-    print('📱 Estado de app cambió: $state');
     _currentState = state;
 
     switch (state) {

@@ -66,7 +66,7 @@ class ChatController {
         _contactIsOnline = userData['isOnline'] ?? false;
       }
     } catch (e) {
-      print('❌ Error cargando info del contacto: $e');
+      // Error cargando info del contacto - no crítico
     }
   }
 
@@ -78,10 +78,8 @@ class ChatController {
       await _firestore.collection('chats').doc(chatId).update({
         'unreadCount_$currentUserId': 0,
       });
-
-      print('✅ Mensajes marcados como leídos para chat: $chatId');
     } catch (e) {
-      print('❌ Error marcando mensajes como leídos: $e');
+      // Error marcando mensajes como leídos - no crítico
     }
   }
 
@@ -112,12 +110,8 @@ class ChatController {
       _lastDocument = snapshot.docs.last;
       _hasMoreMessages = snapshot.docs.length == messagesPerPage;
 
-      print(
-        '📥 Cargados ${snapshot.docs.length} mensajes más antiguos del chat',
-      );
       return snapshot.docs;
     } catch (e) {
-      print('❌ Error cargando más mensajes: $e');
       return [];
     }
   }
@@ -154,10 +148,8 @@ class ChatController {
       // Enviar notificación
       await _sendNotification(text);
 
-      print('✅ Mensaje enviado exitosamente');
       return true;
     } catch (e) {
-      print('❌ Error enviando mensaje 2: $e');
       return false;
     }
   }
@@ -191,10 +183,8 @@ class ChatController {
           });
 
       await _updateChatDocument('📷 Imagen');
-      print('✅ Imagen enviada exitosamente');
       return true;
     } catch (e) {
-      print('❌ Error enviando imagen: $e');
       return false;
     }
   }
@@ -224,10 +214,8 @@ class ChatController {
           });
 
       await _updateChatDocument('🎥 Video');
-      print('✅ Video enviado exitosamente');
       return true;
     } catch (e) {
-      print('❌ Error enviando video: $e');
       return false;
     }
   }
@@ -258,23 +246,19 @@ class ChatController {
           });
 
       await _updateChatDocument('🎤 Audio');
-      print('✅ Audio enviado exitosamente');
       return true;
     } catch (e) {
-      print('❌ Error enviando audio: $e');
       return false;
     }
   }
 
-  /// Actualizar documento del chat
+  /// 🔒 DEPRECADO - INSEGURO: Actualizar documento del chat
+  /// Esta función permite bypass de filtros de contenido
+  /// Solo Cloud Functions deben actualizar lastMessage después de validación
+  @Deprecated('❌ INSEGURO: Solo Cloud Functions pueden actualizar lastMessage después de validación')
   Future<void> _updateChatDocument(String lastMessage) async {
-    await _firestore.collection('chats').doc(chatId).set({
-      'participants': [currentUserId, contactId],
-      'lastMessage': lastMessage,
-      'lastMessageTime': FieldValue.serverTimestamp(),
-      'lastMessageSender': currentUserId,
-      'deletedBy': [],
-    }, SetOptions(merge: true));
+    // 🚨 FUNCIÓN BLOQUEADA POR SEGURIDAD
+    throw Exception('🔒 FUNCIÓN BLOQUEADA: _updateChatDocument es insegura. El contenido "$lastMessage" podría ser ofensivo y bypassear filtros. Solo Cloud Functions pueden actualizar lastMessage después de validación.');
   }
 
   /// Enviar notificación al contacto
@@ -298,7 +282,7 @@ class ChatController {
         isGroup: false,
       );
     } catch (e) {
-      print('⚠️ Error enviando notificación: $e');
+      // Error enviando notificación - no crítico
     }
   }
 
@@ -345,7 +329,6 @@ class ChatController {
         final difference = now.difference(messageTime);
 
         if (difference.inMinutes >= 5) {
-          print('⚠️ No se puede eliminar: Han pasado más de 5 minutos');
           return false;
         }
       }
@@ -358,10 +341,8 @@ class ChatController {
           .doc(messageId)
           .delete();
 
-      print('✅ Mensaje eliminado exitosamente');
       return true;
     } catch (e) {
-      print('❌ Error eliminando mensaje: $e');
       return false;
     }
   }

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../../../../services/story_service_refactored.dart';
-import '../../../../models/story.dart';
 import '../../../../theme_service.dart';
 import '../../../story_approval_screen.dart';
 
@@ -9,18 +8,12 @@ class PendingStoriesCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    print('📚 [PendingStoriesCard] Building widget');
     final StoryService storyService = StoryService();
 
     return StreamBuilder<List<Story>>(
       stream: storyService.getPendingStoriesForParent(),
       builder: (context, snapshot) {
-        print('📚 [PendingStoriesCard] StreamBuilder - hasData: ${snapshot.hasData}, connectionState: ${snapshot.connectionState}');
-        if (snapshot.hasError) {
-          print('❌ [PendingStoriesCard] Error: ${snapshot.error}');
-        }
         final pendingCount = snapshot.data?.length ?? 0;
-        print('📚 [PendingStoriesCard] Pending count: $pendingCount');
 
         return GestureDetector(
           onTap: () {
