@@ -352,6 +352,7 @@ class VideoCallOrchestrator {
 
   /// Terminar videollamada activa
   Future<bool> endCall() async {
+    print('🔥 [DEBUG] ENDCALL ORCHESTRATOR CALLED - currentCallId: $_currentCallId');
     ReleaseLogger.log(
       '🔚 [Orchestrator] ═══════════════════════════════════════════════════════════',
       tag: 'VideoCallOrchestrator',

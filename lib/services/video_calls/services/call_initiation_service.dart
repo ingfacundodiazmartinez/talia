@@ -311,17 +311,54 @@ class CallInitiationService {
 
   /// Terminar una videollamada activa
   Future<bool> endCall(String callId) async {
+    print('🔥 [DEBUG] CallInitiationService.endCall CALLED with callId: $callId');
     try {
+      // ✅ CRÍTICO: Verificar estado actual para determinar tipo de terminación
+      final callData = await _videoCallRepo.getById(callId);
+      if (callData == null) {
+        ReleaseLogger.error(
+          'Error terminando videollamada $callId: llamada no encontrada',
+          tag: 'CallInitiation',
+        );
+        return false;
+      }
+
+      final currentStatus = callData['status'] as String;
+      String newStatus;
+      Map<String, dynamic> additionalData;
+
+      // Diferenciamos entre cancelación y terminación normal
+      if (currentStatus == 'calling') {
+        // Llamada cancelada por el caller ANTES de ser aceptada
+        newStatus = 'cancelled_by_caller';
+        additionalData = {
+          'cancelledAt': DateTime.now().toIso8601String(),
+          'reason': 'caller_ended_before_answer',
+        };
+
+        ReleaseLogger.log(
+          '🚫 [CallInitiationService] Llamada CANCELADA por caller (estaba en calling): $callId',
+          tag: 'CallInitiation',
+        );
+      } else {
+        // Llamada terminada normalmente DESPUÉS de ser aceptada
+        newStatus = 'ended';
+        additionalData = {
+          'endedAt': DateTime.now().toIso8601String(),
+        };
+
+        ReleaseLogger.log(
+          '📞 [CallInitiationService] Llamada TERMINADA normalmente (estaba en $currentStatus): $callId',
+          tag: 'CallInitiation',
+        );
+      }
+
       await _videoCallRepo.updateStatus(
         callId,
-        'ended',
-        additionalData: {'endedAt': DateTime.now().toIso8601String()},
+        newStatus,
+        additionalData: additionalData,
       );
 
-      ReleaseLogger.log(
-        '📞 [CallInitiationService] Videollamada terminada: $callId',
-        tag: 'CallInitiation',
-      );
       return true;
     } catch (e) {
       ReleaseLogger.error(
