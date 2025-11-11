@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/location_service.dart';
-import '../services/video_call_service.dart';
+import '../services/video_calls/video_call_orchestrator.dart';
 import '../services/callkit_service.dart';
 import '../services/voip_service.dart';
 import '../notification_service.dart';
@@ -25,7 +25,7 @@ class ChildHomeController {
 
   // Servicios
   final LocationService _locationService;
-  final VideoCallService _videoCallService;
+  final VideoCallOrchestrator _videoCallService;
   final NotificationService _notificationService;
   final UserRoleService _userRoleService;
   final FirebaseFirestore _firestore;
@@ -42,12 +42,12 @@ class ChildHomeController {
     required this.childId,
     required this.context,
     LocationService? locationService,
-    VideoCallService? videoCallService,
+    VideoCallOrchestrator? videoCallService,
     NotificationService? notificationService,
     UserRoleService? userRoleService,
     FirebaseFirestore? firestore,
   })  : _locationService = locationService ?? LocationService(),
-        _videoCallService = videoCallService ?? VideoCallService(),
+        _videoCallService = videoCallService ?? VideoCallOrchestrator(),
         _notificationService = notificationService ?? NotificationService(),
         _userRoleService = userRoleService ?? UserRoleService(),
         _firestore = firestore ?? FirebaseFirestore.instance;

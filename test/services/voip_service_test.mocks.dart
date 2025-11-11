@@ -9,8 +9,10 @@ import 'package:cloud_firestore/cloud_firestore.dart' as _i7;
 import 'package:firebase_auth/firebase_auth.dart' as _i3;
 import 'package:firebase_core/firebase_core.dart' as _i2;
 import 'package:mockito/mockito.dart' as _i1;
-import 'package:mockito/src/dummies.dart' as _i6;
-import 'package:talia/services/video_call_service.dart' as _i4;
+import 'package:mockito/src/dummies.dart' as _i8;
+import 'package:talia/services/video_calls/services/call_state_service.dart'
+    as _i6;
+import 'package:talia/services/video_calls/video_call_orchestrator.dart' as _i4;
 
 // ignore_for_file: type=lint
 // ignore_for_file: avoid_redundant_argument_values
@@ -76,18 +78,30 @@ class _FakeUser_8 extends _i1.SmartFake implements _i3.User {
     : super(parent, parentInvocation);
 }
 
-/// A class which mocks [VideoCallService].
+/// A class which mocks [VideoCallOrchestrator].
 ///
 /// See the documentation for Mockito's code generation for more information.
-class MockVideoCallService extends _i1.Mock implements _i4.VideoCallService {
-  MockVideoCallService() {
+class MockVideoCallOrchestrator extends _i1.Mock
+    implements _i4.VideoCallOrchestrator {
+  MockVideoCallOrchestrator() {
     _i1.throwOnMissingStub(this);
   }
 
   @override
-  bool get isCameraOff =>
-      (super.noSuchMethod(Invocation.getter(#isCameraOff), returnValue: false)
-          as bool);
+  _i5.Stream<_i6.CallStateUpdate> get callStateStream =>
+      (super.noSuchMethod(
+            Invocation.getter(#callStateStream),
+            returnValue: _i5.Stream<_i6.CallStateUpdate>.empty(),
+          )
+          as _i5.Stream<_i6.CallStateUpdate>);
+
+  @override
+  _i5.Stream<List<_i6.IncomingCall>> get incomingCallsStream =>
+      (super.noSuchMethod(
+            Invocation.getter(#incomingCallsStream),
+            returnValue: _i5.Stream<List<_i6.IncomingCall>>.empty(),
+          )
+          as _i5.Stream<List<_i6.IncomingCall>>);
 
   @override
   bool get isMuted =>
@@ -95,12 +109,72 @@ class MockVideoCallService extends _i1.Mock implements _i4.VideoCallService {
           as bool);
 
   @override
-  _i5.Future<Map<String, dynamic>> generateAgoraToken(
-    String? channelName, {
-    int? uid = 0,
+  bool get isCameraOff =>
+      (super.noSuchMethod(Invocation.getter(#isCameraOff), returnValue: false)
+          as bool);
+
+  @override
+  bool get isJoined =>
+      (super.noSuchMethod(Invocation.getter(#isJoined), returnValue: false)
+          as bool);
+
+  @override
+  Set<int> get remoteUids =>
+      (super.noSuchMethod(Invocation.getter(#remoteUids), returnValue: <int>{})
+          as Set<int>);
+
+  @override
+  set onConnectionStatusChanged(dynamic Function(String)? value) =>
+      super.noSuchMethod(
+        Invocation.setter(#onConnectionStatusChanged, value),
+        returnValueForMissingStub: null,
+      );
+
+  @override
+  set onRemoteUsersChanged(dynamic Function(Set<int>)? value) =>
+      super.noSuchMethod(
+        Invocation.setter(#onRemoteUsersChanged, value),
+        returnValueForMissingStub: null,
+      );
+
+  @override
+  set onLocalUserJoined(dynamic Function(bool)? value) => super.noSuchMethod(
+    Invocation.setter(#onLocalUserJoined, value),
+    returnValueForMissingStub: null,
+  );
+
+  @override
+  set onError(dynamic Function(String)? value) => super.noSuchMethod(
+    Invocation.setter(#onError, value),
+    returnValueForMissingStub: null,
+  );
+
+  @override
+  set onCallEnded(dynamic Function()? value) => super.noSuchMethod(
+    Invocation.setter(#onCallEnded, value),
+    returnValueForMissingStub: null,
+  );
+
+  @override
+  _i5.Future<bool> initialize() =>
+      (super.noSuchMethod(
+            Invocation.method(#initialize, []),
+            returnValue: _i5.Future<bool>.value(false),
+          )
+          as _i5.Future<bool>);
+
+  @override
+  _i5.Future<Map<String, dynamic>> startCall({
+    required String? receiverId,
+    required String? receiverName,
+    required bool? isVideo,
   }) =>
       (super.noSuchMethod(
-            Invocation.method(#generateAgoraToken, [channelName], {#uid: uid}),
+            Invocation.method(#startCall, [], {
+              #receiverId: receiverId,
+              #receiverName: receiverName,
+              #isVideo: isVideo,
+            }),
             returnValue: _i5.Future<Map<String, dynamic>>.value(
               <String, dynamic>{},
             ),
@@ -108,27 +182,9 @@ class MockVideoCallService extends _i1.Mock implements _i4.VideoCallService {
           as _i5.Future<Map<String, dynamic>>);
 
   @override
-  _i5.Future<void> initializeAgora({bool? isVideo = true}) =>
+  _i5.Future<Map<String, dynamic>> acceptCall(String? callId) =>
       (super.noSuchMethod(
-            Invocation.method(#initializeAgora, [], {#isVideo: isVideo}),
-            returnValue: _i5.Future<void>.value(),
-            returnValueForMissingStub: _i5.Future<void>.value(),
-          )
-          as _i5.Future<void>);
-
-  @override
-  _i5.Future<void> initializeAgoraAudio() =>
-      (super.noSuchMethod(
-            Invocation.method(#initializeAgoraAudio, []),
-            returnValue: _i5.Future<void>.value(),
-            returnValueForMissingStub: _i5.Future<void>.value(),
-          )
-          as _i5.Future<void>);
-
-  @override
-  _i5.Future<Map<String, dynamic>> requestPermissions() =>
-      (super.noSuchMethod(
-            Invocation.method(#requestPermissions, []),
+            Invocation.method(#acceptCall, [callId]),
             returnValue: _i5.Future<Map<String, dynamic>>.value(
               <String, dynamic>{},
             ),
@@ -136,272 +192,92 @@ class MockVideoCallService extends _i1.Mock implements _i4.VideoCallService {
           as _i5.Future<Map<String, dynamic>>);
 
   @override
-  _i5.Future<void> joinChannel({
+  _i5.Future<bool> rejectCall(String? callId, {String? reason = 'declined'}) =>
+      (super.noSuchMethod(
+            Invocation.method(#rejectCall, [callId], {#reason: reason}),
+            returnValue: _i5.Future<bool>.value(false),
+          )
+          as _i5.Future<bool>);
+
+  @override
+  _i5.Future<bool> endCall() =>
+      (super.noSuchMethod(
+            Invocation.method(#endCall, []),
+            returnValue: _i5.Future<bool>.value(false),
+          )
+          as _i5.Future<bool>);
+
+  @override
+  _i5.Future<bool> toggleMute() =>
+      (super.noSuchMethod(
+            Invocation.method(#toggleMute, []),
+            returnValue: _i5.Future<bool>.value(false),
+          )
+          as _i5.Future<bool>);
+
+  @override
+  _i5.Future<bool> toggleCamera() =>
+      (super.noSuchMethod(
+            Invocation.method(#toggleCamera, []),
+            returnValue: _i5.Future<bool>.value(false),
+          )
+          as _i5.Future<bool>);
+
+  @override
+  _i5.Future<bool> switchCamera() =>
+      (super.noSuchMethod(
+            Invocation.method(#switchCamera, []),
+            returnValue: _i5.Future<bool>.value(false),
+          )
+          as _i5.Future<bool>);
+
+  @override
+  _i5.Future<bool> joinExistingChannel({
     required String? channelName,
     required String? token,
     required int? uid,
-    bool? isVideo = true,
+    required bool? isVideo,
   }) =>
       (super.noSuchMethod(
-            Invocation.method(#joinChannel, [], {
+            Invocation.method(#joinExistingChannel, [], {
               #channelName: channelName,
               #token: token,
               #uid: uid,
               #isVideo: isVideo,
             }),
-            returnValue: _i5.Future<void>.value(),
-            returnValueForMissingStub: _i5.Future<void>.value(),
+            returnValue: _i5.Future<bool>.value(false),
           )
-          as _i5.Future<void>);
+          as _i5.Future<bool>);
 
   @override
-  _i5.Future<void> leaveChannel() =>
-      (super.noSuchMethod(
-            Invocation.method(#leaveChannel, []),
-            returnValue: _i5.Future<void>.value(),
-            returnValueForMissingStub: _i5.Future<void>.value(),
-          )
-          as _i5.Future<void>);
-
-  @override
-  _i5.Future<void> toggleMute() =>
-      (super.noSuchMethod(
-            Invocation.method(#toggleMute, []),
-            returnValue: _i5.Future<void>.value(),
-            returnValueForMissingStub: _i5.Future<void>.value(),
-          )
-          as _i5.Future<void>);
-
-  @override
-  _i5.Future<void> toggleCamera() =>
-      (super.noSuchMethod(
-            Invocation.method(#toggleCamera, []),
-            returnValue: _i5.Future<void>.value(),
-            returnValueForMissingStub: _i5.Future<void>.value(),
-          )
-          as _i5.Future<void>);
-
-  @override
-  _i5.Future<void> switchCamera() =>
-      (super.noSuchMethod(
-            Invocation.method(#switchCamera, []),
-            returnValue: _i5.Future<void>.value(),
-            returnValueForMissingStub: _i5.Future<void>.value(),
-          )
-          as _i5.Future<void>);
-
-  @override
-  void resetInitialization() => super.noSuchMethod(
-    Invocation.method(#resetInitialization, []),
+  void startMonitoringIncomingCalls() => super.noSuchMethod(
+    Invocation.method(#startMonitoringIncomingCalls, []),
     returnValueForMissingStub: null,
   );
 
   @override
-  _i5.Future<void> dispose() =>
-      (super.noSuchMethod(
-            Invocation.method(#dispose, []),
-            returnValue: _i5.Future<void>.value(),
-            returnValueForMissingStub: _i5.Future<void>.value(),
-          )
-          as _i5.Future<void>);
+  void stopMonitoringIncomingCalls() => super.noSuchMethod(
+    Invocation.method(#stopMonitoringIncomingCalls, []),
+    returnValueForMissingStub: null,
+  );
 
   @override
-  _i5.Future<String> startCall({
-    required String? callerId,
-    required String? callerName,
-    required String? receiverId,
-    required String? receiverName,
-  }) =>
+  _i5.Future<List<_i6.ActiveCall>> getActiveCalls() =>
       (super.noSuchMethod(
-            Invocation.method(#startCall, [], {
-              #callerId: callerId,
-              #callerName: callerName,
-              #receiverId: receiverId,
-              #receiverName: receiverName,
-            }),
-            returnValue: _i5.Future<String>.value(
-              _i6.dummyValue<String>(
-                this,
-                Invocation.method(#startCall, [], {
-                  #callerId: callerId,
-                  #callerName: callerName,
-                  #receiverId: receiverId,
-                  #receiverName: receiverName,
-                }),
-              ),
+            Invocation.method(#getActiveCalls, []),
+            returnValue: _i5.Future<List<_i6.ActiveCall>>.value(
+              <_i6.ActiveCall>[],
             ),
           )
-          as _i5.Future<String>);
+          as _i5.Future<List<_i6.ActiveCall>>);
 
   @override
-  _i5.Future<String> startAudioCall({
-    required String? callerId,
-    required String? callerName,
-    required String? receiverId,
-    required String? receiverName,
-  }) =>
+  _i5.Future<bool> hasActiveCalls() =>
       (super.noSuchMethod(
-            Invocation.method(#startAudioCall, [], {
-              #callerId: callerId,
-              #callerName: callerName,
-              #receiverId: receiverId,
-              #receiverName: receiverName,
-            }),
-            returnValue: _i5.Future<String>.value(
-              _i6.dummyValue<String>(
-                this,
-                Invocation.method(#startAudioCall, [], {
-                  #callerId: callerId,
-                  #callerName: callerName,
-                  #receiverId: receiverId,
-                  #receiverName: receiverName,
-                }),
-              ),
-            ),
+            Invocation.method(#hasActiveCalls, []),
+            returnValue: _i5.Future<bool>.value(false),
           )
-          as _i5.Future<String>);
-
-  @override
-  _i5.Future<String> startGroupCall({
-    required String? callerId,
-    required String? callerName,
-    required List<String>? participantIds,
-    required Map<String, String>? participantNames,
-    String? groupId,
-    bool? isEmergency = false,
-  }) =>
-      (super.noSuchMethod(
-            Invocation.method(#startGroupCall, [], {
-              #callerId: callerId,
-              #callerName: callerName,
-              #participantIds: participantIds,
-              #participantNames: participantNames,
-              #groupId: groupId,
-              #isEmergency: isEmergency,
-            }),
-            returnValue: _i5.Future<String>.value(
-              _i6.dummyValue<String>(
-                this,
-                Invocation.method(#startGroupCall, [], {
-                  #callerId: callerId,
-                  #callerName: callerName,
-                  #participantIds: participantIds,
-                  #participantNames: participantNames,
-                  #groupId: groupId,
-                  #isEmergency: isEmergency,
-                }),
-              ),
-            ),
-          )
-          as _i5.Future<String>);
-
-  @override
-  _i5.Future<String> startGroupAudioCall({
-    required String? callerId,
-    required String? callerName,
-    required List<String>? participantIds,
-    required Map<String, String>? participantNames,
-    String? groupId,
-    bool? isEmergency = false,
-  }) =>
-      (super.noSuchMethod(
-            Invocation.method(#startGroupAudioCall, [], {
-              #callerId: callerId,
-              #callerName: callerName,
-              #participantIds: participantIds,
-              #participantNames: participantNames,
-              #groupId: groupId,
-              #isEmergency: isEmergency,
-            }),
-            returnValue: _i5.Future<String>.value(
-              _i6.dummyValue<String>(
-                this,
-                Invocation.method(#startGroupAudioCall, [], {
-                  #callerId: callerId,
-                  #callerName: callerName,
-                  #participantIds: participantIds,
-                  #participantNames: participantNames,
-                  #groupId: groupId,
-                  #isEmergency: isEmergency,
-                }),
-              ),
-            ),
-          )
-          as _i5.Future<String>);
-
-  @override
-  _i5.Future<void> updateParticipantStatus({
-    required String? callId,
-    required String? userId,
-    required String? status,
-  }) =>
-      (super.noSuchMethod(
-            Invocation.method(#updateParticipantStatus, [], {
-              #callId: callId,
-              #userId: userId,
-              #status: status,
-            }),
-            returnValue: _i5.Future<void>.value(),
-            returnValueForMissingStub: _i5.Future<void>.value(),
-          )
-          as _i5.Future<void>);
-
-  @override
-  _i5.Future<Map<String, dynamic>> inviteToOngoingCall({
-    required String? callId,
-    required String? channelName,
-    required String? invitedUserId,
-    required String? invitedUserName,
-  }) =>
-      (super.noSuchMethod(
-            Invocation.method(#inviteToOngoingCall, [], {
-              #callId: callId,
-              #channelName: channelName,
-              #invitedUserId: invitedUserId,
-              #invitedUserName: invitedUserName,
-            }),
-            returnValue: _i5.Future<Map<String, dynamic>>.value(
-              <String, dynamic>{},
-            ),
-          )
-          as _i5.Future<Map<String, dynamic>>);
-
-  @override
-  _i5.Stream<_i7.QuerySnapshot<Object?>> watchIncomingGroupCalls(
-    String? userId,
-  ) =>
-      (super.noSuchMethod(
-            Invocation.method(#watchIncomingGroupCalls, [userId]),
-            returnValue: _i5.Stream<_i7.QuerySnapshot<Object?>>.empty(),
-          )
-          as _i5.Stream<_i7.QuerySnapshot<Object?>>);
-
-  @override
-  _i5.Future<void> acceptCall(String? callId) =>
-      (super.noSuchMethod(
-            Invocation.method(#acceptCall, [callId]),
-            returnValue: _i5.Future<void>.value(),
-            returnValueForMissingStub: _i5.Future<void>.value(),
-          )
-          as _i5.Future<void>);
-
-  @override
-  _i5.Future<void> rejectCall(String? callId) =>
-      (super.noSuchMethod(
-            Invocation.method(#rejectCall, [callId]),
-            returnValue: _i5.Future<void>.value(),
-            returnValueForMissingStub: _i5.Future<void>.value(),
-          )
-          as _i5.Future<void>);
-
-  @override
-  _i5.Future<void> endCall(String? callId) =>
-      (super.noSuchMethod(
-            Invocation.method(#endCall, [callId]),
-            returnValue: _i5.Future<void>.value(),
-            returnValueForMissingStub: _i5.Future<void>.value(),
-          )
-          as _i5.Future<void>);
+          as _i5.Future<bool>);
 
   @override
   _i5.Stream<_i7.QuerySnapshot<Object?>> watchIncomingCalls(String? userId) =>
@@ -412,24 +288,16 @@ class MockVideoCallService extends _i1.Mock implements _i4.VideoCallService {
           as _i5.Stream<_i7.QuerySnapshot<Object?>>);
 
   @override
-  _i5.Stream<_i7.DocumentSnapshot<Object?>> watchCallStatus(String? callId) =>
-      (super.noSuchMethod(
-            Invocation.method(#watchCallStatus, [callId]),
-            returnValue: _i5.Stream<_i7.DocumentSnapshot<Object?>>.empty(),
-          )
-          as _i5.Stream<_i7.DocumentSnapshot<Object?>>);
-
-  @override
-  _i5.Future<Map<String, dynamic>> initiateCall({
-    required String? receiverId,
-    required String? receiverName,
-    required bool? isVideo,
+  _i5.Future<Map<String, dynamic>> startGroupCall({
+    required String? groupId,
+    required String? groupName,
+    required List<String>? memberIds,
   }) =>
       (super.noSuchMethod(
-            Invocation.method(#initiateCall, [], {
-              #receiverId: receiverId,
-              #receiverName: receiverName,
-              #isVideo: isVideo,
+            Invocation.method(#startGroupCall, [], {
+              #groupId: groupId,
+              #groupName: groupName,
+              #memberIds: memberIds,
             }),
             returnValue: _i5.Future<Map<String, dynamic>>.value(
               <String, dynamic>{},
@@ -438,39 +306,39 @@ class MockVideoCallService extends _i1.Mock implements _i4.VideoCallService {
           as _i5.Future<Map<String, dynamic>>);
 
   @override
-  _i5.Future<void> createMissedCallMessage({
-    required String? callerId,
-    required String? receiverId,
-    required String? callType,
-    required String? callId,
+  _i5.Future<Map<String, dynamic>> startGroupAudioCall({
+    required String? groupId,
+    required String? groupName,
+    required List<String>? memberIds,
   }) =>
       (super.noSuchMethod(
-            Invocation.method(#createMissedCallMessage, [], {
-              #callerId: callerId,
-              #receiverId: receiverId,
-              #callType: callType,
-              #callId: callId,
+            Invocation.method(#startGroupAudioCall, [], {
+              #groupId: groupId,
+              #groupName: groupName,
+              #memberIds: memberIds,
             }),
+            returnValue: _i5.Future<Map<String, dynamic>>.value(
+              <String, dynamic>{},
+            ),
+          )
+          as _i5.Future<Map<String, dynamic>>);
+
+  @override
+  Map<String, dynamic> getDebugInfo() =>
+      (super.noSuchMethod(
+            Invocation.method(#getDebugInfo, []),
+            returnValue: <String, dynamic>{},
+          )
+          as Map<String, dynamic>);
+
+  @override
+  _i5.Future<void> dispose() =>
+      (super.noSuchMethod(
+            Invocation.method(#dispose, []),
             returnValue: _i5.Future<void>.value(),
             returnValueForMissingStub: _i5.Future<void>.value(),
           )
           as _i5.Future<void>);
-
-  @override
-  _i5.Future<dynamic> import_chatService() =>
-      (super.noSuchMethod(
-            Invocation.method(#import_chatService, []),
-            returnValue: _i5.Future<dynamic>.value(),
-          )
-          as _i5.Future<dynamic>);
-
-  @override
-  _i5.Future<dynamic> import_callKitService() =>
-      (super.noSuchMethod(
-            Invocation.method(#import_callKitService, []),
-            returnValue: _i5.Future<dynamic>.value(),
-          )
-          as _i5.Future<dynamic>);
 }
 
 /// A class which mocks [FirebaseAuth].
@@ -852,7 +720,7 @@ class MockFirebaseAuth extends _i1.Mock implements _i3.FirebaseAuth {
       (super.noSuchMethod(
             Invocation.method(#verifyPasswordResetCode, [code]),
             returnValue: _i5.Future<String>.value(
-              _i6.dummyValue<String>(
+              _i8.dummyValue<String>(
                 this,
                 Invocation.method(#verifyPasswordResetCode, [code]),
               ),
@@ -980,7 +848,7 @@ class MockUser extends _i1.Mock implements _i3.User {
   String get uid =>
       (super.noSuchMethod(
             Invocation.getter(#uid),
-            returnValue: _i6.dummyValue<String>(this, Invocation.getter(#uid)),
+            returnValue: _i8.dummyValue<String>(this, Invocation.getter(#uid)),
           )
           as String);
 

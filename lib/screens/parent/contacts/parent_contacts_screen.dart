@@ -7,7 +7,7 @@ import '../../../models/user.dart';
 import '../../../services/user_role_service.dart';
 import '../../../services/contact_alias_service.dart';
 import '../../../services/auto_approval_service.dart';
-import '../../../services/video_call_service.dart';
+import '../../../services/video_calls/video_call_orchestrator.dart';
 import '../../../services/block_service.dart';
 import '../../../notification_service.dart';
 import '../../../theme_service.dart';
@@ -55,7 +55,7 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
       parentId: _auth.currentUser!.uid,
       context: context,
       notificationService: NotificationService(),
-      videoCallService: VideoCallService(),
+      videoCallService: VideoCallOrchestrator(),
       autoApprovalService: AutoApprovalService(),
     );
   }

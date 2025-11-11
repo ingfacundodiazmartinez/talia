@@ -4,12 +4,12 @@ import 'package:mockito/annotations.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/services.dart';
-import 'package:talia/services/video_call_service.dart';
+import 'package:talia/services/video_calls/video_call_orchestrator.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
 
 @GenerateMocks([
-  VideoCallService,
+  VideoCallOrchestrator,
   FirebaseAuth,
   User,
 ])
@@ -17,7 +17,7 @@ import 'voip_service_test.mocks.dart';
 
 void main() {
   group('VoIPService Logic Tests (without singleton)', () {
-    late MockVideoCallService mockVideoCallService;
+    late MockVideoCallOrchestrator mockVideoCallOrchestrator;
     late MockFirebaseAuth mockAuth;
     late MockUser mockUser;
     late MethodChannel mockVoipChannel;
@@ -27,7 +27,7 @@ void main() {
     });
 
     setUp(() {
-      mockVideoCallService = MockVideoCallService();
+      mockVideoCallOrchestrator = MockVideoCallOrchestrator();
       mockAuth = MockFirebaseAuth();
       mockUser = MockUser();
 
@@ -40,15 +40,15 @@ void main() {
     });
 
     group('Call Event Logic Tests', () {
-      test('VideoCallService.rejectCall is called correctly', () async {
+      test('VideoCallOrchestrator.rejectCall is called correctly', () async {
         // Test the core logic without VoIP singleton
-        when(mockVideoCallService.rejectCall('test-call-id')).thenAnswer((_) async {});
+        when(mockVideoCallOrchestrator.rejectCall('test-call-id')).thenAnswer((_) async => true);
 
         // Execute the logic that would happen in handleCallDeclined
-        await mockVideoCallService.rejectCall('test-call-id');
+        await mockVideoCallOrchestrator.rejectCall('test-call-id');
 
         // Verify interaction
-        verify(mockVideoCallService.rejectCall('test-call-id')).called(1);
+        verify(mockVideoCallOrchestrator.rejectCall('test-call-id')).called(1);
       });
 
       test('Method channel integration works', () async {
@@ -68,17 +68,17 @@ void main() {
       });
 
       test('Error handling in call decline works correctly', () async {
-        // Simulate VideoCallService throwing an error
-        when(mockVideoCallService.rejectCall(any))
+        // Simulate VideoCallOrchestrator throwing an error
+        when(mockVideoCallOrchestrator.rejectCall(any))
             .thenThrow(Exception('Network error'));
 
         // The error should be properly caught and handled
         expect(
-          () => mockVideoCallService.rejectCall('test-call-id'),
+          () => mockVideoCallOrchestrator.rejectCall('test-call-id'),
           throwsException,
         );
 
-        verify(mockVideoCallService.rejectCall('test-call-id')).called(1);
+        verify(mockVideoCallOrchestrator.rejectCall('test-call-id')).called(1);
       });
 
       test('Call data validation works', () {
@@ -134,14 +134,14 @@ void main() {
     });
 
     group('Error Handling Logic', () {
-      test('VideoCallService error handling works', () async {
+      test('VideoCallOrchestrator error handling works', () async {
         // Test error handling for rejectCall
-        when(mockVideoCallService.rejectCall('test-call-id'))
+        when(mockVideoCallOrchestrator.rejectCall('test-call-id'))
             .thenThrow(Exception('Network error'));
 
         // Verify the exception is thrown
         expect(
-          () => mockVideoCallService.rejectCall('test-call-id'),
+          () => mockVideoCallOrchestrator.rejectCall('test-call-id'),
           throwsA(isA<Exception>()),
         );
       });

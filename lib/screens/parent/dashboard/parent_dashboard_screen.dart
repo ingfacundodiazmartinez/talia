@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../notification_service.dart';
 import '../../../services/auto_approval_service.dart';
-import '../../../services/video_call_service.dart';
+import '../../../services/video_calls/video_call_orchestrator.dart';
 import '../../../controllers/parent_dashboard_controller.dart';
 import '../../../theme_service.dart';
 import 'widgets/child_dashboard_card.dart';
@@ -42,7 +42,7 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen>
       parentId: '', // Will be set after initialization
       context: context,
       notificationService: NotificationService(),
-      videoCallService: VideoCallService(),
+      videoCallService: VideoCallOrchestrator(),
       autoApprovalService: AutoApprovalService(),
     );
     _initializeController();
@@ -56,7 +56,7 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen>
         parentId: currentUserId,
         context: context,
         notificationService: NotificationService(),
-        videoCallService: VideoCallService(),
+        videoCallService: VideoCallOrchestrator(),
         autoApprovalService: AutoApprovalService(),
       );
       await _controller.initialize();

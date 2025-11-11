@@ -13,6 +13,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:image/image.dart' as img;
 import 'constants/notification_types.dart';
+import 'services/video_calls/video_call_orchestrator.dart';
 import 'services/notification_filter.dart';
 import 'services/callkit_service.dart';
 import 'utils/release_logger.dart';
@@ -164,6 +165,14 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     }
     _globalProcessedCallIds.add(callId);
 
+    // ✅ CRÍTICO: Verificar timestamp para evitar mostrar notificaciones de llamadas expiradas
+    // Las notificaciones FCM pueden llegar después de que la llamada ya fue cancelada
+    final sentTime = message.sentTime;
+    if (sentTime != null && DateTime.now().difference(sentTime).inSeconds > 30) {
+      ReleaseLogger.log('⚠️ [NotificationService] Notificación muy vieja: ${DateTime.now().difference(sentTime).inSeconds} segundos - SALTANDO (background)', tag: 'NotificationService');
+      return;
+    }
+
     try {
       final callKit = CallKitService();
       await callKit.showIncomingCall(
@@ -288,7 +297,64 @@ class NotificationService {
   Future<void> initializeFCMTokenAfterLogin() async {
     ReleaseLogger.log('🔄 Inicializando FCM token después del login...', tag: 'NotificationService');
     await _getFCMToken();
+
+    // ✅ CRÍTICO: Inicializar monitoreo de llamadas entrantes para cancelación automática
+    // Esto permite detectar cuando el caller cancela antes de que el receiver conteste
+    await _startIncomingCallsMonitoring();
   }
+
+  /// Iniciar monitoreo de llamadas entrantes para cancelación automática
+  Future<void> _startIncomingCallsMonitoring() async {
+    try {
+      final currentUser = _auth.currentUser;
+      if (currentUser == null) return;
+
+      ReleaseLogger.log('🔧 [NotificationService] Iniciando monitoreo de llamadas entrantes para: ${currentUser.uid}', tag: 'NotificationService');
+
+      // Obtener instancia del VideoCallOrchestrator
+      final videoCallOrchestrator = _getVideoCallOrchestrator();
+      if (videoCallOrchestrator != null) {
+        await videoCallOrchestrator.initialize();
+        videoCallOrchestrator.startMonitoringIncomingCalls();
+        ReleaseLogger.log('✅ [NotificationService] Monitoreo de llamadas entrantes iniciado', tag: 'NotificationService');
+      } else {
+        ReleaseLogger.log('⚠️ [NotificationService] VideoCallOrchestrator no disponible - monitoreo se iniciará más tarde', tag: 'NotificationService');
+      }
+    } catch (e) {
+      ReleaseLogger.error('❌ [NotificationService] Error iniciando monitoreo de llamadas: $e', tag: 'NotificationService');
+    }
+  }
+
+  /// Helper para obtener VideoCallOrchestrator dinámicamente
+  VideoCallOrchestrator? _getVideoCallOrchestrator() {
+    try {
+      // Crear instancia del VideoCallOrchestrator
+      // Este import ya está disponible al principio del archivo
+      return VideoCallOrchestrator();
+    } catch (e) {
+      ReleaseLogger.log('⚠️ [NotificationService] VideoCallOrchestrator no disponible: $e', tag: 'NotificationService');
+      return null;
+    }
+  }
+
+  /// Verificar si hay usuario autenticado e iniciar monitoreo automáticamente
+  Future<void> _checkAndStartCallMonitoring() async {
+    try {
+      ReleaseLogger.log('🔍 [NotificationService] Verificando estado de autenticación...', tag: 'NotificationService');
+
+      final currentUser = _auth.currentUser;
+      if (currentUser != null) {
+        ReleaseLogger.log('👤 [NotificationService] Usuario autenticado detectado: ${currentUser.uid}', tag: 'NotificationService');
+        ReleaseLogger.log('🚀 [NotificationService] Iniciando monitoreo automático de llamadas entrantes', tag: 'NotificationService');
+        await _startIncomingCallsMonitoring();
+      } else {
+        ReleaseLogger.log('❌ [NotificationService] No hay usuario autenticado - monitoreo se iniciará después del login', tag: 'NotificationService');
+      }
+    } catch (e) {
+      ReleaseLogger.error('❌ [NotificationService] Error verificando autenticación: $e', tag: 'NotificationService');
+    }
+  }
+
 
   /// Limpiar tokens FCM duplicados de otros usuarios
   /// Esto previene que las notificaciones lleguen a usuarios anteriores del mismo dispositivo
@@ -366,6 +432,9 @@ class NotificationService {
 
       // 6. Configurar listeners
       _setupListeners();
+
+      // 7. ✅ CRÍTICO: Verificar si hay usuario autenticado e iniciar monitoreo automáticamente
+      await _checkAndStartCallMonitoring();
 
       _isInitialized = true;
       ReleaseLogger.log('✅ Servicio de notificaciones inicializado', tag: 'NotificationService');
@@ -562,6 +631,14 @@ class NotificationService {
         }
         _processedCallIds.add(callId);
         _globalProcessedCallIds.add(callId);
+
+        // ✅ CRÍTICO: Verificar timestamp para evitar mostrar notificaciones de llamadas expiradas
+        // Las notificaciones FCM pueden llegar después de que la llamada ya fue cancelada
+        final sentTime = message.sentTime;
+        if (sentTime != null && DateTime.now().difference(sentTime).inSeconds > 30) {
+          ReleaseLogger.log('⚠️ [NotificationService] Notificación muy vieja: ${DateTime.now().difference(sentTime).inSeconds} segundos - SALTANDO (foreground)', tag: 'NotificationService');
+          return;
+        }
 
         try {
           if (Platform.isAndroid) {

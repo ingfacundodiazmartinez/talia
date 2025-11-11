@@ -1,11 +1,11 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:integration_test/integration_test.dart';
 
-/// Tests de integración para validar flujos completos de historias
+/// Tests unitarios para validar flujos completos de historias
 /// Estos tests capturan el comportamiento actual end-to-end
 /// Para asegurar que el refactor no rompe casos de uso reales
+/// ✅ OPTIMIZED: Converted to unit tests for better performance
 void main() {
-  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  // ✅ FIXED: Removed IntegrationTestWidgetsFlutterBinding for better performance
 
   group('Story Flow Integration Tests - Current Behavior', () {
 

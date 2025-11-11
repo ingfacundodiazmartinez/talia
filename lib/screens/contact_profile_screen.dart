@@ -1,13 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import '../controllers/contact_profile_controller.dart';
 import '../models/contact_user.dart';
 import 'video_call_screen.dart';
 import 'audio_call_screen.dart';
 import '../widgets/profile_photo_viewer.dart';
 import 'child/profile/widgets/media_gallery_widget.dart';
-import '../services/video_call_service.dart';
+import '../services/video_call_initiation_service.dart';
 
 class ContactProfileScreen extends StatefulWidget {
   final String contactId;
@@ -115,7 +113,6 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
     super.dispose();
   }
 
-
   Future<void> _toggleBlock() async {
     if (_isBlocked) {
       // Desbloquear
@@ -131,7 +128,9 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
             ),
             ElevatedButton(
               onPressed: () => Navigator.pop(context, true),
-              style: ElevatedButton.styleFrom(backgroundColor: Color(0xFF9D7FE8)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Color(0xFF9D7FE8),
+              ),
               child: Text('Desbloquear'),
             ),
           ],
@@ -217,43 +216,51 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
     });
 
     try {
-      // ✅ FIXED: Primero crear la llamada usando VideoCallService para obtener el callId correcto
-      final videoCallService = VideoCallService();
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) return;
-
-      // Obtener información del usuario actual
-      final userDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .get();
-
-      final userName = userDoc.data()?['name'] ?? 'Usuario';
-
-      // Crear la llamada usando el servicio - esto retorna el callId correcto
-      final callId = await videoCallService.startCall(
-        callerId: user.uid,
-        callerName: userName,
+      // ✅ CORRECTO: Usar servicio especializado siguiendo CODING_RULES.md
+      final result = await VideoCallInitiationService().startVideoCall(
         receiverId: widget.contactId,
         receiverName: widget.contactName,
       );
 
-      // Ahora navegar con el callId correcto que coincide con el documento creado
-      await Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (context) => VideoCallScreen(
-            callId: callId, // ✅ FIXED: Usar el callId retornado por el servicio
-            receiverId: widget.contactId,
-            remoteName: widget.contactName,
-            isCaller: true,
-            isVideo: true,
-          ),
-        ),
-      );
+      if (result['success']) {
+        final callId = result['callId'];
+        final channelName = result['channelName'];
+        final token = result['token'];
+        final uid = result['uid'];
 
-      // Cerrar el perfil después de que termine la videollamada
-      if (mounted) {
-        Navigator.pop(context);
+        // Navegar con los datos correctos del orchestrator
+        if (mounted) {
+          await Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => VideoCallScreen(
+                callId: callId,
+                channelName: channelName,
+                token: token,
+                uid: uid,
+                isCaller: true,
+                receiverId: widget.contactId,
+                remoteName: widget.contactName,
+                isVideo: true,
+              ),
+            ),
+          );
+        }
+
+        // Cerrar el perfil después de que termine la videollamada
+        if (mounted) {
+          Navigator.pop(context);
+        }
+      } else {
+        // Manejar error de inicio de llamada
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Error al iniciar videollamada: ${result['error']}',
+              ),
+            ),
+          );
+        }
       }
     } catch (e) {
       // Manejar errores al iniciar la llamada
@@ -273,7 +280,9 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
   }
 
   Future<void> _showEditNameDialog(String currentName) async {
-    final TextEditingController nameController = TextEditingController(text: currentName);
+    final TextEditingController nameController = TextEditingController(
+      text: currentName,
+    );
 
     final result = await showDialog<String>(
       context: context,
@@ -335,7 +344,10 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
           if (currentName != widget.contactName)
             TextButton(
               onPressed: () => Navigator.pop(context, '___RESTORE___'),
-              child: Text('Restaurar original', style: TextStyle(color: Colors.orange)),
+              child: Text(
+                'Restaurar original',
+                style: TextStyle(color: Colors.orange),
+              ),
             ),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, nameController.text.trim()),
@@ -364,46 +376,48 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
     if (!mounted) return;
 
     try {
-      // ✅ FIXED: Primero crear la llamada usando VideoCallService para obtener el callId correcto
-      final videoCallService = VideoCallService();
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) return;
-
-      // Obtener información del usuario actual
-      final userDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .get();
-
-      final userName = userDoc.data()?['name'] ?? 'Usuario';
-
-      // Crear la llamada de audio usando el servicio - esto retorna el callId correcto
-      final callId = await videoCallService.startAudioCall(
-        callerId: user.uid,
-        callerName: userName,
+      // ✅ CORRECTO: Usar servicio especializado siguiendo CODING_RULES.md
+      final result = await VideoCallInitiationService().startAudioCall(
         receiverId: widget.contactId,
         receiverName: widget.contactName,
       );
 
-      // Ahora navegar con el callId correcto que coincide con el documento creado
-      await Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (context) => AudioCallScreen(
-            callId: callId, // ✅ FIXED: Usar el callId retornado por el servicio
-            // No pasamos credenciales - se obtendrán en background
-            channelName: null,
-            token: null,
-            uid: null,
-            remoteName: widget.contactName,
-            receiverId: widget.contactId, // Necesario para iniciar la llamada
-            isCaller: true,
-          ),
-        ),
-      );
+      if (result['success']) {
+        final callId = result['callId'];
+        final channelName = result['channelName'];
+        final token = result['token'];
+        final uid = result['uid'];
 
-      // Cerrar el perfil después de que termine la llamada
-      if (mounted) {
-        Navigator.pop(context);
+        // Navegar con los datos correctos del orchestrator
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => AudioCallScreen(
+              callId: callId,
+              channelName: channelName,
+              token: token,
+              uid: uid,
+              remoteName: widget.contactName,
+              receiverId: widget.contactId,
+              isCaller: true,
+            ),
+          ),
+        );
+
+        // Cerrar el perfil después de que termine la llamada
+        if (mounted) {
+          Navigator.pop(context);
+        }
+      } else {
+        // Manejar error de inicio de llamada
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Error al iniciar llamada de audio: ${result['error']}',
+              ),
+            ),
+          );
+        }
       }
     } catch (e) {
       // Manejar errores al iniciar la llamada
@@ -445,7 +459,9 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
                       Text(
                         _isBlocked ? 'Desbloquear' : 'Bloquear',
                         style: TextStyle(
-                          color: _isBlocked ? Colors.green[700] : Colors.red[700],
+                          color: _isBlocked
+                              ? Colors.green[700]
+                              : Colors.red[700],
                         ),
                       ),
                     ],
@@ -477,332 +493,334 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
         children: [
           // Header con gradiente
           Container(
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: isDarkMode
-                          ? [
-                              colorScheme.primary.withValues(alpha: 0.3),
-                              colorScheme.primary.withValues(alpha: 0.2),
-                            ]
-                          : [
-                              Color(0xFF9D7FE8),
-                              Color(0xFFB39DDB),
-                            ],
+            width: double.infinity,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: isDarkMode
+                    ? [
+                        colorScheme.primary.withValues(alpha: 0.3),
+                        colorScheme.primary.withValues(alpha: 0.2),
+                      ]
+                    : [Color(0xFF9D7FE8), Color(0xFFB39DDB)],
+              ),
+            ),
+            padding: EdgeInsets.symmetric(vertical: 32),
+            child: Column(
+              children: [
+                // Avatar (clickeable para ampliar)
+                Stack(
+                  children: [
+                    ClickableAvatar(
+                      photoUrl: photoURL,
+                      name: widget.contactName,
+                      radius: 60,
+                      backgroundColor: Colors.white.withValues(alpha: 0.3),
                     ),
-                  ),
-                  padding: EdgeInsets.symmetric(vertical: 32),
-                  child: Column(
-                    children: [
-                      // Avatar (clickeable para ampliar)
-                      Stack(
-                        children: [
-                          ClickableAvatar(
-                            photoUrl: photoURL,
-                            name: widget.contactName,
-                            radius: 60,
-                            backgroundColor: Colors.white.withValues(alpha: 0.3),
+                    // Indicador de en línea
+                    if (isOnline)
+                      Positioned(
+                        bottom: 0,
+                        right: 0,
+                        child: Container(
+                          width: 24,
+                          height: 24,
+                          decoration: BoxDecoration(
+                            color: Colors.green,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 3),
                           ),
-                          // Indicador de en línea
-                          if (isOnline)
-                            Positioned(
-                              bottom: 0,
-                              right: 0,
-                              child: Container(
-                                width: 24,
-                                height: 24,
-                                decoration: BoxDecoration(
-                                  color: Colors.green,
-                                  shape: BoxShape.circle,
-                                  border: Border.all(color: Colors.white, width: 3),
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-
-                      SizedBox(height: 16),
-
-                      // Nombre con botón de edición
-                      Column(
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                _contactAlias ?? widget.contactName,
-                                style: TextStyle(
-                                  fontSize: 28,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.white,
-                                ),
-                              ),
-                              SizedBox(width: 8),
-                              IconButton(
-                                icon: Icon(Icons.edit, color: Colors.white70, size: 20),
-                                onPressed: () => _showEditNameDialog(_contactAlias ?? widget.contactName),
-                                tooltip: 'Editar nombre',
-                              ),
-                            ],
-                          ),
-                          if (_contactAlias != null && _contactAlias != widget.contactName)
-                            Padding(
-                              padding: EdgeInsets.only(top: 4),
-                              child: Text(
-                                'Nombre real: ${widget.contactName}',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.white60,
-                                  fontStyle: FontStyle.italic,
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-
-                      SizedBox(height: 4),
-
-                      // Estado
-                      Text(
-                        isOnline ? 'En línea' : 'Desconectado',
-                        style: TextStyle(
-                          fontSize: 16,
-                          color: Colors.white70,
                         ),
                       ),
-                    ],
-                  ),
+                  ],
                 ),
 
-                SizedBox(height: 20),
+                SizedBox(height: 16),
 
-                // Botones de acción
-                Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 20),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: _isStartingVideoCall ? null : _startVideoCall,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: colorScheme.primary,
-                            foregroundColor: Colors.white,
-                            padding: EdgeInsets.symmetric(vertical: 16),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
+                // Nombre con botón de edición
+                Column(
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _contactAlias ?? widget.contactName,
+                          style: TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
                           ),
-                          icon: _isStartingVideoCall ? SizedBox(
+                        ),
+                        SizedBox(width: 8),
+                        IconButton(
+                          icon: Icon(
+                            Icons.edit,
+                            color: Colors.white70,
+                            size: 20,
+                          ),
+                          onPressed: () => _showEditNameDialog(
+                            _contactAlias ?? widget.contactName,
+                          ),
+                          tooltip: 'Editar nombre',
+                        ),
+                      ],
+                    ),
+                    if (_contactAlias != null &&
+                        _contactAlias != widget.contactName)
+                      Padding(
+                        padding: EdgeInsets.only(top: 4),
+                        child: Text(
+                          'Nombre real: ${widget.contactName}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.white60,
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+
+                SizedBox(height: 4),
+
+                // Estado
+                Text(
+                  isOnline ? 'En línea' : 'Desconectado',
+                  style: TextStyle(fontSize: 16, color: Colors.white70),
+                ),
+              ],
+            ),
+          ),
+
+          SizedBox(height: 20),
+
+          // Botones de acción
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: 20),
+            child: Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _isStartingVideoCall ? null : _startVideoCall,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: colorScheme.primary,
+                      foregroundColor: Colors.white,
+                      padding: EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    icon: _isStartingVideoCall
+                        ? SizedBox(
                             width: 20,
                             height: 20,
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.white,
+                              ),
                             ),
-                          ) : Icon(Icons.videocam),
-                          label: Text(_isStartingVideoCall ? 'Iniciando...' : 'Video'),
-                        ),
-                      ),
-                      SizedBox(width: 12),
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: _startAudioCall,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.green[700],
-                            foregroundColor: Colors.white,
-                            padding: EdgeInsets.symmetric(vertical: 16),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                          icon: Icon(Icons.phone),
-                          label: Text('Audio'),
-                        ),
-                      ),
-                    ],
+                          )
+                        : Icon(Icons.videocam),
+                    label: Text(
+                      _isStartingVideoCall ? 'Iniciando...' : 'Video',
+                    ),
                   ),
                 ),
-
-                SizedBox(height: 20),
-
-                // Información del usuario
-                Container(
-                  margin: EdgeInsets.symmetric(horizontal: 20),
-                  decoration: BoxDecoration(
-                    color: colorScheme.surface,
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.05),
-                        blurRadius: 10,
-                        offset: Offset(0, 2),
+                SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _startAudioCall,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green[700],
+                      foregroundColor: Colors.white,
+                      padding: EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
                       ),
-                    ],
-                  ),
-                  child: Column(
-                    children: [
-                      _buildInfoTile(
-                        icon: Icons.cake_outlined,
-                        label: 'Edad',
-                        value: _contactUser!.birthDate != null
-                            ? '$age años (${_formatBirthday(_contactUser!.birthDate!)})'
-                            : '$age años',
-                      ),
-                      Divider(height: 1),
-                      _buildInfoTile(
-                        icon: Icons.badge_outlined,
-                        label: 'Rol',
-                        value: _getRoleLabel(role),
-                      ),
-                    ],
+                    ),
+                    icon: Icon(Icons.phone),
+                    label: Text('Audio'),
                   ),
                 ),
+              ],
+            ),
+          ),
 
-                // Mostrar padres si es un hijo
-                if (role == 'child') ...[
-                  SizedBox(height: 20),
-                  Container(
-                    margin: EdgeInsets.symmetric(horizontal: 20),
-                    decoration: BoxDecoration(
-                      color: colorScheme.surface,
-                      borderRadius: BorderRadius.circular(16),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.05),
-                          blurRadius: 10,
-                          offset: Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Padding(
-                          padding: EdgeInsets.all(16),
-                          child: Row(
-                            children: [
-                              Icon(
-                                Icons.family_restroom,
-                                color: colorScheme.primary,
-                              ),
-                              SizedBox(width: 12),
-                              Text(
-                                'Padres asociados',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                  color: colorScheme.onSurface,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Divider(height: 1),
-                        _controller.childParents.isEmpty
-                            ? Padding(
-                                padding: EdgeInsets.all(16),
-                                child: Text(
-                                  'Sin padres asociados',
-                                  style: TextStyle(color: Colors.grey),
-                                ),
-                              )
-                            : Column(
-                                children: _controller.childParents.map((parent) {
-                                  return ListTile(
-                                    leading: ClickableAvatar(
-                                      photoUrl: parent['photoURL'] != null && parent['photoURL']!.isNotEmpty
-                                          ? parent['photoURL']!
-                                          : null,
-                                      name: parent['name'] ?? 'Padre/Madre',
-                                      radius: 20,
-                                      backgroundColor: Color(0xFF9D7FE8).withValues(alpha: 0.2),
-                                    ),
-                                    title: Text(
-                                      parent['name'] ?? 'Padre/Madre',
-                                      style: TextStyle(fontWeight: FontWeight.w600),
-                                    ),
-                                    trailing: Icon(
-                                      Icons.check_circle,
-                                      color: Colors.green,
-                                      size: 20,
-                                    ),
-                                  );
-                                }).toList(),
-                              ),
-                      ],
-                    ),
+          SizedBox(height: 20),
+
+          // Información del usuario
+          Container(
+            margin: EdgeInsets.symmetric(horizontal: 20),
+            decoration: BoxDecoration(
+              color: colorScheme.surface,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.05),
+                  blurRadius: 10,
+                  offset: Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Column(
+              children: [
+                _buildInfoTile(
+                  icon: Icons.cake_outlined,
+                  label: 'Edad',
+                  value: _contactUser!.birthDate != null
+                      ? '$age años (${_formatBirthday(_contactUser!.birthDate!)})'
+                      : '$age años',
+                ),
+                Divider(height: 1),
+                _buildInfoTile(
+                  icon: Icons.badge_outlined,
+                  label: 'Rol',
+                  value: _getRoleLabel(role),
+                ),
+              ],
+            ),
+          ),
+
+          // Mostrar padres si es un hijo
+          if (role == 'child') ...[
+            SizedBox(height: 20),
+            Container(
+              margin: EdgeInsets.symmetric(horizontal: 20),
+              decoration: BoxDecoration(
+                color: colorScheme.surface,
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.05),
+                    blurRadius: 10,
+                    offset: Offset(0, 2),
                   ),
                 ],
-
-                // Tabs para Perfil y Favoritos
-                SizedBox(height: 20),
-                Container(
-                  margin: EdgeInsets.symmetric(horizontal: 20),
-                  decoration: BoxDecoration(
-                    color: colorScheme.surface,
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.05),
-                        blurRadius: 10,
-                        offset: Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    children: [
-                      // Tab Bar
-                      Container(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.only(
-                            topLeft: Radius.circular(16),
-                            topRight: Radius.circular(16),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Row(
+                      children: [
+                        Icon(Icons.family_restroom, color: colorScheme.primary),
+                        SizedBox(width: 12),
+                        Text(
+                          'Padres asociados',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: colorScheme.onSurface,
                           ),
                         ),
-                        child: TabBar(
-                          controller: _tabController,
-                          indicatorColor: colorScheme.primary,
-                          labelColor: colorScheme.primary,
-                          unselectedLabelColor: colorScheme.onSurfaceVariant,
-                          indicatorWeight: 3,
-                          dividerColor: Colors.transparent,
-                          tabs: [
-                            Tab(
-                              icon: Icon(Icons.info_outline),
-                              text: 'Perfil',
-                            ),
-                            Tab(
-                              icon: Icon(Icons.star_outline),
-                              text: 'Favoritos',
-                            ),
-                          ],
-                        ),
-                      ),
-                      // Tab View
-                      SizedBox(
-                        height: 400, // Fixed height for the tab content
-                        child: TabBarView(
-                          controller: _tabController,
-                          children: [
-                            // Tab 1: Galería de medios (como estaba antes)
-                            Padding(
-                              padding: EdgeInsets.all(16),
-                              child: MediaGalleryWidget(
-                                chatId: widget.chatId,
-                                isOwnProfile: false,
+                      ],
+                    ),
+                  ),
+                  Divider(height: 1),
+                  _controller.childParents.isEmpty
+                      ? Padding(
+                          padding: EdgeInsets.all(16),
+                          child: Text(
+                            'Sin padres asociados',
+                            style: TextStyle(color: Colors.grey),
+                          ),
+                        )
+                      : Column(
+                          children: _controller.childParents.map((parent) {
+                            return ListTile(
+                              leading: ClickableAvatar(
+                                photoUrl:
+                                    parent['photoURL'] != null &&
+                                        parent['photoURL']!.isNotEmpty
+                                    ? parent['photoURL']!
+                                    : null,
+                                name: parent['name'] ?? 'Padre/Madre',
+                                radius: 20,
+                                backgroundColor: Color(
+                                  0xFF9D7FE8,
+                                ).withValues(alpha: 0.2),
                               ),
-                            ),
-                            // Tab 2: Mensajes favoritos
-                            _buildFavoritesTab(),
-                          ],
+                              title: Text(
+                                parent['name'] ?? 'Padre/Madre',
+                                style: TextStyle(fontWeight: FontWeight.w600),
+                              ),
+                              trailing: Icon(
+                                Icons.check_circle,
+                                color: Colors.green,
+                                size: 20,
+                              ),
+                            );
+                          }).toList(),
                         ),
-                      ),
+                ],
+              ),
+            ),
+          ],
+
+          // Tabs para Perfil y Favoritos
+          SizedBox(height: 20),
+          Container(
+            margin: EdgeInsets.symmetric(horizontal: 20),
+            decoration: BoxDecoration(
+              color: colorScheme.surface,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.05),
+                  blurRadius: 10,
+                  offset: Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Column(
+              children: [
+                // Tab Bar
+                Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.only(
+                      topLeft: Radius.circular(16),
+                      topRight: Radius.circular(16),
+                    ),
+                  ),
+                  child: TabBar(
+                    controller: _tabController,
+                    indicatorColor: colorScheme.primary,
+                    labelColor: colorScheme.primary,
+                    unselectedLabelColor: colorScheme.onSurfaceVariant,
+                    indicatorWeight: 3,
+                    dividerColor: Colors.transparent,
+                    tabs: [
+                      Tab(icon: Icon(Icons.info_outline), text: 'Perfil'),
+                      Tab(icon: Icon(Icons.star_outline), text: 'Favoritos'),
                     ],
                   ),
                 ),
+                // Tab View
+                SizedBox(
+                  height: 400, // Fixed height for the tab content
+                  child: TabBarView(
+                    controller: _tabController,
+                    children: [
+                      // Tab 1: Galería de medios (como estaba antes)
+                      Padding(
+                        padding: EdgeInsets.all(16),
+                        child: MediaGalleryWidget(
+                          chatId: widget.chatId,
+                          isOwnProfile: false,
+                        ),
+                      ),
+                      // Tab 2: Mensajes favoritos
+                      _buildFavoritesTab(),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
 
           SizedBox(height: 40),
         ],
@@ -889,210 +907,208 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
       );
     }
 
-        if (favoriteMessages.isEmpty) {
-          return Center(
-            child: Padding(
-              padding: EdgeInsets.all(32),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Container(
-                    padding: EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      color: colorScheme.primary.withValues(alpha: 0.1),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      Icons.star_border_rounded,
-                      color: colorScheme.primary,
-                      size: 48,
-                    ),
-                  ),
-                  SizedBox(height: 24),
-                  Text(
-                    'Sin mensajes favoritos',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                      color: colorScheme.onSurface,
-                    ),
-                  ),
-                  SizedBox(height: 12),
-                  Text(
-                    'Los mensajes que marques como favoritos aparecerán aquí',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: colorScheme.onSurfaceVariant,
-                      fontSize: 14,
-                      height: 1.4,
-                    ),
-                  ),
-                  SizedBox(height: 20),
-                  Container(
-                    padding: EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: colorScheme.outline.withValues(alpha: 0.2),
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.info_outline_rounded,
-                          color: colorScheme.primary,
-                          size: 20,
-                        ),
-                        SizedBox(width: 8),
-                        Flexible(
-                          child: Text(
-                            'Mantén presionado un mensaje para marcarlo como favorito',
-                            style: TextStyle(
-                              color: colorScheme.onSurfaceVariant,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        }
-
-        return ListView.separated(
-          padding: EdgeInsets.all(16),
-          itemCount: favoriteMessages.length,
-          separatorBuilder: (context, index) => SizedBox(height: 12),
-          itemBuilder: (context, index) {
-            final messageData = favoriteMessages[index];
-
-            final text = messageData['text'] ?? '';
-            final formattedTime = messageData['formattedTime'] ?? '';
-            final senderId = messageData['senderId'] ?? '';
-            final isMe = senderId == _controller.currentUserId;
-            final mediaType = messageData['mediaType'] as String?;
-            final mediaUrl = messageData['mediaUrl'] as String?;
-
-            return Container(
-              decoration: BoxDecoration(
-                color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                  color: Colors.amber.withValues(alpha: 0.3),
-                  width: 1.5,
+    if (favoriteMessages.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: EdgeInsets.all(32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                padding: EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: colorScheme.primary.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
                 ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.amber.withValues(alpha: 0.1),
-                    blurRadius: 8,
-                    offset: Offset(0, 2),
-                  ),
-                ],
+                child: Icon(
+                  Icons.star_border_rounded,
+                  color: colorScheme.primary,
+                  size: 48,
+                ),
               ),
-              padding: EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Header con info del remitente y fecha
-                  Row(
-                    children: [
-                      Container(
-                        padding: EdgeInsets.all(4),
-                        decoration: BoxDecoration(
-                          color: Colors.amber.withValues(alpha: 0.2),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Icon(
-                          Icons.star,
-                          color: Colors.amber[600],
-                          size: 16,
-                        ),
-                      ),
-                      SizedBox(width: 8),
-                      Text(
-                        isMe ? 'Tú' : widget.contactName,
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          color: colorScheme.primary,
-                          fontSize: 14,
-                        ),
-                      ),
-                      Spacer(),
-                      Text(
-                        formattedTime,
+              SizedBox(height: 24),
+              Text(
+                'Sin mensajes favoritos',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: colorScheme.onSurface,
+                ),
+              ),
+              SizedBox(height: 12),
+              Text(
+                'Los mensajes que marques como favoritos aparecerán aquí',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: colorScheme.onSurfaceVariant,
+                  fontSize: 14,
+                  height: 1.4,
+                ),
+              ),
+              SizedBox(height: 20),
+              Container(
+                padding: EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: colorScheme.surfaceContainerHighest.withValues(
+                    alpha: 0.5,
+                  ),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: colorScheme.outline.withValues(alpha: 0.2),
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.info_outline_rounded,
+                      color: colorScheme.primary,
+                      size: 20,
+                    ),
+                    SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        'Mantén presionado un mensaje para marcarlo como favorito',
                         style: TextStyle(
                           color: colorScheme.onSurfaceVariant,
                           fontSize: 12,
-                          fontWeight: FontWeight.w500,
                         ),
-                      ),
-                    ],
-                  ),
-                  SizedBox(height: 8),
-
-                  // Contenido del mensaje
-                  if (mediaType != null && mediaUrl != null) ...[
-                    // Mensaje con media
-                    Row(
-                      children: [
-                        Icon(
-                          mediaType == 'image'
-                              ? Icons.image
-                              : mediaType == 'video'
-                                  ? Icons.videocam
-                                  : Icons.audiotrack,
-                          color: colorScheme.onSurfaceVariant,
-                          size: 20,
-                        ),
-                        SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            mediaType == 'image'
-                                ? 'Imagen'
-                                : mediaType == 'video'
-                                    ? 'Video'
-                                    : 'Audio',
-                            style: TextStyle(
-                              fontStyle: FontStyle.italic,
-                              color: colorScheme.onSurfaceVariant,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    if (text.isNotEmpty) ...[
-                      SizedBox(height: 4),
-                      Text(
-                        text,
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: colorScheme.onSurface,
-                          height: 1.4,
-                        ),
-                      ),
-                    ],
-                  ] else if (text.isNotEmpty) ...[
-                    // Solo texto
-                    Text(
-                      text,
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: colorScheme.onSurface,
-                        height: 1.4,
                       ),
                     ),
                   ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return ListView.separated(
+      padding: EdgeInsets.all(16),
+      itemCount: favoriteMessages.length,
+      separatorBuilder: (context, index) => SizedBox(height: 12),
+      itemBuilder: (context, index) {
+        final messageData = favoriteMessages[index];
+
+        final text = messageData['text'] ?? '';
+        final formattedTime = messageData['formattedTime'] ?? '';
+        final senderId = messageData['senderId'] ?? '';
+        final isMe = senderId == _controller.currentUserId;
+        final mediaType = messageData['mediaType'] as String?;
+        final mediaUrl = messageData['mediaUrl'] as String?;
+
+        return Container(
+          decoration: BoxDecoration(
+            color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: Colors.amber.withValues(alpha: 0.3),
+              width: 1.5,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.amber.withValues(alpha: 0.1),
+                blurRadius: 8,
+                offset: Offset(0, 2),
+              ),
+            ],
+          ),
+          padding: EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header con info del remitente y fecha
+              Row(
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: Colors.amber.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(Icons.star, color: Colors.amber[600], size: 16),
+                  ),
+                  SizedBox(width: 8),
+                  Text(
+                    isMe ? 'Tú' : widget.contactName,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: colorScheme.primary,
+                      fontSize: 14,
+                    ),
+                  ),
+                  Spacer(),
+                  Text(
+                    formattedTime,
+                    style: TextStyle(
+                      color: colorScheme.onSurfaceVariant,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
                 ],
               ),
-            );
-          },
+              SizedBox(height: 8),
+
+              // Contenido del mensaje
+              if (mediaType != null && mediaUrl != null) ...[
+                // Mensaje con media
+                Row(
+                  children: [
+                    Icon(
+                      mediaType == 'image'
+                          ? Icons.image
+                          : mediaType == 'video'
+                          ? Icons.videocam
+                          : Icons.audiotrack,
+                      color: colorScheme.onSurfaceVariant,
+                      size: 20,
+                    ),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        mediaType == 'image'
+                            ? 'Imagen'
+                            : mediaType == 'video'
+                            ? 'Video'
+                            : 'Audio',
+                        style: TextStyle(
+                          fontStyle: FontStyle.italic,
+                          color: colorScheme.onSurfaceVariant,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                if (text.isNotEmpty) ...[
+                  SizedBox(height: 4),
+                  Text(
+                    text,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: colorScheme.onSurface,
+                      height: 1.4,
+                    ),
+                  ),
+                ],
+              ] else if (text.isNotEmpty) ...[
+                // Solo texto
+                Text(
+                  text,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: colorScheme.onSurface,
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            ],
+          ),
         );
+      },
+    );
   }
 
   Widget _buildInfoTile({
@@ -1113,11 +1129,7 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
               color: colorScheme.primary.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(10),
             ),
-            child: Icon(
-              icon,
-              color: colorScheme.primary,
-              size: 24,
-            ),
+            child: Icon(icon, color: colorScheme.primary, size: 24),
           ),
           SizedBox(width: 16),
           Expanded(

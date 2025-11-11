@@ -2,7 +2,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import 'package:cloud_functions/cloud_functions.dart';
-import '../services/video_call_service.dart';
+import '../services/video_calls/video_call_orchestrator.dart';
 import '../utils/release_logger.dart';
 
 /// Controller para manejar la lógica del AppBar de chat grupal
@@ -11,13 +11,13 @@ import '../utils/release_logger.dart';
 /// - Gestión de datos del grupo en tiempo real
 /// - Iniciar videollamadas y llamadas grupales
 /// - Generar tokens de Agora para llamadas
-/// - Coordinar con VideoCallService
+/// - Coordinar con VideoCallOrchestrator
 /// - Manejo de estados de error y loading
 class GroupChatAppBarController {
   final String groupId;
 
   // Servicios privados
-  final VideoCallService _videoCallService;
+  final VideoCallOrchestrator _videoCallService;
   final FirebaseFirestore _firestore;
   final firebase_auth.FirebaseAuth _auth;
   final FirebaseFunctions _functions;
@@ -41,11 +41,11 @@ class GroupChatAppBarController {
   // Constructor
   GroupChatAppBarController({
     required this.groupId,
-    VideoCallService? videoCallService,
+    VideoCallOrchestrator? videoCallService,
     FirebaseFirestore? firestore,
     firebase_auth.FirebaseAuth? auth,
     FirebaseFunctions? functions,
-  }) : _videoCallService = videoCallService ?? VideoCallService(),
+  }) : _videoCallService = videoCallService ?? VideoCallOrchestrator(),
        _firestore = firestore ?? FirebaseFirestore.instance,
        _auth = auth ?? firebase_auth.FirebaseAuth.instance,
        _functions = functions ?? FirebaseFunctions.instance;
@@ -163,35 +163,36 @@ class GroupChatAppBarController {
       // Crear llamada grupal
       ReleaseLogger.log('Iniciando ${isVideo ? "videollamada" : "llamada"} grupal', tag: 'GroupChatAppBar');
 
-      final channelName = isVideo
+      final result = isVideo
           ? await _videoCallService.startGroupCall(
-              callerId: currentUserId,
-              callerName: currentUserName,
-              participantIds: participantIds,
-              participantNames: participantNames,
               groupId: groupId,
-              isEmergency: false,
+              groupName: groupData['name'] ?? 'Grupo',
+              memberIds: participantIds,
             )
           : await _videoCallService.startGroupAudioCall(
-              callerId: currentUserId,
-              callerName: currentUserName,
-              participantIds: participantIds,
-              participantNames: participantNames,
               groupId: groupId,
-              isEmergency: false,
+              groupName: groupData['name'] ?? 'Grupo',
+              memberIds: participantIds,
             );
+
+      // Check if call was successful
+      if (result['success'] != true) {
+        throw result['error'] ?? 'Error al iniciar llamada grupal';
+      }
+
+      final channelName = result['channelName'] ?? 'group_${groupId}_${DateTime.now().millisecondsSinceEpoch}';
 
       // Obtener token de Agora
       ReleaseLogger.log('Generando token de Agora para llamada grupal', tag: 'GroupChatAppBar');
 
       final callable = _functions.httpsCallable('generateAgoraToken');
-      final result = await callable.call({
+      final tokenResult = await callable.call({
         'channelName': channelName,
         'uid': 0, // 0 = Agora asigna automáticamente
       });
 
-      final token = result.data['token'] as String;
-      final uid = result.data['uid'] as int;
+      final token = tokenResult.data['token'] as String;
+      final uid = tokenResult.data['uid'] as int;
 
       ReleaseLogger.log('Token de Agora generado exitosamente', tag: 'GroupChatAppBar');
 

@@ -100,6 +100,7 @@ exports.sendInstantPushNotification = notifications.sendInstantPushNotification;
 
 // Videollamadas
 exports.generateAgoraToken = videoCalls.generateAgoraToken;
+exports.initiateVideoCall = videoCalls.initiateVideoCall;
 
 // Reportes
 exports.generateChildReport = reports.generateChildReport;

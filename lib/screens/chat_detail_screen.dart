@@ -8,7 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import '../controllers/chat_controller_optimistic.dart';
 import '../notification_service.dart';
 import '../services/reaction_service.dart';
-import '../services/video_call_service.dart';
+import '../services/video_calls/video_call_orchestrator.dart';
 import '../widgets/reaction_picker.dart';
 import 'chat/widgets/chat_app_bar.dart';
 import 'chat/widgets/chat_input_bar.dart';
@@ -551,10 +551,13 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     if (!mounted) return;
 
     try {
-      // ✅ FIXED: Primero crear la llamada usando VideoCallService para obtener el callId correcto
-      final videoCallService = VideoCallService();
+      // ✅ FIXED: Usar VideoCallOrchestrator para crear llamadas con nueva arquitectura
+      final orchestrator = VideoCallOrchestrator();
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) return;
+
+      // Inicializar orchestrator
+      await orchestrator.initialize();
 
       // Obtener información del usuario actual
       final userDoc = await FirebaseFirestore.instance
@@ -564,49 +567,60 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
 
       final userName = userDoc.data()?['name'] ?? 'Usuario';
 
-      if (callType == 'audio') {
-        // Crear la llamada de audio usando el servicio - esto retorna el callId correcto
-        final callId = await videoCallService.startAudioCall(
-          callerId: user.uid,
-          callerName: userName,
-          receiverId: widget.contactId,
-          receiverName: widget.contactName,
-        );
+      // Iniciar llamada usando el orchestrator - esto garantiza consistencia
+      final result = await orchestrator.startCall(
+        receiverId: widget.contactId,
+        receiverName: widget.contactName,
+        isVideo: callType == 'video',
+      );
 
-        // Ahora navegar con el callId correcto que coincide con el documento creado
-        if (mounted) {
-          Navigator.of(context, rootNavigator: true).push(
-            MaterialPageRoute(
-              builder: (context) => AudioCallScreen(
-                callId: callId, // ✅ FIXED: Usar el callId retornado por el servicio
-                receiverId: widget.contactId,
-                remoteName: widget.contactName,
-                isCaller: true,
+      if (result['success']) {
+        final callId = result['callId'];
+        final channelName = result['channelName'];
+        final token = result['token'];
+        final uid = result['uid'];
+
+        if (callType == 'audio') {
+          // Navegar a llamada de audio con datos correctos del orchestrator
+          if (mounted) {
+            Navigator.of(context, rootNavigator: true).push(
+              MaterialPageRoute(
+                builder: (context) => AudioCallScreen(
+                  callId: callId,
+                  channelName: channelName,
+                  token: token,
+                  uid: uid,
+                  receiverId: widget.contactId,
+                  remoteName: widget.contactName,
+                  isCaller: true,
+                ),
               ),
-            ),
-          );
+            );
+          }
+        } else {
+          // Navegar a llamada de video con datos correctos del orchestrator
+          if (mounted) {
+            Navigator.of(context, rootNavigator: true).push(
+              MaterialPageRoute(
+                builder: (context) => VideoCallScreen(
+                  callId: callId,
+                  channelName: channelName,
+                  token: token,
+                  uid: uid,
+                  receiverId: widget.contactId,
+                  remoteName: widget.contactName,
+                  isCaller: true,
+                  isVideo: true,
+                ),
+              ),
+            );
+          }
         }
       } else {
-        // Crear la llamada de video usando el servicio - esto retorna el callId correcto
-        final callId = await videoCallService.startCall(
-          callerId: user.uid,
-          callerName: userName,
-          receiverId: widget.contactId,
-          receiverName: widget.contactName,
-        );
-
-        // Ahora navegar con el callId correcto que coincide con el documento creado
+        // Manejar error de inicio de llamada
         if (mounted) {
-          Navigator.of(context, rootNavigator: true).push(
-            MaterialPageRoute(
-              builder: (context) => VideoCallScreen(
-                callId: callId, // ✅ FIXED: Usar el callId retornado por el servicio
-                receiverId: widget.contactId,
-                remoteName: widget.contactName,
-                isCaller: true,
-                isVideo: true,
-              ),
-            ),
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error al iniciar llamada ($callType): ${result['error']}')),
           );
         }
       }

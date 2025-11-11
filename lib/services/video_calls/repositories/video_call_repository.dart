@@ -1,6 +1,25 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../utils/release_logger.dart';
 
+/// Mock QuerySnapshot para filtros del lado cliente
+class _MockQuerySnapshot implements QuerySnapshot {
+  final List<QueryDocumentSnapshot> _docs;
+
+  _MockQuerySnapshot(this._docs);
+
+  @override
+  List<QueryDocumentSnapshot> get docs => _docs;
+
+  @override
+  List<DocumentChange> get docChanges => [];
+
+  @override
+  SnapshotMetadata get metadata => throw UnimplementedError();
+
+  @override
+  int get size => _docs.length;
+}
+
 /// Repository para acceso directo a datos de videollamadas en Firestore
 ///
 /// Responsabilidades:
@@ -9,12 +28,27 @@ import '../../../utils/release_logger.dart';
 /// - Conversión entre Firestore y Maps
 /// - Manejo básico de errores de DB
 class VideoCallRepository {
-  static final VideoCallRepository _instance = VideoCallRepository._internal();
-  factory VideoCallRepository() => _instance;
-  VideoCallRepository._internal();
+  static VideoCallRepository? _instance;
 
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  factory VideoCallRepository({FirebaseFirestore? firestore}) {
+    return _instance ??= _createInstance(firestore);
+  }
+
+  /// ✅ FIXED: Método nombrado para evitar problemas de stack trace parser con constructores anónimos
+  static VideoCallRepository _createInstance(FirebaseFirestore? firestore) {
+    return VideoCallRepository._internal(firestore);
+  }
+
+  VideoCallRepository._internal(FirebaseFirestore? firestore)
+      : _firestore = firestore ?? FirebaseFirestore.instance;
+
+  final FirebaseFirestore _firestore;
   static const String _collection = 'video_calls';
+
+  /// Reset singleton for testing
+  static void resetInstance() {
+    _instance = null;
+  }
 
   /// Crear nuevo documento de videollamada
   Future<void> create(String callId, Map<String, dynamic> callData) async {
@@ -74,7 +108,19 @@ class VideoCallRepository {
         .collection(_collection)
         .where('receiverId', isEqualTo: userId)
         .where('status', isEqualTo: 'calling')
-        .snapshots();
+        .snapshots()
+        .map((querySnapshot) {
+          // ✅ FILTRO ADICIONAL: Excluir llamadas terminadas/canceladas en cliente
+          final validStatuses = {'calling', 'ringing'};
+          final filteredDocs = querySnapshot.docs.where((doc) {
+            final data = doc.data() as Map<String, dynamic>;
+            final status = data['status'] as String?;
+            return status != null && validStatuses.contains(status);
+          }).toList();
+
+          // Retornar QuerySnapshot simulado con documentos filtrados
+          return _MockQuerySnapshot(filteredDocs);
+        });
   }
 
   /// Stream de videollamadas salientes activas para un usuario

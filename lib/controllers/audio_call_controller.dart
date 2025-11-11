@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:permission_handler/permission_handler.dart';
-import '../services/video_call_service.dart';
+import '../services/video_calls/video_call_orchestrator.dart';
 import '../services/callkit_service.dart';
 import '../utils/release_logger.dart';
 
@@ -25,7 +25,7 @@ class AudioCallController {
   final String? receiverId;
 
   // Services
-  final VideoCallService _callService;
+  final VideoCallOrchestrator _callService;
   final CallKitService _callKitService;
 
   // State
@@ -57,9 +57,9 @@ class AudioCallController {
     required this.isCaller,
     required this.remoteName,
     this.receiverId,
-    VideoCallService? callService,
+    VideoCallOrchestrator? callService,
     CallKitService? callKitService,
-  }) : _callService = callService ?? VideoCallService(),
+  }) : _callService = callService ?? VideoCallOrchestrator(),
        _callKitService = callKitService ?? CallKitService() {
 
     // Inicializar credenciales desde parámetros
@@ -105,7 +105,7 @@ class AudioCallController {
         }
 
         // Iniciar llamada completa para obtener credenciales
-        final result = await _callService.initiateCall(
+        final result = await _callService.startCall(
           receiverId: receiverId!,
           receiverName: remoteName,
           isVideo: false,
@@ -133,15 +133,15 @@ class AudioCallController {
       }
 
       // Paso 3: Inicializar Agora para audio
-      await _callService.initializeAgoraAudio();
+      await _callService.initialize();
 
       // Paso 4: Configurar event handler personalizado
       ReleaseLogger.log('Registrando event handlers...', tag: 'AudioCall');
-      _callService.engine?.registerEventHandler(_createAgoraEventHandler());
+      _callService.agoraEngine?.registerEventHandler(_createAgoraEventHandler());
 
       // Paso 5: Unirse al canal de audio
       ReleaseLogger.log('Uniéndose al canal de audio: $_channelName', tag: 'AudioCall');
-      await _callService.engine?.joinChannel(
+      await _callService.agoraEngine?.joinChannel(
         token: _token!,
         channelId: _channelName!,
         uid: _uid!,
@@ -168,7 +168,7 @@ class AudioCallController {
         ReleaseLogger.log('Elapsed: ${elapsed}ms', tag: 'AudioCall');
 
         // Configurar auricular por defecto
-        _callService.engine?.setEnableSpeakerphone(false).then((_) {
+        _callService.agoraEngine?.setEnableSpeakerphone(false).then((_) {
           ReleaseLogger.log('Auricular activado (modo normal de llamada)', tag: 'AudioCall');
         }).catchError((e) {
           ReleaseLogger.warning('Error configurando auricular: $e', tag: 'AudioCall');
@@ -296,7 +296,7 @@ class AudioCallController {
   Future<void> toggleMute() async {
     try {
       _isMuted = !_isMuted;
-      await _callService.engine?.muteLocalAudioStream(_isMuted);
+      await _callService.agoraEngine?.muteLocalAudioStream(_isMuted);
       ReleaseLogger.log('Micrófono ${_isMuted ? 'silenciado' : 'activado'}', tag: 'AudioCall');
       _notifyStateChanged();
     } catch (e) {
@@ -308,7 +308,7 @@ class AudioCallController {
   Future<void> toggleSpeaker() async {
     try {
       _isSpeakerOn = !_isSpeakerOn;
-      await _callService.engine?.setEnableSpeakerphone(_isSpeakerOn);
+      await _callService.agoraEngine?.setEnableSpeakerphone(_isSpeakerOn);
       ReleaseLogger.log('Altavoz ${_isSpeakerOn ? 'activado' : 'desactivado'}', tag: 'AudioCall');
       _notifyStateChanged();
     } catch (e) {
@@ -331,12 +331,12 @@ class AudioCallController {
       _callStatusSubscription = null;
 
       // 2. Salir del canal de Agora
-      await _callService.engine?.leaveChannel();
+      await _callService.agoraEngine?.leaveChannel();
       ReleaseLogger.log('Salido del canal de Agora', tag: 'AudioCall');
 
       // 3. Actualizar estado en Firestore
       final callIdToUpdate = _realCallId ?? callId;
-      await _callService.endCall(callIdToUpdate);
+      await _callService.endCall();
       ReleaseLogger.log('Estado de llamada actualizado en Firestore', tag: 'AudioCall');
 
       // 4. Limpiar CallKit si está disponible

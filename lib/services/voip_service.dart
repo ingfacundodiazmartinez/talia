@@ -6,7 +6,7 @@ import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
-import 'video_call_service.dart';
+import 'video_calls/video_call_orchestrator.dart';
 import 'app_state_service.dart';
 import '../utils/release_logger.dart';
 
@@ -151,7 +151,7 @@ class VoIPService {
       ReleaseLogger.log('   - Type: $callType', tag: 'VoIPService');
 
       // Actualizar estado en Firestore
-      await VideoCallService().acceptCall(callId);
+      await VideoCallOrchestrator().acceptCall(callId);
 
       // Obtener token de Agora directamente (sin crear nueva llamada)
       ReleaseLogger.log('🎫 [VoIP] Generando token de Agora para unirse al canal: $channelName', tag: 'VoIPService');
@@ -331,7 +331,7 @@ class VoIPService {
       ReleaseLogger.log('   - Emergency: $isEmergency', tag: 'VoIPService');
 
       // Actualizar estado en Firestore
-      await VideoCallService().acceptCall(callId);
+      await VideoCallOrchestrator().acceptCall(callId);
 
       // Obtener token de Agora directamente (sin crear nueva llamada)
       ReleaseLogger.log('🎫 [CallKit] Generando token de Agora para unirse al canal: $channelName', tag: 'VoIPService');
@@ -383,7 +383,7 @@ class VoIPService {
       final callId = extra['callId'] as String;
 
       // ✅ CRÍTICO: Rechazar en Firestore
-      await VideoCallService().rejectCall(callId);
+      await VideoCallOrchestrator().rejectCall(callId);
       ReleaseLogger.log('✅ [CallKit] Llamada rechazada en Firestore', tag: 'VoIPService');
 
       // ✅ FIX: Cerrar CallKit UI inmediatamente después del rechazo

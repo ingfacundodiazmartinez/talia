@@ -40,37 +40,56 @@ class AgoraEngineManager {
   /// Inicializar Agora Engine
   Future<bool> initialize({required bool isVideo}) async {
     if (_isInitialized) {
+      ReleaseLogger.log('✅ Agora Engine ya inicializado', tag: 'AgoraManager');
       return true;
     }
 
     try {
+      ReleaseLogger.log('🚀 Inicializando Agora Engine...', tag: 'AgoraManager');
+
       await _appConfig.initialize();
       final appId = _appConfig.agoraAppId;
+      ReleaseLogger.log('📋 App ID obtenido: ${appId.substring(0, 8)}...', tag: 'AgoraManager');
 
+      if (appId.isEmpty) {
+        throw Exception('Agora App ID vacío - verifica configuración');
+      }
+
+      ReleaseLogger.log('🔧 Creando Agora RTC Engine...', tag: 'AgoraManager');
       _engine = createAgoraRtcEngine();
 
+      ReleaseLogger.log('⚙️ Inicializando engine con App ID...', tag: 'AgoraManager');
       await _engine!.initialize(RtcEngineContext(
         appId: appId,
         channelProfile: ChannelProfileType.channelProfileCommunication,
       ));
 
       // Configurar callbacks
+      ReleaseLogger.log('📡 Configurando event handlers...', tag: 'AgoraManager');
       _setupEventHandlers();
 
       // Configurar audio/video según tipo de llamada
       if (isVideo) {
+        ReleaseLogger.log('📹 Habilitando video...', tag: 'AgoraManager');
         await _engine!.enableVideo();
+
+        ReleaseLogger.log('📷 Iniciando vista previa de video...', tag: 'AgoraManager');
+        await _engine!.startPreview();
       } else {
+        ReleaseLogger.log('🔇 Deshabilitando video (llamada de audio)...', tag: 'AgoraManager');
         await _engine!.disableVideo();
       }
 
+      ReleaseLogger.log('🎤 Habilitando audio...', tag: 'AgoraManager');
       await _engine!.enableAudio();
 
       _isInitialized = true;
+      ReleaseLogger.log('✅ Agora Engine inicializado exitosamente', tag: 'AgoraManager');
       return true;
 
     } catch (e) {
-      ReleaseLogger.error('Error inicializando Agora Engine: $e', tag: 'AgoraManager');
+      ReleaseLogger.error('❌ Error inicializando Agora Engine: $e', tag: 'AgoraManager');
+      ReleaseLogger.error('❌ Stack trace: ${StackTrace.current}', tag: 'AgoraManager');
       onError?.call('Error inicializando motor de videollamada: $e');
       return false;
     }
@@ -83,11 +102,20 @@ class AgoraEngineManager {
     required int uid,
   }) async {
     if (!_isInitialized || _engine == null) {
-      ReleaseLogger.error('Agora Engine no inicializado', tag: 'AgoraManager');
+      ReleaseLogger.error('❌ Agora Engine no inicializado', tag: 'AgoraManager');
       return false;
     }
 
+    // ✅ CRÍTICO: Evitar double join - verificar si ya está conectado a este canal
+    if (_isJoined) {
+      ReleaseLogger.log('⚠️ [AgoraManager] Ya conectado al canal, saltando joinChannel', tag: 'AgoraManager');
+      return true;
+    }
+
     try {
+      ReleaseLogger.log('🔗 Iniciando conexión a canal Agora...', tag: 'AgoraManager');
+      ReleaseLogger.log('📋 Parámetros: channelId=$channelId, uid=$uid, token=${token.substring(0, 20)}...', tag: 'AgoraManager');
+
       final options = ChannelMediaOptions(
         clientRoleType: ClientRoleType.clientRoleBroadcaster,
         channelProfile: ChannelProfileType.channelProfileCommunication,
@@ -97,6 +125,12 @@ class AgoraEngineManager {
         throw Exception('Token vacío detectado en AgoraEngineManager');
       }
 
+      if (channelId.isEmpty) {
+        throw Exception('Channel ID vacío detectado en AgoraEngineManager');
+      }
+
+      ReleaseLogger.log('🚀 Llamando a engine.joinChannel()...', tag: 'AgoraManager');
+      ReleaseLogger.log('🔑 CANAL DE CONEXIÓN: "$channelId" (${channelId.length} chars)', tag: 'AgoraManager');
       await _engine!.joinChannel(
         token: token,
         channelId: channelId,
@@ -104,11 +138,13 @@ class AgoraEngineManager {
         options: options,
       );
 
+      ReleaseLogger.log('✅ engine.joinChannel() completado - esperando onJoinChannelSuccess...', tag: 'AgoraManager');
       onConnectionStatusChanged?.call('Conectando...');
       return true;
 
     } catch (e) {
-      ReleaseLogger.error('Error uniéndose al canal $channelId: $e', tag: 'AgoraManager');
+      ReleaseLogger.error('❌ Error uniéndose al canal $channelId: $e', tag: 'AgoraManager');
+      ReleaseLogger.error('❌ Stack trace: ${StackTrace.current}', tag: 'AgoraManager');
       onError?.call('Error uniéndose a la llamada: $e');
       return false;
     }
@@ -121,6 +157,7 @@ class AgoraEngineManager {
     _engine!.registerEventHandler(
       RtcEngineEventHandler(
         onJoinChannelSuccess: (RtcConnection connection, int elapsed) {
+          ReleaseLogger.log('🎉 onJoinChannelSuccess: localUid=${connection.localUid}, elapsed=${elapsed}ms', tag: 'AgoraManager');
           _localUid = connection.localUid;
           _isJoined = true;
           onConnectionStatusChanged?.call('Conectado');
@@ -128,12 +165,15 @@ class AgoraEngineManager {
         },
 
         onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
+          ReleaseLogger.log('👥 onUserJoined: remoteUid=$remoteUid, elapsed=${elapsed}ms, canal=${connection.channelId}', tag: 'AgoraManager');
           _remoteUids.add(remoteUid);
+          ReleaseLogger.log('👥 Total usuarios remotos: ${_remoteUids.length} - UIDs: $_remoteUids', tag: 'AgoraManager');
           onRemoteUsersChanged?.call(Set.from(_remoteUids));
           onConnectionStatusChanged?.call('En llamada');
         },
 
         onUserOffline: (RtcConnection connection, int remoteUid, UserOfflineReasonType reason) {
+          ReleaseLogger.log('👋 onUserOffline: remoteUid=$remoteUid, reason=$reason', tag: 'AgoraManager');
           _remoteUids.remove(remoteUid);
           onRemoteUsersChanged?.call(Set.from(_remoteUids));
 
@@ -144,14 +184,18 @@ class AgoraEngineManager {
         },
 
         onConnectionStateChanged: (RtcConnection connection, ConnectionStateType state, ConnectionChangedReasonType reason) {
+          ReleaseLogger.log('🔄 onConnectionStateChanged: state=$state, reason=$reason', tag: 'AgoraManager');
           switch (state) {
             case ConnectionStateType.connectionStateDisconnected:
+              ReleaseLogger.log('❌ Conexión DESCONECTADA (reason: $reason)', tag: 'AgoraManager');
               onConnectionStatusChanged?.call('Desconectado');
               break;
             case ConnectionStateType.connectionStateConnecting:
+              ReleaseLogger.log('🔗 Conexión CONECTANDO (reason: $reason)', tag: 'AgoraManager');
               onConnectionStatusChanged?.call('Conectando...');
               break;
             case ConnectionStateType.connectionStateConnected:
+              ReleaseLogger.log('✅ Conexión CONECTADA (reason: $reason)', tag: 'AgoraManager');
               onConnectionStatusChanged?.call('Conectado');
               break;
             case ConnectionStateType.connectionStateFailed:
@@ -163,8 +207,25 @@ class AgoraEngineManager {
         },
 
         onError: (ErrorCodeType err, String msg) {
-          ReleaseLogger.error('Error de Agora Engine: $err - $msg', tag: 'AgoraManager');
-          onError?.call('Error en la llamada: $msg');
+          ReleaseLogger.error('❌ onError - ErrorCode: $err, Message: $msg', tag: 'AgoraManager');
+          ReleaseLogger.error('❌ Error detail: error=$err, message=$msg', tag: 'AgoraManager');
+          onError?.call('Error en la llamada: $msg (Code: $err)');
+        },
+
+        // Agregar más handlers para debugging
+        onLeaveChannel: (RtcConnection connection, RtcStats stats) {
+          ReleaseLogger.log('🚪 onLeaveChannel: duration=${stats.duration}s', tag: 'AgoraManager');
+          _isJoined = false;
+          _localUid = null;
+          _remoteUids.clear();
+        },
+
+        onTokenPrivilegeWillExpire: (RtcConnection connection, String token) {
+          ReleaseLogger.error('⚠️ onTokenPrivilegeWillExpire: token expirando pronto', tag: 'AgoraManager');
+        },
+
+        onRequestToken: (RtcConnection connection) {
+          ReleaseLogger.error('🔑 onRequestToken: se requiere nuevo token', tag: 'AgoraManager');
         },
       ),
     );

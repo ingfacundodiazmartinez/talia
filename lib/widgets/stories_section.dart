@@ -18,6 +18,7 @@ class StoriesSection extends StatefulWidget {
 }
 
 class _StoriesSectionState extends State<StoriesSection> {
+  // ✅ CRÍTICO: Usar instancia directa del servicio (revertido para evitar late init error)
   final StoryService storyService = StoryService();
   List<UserStories>? _cachedStories;
   late Stream<List<UserStories>> _storiesStream;
@@ -38,6 +39,19 @@ class _StoriesSectionState extends State<StoriesSection> {
     // CRÍTICO: Usar storiesFromCache que reacciona a los background streams
     _storiesStream = storyService.storiesFromCache;
     print('🎬 StoriesSection.initState() - Stream asignado (cache): $_storiesStream');
+  }
+
+  @override
+  void dispose() {
+    // ✅ CRÍTICO: Detener streams de background para evitar spinner infinito
+    print('🎬 StoriesSection.dispose() - Deteniendo background streams...');
+    try {
+      storyService.stopBackgroundCacheUpdates();
+      print('🎬 StoriesSection.dispose() - Background streams detenidos exitosamente');
+    } catch (e) {
+      print('🎬 StoriesSection.dispose() - Error deteniendo background streams: $e');
+    }
+    super.dispose();
   }
 
   @override
@@ -101,6 +115,7 @@ class _StoriesSectionState extends State<StoriesSection> {
               print('🎬 StoriesSection: Después de ordenar, sortedUserStoriesList.length = ${sortedUserStoriesList.length}');
 
               return ListView.builder(
+                key: const ValueKey('stories_list'),
                 scrollDirection: Axis.horizontal,
                 padding: EdgeInsets.symmetric(horizontal: 16),
                 itemCount:
@@ -124,6 +139,7 @@ class _StoriesSectionState extends State<StoriesSection> {
                   final userStories = sortedUserStoriesList[storyIndex];
                   print('🎬 StoriesSection: Building story item for ${userStories.userName}');
                   return _buildStoryItem(
+                    key: ValueKey('story_${userStories.userId}'),
                     context: context,
                     userStories: userStories,
                     allUserStories: sortedUserStoriesList,
@@ -244,6 +260,7 @@ class _StoriesSectionState extends State<StoriesSection> {
   }
 
   Widget _buildStoryItem({
+    Key? key,
     required BuildContext context,
     required UserStories userStories,
     required List<UserStories> allUserStories,
@@ -315,6 +332,7 @@ class _StoriesSectionState extends State<StoriesSection> {
     final hasUploadError = progress == -1.0;
 
     return GestureDetector(
+      key: key,
       onTap: () {
         Navigator.of(context).push(
           MaterialPageRoute(

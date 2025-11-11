@@ -1,13 +1,59 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
+import 'package:firebase_auth_mocks/firebase_auth_mocks.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
+import 'package:cloud_functions/cloud_functions.dart';
+import 'package:mockito/mockito.dart';
 
 /// Helpers comunes para tests
+
+/// Mock de Firestore para tests
+late FakeFirebaseFirestore mockFirestore;
+
+/// Mock de Firebase Auth para tests
+late MockFirebaseAuth mockFirebaseAuth;
+
+/// Mock de Firebase Functions para tests
+class MockFirebaseFunctions extends Mock implements FirebaseFunctions {}
 
 /// Inicializa mocks necesarios para tests
 Future<void> initializeTestEnvironment() async {
   TestWidgetsFlutterBinding.ensureInitialized();
   SharedPreferences.setMockInitialValues({});
+
+  // Initialize Firebase Mock with try-catch for already initialized case
+  try {
+    await Firebase.initializeApp(
+      options: const FirebaseOptions(
+        apiKey: 'test-api-key',
+        appId: 'test-app-id',
+        messagingSenderId: 'test-sender-id',
+        projectId: 'test-project',
+      ),
+    );
+
+    // Setup mocks
+    mockFirestore = FakeFirebaseFirestore();
+    mockFirebaseAuth = MockFirebaseAuth();
+
+  } catch (e) {
+    // Firebase ya inicializado, continuar
+    // Setup mocks si no están inicializados
+    mockFirestore = FakeFirebaseFirestore();
+    mockFirebaseAuth = MockFirebaseAuth();
+  }
+}
+
+/// Limpiar datos de test después de cada test
+Future<void> cleanupTestEnvironment() async {
+  // Limpiar datos de Firestore mock
+  if (Firebase.apps.isNotEmpty) {
+    await mockFirestore.clearPersistence();
+  }
 }
 
 /// Crea un MaterialApp de prueba con configuración básica

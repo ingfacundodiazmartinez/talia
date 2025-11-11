@@ -8,11 +8,22 @@ import '../../../utils/release_logger.dart';
 /// - Verificar estado online de usuarios
 /// - ZERO lógica de negocio, solo acceso a datos
 class UserInfoRepository {
-  static final UserInfoRepository _instance = UserInfoRepository._internal();
-  factory UserInfoRepository() => _instance;
-  UserInfoRepository._internal();
+  static UserInfoRepository? _instance;
 
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  factory UserInfoRepository({FirebaseFirestore? firestore}) {
+    _instance ??= UserInfoRepository._internal(firestore);
+    return _instance!;
+  }
+
+  UserInfoRepository._internal(FirebaseFirestore? firestore)
+      : _firestore = firestore ?? FirebaseFirestore.instance;
+
+  final FirebaseFirestore _firestore;
+
+  /// Reset singleton for testing
+  static void resetInstance() {
+    _instance = null;
+  }
 
   /// Obtener información básica de usuario por ID
   Future<Map<String, dynamic>?> getUserInfo(String userId) async {

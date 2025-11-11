@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:vibration/vibration.dart';
-import '../../services/video_call_service.dart';
+import '../../services/video_calls/video_call_orchestrator.dart';
+import '../../services/video_calls/services/call_state_service.dart';
 import '../video_call_screen.dart';
 import '../audio_call_screen.dart';
 import '../../utils/release_logger.dart';
@@ -42,6 +44,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
   late AnimationController _pulseController;
   late AnimationController _slideController;
   bool _isProcessing = false;
+  StreamSubscription<CallStateUpdate>? _callStateSubscription;
 
   @override
   void initState() {
@@ -62,10 +65,56 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
 
     // ✅ VIBRACIÓN INICIAL: Simular comportamiento de CallKit
     _startVibration();
+
+    // ✅ CRÍTICO: Escuchar cancelaciones de llamada para auto-cerrar
+    _setupCallCancellationListener();
+  }
+
+  /// Escuchar eventos de cancelación de llamada
+  void _setupCallCancellationListener() {
+    try {
+      final callStateService = CallStateService();
+      _callStateSubscription = callStateService.callStateStream.listen(
+        (callStateUpdate) {
+          // Solo procesar eventos de esta llamada específica
+          if (callStateUpdate.callId == widget.callId) {
+            ReleaseLogger.log('📱 [IncomingCallScreen] Evento recibido: ${callStateUpdate.status}', tag: 'IncomingCall');
+
+            // Si el caller canceló la llamada, cerrar la pantalla automáticamente
+            if (callStateUpdate.status == 'cancelled_by_caller' ||
+                callStateUpdate.status == 'ended' ||
+                callStateUpdate.status == 'missed' ||
+                callStateUpdate.status == 'declined') {
+              ReleaseLogger.log('🚫 [IncomingCallScreen] Llamada cancelada por caller - cerrando pantalla', tag: 'IncomingCall');
+              _handleCallCancellation();
+            }
+          }
+        },
+        onError: (error) {
+          ReleaseLogger.error('❌ [IncomingCallScreen] Error en listener de cancelación: $error', tag: 'IncomingCall');
+        },
+      );
+      ReleaseLogger.log('✅ [IncomingCallScreen] Listener de cancelación configurado para callId: ${widget.callId}', tag: 'IncomingCall');
+    } catch (e) {
+      ReleaseLogger.error('❌ [IncomingCallScreen] Error configurando listener de cancelación: $e', tag: 'IncomingCall');
+    }
+  }
+
+  /// Manejar cancelación de llamada por parte del caller
+  void _handleCallCancellation() {
+    if (!mounted || _isProcessing) return;
+
+    setState(() => _isProcessing = true);
+    _stopVibration();
+
+    // Cerrar la pantalla inmediatamente
+    Navigator.of(context).pop();
+    ReleaseLogger.log('✅ [IncomingCallScreen] Pantalla cerrada por cancelación del caller', tag: 'IncomingCall');
   }
 
   @override
   void dispose() {
+    _callStateSubscription?.cancel();
     _pulseController.dispose();
     _slideController.dispose();
     _stopVibration();
@@ -105,7 +154,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
 
     try {
       // Aceptar llamada en Firestore
-      await VideoCallService().acceptCall(widget.callId);
+      await VideoCallOrchestrator().acceptCall(widget.callId);
 
       if (!mounted) return;
 
@@ -151,7 +200,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
 
     try {
       // Rechazar llamada en Firestore
-      await VideoCallService().rejectCall(widget.callId);
+      await VideoCallOrchestrator().rejectCall(widget.callId);
 
       if (!mounted) return;
 

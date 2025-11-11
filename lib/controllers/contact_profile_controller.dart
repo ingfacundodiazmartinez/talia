@@ -5,7 +5,7 @@ import 'package:intl/intl.dart';
 import '../services/block_service.dart';
 import '../services/contact_alias_service.dart';
 import '../services/favorite_service.dart';
-import '../services/video_call_service.dart';
+import '../services/video_calls/video_call_orchestrator.dart';
 import '../models/child.dart';
 import '../models/contact_user.dart';
 
@@ -26,7 +26,7 @@ class ContactProfileController {
   final BlockService _blockService;
   final ContactAliasService _aliasService;
   final FavoriteService _favoriteService;
-  final VideoCallService _videoCallService;
+  final VideoCallOrchestrator _videoCallService;
   final FirebaseFirestore _firestore;
   final firebase_auth.FirebaseAuth _auth;
 
@@ -62,13 +62,13 @@ class ContactProfileController {
     BlockService? blockService,
     ContactAliasService? aliasService,
     FavoriteService? favoriteService,
-    VideoCallService? videoCallService,
+    VideoCallOrchestrator? videoCallService,
     FirebaseFirestore? firestore,
     firebase_auth.FirebaseAuth? auth,
   }) : _blockService = blockService ?? BlockService(),
        _aliasService = aliasService ?? ContactAliasService(),
        _favoriteService = favoriteService ?? FavoriteService(),
-       _videoCallService = videoCallService ?? VideoCallService(),
+       _videoCallService = videoCallService ?? VideoCallOrchestrator(),
        _firestore = firestore ?? FirebaseFirestore.instance,
        _auth = auth ?? firebase_auth.FirebaseAuth.instance;
 
@@ -260,10 +260,9 @@ class ContactProfileController {
       final currentUserName = currentUserDoc.data()?['name'] ?? 'Usuario';
 
       await _videoCallService.startCall(
-        callerId: currentUser.uid,
-        callerName: currentUserName,
         receiverId: contactId,
         receiverName: contactName,
+        isVideo: true,
       );
 
       onSuccess?.call('Videollamada iniciada');
@@ -296,10 +295,9 @@ class ContactProfileController {
       final currentUserName = currentUserDoc.data()?['name'] ?? 'Usuario';
 
       await _videoCallService.startCall(
-        callerId: currentUser.uid,
-        callerName: currentUserName,
         receiverId: contactId,
         receiverName: contactName,
+        isVideo: false,
       );
 
       onSuccess?.call('Llamada de audio iniciada');

@@ -4,7 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import 'package:flutter/material.dart';
 import '../notification_service.dart';
-import '../services/video_call_service.dart';
+import '../services/video_calls/video_call_orchestrator.dart';
 import '../services/auto_approval_service.dart';
 import '../services/user_role_service.dart';
 import '../services/callkit_service.dart';
@@ -30,7 +30,7 @@ class ParentDashboardController {
 
   // Servicios
   final NotificationService _notificationService;
-  final VideoCallService _videoCallService;
+  final VideoCallOrchestrator _videoCallService;
   final AutoApprovalService _autoApprovalService;
 
   // Subscripciones (deben limpiarse en dispose)
@@ -48,7 +48,7 @@ class ParentDashboardController {
     firebase_auth.FirebaseAuth? auth,
     FirebaseFirestore? firestore,
     required NotificationService notificationService,
-    required VideoCallService videoCallService,
+    required VideoCallOrchestrator videoCallService,
     required AutoApprovalService autoApprovalService,
   })  : _auth = auth ?? firebase_auth.FirebaseAuth.instance,
         _firestore = firestore ?? FirebaseFirestore.instance,

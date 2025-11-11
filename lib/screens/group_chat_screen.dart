@@ -51,6 +51,7 @@ class GroupChatScreen extends StatefulWidget {
 class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingObserver {
   // Controller (maneja toda la lógica de negocio)
   late GroupChatController _controller;
+  bool _controllerInitialized = false;
 
   // Controllers de UI
   final TextEditingController _messageController = TextEditingController();
@@ -112,6 +113,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     if (widget.scrollToMessageId != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _scrollToSpecificMessage(widget.scrollToMessageId!);
+      });
+    }
+
+    // ✅ CRITICAL FIX: Marcar controller como inicializado y actualizar UI
+    if (mounted) {
+      setState(() {
+        _controllerInitialized = true;
       });
     }
   }
@@ -631,6 +639,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
 
   Widget _buildMessagesList() {
     final colorScheme = Theme.of(context).colorScheme;
+
+    // ✅ CRITICAL FIX: Evitar usar _controller antes de que esté inicializado
+    if (!_controllerInitialized) {
+      return const Center(
+        child: CircularProgressIndicator(),
+      );
+    }
 
     return StreamBuilder<QuerySnapshot>(
       stream: _controller.watchRecentMessages(),

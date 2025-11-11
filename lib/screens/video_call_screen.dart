@@ -29,6 +29,9 @@ class VideoCallScreen extends StatefulWidget {
   final bool isGroupCall;
   final List<Map<String, dynamic>>? participants;
 
+  // ✅ TESTING: Optional dependencies for tests
+  final VideoCallOrchestrator? orchestrator;
+
   const VideoCallScreen({
     super.key,
     required this.callId,
@@ -41,6 +44,7 @@ class VideoCallScreen extends StatefulWidget {
     required this.isVideo,
     this.isGroupCall = false,
     this.participants,
+    this.orchestrator,
   });
 
   @override
@@ -64,6 +68,8 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
   // ✅ NUEVO: Flag para evitar múltiples navegaciones
   bool _isNavigating = false;
+  Timer? _endCallTimer; // ✅ FIXED: Track timer for cleanup
+  Timer? _periodicTimer; // ✅ FIXED: Track periodic timer for cleanup
 
   @override
   void initState() {
@@ -79,6 +85,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       remoteName: widget.remoteName,
       receiverId: widget.receiverId,
       isVideo: widget.isVideo,
+      orchestrator: widget.orchestrator, // ✅ TESTING: Use injected orchestrator
     );
 
     // Configurar callbacks para comunicación controller → screen
@@ -400,7 +407,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       tag: 'VideoCallScreen',
     );
 
-    Timer.periodic(const Duration(seconds: 2), (timer) async {
+    _periodicTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
       if (!mounted) {
         timer.cancel();
         return;
@@ -625,6 +632,12 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     // ✅ NUEVO: Cancelar suscripción al stream de estado de llamada
     _callStateSubscription?.cancel();
     _callStateSubscription = null;
+
+    // ✅ FIXED: Cancelar timers para evitar "Timer is still pending" error
+    _endCallTimer?.cancel();
+    _endCallTimer = null;
+    _periodicTimer?.cancel();
+    _periodicTimer = null;
 
     // ✅ NUEVO: Resetear flags
     _isTerminating = false;
@@ -1155,19 +1168,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
           _buildControlButton(
             icon: Icons.call_end,
             color: Colors.red,
-            onPressed: () {
-              _controller.endCall();
-              // Backup navigation si el callback no funciona
-              Future.delayed(const Duration(milliseconds: 500), () {
-                if (mounted) {
-                  if (Navigator.canPop(context)) {
-                    Navigator.pop(context);
-                  } else {
-                    Navigator.pushReplacementNamed(context, '/');
-                  }
-                }
-              });
-            },
+            onPressed: _handleEndCallButton,
             isEndCall: true,
           ),
         ],
@@ -1322,5 +1323,20 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
         content: Text('Funcionalidad de invitación en desarrollo'),
       ),
     );
+  }
+
+  /// ✅ FIXED: Método nombrado para evitar problemas de stack trace parser con closures anónimas
+  void _handleEndCallButton() {
+    _controller.endCall();
+    // Backup navigation si el callback no funciona
+    _endCallTimer = Timer(const Duration(milliseconds: 500), () {
+      if (mounted) {
+        if (Navigator.canPop(context)) {
+          Navigator.pop(context);
+        } else {
+          Navigator.pushReplacementNamed(context, '/');
+        }
+      }
+    });
   }
 }

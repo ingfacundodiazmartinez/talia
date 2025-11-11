@@ -755,9 +755,9 @@ service cloud.firestore {
         (resource.data.isEmergency == true && isParentOfCaller())
       );
 
-      // Permitir crear llamada si eres el caller
-      allow create: if request.auth != null &&
-        request.auth.uid == request.resource.data.callerId;
+      // ❌ SEGURIDAD: Solo Cloud Functions pueden crear videollamadas
+      // Migrado a backend por seguridad - usar Cloud Function 'initiateVideoCall'
+      allow create: if false;
 
       // Función auxiliar para verificar si solo se están actualizando campos de estado de llamada
       function isOnlyUpdatingCallStatus() {

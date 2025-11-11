@@ -6,6 +6,7 @@ const { getMessaging } = require("firebase-admin/messaging");
 const { getStorage } = require("firebase-admin/storage");
 
 const { RtcTokenBuilder, RtcRole } = require("agora-token");
+const { v4: uuidv4 } = require("uuid");
 const {
   validateAgoraTokenParams,
   checkRateLimit,
@@ -468,4 +469,190 @@ IMPORTANTE:
 
 // Función para generar reporte de análisis de mensajes del hijo
 // Solo padres pueden llamar esta función para analizar conversaciones de sus hijos
+
+
+// ═══════════════════════════════════════════════════════════════
+// FUNCIÓN PARA INICIAR VIDEOLLAMADAS
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Iniciar una videollamada - migrado desde frontend por seguridad
+ * Solo permite escrituras desde Cloud Functions
+ */
+exports.initiateVideoCall = onCall(
+  {
+    cors: true,
+    consumeAppCheckToken: true,
+  },
+  async (request) => {
+    console.log("📞 ===== INICIANDO VIDEOLLAMADA =====");
+
+    // Verificar que el usuario esté autenticado
+    if (!request.auth) {
+      console.log("❌ Usuario no autenticado");
+      throw new HttpsError("unauthenticated", "Usuario no autenticado");
+    }
+
+    const callerId = request.auth.uid;
+    console.log(`✅ Usuario autenticado: ${callerId}`);
+
+    // Validar parámetros
+    const { receiverId, receiverName, isVideo, customChannelName } = request.data;
+
+    if (!receiverId || !receiverName || typeof isVideo !== 'boolean') {
+      throw new HttpsError("invalid-argument", "Parámetros faltantes o inválidos");
+    }
+
+    console.log(`📞 Iniciando llamada: ${callerId} → ${receiverId} (${isVideo ? 'video' : 'audio'})`);
+
+    const db = getFirestore();
+
+    try {
+      // Rate limiting
+      const rateLimitCheck = await checkRateLimit(
+        callerId,
+        "initiateCall",
+        RATE_LIMITS.generateToken // Usar mismo límite que tokens
+      );
+      if (!rateLimitCheck.allowed) {
+        throw new HttpsError(
+          "resource-exhausted",
+          `Demasiadas solicitudes. Intenta nuevamente en ${rateLimitCheck.retryAfter} segundos.`
+        );
+      }
+
+      // Generar identificadores únicos
+      const callId = uuidv4();
+      const channelName = customChannelName || callId;
+
+      console.log(`🔑 CallID generado: ${callId}`);
+      console.log(`📺 Channel name: ${channelName}`);
+
+      // Obtener información del caller
+      const callerDoc = await db.collection('users').doc(callerId).get();
+      if (!callerDoc.exists) {
+        throw new HttpsError("not-found", "Usuario caller no encontrado");
+      }
+      const callerName = callerDoc.data().name || 'Usuario';
+
+      // Verificar que el receiver existe
+      const receiverDoc = await db.collection('users').doc(receiverId).get();
+      if (!receiverDoc.exists) {
+        throw new HttpsError("not-found", "Usuario receiver no encontrado");
+      }
+
+      // Generar token de Agora
+      const expirationTimeInSeconds = 86400; // 24 horas
+      const currentTimestamp = Math.floor(Date.now() / 1000);
+      const privilegeExpiredTs = currentTimestamp + expirationTimeInSeconds;
+
+      const token = RtcTokenBuilder.buildTokenWithUid(
+        AGORA_APP_ID,
+        AGORA_APP_CERTIFICATE,
+        channelName,
+        0, // uid = 0 para que Agora genere automáticamente
+        RtcRole.PUBLISHER,
+        privilegeExpiredTs
+      );
+
+      if (!token || token.length === 0) {
+        throw new Error('Token generado está vacío');
+      }
+
+      console.log(`✅ Token generado (${token.length} chars)`);
+
+      // Crear documento de videollamada en Firestore
+      const callData = {
+        callerId: callerId,
+        callerName: callerName,
+        receiverId: receiverId,
+        receiverName: receiverName,
+        isVideo: isVideo,
+        status: 'calling',
+        channelName: channelName,
+        token: token,
+        uid: 0, // Se asignará automáticamente por Agora
+        agoraAppId: AGORA_APP_ID,
+        createdAt: new Date().toISOString(),
+        type: isVideo ? 'video' : 'audio',
+      };
+
+      await db.collection('video_calls').doc(callId).set(callData);
+      console.log(`📝 Documento de videollamada creado: ${callId}`);
+
+      // Enviar notificación push al receiver
+      try {
+        const messaging = getMessaging();
+
+        // Obtener FCM token del receiver
+        const receiverDocData = receiverDoc.data();
+        if (receiverDocData.fcmToken) {
+          const message = {
+            token: receiverDocData.fcmToken,
+            notification: {
+              title: 'Videollamada entrante',
+              body: `${callerName} te está llamando`,
+            },
+            data: {
+              type: 'video_call',
+              callId: callId,
+              callerId: callerId,
+              callerName: callerName,
+              channelName: channelName,
+              callType: isVideo ? 'video' : 'audio',
+              token: token,
+              uid: '0',
+            },
+            android: {
+              priority: 'high',
+              notification: {
+                priority: 'high',
+                channelId: 'video_calls',
+              },
+            },
+            apns: {
+              headers: {
+                'apns-priority': '10',
+              },
+              payload: {
+                aps: {
+                  alert: {
+                    title: 'Videollamada entrante',
+                    body: `${callerName} te está llamando`,
+                  },
+                  badge: 1,
+                  sound: 'default',
+                },
+              },
+            },
+          };
+
+          await messaging.send(message);
+          console.log(`📱 Notificación enviada a ${receiverId}`);
+        }
+      } catch (notificationError) {
+        console.error('❌ Error enviando notificación:', notificationError);
+        // No fallar toda la llamada por error de notificación
+      }
+
+      console.log(`✅ Videollamada iniciada exitosamente: ${callId}`);
+
+      return {
+        success: true,
+        callId: callId,
+        channelName: channelName,
+        token: token,
+        uid: 0,
+        appId: AGORA_APP_ID,
+      };
+
+    } catch (error) {
+      console.error(`❌ Error iniciando videollamada:`, error);
+      if (error.code && error.code.startsWith('functions/')) {
+        throw error;
+      }
+      throw new HttpsError("internal", `Error iniciando videollamada: ${error.message}`);
+    }
+  }
+);
 

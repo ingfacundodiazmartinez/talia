@@ -153,46 +153,123 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
     );
   }
 
+  // ✅ CACHE: Variables para mantener últimos datos válidos y evitar rebuild infinito
+  QuerySnapshot? _lastValidChatsData;
+  DateTime _lastValidChatsTimestamp = DateTime.now();
+
   Widget _buildChatList(ColorScheme colorScheme) {
     return StreamBuilder<QuerySnapshot>(
       stream: _chatsController.getChatsStream(),
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
+        // ✅ SPINNER DEBUG: Logs detallados para identificar el problema
+        print('🔄 [SPINNER_DEBUG] ═══════════════════════════════════════════');
+        print('🔄 [SPINNER_DEBUG] ConnectionState: ${snapshot.connectionState}');
+        print('🔄 [SPINNER_DEBUG] HasData: ${snapshot.hasData}');
+        print('🔄 [SPINNER_DEBUG] HasError: ${snapshot.hasError}');
+        print('🔄 [SPINNER_DEBUG] Data is null: ${snapshot.data == null}');
+        if (snapshot.hasData) {
+          print('🔄 [SPINNER_DEBUG] Documents count: ${snapshot.data!.docs.length}');
+        }
+        if (snapshot.hasError) {
+          print('🔄 [SPINNER_DEBUG] Error: ${snapshot.error}');
+        }
+
+        // ✅ CACHE LOGIC: Actualizar cache cuando tenemos datos válidos
+        if (snapshot.hasData && snapshot.data != null) {
+          _lastValidChatsData = snapshot.data;
+          _lastValidChatsTimestamp = DateTime.now();
+          print('🔄 [SPINNER_DEBUG] Cache actualizado con ${snapshot.data!.docs.length} documentos');
+        }
+
+        final isInitialLoading = snapshot.connectionState == ConnectionState.waiting &&
+                                 !snapshot.hasData &&
+                                 !snapshot.hasError &&
+                                 _lastValidChatsData == null; // Solo initial loading si no hay cache
+
+        print('🔄 [SPINNER_DEBUG] Showing spinner: $isInitialLoading');
+        print('🔄 [SPINNER_DEBUG] Has cached data: ${_lastValidChatsData != null}');
+        print('🔄 [SPINNER_DEBUG] ═══════════════════════════════════════════');
+
+        if (isInitialLoading) {
+          print('🟡 [SPINNER_DEBUG] MOSTRANDO SPINNER - Carga inicial (waiting sin datos ni cache)');
           return Center(child: CircularProgressIndicator());
         }
 
         if (snapshot.hasError) {
+          print('🔴 [SPINNER_DEBUG] ERROR EN STREAM: ${snapshot.error}');
+          // ✅ FIXED: En caso de error, usar cache si está disponible y es reciente (< 5 minutos)
+          if (_lastValidChatsData != null) {
+            final cacheAge = DateTime.now().difference(_lastValidChatsTimestamp).inMinutes;
+            if (cacheAge < 5) {
+              print('🔄 [SPINNER_DEBUG] Usando cache por error de stream (age: ${cacheAge}m)');
+              var chatDocs = _chatService.filterDeletedChats(_lastValidChatsData!);
+              chatDocs = _chatsController.filterArchivedChats(chatDocs);
+              return _buildChatListContent(chatDocs, colorScheme);
+            }
+          }
           return Center(child: Text('Error: ${snapshot.error}'));
         }
 
-        var chatDocs = snapshot.hasData
-            ? _chatService.filterDeletedChats(snapshot.data!)
-            : <QueryDocumentSnapshot>[];
+        // ✅ FIXED: Usar cache cuando estamos waiting pero tenemos datos válidos recientes
+        final useCache = !snapshot.hasData && _lastValidChatsData != null &&
+                        DateTime.now().difference(_lastValidChatsTimestamp).inMinutes < 10;
+
+        final dataToUse = useCache ? _lastValidChatsData! : snapshot.data;
+
+        if (dataToUse == null) {
+          print('🔄 [SPINNER_DEBUG] No hay datos ni cache disponible');
+          return Center(child: CircularProgressIndicator());
+        }
+
+        if (useCache) {
+          print('🟠 [SPINNER_DEBUG] USANDO CACHE (stream waiting, cache válido)');
+        }
+
+        var chatDocs = _chatService.filterDeletedChats(dataToUse);
 
         // Filtrar chats archivados
         chatDocs = _chatsController.filterArchivedChats(chatDocs);
 
-        // Obtener grupos del niño
-        return StreamBuilder<QuerySnapshot>(
-          stream: _chatsController.getGroupsStream(),
-          builder: (context, groupsSnapshot) {
-            final allGroups = groupsSnapshot.data?.docs ?? [];
-            final groups = _chatsController.filterArchivedGroups(allGroups);
+        return _buildChatListContent(chatDocs, colorScheme);
+      },
+    );
+  }
 
-            if (chatDocs.isEmpty && groups.isEmpty) {
-              return _buildEmptyState(colorScheme);
-            }
+  // ✅ EXTRACTED: Método separado para construir el contenido con grupos
+  Widget _buildChatListContent(List<QueryDocumentSnapshot> chatDocs, ColorScheme colorScheme) {
+    // Obtener grupos del niño
+    return StreamBuilder<QuerySnapshot>(
+      stream: _chatsController.getGroupsStream(),
+      builder: (context, groupsSnapshot) {
+        // ✅ GROUPS DEBUG: Logs para el segundo StreamBuilder
+        print('👥 [GROUPS_DEBUG] ═══════════════════════════════════════════');
+        print('👥 [GROUPS_DEBUG] Groups ConnectionState: ${groupsSnapshot.connectionState}');
+        print('👥 [GROUPS_DEBUG] Groups HasData: ${groupsSnapshot.hasData}');
+        print('👥 [GROUPS_DEBUG] Groups HasError: ${groupsSnapshot.hasError}');
+        if (groupsSnapshot.hasData) {
+          print('👥 [GROUPS_DEBUG] Groups count: ${groupsSnapshot.data!.docs.length}');
+        }
+        print('👥 [GROUPS_DEBUG] ═══════════════════════════════════════════');
 
-            return ListView(
-              padding: EdgeInsets.all(16),
-              children: [
-                StoriesHeader(),
-                StoriesSection(),
-                SizedBox(height: 16),
-                ..._buildChatItems(chatDocs, groups, colorScheme),
-              ],
-            );
-          },
+        final allGroups = groupsSnapshot.data?.docs ?? [];
+        final groups = _chatsController.filterArchivedGroups(allGroups);
+
+        print('📋 [CHATS_DEBUG] Final chatDocs: ${chatDocs.length}, Final groups: ${groups.length}');
+        print('📋 [CHATS_DEBUG] Will show empty state: ${chatDocs.isEmpty && groups.isEmpty}');
+
+        if (chatDocs.isEmpty && groups.isEmpty) {
+          print('🔍 [CHATS_DEBUG] MOSTRANDO EMPTY STATE');
+          return _buildEmptyState(colorScheme);
+        }
+
+        return ListView(
+          padding: EdgeInsets.all(16),
+          children: [
+            StoriesHeader(),
+            StoriesSection(),
+            SizedBox(height: 16),
+            ..._buildChatItems(chatDocs, groups, colorScheme),
+          ],
         );
       },
     );

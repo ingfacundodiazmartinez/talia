@@ -221,6 +221,11 @@ class StoryStreamManager {
   void stopBackgroundStreams() {
     _backgroundStreamSubscription?.cancel();
     _backgroundStreamSubscription = null;
+
+    // ✅ CRÍTICO: También cancelar la suscripción de block status para evitar spinner infinito
+    _blockStatusSubscription?.cancel();
+    _blockStatusSubscription = null;
+
     _isBackgroundStreamActive = false;
   }
 

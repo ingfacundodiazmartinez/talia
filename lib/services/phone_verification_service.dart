@@ -268,6 +268,7 @@ class PhoneVerificationService {
         // No relanzar el error para no interferir con el flujo de login
       }
 
+
       // Procesar VoIP token pendiente después del login exitoso (solo iOS)
       if (Platform.isIOS) {
         try {
@@ -371,6 +372,7 @@ class PhoneVerificationService {
       return null;
     }
   }
+
 }
 
 /// Clase para resultados de verificación

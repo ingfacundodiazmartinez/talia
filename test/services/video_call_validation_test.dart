@@ -5,7 +5,7 @@ import 'package:mockito/annotations.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:talia/services/video_call_service.dart';
+import 'package:talia/services/video_calls/video_call_orchestrator.dart';
 import 'package:talia/services/block_service.dart';
 import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
 import 'package:firebase_auth_mocks/firebase_auth_mocks.dart';

@@ -26,8 +26,9 @@ import 'screens/splash_wrapper.dart';
 import 'notification_service.dart';
 import 'theme_service.dart';
 import 'services/callkit_service.dart';
-import 'services/video_call_service.dart';
+import 'services/video_calls/video_call_orchestrator.dart';
 import 'services/two_factor_session_service.dart';
+import 'services/permission_service.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'services/app_config_service.dart';
 import 'services/message_cache_service.dart';
@@ -914,64 +915,35 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
                   // Actualizar role primero
                   _currentUserRole = newRole;
 
-                  // Forzar reconexión de Firestore para obtener datos frescos sin cache
+                  // ✅ CORREGIDO: Refresh suave sin romper StreamSubscriptions activos
+                  //
+                  // PROBLEMA ANTERIOR: disableNetwork() y enableNetwork() cancelaban TODOS los
+                  // StreamBuilders activos, causando spinner infinito después de videollamadas.
+                  //
+                  // SOLUCIÓN: Usar delay simple para permitir refresh natural de datos
                   ReleaseLogger.log(
-                    '🔄Forzando reconexión de Firestore para limpiar cache...',
+                    '🔄Esperando refresh de datos de Firestore...',
                   );
-                  FirebaseFirestore.instance
-                      .disableNetwork()
-                      .then((_) {
-                        ReleaseLogger.log('✅Firestore desconectado');
-                        return Future.delayed(Duration(milliseconds: 200));
-                      })
-                      .then((_) {
-                        return FirebaseFirestore.instance.enableNetwork();
-                      })
-                      .then((_) {
-                        ReleaseLogger.log(
-                          '✅Firestore reconectado con datos frescos',
-                        );
 
-                        // Navegar después de que Firestore esté listo
-                        Future.delayed(Duration(milliseconds: 100), () {
-                          final navigator = _navigatorKey.currentState;
-                          if (navigator != null && navigator.mounted) {
-                            ReleaseLogger.log(
-                              '✅Navegando a AuthWrapper con nuevo rol: $newRole',
-                            );
-                            navigator.pushAndRemoveUntil(
-                              MaterialPageRoute(
-                                builder: (_) => const AuthWrapper(),
-                              ),
-                              (route) => false,
-                            );
-                          } else {
-                            ReleaseLogger.log(
-                              '⚠️ Navigator no disponible para navegación',
-                            );
-                          }
-                        });
-                      })
-                      .catchError((error) {
-                        ReleaseLogger.log(
-                          '⚠️ Error reconectando Firestore: $error',
-                        );
-                        // Intentar navegar de todos modos
-                        Future.delayed(Duration(milliseconds: 100), () {
-                          final navigator = _navigatorKey.currentState;
-                          if (navigator != null && navigator.mounted) {
-                            ReleaseLogger.log(
-                              '⚠️ Navegando a AuthWrapper a pesar del error',
-                            );
-                            navigator.pushAndRemoveUntil(
-                              MaterialPageRoute(
-                                builder: (_) => const AuthWrapper(),
-                              ),
-                              (route) => false,
-                            );
-                          }
-                        });
-                      });
+                  // Navegar después de un breve delay para refresh natural
+                  Future.delayed(Duration(milliseconds: 300), () {
+                    final navigator = _navigatorKey.currentState;
+                    if (navigator != null && navigator.mounted) {
+                      ReleaseLogger.log(
+                        '✅Navegando a AuthWrapper con nuevo rol: $newRole',
+                      );
+                      navigator.pushAndRemoveUntil(
+                        MaterialPageRoute(
+                          builder: (_) => const AuthWrapper(),
+                        ),
+                        (route) => false,
+                      );
+                    } else {
+                      ReleaseLogger.log(
+                        '⚠️ Navigator no disponible para navegación',
+                      );
+                    }
+                  });
                 } else if (_currentUserRole == null) {
                   ReleaseLogger.log(
                     'ℹ️Inicializando role por primera vez: $newRole',
@@ -1237,10 +1209,44 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
           ReleaseLogger.log(
             '📝 Actualizando estado de llamada en Firestore...',
           );
-          await VideoCallService().acceptCall(callId);
+          await VideoCallOrchestrator().acceptCall(callId);
           ReleaseLogger.log('✅Llamada aceptada en Firestore');
 
-          // 2. Generar token de Agora
+          // 2. Solicitar permisos para Android (iOS los maneja automáticamente)
+          if (Platform.isAndroid && context.mounted) {
+            ReleaseLogger.log('📋 Verificando permisos de cámara y micrófono para Android...');
+            final permissionService = PermissionService();
+
+            final cameraResult = await permissionService.request(
+              AppPermission.camera,
+              context: context,
+              showRationale: true,
+            );
+
+            final micResult = await permissionService.request(
+              AppPermission.microphone,
+              context: context,
+              showRationale: true,
+            );
+
+            if (cameraResult != PermissionResult.granted ||
+                micResult != PermissionResult.granted) {
+              ReleaseLogger.error('❌ Permisos de cámara o micrófono denegados');
+              if (context.mounted) {
+                Navigator.of(context).pop(); // Cerrar loading
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Se requieren permisos de cámara y micrófono para videollamadas'),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+              }
+              return;
+            }
+            ReleaseLogger.log('✅ Permisos de cámara y micrófono concedidos');
+          }
+
+          // 3. Generar token de Agora
           ReleaseLogger.log('🎫 Generando token de Agora...');
           final functions = FirebaseFunctions.instance;
           final callable = functions.httpsCallable('generateAgoraToken');
@@ -1255,7 +1261,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
 
           ReleaseLogger.log('✅Token generado - UID: $uid');
 
-          // 3. Cerrar indicador de carga y navegar a la pantalla de llamada correcta
+          // 4. Cerrar indicador de carga y navegar a la pantalla de llamada correcta
           if (context.mounted) {
             Navigator.of(context).pop(); // Cerrar loading indicator
 
@@ -1312,19 +1318,15 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
                     '👤Role del usuario: $role - navegando a ${role == 'parent' ? 'ParentMainShell' : 'ChildMainShell'}',
                   );
 
-                  // Navegar a la pantalla correcta y limpiar el stack
+                  // ✅ FIXED: NO recrear ChildMainShell - usar navegación menos agresiva
+                  // Esto evita el spinner infinito causado por recreación de widgets
                   if (context.mounted) {
-                    Navigator.of(
-                      context,
-                      rootNavigator: true,
-                    ).pushAndRemoveUntil(
-                      MaterialPageRoute(
-                        builder: (context) => role == 'parent'
-                            ? ParentMainShell()
-                            : ChildMainShell(),
-                      ),
-                      (route) => false, // Remover todas las rutas anteriores
+                    ReleaseLogger.log(
+                      '📱 Usando Navigator.pop() estándar para volver a shell existente',
                     );
+
+                    // ✅ CRITICAL: Usar pop estándar sin rootNavigator para evitar romper monitoreo global
+                    Navigator.of(context).pop();
                   }
                 } else {
                   ReleaseLogger.error(
@@ -1507,6 +1509,14 @@ class _AuthWrapperState extends State<AuthWrapper> {
     return StreamBuilder<firebase_auth.User?>(
       stream: firebase_auth.FirebaseAuth.instance.authStateChanges(),
       builder: (context, snapshot) {
+        // ✅ SPINNER DEBUG: Logs detallados para identificar el problema
+        print('🔄 [SPINNER_DEBUG] ═══════════════════════════════════════════');
+        print('🔄 [SPINNER_DEBUG] AuthWrapper ConnectionState: ${snapshot.connectionState}');
+        print('🔄 [SPINNER_DEBUG] AuthWrapper HasData: ${snapshot.hasData}');
+        print('🔄 [SPINNER_DEBUG] AuthWrapper HasError: ${snapshot.hasError}');
+        print('🔄 [SPINNER_DEBUG] User: ${snapshot.data?.email}');
+        print('🔄 [SPINNER_DEBUG] ═══════════════════════════════════════════');
+
         ReleaseLogger.log(
           '🔄AuthWrapper - Connection state: ${snapshot.connectionState}',
         );
@@ -1540,10 +1550,24 @@ class _AuthWrapperState extends State<AuthWrapper> {
                 .doc(snapshot.data!.uid)
                 .snapshots(),
             builder: (context, userSnapshot) {
+              // ✅ SPINNER DEBUG: Logs detallados para el StreamBuilder de usuario
+              print('📄 [SPINNER_DEBUG] ═══════════════════════════════════════════');
+              print('📄 [SPINNER_DEBUG] UserSnapshot ConnectionState: ${userSnapshot.connectionState}');
+              print('📄 [SPINNER_DEBUG] UserSnapshot HasData: ${userSnapshot.hasData}');
+              print('📄 [SPINNER_DEBUG] UserSnapshot HasError: ${userSnapshot.hasError}');
+              print('📄 [SPINNER_DEBUG] UserSnapshot Data Exists: ${userSnapshot.data?.exists}');
+              if (userSnapshot.hasError) {
+                print('📄 [SPINNER_DEBUG] UserSnapshot Error: ${userSnapshot.error}');
+              }
+              final showingSpinner = userSnapshot.connectionState == ConnectionState.waiting && !userSnapshot.hasData;
+              print('📄 [SPINNER_DEBUG] Showing "Verificando tipo de usuario" spinner: $showingSpinner');
+              print('📄 [SPINNER_DEBUG] ═══════════════════════════════════════════');
+
               // Si estamos esperando Y no tenemos datos cacheados, mostrar loading
               // Si tenemos datos cacheados (hasData), usar esos datos aunque estemos waiting
               if (userSnapshot.connectionState == ConnectionState.waiting &&
                   !userSnapshot.hasData) {
+                print('📄 [SPINNER_DEBUG] 🔄 MOSTRANDO SPINNER: "Verificando tipo de usuario..."');
                 return Scaffold(
                   body: Center(
                     child: Column(
@@ -1630,8 +1654,18 @@ class _AuthWrapperState extends State<AuthWrapper> {
                 return FutureBuilder<bool>(
                   future: TwoFactorSessionService().isVerified(userId),
                   builder: (context, verificationSnapshot) {
+                    // ✅ SPINNER DEBUG: Logs detallados para 2FA verification
+                    print('🔐 [SPINNER_DEBUG] ═══════════════════════════════════════════');
+                    print('🔐 [SPINNER_DEBUG] 2FA ConnectionState: ${verificationSnapshot.connectionState}');
+                    print('🔐 [SPINNER_DEBUG] 2FA HasData: ${verificationSnapshot.hasData}');
+                    print('🔐 [SPINNER_DEBUG] 2FA Data: ${verificationSnapshot.data}');
+                    final showing2FASpinner = verificationSnapshot.connectionState == ConnectionState.waiting;
+                    print('🔐 [SPINNER_DEBUG] Showing "Verificando sesión" spinner: $showing2FASpinner');
+                    print('🔐 [SPINNER_DEBUG] ═══════════════════════════════════════════');
+
                     if (verificationSnapshot.connectionState ==
                         ConnectionState.waiting) {
+                      print('🔐 [SPINNER_DEBUG] 🔄 MOSTRANDO SPINNER: "Verificando sesión..."');
                       return Scaffold(
                         body: Center(
                           child: Column(

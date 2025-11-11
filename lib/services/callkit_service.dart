@@ -5,6 +5,7 @@ import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:uuid/uuid.dart';
 import '../utils/release_logger.dart';
+import 'video_calls/services/call_state_service.dart';
 
 // Method channel para comunicación con AppDelegate nativo (iOS)
 const MethodChannel _nativeCallKitChannel = MethodChannel('com.talia.chat/callkit');
@@ -309,6 +310,35 @@ class CallKitService {
     // Re-inicializar si es necesario (callbacks podrían haberse perdido)
     if (!_isInitialized) {
       ReleaseLogger.log('⚠️ CallKit Service requiere re-inicialización manual', tag: 'CallKitService');
+    }
+  }
+
+  /// Iniciar monitoreo de cancelación para una llamada específica
+  void _startCallCancellationMonitoring(String callId) {
+    try {
+      ReleaseLogger.log('🔍 [CallKit] Iniciando monitoreo de cancelación para: $callId', tag: 'CallKitService');
+
+      // Importar CallStateService dinámicamente para evitar dependencia circular
+      final callStateService = _getCallStateService();
+      if (callStateService != null) {
+        callStateService.startMonitoringCall(callId);
+        ReleaseLogger.log('✅ [CallKit] Monitoreo de cancelación iniciado para: $callId', tag: 'CallKitService');
+      } else {
+        ReleaseLogger.log('⚠️ [CallKit] CallStateService no disponible - no se puede monitorear cancelación', tag: 'CallKitService');
+      }
+    } catch (e) {
+      ReleaseLogger.error('❌ [CallKit] Error iniciando monitoreo de cancelación: $e', tag: 'CallKitService');
+    }
+  }
+
+  /// Helper para obtener CallStateService sin dependencia circular
+  dynamic _getCallStateService() {
+    try {
+      // Crear instancia directa de CallStateService (singleton)
+      return CallStateService();
+    } catch (e) {
+      ReleaseLogger.log('⚠️ [CallKit] Error obteniendo CallStateService: $e', tag: 'CallKitService');
+      return null;
     }
   }
 }

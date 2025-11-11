@@ -2,7 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../controllers/group_profile_controller.dart';
-import '../../services/video_call_service.dart';
+import '../../services/video_calls/video_call_orchestrator.dart';
 import 'widgets/add_members_dialog.dart';
 import '../video_call_screen.dart';
 
@@ -29,7 +29,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
   // ✅ CORRECTO: Solo controller y estado UI local
   late GroupProfileController _controller;
   final ImagePicker _picker = ImagePicker();
-  final VideoCallService _videoCallService = VideoCallService();
+  final VideoCallOrchestrator _videoCallService = VideoCallOrchestrator();
 
   // Estado UI únicamente
   final TextEditingController _nameController = TextEditingController();
@@ -596,12 +596,13 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
   Future<void> _startVideoCall(String userId, String userName) async {
     try {
       // ✅ FIXED: Capturar el callId retornado por el servicio
-      final callId = await _videoCallService.startCall(
-        callerId: _controller.currentUserId,
-        callerName: 'Yo', // El controller podría proveer esto
+      final result = await _videoCallService.startCall(
         receiverId: userId,
         receiverName: userName,
+        isVideo: true,
       );
+
+      final callId = result['callId'] as String? ?? 'unknown';
 
       if (mounted) {
         Navigator.push(
