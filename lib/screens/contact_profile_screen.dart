@@ -5,7 +5,7 @@ import 'video_call_screen.dart';
 import 'audio_call_screen.dart';
 import '../widgets/profile_photo_viewer.dart';
 import 'child/profile/widgets/media_gallery_widget.dart';
-import '../services/video_call_initiation_service.dart';
+import '../services/calls/calls_orchestrator.dart';
 
 class ContactProfileScreen extends StatefulWidget {
   final String contactId;
@@ -216,17 +216,16 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
     });
 
     try {
-      // ✅ CORRECTO: Usar servicio especializado siguiendo CODING_RULES.md
-      final result = await VideoCallInitiationService().startVideoCall(
-        receiverId: widget.contactId,
-        receiverName: widget.contactName,
+      // ✅ MIGRADO: Usar CallsOrchestrator siguiendo nueva arquitectura
+      final result = await CallsOrchestrator().createCall(
+        participantIds: [widget.contactId],
+        type: 'video',
       );
 
       if (result['success']) {
         final callId = result['callId'];
         final channelName = result['channelName'];
         final token = result['token'];
-        final uid = result['uid'];
 
         // Navegar con los datos correctos del orchestrator
         if (mounted) {
@@ -236,7 +235,7 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
                 callId: callId,
                 channelName: channelName,
                 token: token,
-                uid: uid,
+                uid: 0, // Se generará dinámicamente
                 isCaller: true,
                 receiverId: widget.contactId,
                 remoteName: widget.contactName,
@@ -376,17 +375,16 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
     if (!mounted) return;
 
     try {
-      // ✅ CORRECTO: Usar servicio especializado siguiendo CODING_RULES.md
-      final result = await VideoCallInitiationService().startAudioCall(
-        receiverId: widget.contactId,
-        receiverName: widget.contactName,
+      // ✅ MIGRADO: Usar CallsOrchestrator siguiendo nueva arquitectura
+      final result = await CallsOrchestrator().createCall(
+        participantIds: [widget.contactId],
+        type: 'audio',
       );
 
       if (result['success']) {
         final callId = result['callId'];
         final channelName = result['channelName'];
         final token = result['token'];
-        final uid = result['uid'];
 
         // Navegar con los datos correctos del orchestrator
         await Navigator.of(context).push(
@@ -395,7 +393,7 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
               callId: callId,
               channelName: channelName,
               token: token,
-              uid: uid,
+              uid: 0, // Se generará dinámicamente
               remoteName: widget.contactName,
               receiverId: widget.contactId,
               isCaller: true,

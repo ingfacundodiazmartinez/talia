@@ -8,7 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import '../controllers/chat_controller_optimistic.dart';
 import '../notification_service.dart';
 import '../services/reaction_service.dart';
-import '../services/video_calls/video_call_orchestrator.dart';
+import '../services/calls/calls_orchestrator.dart';
 import '../widgets/reaction_picker.dart';
 import 'chat/widgets/chat_app_bar.dart';
 import 'chat/widgets/chat_input_bar.dart';
@@ -551,34 +551,16 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     if (!mounted) return;
 
     try {
-      // ✅ FIXED: Usar VideoCallOrchestrator para crear llamadas con nueva arquitectura
-      final orchestrator = VideoCallOrchestrator();
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) return;
-
-      // Inicializar orchestrator
-      await orchestrator.initialize();
-
-      // Obtener información del usuario actual
-      final userDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .get();
-
-      final userName = userDoc.data()?['name'] ?? 'Usuario';
-
-      // Iniciar llamada usando el orchestrator - esto garantiza consistencia
-      final result = await orchestrator.startCall(
-        receiverId: widget.contactId,
-        receiverName: widget.contactName,
-        isVideo: callType == 'video',
+      // ✅ MIGRADO: Usar CallsOrchestrator para crear llamadas con nueva arquitectura
+      final result = await CallsOrchestrator().createCall(
+        participantIds: [widget.contactId],
+        type: callType,
       );
 
       if (result['success']) {
         final callId = result['callId'];
         final channelName = result['channelName'];
         final token = result['token'];
-        final uid = result['uid'];
 
         if (callType == 'audio') {
           // Navegar a llamada de audio con datos correctos del orchestrator
@@ -589,7 +571,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
                   callId: callId,
                   channelName: channelName,
                   token: token,
-                  uid: uid,
+                  uid: 0, // Se generará dinámicamente
                   receiverId: widget.contactId,
                   remoteName: widget.contactName,
                   isCaller: true,
@@ -606,7 +588,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
                   callId: callId,
                   channelName: channelName,
                   token: token,
-                  uid: uid,
+                  uid: 0, // Se generará dinámicamente
                   receiverId: widget.contactId,
                   remoteName: widget.contactName,
                   isCaller: true,

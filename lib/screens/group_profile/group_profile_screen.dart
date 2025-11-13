@@ -2,7 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../controllers/group_profile_controller.dart';
-import '../../services/video_calls/video_call_orchestrator.dart';
+import '../../services/calls/calls_orchestrator.dart';
 import 'widgets/add_members_dialog.dart';
 import '../video_call_screen.dart';
 
@@ -29,7 +29,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
   // ✅ CORRECTO: Solo controller y estado UI local
   late GroupProfileController _controller;
   final ImagePicker _picker = ImagePicker();
-  final VideoCallOrchestrator _videoCallService = VideoCallOrchestrator();
+  final CallsOrchestrator _callsOrchestrator = CallsOrchestrator();
 
   // Estado UI únicamente
   final TextEditingController _nameController = TextEditingController();
@@ -595,28 +595,45 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
 
   Future<void> _startVideoCall(String userId, String userName) async {
     try {
-      // ✅ FIXED: Capturar el callId retornado por el servicio
-      final result = await _videoCallService.startCall(
-        receiverId: userId,
-        receiverName: userName,
-        isVideo: true,
+      // ✅ MIGRADO: Usar CallsOrchestrator para crear llamadas con nueva arquitectura
+      final result = await _callsOrchestrator.createCall(
+        participantIds: [userId],
+        type: 'video',
       );
 
-      final callId = result['callId'] as String? ?? 'unknown';
+      if (result['success']) {
+        final callId = result['callId'];
+        final channelName = result['channelName'];
+        final token = result['token'];
 
-      if (mounted) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => VideoCallScreen(
-              callId: callId, // ✅ FIXED: Usar el callId retornado por el servicio
-              isCaller: true,
-              remoteName: userName,
-              receiverId: userId,
-              isVideo: true,
+        if (mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => VideoCallScreen(
+                callId: callId,
+                channelName: channelName,
+                token: token,
+                uid: 0, // Se generará dinámicamente
+                isCaller: true,
+                remoteName: userName,
+                receiverId: userId,
+                isVideo: true,
+              ),
             ),
-          ),
-        );
+          );
+        }
+      } else {
+        // Manejar error de inicio de llamada
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Error al iniciar videollamada: ${result['error']}',
+              ),
+            ),
+          );
+        }
       }
     } catch (e) {
       if (mounted) {
