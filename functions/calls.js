@@ -1,0 +1,559 @@
+/**
+ * ═══════════════════════════════════════════════════════════════
+ * CALLS - Nueva arquitectura unificada para videollamadas
+ * ═══════════════════════════════════════════════════════════════
+ *
+ * Funciones para la nueva colección 'calls' que reemplaza 'video_calls'
+ * - Maneja tanto llamadas 1-1 como grupales
+ * - Estados sincronizados entre participantes
+ * - Transiciones fluidas de 1-1 a grupal
+ * - Cleanup automático basado en estados
+ *
+ * Funciones expuestas:
+ * - createCall: Crear nueva llamada (1-1 o grupal)
+ * - addParticipants: Agregar participantes a llamada existente
+ * - updateCallStatus: Actualizar estado de llamada (cleanup automático)
+ *
+ * ═══════════════════════════════════════════════════════════════
+ */
+
+const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onDocumentUpdated } = require("firebase-functions/v2/firestore");
+const admin = require('firebase-admin');
+const { v4: uuidv4 } = require('uuid');
+// Helper functions were not defined, using direct validation instead
+
+// Usar admin ya inicializado si existe
+if (admin.apps.length === 0) {
+  admin.initializeApp();
+}
+
+const db = admin.firestore();
+
+/**
+ * Crear nueva llamada unificada (1-1 o grupal)
+ *
+ * Reemplaza initiateVideoCall para manejar tanto llamadas simples como grupales
+ * con una sola estructura de datos y estados sincronizados
+ */
+exports.createCall = onCall(
+  {
+    region: 'us-central1',
+    timeoutSeconds: 30,
+    memory: '256MB',
+    cors: true,
+  },
+  async (request) => {
+    const data = request.data;
+    const context = { auth: request.auth };
+    try {
+      console.log('🚀 [createCall] INICIANDO - data:', JSON.stringify(data, null, 2));
+
+      // ✅ Validación de autenticación
+      if (!context.auth || !context.auth.uid) {
+        throw new HttpsError('unauthenticated', 'Usuario no autenticado');
+      }
+      const callerId = context.auth.uid;
+
+      // ✅ Validar campos requeridos
+      if (!data.participantIds || !Array.isArray(data.participantIds)) {
+        throw new HttpsError('invalid-argument', 'participantIds debe ser un array');
+      }
+      if (!data.type || typeof data.type !== 'string') {
+        throw new HttpsError('invalid-argument', 'type debe ser un string');
+      }
+
+      const participantIds = data.participantIds;
+      const callType = data.type;
+      const customChannelName = data.customChannelName;
+
+      // ✅ Validaciones de negocio
+      if (!['video', 'audio'].includes(callType)) {
+        throw new HttpsError('invalid-argument', 'Tipo de llamada inválido');
+      }
+
+      if (!participantIds.includes(callerId)) {
+        participantIds.push(callerId); // Agregar caller si no está incluido
+      }
+
+      if (participantIds.length < 2) {
+        throw new HttpsError('invalid-argument', 'Se requieren al menos 2 participantes');
+      }
+
+      if (participantIds.length > 6) {
+        throw new HttpsError('invalid-argument', 'Máximo 6 participantes por llamada');
+      }
+
+      console.log(`📞 [createCall] Creando llamada ${callType} con ${participantIds.length} participantes`);
+
+      // ✅ Verificar que todos los participantes existen
+      const userPromises = participantIds.map(id =>
+        db.collection('users').doc(id).get()
+      );
+      const userDocs = await Promise.all(userPromises);
+
+      for (let i = 0; i < userDocs.length; i++) {
+        if (!userDocs[i].exists) {
+          throw new HttpsError('not-found', `Usuario ${participantIds[i]} no encontrado`);
+        }
+      }
+
+      // ✅ Generar credenciales de Agora
+      const callId = uuidv4();
+      const channelName = customChannelName || `call_${callId}`;
+
+      console.log('🎫 [createCall] Generando token de Agora...');
+      const agoraToken = await generateAgoraToken(channelName, 0); // 0 = auto-assign UID
+
+      // ✅ Preparar estructura de participantes
+      const participants = {};
+      for (const participantId of participantIds) {
+        if (participantId === callerId) {
+          // Creator empieza como 'joined'
+          participants[participantId] = {
+            status: 'joined',
+            joinedAt: admin.firestore.FieldValue.serverTimestamp()
+          };
+        } else {
+          // Otros empiezan como 'waiting'
+          participants[participantId] = {
+            status: 'waiting',
+            waitingAt: admin.firestore.FieldValue.serverTimestamp()
+          };
+        }
+      }
+
+      // ✅ Crear documento de llamada
+      const callData = {
+        type: callType,
+        channelName: channelName,
+        token: agoraToken.token,
+        createdBy: callerId,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        participants: participants,
+        // endedAt se agrega cuando la llamada termina
+      };
+
+      console.log('📝 [createCall] Guardando en Firestore...');
+      await db.collection('calls').doc(callId).set(callData);
+
+      console.log('🔔 [createCall] Enviando notificaciones a participantes...');
+      // ✅ Enviar notificaciones push a participantes (excepto caller)
+      const notificationPromises = participantIds
+        .filter(id => id !== callerId)
+        .map(participantId => sendCallNotification(participantId, callId, callType, callerId));
+
+      await Promise.all(notificationPromises);
+
+      console.log('✅ [createCall] Llamada creada exitosamente:', callId);
+
+      return {
+        success: true,
+        callId: callId,
+        channelName: channelName,
+        token: agoraToken.token,
+        uid: agoraToken.uid,
+        appId: agoraToken.appId,
+        participantCount: participantIds.length
+      };
+
+    } catch (error) {
+      console.error('❌ [createCall] Error crítico:', error);
+      throw new HttpsError('internal', `Error creando llamada: ${error.message}`);
+    }
+  });
+
+/**
+ * Agregar participantes a llamada existente
+ *
+ * Permite expandir una llamada 1-1 a grupal o agregar más participantes
+ * a una llamada grupal existente
+ */
+exports.addParticipants = onCall(
+  {
+    region: 'us-central1',
+    timeoutSeconds: 20,
+    memory: '256MB',
+    cors: true,
+  },
+  async (request) => {
+    const data = request.data;
+    const context = { auth: request.auth };
+    try {
+      console.log('➕ [addParticipants] INICIANDO - data:', JSON.stringify(data, null, 2));
+
+      // ✅ Validación de autenticación
+      if (!context.auth || !context.auth.uid) {
+        throw new HttpsError('unauthenticated', 'Usuario no autenticado');
+      }
+      const requesterId = context.auth.uid;
+
+      // ✅ Validar campos requeridos
+      if (!data.callId || typeof data.callId !== 'string') {
+        throw new HttpsError('invalid-argument', 'callId debe ser un string');
+      }
+      if (!data.newParticipantIds || !Array.isArray(data.newParticipantIds)) {
+        throw new HttpsError('invalid-argument', 'newParticipantIds debe ser un array');
+      }
+
+      const callId = data.callId;
+      const newParticipantIds = data.newParticipantIds;
+
+      if (newParticipantIds.length === 0) {
+        throw new HttpsError('invalid-argument', 'Se requiere al menos un nuevo participante');
+      }
+
+      console.log(`➕ [addParticipants] Agregando ${newParticipantIds.length} participantes a ${callId}`);
+
+      // ✅ Verificar que la llamada existe y está activa
+      const callDoc = await db.collection('calls').doc(callId).get();
+      if (!callDoc.exists) {
+        throw new HttpsError('not-found', 'Llamada no encontrada');
+      }
+
+      const callData = callDoc.data();
+
+      // ✅ Verificar que el requester está en la llamada
+      if (!callData.participants[requesterId] ||
+          !['joined', 'waiting'].includes(callData.participants[requesterId].status)) {
+        throw new HttpsError('permission-denied', 'No tienes permisos para agregar participantes');
+      }
+
+      // ✅ Verificar que la llamada no ha terminado
+      if (callData.endedAt) {
+        throw new HttpsError('failed-precondition', 'La llamada ya ha terminado');
+      }
+
+      // ✅ Verificar límite máximo de participantes
+      const currentParticipantCount = Object.keys(callData.participants).length;
+      if (currentParticipantCount + newParticipantIds.length > 6) {
+        throw new HttpsError('invalid-argument',
+          `Máximo 6 participantes. Actualmente hay ${currentParticipantCount}, intentando agregar ${newParticipantIds.length}`);
+      }
+
+      // ✅ Verificar que los nuevos participantes existen y no están ya en la llamada
+      for (const participantId of newParticipantIds) {
+        // Verificar que el usuario existe
+        const userDoc = await db.collection('users').doc(participantId).get();
+        if (!userDoc.exists) {
+          throw new HttpsError('not-found', `Usuario ${participantId} no encontrado`);
+        }
+
+        // Verificar que no está ya en la llamada
+        if (callData.participants[participantId]) {
+          throw new HttpsError('invalid-argument', `Usuario ${participantId} ya está en la llamada`);
+        }
+      }
+
+      // ✅ Agregar nuevos participantes como 'waiting'
+      const updates = {};
+      for (const participantId of newParticipantIds) {
+        updates[`participants.${participantId}`] = {
+          status: 'waiting',
+          waitingAt: admin.firestore.FieldValue.serverTimestamp()
+        };
+      }
+
+      console.log('📝 [addParticipants] Actualizando documento de llamada...');
+      await db.collection('calls').doc(callId).update(updates);
+
+      console.log('🔔 [addParticipants] Enviando notificaciones...');
+      // ✅ Enviar notificaciones a nuevos participantes
+      const notificationPromises = newParticipantIds.map(participantId =>
+        sendCallNotification(participantId, callId, callData.type, requesterId)
+      );
+      await Promise.all(notificationPromises);
+
+      console.log('✅ [addParticipants] Participantes agregados exitosamente');
+
+      return {
+        success: true,
+        newParticipantCount: currentParticipantCount + newParticipantIds.length,
+        addedParticipants: newParticipantIds
+      };
+
+    } catch (error) {
+      console.error('❌ [addParticipants] Error crítico:', error);
+      throw new HttpsError('internal', `Error agregando participantes: ${error.message}`);
+    }
+  });
+
+/**
+ * Trigger automático para cleanup cuando se actualiza una llamada
+ *
+ * Monitorea cambios en documentos de calls y aplica cleanup automático
+ * cuando se cumplen las condiciones de finalización
+ */
+exports.updateCallStatus = onDocumentUpdated(
+  {
+    document: 'calls/{callId}',
+    region: 'us-central1',
+    timeoutSeconds: 10,
+    memory: '128MB',
+  },
+  async (event) => {
+    const change = event.data;
+    const context = event;
+    try {
+      const callId = context.params.callId;
+      const beforeData = change.before.data();
+      const afterData = change.after.data();
+
+      console.log(`🔄 [updateCallStatus] Procesando cambios en call: ${callId}`);
+
+      // ✅ Skip si la llamada ya terminó
+      if (afterData.endedAt) {
+        console.log(`⏩ [updateCallStatus] Call ${callId} ya está terminada, skipping`);
+        return null;
+      }
+
+      // ✅ Analizar estados de participantes
+      const participants = afterData.participants || {};
+      const participantStates = Object.values(participants).map(p => p.status);
+
+      const waitingCount = participantStates.filter(s => s === 'waiting').length;
+      const joinedCount = participantStates.filter(s => s === 'joined').length;
+      const declinedCount = participantStates.filter(s => s === 'declined').length;
+      const endedCount = participantStates.filter(s => s === 'ended').length;
+
+      const activeCount = waitingCount + joinedCount;
+      const hasEnded = participantStates.includes('ended');
+      const allDeclined = participantStates.length > 1 && participantStates.every(s => ['declined', 'ended'].includes(s));
+
+      // ✅ FIX: Para llamadas 1-1, si alguien declina, terminar la llamada inmediatamente
+      const is1on1Call = participantStates.length === 2;
+      const someone1on1Declined = is1on1Call && declinedCount > 0;
+
+      console.log(`📊 [updateCallStatus] Call ${callId}: waiting=${waitingCount}, joined=${joinedCount}, declined=${declinedCount}, ended=${endedCount}`);
+      console.log(`📊 [updateCallStatus] activeCount=${activeCount}, hasEnded=${hasEnded}, allDeclined=${allDeclined}, is1on1Call=${is1on1Call}, someone1on1Declined=${someone1on1Declined}`);
+
+      // ✅ PROBLEMA 3 FIX: Lógica corregida para llamadas grupales
+      // Solo terminar llamadas si:
+      // - Quedan menos de 2 participantes activos (ya no es una conversación viable)
+      // - O todos los participantes declinaron
+      // - O es llamada 1-1 y alguien declinó
+      // - O no hay participantes activos Y la llamada tiene más de 2 minutos (timeout)
+      const callAge = Date.now() - afterData.createdAt.toDate().getTime();
+      const isOldCall = callAge > 2 * 60 * 1000; // 2 minutos
+
+      // ✅ FIX: Cambiar hasEnded por activeCount < 2 para permitir llamadas grupales → 1-1
+      const shouldEnd = (activeCount < 2) || allDeclined || someone1on1Declined || (activeCount === 0 && isOldCall);
+
+      if (shouldEnd) {
+        console.log(`🚫 [updateCallStatus] Terminando call ${callId} - activeCount: ${activeCount}, allDeclined: ${allDeclined}, someone1on1Declined: ${someone1on1Declined}, isOldCall: ${isOldCall}`);
+
+        // Marcar llamada como terminada
+        await change.after.ref.update({
+          endedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        // Programar eliminación del documento en 1 hora (para debugging/logs)
+        await scheduleCallDeletion(callId);
+
+        console.log(`✅ [updateCallStatus] Call ${callId} marcada como terminada`);
+      }
+
+      return null;
+
+    } catch (error) {
+      console.error('❌ [updateCallStatus] Error:', error);
+      // No re-throw para evitar loops infinitos
+      return null;
+    }
+  });
+
+// ═══════════════════════════════════════════════════════════════
+// FUNCIONES AUXILIARES
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Generar token de Agora para llamada
+ * ✅ SOLUCIÓN DEFINITIVA: Usar helper puro en lugar de llamar Cloud Function
+ */
+async function generateAgoraToken(channelName, uid = 0) {
+  try {
+    // ✅ ROOT CAUSE FIX: Usar helper function puro en lugar de llamar Cloud Function
+    const { generateAgoraTokenHelper } = require('./agora-token-helper');
+
+    console.log('🎫 [generateAgoraToken] Delegando a helper puro para channel:', channelName, 'uid:', uid);
+
+    // Llamar al helper puro que puede ser reutilizado seguramente
+    const result = await generateAgoraTokenHelper(channelName, uid);
+
+    console.log('✅ [generateAgoraToken] Token generado exitosamente via helper');
+    return result;
+
+  } catch (error) {
+    console.error('❌ [generateAgoraToken] Error:', error);
+    throw new HttpsError('internal', `Error generando token de Agora: ${error.message}`);
+  }
+}
+
+/**
+ * Enviar notificación push de llamada
+ */
+async function sendCallNotification(userId, callId, callType, callerId) {
+  try {
+    console.log(`🔔 [sendCallNotification] Enviando notificación a ${userId} para call ${callId}`);
+
+    // ✅ FIXED: Obtener token FCM del usuario (corregir mismatch fcmToken vs fcmTokens)
+    const userDoc = await db.collection('users').doc(userId).get();
+    if (!userDoc.exists) {
+      console.log(`⚠️ [sendCallNotification] Usuario ${userId} no encontrado`);
+      return;
+    }
+
+    const userData = userDoc.data();
+    // FIXED: La app guarda 'fcmToken' (singular), no 'fcmTokens' (plural)
+    const fcmToken = userData.fcmToken;
+
+    if (!fcmToken || typeof fcmToken !== 'string' || fcmToken.trim() === '') {
+      console.log(`⚠️ [sendCallNotification] Usuario ${userId} sin token FCM válido. Token: ${fcmToken}`);
+      return;
+    }
+
+    console.log(`📲 [sendCallNotification] Token FCM encontrado para ${userId}: ${fcmToken.substring(0, 20)}...`);
+
+    // Obtener nombre del caller
+    const callerDoc = await db.collection('users').doc(callerId).get();
+    const callerName = callerDoc.exists ? callerDoc.data().name : 'Usuario';
+
+    // ✅ FIXED: Obtener datos de la llamada para incluir channelName y token
+    const callDoc = await db.collection('calls').doc(callId).get();
+    const callData = callDoc.exists ? callDoc.data() : {};
+
+    // ✅ FIXED: Preparar notificación con datos compatibles para CallKit Android
+    const notificationTitle = `${callType === 'video' ? 'Videollamada' : 'Llamada'} entrante`;
+    const notificationBody = `${callerName} te está llamando`;
+
+    // ✅ CRÍTICO: Datos en el formato exacto que espera el background handler de Flutter
+    // ✅ FIXED: Incluir channelName y token para CallKit acceptance
+    const notificationData = {
+      // Campos requeridos por firebaseMessagingBackgroundHandler
+      type: callType === 'video' ? 'video_call' : 'audio_call', // FIXED: Debe ser 'video_call' no 'incoming_call'
+      callId: callId,
+      callerName: callerName,
+      callerId: callerId,
+      callerPhotoURL: userData.photoUrl || '', // Agregar foto si está disponible
+      isEmergency: 'false',
+      // ✅ FIXED: Agregar campos críticos para CallKit acceptance
+      channelName: callData.channelName || `call_${callId}`,
+      token: callData.token || ''
+    };
+
+    console.log(`📦 [sendCallNotification] Datos de notificación:`, notificationData);
+
+    // ✅ FIXED: Enviar a token único, no array
+    const message = {
+      token: fcmToken,
+      // Para Android: Solo datos, sin notification para que llegue al background handler
+      data: notificationData,
+      android: {
+        priority: 'high',
+        ttl: 30000, // 30 segundos
+        // Para CallKit Android, necesitamos que los datos lleguen al background handler
+        // No usar 'notification' para que siempre pase por firebaseMessagingBackgroundHandler
+      },
+      // Para iOS: VoIP push notifications
+      apns: {
+        headers: {
+          'apns-priority': '10',
+          'apns-push-type': 'background', // Para VoIP
+          'apns-expiration': (Math.floor(Date.now() / 1000) + 30).toString()
+        },
+        payload: {
+          aps: {
+            alert: {
+              title: notificationTitle,
+              body: notificationBody
+            },
+            sound: 'default',
+            'content-available': 1,
+            category: 'CALL_INVITATION'
+          }
+        }
+      }
+    };
+
+    await admin.messaging().send(message);
+    console.log(`✅ [sendCallNotification] Notificación enviada a ${userId}`);
+
+  } catch (error) {
+    console.error(`❌ [sendCallNotification] Error enviando notificación a ${userId}:`, error);
+    // No re-throw, es mejor que la call se cree aunque falle la notificación
+  }
+}
+
+/**
+ * Programar eliminación de call para cleanup
+ */
+async function scheduleCallDeletion(callId) {
+  try {
+    // En un entorno real, esto podría ser un Cloud Task o Pub/Sub delayed
+    // Por simplicidad, programamos eliminación directa con setTimeout equivalente
+
+    console.log(`⏰ [scheduleCallDeletion] Programando eliminación de call ${callId} en 1 hora`);
+
+    // Crear documento en colección de tareas programadas
+    await db.collection('_scheduled_tasks').add({
+      type: 'delete_call',
+      callId: callId,
+      scheduledFor: admin.firestore.Timestamp.fromDate(new Date(Date.now() + 60 * 60 * 1000)), // 1 hora
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    console.log(`✅ [scheduleCallDeletion] Eliminación programada para call ${callId}`);
+
+  } catch (error) {
+    console.error(`❌ [scheduleCallDeletion] Error programando eliminación:`, error);
+    // No crítico, los documentos se pueden limpiar manualmente
+  }
+}
+
+/**
+ * Función programada para limpiar calls terminadas (ejecuta cada hora)
+ * TODO: Migrar a v2 syntax
+ */
+/*
+exports.cleanupFinishedCalls = functions
+  .region('us-central1')
+  .runWith({
+    timeoutSeconds: 540, // 9 minutos
+    memory: '256MB'
+  })
+  .pubsub.schedule('0 * * * *') // Cada hora en punto
+  .timeZone('America/Argentina/Buenos_Aires')
+  .onRun(async (context) => {
+    try {
+      console.log('🧹 [cleanupFinishedCalls] Iniciando limpieza de calls terminadas');
+
+      const oneHourAgo = admin.firestore.Timestamp.fromDate(new Date(Date.now() - 60 * 60 * 1000));
+
+      // Buscar calls terminadas hace más de 1 hora
+      const finishedCalls = await db.collection('calls')
+        .where('endedAt', '<', oneHourAgo)
+        .limit(100) // Procesar en batches
+        .get();
+
+      if (finishedCalls.empty) {
+        console.log('✅ [cleanupFinishedCalls] No hay calls para limpiar');
+        return;
+      }
+
+      console.log(`🧹 [cleanupFinishedCalls] Eliminando ${finishedCalls.docs.length} calls terminadas`);
+
+      // Eliminar en batch
+      const batch = db.batch();
+      finishedCalls.docs.forEach(doc => {
+        batch.delete(doc.ref);
+      });
+
+      await batch.commit();
+
+      console.log(`✅ [cleanupFinishedCalls] Cleanup completado: ${finishedCalls.docs.length} calls eliminadas`);
+
+    } catch (error) {
+      console.error('❌ [cleanupFinishedCalls] Error:', error);
+    }
+  });
+*/

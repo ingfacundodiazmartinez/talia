@@ -2,13 +2,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
-import '../controllers/video_call_controller.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../controllers/call_controller.dart';
 import '../utils/release_logger.dart';
-import '../services/video_calls/video_call_orchestrator.dart';
-import '../services/video_calls/services/call_initiation_service.dart';
-import '../services/video_calls/services/call_state_service.dart';
-import '../services/video_calls/repositories/user_info_repository.dart';
-import '../services/video_calls/repositories/video_call_repository.dart';
+import '../services/calls/calls_orchestrator.dart';
+import '../main.dart' show AuthWrapper;
 
 /// Pantalla de videollamada refactorizada siguiendo CODING_RULES.md
 ///
@@ -30,7 +28,7 @@ class VideoCallScreen extends StatefulWidget {
   final List<Map<String, dynamic>>? participants;
 
   // ✅ TESTING: Optional dependencies for tests
-  final VideoCallOrchestrator? orchestrator;
+  final CallsOrchestrator? orchestrator;
 
   const VideoCallScreen({
     super.key,
@@ -53,7 +51,7 @@ class VideoCallScreen extends StatefulWidget {
 
 class _VideoCallScreenState extends State<VideoCallScreen> {
   // ✅ CORRECTO: Solo controller y estado UI local
-  late VideoCallController _controller;
+  late CallController _controller;
 
   // Estado UI mínimo
   String _connectionStatus = 'Inicializando...';
@@ -76,7 +74,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     super.initState();
 
     // ✅ CORRECTO: Solo inicializar controller y configurar callbacks
-    _controller = VideoCallController(
+    _controller = CallController(
       callId: widget.callId,
       channelName: widget.channelName,
       token: widget.token,
@@ -85,11 +83,14 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       remoteName: widget.remoteName,
       receiverId: widget.receiverId,
       isVideo: widget.isVideo,
-      orchestrator: widget.orchestrator, // ✅ TESTING: Use injected orchestrator
+      orchestrator: widget.orchestrator,
     );
 
     // Configurar callbacks para comunicación controller → screen
     _setupControllerCallbacks();
+
+    // ✅ NUEVO: Suscribirse a cambios de estado de la llamada en Firestore
+    _setupCallStateListener();
 
     // ✅ CORRECTO: Delegar inicialización al controller
     _initializeCall();
@@ -152,24 +153,50 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       }
     }
 
-    // Si es receiver, aceptar llamada para obtener credenciales y unirse al canal
+    // Si es receiver, usar credenciales existentes para unirse al canal
+    // NOTA: acceptCall() ya fue llamado desde IncomingCallScreen antes de llegar aquí
     if (!widget.isCaller && success) {
-      final result = await _controller.acceptCall(widget.callId);
-      if (result['success']) {
-        callSetupSuccess = true;
+      if (_controller.channelName != null && _controller.token != null) {
         ReleaseLogger.log(
-          '✅ [VideoCallScreen] Receiver - acceptCall exitoso',
+          '📞 [VideoCallScreen] Receiver usando credenciales existentes: channel=${_controller.channelName}',
           tag: 'VideoCallScreen',
         );
+
+        // Unirse al canal usando credenciales ya obtenidas
+        final joinResult = await _controller.joinExistingCall(
+          channelName: _controller.channelName!,
+          token: _controller.token!,
+          uid: _controller.uid ?? 0,
+          isVideo: _controller.isVideo,
+        );
+
+        if (joinResult) {
+          callSetupSuccess = true;
+          ReleaseLogger.log(
+            '✅ [VideoCallScreen] Receiver - joinExistingCall exitoso',
+            tag: 'VideoCallScreen',
+          );
+        } else {
+          ReleaseLogger.error(
+            '❌ [VideoCallScreen] Receiver - joinExistingCall falló',
+            tag: 'VideoCallScreen',
+          );
+          if (mounted) {
+            setState(() {
+              _showError = true;
+              _errorMessage = 'Error uniéndose al canal';
+            });
+          }
+        }
       } else {
         ReleaseLogger.error(
-          '❌ [VideoCallScreen] Receiver - acceptCall falló: ${result['error']}',
+          '❌ [VideoCallScreen] Receiver - No hay credenciales disponibles',
           tag: 'VideoCallScreen',
         );
         if (mounted) {
           setState(() {
             _showError = true;
-            _errorMessage = result['error'] ?? 'Error aceptando llamada';
+            _errorMessage = 'Credenciales de llamada no disponibles';
           });
         }
       }
@@ -242,6 +269,21 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       }
     };
 
+    // ✅ PROBLEMA 1: Callback para cambios en participantes de Firestore
+    _controller.onParticipantsChanged = (participants) {
+      if (mounted) {
+        print('🔥 [VideoCallScreen] Participantes cambiaron: ${participants.length}');
+        for (final p in participants) {
+          print('  - ${p['name']} (${p['userId']}): ${p['status']}');
+        }
+
+        setState(() {
+          // Trigger rebuild con nueva lista de participantes
+          // El layout se actualizará automáticamente usando controller.firestoreParticipants
+        });
+      }
+    };
+
     _controller.onLocalUserJoined = (joined) {
       if (mounted) {
         setState(() {
@@ -287,6 +329,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
         (callStateUpdate) {
           if (!mounted) return;
 
+          print('🔥 [DEBUG] Call state listener received: ${callStateUpdate.status} for call ${callStateUpdate.callId}');
           ReleaseLogger.log(
             '📡 [VideoCallScreen] Call state changed: ${callStateUpdate.status} for call ${callStateUpdate.callId}',
             tag: 'VideoCallScreen',
@@ -294,8 +337,11 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
           // Solo procesar cambios de estado para esta llamada específica
           if (callStateUpdate.callId != widget.callId) {
+            print('🔥 [DEBUG] Ignoring state change - different call ID: ${callStateUpdate.callId} vs ${widget.callId}');
             return;
           }
+
+          print('🔥 [DEBUG] Processing state change for our call: ${callStateUpdate.status}');
 
           switch (callStateUpdate.status) {
             case 'ended':
@@ -329,12 +375,14 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                   '❌ [VideoCallScreen] Error ending call in background: $error',
                   tag: 'VideoCallScreen',
                 );
+                return false;
               });
               break;
 
             case 'declined':
             case 'cancelled':
             case 'missed':
+              print('🔥 [DEBUG] CALL REJECTED/CANCELLED - Status: ${callStateUpdate.status}');
               ReleaseLogger.log(
                 '📞 [VideoCallScreen] Call ${callStateUpdate.status} by other user',
                 tag: 'VideoCallScreen',
@@ -342,6 +390,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
               // La llamada fue rechazada, cancelada o perdida
               if (mounted) {
+                print('🔥 [DEBUG] Widget is mounted, updating UI and scheduling navigation');
                 setState(() {
                   _connectionStatus = 'Llamada ${callStateUpdate.status}';
                 });
@@ -349,9 +398,14 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                 // Esperar un poco y navegar de vuelta
                 Future.delayed(const Duration(seconds: 2), () {
                   if (mounted && !_isNavigating) {
+                    print('🔥 [DEBUG] Navegating back after ${callStateUpdate.status}');
                     _navigateBackSafely('call ${callStateUpdate.status}');
+                  } else {
+                    print('🔥 [DEBUG] NOT navigating - mounted: $mounted, isNavigating: $_isNavigating');
                   }
                 });
+              } else {
+                print('🔥 [DEBUG] Widget NOT mounted, skipping UI update and navigation');
               }
               break;
 
@@ -525,61 +579,109 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     }
   }
 
-  /// ✅ CALLKIT: Navegación específica para escenarios CallKit - MÁS CONSERVADORA
+  /// ✅ CALLKIT: Navegación específica para escenarios CallKit - ROBUSTO CONTRA STACK VACÍO
   void _attemptCallKitNavigation() {
     ReleaseLogger.log(
-      '🔧 [VideoCallScreen] CallKit navigation - usando estrategias conservadoras',
+      '🔧 [VideoCallScreen] CallKit navigation - implementando fix para navigation stack vacío',
       tag: 'VideoCallScreen',
     );
 
-    // ✅ CONSERVADOR: Solo intentar pushReplacementNamed - evitar vaciar el stack
+    // ✅ FIX: Verificar primero si hay algo en el stack
     try {
+      final navigator = Navigator.of(context);
+      final canPopSafely = navigator.canPop();
+
       ReleaseLogger.log(
-        '📱 [VideoCallScreen] CallKit Strategy: pushReplacementNamed conservador',
+        '🔍 [VideoCallScreen] Navigation stack analysis: canPop=$canPopSafely',
         tag: 'VideoCallScreen',
       );
-      Navigator.of(context).pushReplacementNamed('/');
-      return;
+
+      if (canPopSafely) {
+        // Stack tiene elementos - usar pop normal
+        ReleaseLogger.log(
+          '📱 [VideoCallScreen] Stack has elements - using Navigator.pop()',
+          tag: 'VideoCallScreen',
+        );
+        Navigator.of(context).pop();
+        return;
+      } else {
+        // Stack vacío - necesitamos recrear la app completamente
+        ReleaseLogger.log(
+          '⚠️ [VideoCallScreen] EMPTY STACK DETECTED - recreating app navigation',
+          tag: 'VideoCallScreen',
+        );
+
+        // ✅ SOLUCIÓN: pushAndRemoveUntil para recrear stack completamente
+        Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (context) => const AuthWrapper()),
+          (route) => false, // Remove all existing routes
+        );
+        return;
+      }
     } catch (e) {
       ReleaseLogger.error(
-        '❌ [VideoCallScreen] CallKit pushReplacementNamed failed: $e',
+        '❌ [VideoCallScreen] Error checking navigation stack: $e',
         tag: 'VideoCallScreen',
       );
+
+      // ✅ EMERGENCY FALLBACK: Recrear app desde cero
+      _recreateAppNavigation();
     }
+  }
 
-    // ✅ FALLBACK: Si replacement falla, usar navegación muy simple
+  /// ✅ EMERGENCY: Recrear navegación de app desde cero
+  void _recreateAppNavigation() {
     try {
       ReleaseLogger.log(
-        '🔄 [VideoCallScreen] CallKit Fallback: navegación simple con root navigator',
-        tag: 'VideoCallScreen',
-      );
-      // Usar rootNavigator para asegurar que encontramos un navigator válido
-      Navigator.of(context, rootNavigator: true).pop();
-    } catch (e) {
-      ReleaseLogger.error(
-        '❌ [VideoCallScreen] CallKit Fallback también falló: $e',
+        '🆘 [VideoCallScreen] EMERGENCY: Recreando navegación de app desde cero',
         tag: 'VideoCallScreen',
       );
 
-      // ✅ ÚLTIMO RECURSO: Mostrar error y dejar que usuario navegue manualmente
+      // Usar el navigatorKey de _TaliaAppState para recrear completamente
+      final rootNavigator = Navigator.of(context, rootNavigator: true);
+      rootNavigator.pushAndRemoveUntil(
+        MaterialPageRoute(builder: (context) => const AuthWrapper()),
+        (route) => false,
+      );
+    } catch (e) {
+      ReleaseLogger.error(
+        '💥 [VideoCallScreen] CRITICAL: Emergency navigation recreation failed: $e',
+        tag: 'VideoCallScreen',
+      );
+
+      // ✅ ÚLTIMO RECURSO: Mostrar UI de error
       if (mounted) {
         setState(() {
           _showError = true;
-          _errorMessage = 'Usa el botón "Volver" para continuar.';
+          _errorMessage = 'Error de navegación. Reinicia la app.';
         });
       }
     }
   }
 
-  /// ✅ FALLBACK: Navegación de último recurso
+  /// ✅ FALLBACK: Navegación de último recurso - ROBUSTO CONTRA STACK VACÍO
   void _fallbackNavigation() {
     try {
       if (mounted) {
         ReleaseLogger.log(
-          '🔄 [VideoCallScreen] FALLBACK navigation - pushReplacementNamed direct',
+          '🔄 [VideoCallScreen] FALLBACK navigation - verificando stack primero',
           tag: 'VideoCallScreen',
         );
-        Navigator.pushReplacementNamed(context, '/');
+
+        // ✅ FIX: También verificar stack en fallback
+        if (Navigator.canPop(context)) {
+          ReleaseLogger.log(
+            '📱 [VideoCallScreen] FALLBACK - usando pop normal',
+            tag: 'VideoCallScreen',
+          );
+          Navigator.of(context).pop();
+        } else {
+          ReleaseLogger.log(
+            '⚠️ [VideoCallScreen] FALLBACK - stack vacío, recreando navegación',
+            tag: 'VideoCallScreen',
+          );
+          _recreateAppNavigation();
+        }
       }
     } catch (fallbackError) {
       ReleaseLogger.error(
@@ -587,12 +689,22 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
         tag: 'VideoCallScreen',
       );
 
-      // ✅ ÚLTIMO RECURSO: Mostrar vista de emergencia más tiempo
-      if (mounted) {
-        setState(() {
-          _showError = true;
-          _errorMessage = 'Error de navegación. Usa el botón "Volver" para continuar.';
-        });
+      // ✅ ÚLTIMO RECURSO: Intentar recrear app una vez más
+      try {
+        _recreateAppNavigation();
+      } catch (e) {
+        ReleaseLogger.error(
+          '💀 [VideoCallScreen] ULTIMATE FAILURE: Cannot navigate anywhere: $e',
+          tag: 'VideoCallScreen',
+        );
+
+        // ✅ ÚLTIMO ÚLTIMO RECURSO: Mostrar UI de error
+        if (mounted) {
+          setState(() {
+            _showError = true;
+            _errorMessage = 'Error crítico de navegación. Reinicia la app.';
+          });
+        }
       }
     }
   }
@@ -675,6 +787,34 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     super.dispose();
   }
 
+  /// ✅ RACE CONDITION FIX: Crear VideoViewController con protección contra nulls
+  Widget? _createSafeVideoView(RtcEngine engine, VideoCanvas canvas) {
+    // Double-check engine validity right before creating VideoViewController
+    if (_controller.isDisposed || _controller.agoraEngine == null) {
+      return null; // Return null instead of crashing
+    }
+
+    try {
+      return AgoraVideoView(
+        controller: VideoViewController(
+          rtcEngine: engine,
+          canvas: canvas,
+        ),
+      );
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [VideoCallScreen] Error creating VideoViewController: $e',
+        tag: 'VideoCallScreen',
+      );
+      return Container(
+        color: Colors.grey[800],
+        child: const Center(
+          child: Icon(Icons.error, color: Colors.white, size: 48),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return PopScope(
@@ -689,29 +829,39 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
         );
 
         ReleaseLogger.log(
-          '⚡ [VideoCallScreen] Forzando navegación inmediata por botón back',
+          '⚡ [VideoCallScreen] BOTÓN BACK - usando navegación robusta contra stack vacío',
           tag: 'VideoCallScreen',
         );
 
-        // ✅ SÚPER AGRESIVO: Navegación inmediata SIN verificaciones
-        if (Navigator.canPop(context)) {
-          ReleaseLogger.log(
-            '📱 [VideoCallScreen] BOTÓN BACK - Navigator.pop() DIRECTO',
+        // ✅ FIX: Usar lógica robusta igual que el resto de la navegación
+        try {
+          if (Navigator.canPop(context)) {
+            ReleaseLogger.log(
+              '📱 [VideoCallScreen] BOTÓN BACK - Stack OK, usando Navigator.pop()',
+              tag: 'VideoCallScreen',
+            );
+            Navigator.of(context).pop();
+          } else {
+            ReleaseLogger.log(
+              '⚠️ [VideoCallScreen] BOTÓN BACK - Stack vacío, recreando navegación',
+              tag: 'VideoCallScreen',
+            );
+            _recreateAppNavigation();
+          }
+        } catch (e) {
+          ReleaseLogger.error(
+            '❌ [VideoCallScreen] Error en navegación de botón back: $e',
             tag: 'VideoCallScreen',
           );
-          Navigator.of(context).pop();
-        } else {
-          ReleaseLogger.log(
-            '📱 [VideoCallScreen] BOTÓN BACK - pushReplacementNamed DIRECTO',
-            tag: 'VideoCallScreen',
-          );
-          Navigator.pushReplacementNamed(context, '/');
+          // Emergency fallback
+          _recreateAppNavigation();
         }
 
         // Limpiar en background (sin bloquear navegación)
         if (!_isTerminating) {
           _controller.endCall().catchError((e) {
             ReleaseLogger.error('Error cleaning up call: $e', tag: 'VideoCallScreen');
+            return false;
           });
         }
       },
@@ -743,10 +893,14 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   /// Vista principal (adaptable para 1:1 o grupales)
   Widget _buildMainView() {
     final remoteUids = _controller.remoteUids;
+    final firestoreParticipants = _controller.firestoreParticipants;
 
     // Debug logging
     print(
       '🔍 [VideoCallScreen] isVideo=${widget.isVideo}, isJoined=${_controller.isJoined}, remoteUids=${remoteUids.length}: $remoteUids, isTerminating: $_isTerminating',
+    );
+    print(
+      '🔍 [VideoCallScreen] firestoreParticipants=${firestoreParticipants.length}: ${firestoreParticipants.map((p) => '${p['name']}(${p['status']})').toList()}',
     );
 
     // ✅ CRÍTICO: Si ya estamos terminando, mostrar vista de cierre
@@ -756,32 +910,272 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
     // Si es video y está conectado, mostrar vista de video
     if (widget.isVideo && _controller.isJoined) {
-      // Vista de espera con preview local si no hay usuarios remotos
-      if (remoteUids.isEmpty) {
+      // ✅ PROBLEMA 1: Decidir layout basado en PARTICIPANTES ACTIVOS (no 'ended' ni 'declined')
+      final activeParticipants = firestoreParticipants.where((p) {
+        final status = p['status'] as String;
+        return status != 'ended' && status != 'declined';
+      }).length;
+
+      if (activeParticipants >= 3) {
+        // Layout grupal: 3+ participantes activos (incluyendo pending)
         print(
-          '📱 [VideoCallScreen] No hay usuarios remotos - mostrando preview local',
+          '👥 [VideoCallScreen] Layout grupal: $activeParticipants participantes activos (${remoteUids.length} conectados)',
+        );
+        return _buildGroupCallGridEnhanced(remoteUids, firestoreParticipants);
+      } else if (remoteUids.isNotEmpty) {
+        // Layout 1-1: Menos de 3 participantes activos y al menos 1 conectado
+        final remoteUid = remoteUids.first;
+        print(
+          '📹 [VideoCallScreen] Mostrando video 1:1 con remoteUid=$remoteUid',
+        );
+        return _buildVideoView(remoteUid);
+      } else {
+        // Vista de espera: 2 participantes pero ninguno conectado aún
+        print(
+          '📱 [VideoCallScreen] Vista de espera - esperando conexión de participantes',
         );
         return _buildLocalPreviewView();
       }
-
-      // ✅ NUEVO: Para múltiples usuarios remotos, mostrar grid
-      if (remoteUids.length > 1) {
-        print(
-          '👥 [VideoCallScreen] Múltiples usuarios remotos - mostrando grid',
-        );
-        return _buildGroupCallGrid(remoteUids);
-      }
-
-      // ✅ CORRECTO: Vista única para un usuario remoto
-      final remoteUid = remoteUids.first;
-      print(
-        '📹 [VideoCallScreen] Mostrando video 1:1 con remoteUid=$remoteUid',
-      );
-      return _buildVideoView(remoteUid);
     } else {
       print('⏳ [VideoCallScreen] No conectado aún - mostrando vista de espera');
       return _buildWaitingView();
     }
+  }
+
+  /// ✅ PROBLEMA 1: Layout grupal mejorado que muestra participantes pending
+  Widget _buildGroupCallGridEnhanced(Set<int> remoteUids, List<Map<String, dynamic>> participants) {
+    final tiles = <Widget>[];
+    final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+
+    // 1. Agregar tile del usuario local
+    tiles.add(_buildParticipantTile(0));
+
+    // 2. ✅ PROBLEMA 1 FIX: Procesar TODOS los participantes de Firestore
+    final usedRemoteUids = <int>{};
+
+    for (final participant in participants) {
+      final userId = participant['userId'] as String;
+      final status = participant['status'] as String;
+
+      // Saltar el usuario local (ya agregado arriba)
+      if (userId == currentUserId) continue;
+
+      if (status == 'waiting') {
+        // Participante pendiente - mostrar placeholder "Llamando..."
+        tiles.add(_buildPendingParticipantTile(participant));
+      } else if (status == 'joined') {
+        // Participante joined - intentar asignar video real si disponible
+        int? assignedUid;
+        for (final uid in remoteUids) {
+          if (!usedRemoteUids.contains(uid)) {
+            assignedUid = uid;
+            usedRemoteUids.add(uid);
+            break;
+          }
+        }
+
+        if (assignedUid != null) {
+          // Mostrar video real
+          tiles.add(_buildParticipantTile(assignedUid));
+        } else {
+          // Sin video disponible - mostrar placeholder "Conectado"
+          tiles.add(_buildPendingParticipantTile(participant));
+        }
+      }
+    }
+
+    // 3. Agregar UIDs huérfanos (videos sin mapear a participantes)
+    for (final uid in remoteUids) {
+      if (!usedRemoteUids.contains(uid)) {
+        tiles.add(_buildParticipantTile(uid));
+      }
+    }
+
+    final participantCount = tiles.length;
+    print('🎬 [GroupLayoutEnhanced] Tiles generados: $participantCount');
+
+    return Padding(
+      padding: const EdgeInsets.all(8.0),
+      child: _buildGroupLayoutForTiles(tiles, participantCount),
+    );
+  }
+
+  /// ✅ PROBLEMA 1: Layout grupal usando lista de tiles
+  Widget _buildGroupLayoutForTiles(List<Widget> tiles, int count) {
+    switch (count) {
+      case 2:
+        return Row(
+          children: [
+            Expanded(child: tiles[0]),
+            const SizedBox(width: 8),
+            Expanded(child: tiles[1]),
+          ],
+        );
+      case 3:
+        return Column(
+          children: [
+            Expanded(
+              child: Row(
+                children: [
+                  Expanded(child: tiles[0]),
+                  const SizedBox(width: 8),
+                  Expanded(child: tiles[1]),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Expanded(child: tiles[2]),
+          ],
+        );
+      case 4:
+        return Column(
+          children: [
+            Expanded(
+              child: Row(
+                children: [
+                  Expanded(child: tiles[0]),
+                  const SizedBox(width: 8),
+                  Expanded(child: tiles[1]),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: Row(
+                children: [
+                  Expanded(child: tiles[2]),
+                  const SizedBox(width: 8),
+                  Expanded(child: tiles[3]),
+                ],
+              ),
+            ),
+          ],
+        );
+      case 5:
+        return Column(
+          children: [
+            Expanded(
+              child: Row(
+                children: [
+                  Expanded(child: tiles[0]),
+                  const SizedBox(width: 8),
+                  Expanded(child: tiles[1]),
+                  const SizedBox(width: 8),
+                  Expanded(child: tiles[2]),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: Row(
+                children: [
+                  Expanded(child: tiles[3]),
+                  const SizedBox(width: 8),
+                  Expanded(child: tiles[4]),
+                ],
+              ),
+            ),
+          ],
+        );
+      case 6:
+        return Column(
+          children: [
+            Expanded(
+              child: Row(
+                children: [
+                  Expanded(child: tiles[0]),
+                  const SizedBox(width: 8),
+                  Expanded(child: tiles[1]),
+                  const SizedBox(width: 8),
+                  Expanded(child: tiles[2]),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: Row(
+                children: [
+                  Expanded(child: tiles[3]),
+                  const SizedBox(width: 8),
+                  Expanded(child: tiles[4]),
+                  const SizedBox(width: 8),
+                  Expanded(child: tiles[5]),
+                ],
+              ),
+            ),
+          ],
+        );
+      default:
+        // Fallback para más de 6 participantes
+        return _buildGroupLayoutForTiles(tiles.take(6).toList(), 6);
+    }
+  }
+
+  /// ✅ PROBLEMA 1: Tile para participante pending (no conectado aún)
+  Widget _buildPendingParticipantTile(Map<String, dynamic> participant) {
+    final name = participant['name'] as String;
+    final status = participant['status'] as String;
+
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        color: Colors.grey[900],
+        border: Border.all(color: Colors.orange, width: 2), // Indicador pending
+      ),
+      child: Stack(
+        children: [
+          // Placeholder para usuario pending
+          Container(
+            color: Colors.grey[800],
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.person,
+                    size: 50,
+                    color: Colors.orange[300],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Llamando...',
+                    style: TextStyle(
+                      color: Colors.orange[300],
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // Nombre del participante
+          Positioned(
+            bottom: 8,
+            left: 8,
+            right: 8,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.orange.withValues(alpha: 0.8),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                name,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
+                textAlign: TextAlign.center,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   /// Vista cuando la llamada está terminando
@@ -840,9 +1234,10 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
   /// Vista de preview local mientras espera usuarios remotos
   Widget _buildLocalPreviewView() {
+    // ✅ RACE CONDITION FIX: Cache engine reference and double-check nulls
     final engine = _controller.agoraEngine;
 
-    if (engine == null) {
+    if (engine == null || _controller.isDisposed) {
       return _buildWaitingView();
     }
 
@@ -851,13 +1246,16 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       children: [
         // ✅ FIXED: Video local a PANTALLA COMPLETA (como background)
         Positioned.fill(
-          child: AgoraVideoView(
-            controller: VideoViewController(
-              rtcEngine: engine,
-              canvas: const VideoCanvas(
-                uid: 0, // Local user is always uid 0
-                renderMode: RenderModeType.renderModeHidden,
-              ),
+          child: _createSafeVideoView(
+            engine,
+            const VideoCanvas(
+              uid: 0, // Local user is always uid 0
+              renderMode: RenderModeType.renderModeHidden,
+            ),
+          ) ?? Container(
+            color: Colors.black,
+            child: const Center(
+              child: Icon(Icons.videocam_off, color: Colors.white, size: 64),
             ),
           ),
         ),
@@ -915,13 +1313,16 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(10),
-              child: AgoraVideoView(
-                controller: VideoViewController(
-                  rtcEngine: engine,
-                  canvas: const VideoCanvas(
-                    uid: 0, // Local user is always uid 0
-                    renderMode: RenderModeType.renderModeHidden,
-                  ),
+              child: _createSafeVideoView(
+                engine,
+                const VideoCanvas(
+                  uid: 0, // Local user is always uid 0
+                  renderMode: RenderModeType.renderModeHidden,
+                ),
+              ) ?? Container(
+                color: Colors.grey[800],
+                child: const Center(
+                  child: Icon(Icons.videocam_off, color: Colors.white, size: 32),
                 ),
               ),
             ),
@@ -933,9 +1334,10 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
   /// Vista de video para un usuario remoto específico
   Widget _buildVideoView(int remoteUid) {
+    // ✅ RACE CONDITION FIX: Cache engine reference and double-check nulls
     final engine = _controller.agoraEngine;
 
-    if (engine == null) {
+    if (engine == null || _controller.isDisposed) {
       return _buildWaitingView();
     }
 
@@ -944,12 +1346,25 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       children: [
         // Vista principal del usuario remoto - PANTALLA COMPLETA
         Positioned.fill(
-          child: AgoraVideoView(
-            controller: VideoViewController(
-              rtcEngine: engine,
-              canvas: VideoCanvas(
-                uid: remoteUid,
-                renderMode: RenderModeType.renderModeHidden,
+          child: _createSafeVideoView(
+            engine,
+            VideoCanvas(
+              uid: remoteUid,
+              renderMode: RenderModeType.renderModeHidden,
+            ),
+          ) ?? Container(
+            color: Colors.grey[800],
+            child: const Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.person, color: Colors.white, size: 64),
+                  SizedBox(height: 16),
+                  Text(
+                    'Video no disponible',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ],
               ),
             ),
           ),
@@ -975,13 +1390,16 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(10),
-              child: AgoraVideoView(
-                controller: VideoViewController(
-                  rtcEngine: engine,
-                  canvas: const VideoCanvas(
-                    uid: 0, // Local user is always uid 0
-                    renderMode: RenderModeType.renderModeHidden,
-                  ),
+              child: _createSafeVideoView(
+                engine,
+                const VideoCanvas(
+                  uid: 0, // Local user is always uid 0
+                  renderMode: RenderModeType.renderModeHidden,
+                ),
+              ) ?? Container(
+                color: Colors.grey[800],
+                child: const Center(
+                  child: Icon(Icons.videocam_off, color: Colors.white, size: 32),
                 ),
               ),
             ),
@@ -991,22 +1409,171 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     );
   }
 
-  /// Grid para llamadas grupales
-  Widget _buildGroupCallGrid(Set<int> remoteUids) {
-    final uids = remoteUids.toList();
+  /// Layout para llamadas grupales con distribución específica
+  Widget _buildGroupCallGrid(Set<int> remoteUids, {bool includeLocalUser = false}) {
+    final uids = <int>[];
 
-    return GridView.builder(
-      padding: const EdgeInsets.all(8),
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: uids.length > 4 ? 3 : 2,
-        crossAxisSpacing: 8,
-        mainAxisSpacing: 8,
-        childAspectRatio: 0.75,
-      ),
-      itemCount: uids.length,
-      itemBuilder: (context, index) {
-        return _buildParticipantTile(uids[index]);
-      },
+    // ✅ FIX: Incluir el usuario local (UID 0) en el layout grupal cuando sea necesario
+    if (includeLocalUser) {
+      uids.add(0); // Local user siempre es UID 0 en Agora
+    }
+
+    // Agregar usuarios remotos
+    uids.addAll(remoteUids.toList());
+
+    final participantCount = uids.length;
+
+    print('🎬 [GroupLayout] UIDs incluidos: $uids (total: $participantCount)');
+
+    return Padding(
+      padding: const EdgeInsets.all(8.0),
+      child: _buildGroupLayout(uids, participantCount),
+    );
+  }
+
+  /// Construye el layout grupal según el número de participantes
+  Widget _buildGroupLayout(List<int> uids, int count) {
+    switch (count) {
+      case 2:
+        return _build2ParticipantsLayout(uids);
+      case 3:
+        return _build3ParticipantsLayout(uids);
+      case 4:
+        return _build4ParticipantsLayout(uids);
+      case 5:
+        return _build5ParticipantsLayout(uids);
+      case 6:
+        return _build6ParticipantsLayout(uids);
+      default:
+        // Fallback para más de 6 participantes (no debería pasar)
+        return _build6ParticipantsLayout(uids.take(6).toList());
+    }
+  }
+
+  /// Layout para 2 participantes: 50% cada uno verticalmente
+  Widget _build2ParticipantsLayout(List<int> uids) {
+    return Row(
+      children: [
+        Expanded(child: _buildParticipantTile(uids[0])),
+        const SizedBox(width: 8),
+        Expanded(child: _buildParticipantTile(uids[1])),
+      ],
+    );
+  }
+
+  /// Layout para 3 participantes: 2 arriba (50% cada uno), 1 abajo (100%)
+  Widget _build3ParticipantsLayout(List<int> uids) {
+    return Column(
+      children: [
+        // Fila superior: 2 participantes
+        Expanded(
+          child: Row(
+            children: [
+              Expanded(child: _buildParticipantTile(uids[0])),
+              const SizedBox(width: 8),
+              Expanded(child: _buildParticipantTile(uids[1])),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        // Fila inferior: 1 participante ocupando todo el ancho
+        Expanded(
+          child: _buildParticipantTile(uids[2]),
+        ),
+      ],
+    );
+  }
+
+  /// Layout para 4 participantes: Grid 2x2
+  Widget _build4ParticipantsLayout(List<int> uids) {
+    return Column(
+      children: [
+        // Fila superior
+        Expanded(
+          child: Row(
+            children: [
+              Expanded(child: _buildParticipantTile(uids[0])),
+              const SizedBox(width: 8),
+              Expanded(child: _buildParticipantTile(uids[1])),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        // Fila inferior
+        Expanded(
+          child: Row(
+            children: [
+              Expanded(child: _buildParticipantTile(uids[2])),
+              const SizedBox(width: 8),
+              Expanded(child: _buildParticipantTile(uids[3])),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Layout para 5 participantes: 3 arriba (33% cada uno), 2 abajo (50% cada uno)
+  Widget _build5ParticipantsLayout(List<int> uids) {
+    return Column(
+      children: [
+        // Fila superior: 3 participantes
+        Expanded(
+          child: Row(
+            children: [
+              Expanded(child: _buildParticipantTile(uids[0])),
+              const SizedBox(width: 8),
+              Expanded(child: _buildParticipantTile(uids[1])),
+              const SizedBox(width: 8),
+              Expanded(child: _buildParticipantTile(uids[2])),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        // Fila inferior: 2 participantes
+        Expanded(
+          child: Row(
+            children: [
+              Expanded(child: _buildParticipantTile(uids[3])),
+              const SizedBox(width: 8),
+              Expanded(child: _buildParticipantTile(uids[4])),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Layout para 6 participantes: Grid 3x2
+  Widget _build6ParticipantsLayout(List<int> uids) {
+    return Column(
+      children: [
+        // Fila superior: 3 participantes
+        Expanded(
+          child: Row(
+            children: [
+              Expanded(child: _buildParticipantTile(uids[0])),
+              const SizedBox(width: 8),
+              Expanded(child: _buildParticipantTile(uids[1])),
+              const SizedBox(width: 8),
+              Expanded(child: _buildParticipantTile(uids[2])),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        // Fila inferior: 3 participantes
+        Expanded(
+          child: Row(
+            children: [
+              Expanded(child: _buildParticipantTile(uids[3])),
+              const SizedBox(width: 8),
+              Expanded(child: _buildParticipantTile(uids[4])),
+              const SizedBox(width: 8),
+              Expanded(child: _buildParticipantTile(uids[5])),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -1019,16 +1586,11 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       ),
       child: Stack(
         children: [
-          // Video view placeholder
+          // ✅ FIX: Video real en lugar de placeholder
           if (widget.isVideo)
             ClipRRect(
               borderRadius: BorderRadius.circular(10),
-              child: Container(
-                color: Colors.grey[800],
-                child: const Center(
-                  child: Icon(Icons.person, size: 50, color: Colors.white54),
-                ),
-              ),
+              child: _buildRemoteVideoForTile(uid),
             )
           else
             _buildAudioOnlyView(uid),
@@ -1045,7 +1607,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Text(
-                'Usuario $uid',
+                _getParticipantName(uid),
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 12,
@@ -1314,20 +1876,61 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     );
   }
 
-  /// ✅ SIMPLIFICADO: Agregar participante delegado al controller
+  /// ✅ IMPLEMENTADO: Agregar participante delegando al controller
   void _showAddParticipantDialog() {
-    // TODO: Implementar diálogo simplificado que use el controller
-    // para obtener contactos y enviar invitaciones
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Funcionalidad de invitación en desarrollo'),
+    showDialog(
+      context: context,
+      builder: (context) => _AddParticipantDialog(
+        controller: _controller,
+        remoteName: widget.remoteName,
+        isVideo: widget.isVideo,
+        onParticipantsAdded: (Map<String, dynamic> result) {
+          if (mounted) {
+            ReleaseLogger.log(
+              '➕ [VideoCallScreen] Participantes agregados: ${result['participantsAdded']} (total: ${result['totalParticipants']})',
+              tag: 'VideoCallScreen'
+            );
+
+            // ✅ NUEVO ENFOQUE: NO navegar - el layout se adaptará automáticamente
+            // cuando el listener detecte más participantes en la llamada
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('${result['participantsAdded']} participantes agregados a la llamada'),
+                backgroundColor: Colors.green,
+                duration: const Duration(seconds: 2),
+              ),
+            );
+
+            // El VideoCallScreen detectará automáticamente los nuevos participantes
+            // vía el stream listener y adaptará el layout de 1-1 a grupal
+          }
+        },
       ),
     );
   }
 
   /// ✅ FIXED: Método nombrado para evitar problemas de stack trace parser con closures anónimas
   void _handleEndCallButton() {
-    _controller.endCall();
+    // ✅ CRÍTICO: Diferenciar entre reject y end call según el contexto
+    final isReceiver = !widget.isCaller;
+    final hasNotJoinedYet = !_controller.isJoined;
+
+    if (isReceiver && hasNotJoinedYet) {
+      // Si soy receiver y no acepté la llamada, es un RECHAZO (declined)
+      ReleaseLogger.log(
+        '❌ [VideoCallScreen] RECEIVER rechazando llamada entrante desde VideoCallScreen',
+        tag: 'VideoCallScreen'
+      );
+      _controller.rejectCall(widget.callId, reason: 'declined');
+    } else {
+      // En cualquier otro caso (caller cancela, o call ya fue aceptada), es END CALL
+      ReleaseLogger.log(
+        '📞 [VideoCallScreen] Terminando llamada normal - isCaller: ${widget.isCaller}, isJoined: ${_controller.isJoined}',
+        tag: 'VideoCallScreen'
+      );
+      _controller.endCall();
+    }
+
     // Backup navigation si el callback no funciona
     _endCallTimer = Timer(const Duration(milliseconds: 500), () {
       if (mounted) {
@@ -1339,4 +1942,281 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       }
     });
   }
+
+  /// ✅ FIX: Crear vista de video real para tiles de participantes
+  Widget _buildRemoteVideoForTile(int uid) {
+    final engine = _controller.agoraEngine;
+    if (engine == null) {
+      return Container(
+        color: Colors.grey[800],
+        child: const Center(
+          child: Icon(Icons.videocam_off, size: 50, color: Colors.white54),
+        ),
+      );
+    }
+
+    final canvas = VideoCanvas(uid: uid);
+    final videoView = _createSafeVideoView(engine, canvas);
+
+    return videoView ?? Container(
+      color: Colors.grey[800],
+      child: const Center(
+        child: Icon(Icons.videocam_off, size: 50, color: Colors.white54),
+      ),
+    );
+  }
+
+  /// ✅ FIX: Obtener nombre real del participante en lugar de "Usuario $uid"
+  String _getParticipantName(int uid) {
+    // ✅ FIX: Manejar el usuario local (UID 0)
+    if (uid == 0) {
+      return 'Tú';
+    }
+
+    // TODO: Implementar mapeo de UID a nombre real desde Firestore
+    // Por ahora retornamos el UID formateado hasta que implementemos el mapeo
+    return 'Participante $uid';
+  }
+}
+
+/// Dialog para agregar participantes a una llamada 1-1 existente
+/// ✅ NUEVO ENFOQUE: Solo agregar participantes, no crear llamada nueva
+class _AddParticipantDialog extends StatefulWidget {
+  final CallController controller;
+  final String remoteName;
+  final bool isVideo;
+  final Function(Map<String, dynamic>)? onParticipantsAdded;
+
+  const _AddParticipantDialog({
+    required this.controller,
+    required this.remoteName,
+    required this.isVideo,
+    this.onParticipantsAdded,
+  });
+
+  @override
+  State<_AddParticipantDialog> createState() => _AddParticipantDialogState();
+}
+
+/// ✅ CORREGIDO: State que delega al controller siguiendo CODING_RULES.md
+class _AddParticipantDialogState extends State<_AddParticipantDialog> {
+  List<ContactItem> _availableContacts = [];
+  Set<String> _selectedContactIds = {};
+  bool _isLoading = true;
+  bool _isCreatingCall = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAvailableContacts();
+  }
+
+  /// ✅ CORRECTO: Cargar contactos delegando al controller
+  Future<void> _loadAvailableContacts() async {
+    try {
+      setState(() {
+        _isLoading = true;
+      });
+
+      // Delegar al controller, que a su vez delega al orchestrator
+      final contactsData = await widget.controller.getAvailableContacts();
+
+      final contacts = contactsData.map((data) => ContactItem(
+        contactId: data['contactId'],
+        name: data['name'],
+        photoUrl: data['photoUrl'],
+      )).toList();
+
+      setState(() {
+        _availableContacts = contacts;
+        _isLoading = false;
+      });
+    } catch (e) {
+      ReleaseLogger.error('Error cargando contactos: $e', tag: 'AddParticipantDialog');
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  /// ✅ NUEVO: Agregar participantes a la llamada actual
+  Future<void> _addParticipants() async {
+    if (_selectedContactIds.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Selecciona al menos un contacto'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    try {
+      setState(() {
+        _isCreatingCall = true;
+      });
+
+      // ✅ NUEVO ENFOQUE: Agregar participantes a la llamada existente
+      final result = await widget.controller.addParticipantsToCurrentCall(
+        selectedContactIds: _selectedContactIds.toList(),
+      );
+
+      if (result['success'] == true) {
+        // Cerrar dialog y notificar éxito
+        if (mounted) {
+          Navigator.pop(context);
+          widget.onParticipantsAdded?.call(result);
+        }
+      } else {
+        // Mostrar error
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(result['error'] ?? 'Error agregando participantes'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      ReleaseLogger.error('Error en _createGroupCall: $e', tag: 'AddParticipantDialog');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCreatingCall = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Agregar Participantes'),
+      content: SizedBox(
+        width: double.maxFinite,
+        height: 400,
+        child: Column(
+          children: [
+            Text(
+              'Selecciona contactos para agregar a la ${widget.isVideo ? "videollamada" : "llamada"}',
+              style: TextStyle(fontSize: 14),
+            ),
+            const SizedBox(height: 16),
+            if (_isLoading)
+              const Center(child: CircularProgressIndicator())
+            else if (_availableContacts.isEmpty)
+              const Center(
+                child: Text(
+                  'No hay contactos disponibles',
+                  style: TextStyle(color: Colors.grey),
+                ),
+              )
+            else
+              Expanded(
+                child: ListView.builder(
+                  itemCount: _availableContacts.length,
+                  itemBuilder: (context, index) {
+                    final contact = _availableContacts[index];
+                    final isSelected = _selectedContactIds.contains(contact.contactId);
+
+                    // ✅ Validación UI: Máximo 4 contactos seleccionables (total 6 con user actual + receiver)
+                    final canSelect = isSelected || _selectedContactIds.length < 4;
+
+                    return CheckboxListTile(
+                      value: isSelected,
+                      onChanged: canSelect ? (selected) {
+                        setState(() {
+                          if (selected == true) {
+                            _selectedContactIds.add(contact.contactId);
+                          } else {
+                            _selectedContactIds.remove(contact.contactId);
+                          }
+                        });
+                      } : null, // Desactivar si se alcanzó el límite
+                      title: Text(contact.name),
+                      subtitle: Text('Contacto autorizado'),
+                      secondary: CircleAvatar(
+                        backgroundImage: contact.photoUrl.isNotEmpty
+                            ? NetworkImage(contact.photoUrl)
+                            : null,
+                        child: contact.photoUrl.isEmpty
+                            ? Text(contact.name[0].toUpperCase())
+                            : null,
+                      ),
+                    );
+                  },
+                ),
+              ),
+            const SizedBox(height: 16),
+            Text(
+              'Participantes seleccionados: ${_selectedContactIds.length}',
+              style: const TextStyle(fontWeight: FontWeight.w500),
+            ),
+            if (_selectedContactIds.isNotEmpty)
+              Text(
+                'Total en llamada: ${_selectedContactIds.length + 2} (máx. 6)',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: _selectedContactIds.length + 2 > 6
+                      ? Colors.red
+                      : Colors.grey[600],
+                ),
+              ),
+            if (_selectedContactIds.length >= 4)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  'Límite alcanzado: máximo 6 participantes por llamada',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.orange[700],
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _isCreatingCall ? null : () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        ElevatedButton(
+          onPressed: _isCreatingCall ? null : _addParticipants,
+          child: _isCreatingCall
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : Text(_selectedContactIds.isEmpty
+                  ? 'Agregar'
+                  : 'Agregar ${_selectedContactIds.length} Participantes'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Modelo para representar un contacto
+class ContactItem {
+  final String contactId;
+  final String name;
+  final String photoUrl;
+
+  ContactItem({
+    required this.contactId,
+    required this.name,
+    required this.photoUrl,
+  });
 }
