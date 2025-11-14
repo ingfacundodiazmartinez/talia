@@ -22,6 +22,7 @@ class CallKitService {
   Function(Map<String, dynamic>)? _onCallAccepted;
   Function(String)? _onCallDeclined;
   Function(String)? _onCallEnded;
+  Function(String)? onCallKitShown;
 
   /// 🔒 LIFECYCLE MANAGEMENT para prevenir memory leaks
   bool _isInitialized = false;
@@ -32,6 +33,7 @@ class CallKitService {
     Function(Map<String, dynamic>)? onCallAccepted,
     Function(String)? onCallDeclined,
     Function(String)? onCallEnded,
+    Function(String)? onCallKitShown,
   }) {
     // 🔒 Prevenir re-inicialización innecesaria
     if (_isInitialized) {
@@ -44,6 +46,7 @@ class CallKitService {
     _onCallAccepted = onCallAccepted;
     _onCallDeclined = onCallDeclined;
     _onCallEnded = onCallEnded;
+    this.onCallKitShown = onCallKitShown;
 
     // Escuchar eventos de llamadas (con cleanup previo por seguridad)
     _callEventSubscription?.cancel();
@@ -97,6 +100,17 @@ class CallKitService {
           final callId = event.body!['id'] as String?;
           if (callId != null) {
             _onCallDeclined!(callId);
+          }
+        }
+        break;
+
+      case Event.actionCallIncoming:
+        // CallKit se mostró exitosamente
+        ReleaseLogger.log('📞 CallKit mostrado - evento incoming', tag: 'CallKitService');
+        if (onCallKitShown != null && event.body != null) {
+          final callId = event.body!['id'] as String?;
+          if (callId != null) {
+            onCallKitShown!(callId);
           }
         }
         break;
@@ -246,30 +260,39 @@ class CallKitService {
   /// Finalizar llamada activa
   Future<void> endCall(String callId) async {
     try {
+      ReleaseLogger.log('🔍 [DEBUG] CallKitService.endCall called for callId: $callId', tag: 'CallKitService');
       await FlutterCallkitIncoming.endCall(callId);
       ReleaseLogger.log('✅ Llamada finalizada: $callId', tag: 'CallKitService');
+      ReleaseLogger.log('✅ [DEBUG] CallKitService.endCall completed successfully for $callId', tag: 'CallKitService');
     } catch (e) {
       ReleaseLogger.error('❌ Error finalizando llamada: $e', tag: 'CallKitService');
+      ReleaseLogger.error('❌ [DEBUG] CallKitService.endCall failed for $callId: $e', tag: 'CallKitService');
     }
   }
 
   /// Finalizar todas las llamadas activas
   Future<void> endAllCalls() async {
     try {
+      ReleaseLogger.log('🔍 [DEBUG] CallKitService.endAllCalls called', tag: 'CallKitService');
       await FlutterCallkitIncoming.endAllCalls();
       ReleaseLogger.log('✅ Todas las llamadas finalizadas', tag: 'CallKitService');
+      ReleaseLogger.log('✅ [DEBUG] CallKitService.endAllCalls completed successfully', tag: 'CallKitService');
     } catch (e) {
       ReleaseLogger.error('❌ Error finalizando todas las llamadas: $e', tag: 'CallKitService');
+      ReleaseLogger.error('❌ [DEBUG] CallKitService.endAllCalls failed: $e', tag: 'CallKitService');
     }
   }
 
   /// Obtener llamadas activas
   Future<List<dynamic>> getActiveCalls() async {
     try {
+      ReleaseLogger.log('🔍 [DEBUG] CallKitService.getActiveCalls called', tag: 'CallKitService');
       final calls = await FlutterCallkitIncoming.activeCalls();
+      ReleaseLogger.log('🔍 [DEBUG] CallKitService.getActiveCalls result: ${calls?.length ?? 0} calls', tag: 'CallKitService');
       return calls ?? [];
     } catch (e) {
       ReleaseLogger.error('❌ Error obteniendo llamadas activas: $e', tag: 'CallKitService');
+      ReleaseLogger.error('❌ [DEBUG] CallKitService.getActiveCalls failed: $e', tag: 'CallKitService');
       return [];
     }
   }
@@ -291,6 +314,7 @@ class CallKitService {
     _onCallAccepted = null;
     _onCallDeclined = null;
     _onCallEnded = null;
+    onCallKitShown = null;
 
     _isInitialized = false;
 

@@ -1,4 +1,15 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
+/// Estados posibles de una llamada desde la perspectiva del usuario actual
+enum CallState {
+  incomingVideo,
+  incomingAudio,
+  activeVideo,
+  activeAudio,
+  ended,
+  error,
+}
 
 /// Helper function para manejar tanto Timestamp como String de Firestore
 DateTime _parseDateTime(dynamic value) {
@@ -108,6 +119,41 @@ class Call {
     // Si quedan menos de 2 participantes activos O algún participante ya terminó
     return activeParticipantIds.length < 2 ||
            participants.values.any((p) => p.status == 'ended');
+  }
+
+  /// Determinar el estado de la llamada para el usuario actual
+  CallState getStateForUser(String userId) {
+    // Verificar si el usuario está en la llamada
+    final participant = participants[userId];
+    if (participant == null) {
+      return CallState.error;
+    }
+
+    // Si la llamada ya terminó
+    if (endedAt != null) {
+      return CallState.ended;
+    }
+
+    final isVideo = type == 'video';
+    final isCaller = createdBy == userId;
+
+    // Si es el creador de la llamada, siempre va directo a activa
+    if (isCaller) {
+      return isVideo ? CallState.activeVideo : CallState.activeAudio;
+    }
+
+    // Para receptores, depende del estado del participante
+    switch (participant.status) {
+      case 'waiting':
+        return isVideo ? CallState.incomingVideo : CallState.incomingAudio;
+      case 'joined':
+        return isVideo ? CallState.activeVideo : CallState.activeAudio;
+      case 'declined':
+      case 'ended':
+      case 'busy':
+      default:
+        return CallState.ended;
+    }
   }
 
   /// Crear copia con parámetros modificados

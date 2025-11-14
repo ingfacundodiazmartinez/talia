@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/emergency_service.dart';
-import '../screens/video_call_screen.dart';
+import '../screens/call/video/video_call_screen.dart';
 
 class EmergencyButton extends StatefulWidget {
   final VoidCallback? onEmergencyActivated;

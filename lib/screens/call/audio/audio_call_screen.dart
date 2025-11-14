@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import '../controllers/audio_call_controller.dart';
-import '../utils/release_logger.dart';
+import '../../../controllers/audio_call_controller.dart';
+import '../../../utils/release_logger.dart';
 
 /// Pantalla de llamada de audio
 ///

@@ -7,13 +7,18 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/calls/calls_orchestrator.dart';
 import '../services/permission_service.dart';
 import '../services/app_config_service.dart';
+import '../services/callkit_service.dart';
 import '../utils/release_logger.dart';
 import '../models/call.dart';
 
-/// Nuevo controller para VideoCallScreen usando la arquitectura de calls unificada
+/// Controller principal para gestión de llamadas
 ///
-/// Este controller adapta la nueva arquitectura CallsOrchestrator para
-/// trabajar con VideoCallScreen siguiendo CODING_RULES.md
+/// Responsabilidades:
+/// 1. Manejo global de listeners de llamadas (VoIP, CallKit, foreground)
+/// 2. Lógica específica para VideoCallScreen/AudioCallScreen
+/// 3. Coordinación con CallsOrchestrator
+///
+/// Flujo: main.dart → CallController → CallsOrchestrator → CallNavigationService
 ///
 /// ✅ SINGLETON: Evita múltiples instancias que causan AgoraRtcException(-17)
 class CallController {
@@ -47,6 +52,10 @@ class CallController {
   String _connectionStatus = 'Inicializando...';
   List<Map<String, dynamic>> _firestoreParticipants = []; // ✅ PROBLEMA 1
 
+  // ✅ FIX PROBLEMA #2: Stream subscriptions para evitar garbage collection
+  StreamSubscription<Call?>? _callWatchSubscription;
+  StreamSubscription<CallStateUpdate>? _callStateSubscription;
+
   // Callbacks para comunicación con VideoCallScreen
   VoidCallback? onStateChanged;
   Function(String)? onConnectionStatusChanged;
@@ -70,10 +79,12 @@ class CallController {
     CallsOrchestrator? orchestrator,
   }) {
     // Si hay instancia existente para el mismo callId, la reutilizamos
-    if (_instance != null && _currentCallId == callId && !_instance!._disposed) {
+    if (_instance != null &&
+        _currentCallId == callId &&
+        !_instance!._disposed) {
       ReleaseLogger.info(
         '🔄 [CallController] Reutilizando instancia existente para call: $callId',
-        tag: 'CallController'
+        tag: 'CallController',
       );
       return _instance!;
     }
@@ -82,7 +93,7 @@ class CallController {
     if (_instance != null && _currentCallId != callId) {
       ReleaseLogger.info(
         '🔄 [CallController] Limpiando instancia previa para call: $_currentCallId, nueva call: $callId',
-        tag: 'CallController'
+        tag: 'CallController',
       );
       _instance!.dispose();
     }
@@ -90,7 +101,7 @@ class CallController {
     // Crear nueva instancia
     ReleaseLogger.info(
       '🆕 [CallController] Creando nueva instancia singleton para call: $callId',
-      tag: 'CallController'
+      tag: 'CallController',
     );
     _currentCallId = callId;
     _instance = CallController._internal(
@@ -132,13 +143,19 @@ class CallController {
   String get connectionStatus => _connectionStatus;
   String? get currentCallId => callId;
   RtcEngine? get agoraEngine => _agoraEngine;
-  List<Map<String, dynamic>> get firestoreParticipants => _firestoreParticipants; // ✅ PROBLEMA 1
+  List<Map<String, dynamic>> get firestoreParticipants =>
+      _firestoreParticipants; // ✅ PROBLEMA 1
   CallsOrchestrator get callsOrchestrator => _callsOrchestrator; // ✅ PROBLEMA 1
 
   /// Stream de estado de llamada
   Stream<CallStateUpdate> get callStateStream {
     return _callsOrchestrator.watchCall(callId).map((call) {
       if (call == null) {
+        return CallStateUpdate(callId: callId, status: 'ended');
+      }
+
+      // ✅ PRIORITY CHECK: Si la llamada global está terminada, devolver 'ended'
+      if (call.endedAt != null) {
         return CallStateUpdate(callId: callId, status: 'ended');
       }
 
@@ -156,52 +173,107 @@ class CallController {
 
   /// Inicializar listener para sincronización de terminación de llamada
   void _initializeCallTerminationListener() {
+    // ✅ FIX PROBLEMA #2: Guardar subscription para evitar garbage collection
     // Escuchar cambios en el estado de la llamada
-    callStateStream.listen((update) {
+    _callStateSubscription = callStateStream.listen((update) {
       if (update.status == 'ended' && !_disposed) {
-        ReleaseLogger.log('🔚 [CallController] Llamada terminada remotamente, finalizando localmente', tag: 'CallController');
+        ReleaseLogger.log(
+          '🔚 [CallController] Llamada terminada remotamente, finalizando localmente',
+          tag: 'CallController',
+        );
         // Terminar la llamada local sin actualizar Firestore (ya está terminada)
         _endCallLocally();
       }
     });
 
-    // ✅ CRITICAL FIX: Escuchar el estado general de la llamada para detectar declines
-    _callsOrchestrator.watchCall(callId).listen((call) {
-      if (call == null && !_disposed) {
-        ReleaseLogger.log('🔚 [CallController] Llamada eliminada de Firestore, finalizando localmente', tag: 'CallController');
+    // ✅ REFACTORED: Escuchar TODOS los cambios de la llamada y actualizar estado
+    // ✅ FIX PROBLEMA #2: Guardar subscription para evitar garbage collection
+    _callWatchSubscription = _callsOrchestrator.watchCall(callId).listen((
+      call,
+    ) {
+      if (_disposed) return;
+
+      if (call == null) {
+        ReleaseLogger.log(
+          '🔚 [CallController] Llamada eliminada de Firestore, finalizando localmente',
+          tag: 'CallController',
+        );
         _endCallLocally();
-      } else if (call != null && call.endedAt != null && !_disposed) {
-        ReleaseLogger.log('🔚 [CallController] Llamada marcada como terminada, finalizando localmente', tag: 'CallController');
-        _endCallLocally();
-      } else if (call != null && !_disposed) {
-        // ✅ NUEVA LÓGICA: Detectar cuando otros participantes declinan la llamada
-        final currentUserId = _getCurrentUserId();
-        if (currentUserId != null) {
-          // Verificar si hay algún participante con estado 'declined'
-          bool hasDeclinedParticipant = call.participants.values.any((participant) => participant.status == 'declined');
-
-          // Verificar si todos los participantes (excepto el caller) han declinado
-          final nonCallerParticipants = call.participants.entries.where((entry) => entry.key != call.createdBy);
-          bool allNonCallersDeclined = nonCallerParticipants.isNotEmpty &&
-              nonCallerParticipants.every((entry) => entry.value.status == 'declined');
-
-          if (hasDeclinedParticipant && allNonCallersDeclined) {
-            ReleaseLogger.log('❌ [CallController] Todos los participantes declinaron la llamada, finalizando localmente', tag: 'CallController');
-            _endCallLocally();
-          } else if (hasDeclinedParticipant) {
-            ReleaseLogger.log('❌ [CallController] Participante declinó la llamada: ${call.participants}', tag: 'CallController');
-            // En llamada 1-1, si el otro participante declina, terminar
-            if (call.participants.length == 2) {
-              ReleaseLogger.log('❌ [CallController] Llamada 1-1 declinada, finalizando localmente', tag: 'CallController');
-              _endCallLocally();
-            }
-          }
-        }
-
-        // ✅ PROBLEMA 1: Trackear cambios en participantes para UI reactivo
-        _updateParticipantsList(call);
+        return;
       }
+
+      if (call.endedAt != null) {
+        ReleaseLogger.log(
+          '🔚 [CallController] Llamada marcada como terminada, finalizando localmente',
+          tag: 'CallController',
+        );
+        _endCallLocally();
+        return;
+      }
+
+      // ✅ SIEMPRE actualizar participantes en CUALQUIER cambio
+      _updateParticipantsList(call);
+
+      // ✅ DESPUÉS verificar condiciones especiales de terminación
+      _checkForTerminationConditions(call);
     });
+  }
+
+  /// ✅ REFACTORED: Verificar condiciones especiales de terminación
+  void _checkForTerminationConditions(Call call) {
+    final currentUserId = _getCurrentUserId();
+    if (currentUserId == null) return;
+
+    // Verificar si hay algún participante con estado 'declined'
+    bool hasDeclinedParticipant = call.participants.values.any(
+      (participant) => participant.status == 'declined',
+    );
+
+    // Verificar si todos los participantes (excepto el caller) han declinado
+    final nonCallerParticipants = call.participants.entries.where(
+      (entry) => entry.key != call.createdBy,
+    );
+    bool allNonCallersDeclined =
+        nonCallerParticipants.isNotEmpty &&
+        nonCallerParticipants.every(
+          (entry) => entry.value.status == 'declined',
+        );
+
+    if (hasDeclinedParticipant && allNonCallersDeclined) {
+      ReleaseLogger.log(
+        '❌ [CallController] Todos los participantes declinaron la llamada, finalizando localmente',
+        tag: 'CallController',
+      );
+      _endCallLocally();
+    } else if (hasDeclinedParticipant) {
+      ReleaseLogger.log(
+        '❌ [CallController] Participante declinó la llamada: ${call.participants}',
+        tag: 'CallController',
+      );
+      // En llamada 1-1, si el otro participante declina, terminar
+      if (call.participants.length == 2) {
+        ReleaseLogger.log(
+          '❌ [CallController] Llamada 1-1 declinada, finalizando localmente',
+          tag: 'CallController',
+        );
+        _endCallLocally();
+      }
+    }
+
+    // ✅ FIX PROBLEMA #2: Detectar cuando queda solo 1 participante activo
+    final activeParticipants = call.participants.entries.where((entry) {
+      final status = entry.value.status;
+      return status == 'joined' || status == 'waiting';
+    }).toList();
+
+    if (activeParticipants.length == 1 &&
+        activeParticipants.first.key == currentUserId) {
+      ReleaseLogger.log(
+        '🤷 [CallController] Solo queda el usuario actual, finalizando llamada',
+        tag: 'CallController',
+      );
+      _endCallLocally();
+    }
   }
 
   /// ✅ PROBLEMA 1: Actualizar lista de participantes y notificar UI
@@ -211,7 +283,8 @@ class CallController {
         'userId': entry.key,
         'status': entry.value.status,
         'joinedAt': entry.value.joinedAt,
-        'name': 'Cargando...', // Placeholder temporal mientras se obtienen nombres
+        'name':
+            'Cargando...', // Placeholder temporal mientras se obtienen nombres
       };
     }).toList();
 
@@ -225,7 +298,10 @@ class CallController {
       );
 
       for (final p in _firestoreParticipants) {
-        ReleaseLogger.log('  - ${p['name']} (${p['userId']}): ${p['status']}', tag: 'CallController');
+        ReleaseLogger.log(
+          '  - ${p['name']} (${p['userId']}): ${p['status']}',
+          tag: 'CallController',
+        );
       }
 
       // Notificar a la UI
@@ -248,9 +324,10 @@ class CallController {
         String userName = 'Usuario';
         if (userDoc.exists) {
           final userData = userDoc.data()!;
-          userName = userData['name'] as String? ??
-                    userData['email'] as String? ??
-                    'Usuario';
+          userName =
+              userData['name'] as String? ??
+              userData['email'] as String? ??
+              'Usuario';
         }
 
         return {'userId': userId, 'name': userName};
@@ -262,7 +339,7 @@ class CallController {
       bool updated = false;
       for (final result in results) {
         final index = _firestoreParticipants.indexWhere(
-          (p) => p['userId'] == result['userId']
+          (p) => p['userId'] == result['userId'],
         );
         if (index != -1) {
           _firestoreParticipants[index]['name'] = result['name'];
@@ -271,11 +348,17 @@ class CallController {
       }
 
       if (updated) {
-        ReleaseLogger.log('✅ [CallController] Nombres de participantes actualizados', tag: 'CallController');
+        ReleaseLogger.log(
+          '✅ [CallController] Nombres de participantes actualizados',
+          tag: 'CallController',
+        );
         onParticipantsChanged?.call(_firestoreParticipants);
       }
     } catch (e) {
-      ReleaseLogger.error('❌ [CallController] Error obteniendo nombres: $e', tag: 'CallController');
+      ReleaseLogger.error(
+        '❌ [CallController] Error obteniendo nombres: $e',
+        tag: 'CallController',
+      );
     }
   }
 
@@ -298,7 +381,10 @@ class CallController {
     if (_disposed) return;
 
     try {
-      ReleaseLogger.log('📞 [CallController] Finalizando llamada localmente', tag: 'CallController');
+      ReleaseLogger.log(
+        '📞 [CallController] Finalizando llamada localmente',
+        tag: 'CallController',
+      );
 
       // Actualizar estado local
       _isJoined = false;
@@ -308,12 +394,30 @@ class CallController {
       // Salir del canal de Agora
       await _leaveChannel();
 
+      // ✅ CRITICAL: Limpiar sesión CallKit para evitar que SO detecte llamada activa
+      try {
+        final callKitService = CallKitService();
+        await callKitService.endCall(callId);
+        await callKitService.endAllCalls();
+        ReleaseLogger.log(
+          '✅ [CallController] Sesión CallKit terminada para $callId',
+          tag: 'CallController',
+        );
+      } catch (e) {
+        ReleaseLogger.error(
+          '❌ [CallController] Error terminando sesión CallKit: $e',
+          tag: 'CallController',
+        );
+      }
+
       // Notificar a la UI
       onStateChanged?.call();
-      onCallEnded?.call();
-
+      // ✅ FIX: No llamar onCallEnded() - que solo el callStateStream lo maneje
     } catch (e) {
-      ReleaseLogger.error('❌ [CallController] Error finalizando llamada localmente: $e', tag: 'CallController');
+      ReleaseLogger.error(
+        '❌ [CallController] Error finalizando llamada localmente: $e',
+        tag: 'CallController',
+      );
     }
   }
 
@@ -323,26 +427,49 @@ class CallController {
 
     // ✅ FIXED: Evitar doble inicialización del controller
     if (_isInitialized) {
-      ReleaseLogger.log('✅ [CallController] Controller ya inicializado, reutilizando instancia', tag: 'CallController');
+      ReleaseLogger.log(
+        '✅ [CallController] Controller ya inicializado, reutilizando instancia',
+        tag: 'CallController',
+      );
       return true;
     }
 
     try {
-      ReleaseLogger.log('🎧 [CallController] Inicializando controller', tag: 'CallController');
+      ReleaseLogger.log(
+        '🎧 [CallController] Inicializando controller',
+        tag: 'CallController',
+      );
 
       // ✅ ANDROID: Verificar permisos ANTES de inicializar Agora
-      if (context != null) {
+      // ✅ FIX: Si Agora Engine ya existe, significa que es VoIP/CallKit en progreso
+      if (context != null && _agoraEngine == null) {
         final permissionsGranted = await _checkCallPermissions(context);
         if (!permissionsGranted) {
-          ReleaseLogger.error('❌ [CallController] Permisos de llamada no concedidos', tag: 'CallController');
-          onError?.call('Permisos de cámara/micrófono requeridos para llamadas');
+          ReleaseLogger.error(
+            '❌ [CallController] Permisos de llamada no concedidos',
+            tag: 'CallController',
+          );
+          onError?.call(
+            'Permisos de cámara/micrófono requeridos para llamadas',
+          );
           return false;
         }
+      } else if (context != null && _agoraEngine != null) {
+        ReleaseLogger.log(
+          '✅ [CallController] Llamada VoIP/CallKit ya en progreso, saltando verificación de permisos',
+          tag: 'CallController',
+        );
       } else {
         // ✅ VoIP CALL: Context is null, proceed without permission check
         // Los permisos se solicitarán cuando la app esté en foreground
-        ReleaseLogger.log('📞 [CallController] Llamada VoIP detectada (context=null), procediendo sin verificación de permisos inmediata', tag: 'CallController');
-        ReleaseLogger.log('⚠️ [CallController] Los permisos se verificarán/solicitarán cuando la app esté en foreground', tag: 'CallController');
+        ReleaseLogger.log(
+          '📞 [CallController] Llamada VoIP detectada (context=null), procediendo sin verificación de permisos inmediata',
+          tag: 'CallController',
+        );
+        ReleaseLogger.log(
+          '⚠️ [CallController] Los permisos se verificarán/solicitarán cuando la app esté en foreground',
+          tag: 'CallController',
+        );
       }
 
       // Inicializar Agora Engine directamente
@@ -356,11 +483,16 @@ class CallController {
       _connectionStatus = 'Inicializado';
       onStateChanged?.call();
 
-      ReleaseLogger.log('✅ [CallController] CallController inicializado', tag: 'CallController');
+      ReleaseLogger.log(
+        '✅ [CallController] CallController inicializado',
+        tag: 'CallController',
+      );
       return true;
-
     } catch (e) {
-      ReleaseLogger.error('❌ [CallController] Error inicializando: $e', tag: 'CallController');
+      ReleaseLogger.error(
+        '❌ [CallController] Error inicializando: $e',
+        tag: 'CallController',
+      );
       onError?.call('Error de inicialización: $e');
       return false;
     }
@@ -369,12 +501,18 @@ class CallController {
   /// Inicializar Agora Engine
   Future<void> _initializeAgoraEngine() async {
     try {
-      ReleaseLogger.log('🎥 [CallController] Inicializando Agora Engine', tag: 'CallController');
+      ReleaseLogger.log(
+        '🎥 [CallController] Inicializando Agora Engine',
+        tag: 'CallController',
+      );
 
       // ✅ FIXED: Verificar si Agora Engine ya existe antes de crear uno nuevo
       // Esto evita el error AgoraRtcException(-7) "Engine already exists"
       if (_agoraEngine != null) {
-        ReleaseLogger.log('✅ [CallController] Agora Engine ya existe, reutilizando instancia', tag: 'CallController');
+        ReleaseLogger.log(
+          '✅ [CallController] Agora Engine ya existe, reutilizando instancia',
+          tag: 'CallController',
+        );
         return; // No crear otra instancia
       }
 
@@ -385,19 +523,27 @@ class CallController {
       final appConfigService = AppConfigService();
       final appId = appConfigService.agoraAppId;
 
-      ReleaseLogger.log('🔑 [CallController] Inicializando con App ID: ${appId.substring(0, 8)}...', tag: 'CallController');
+      ReleaseLogger.log(
+        '🔑 [CallController] Inicializando con App ID: ${appId.substring(0, 8)}...',
+        tag: 'CallController',
+      );
 
       // Inicializar con App ID real
-      await _agoraEngine!.initialize(RtcEngineContext(
-        appId: appId,
-        channelProfile: ChannelProfileType.channelProfileCommunication,
-      ));
+      await _agoraEngine!.initialize(
+        RtcEngineContext(
+          appId: appId,
+          channelProfile: ChannelProfileType.channelProfileCommunication,
+        ),
+      );
 
       // Configurar callbacks
       _agoraEngine!.registerEventHandler(
         RtcEngineEventHandler(
           onJoinChannelSuccess: (RtcConnection connection, int elapsed) {
-            ReleaseLogger.log('✅ [CallController] Usuario local se unió al canal', tag: 'CallController');
+            ReleaseLogger.log(
+              '✅ [CallController] Usuario local se unió al canal',
+              tag: 'CallController',
+            );
             _isJoined = true;
             _localUid = connection.localUid;
             _connectionStatus = 'Conectado';
@@ -406,43 +552,75 @@ class CallController {
             onStateChanged?.call();
           },
           onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
-            ReleaseLogger.log('👤 [CallController] Usuario remoto se unió: $remoteUid', tag: 'CallController');
+            ReleaseLogger.log(
+              '👤 [CallController] Usuario remoto se unió: $remoteUid',
+              tag: 'CallController',
+            );
             _remoteUids.add(remoteUid);
             onRemoteUsersChanged?.call(_remoteUids);
             onStateChanged?.call();
           },
-          onUserOffline: (RtcConnection connection, int remoteUid, UserOfflineReasonType reason) {
-            ReleaseLogger.log('🚶 [CallController] Usuario remoto se fue: $remoteUid (reason: $reason)', tag: 'CallController');
-            _remoteUids.remove(remoteUid);
-            onRemoteUsersChanged?.call(_remoteUids);
-            onStateChanged?.call();
+          onUserOffline:
+              (
+                RtcConnection connection,
+                int remoteUid,
+                UserOfflineReasonType reason,
+              ) {
+                ReleaseLogger.log(
+                  '🚶 [CallController] Usuario remoto se fue: $remoteUid (reason: $reason)',
+                  tag: 'CallController',
+                );
+                _remoteUids.remove(remoteUid);
+                onRemoteUsersChanged?.call(_remoteUids);
+                onStateChanged?.call();
 
-            // ✅ NUEVO: En llamada 1-1, si el otro usuario se va, terminar la llamada
-            if (_remoteUids.isEmpty && _isJoined) {
-              ReleaseLogger.log('🔚 [CallController] Todos los usuarios remotos se fueron, terminando llamada automáticamente', tag: 'CallController');
-              // Terminar llamada local y actualizar Firestore
-              endCall().catchError((error) {
-                ReleaseLogger.error('❌ [CallController] Error terminando llamada automáticamente: $error', tag: 'CallController');
-                return false;
-              });
-            }
-          },
-          onConnectionStateChanged: (RtcConnection connection, ConnectionStateType state, ConnectionChangedReasonType reason) {
-            final statusText = _getConnectionStatusText(state);
-            ReleaseLogger.log('🔄 [CallController] Estado de conexión: $statusText (isJoined: $_isJoined)', tag: 'CallController');
+                // ✅ NUEVO: En llamada 1-1, si el otro usuario se va, terminar la llamada
+                if (_remoteUids.isEmpty && _isJoined) {
+                  ReleaseLogger.log(
+                    '🔚 [CallController] Todos los usuarios remotos se fueron, terminando llamada automáticamente',
+                    tag: 'CallController',
+                  );
+                  // Terminar llamada local y actualizar Firestore
+                  endCall().catchError((error) {
+                    ReleaseLogger.error(
+                      '❌ [CallController] Error terminando llamada automáticamente: $error',
+                      tag: 'CallController',
+                    );
+                    return false;
+                  });
+                }
+              },
+          onConnectionStateChanged:
+              (
+                RtcConnection connection,
+                ConnectionStateType state,
+                ConnectionChangedReasonType reason,
+              ) {
+                final statusText = _getConnectionStatusText(state);
+                ReleaseLogger.log(
+                  '🔄 [CallController] Estado de conexión: $statusText (isJoined: $_isJoined)',
+                  tag: 'CallController',
+                );
 
-            // ✅ FIX: No sobreescribir si ya estamos joined y conectado
-            if (_isJoined && state == ConnectionStateType.connectionStateConnecting) {
-              ReleaseLogger.log('⚠️ [CallController] Evitando sobreescribir estado Conectado con Conectando (ya joined)', tag: 'CallController');
-              return; // Mantener estado actual
-            }
+                // ✅ FIX: No sobreescribir si ya estamos joined y conectado
+                if (_isJoined &&
+                    state == ConnectionStateType.connectionStateConnecting) {
+                  ReleaseLogger.log(
+                    '⚠️ [CallController] Evitando sobreescribir estado Conectado con Conectando (ya joined)',
+                    tag: 'CallController',
+                  );
+                  return; // Mantener estado actual
+                }
 
-            _connectionStatus = statusText;
-            onConnectionStatusChanged?.call(_connectionStatus);
-            onStateChanged?.call();
-          },
+                _connectionStatus = statusText;
+                onConnectionStatusChanged?.call(_connectionStatus);
+                onStateChanged?.call();
+              },
           onError: (ErrorCodeType err, String msg) {
-            ReleaseLogger.error('❌ [CallController] Error Agora: $err - $msg', tag: 'CallController');
+            ReleaseLogger.error(
+              '❌ [CallController] Error Agora: $err - $msg',
+              tag: 'CallController',
+            );
             onError?.call('Error de conexión: $msg');
           },
         ),
@@ -457,20 +635,29 @@ class CallController {
         await _agoraEngine!.disableVideo();
       }
 
-      ReleaseLogger.log('✅ [CallController] Agora Engine configurado', tag: 'CallController');
-
+      ReleaseLogger.log(
+        '✅ [CallController] Agora Engine configurado',
+        tag: 'CallController',
+      );
     } catch (e) {
-      ReleaseLogger.error('❌ [CallController] Error inicializando Agora: $e', tag: 'CallController');
+      ReleaseLogger.error(
+        '❌ [CallController] Error inicializando Agora: $e',
+        tag: 'CallController',
+      );
       throw Exception('Error inicializando motor de llamadas: $e');
     }
   }
 
   /// Aceptar llamada entrante
   Future<Map<String, dynamic>> acceptCall(String callId) async {
-    if (_disposed || _agoraEngine == null) return {'success': false, 'error': 'Controller disposed'};
+    if (_disposed || _agoraEngine == null)
+      return {'success': false, 'error': 'Controller disposed'};
 
     try {
-      ReleaseLogger.log('📞 [CallController] Aceptando llamada: $callId', tag: 'CallController');
+      ReleaseLogger.log(
+        '📞 [CallController] Aceptando llamada: $callId',
+        tag: 'CallController',
+      );
 
       // 1. Aceptar la llamada en Firestore
       final success = await _callsOrchestrator.acceptCall(callId);
@@ -498,14 +685,22 @@ class CallController {
             return {'success': false, 'error': 'Error uniéndose al canal'};
           }
         } else {
-          return {'success': false, 'error': 'Credenciales de llamada faltantes'};
+          return {
+            'success': false,
+            'error': 'Credenciales de llamada faltantes',
+          };
         }
       } else {
-        return {'success': false, 'error': 'Error aceptando llamada en Firestore'};
+        return {
+          'success': false,
+          'error': 'Error aceptando llamada en Firestore',
+        };
       }
-
     } catch (e) {
-      ReleaseLogger.error('❌ [CallController] Error aceptando llamada: $e', tag: 'CallController');
+      ReleaseLogger.error(
+        '❌ [CallController] Error aceptando llamada: $e',
+        tag: 'CallController',
+      );
       onError?.call('Error aceptando llamada: $e');
       return {'success': false, 'error': e.toString()};
     }
@@ -516,10 +711,16 @@ class CallController {
     if (_disposed) return false;
 
     try {
-      ReleaseLogger.log('❌ [CallsVideoController] Rechazando llamada: $callId', tag: 'CallsVideoController');
+      ReleaseLogger.log(
+        '❌ [CallsVideoController] Rechazando llamada: $callId',
+        tag: 'CallsVideoController',
+      );
       return await _callsOrchestrator.declineCall(callId, reason: reason);
     } catch (e) {
-      ReleaseLogger.error('❌ [CallsVideoController] Error rechazando llamada: $e', tag: 'CallsVideoController');
+      ReleaseLogger.error(
+        '❌ [CallsVideoController] Error rechazando llamada: $e',
+        tag: 'CallsVideoController',
+      );
       onError?.call('Error rechazando llamada: $e');
       return false;
     }
@@ -530,20 +731,26 @@ class CallController {
     if (_disposed) return false;
 
     try {
-      ReleaseLogger.log('📞 [CallsVideoController] Terminando llamada: $callId', tag: 'CallsVideoController');
+      ReleaseLogger.log(
+        '📞 [CallsVideoController] Terminando llamada: $callId',
+        tag: 'CallsVideoController',
+      );
       final success = await _callsOrchestrator.endCall(callId);
 
       if (success) {
         _isJoined = false;
         _remoteUids.clear();
         onStateChanged?.call();
-        onCallEnded?.call();
+        // ✅ FIX: No llamar onCallEnded() - que solo el callStateStream lo maneje
+        // Esto evita race conditions entre callback directo y Firestore listener
       }
 
       return success;
-
     } catch (e) {
-      ReleaseLogger.error('❌ [CallsVideoController] Error terminando llamada: $e', tag: 'CallsVideoController');
+      ReleaseLogger.error(
+        '❌ [CallsVideoController] Error terminando llamada: $e',
+        tag: 'CallsVideoController',
+      );
       onError?.call('Error terminando llamada: $e');
       return false;
     }
@@ -557,10 +764,16 @@ class CallController {
       _isMuted = !_isMuted;
       await _agoraEngine!.muteLocalAudioStream(_isMuted);
       onStateChanged?.call();
-      ReleaseLogger.log('🎤 [CallController] Micrófono ${_isMuted ? 'silenciado' : 'activado'}', tag: 'CallController');
+      ReleaseLogger.log(
+        '🎤 [CallController] Micrófono ${_isMuted ? 'silenciado' : 'activado'}',
+        tag: 'CallController',
+      );
       return true;
     } catch (e) {
-      ReleaseLogger.error('❌ [CallController] Error alternando mute: $e', tag: 'CallController');
+      ReleaseLogger.error(
+        '❌ [CallController] Error alternando mute: $e',
+        tag: 'CallController',
+      );
       onError?.call('Error alternando micrófono: $e');
       return false;
     }
@@ -574,10 +787,16 @@ class CallController {
       _isCameraOff = !_isCameraOff;
       await _agoraEngine!.enableLocalVideo(!_isCameraOff);
       onStateChanged?.call();
-      ReleaseLogger.log('📹 [CallController] Cámara ${_isCameraOff ? 'desactivada' : 'activada'}', tag: 'CallController');
+      ReleaseLogger.log(
+        '📹 [CallController] Cámara ${_isCameraOff ? 'desactivada' : 'activada'}',
+        tag: 'CallController',
+      );
       return true;
     } catch (e) {
-      ReleaseLogger.error('❌ [CallController] Error alternando cámara: $e', tag: 'CallController');
+      ReleaseLogger.error(
+        '❌ [CallController] Error alternando cámara: $e',
+        tag: 'CallController',
+      );
       onError?.call('Error alternando cámara: $e');
       return false;
     }
@@ -589,10 +808,16 @@ class CallController {
 
     try {
       await _agoraEngine!.switchCamera();
-      ReleaseLogger.log('🔄 [CallController] Cámara cambiada', tag: 'CallController');
+      ReleaseLogger.log(
+        '🔄 [CallController] Cámara cambiada',
+        tag: 'CallController',
+      );
       return true;
     } catch (e) {
-      ReleaseLogger.error('❌ [CallController] Error cambiando cámara: $e', tag: 'CallController');
+      ReleaseLogger.error(
+        '❌ [CallController] Error cambiando cámara: $e',
+        tag: 'CallController',
+      );
       onError?.call('Error cambiando cámara: $e');
       return false;
     }
@@ -606,33 +831,63 @@ class CallController {
     required bool isVideo,
   }) async {
     // ✅ CRITICAL: Logging INMEDIATO para debuggear
-    ReleaseLogger.log('🚀 [CallController] ===== INICIO joinExistingCall =====', tag: 'CallController');
-    ReleaseLogger.log('🚀 [CallController] Parámetros: channelName=$channelName, uid=$uid, isVideo=$isVideo', tag: 'CallController');
-    ReleaseLogger.log('🚀 [CallController] Estado: _disposed=$_disposed, _agoraEngine=${_agoraEngine != null ? "EXISTS" : "NULL"}', tag: 'CallController');
+    ReleaseLogger.log(
+      '🚀 [CallController] ===== INICIO joinExistingCall =====',
+      tag: 'CallController',
+    );
+    ReleaseLogger.log(
+      '🚀 [CallController] Parámetros: channelName=$channelName, uid=$uid, isVideo=$isVideo',
+      tag: 'CallController',
+    );
+    ReleaseLogger.log(
+      '🚀 [CallController] Estado: _disposed=$_disposed, _agoraEngine=${_agoraEngine != null ? "EXISTS" : "NULL"}',
+      tag: 'CallController',
+    );
 
     if (_disposed || _agoraEngine == null) {
-      ReleaseLogger.error('❌ [CallController] EARLY RETURN: disposed=$_disposed o agoraEngine=null', tag: 'CallController');
+      ReleaseLogger.error(
+        '❌ [CallController] EARLY RETURN: disposed=$_disposed o agoraEngine=null',
+        tag: 'CallController',
+      );
       return false;
     }
 
     try {
-      ReleaseLogger.log('📞 [CallController] Uniéndose a llamada existente: $channelName', tag: 'CallController');
-      ReleaseLogger.log('🔑 [CallController] Token: ${token.length > 20 ? '${token.substring(0, 20)}...' : token}', tag: 'CallController');
+      ReleaseLogger.log(
+        '📞 [CallController] Uniéndose a llamada existente: $channelName',
+        tag: 'CallController',
+      );
+      ReleaseLogger.log(
+        '🔑 [CallController] Token: ${token.length > 20 ? '${token.substring(0, 20)}...' : token}',
+        tag: 'CallController',
+      );
       ReleaseLogger.log('👤 [CallController] UID: $uid', tag: 'CallController');
-      ReleaseLogger.log('📺 [CallController] Is Video: $isVideo', tag: 'CallController');
+      ReleaseLogger.log(
+        '📺 [CallController] Is Video: $isVideo',
+        tag: 'CallController',
+      );
 
       // Verificar que Agora Engine esté disponible
       if (_agoraEngine == null) {
-        ReleaseLogger.error('❌ [CallController] Agora Engine es null!', tag: 'CallController');
+        ReleaseLogger.error(
+          '❌ [CallController] Agora Engine es null!',
+          tag: 'CallController',
+        );
         return false;
       }
 
       // ✅ NUEVO: Verificar si ya estamos en un canal y salir primero
       try {
         await _agoraEngine!.leaveChannel();
-        ReleaseLogger.log('🚪 [CallController] Salido de canal previo (si existía)', tag: 'CallController');
+        ReleaseLogger.log(
+          '🚪 [CallController] Salido de canal previo (si existía)',
+          tag: 'CallController',
+        );
       } catch (leaveError) {
-        ReleaseLogger.log('ℹ️ [CallController] No había canal previo: $leaveError', tag: 'CallController');
+        ReleaseLogger.log(
+          'ℹ️ [CallController] No había canal previo: $leaveError',
+          tag: 'CallController',
+        );
       }
 
       // Configurar el canal antes de unirse
@@ -644,7 +899,10 @@ class CallController {
         clientRoleType: ClientRoleType.clientRoleBroadcaster,
       );
 
-      ReleaseLogger.log('🎯 [CallController] Intentando joinChannel...', tag: 'CallController');
+      ReleaseLogger.log(
+        '🎯 [CallController] Intentando joinChannel...',
+        tag: 'CallController',
+      );
 
       // Unirse al canal real de Agora
       await _agoraEngine!.joinChannel(
@@ -654,15 +912,32 @@ class CallController {
         options: channelMediaOptions,
       );
 
-      ReleaseLogger.log('✅ [CallController] Unido al canal exitosamente', tag: 'CallController');
-      ReleaseLogger.log('🚀 [CallController] ===== FIN joinExistingCall: SUCCESS =====', tag: 'CallController');
+      ReleaseLogger.log(
+        '✅ [CallController] Unido al canal exitosamente',
+        tag: 'CallController',
+      );
+      ReleaseLogger.log(
+        '🚀 [CallController] ===== FIN joinExistingCall: SUCCESS =====',
+        tag: 'CallController',
+      );
       return true;
-
     } catch (e) {
-      ReleaseLogger.error('❌ [CallController] Error uniéndose a llamada existente: $e', tag: 'CallController');
-      ReleaseLogger.error('🔍 [CallController] Error type: ${e.runtimeType}', tag: 'CallController');
-      ReleaseLogger.error('🔍 [CallController] Error details: $e', tag: 'CallController');
-      ReleaseLogger.error('🚀 [CallController] ===== FIN joinExistingCall: ERROR =====', tag: 'CallController');
+      ReleaseLogger.error(
+        '❌ [CallController] Error uniéndose a llamada existente: $e',
+        tag: 'CallController',
+      );
+      ReleaseLogger.error(
+        '🔍 [CallController] Error type: ${e.runtimeType}',
+        tag: 'CallController',
+      );
+      ReleaseLogger.error(
+        '🔍 [CallController] Error details: $e',
+        tag: 'CallController',
+      );
+      ReleaseLogger.error(
+        '🚀 [CallController] ===== FIN joinExistingCall: ERROR =====',
+        tag: 'CallController',
+      );
       onError?.call('Error uniéndose a llamada existente: $e');
       return false;
     }
@@ -674,12 +949,19 @@ class CallController {
 
     try {
       final activeCalls = _callsOrchestrator.activeCalls;
-      return activeCalls.map((call) => ActiveCall(
-        callId: call.id,
-        status: 'active', // Simplificado
-      )).toList();
+      return activeCalls
+          .map(
+            (call) => ActiveCall(
+              callId: call.id,
+              status: 'active', // Simplificado
+            ),
+          )
+          .toList();
     } catch (e) {
-      ReleaseLogger.error('❌ [CallsVideoController] Error obteniendo calls activas: $e', tag: 'CallsVideoController');
+      ReleaseLogger.error(
+        '❌ [CallsVideoController] Error obteniendo calls activas: $e',
+        tag: 'CallsVideoController',
+      );
       return [];
     }
   }
@@ -689,16 +971,21 @@ class CallController {
     if (_disposed) return [];
 
     try {
-      ReleaseLogger.log('🔍 [CallController] Solicitando contactos disponibles al orchestrator', tag: 'CallController');
+      ReleaseLogger.log(
+        '🔍 [CallController] Solicitando contactos disponibles al orchestrator',
+        tag: 'CallController',
+      );
 
       // ✅ CORRECTO: Delegar al orchestrator siguiendo CODING_RULES.md
       return await _callsOrchestrator.getAvailableContactsForCall(
         currentCallId: callId,
         currentReceiverId: receiverId,
       );
-
     } catch (e) {
-      ReleaseLogger.error('❌ [CallController] Error obteniendo contactos: $e', tag: 'CallController');
+      ReleaseLogger.error(
+        '❌ [CallController] Error obteniendo contactos: $e',
+        tag: 'CallController',
+      );
       return [];
     }
   }
@@ -716,13 +1003,14 @@ class CallController {
       if (totalParticipants > 6) {
         return {
           'success': false,
-          'error': 'Máximo 6 participantes por llamada (actualmente $currentParticipants, intentando agregar ${selectedContactIds.length})'
+          'error':
+              'Máximo 6 participantes por llamada (actualmente $currentParticipants, intentando agregar ${selectedContactIds.length})',
         };
       }
 
       ReleaseLogger.log(
         '➕ [CallController] Agregando ${selectedContactIds.length} participantes a llamada actual: $callId',
-        tag: 'CallController'
+        tag: 'CallController',
       );
 
       // ✅ NUEVO ENFOQUE: Agregar participantes a la llamada existente
@@ -734,7 +1022,7 @@ class CallController {
       if (result['success'] == true) {
         ReleaseLogger.log(
           '✅ [CallController] Participantes agregados exitosamente. Layout se adaptará automáticamente.',
-          tag: 'CallController'
+          tag: 'CallController',
         );
         return {
           'success': true,
@@ -745,9 +1033,11 @@ class CallController {
       } else {
         return result;
       }
-
     } catch (e) {
-      ReleaseLogger.error('❌ [CallController] Error agregando participantes: $e', tag: 'CallController');
+      ReleaseLogger.error(
+        '❌ [CallController] Error agregando participantes: $e',
+        tag: 'CallController',
+      );
       return {'success': false, 'error': e.toString()};
     }
   }
@@ -755,9 +1045,17 @@ class CallController {
   /// Verificar permisos de llamada (cámara y micrófono)
   Future<bool> _checkCallPermissions(BuildContext context) async {
     try {
-      ReleaseLogger.log('🔒 [CallController] Verificando permisos para llamada', tag: 'CallController');
-      ReleaseLogger.log('🔍 [CallController] DEBUG - Context disponible: ${context != null}, esVideo: $isVideo', tag: 'CallController');
+      ReleaseLogger.log(
+        '🔒 [CallController] Verificando permisos para llamada',
+        tag: 'CallController',
+      );
+      ReleaseLogger.log(
+        '🔍 [CallController] DEBUG - Context disponible: true, esVideo: $isVideo',
+        tag: 'CallController',
+      );
 
+      // ✅ FIX: Guardar context antes de async gaps
+      final localContext = context;
       final permissionService = PermissionService();
       final requiredPermissions = [AppPermission.microphone];
 
@@ -776,32 +1074,47 @@ class CallController {
         final currentStatus = await permissionService.checkStatus(permission);
         currentStatuses[permission] = currentStatus;
 
-        if (currentStatus != PermissionResult.granted && currentStatus != PermissionResult.limited) {
+        if (currentStatus != PermissionResult.granted &&
+            currentStatus != PermissionResult.limited) {
           needsRequest = true;
         }
       }
 
-      ReleaseLogger.log('🔍 [CallController] Estado actual de permisos: $currentStatuses', tag: 'CallController');
+      ReleaseLogger.log(
+        '🔍 [CallController] Estado actual de permisos: $currentStatuses',
+        tag: 'CallController',
+      );
 
       // ✅ iOS VoIP EXCEPTION: Si todos los permisos están "denied" en iOS,
       // esto probablemente significa que es una llamada VoIP aceptada desde CallKit
-      final allDenied = currentStatuses.values.every((status) => status == PermissionResult.denied);
+      final allDenied = currentStatuses.values.every(
+        (status) => status == PermissionResult.denied,
+      );
       if (allDenied && Platform.isIOS) {
-        ReleaseLogger.log('📞 [CallController] iOS VoIP: Todos los permisos denegados en iOS', tag: 'CallController');
-        ReleaseLogger.log('⚠️ [CallController] Permitiendo continuar - permisos se solicitarán cuando sea posible', tag: 'CallController');
+        ReleaseLogger.log(
+          '📞 [CallController] iOS VoIP: Todos los permisos denegados en iOS',
+          tag: 'CallController',
+        );
+        ReleaseLogger.log(
+          '⚠️ [CallController] Permitiendo continuar - permisos se solicitarán cuando sea posible',
+          tag: 'CallController',
+        );
         // Devolver true para permitir continuar, pero marcar que necesitamos permisos
         return true; // ✅ ALLOW iOS VoIP TO PROCEED
       }
 
       // Solo hacer request si realmente necesitamos permisos
       if (needsRequest) {
-        ReleaseLogger.log('🙋 [CallController] Solicitando permisos faltantes...', tag: 'CallController');
+        ReleaseLogger.log(
+          '🙋 [CallController] Solicitando permisos faltantes...',
+          tag: 'CallController',
+        );
 
         // ✅ IMPROVED: Usar try-catch específico para race conditions de permisos
         try {
           final requestResults = await permissionService.requestMultiple(
             requiredPermissions,
-            context: context,
+            context: localContext,
           );
 
           // Combinar resultados actuales con nuevos resultados
@@ -809,7 +1122,10 @@ class CallController {
             results[entry.key] = entry.value;
           }
         } catch (permissionError) {
-          ReleaseLogger.log('⚠️ [CallController] Error en solicitud de permisos (probablemente race condition): $permissionError', tag: 'CallController');
+          ReleaseLogger.log(
+            '⚠️ [CallController] Error en solicitud de permisos (probablemente race condition): $permissionError',
+            tag: 'CallController',
+          );
           // Si hay error, usar los estados actuales - es probable que ya tengamos los permisos
           for (final entry in currentStatuses.entries) {
             results[entry.key] = entry.value;
@@ -817,7 +1133,10 @@ class CallController {
         }
       } else {
         // Ya tenemos todos los permisos
-        ReleaseLogger.log('✅ [CallController] Ya tenemos todos los permisos necesarios', tag: 'CallController');
+        ReleaseLogger.log(
+          '✅ [CallController] Ya tenemos todos los permisos necesarios',
+          tag: 'CallController',
+        );
         for (final entry in currentStatuses.entries) {
           results[entry.key] = entry.value;
         }
@@ -826,7 +1145,8 @@ class CallController {
       bool allPermissionsGranted = true;
       for (final entry in results.entries) {
         final result = entry.value;
-        if (result != PermissionResult.granted && result != PermissionResult.limited) {
+        if (result != PermissionResult.granted &&
+            result != PermissionResult.limited) {
           allPermissionsGranted = false;
           break;
         }
@@ -834,15 +1154,17 @@ class CallController {
 
       ReleaseLogger.log(
         allPermissionsGranted
-          ? '✅ [CallController] Todos los permisos concedidos'
-          : '❌ [CallController] Permisos insuficientes',
-        tag: 'CallController'
+            ? '✅ [CallController] Todos los permisos concedidos'
+            : '❌ [CallController] Permisos insuficientes',
+        tag: 'CallController',
       );
 
       return allPermissionsGranted;
-
     } catch (e) {
-      ReleaseLogger.error('❌ [CallController] Error verificando permisos: $e', tag: 'CallController');
+      ReleaseLogger.error(
+        '❌ [CallController] Error verificando permisos: $e',
+        tag: 'CallController',
+      );
       return false;
     }
   }
@@ -887,9 +1209,15 @@ class CallController {
         _isJoined = false;
         _remoteUids.clear();
         _localUid = null;
-        ReleaseLogger.log('📤 [CallController] Canal abandonado exitosamente', tag: 'CallController');
+        ReleaseLogger.log(
+          '📤 [CallController] Canal abandonado exitosamente',
+          tag: 'CallController',
+        );
       } catch (e) {
-        ReleaseLogger.error('❌ [CallController] Error abandonando canal: $e', tag: 'CallController');
+        ReleaseLogger.error(
+          '❌ [CallController] Error abandonando canal: $e',
+          tag: 'CallController',
+        );
       }
     }
   }
@@ -903,7 +1231,10 @@ class CallController {
   Future<void> dispose() async {
     if (_disposed) return;
 
-    ReleaseLogger.log('🧹 [CallController] Disposing singleton instance for call: $callId', tag: 'CallController');
+    ReleaseLogger.log(
+      '🧹 [CallController] Disposing singleton instance for call: $callId',
+      tag: 'CallController',
+    );
 
     _disposed = true;
 
@@ -916,6 +1247,12 @@ class CallController {
     onError = null;
     onCallEnded = null;
 
+    // ✅ Cancelar subscripciones para evitar memory leaks
+    await _callStateSubscription?.cancel();
+    _callStateSubscription = null;
+    await _callWatchSubscription?.cancel();
+    _callWatchSubscription = null;
+
     // Salir del canal y limpiar Agora
     await _leaveChannel();
     await _agoraEngine?.release();
@@ -925,7 +1262,10 @@ class CallController {
 
     // ✅ SINGLETON CLEANUP: Limpiar instancia singleton si es la actual
     if (_instance == this) {
-      ReleaseLogger.log('🧹 [CallController] Limpiando instancia singleton', tag: 'CallController');
+      ReleaseLogger.log(
+        '🧹 [CallController] Limpiando instancia singleton',
+        tag: 'CallController',
+      );
       _instance = null;
       _currentCallId = null;
     }

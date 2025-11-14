@@ -19,17 +19,11 @@ import 'screens/common/profile_completion_screen.dart';
 import 'screens/auth/two_factor_verification_screen.dart';
 import 'screens/chat_moderation_settings_screen.dart';
 import 'screens/parent/chat_moderation_management_screen.dart';
-import 'screens/audio_call_screen.dart';
-import 'screens/video_call_screen.dart';
-import 'screens/common/incoming_call_screen.dart';
+import 'services/calls/calls_orchestrator.dart';
 import 'screens/splash_wrapper.dart';
 import 'notification_service.dart';
 import 'theme_service.dart';
-import 'services/callkit_service.dart';
-import 'services/video_calls/video_call_orchestrator.dart';
 import 'services/two_factor_session_service.dart';
-import 'services/permission_service.dart';
-import 'package:cloud_functions/cloud_functions.dart';
 import 'services/app_config_service.dart';
 import 'services/message_cache_service.dart';
 import 'services/dashboard_cache_service.dart';
@@ -83,7 +77,10 @@ void main() async {
 
   // 🕐 TIMESTAMP único para identificar logs de esta sesión
   final sessionTimestamp = DateTime.now().millisecondsSinceEpoch;
-  ReleaseLogger.log('APP_START_$sessionTimestamp - Iniciando aplicación Talia...', tag: 'MainApp');
+  ReleaseLogger.log(
+    'APP_START_$sessionTimestamp - Iniciando aplicación Talia...',
+    tag: 'MainApp',
+  );
 
   // 🚀 CACHE INITIALIZATION: MessageCacheService primero (inicializa Hive)
   ReleaseLogger.log('🚀 Inicializando MessageCacheService...', tag: 'MainApp');
@@ -119,7 +116,10 @@ void main() async {
   // SOLUCIÓN: firebaseMessagingBackgroundHandler ahora está definido como función
   // top-level en notification_service.dart con @pragma('vm:entry-point')
   FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
-  ReleaseLogger.log('✅ Background message handler registrado en main.dart', tag: 'MainApp');
+  ReleaseLogger.log(
+    '✅ Background message handler registrado en main.dart',
+    tag: 'MainApp',
+  );
 
   // Ahora DashboardCacheService puede usar Hive Y Firebase (remote logger)
   try {
@@ -146,7 +146,10 @@ void main() async {
 
   // ✅ CRÍTICO: Inicializar StoryService manualmente si el usuario ya está autenticado
   // authStateChanges() solo se dispara en CAMBIOS, no en estados existentes
-  ReleaseLogger.log('Verificando usuario autenticado para inicializar StoryService...', tag: 'MainApp');
+  ReleaseLogger.log(
+    'Verificando usuario autenticado para inicializar StoryService...',
+    tag: 'MainApp',
+  );
   final currentUser = firebase_auth.FirebaseAuth.instance.currentUser;
   if (currentUser != null) {
     ReleaseLogger.log(
@@ -482,10 +485,16 @@ Future<void> _initializeHeavyServicesInBackground() async {
 
     // VoIP Service (solo iOS, para llamadas)
     () async {
-      ReleaseLogger.log('Verificando plataforma iOS - Platform.isIOS = ${Platform.isIOS}', tag: 'VoIPDebug');
+      ReleaseLogger.log(
+        'Verificando plataforma iOS - Platform.isIOS = ${Platform.isIOS}',
+        tag: 'VoIPDebug',
+      );
 
       if (Platform.isIOS) {
-        ReleaseLogger.log('Ejecutando en iOS - iniciando VoIP Service...', tag: 'VoIPDebug');
+        ReleaseLogger.log(
+          'Ejecutando en iOS - iniciando VoIP Service...',
+          tag: 'VoIPDebug',
+        );
 
         try {
           await VoIPService().initialize();
@@ -495,10 +504,16 @@ Future<void> _initializeHeavyServicesInBackground() async {
           );
 
           // ✅ CRÍTICO: Debug adicional para verificar estado del token VoIP
-          ReleaseLogger.log('Verificando estado token VoIP post-inicialización...', tag: 'VoIPDebug');
+          ReleaseLogger.log(
+            'Verificando estado token VoIP post-inicialización...',
+            tag: 'VoIPDebug',
+          );
           try {
             final user = firebase_auth.FirebaseAuth.instance.currentUser;
-            ReleaseLogger.log('Usuario autenticado: ${user?.uid ?? "null"}', tag: 'VoIPDebug');
+            ReleaseLogger.log(
+              'Usuario autenticado: ${user?.uid ?? "null"}',
+              tag: 'VoIPDebug',
+            );
 
             if (user != null) {
               // Verificar token en Firestore
@@ -512,30 +527,57 @@ Future<void> _initializeHeavyServicesInBackground() async {
                 final voipToken = data['voipToken'] as String?;
                 final tokenUpdatedAt = data['voipTokenUpdatedAt'];
 
-                ReleaseLogger.log('VoIP Token existe: ${voipToken != null}', tag: 'VoIPDebug');
+                ReleaseLogger.log(
+                  'VoIP Token existe: ${voipToken != null}',
+                  tag: 'VoIPDebug',
+                );
                 if (voipToken != null) {
-                  ReleaseLogger.log('Token (primeros 20): ${voipToken.length > 20 ? voipToken.substring(0, 20) + '...' : voipToken}', tag: 'VoIPDebug');
-                  ReleaseLogger.log('Token actualizado: $tokenUpdatedAt', tag: 'VoIPDebug');
+                  ReleaseLogger.log(
+                    'Token (primeros 20): ${voipToken.length > 20 ? voipToken.substring(0, 20) + '...' : voipToken}',
+                    tag: 'VoIPDebug',
+                  );
+                  ReleaseLogger.log(
+                    'Token actualizado: $tokenUpdatedAt',
+                    tag: 'VoIPDebug',
+                  );
                 } else {
-                  ReleaseLogger.error('NO HAY TOKEN VOIP - Intentando forzar solicitud de token...', tag: 'VoIPDebug');
+                  ReleaseLogger.error(
+                    'NO HAY TOKEN VOIP - Intentando forzar solicitud de token...',
+                    tag: 'VoIPDebug',
+                  );
 
                   // Forzar solicitud manual de token VoIP
                   const platform = MethodChannel('com.talia.chat/voip');
                   try {
                     await platform.invokeMethod('requestVoIPToken');
-                    ReleaseLogger.log('Solicitud manual enviada a iOS', tag: 'VoIPDebug');
+                    ReleaseLogger.log(
+                      'Solicitud manual enviada a iOS',
+                      tag: 'VoIPDebug',
+                    );
                   } catch (platformError) {
-                    ReleaseLogger.error('Error llamando método nativo: $platformError', tag: 'VoIPDebug');
+                    ReleaseLogger.error(
+                      'Error llamando método nativo: $platformError',
+                      tag: 'VoIPDebug',
+                    );
                   }
                 }
               } else {
-                ReleaseLogger.error('Documento de usuario no existe', tag: 'VoIPDebug');
+                ReleaseLogger.error(
+                  'Documento de usuario no existe',
+                  tag: 'VoIPDebug',
+                );
               }
             } else {
-              ReleaseLogger.log('Usuario no autenticado en momento de inicialización VoIP', tag: 'VoIPDebug');
+              ReleaseLogger.log(
+                'Usuario no autenticado en momento de inicialización VoIP',
+                tag: 'VoIPDebug',
+              );
             }
           } catch (debugError) {
-            ReleaseLogger.error('Error en verificación post-inicialización: $debugError', tag: 'VoIPDebug');
+            ReleaseLogger.error(
+              'Error en verificación post-inicialización: $debugError',
+              tag: 'VoIPDebug',
+            );
           }
         } catch (e) {
           ReleaseLogger.error(
@@ -544,7 +586,10 @@ Future<void> _initializeHeavyServicesInBackground() async {
           );
         }
       } else {
-        ReleaseLogger.log('Plataforma no es iOS, saltando VoIP', tag: 'VoIPDebug');
+        ReleaseLogger.log(
+          'Plataforma no es iOS, saltando VoIP',
+          tag: 'VoIPDebug',
+        );
       }
     }(),
 
@@ -596,14 +641,9 @@ class TaliaApp extends StatefulWidget {
 }
 
 class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
-  StreamSubscription<Map<String, dynamic>>? _incomingCallSubscription;
   StreamSubscription<DocumentSnapshot>? _userRoleSubscription;
-  StreamSubscription<Map<String, dynamic>>? _pendingCallSubscription;
-  StreamSubscription<QuerySnapshot>? _foregroundCallSubscription;
-
-  // ✅ PREVENCIÓN DE LOOPS: Set para rastrear llamadas ya procesadas
-  final Set<String> _processedForegroundCalls = {};
-  StreamSubscription<firebase_auth.User?>? _authSubscription; // ✅ NUEVO: listener auth independiente
+  StreamSubscription<firebase_auth.User?>?
+  _authSubscription; // ✅ NUEVO: listener auth independiente
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   String? _currentUserRole;
 
@@ -611,249 +651,21 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _setupIncomingCallListener();
     _setupRoleListener();
-    _setupPendingCallListener(); // Escuchar llamadas pendientes de VoIP
-    _setupForegroundCallListener(); // ✅ NUEVO: Escuchar llamadas en foreground via Firestore
-    _checkPendingCall(); // Verificar llamadas pendientes al iniciar
+    CallsOrchestrator().initializeGlobalListeners(
+      navigatorKey: _navigatorKey,
+    ); // ✅ NUEVO: Inicializar listeners via CallsOrchestrator
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _incomingCallSubscription?.cancel();
     _userRoleSubscription?.cancel();
-    _pendingCallSubscription?.cancel();
-    _foregroundCallSubscription?.cancel(); // ✅ NUEVO: Limpiar foreground listener
+    CallsOrchestrator()
+        .disposeGlobalListeners(); // ✅ NUEVO: Cleanup CallsOrchestrator
     _authSubscription?.cancel(); // ✅ NUEVO: Limpiar auth listener independiente
     super.dispose();
   }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      ReleaseLogger.log('📱App resumed from background');
-
-      // App regresó de background, verificar llamadas pendientes
-      _checkPendingCall();
-
-
-      // ℹ️ Firestore maneja automáticamente la reconexión cuando la app se reanuda.
-      // NO forzar disableNetwork/enableNetwork porque cancela todos los StreamBuilders
-      // activos y causa que la UI se quede en loading infinito.
-      ReleaseLogger.log('✅Firestore se reconectará automáticamente');
-    }
-  }
-
-  /// Escuchar stream de llamadas pendientes de VoIP
-  void _setupPendingCallListener() {
-    if (!Platform.isIOS) return;
-
-    _pendingCallSubscription = VoIPService().pendingCallStream.listen((
-      callData,
-    ) {
-      ReleaseLogger.log(
-        '📞[Main] Llamada pendiente recibida del stream: $callData',
-      );
-      _navigateToCall(callData);
-    });
-  }
-
-  Future<void> _checkPendingCall() async {
-    if (!Platform.isIOS) return;
-
-    await Future.delayed(
-      const Duration(milliseconds: 500),
-    ); // Pequeño delay para que Flutter esté listo
-
-    final pendingData = VoIPService().getPendingCallData();
-    if (pendingData != null) {
-      ReleaseLogger.log('📞[Main] Llamada pendiente detectada: $pendingData');
-      _navigateToCall(pendingData);
-    }
-  }
-
-  void _navigateToCall(Map<String, dynamic> callData) {
-    final callId = callData['callId'] as String;
-    final channelName = callData['channelName'] as String;
-    final token = callData['token'] as String;
-    final uid = callData['uid'] as int;
-    final callType = callData['callType'] as String?;
-    final callerName = callData['callerName'] as String;
-    final callerId = callData['callerId'] as String? ?? '';
-
-    final isAudioCall = callType == 'audio';
-
-    ReleaseLogger.log('🚀[Main] Navegando a pantalla de llamada:');
-    ReleaseLogger.log('   -Call ID: $callId');
-    ReleaseLogger.log('   -Channel: $channelName');
-    ReleaseLogger.log('   -Type: $callType');
-    ReleaseLogger.log('   -Is Audio: $isAudioCall');
-    ReleaseLogger.log('   -UID: $uid');
-
-    if (_navigatorKey.currentContext != null) {
-      if (isAudioCall) {
-        // Navegar a AudioCallScreen para llamadas de audio
-        ReleaseLogger.log('📞[Main] Navegando a AudioCallScreen');
-        Navigator.of(_navigatorKey.currentContext!).push(
-          MaterialPageRoute(
-            builder: (context) => AudioCallScreen(
-              callId: callId,
-              channelName: channelName,
-              token: token,
-              uid: uid,
-              isCaller: false, // Estamos recibiendo la llamada
-              remoteName: callerName,
-            ),
-          ),
-        );
-      } else {
-        // Navegar a VideoCallScreen para llamadas de video
-        ReleaseLogger.log('📹[Main] Navegando a VideoCallScreen');
-        Navigator.of(_navigatorKey.currentContext!).push(
-          MaterialPageRoute(
-            builder: (context) => VideoCallScreen(
-              callId: callId,
-              channelName: channelName,
-              token: token,
-              uid: uid,
-              isCaller: false, // Estamos recibiendo la llamada
-              remoteName: callerName,
-              receiverId: callerId, // ID del que llama
-              isVideo: true,
-            ),
-          ),
-        );
-      }
-    }
-  }
-
-  /// ✅ Configurar listener para detectar llamadas en foreground
-  void _setupForegroundCallListener() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _configureForegroundListenerWhenReady();
-    });
-  }
-
-  /// ✅ Configurar listener cuando la app esté lista
-  Future<void> _configureForegroundListenerWhenReady() async {
-    await Future.delayed(Duration(seconds: 2));
-
-    final currentUser = firebase_auth.FirebaseAuth.instance.currentUser;
-    if (currentUser != null) {
-      await _startSimpleForegroundListener(currentUser.uid);
-    }
-  }
-
-  /// ✅ Listener para llamadas en foreground
-  Future<void> _startSimpleForegroundListener(String userId) async {
-    try {
-      _foregroundCallSubscription = FirebaseFirestore.instance
-          .collection('video_calls')
-          .where('receiverId', isEqualTo: userId)
-          .where('status', isEqualTo: 'ringing')
-          .snapshots()
-          .listen((snapshot) {
-            for (final change in snapshot.docChanges) {
-              if (change.type == DocumentChangeType.added) {
-                final callData = change.doc.data() as Map<String, dynamic>;
-                final callId = change.doc.id;
-
-                // ✅ PREVENCIÓN DE LOOPS: Verificar si ya procesamos esta llamada
-                if (_processedForegroundCalls.contains(callId)) {
-                  continue;
-                }
-
-                // ✅ MARCAR COMO PROCESADA ANTES de manejar
-                _processedForegroundCalls.add(callId);
-
-                // Procesar inmediatamente
-                _handleSimpleForegroundCall(callId, callData);
-
-                // ✅ LIMPIEZA AUTOMÁTICA: Remover después de 2 minutos para evitar memory leaks
-                Future.delayed(Duration(minutes: 2), () {
-                  _processedForegroundCalls.remove(callId);
-                });
-              }
-            }
-          }, onError: (error) {
-            ReleaseLogger.error('❌ Error en foreground call listener: $error', tag: 'ForegroundCall');
-          });
-
-    } catch (e) {
-      ReleaseLogger.error('❌ Error configurando foreground listener: $e', tag: 'ForegroundCall');
-    }
-  }
-
-  /// ✅ Procesar llamada entrante en foreground
-  Future<void> _handleSimpleForegroundCall(String callId, Map<String, dynamic> callData) async {
-    try {
-      final callType = callData['callType'] as String? ?? 'video';
-      final callerName = callData['callerName'] as String? ?? 'Usuario desconocido';
-      final callerId = callData['callerId'] as String? ?? '';
-      final channelName = callData['channelName'] as String?;
-      final isEmergency = callData['isEmergency'] == true;
-
-      // 📱 CRÍTICO: Verificar si la app está REALMENTE en foreground
-      // Esto previene conflictos entre VoIP/CallKit y IncomingCallScreen
-      final isAppInForeground = AppStateService().isAppInForeground();
-
-      ReleaseLogger.log(
-        '📱 [FOREGROUND CALL] App estado: ${isAppInForeground ? "FOREGROUND" : "BACKGROUND"}',
-        tag: 'ForegroundCall'
-      );
-
-      if (!isAppInForeground) {
-        ReleaseLogger.log(
-          '⬇️ [FOREGROUND CALL] App en background - saltando IncomingCallScreen (VoIP/CallKit se encargará)',
-          tag: 'ForegroundCall'
-        );
-        return;
-      }
-
-      // 🔄 CRÍTICO: Verificar si VoIP ya está manejando esta llamada
-      // Esto previene dobles pantallas cuando usuario contesta desde VoIP y app abre después
-      if (VoIPService().isCallHandledByVoIP(callId)) {
-        ReleaseLogger.log(
-          '📞 [FOREGROUND CALL] Llamada $callId ya siendo manejada por VoIP - saltando IncomingCallScreen',
-          tag: 'ForegroundCall'
-        );
-        return;
-      }
-
-      // Solo proceder si la app está en foreground Y es iOS
-      if (Platform.isIOS && _navigatorKey.currentContext != null) {
-        ReleaseLogger.log(
-          '✅ [FOREGROUND CALL] Mostrando IncomingCallScreen para llamada $callId',
-          tag: 'ForegroundCall'
-        );
-
-        Navigator.of(_navigatorKey.currentContext!).push(
-          MaterialPageRoute(
-            builder: (context) => IncomingCallScreen(
-              callId: callId,
-              callerName: callerName,
-              callerId: callerId,
-              callerPhotoUrl: callData['callerPhotoURL'] as String?,
-              callType: callType,
-              channelName: channelName,
-              token: callData['token'] as String?,
-              uid: (callData['uid'] as int?),
-              isEmergency: isEmergency,
-            ),
-          ),
-        );
-      } else if (Platform.isIOS) {
-        ReleaseLogger.error('❌ NavigatorKey context es null al procesar llamada iOS', tag: 'ForegroundCall');
-      } else {
-        ReleaseLogger.log('📱 [FOREGROUND CALL] Android - CallKit maneja el flujo completo', tag: 'ForegroundCall');
-      }
-
-    } catch (e) {
-      ReleaseLogger.error('❌ Error procesando llamada foreground: $e', tag: 'ForegroundCall');
-    }
-  }
-
 
   void _setupRoleListener() {
     firebase_auth.FirebaseAuth.instance.authStateChanges().listen((user) {
@@ -862,7 +674,6 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
       );
       if (user != null) {
         ReleaseLogger.log('✅Usuario autenticado: ${user.uid}');
-
 
         // Inicializar protección de screenshots
         ReleaseLogger.log('📸 Inicializando ScreenshotProtectionService...');
@@ -933,9 +744,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
                         '✅Navegando a AuthWrapper con nuevo rol: $newRole',
                       );
                       navigator.pushAndRemoveUntil(
-                        MaterialPageRoute(
-                          builder: (_) => const AuthWrapper(),
-                        ),
+                        MaterialPageRoute(builder: (_) => const AuthWrapper()),
                         (route) => false,
                       );
                     } else {
@@ -962,422 +771,6 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
         // Limpiar cache de historias
         StoryService().clearCache();
         ReleaseLogger.log('🧹 Cache de historias limpiado por logout');
-      }
-    });
-  }
-
-  void _setupIncomingCallListener() {
-    _incomingCallSubscription = NotificationService().incomingCallStream.listen((
-      callData,
-    ) async {
-      // Usar callType directamente de los datos de la notificación
-      final callType = callData['callType'] ?? 'video';
-      final isAudioCall = callType == 'audio';
-
-      final isEmergency = callData['isEmergency'] == true;
-
-      ReleaseLogger.log(
-        '📞 ${isAudioCall ? 'Llamada de audio' : 'Videollamada'} entrante recibida en main.dart',
-      );
-      ReleaseLogger.log('📦 Datos completos: $callData');
-      ReleaseLogger.log(
-        '📦 channelName: "${callData['channelName']}" (null? ${callData['channelName'] == null})',
-      );
-      if (isEmergency) {
-        ReleaseLogger.log('🆘 Es una llamada de EMERGENCIA');
-      }
-
-      // En iOS, usar CallKit nativo directamente (no el diálogo de Flutter)
-      // Esto evita duplicación con VoIP push que puede llegar después
-      if (Platform.isIOS) {
-        ReleaseLogger.log(
-          '📱 [iOS] Procesando llamada - usando CallKit nativo para evitar duplicación',
-        );
-
-        final callId = callData['callId'] ?? '';
-
-        // Importar CallKitService
-        final callKit = CallKitService();
-
-        // Mostrar CallKit usando el método nativo
-        await callKit.showIncomingCall(
-          callId: callId,
-          callerName: callData['callerName'] ?? 'Usuario desconocido',
-          callerId: callData['callerId'] ?? '',
-          callerPhotoUrl: callData['callerPhotoURL'],
-          callType: callType,
-          isEmergency: isEmergency,
-          extraData: callData,
-        );
-
-        ReleaseLogger.log(
-          '✅[iOS] CallKit mostrado desde FCM foreground notification',
-        );
-
-        // IMPORTANTE: Configurar listener para detectar si la llamada es cancelada
-        // Esto maneja el caso donde la llamada se cancela antes de que el listener
-        // del controller se configure (race condition)
-        ReleaseLogger.log(
-          '👂[iOS] Configurando listener de cancelación para callId: $callId',
-        );
-        final cancelListener = FirebaseFirestore.instance
-            .collection('video_calls')
-            .doc(callId)
-            .snapshots()
-            .listen((snapshot) {
-              if (!snapshot.exists) {
-                ReleaseLogger.log(
-                  '📵 [iOS-main] Documento $callId eliminado - cerrando CallKit',
-                );
-                callKit.endCall(callId);
-                return;
-              }
-
-              final data = snapshot.data();
-              final status = data?['status'];
-
-              if (status == 'cancelled') {
-                ReleaseLogger.log(
-                  '📵 [iOS-main] Llamada $callId cancelada - cerrando CallKit',
-                );
-                // Usar el method channel nativo en lugar del plugin para evitar reinicio
-                VoIPService().notifyCallEnded(callId);
-              } else if (status == 'accepted' ||
-                  status == 'active' ||
-                  status == 'ended') {
-                ReleaseLogger.log(
-                  'ℹ️[iOS-main] Llamada $callId en status $status - listener se limpiará automáticamente',
-                );
-              }
-            });
-
-        // Cancelar el listener después de 60 segundos (timeout de llamada)
-        Future.delayed(Duration(seconds: 60), () {
-          cancelListener.cancel();
-          ReleaseLogger.log(
-            '🧹 [iOS-main] Listener de cancelación limpiado por timeout',
-          );
-        });
-
-        return; // No continuar con el diálogo de Flutter
-      }
-
-      // ANDROID: Determinar si la llamada fue aceptada desde CallKit en background
-      // o si es una llamada entrante en foreground que debe mostrar el diálogo
-
-      // 🔍 DEBUGGING DETALLADO: Analizar estructura completa de callData
-      ReleaseLogger.log('🔍 [CALLKIT_DEBUG] ════════════════════════════════════');
-      ReleaseLogger.log('🔍 [CALLKIT_DEBUG] CallData recibido completo:');
-      ReleaseLogger.log('🔍 [CALLKIT_DEBUG] ${callData.toString()}');
-      ReleaseLogger.log('🔍 [CALLKIT_DEBUG] ────────────────────────────────────');
-      ReleaseLogger.log('🔍 [CALLKIT_DEBUG] Keys disponibles:');
-      callData.forEach((key, value) {
-        ReleaseLogger.log('🔍 [CALLKIT_DEBUG]   "$key": ${value.runtimeType} = $value');
-      });
-      ReleaseLogger.log('🔍 [CALLKIT_DEBUG] ════════════════════════════════════');
-
-      // Si la llamada viene de CallKit acceptance (background), debe incluir 'id' en lugar de 'callId'
-      // porque flutter_callkit_incoming usa 'id' como key
-      final hasId = callData.containsKey('id');
-      final hasCallId = callData.containsKey('callId');
-      final hasFromFirestore = callData.containsKey('fromFirestore');
-      final hasFromNotificationTap = callData.containsKey('fromNotificationTap');
-      final hasExtra = callData.containsKey('extra');
-      final hasNameCaller = callData.containsKey('nameCaller');
-      final hasNumber = callData.containsKey('number');
-
-      // ✅ LÓGICA MEJORADA: Múltiples formas de detectar CallKit acceptance
-      final isFromCallKitAcceptance =
-          hasId && !hasFromFirestore && !hasFromNotificationTap;
-
-      ReleaseLogger.log('🔍 [CALLKIT_DEBUG] Detectando origen del evento:');
-      ReleaseLogger.log('🔍 [CALLKIT_DEBUG]   hasId: $hasId');
-      ReleaseLogger.log('🔍 [CALLKIT_DEBUG]   hasCallId: $hasCallId');
-      ReleaseLogger.log('🔍 [CALLKIT_DEBUG]   hasFromFirestore: $hasFromFirestore');
-      ReleaseLogger.log('🔍 [CALLKIT_DEBUG]   hasFromNotificationTap: $hasFromNotificationTap');
-      ReleaseLogger.log('🔍 [CALLKIT_DEBUG]   hasExtra: $hasExtra');
-      ReleaseLogger.log('🔍 [CALLKIT_DEBUG]   hasNameCaller: $hasNameCaller');
-      ReleaseLogger.log('🔍 [CALLKIT_DEBUG]   hasNumber: $hasNumber');
-      ReleaseLogger.log('🔍 [CALLKIT_DEBUG]   isFromCallKitAcceptance: $isFromCallKitAcceptance');
-
-      if (isFromCallKitAcceptance) {
-        // Usuario aceptó desde CallKit en background - navegar directamente a VideoCallScreen
-        ReleaseLogger.log(
-          '✅Llamada aceptada desde CallKit en background - generando token y navegando a videollamada',
-        );
-
-        // IMPORTANTE: Si la app está en background, puede que el contexto aún no esté disponible
-        // Esperar hasta que esté listo (máximo 5 segundos)
-        BuildContext? context = _navigatorKey.currentContext;
-        if (context == null) {
-          ReleaseLogger.log(
-            '⏳ Contexto no disponible, esperando a que la app inicialice...',
-          );
-          for (int i = 0; i < 50; i++) {
-            await Future.delayed(const Duration(milliseconds: 100));
-            context = _navigatorKey.currentContext;
-            if (context != null) {
-              ReleaseLogger.log(
-                '✅Contexto disponible después de ${(i + 1) * 100}ms',
-              );
-              break;
-            }
-          }
-        }
-
-        if (context == null) {
-          ReleaseLogger.error(
-            '❌No se pudo obtener el contexto del navegador después de 5 segundos',
-          );
-          return;
-        }
-
-        // Extraer datos del callData (que vienen del extraData de CallKit)
-        final callId = callData['id'] as String?;
-
-        // channelName está en extra, no en el root
-        // Convertir extra de Map<Object?, Object?> a Map<String, dynamic>
-        final extraRaw = callData['extra'];
-        final extra = extraRaw != null
-            ? Map<String, dynamic>.from(extraRaw as Map)
-            : null;
-        final channelName =
-            extra?['channelName'] as String? ??
-            callData['channelName'] as String?;
-        final callerId =
-            extra?['callerId'] as String? ??
-            callData['number'] as String? ??
-            callData['callerId'] as String?;
-        final callerName =
-            callData['nameCaller'] as String? ??
-            extra?['callerName'] as String? ??
-            'Usuario desconocido';
-
-        if (callId == null || channelName == null || callerId == null) {
-          ReleaseLogger.error('❌Datos incompletos en callData de CallKit:');
-          ReleaseLogger.log('   callId=$callId');
-          ReleaseLogger.log('   channelName=$channelName');
-          ReleaseLogger.log('   callerId=$callerId');
-          ReleaseLogger.log('   extra=$extra');
-          return;
-        }
-
-        // Obtener callType desde Firestore si no está en extra
-        String callType =
-            extra?['callType'] as String? ??
-            callData['type'] as String? ??
-            'video';
-
-        // Si callType no está en los datos de CallKit, consultar Firestore
-        if (callType == 'video' &&
-            (extra?['callType'] == null && callData['type'] == null)) {
-          ReleaseLogger.log(
-            '⚠️ callType no encontrado en CallKit data, consultando Firestore...',
-          );
-          try {
-            final callDoc = await FirebaseFirestore.instance
-                .collection('video_calls')
-                .doc(callId)
-                .get();
-            if (callDoc.exists) {
-              callType = callDoc.data()?['callType'] as String? ?? 'video';
-              ReleaseLogger.log('✅callType obtenido de Firestore: $callType');
-            }
-          } catch (e) {
-            ReleaseLogger.log('⚠️ Error obteniendo callType de Firestore: $e');
-            // Mantener 'video' como default
-          }
-        }
-
-        ReleaseLogger.log('📞Procesando aceptación de CallKit:');
-        ReleaseLogger.log('   callId: $callId');
-        ReleaseLogger.log('   channelName: $channelName');
-        ReleaseLogger.log('   callerId: $callerId');
-        ReleaseLogger.log('   callerName: $callerName');
-        ReleaseLogger.log('   callType: $callType');
-
-        // Mostrar indicador de carga mientras se genera el token
-        showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (context) =>
-              const Center(child: CircularProgressIndicator()),
-        );
-
-        try {
-          // 1. Actualizar estado de llamada en Firestore
-          ReleaseLogger.log(
-            '📝 Actualizando estado de llamada en Firestore...',
-          );
-          await VideoCallOrchestrator().acceptCall(callId);
-          ReleaseLogger.log('✅Llamada aceptada en Firestore');
-
-          // 2. Solicitar permisos para Android (iOS los maneja automáticamente)
-          if (Platform.isAndroid && context.mounted) {
-            ReleaseLogger.log('📋 Verificando permisos de cámara y micrófono para Android...');
-            final permissionService = PermissionService();
-
-            final cameraResult = await permissionService.request(
-              AppPermission.camera,
-              context: context,
-              showRationale: true,
-            );
-
-            final micResult = await permissionService.request(
-              AppPermission.microphone,
-              context: context,
-              showRationale: true,
-            );
-
-            if (cameraResult != PermissionResult.granted ||
-                micResult != PermissionResult.granted) {
-              ReleaseLogger.error('❌ Permisos de cámara o micrófono denegados');
-              if (context.mounted) {
-                Navigator.of(context).pop(); // Cerrar loading
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Se requieren permisos de cámara y micrófono para videollamadas'),
-                    backgroundColor: Colors.red,
-                  ),
-                );
-              }
-              return;
-            }
-            ReleaseLogger.log('✅ Permisos de cámara y micrófono concedidos');
-          }
-
-          // 3. Generar token de Agora
-          ReleaseLogger.log('🎫 Generando token de Agora...');
-          final functions = FirebaseFunctions.instance;
-          final callable = functions.httpsCallable('generateAgoraToken');
-
-          final result = await callable.call({
-            'channelName': channelName.toString().trim(),
-            'uid': 0,
-          });
-
-          final token = result.data['token'] as String;
-          final uid = result.data['uid'] as int;
-
-          ReleaseLogger.log('✅Token generado - UID: $uid');
-
-          // 4. Cerrar indicador de carga y navegar a la pantalla de llamada correcta
-          if (context.mounted) {
-            Navigator.of(context).pop(); // Cerrar loading indicator
-
-            // Navegar a AudioCallScreen para llamadas de audio, VideoCallScreen para video
-            if (callType == 'audio') {
-              await Navigator.of(context, rootNavigator: true).push(
-                MaterialPageRoute(
-                  builder: (context) => AudioCallScreen(
-                    callId: callId,
-                    channelName: channelName,
-                    token: token,
-                    uid: uid,
-                    isCaller: false,
-                    remoteName: callerName,
-                    receiverId: callerId,
-                  ),
-                ),
-              );
-            } else {
-              await Navigator.of(context, rootNavigator: true).push(
-                MaterialPageRoute(
-                  builder: (context) => VideoCallScreen(
-                    callId: callId,
-                    channelName: channelName,
-                    token: token,
-                    uid: uid,
-                    isCaller: false,
-                    remoteName: callerName,
-                    receiverId: callerId,
-                    isVideo: true,
-                  ),
-                ),
-              );
-            }
-
-            // Cuando vuelve de VideoCallScreen, navegar de vuelta a home
-            ReleaseLogger.log('📱Videollamada terminada - navegando a home');
-
-            // Obtener el rol del usuario para navegar a la pantalla correcta
-            if (context.mounted) {
-              try {
-                final currentUser =
-                    firebase_auth.FirebaseAuth.instance.currentUser;
-                if (currentUser != null) {
-                  final userDoc = await FirebaseFirestore.instance
-                      .collection('users')
-                      .doc(currentUser.uid)
-                      .get();
-
-                  final userData = userDoc.data();
-                  final role = userData?['role'] ?? 'child';
-
-                  ReleaseLogger.log(
-                    '👤Role del usuario: $role - navegando a ${role == 'parent' ? 'ParentMainShell' : 'ChildMainShell'}',
-                  );
-
-                  // ✅ FIXED: NO recrear ChildMainShell - usar navegación menos agresiva
-                  // Esto evita el spinner infinito causado por recreación de widgets
-                  if (context.mounted) {
-                    ReleaseLogger.log(
-                      '📱 Usando Navigator.pop() estándar para volver a shell existente',
-                    );
-
-                    // ✅ CRITICAL: Usar pop estándar sin rootNavigator para evitar romper monitoreo global
-                    Navigator.of(context).pop();
-                  }
-                } else {
-                  ReleaseLogger.error(
-                    '❌No hay usuario autenticado después de la llamada',
-                  );
-                }
-              } catch (e) {
-                ReleaseLogger.error(
-                  '❌Error navegando a home después de llamada: $e',
-                );
-              }
-            }
-          }
-        } catch (e) {
-          ReleaseLogger.error('❌Error procesando aceptación de CallKit: $e');
-
-          if (context.mounted) {
-            // Cerrar loading indicator
-            Navigator.of(context).pop();
-
-            // Mostrar error
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  'Error al conectar la llamada: ${e.toString().length > 60 ? '${e.toString().substring(0, 60)}...' : e}',
-                ),
-                backgroundColor: Colors.red,
-                duration: const Duration(seconds: 5),
-              ),
-            );
-          }
-        }
-      } else {
-        // Las llamadas se manejan completamente por CallKit (Android) y VoIP (iOS)
-        ReleaseLogger.log('🔍 [CALLKIT_DEBUG] ❌ NO se detectó como CallKit acceptance');
-        ReleaseLogger.log('🔍 [CALLKIT_DEBUG] Esto significa que:');
-        ReleaseLogger.log('🔍 [CALLKIT_DEBUG] - O la app está en foreground');
-        ReleaseLogger.log('🔍 [CALLKIT_DEBUG] - O los datos no coinciden con CallKit acceptance');
-        ReleaseLogger.log('🔍 [CALLKIT_DEBUG] - CallKit/VoIP debe manejar la navegación');
-        ReleaseLogger.log(
-          '🔍 [CALLKIT_DEBUG] ℹ️ No se navega a VideoCallScreen desde aquí',
-        );
-
-        // ✅ POSIBLE PROBLEMA: Si la app se abre desde background por CallKit
-        // pero no se detecta correctamente, la llamada nunca llegará a VideoCallScreen
-        if (Platform.isAndroid && (hasId || hasNameCaller || hasNumber)) {
-          ReleaseLogger.log('🔍 [CALLKIT_DEBUG] ⚠️ POSIBLE PROBLEMA DETECTADO:');
-          ReleaseLogger.log('🔍 [CALLKIT_DEBUG] App abierta en Android con datos que parecen CallKit');
-          ReleaseLogger.log('🔍 [CALLKIT_DEBUG] pero no se detectó como CallKit acceptance');
-          ReleaseLogger.log('🔍 [CALLKIT_DEBUG] Esto puede causar que la navegación no funcione');
-        }
       }
     });
   }
@@ -1511,7 +904,9 @@ class _AuthWrapperState extends State<AuthWrapper> {
       builder: (context, snapshot) {
         // ✅ SPINNER DEBUG: Logs detallados para identificar el problema
         print('🔄 [SPINNER_DEBUG] ═══════════════════════════════════════════');
-        print('🔄 [SPINNER_DEBUG] AuthWrapper ConnectionState: ${snapshot.connectionState}');
+        print(
+          '🔄 [SPINNER_DEBUG] AuthWrapper ConnectionState: ${snapshot.connectionState}',
+        );
         print('🔄 [SPINNER_DEBUG] AuthWrapper HasData: ${snapshot.hasData}');
         print('🔄 [SPINNER_DEBUG] AuthWrapper HasError: ${snapshot.hasError}');
         print('🔄 [SPINNER_DEBUG] User: ${snapshot.data?.email}');
@@ -1551,23 +946,43 @@ class _AuthWrapperState extends State<AuthWrapper> {
                 .snapshots(),
             builder: (context, userSnapshot) {
               // ✅ SPINNER DEBUG: Logs detallados para el StreamBuilder de usuario
-              print('📄 [SPINNER_DEBUG] ═══════════════════════════════════════════');
-              print('📄 [SPINNER_DEBUG] UserSnapshot ConnectionState: ${userSnapshot.connectionState}');
-              print('📄 [SPINNER_DEBUG] UserSnapshot HasData: ${userSnapshot.hasData}');
-              print('📄 [SPINNER_DEBUG] UserSnapshot HasError: ${userSnapshot.hasError}');
-              print('📄 [SPINNER_DEBUG] UserSnapshot Data Exists: ${userSnapshot.data?.exists}');
+              print(
+                '📄 [SPINNER_DEBUG] ═══════════════════════════════════════════',
+              );
+              print(
+                '📄 [SPINNER_DEBUG] UserSnapshot ConnectionState: ${userSnapshot.connectionState}',
+              );
+              print(
+                '📄 [SPINNER_DEBUG] UserSnapshot HasData: ${userSnapshot.hasData}',
+              );
+              print(
+                '📄 [SPINNER_DEBUG] UserSnapshot HasError: ${userSnapshot.hasError}',
+              );
+              print(
+                '📄 [SPINNER_DEBUG] UserSnapshot Data Exists: ${userSnapshot.data?.exists}',
+              );
               if (userSnapshot.hasError) {
-                print('📄 [SPINNER_DEBUG] UserSnapshot Error: ${userSnapshot.error}');
+                print(
+                  '📄 [SPINNER_DEBUG] UserSnapshot Error: ${userSnapshot.error}',
+                );
               }
-              final showingSpinner = userSnapshot.connectionState == ConnectionState.waiting && !userSnapshot.hasData;
-              print('📄 [SPINNER_DEBUG] Showing "Verificando tipo de usuario" spinner: $showingSpinner');
-              print('📄 [SPINNER_DEBUG] ═══════════════════════════════════════════');
+              final showingSpinner =
+                  userSnapshot.connectionState == ConnectionState.waiting &&
+                  !userSnapshot.hasData;
+              print(
+                '📄 [SPINNER_DEBUG] Showing "Verificando tipo de usuario" spinner: $showingSpinner',
+              );
+              print(
+                '📄 [SPINNER_DEBUG] ═══════════════════════════════════════════',
+              );
 
               // Si estamos esperando Y no tenemos datos cacheados, mostrar loading
               // Si tenemos datos cacheados (hasData), usar esos datos aunque estemos waiting
               if (userSnapshot.connectionState == ConnectionState.waiting &&
                   !userSnapshot.hasData) {
-                print('📄 [SPINNER_DEBUG] 🔄 MOSTRANDO SPINNER: "Verificando tipo de usuario..."');
+                print(
+                  '📄 [SPINNER_DEBUG] 🔄 MOSTRANDO SPINNER: "Verificando tipo de usuario..."',
+                );
                 return Scaffold(
                   body: Center(
                     child: Column(
@@ -1655,17 +1070,33 @@ class _AuthWrapperState extends State<AuthWrapper> {
                   future: TwoFactorSessionService().isVerified(userId),
                   builder: (context, verificationSnapshot) {
                     // ✅ SPINNER DEBUG: Logs detallados para 2FA verification
-                    print('🔐 [SPINNER_DEBUG] ═══════════════════════════════════════════');
-                    print('🔐 [SPINNER_DEBUG] 2FA ConnectionState: ${verificationSnapshot.connectionState}');
-                    print('🔐 [SPINNER_DEBUG] 2FA HasData: ${verificationSnapshot.hasData}');
-                    print('🔐 [SPINNER_DEBUG] 2FA Data: ${verificationSnapshot.data}');
-                    final showing2FASpinner = verificationSnapshot.connectionState == ConnectionState.waiting;
-                    print('🔐 [SPINNER_DEBUG] Showing "Verificando sesión" spinner: $showing2FASpinner');
-                    print('🔐 [SPINNER_DEBUG] ═══════════════════════════════════════════');
+                    print(
+                      '🔐 [SPINNER_DEBUG] ═══════════════════════════════════════════',
+                    );
+                    print(
+                      '🔐 [SPINNER_DEBUG] 2FA ConnectionState: ${verificationSnapshot.connectionState}',
+                    );
+                    print(
+                      '🔐 [SPINNER_DEBUG] 2FA HasData: ${verificationSnapshot.hasData}',
+                    );
+                    print(
+                      '🔐 [SPINNER_DEBUG] 2FA Data: ${verificationSnapshot.data}',
+                    );
+                    final showing2FASpinner =
+                        verificationSnapshot.connectionState ==
+                        ConnectionState.waiting;
+                    print(
+                      '🔐 [SPINNER_DEBUG] Showing "Verificando sesión" spinner: $showing2FASpinner',
+                    );
+                    print(
+                      '🔐 [SPINNER_DEBUG] ═══════════════════════════════════════════',
+                    );
 
                     if (verificationSnapshot.connectionState ==
                         ConnectionState.waiting) {
-                      print('🔐 [SPINNER_DEBUG] 🔄 MOSTRANDO SPINNER: "Verificando sesión..."');
+                      print(
+                        '🔐 [SPINNER_DEBUG] 🔄 MOSTRANDO SPINNER: "Verificando sesión..."',
+                      );
                       return Scaffold(
                         body: Center(
                           child: Column(

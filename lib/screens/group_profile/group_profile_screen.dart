@@ -4,7 +4,7 @@ import 'package:image_picker/image_picker.dart';
 import '../../controllers/group_profile_controller.dart';
 import '../../services/calls/calls_orchestrator.dart';
 import 'widgets/add_members_dialog.dart';
-import '../video_call_screen.dart';
+import '../call/video/video_call_screen.dart';
 
 /// Pantalla de perfil de grupo refactorizada siguiendo CODING_RULES.md
 ///

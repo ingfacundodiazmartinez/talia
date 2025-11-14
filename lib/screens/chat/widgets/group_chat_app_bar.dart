@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../widgets/profile_photo_viewer.dart';
 import '../../../controllers/group_chat_app_bar_controller.dart';
-import '../../video_call_screen.dart';
+import '../../call/video/video_call_screen.dart';
 
 /// AppBar personalizado para pantallas de chat grupal
 class GroupChatAppBar extends StatefulWidget implements PreferredSizeWidget {

@@ -4,7 +4,7 @@ import 'package:mockito/mockito.dart';
 import 'package:mockito/annotations.dart';
 import 'package:provider/provider.dart';
 
-import 'package:talia/screens/video_call_screen.dart';
+import 'package:talia/screens/call/video/video_call_screen.dart';
 import 'package:talia/controllers/video_call_controller.dart';
 import 'package:talia/services/video_calls/video_call_orchestrator.dart';
 

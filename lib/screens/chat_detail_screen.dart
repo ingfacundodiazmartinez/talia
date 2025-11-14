@@ -22,8 +22,8 @@ import 'chat/widgets/message_list_widget.dart';
 import 'chat/widgets/chat_selection_bar_widget.dart';
 import 'chat/widgets/media_handlers_mixin.dart';
 import 'contact_profile_screen.dart';
-import 'video_call_screen.dart';
-import 'audio_call_screen.dart';
+import 'call/video/video_call_screen.dart';
+import 'call/audio/audio_call_screen.dart';
 import 'forward_messages_screen.dart';
 
 /// Pantalla de chat individual (1 a 1) - REFACTORIZADA

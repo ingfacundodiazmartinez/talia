@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import '../controllers/contact_profile_controller.dart';
 import '../models/contact_user.dart';
-import 'video_call_screen.dart';
-import 'audio_call_screen.dart';
+import 'call/video/video_call_screen.dart';
+import 'call/audio/audio_call_screen.dart';
 import '../widgets/profile_photo_viewer.dart';
 import 'child/profile/widgets/media_gallery_widget.dart';
 import '../services/calls/calls_orchestrator.dart';

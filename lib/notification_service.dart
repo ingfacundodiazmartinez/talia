@@ -14,8 +14,10 @@ import 'dart:convert';
 import 'package:image/image.dart' as img;
 import 'constants/notification_types.dart';
 import 'services/video_calls/video_call_orchestrator.dart';
+import 'services/calls/calls_orchestrator.dart';
 import 'services/notification_filter.dart';
 import 'services/callkit_service.dart';
+import 'services/app_state_service.dart';
 import 'utils/release_logger.dart';
 
 // ═══════════════════════════════════════════════════════════════
@@ -591,14 +593,39 @@ class NotificationService {
   // Inicializar CallKit para llamadas en pantalla completa
   void _initializeCallKit() {
     _callKit.initialize(
+      onCallKitShown: (callId) {
+        // ✅ CRITICAL FIX: Marcar como manejada por CallKit ANTES de que app vuelva al foreground
+        CallsOrchestrator().markCallAsCallKitHandled(callId);
+        ReleaseLogger.log('✅ CallKit mostrado y marcado como handled: $callId', tag: 'NotificationService');
+      },
       onCallAccepted: (callData) {
         ReleaseLogger.log('✅ CallKit: Llamada aceptada', tag: 'NotificationService');
-        // Emitir evento para que la app navegue a la pantalla de llamada
-        _incomingCallController.add(callData);
+
+        // Aceptar llamada y navegar directamente
+        final callId = callData['id'] as String?;
+        if (callId != null) {
+          CallsOrchestrator().acceptCall(callId).then((_) {
+            ReleaseLogger.log('✅ Llamada $callId aceptada desde CallKit', tag: 'NotificationService');
+            // ✅ CRITICAL: Navegar directamente a la pantalla de videollamada
+            return CallsOrchestrator().processVoIPCall(callId);
+          }).then((_) {
+            ReleaseLogger.log('✅ Navegación a videollamada iniciada para $callId', tag: 'NotificationService');
+          }).catchError((e) {
+            ReleaseLogger.error('❌ Error en flujo CallKit: $e', tag: 'NotificationService');
+          });
+        } else {
+          ReleaseLogger.error('❌ CallKit: callId es null en callData', tag: 'NotificationService');
+        }
       },
       onCallDeclined: (callId) {
         ReleaseLogger.log('❌ CallKit: Llamada rechazada - $callId', tag: 'NotificationService');
-        // Aquí podrías enviar una notificación al llamador de que se rechazó
+
+        // ✅ FIX: Rechazar la llamada en Firestore para que el caller detecte el rechazo
+        CallsOrchestrator().declineCall(callId, reason: 'declined').then((_) {
+          ReleaseLogger.log('✅ CallKit: Rechazo propagado a Firestore para callId: $callId', tag: 'NotificationService');
+        }).catchError((error) {
+          ReleaseLogger.error('❌ CallKit: Error rechazando llamada en Firestore: $error', tag: 'NotificationService');
+        });
       },
       onCallEnded: (callId) {
         ReleaseLogger.log('🔚 CallKit: Llamada finalizada - $callId', tag: 'NotificationService');
@@ -621,12 +648,23 @@ class NotificationService {
           message.data['type'] == 'group_audio_call' ||
           message.data['type'] == 'emergency_call') {
         ReleaseLogger.log('📞 ${message.data['type']} entrante detectada en FOREGROUND', tag: 'NotificationService');
-        ReleaseLogger.log('📞 Mostrando CallKit incluso en foreground para experiencia nativa', tag: 'NotificationService');
 
-        // ✅ FIXED: Deduplicación también en foreground
+        // ✅ FIX: Verificar si la app realmente está en foreground
+        final isAppInForeground = AppStateService().isAppInForeground();
+
+        if (isAppInForeground) {
+          ReleaseLogger.log('✅ App en foreground - NO mostrar CallKit, delegando al CallListenerService', tag: 'NotificationService');
+          // Cuando la app está en foreground, el CallListenerService debe manejar las llamadas
+          // Esto evita conflictos entre CallKit y IncomingCallScreen
+          return;
+        }
+
+        ReleaseLogger.log('⬇️ App en background - mostrando CallKit para experiencia nativa', tag: 'NotificationService');
+
+        // ✅ FIXED: Deduplicación también en background
         final callId = message.data['callId'] ?? message.messageId ?? '';
         if (_processedCallIds.contains(callId) || _globalProcessedCallIds.contains(callId)) {
-          ReleaseLogger.log('⚠️ CallId $callId ya procesado en FOREGROUND - SALTANDO para evitar duplicados', tag: 'NotificationService');
+          ReleaseLogger.log('⚠️ CallId $callId ya procesado en BACKGROUND - SALTANDO para evitar duplicados', tag: 'NotificationService');
           return;
         }
         _processedCallIds.add(callId);
@@ -636,13 +674,13 @@ class NotificationService {
         // Las notificaciones FCM pueden llegar después de que la llamada ya fue cancelada
         final sentTime = message.sentTime;
         if (sentTime != null && DateTime.now().difference(sentTime).inSeconds > 30) {
-          ReleaseLogger.log('⚠️ [NotificationService] Notificación muy vieja: ${DateTime.now().difference(sentTime).inSeconds} segundos - SALTANDO (foreground)', tag: 'NotificationService');
+          ReleaseLogger.log('⚠️ [NotificationService] Notificación muy vieja: ${DateTime.now().difference(sentTime).inSeconds} segundos - SALTANDO (background)', tag: 'NotificationService');
           return;
         }
 
         try {
           if (Platform.isAndroid) {
-            // Android usa CallKit
+            // Android usa CallKit SOLO en background
             await _callKit.showIncomingCall(
               callId: callId,
               callerName: message.data['callerName'] ?? 'Usuario',
@@ -652,15 +690,15 @@ class NotificationService {
               isEmergency: message.data['isEmergency'] == 'true' || message.data['isEmergency'] == true,
               extraData: message.data,
             );
-            ReleaseLogger.log('✅ CallKit (Android) mostrado exitosamente en foreground', tag: 'NotificationService');
+            ReleaseLogger.log('✅ CallKit (Android) mostrado exitosamente en background', tag: 'NotificationService');
           } else if (Platform.isIOS) {
             // iOS usa VoIP nativo - las notificaciones VoIP se manejan automáticamente por el sistema
-            ReleaseLogger.log('✅ iOS VoIP - las llamadas se manejan automáticamente por el sistema', tag: 'NotificationService');
+            ReleaseLogger.log('✅ iOS VoIP - las llamadas se manejan automáticamente por el sistema (background)', tag: 'NotificationService');
             // En iOS, las notificaciones VoIP push aparecen automáticamente como CallKit
             // No necesitamos hacer nada adicional aquí
           }
         } catch (e) {
-          ReleaseLogger.error('ERROR mostrando notificación nativa en foreground: $e', tag: 'NotificationService');
+          ReleaseLogger.error('ERROR mostrando notificación nativa en background: $e', tag: 'NotificationService');
         }
         return;
       } else {

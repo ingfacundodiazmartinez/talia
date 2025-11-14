@@ -1,10 +1,11 @@
 import 'dart:async';
-import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'repositories/calls_repository.dart';
 import '../../models/call.dart';
 import '../../utils/release_logger.dart';
+import '../contact_alias_service.dart';
 
 /// Service principal para monitoreo de calls unificadas
 ///
@@ -47,7 +48,8 @@ class CallsService {
   Function(Call call)? onIncomingCall;
   Function(Call call)? onCallStatusChanged;
   Function(String callId)? onCallEnded;
-  Function(Call call)? onMissedCall; // ✅ NUEVO: Para notificaciones de llamada perdida
+  Function(Call call)?
+  onMissedCall; // ✅ NUEVO: Para notificaciones de llamada perdida
   Function(String error)? onError;
 
   /// Reset singleton for testing
@@ -59,7 +61,10 @@ class CallsService {
   ///
   /// Debe ser llamado desde main.dart después de inicializar Firebase
   void initialize() {
-    ReleaseLogger.log('🎧 [CallsService] Inicializando service de calls', tag: 'CallsService');
+    ReleaseLogger.log(
+      '🎧 [CallsService] Inicializando service de calls',
+      tag: 'CallsService',
+    );
 
     // Monitorear cambios de autenticación
     _authSubscription = _auth.authStateChanges().listen(_onAuthStateChanged);
@@ -73,10 +78,16 @@ class CallsService {
   /// Manejar cambios de estado de autenticación
   void _onAuthStateChanged(User? user) {
     if (user != null && user.uid != _currentUserId) {
-      ReleaseLogger.log('👤 [CallsService] Usuario logueado: ${user.uid}', tag: 'CallsService');
+      ReleaseLogger.log(
+        '👤 [CallsService] Usuario logueado: ${user.uid}',
+        tag: 'CallsService',
+      );
       _startMonitoring(user.uid);
     } else if (user == null) {
-      ReleaseLogger.log('👤 [CallsService] Usuario deslogueado', tag: 'CallsService');
+      ReleaseLogger.log(
+        '👤 [CallsService] Usuario deslogueado',
+        tag: 'CallsService',
+      );
       _stopMonitoring();
     }
   }
@@ -88,16 +99,24 @@ class CallsService {
     // Cancelar subscription anterior si existe
     _userCallsSubscription?.cancel();
 
-    ReleaseLogger.log('👀 [CallsService] Iniciando monitoreo de calls para: $userId', tag: 'CallsService');
+    ReleaseLogger.log(
+      '👀 [CallsService] Iniciando monitoreo de calls para: $userId',
+      tag: 'CallsService',
+    );
 
     // Monitorear calls del usuario en tiempo real
-    _userCallsSubscription = _repository.watchUserCalls(userId: userId).listen(
-      _onCallsChanged,
-      onError: (error) {
-        ReleaseLogger.error('❌ [CallsService] Error en stream de calls: $error', tag: 'CallsService');
-        onError?.call('Error monitoreando llamadas: $error');
-      },
-    );
+    _userCallsSubscription = _repository
+        .watchUserCalls(userId: userId)
+        .listen(
+          _onCallsChanged,
+          onError: (error) {
+            ReleaseLogger.error(
+              '❌ [CallsService] Error en stream de calls: $error',
+              tag: 'CallsService',
+            );
+            onError?.call('Error monitoreando llamadas: $error');
+          },
+        );
   }
 
   /// Detener monitoreo
@@ -107,14 +126,34 @@ class CallsService {
     _userCallsSubscription?.cancel();
     _userCallsSubscription = null;
 
-    ReleaseLogger.log('🔇 [CallsService] Monitoreo detenido', tag: 'CallsService');
+    ReleaseLogger.log(
+      '🔇 [CallsService] Monitoreo detenido',
+      tag: 'CallsService',
+    );
   }
 
   /// Procesar cambios en las calls del usuario
   void _onCallsChanged(List<Call> calls) {
-    ReleaseLogger.log('🔄 [CallsService] Calls actualizadas: ${calls.length} activas', tag: 'CallsService');
+    ReleaseLogger.log(
+      '🔄 [CallsService] Calls actualizadas: ${calls.length} activas',
+      tag: 'CallsService',
+    );
 
-    final previousCalls = Map.fromEntries(_activeCalls.map((call) => MapEntry(call.id, call)));
+    ReleaseLogger.log(
+      '🔍 [DEBUG] _onCallsChanged called with ${calls.length} calls',
+      tag: 'CallsService',
+    );
+
+    for (final call in calls) {
+      ReleaseLogger.log(
+        '🔍 [DEBUG] Call ${call.id}: endedAt=${call.endedAt}, participants=${call.participants.keys.toList()}',
+        tag: 'CallsService',
+      );
+    }
+
+    final previousCalls = Map.fromEntries(
+      _activeCalls.map((call) => MapEntry(call.id, call)),
+    );
 
     for (final call in calls) {
       final previousCall = previousCalls[call.id];
@@ -122,22 +161,32 @@ class CallsService {
 
       if (previousCall == null) {
         // ✅ Nueva call detectada
-        ReleaseLogger.log('📞 [CallsService] Nueva call detectada: ${call.id} (status: $currentUserStatus)', tag: 'CallsService');
+        ReleaseLogger.log(
+          '📞 [CallsService] Nueva call detectada: ${call.id} (status: $currentUserStatus)',
+          tag: 'CallsService',
+        );
 
         if (currentUserStatus == 'waiting' && call.endedAt == null) {
           // Call entrante activa - mostrar notificación
           _handleIncomingCall(call);
         } else if (currentUserStatus == 'waiting' && call.endedAt != null) {
           // ✅ NUEVO: Call que llegó ya terminada - fue llamada perdida
-          ReleaseLogger.log('📞 [CallsService] Call perdida detectada al llegar: ${call.id}', tag: 'CallsService');
+          ReleaseLogger.log(
+            '📞 [CallsService] Call perdida detectada al llegar: ${call.id}',
+            tag: 'CallsService',
+          );
           _handleMissedCall(call);
         }
       } else {
         // ✅ Call existente - verificar cambios de estado
-        final previousStatus = previousCall.participants[_currentUserId]?.status;
+        final previousStatus =
+            previousCall.participants[_currentUserId]?.status;
 
         if (previousStatus != currentUserStatus) {
-          ReleaseLogger.log('🔄 [CallsService] Call ${call.id} cambió estado: $previousStatus → $currentUserStatus', tag: 'CallsService');
+          ReleaseLogger.log(
+            '🔄 [CallsService] Call ${call.id} cambió estado: $previousStatus → $currentUserStatus',
+            tag: 'CallsService',
+          );
 
           if (currentUserStatus == 'joined') {
             // Usuario se unió - notificar para navegación
@@ -154,13 +203,28 @@ class CallsService {
           }
         } else if (call.endedAt != null && previousCall.endedAt == null) {
           // ✅ NUEVO: La llamada se marcó como terminada sin cambio de estado del usuario
-          ReleaseLogger.log('🔄 [CallsService] Call ${call.id} marcada como terminada (endedAt changed)', tag: 'CallsService');
+          ReleaseLogger.log(
+            '🔄 [CallsService] Call ${call.id} marcada como terminada (endedAt changed)',
+            tag: 'CallsService',
+          );
+          ReleaseLogger.log(
+            '🔍 [DEBUG] CallsService endedAt changed - currentUserStatus: $currentUserStatus, endedAt: ${call.endedAt}',
+            tag: 'CallsService',
+          );
 
           if (currentUserStatus == 'waiting') {
             // Usuario seguía esperando cuando se terminó → llamada perdida
+            ReleaseLogger.log(
+              '📞 [DEBUG] CallsService calling _handleMissedCall for ${call.id} (user was waiting)',
+              tag: 'CallsService',
+            );
             _handleMissedCall(call);
           } else {
             // Call terminada normalmente
+            ReleaseLogger.log(
+              '📞 [DEBUG] CallsService calling _handleCallEnded for ${call.id} (user status: $currentUserStatus)',
+              tag: 'CallsService',
+            );
             _handleCallEnded(call);
           }
         }
@@ -174,7 +238,10 @@ class CallsService {
     final currentCallIds = calls.map((call) => call.id).toSet();
     for (final previousCall in _activeCalls) {
       if (!currentCallIds.contains(previousCall.id)) {
-        ReleaseLogger.log('🗑️ [CallsService] Call eliminada: ${previousCall.id}', tag: 'CallsService');
+        ReleaseLogger.log(
+          '🗑️ [CallsService] Call eliminada: ${previousCall.id}',
+          tag: 'CallsService',
+        );
 
         // ✅ NUEVO: Detectar si fue llamada perdida al ser eliminada
         final userStatus = previousCall.participants[_currentUserId]?.status;
@@ -193,7 +260,10 @@ class CallsService {
 
   /// Manejar call entrante (waiting)
   void _handleIncomingCall(Call call) {
-    ReleaseLogger.log('📞 [CallsService] Call entrante: ${call.id} (${call.type})', tag: 'CallsService');
+    ReleaseLogger.log(
+      '📞 [CallsService] Call entrante: ${call.id} (${call.type})',
+      tag: 'CallsService',
+    );
 
     // Notificar a main.dart para mostrar notificación/CallKit
     onIncomingCall?.call(call);
@@ -204,7 +274,10 @@ class CallsService {
 
   /// Manejar cuando el usuario se une a una call
   void _handleCallJoined(Call call) {
-    ReleaseLogger.log('✅ [CallsService] Usuario se unió a call: ${call.id}', tag: 'CallsService');
+    ReleaseLogger.log(
+      '✅ [CallsService] Usuario se unió a call: ${call.id}',
+      tag: 'CallsService',
+    );
 
     // Este evento se puede usar para navegación automática en main.dart
     onCallStatusChanged?.call(call);
@@ -212,7 +285,10 @@ class CallsService {
 
   /// Manejar call terminada
   void _handleCallEnded(Call call) {
-    ReleaseLogger.log('📞 [CallsService] Call terminada: ${call.id}', tag: 'CallsService');
+    ReleaseLogger.log(
+      '📞 [CallsService] Call terminada: ${call.id}',
+      tag: 'CallsService',
+    );
 
     onCallEnded?.call(call.id);
   }
@@ -222,13 +298,47 @@ class CallsService {
   /// Se activa cuando una llamada se termina/elimina mientras el usuario
   /// estaba en estado 'waiting' (nunca contestó)
   void _handleMissedCall(Call call) {
-    ReleaseLogger.log('📞 [CallsService] Llamada perdida detectada: ${call.id} (${call.type})', tag: 'CallsService');
+    ReleaseLogger.log(
+      '📞 [CallsService] Llamada perdida detectada: ${call.id} (${call.type})',
+      tag: 'CallsService',
+    );
+
+    ReleaseLogger.log(
+      '🔍 [DEBUG] _handleMissedCall - onMissedCall callback: ${onMissedCall != null ? 'EXISTS' : 'NULL'}',
+      tag: 'CallsService',
+    );
+    ReleaseLogger.log(
+      '🔍 [DEBUG] _handleMissedCall - onCallEnded callback: ${onCallEnded != null ? 'EXISTS' : 'NULL'}',
+      tag: 'CallsService',
+    );
 
     // Notificar a main.dart para mostrar notificación de llamada perdida
-    onMissedCall?.call(call);
+    if (onMissedCall != null) {
+      ReleaseLogger.log(
+        '📞 [DEBUG] _handleMissedCall calling onMissedCall for ${call.id}',
+        tag: 'CallsService',
+      );
+      onMissedCall?.call(call);
+    } else {
+      ReleaseLogger.log(
+        '❌ [DEBUG] _handleMissedCall - onMissedCall is NULL! Cannot notify missed call',
+        tag: 'CallsService',
+      );
+    }
 
     // También terminar la call para limpiar el estado
-    onCallEnded?.call(call.id);
+    if (onCallEnded != null) {
+      ReleaseLogger.log(
+        '📞 [DEBUG] _handleMissedCall calling onCallEnded for ${call.id}',
+        tag: 'CallsService',
+      );
+      onCallEnded?.call(call.id);
+    } else {
+      ReleaseLogger.log(
+        '❌ [DEBUG] _handleMissedCall - onCallEnded is NULL! Cannot notify call ended',
+        tag: 'CallsService',
+      );
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -242,7 +352,10 @@ class CallsService {
     String? customChannelName,
   }) async {
     try {
-      ReleaseLogger.log('🚀 [CallsService] Creando call $type con ${participantIds.length} participantes', tag: 'CallsService');
+      ReleaseLogger.log(
+        '🚀 [CallsService] Creando call $type con ${participantIds.length} participantes',
+        tag: 'CallsService',
+      );
 
       final callable = _functions.httpsCallable('createCall');
       final result = await callable.call({
@@ -254,15 +367,23 @@ class CallsService {
       final data = result.data as Map<String, dynamic>;
 
       if (data['success'] == true) {
-        ReleaseLogger.log('✅ [CallsService] Call creada exitosamente: ${data['callId']}', tag: 'CallsService');
+        ReleaseLogger.log(
+          '✅ [CallsService] Call creada exitosamente: ${data['callId']}',
+          tag: 'CallsService',
+        );
       } else {
-        ReleaseLogger.error('❌ [CallsService] Error creando call: ${data['error']}', tag: 'CallsService');
+        ReleaseLogger.error(
+          '❌ [CallsService] Error creando call: ${data['error']}',
+          tag: 'CallsService',
+        );
       }
 
       return data;
-
     } catch (e) {
-      ReleaseLogger.error('❌ [CallsService] Exception creando call: $e', tag: 'CallsService');
+      ReleaseLogger.error(
+        '❌ [CallsService] Exception creando call: $e',
+        tag: 'CallsService',
+      );
       return {'success': false, 'error': e.toString()};
     }
   }
@@ -273,7 +394,10 @@ class CallsService {
     required List<String> newParticipantIds,
   }) async {
     try {
-      ReleaseLogger.log('➕ [CallsService] Agregando ${newParticipantIds.length} participantes a $callId', tag: 'CallsService');
+      ReleaseLogger.log(
+        '➕ [CallsService] Agregando ${newParticipantIds.length} participantes a $callId',
+        tag: 'CallsService',
+      );
 
       final callable = _functions.httpsCallable('addParticipants');
       final result = await callable.call({
@@ -284,15 +408,23 @@ class CallsService {
       final data = result.data as Map<String, dynamic>;
 
       if (data['success'] == true) {
-        ReleaseLogger.log('✅ [CallsService] Participantes agregados exitosamente', tag: 'CallsService');
+        ReleaseLogger.log(
+          '✅ [CallsService] Participantes agregados exitosamente',
+          tag: 'CallsService',
+        );
       } else {
-        ReleaseLogger.error('❌ [CallsService] Error agregando participantes: ${data['error']}', tag: 'CallsService');
+        ReleaseLogger.error(
+          '❌ [CallsService] Error agregando participantes: ${data['error']}',
+          tag: 'CallsService',
+        );
       }
 
       return data;
-
     } catch (e) {
-      ReleaseLogger.error('❌ [CallsService] Exception agregando participantes: $e', tag: 'CallsService');
+      ReleaseLogger.error(
+        '❌ [CallsService] Exception agregando participantes: $e',
+        tag: 'CallsService',
+      );
       return {'success': false, 'error': e.toString()};
     }
   }
@@ -300,7 +432,10 @@ class CallsService {
   /// Aceptar call entrante
   Future<bool> acceptCall(String callId) async {
     try {
-      ReleaseLogger.log('✅ [CallsService] Aceptando call: $callId', tag: 'CallsService');
+      ReleaseLogger.log(
+        '✅ [CallsService] Aceptando call: $callId',
+        tag: 'CallsService',
+      );
 
       final participant = CallParticipant(
         status: 'joined',
@@ -314,13 +449,18 @@ class CallsService {
       );
 
       if (success) {
-        ReleaseLogger.log('✅ [CallsService] Call aceptada exitosamente', tag: 'CallsService');
+        ReleaseLogger.log(
+          '✅ [CallsService] Call aceptada exitosamente',
+          tag: 'CallsService',
+        );
       }
 
       return success;
-
     } catch (e) {
-      ReleaseLogger.error('❌ [CallsService] Error aceptando call: $e', tag: 'CallsService');
+      ReleaseLogger.error(
+        '❌ [CallsService] Error aceptando call: $e',
+        tag: 'CallsService',
+      );
       return false;
     }
   }
@@ -328,7 +468,10 @@ class CallsService {
   /// Rechazar call entrante
   Future<bool> declineCall(String callId, {String reason = 'declined'}) async {
     try {
-      ReleaseLogger.log('❌ [CallsService] Rechazando call: $callId (reason: $reason)', tag: 'CallsService');
+      ReleaseLogger.log(
+        '❌ [CallsService] Rechazando call: $callId (reason: $reason)',
+        tag: 'CallsService',
+      );
 
       final participant = CallParticipant(
         status: 'declined',
@@ -343,13 +486,18 @@ class CallsService {
       );
 
       if (success) {
-        ReleaseLogger.log('✅ [CallsService] Call rechazada exitosamente', tag: 'CallsService');
+        ReleaseLogger.log(
+          '✅ [CallsService] Call rechazada exitosamente',
+          tag: 'CallsService',
+        );
       }
 
       return success;
-
     } catch (e) {
-      ReleaseLogger.error('❌ [CallsService] Error rechazando call: $e', tag: 'CallsService');
+      ReleaseLogger.error(
+        '❌ [CallsService] Error rechazando call: $e',
+        tag: 'CallsService',
+      );
       return false;
     }
   }
@@ -357,36 +505,57 @@ class CallsService {
   /// Terminar call activa
   Future<bool> endCall(String callId) async {
     try {
-      ReleaseLogger.log('📞 [CallsService] Terminando call: $callId', tag: 'CallsService');
+      ReleaseLogger.log(
+        '📞 [CallsService] Terminando call: $callId',
+        tag: 'CallsService',
+      );
 
       // ✅ NUEVO: Primero obtener la call para verificar si es 1-1
       final call = await _repository.getCallById(callId);
       if (call == null) {
-        ReleaseLogger.error('❌ [CallsService] Call no encontrada: $callId', tag: 'CallsService');
+        ReleaseLogger.error(
+          '❌ [CallsService] Call no encontrada: $callId',
+          tag: 'CallsService',
+        );
         return false;
       }
 
       final participantCount = call.participants.length;
-      ReleaseLogger.log('📊 [CallsService] Call tiene $participantCount participantes', tag: 'CallsService');
+      ReleaseLogger.log(
+        '📊 [CallsService] Call tiene $participantCount participantes',
+        tag: 'CallsService',
+      );
 
       // ✅ NUEVO: Para llamadas 1-1 (2 participantes), terminar toda la call
       if (participantCount == 2) {
-        ReleaseLogger.log('🔚 [CallsService] Llamada 1-1 detectada, terminando para todos los participantes', tag: 'CallsService');
+        ReleaseLogger.log(
+          '🔚 [CallsService] Llamada 1-1 detectada, terminando para todos los participantes',
+          tag: 'CallsService',
+        );
 
         // Usar la repository directamente para actualizar endedAt de toda la call
         final success = await _repository.endEntireCall(callId);
 
         if (success) {
-          ReleaseLogger.log('✅ [CallsService] Call 1-1 terminada exitosamente para todos', tag: 'CallsService');
+          ReleaseLogger.log(
+            '✅ [CallsService] Call 1-1 terminada exitosamente para todos',
+            tag: 'CallsService',
+          );
         } else {
-          ReleaseLogger.error('❌ [CallsService] Error terminando call 1-1', tag: 'CallsService');
+          ReleaseLogger.error(
+            '❌ [CallsService] Error terminando call 1-1',
+            tag: 'CallsService',
+          );
         }
 
         return success;
       }
 
       // ✅ Para llamadas grupales (3+ participantes), solo actualizar el participante actual
-      ReleaseLogger.log('👥 [CallsService] Llamada grupal detectada, solo actualizando participante actual', tag: 'CallsService');
+      ReleaseLogger.log(
+        '👥 [CallsService] Llamada grupal detectada, solo actualizando participante actual',
+        tag: 'CallsService',
+      );
 
       final participant = CallParticipant(
         status: 'ended',
@@ -400,13 +569,18 @@ class CallsService {
       );
 
       if (success) {
-        ReleaseLogger.log('✅ [CallsService] Participante actual marcado como terminado', tag: 'CallsService');
+        ReleaseLogger.log(
+          '✅ [CallsService] Participante actual marcado como terminado',
+          tag: 'CallsService',
+        );
       }
 
       return success;
-
     } catch (e) {
-      ReleaseLogger.error('❌ [CallsService] Error terminando call: $e', tag: 'CallsService');
+      ReleaseLogger.error(
+        '❌ [CallsService] Error terminando call: $e',
+        tag: 'CallsService',
+      );
       return false;
     }
   }
@@ -442,21 +616,59 @@ class CallsService {
 
   /// Verificar si el usuario está actualmente en una videollamada
   bool get isInVideoCall {
-    return _activeCalls.any((call) =>
-        call.type == 'video' &&
-        call.participants[_currentUserId]?.status == 'joined');
+    return _activeCalls.any(
+      (call) =>
+          call.type == 'video' &&
+          call.participants[_currentUserId]?.status == 'joined',
+    );
   }
 
   /// Verificar si el usuario está actualmente en una llamada de audio
   bool get isInAudioCall {
-    return _activeCalls.any((call) =>
-        call.type == 'audio' &&
-        call.participants[_currentUserId]?.status == 'joined');
+    return _activeCalls.any(
+      (call) =>
+          call.type == 'audio' &&
+          call.participants[_currentUserId]?.status == 'joined',
+    );
+  }
+
+  /// Obtener nombre de usuario con alias si existe
+  Future<String> getUserDisplayName(String userId) async {
+    try {
+      // 1. Obtener datos del usuario desde Firestore
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(userId)
+          .get();
+
+      if (!userDoc.exists) {
+        return 'Usuario';
+      }
+
+      final userData = userDoc.data();
+      final realName = userData?['name'] as String? ?? 'Usuario';
+
+      // 2. Usar ContactAliasService para obtener alias si existe
+      final displayName = await ContactAliasService().getDisplayName(
+        userId,
+        realName,
+      );
+      return displayName;
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [CallsService] Error obteniendo nombre de usuario $userId: $e',
+        tag: 'CallsService',
+      );
+      return 'Usuario';
+    }
   }
 
   /// Dispose del service
   void dispose() {
-    ReleaseLogger.log('🔇 [CallsService] Disposing service', tag: 'CallsService');
+    ReleaseLogger.log(
+      '🔇 [CallsService] Disposing service',
+      tag: 'CallsService',
+    );
 
     _userCallsSubscription?.cancel();
     _authSubscription?.cancel();

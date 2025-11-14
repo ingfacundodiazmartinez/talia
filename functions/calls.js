@@ -224,11 +224,22 @@ exports.addParticipants = onCall(
         throw new HttpsError('failed-precondition', 'La llamada ya ha terminado');
       }
 
-      // ✅ Verificar límite máximo de participantes
-      const currentParticipantCount = Object.keys(callData.participants).length;
-      if (currentParticipantCount + newParticipantIds.length > 6) {
+      // ✅ Verificar límite máximo de participantes ACTIVOS
+      const activeParticipants = Object.entries(callData.participants).filter(([id, participant]) => {
+        const status = participant.status;
+        return status === 'joined' || status === 'waiting';
+      });
+      const currentActiveCount = activeParticipants.length;
+
+      // Contar solo los nuevos participantes que realmente son nuevos (no re-invitaciones)
+      const actualNewCount = newParticipantIds.filter(id => {
+        const existing = callData.participants[id];
+        return !existing || (existing.status !== 'joined' && existing.status !== 'waiting');
+      }).length;
+
+      if (currentActiveCount + actualNewCount > 6) {
         throw new HttpsError('invalid-argument',
-          `Máximo 6 participantes. Actualmente hay ${currentParticipantCount}, intentando agregar ${newParticipantIds.length}`);
+          `Máximo 6 participantes activos. Actualmente hay ${currentActiveCount} activos, intentando agregar ${actualNewCount} nuevos`);
       }
 
       // ✅ Verificar que los nuevos participantes existen y no están ya en la llamada
@@ -239,9 +250,16 @@ exports.addParticipants = onCall(
           throw new HttpsError('not-found', `Usuario ${participantId} no encontrado`);
         }
 
-        // Verificar que no está ya en la llamada
-        if (callData.participants[participantId]) {
-          throw new HttpsError('invalid-argument', `Usuario ${participantId} ya está en la llamada`);
+        // Verificar que no está ya en la llamada ACTIVA
+        const existingParticipant = callData.participants[participantId];
+        if (existingParticipant) {
+          const status = existingParticipant.status;
+          // Solo rechazar si el participante está activo (joined o waiting)
+          if (status === 'joined' || status === 'waiting') {
+            throw new HttpsError('invalid-argument', `Usuario ${participantId} ya está en la llamada activa`);
+          }
+          // Si el usuario estuvo pero se desconectó/declinó, permitir re-invitación
+          console.log(`♻️ [addParticipants] Re-invitando usuario ${participantId} que previamente tenía status: ${status}`);
         }
       }
 
@@ -268,8 +286,9 @@ exports.addParticipants = onCall(
 
       return {
         success: true,
-        newParticipantCount: currentParticipantCount + newParticipantIds.length,
-        addedParticipants: newParticipantIds
+        newParticipantCount: currentActiveCount + actualNewCount,
+        addedParticipants: newParticipantIds,
+        reInvitedCount: newParticipantIds.length - actualNewCount
       };
 
     } catch (error) {

@@ -6,13 +6,13 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'calls_service.dart';
 import '../../models/call.dart';
 import '../../utils/release_logger.dart';
-import '../../screens/audio_call_screen.dart';
-import '../../screens/video_call_screen.dart';
-import '../../screens/common/incoming_call_screen.dart';
+import '../../screens/call/common/incoming_call_screen.dart';
 import '../callkit_service.dart';
 import '../voip_service.dart';
 import '../chat_permission_service.dart';
 import '../contact_alias_service.dart';
+import 'call_navigation_service.dart';
+import 'call_listener_service.dart';
 
 /// Orchestrator principal para la gestión de calls unificadas
 ///
@@ -41,9 +41,17 @@ class CallsOrchestrator {
   CallKitService? _callKitService;
   VoIPService? _voipService;
 
+  // Services
+  final CallNavigationService _navigationService = CallNavigationService();
+  final CallListenerService _listenerService = CallListenerService();
+
   // State management
   GlobalKey<NavigatorState>? _navigatorKey;
   bool _isInitialized = false;
+
+  // Global listeners
+  bool _globalListenersInitialized = false;
+  StreamSubscription<Map<String, dynamic>>? _pendingCallSubscription;
 
   // Navigation tracking para evitar loops infinitos
   final Set<String> _navigatingCallIds = <String>{};
@@ -169,14 +177,23 @@ class CallsOrchestrator {
   }
 
   /// Manejar llamada terminada
-  void _handleCallEnded(String callId) {
+  Future<void> _handleCallEnded(String callId) async {
     ReleaseLogger.log(
       '📞 [CallsOrchestrator] Llamada terminada: $callId',
       tag: 'CallsOrchestrator'
     );
 
+    ReleaseLogger.log(
+      '🔍 [DEBUG] CallsOrchestrator _handleCallEnded called for callId: $callId',
+      tag: 'CallsOrchestrator'
+    );
+
     // ✅ CRÍTICO: Terminar notificaciones CallKit activas para esta llamada
-    _terminateCallKitNotification(callId);
+    ReleaseLogger.log(
+      '📞 [DEBUG] CallsOrchestrator calling _terminateCallKitNotification for $callId',
+      tag: 'CallsOrchestrator'
+    );
+    await _terminateCallKitNotification(callId);
 
     // Limpiar tracking de navegación para esta llamada
     _navigatingCallIds.remove(callId);
@@ -204,7 +221,7 @@ class CallsOrchestrator {
   // ═══════════════════════════════════════════════════════════════
 
   /// Mostrar IncomingCallScreen para llamadas entrantes
-  void _showIncomingCallScreen(Call call) {
+  Future<void> _showIncomingCallScreen(Call call) async {
     if (_navigatorKey?.currentContext == null) return;
 
     final context = _navigatorKey!.currentContext!;
@@ -227,23 +244,35 @@ class CallsOrchestrator {
       return;
     }
 
+    // ✅ FIXED: Verificar si VoIP ya está manejando esta llamada
+    if (_voipService != null && _voipService!.isCallHandledByVoIP(call.id)) {
+      ReleaseLogger.log(
+        '⚠️ [CallsOrchestrator] Llamada ${call.id} ya siendo manejada por VoIP - NO mostrar IncomingCallScreen',
+        tag: 'CallsOrchestrator'
+      );
+      return;
+    }
+
     ReleaseLogger.log(
       '📱 [CallsOrchestrator] Mostrando IncomingCallScreen para ${call.id}',
       tag: 'CallsOrchestrator'
     );
 
+    // Obtener el nombre del caller de forma asíncrona
+    final callerName = await _getCallerName(call);
+
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (context) => IncomingCallScreen(
           callId: call.id,
-          callerName: _getCallerName(call),
+          callerName: callerName,
           callerId: call.createdBy,
-          callerPhotoUrl: null, // TODO: Obtener desde participants data
+          callerPhotoUrl: null, // TODO: Obtener desde user profile data
           callType: call.type,
           channelName: call.channelName,
           token: call.token,
           uid: 0, // Se generará dinámicamente
-          isEmergency: false, // TODO: Agregar campo isEmergency al modelo
+          isEmergency: false, // TODO: Agregar campo isEmergency al modelo Call
         ),
       ),
     );
@@ -253,11 +282,9 @@ class CallsOrchestrator {
   void _navigateToCallScreenIfNeeded(Call call) {
     if (_navigatorKey?.currentContext == null) return;
 
-    final currentUserId = FirebaseAuth.instance.currentUser?.uid;
-
     // Si el usuario actual es el creador de la llamada (caller),
     // no navegar automáticamente porque ya debe estar en VideoCallScreen
-    if (call.createdBy == currentUserId) {
+    if (_isUserCaller(call)) {
       ReleaseLogger.log(
         '⚠️ [CallsOrchestrator] Evitando navegación automática para caller - ya debe estar en VideoCallScreen',
         tag: 'CallsOrchestrator'
@@ -312,46 +339,15 @@ class CallsOrchestrator {
 
   /// Navegar automáticamente a call screen cuando usuario se une
   void _navigateToCallScreen(Call call) {
-    if (_navigatorKey?.currentContext == null) return;
-
-    final context = _navigatorKey!.currentContext!;
-
     ReleaseLogger.log(
-      '✅ [CallsOrchestrator] Navegando a ${call.type}CallScreen para ${call.id}',
+      '✅ [CallsOrchestrator] Navegando a CallScreen para ${call.id}',
       tag: 'CallsOrchestrator'
     );
 
-    if (call.type == 'audio') {
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          settings: const RouteSettings(name: '/AudioCallScreen'), // ✅ FIXED: Named route for navigation detection
-          builder: (context) => AudioCallScreen(
-            callId: call.id,
-            channelName: call.channelName,
-            token: call.token ?? '',
-            uid: 0, // Se generará dinámicamente
-            isCaller: _isUserCaller(call),
-            remoteName: _getOtherParticipantName(call),
-          ),
-        ),
-      );
-    } else {
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          settings: const RouteSettings(name: '/VideoCallScreen'), // ✅ FIXED: Named route for navigation detection
-          builder: (context) => VideoCallScreen(
-            callId: call.id,
-            channelName: call.channelName,
-            token: call.token ?? '',
-            uid: 0, // Se generará dinámicamente
-            isCaller: _isUserCaller(call),
-            remoteName: _getOtherParticipantName(call),
-            receiverId: call.createdBy,
-            isVideo: true,
-          ),
-        ),
-      );
-    }
+    _navigationService.navigateToCall(
+      callId: call.id,
+      source: 'auto_join',
+    );
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -402,9 +398,164 @@ class CallsOrchestrator {
     return await _callsService.getCall(callId);
   }
 
+  /// ==== MÉTODOS DE NAVEGACIÓN PARA MAIN.DART ====
+
+  /// Procesar llamada entrante desde CallKit
+  Future<void> processCallKitCall(String callId) async {
+    ReleaseLogger.log(
+      '📞 [CallsOrchestrator] Procesando llamada CallKit: $callId',
+      tag: 'CallsOrchestrator'
+    );
+
+    await _navigationService.navigateToCall(
+      callId: callId,
+      source: 'callkit',
+    );
+  }
+
+  /// Procesar llamada entrante en foreground
+  Future<void> processForegroundCall(String callId) async {
+    ReleaseLogger.log(
+      '📱 [CallsOrchestrator] Procesando llamada foreground: $callId',
+      tag: 'CallsOrchestrator'
+    );
+
+    await _navigationService.navigateToCall(
+      callId: callId,
+      source: 'foreground',
+    );
+  }
+
+  /// Procesar llamada desde VoIP
+  Future<void> processVoIPCall(String callId) async {
+    ReleaseLogger.log(
+      '📞 [CallsOrchestrator] Procesando llamada VoIP: $callId',
+      tag: 'CallsOrchestrator'
+    );
+
+    await _navigationService.navigateToCall(
+      callId: callId,
+      source: 'voip',
+    );
+  }
+
+  /// Procesar cualquier llamada (método genérico)
+  Future<void> processIncomingCall(String callId, {String? source}) async {
+    ReleaseLogger.log(
+      '📲 [CallsOrchestrator] Procesando llamada entrante: $callId (source: $source)',
+      tag: 'CallsOrchestrator'
+    );
+
+    await _navigationService.navigateToCall(
+      callId: callId,
+      source: source,
+    );
+  }
+
   /// Stream de una call específica
   Stream<Call?> watchCall(String callId) {
     return _callsService.watchCall(callId);
+  }
+
+  /// ==== MÉTODOS DE LISTENERS GLOBALES PARA CALLCONTROLLER ====
+
+  /// Inicializar listeners globales
+  Future<void> initializeGlobalListeners({
+    required GlobalKey<NavigatorState> navigatorKey,
+  }) async {
+    if (_globalListenersInitialized) return;
+
+    _navigatorKey = navigatorKey;
+
+    ReleaseLogger.log(
+      '🚀 [CallsOrchestrator] Inicializando listeners globales',
+      tag: 'CallsOrchestrator'
+    );
+
+    // Inicializar orchestrator si no está inicializado
+    await initialize(navigatorKey: navigatorKey);
+
+    // Inicializar navigation service
+    _navigationService.initialize(navigatorKey);
+
+    // Inicializar listener service con callback
+    await _listenerService.initialize(
+      onCallDetected: _handleDetectedCall,
+    );
+
+    // Inicializar VoIP y configurar integration
+    await _initializeVoIPIntegration();
+
+    _globalListenersInitialized = true;
+
+    ReleaseLogger.log(
+      '✅ [CallsOrchestrator] Listeners globales inicializados',
+      tag: 'CallsOrchestrator'
+    );
+  }
+
+  /// Dispose listeners globales
+  void disposeGlobalListeners() {
+    _listenerService.dispose();
+    _pendingCallSubscription?.cancel();
+    _globalListenersInitialized = false;
+
+    ReleaseLogger.log(
+      '🧹 [CallsOrchestrator] Listeners globales disposed',
+      tag: 'CallsOrchestrator'
+    );
+  }
+
+  /// Callback cuando el listener service detecta una llamada
+  Future<void> _handleDetectedCall(String callId, String source) async {
+    ReleaseLogger.log(
+      '📲 [CallsOrchestrator] Llamada detectada por listener: $callId (source: $source)',
+      tag: 'CallsOrchestrator'
+    );
+
+    // Delegar al método correspondiente según la source
+    await processIncomingCall(callId, source: source);
+  }
+
+  /// Inicializar integración con VoIP (usa métodos existentes del VoIPService)
+  Future<void> _initializeVoIPIntegration() async {
+    if (!Platform.isIOS) return;
+
+    try {
+      // Inicializar VoIP service (usa su método initialize existente)
+      if (_voipService != null) {
+        await _voipService!.initialize();
+
+        // Suscribirse al stream de llamadas pendientes
+        _pendingCallSubscription = _voipService!.pendingCallStream.listen((callData) {
+          ReleaseLogger.log(
+            '📞 [CallsOrchestrator] VoIP call detected: ${callData['callId']}',
+            tag: 'CallsOrchestrator'
+          );
+
+          final callId = callData['callId'] as String;
+          processIncomingCall(callId, source: 'voip');
+        });
+
+        // Verificar llamadas pendientes al inicializar (usa método existente)
+        await Future.delayed(const Duration(milliseconds: 500));
+        final pendingData = _voipService!.getPendingCallData();
+        if (pendingData != null) {
+          ReleaseLogger.log(
+            '📞 [CallsOrchestrator] Pending VoIP call found: ${pendingData['callId']}',
+            tag: 'CallsOrchestrator'
+          );
+
+          final callId = pendingData['callId'] as String;
+          await processIncomingCall(callId, source: 'voip');
+        }
+      }
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [CallsOrchestrator] Error initializing VoIP integration: $e',
+        tag: 'CallsOrchestrator'
+      );
+    }
   }
 
   /// Verificar si el usuario tiene calls activas
@@ -488,15 +639,37 @@ class CallsOrchestrator {
   }
 
   /// Obtener nombre del caller para llamadas entrantes
-  String _getCallerName(Call call) {
-    // TODO: Obtener nombre real desde user data o participants
-    return 'Usuario'; // Placeholder
+  Future<String> _getCallerName(Call call) async {
+    try {
+      return await _callsService.getUserDisplayName(call.createdBy);
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [CallsOrchestrator] Error obteniendo nombre de caller: $e',
+        tag: 'CallsOrchestrator'
+      );
+      return 'Usuario';
+    }
   }
 
   /// Obtener nombre del otro participante
-  String _getOtherParticipantName(Call call) {
-    // TODO: Obtener nombre real del otro participante
-    return 'Usuario'; // Placeholder
+  Future<String> getOtherParticipantName(Call call) async {
+    try {
+      final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+      if (currentUserId == null) return 'Usuario';
+
+      for (String participantId in call.participants.keys) {
+        if (participantId != currentUserId) {
+          return await _callsService.getUserDisplayName(participantId);
+        }
+      }
+      return 'Usuario';
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [CallsOrchestrator] Error obteniendo nombre de participante: $e',
+        tag: 'CallsOrchestrator'
+      );
+      return 'Usuario';
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -553,10 +726,15 @@ class CallsOrchestrator {
   ///
   /// Este método resuelve el problema donde las notificaciones CallKit
   /// seguían sonando después de que A cancelara la llamada antes de que B respondiera.
-  void _terminateCallKitNotification(String callId) {
+  Future<void> _terminateCallKitNotification(String callId) async {
     try {
       ReleaseLogger.log(
         '📞 [CallsOrchestrator] Terminando notificación CallKit para callId: $callId',
+        tag: 'CallsOrchestrator'
+      );
+
+      ReleaseLogger.log(
+        '🔍 [DEBUG] _terminateCallKitNotification - Platform: ${Platform.operatingSystem}',
         tag: 'CallsOrchestrator'
       );
 
@@ -566,37 +744,33 @@ class CallsOrchestrator {
           '❌ [CallsOrchestrator] CallKitService no disponible - no se puede terminar notificación',
           tag: 'CallsOrchestrator'
         );
+        ReleaseLogger.error(
+          '❌ [DEBUG] _terminateCallKitNotification - _callKitService is NULL!',
+          tag: 'CallsOrchestrator'
+        );
         return;
       }
 
+      ReleaseLogger.log(
+        '✅ [DEBUG] _terminateCallKitNotification - _callKitService is available',
+        tag: 'CallsOrchestrator'
+      );
+
       // ✅ ANDROID: Terminar CallKit notification
       if (Platform.isAndroid) {
-        _callKitService!.endCall(callId).then((_) {
-          ReleaseLogger.log(
-            '✅ [CallsOrchestrator] Notificación Android CallKit terminada para $callId',
-            tag: 'CallsOrchestrator'
-          );
-        }).catchError((e) {
-          ReleaseLogger.error(
-            '❌ [CallsOrchestrator] Error terminando Android CallKit para $callId: $e',
-            tag: 'CallsOrchestrator'
-          );
-        });
+        await _callKitService!.endCall(callId);
+        await _callKitService!.endAllCalls();
+        ReleaseLogger.log('✅ [CallsOrchestrator] CallKit terminado para $callId', tag: 'CallsOrchestrator');
       }
 
-      // ✅ iOS: Terminar VoIP notification
-      if (Platform.isIOS && _voipService != null) {
-        _voipService!.notifyCallEnded(callId).then((_) {
-          ReleaseLogger.log(
-            '✅ [CallsOrchestrator] Notificación iOS VoIP terminada para $callId',
-            tag: 'CallsOrchestrator'
-          );
-        }).catchError((e) {
-          ReleaseLogger.error(
-            '❌ [CallsOrchestrator] Error terminando iOS VoIP para $callId: $e',
-            tag: 'CallsOrchestrator'
-          );
-        });
+      // ✅ iOS: Terminar CallKit y VoIP
+      if (Platform.isIOS) {
+        await _callKitService!.endCall(callId);
+        await _callKitService!.endAllCalls();
+        if (_voipService != null) {
+          await _voipService!.notifyCallEnded(callId);
+        }
+        ReleaseLogger.log('✅ [CallsOrchestrator] CallKit y VoIP terminados para $callId', tag: 'CallsOrchestrator');
       }
 
     } catch (e) {

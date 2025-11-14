@@ -153,6 +153,9 @@ class VoIPService {
     final startTime = DateTime.now();
     try {
       ReleaseLogger.log('⚡ [VoIP OPTIMIZED] Iniciando aceptación acelerada: $callId', tag: 'VoIPService');
+
+      // ✅ CRITICAL: Marcar como manejada por VoIP ANTES de procesar para evitar IncomingCallScreen
+      markCallAsVoIPHandled(callId);
       // ✅ OPTIMIZACIÓN 1: Paralelizar TODAS las operaciones
       ReleaseLogger.log('🚀 [VoIP OPTIMIZED] Lanzando operaciones paralelas', tag: 'VoIPService');
 

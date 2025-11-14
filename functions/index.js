@@ -48,6 +48,9 @@ const notifications = require("./notifications");
 // Videollamadas
 const videoCalls = require("./video-calls");
 
+// Llamadas (Calls Management)
+const calls = require("./calls");
+
 // Reportes
 const reports = require("./reports");
 
@@ -101,6 +104,11 @@ exports.sendInstantPushNotification = notifications.sendInstantPushNotification;
 // Videollamadas
 exports.generateAgoraToken = videoCalls.generateAgoraToken;
 exports.initiateVideoCall = videoCalls.initiateVideoCall;
+
+// Llamadas (Calls Management)
+exports.createCall = calls.createCall;
+exports.addParticipants = calls.addParticipants;
+exports.updateCallStatus = calls.updateCallStatus;
 
 // Reportes
 exports.generateChildReport = reports.generateChildReport;

@@ -1,11 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:vibration/vibration.dart';
-import '../../services/video_calls/video_call_orchestrator.dart';
-import '../../services/video_calls/services/call_state_service.dart';
-import '../video_call_screen.dart';
-import '../audio_call_screen.dart';
-import '../../utils/release_logger.dart';
+import '../../../services/calls/calls_orchestrator.dart';
+import '../../../controllers/call_controller.dart';
+import '../../../utils/release_logger.dart';
 
 /// Pantalla de llamada entrante para foreground
 ///
@@ -44,7 +42,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
   late AnimationController _pulseController;
   late AnimationController _slideController;
   bool _isProcessing = false;
-  StreamSubscription<CallStateUpdate>? _callStateSubscription;
+  StreamSubscription? _callStateSubscription;
 
   @override
   void initState() {
@@ -66,64 +64,58 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
     // ✅ VIBRACIÓN INICIAL: Simular comportamiento de CallKit
     _startVibration();
 
-    // ✅ CRÍTICO: Escuchar cancelaciones de llamada para auto-cerrar
-    _setupCallCancellationListener();
-  }
-
-  /// Escuchar eventos de cancelación de llamada
-  void _setupCallCancellationListener() {
+    // ✅ LISTENER PARA DETECTAR CANCELACIÓN REMOTA VIA CONTROLLER
+    // Crear instancia temporal solo para monitorear estado de llamada
     try {
-      final callStateService = CallStateService();
-      _callStateSubscription = callStateService.callStateStream.listen(
-        (callStateUpdate) {
-          // Solo procesar eventos de esta llamada específica
-          if (callStateUpdate.callId == widget.callId) {
-            ReleaseLogger.log('📱 [IncomingCallScreen] Evento recibido: ${callStateUpdate.status}', tag: 'IncomingCall');
-
-            // Si el caller canceló la llamada, cerrar la pantalla automáticamente
-            if (callStateUpdate.status == 'cancelled_by_caller' ||
-                callStateUpdate.status == 'ended' ||
-                callStateUpdate.status == 'missed' ||
-                callStateUpdate.status == 'declined') {
-              ReleaseLogger.log('🚫 [IncomingCallScreen] Llamada cancelada por caller - cerrando pantalla', tag: 'IncomingCall');
-              _handleCallCancellation();
-            }
-          }
-        },
-        onError: (error) {
-          ReleaseLogger.error('❌ [IncomingCallScreen] Error en listener de cancelación: $error', tag: 'IncomingCall');
-        },
+      final tempController = CallController(
+        callId: widget.callId,
+        channelName: widget.channelName,
+        token: widget.token,
+        uid: widget.uid,
+        isCaller: false, // En IncomingCall siempre somos receiver
+        remoteName: widget.callerName,
+        receiverId: widget.callerId,
+        isVideo: widget.callType == 'video',
       );
-      ReleaseLogger.log('✅ [IncomingCallScreen] Listener de cancelación configurado para callId: ${widget.callId}', tag: 'IncomingCall');
+
+      _callStateSubscription = tempController.callStateStream.listen((update) {
+        if (update.status == 'ended' && mounted && !_isProcessing) {
+          _stopVibration();
+          // ✅ Verificar si se puede hacer pop antes de cerrar pantalla
+          if (Navigator.of(context).canPop()) {
+            Navigator.of(context).pop();
+            ReleaseLogger.log(
+              '🔚 [IncomingCallScreen] Llamada cancelada remotamente - cerrando pantalla',
+              tag: 'IncomingCall',
+            );
+          } else {
+            ReleaseLogger.log(
+              '⚠️ [IncomingCallScreen] No se puede hacer pop - stack vacío',
+              tag: 'IncomingCall',
+            );
+          }
+        }
+      });
     } catch (e) {
-      ReleaseLogger.error('❌ [IncomingCallScreen] Error configurando listener de cancelación: $e', tag: 'IncomingCall');
+      ReleaseLogger.error(
+        '❌ [IncomingCallScreen] Error configurando listener de estado: $e',
+        tag: 'IncomingCall',
+      );
     }
-  }
-
-  /// Manejar cancelación de llamada por parte del caller
-  void _handleCallCancellation() {
-    if (!mounted || _isProcessing) return;
-
-    setState(() => _isProcessing = true);
-    _stopVibration();
-
-    // Cerrar la pantalla inmediatamente
-    Navigator.of(context).pop();
-    ReleaseLogger.log('✅ [IncomingCallScreen] Pantalla cerrada por cancelación del caller', tag: 'IncomingCall');
   }
 
   @override
   void dispose() {
-    _callStateSubscription?.cancel();
     _pulseController.dispose();
     _slideController.dispose();
     _stopVibration();
+    _callStateSubscription?.cancel();
     super.dispose();
   }
 
   /// Iniciar patrón de vibración para llamada entrante
   void _startVibration() async {
-    if (await Vibration.hasVibrator() ?? false) {
+    if (await Vibration.hasVibrator()) {
       // Patrón: vibrar 500ms, pausa 1000ms, repetir
       Vibration.vibrate(duration: 500);
 
@@ -154,35 +146,16 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
 
     try {
       // Aceptar llamada en Firestore
-      await VideoCallOrchestrator().acceptCall(widget.callId);
+      await CallsOrchestrator().acceptCall(widget.callId);
 
       if (!mounted) return;
 
-      // Navegar a la pantalla de videollamada
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (context) => widget.callType == 'audio'
-              ? AudioCallScreen(
-                  callId: widget.callId,
-                  channelName: widget.channelName,
-                  token: widget.token,
-                  uid: widget.uid,
-                  isCaller: false,
-                  remoteName: widget.callerName,
-                )
-              : VideoCallScreen(
-                  callId: widget.callId,
-                  channelName: widget.channelName,
-                  token: widget.token,
-                  uid: widget.uid,
-                  isCaller: false,
-                  remoteName: widget.callerName,
-                  receiverId: widget.callerId,
-                  isVideo: widget.callType == 'video',
-                ),
-        ),
+      // El orchestrator detectará el cambio de estado automáticamente
+      // y navegará a la pantalla correcta
+      ReleaseLogger.log(
+        '✅ [IncomingCallScreen] Llamada aceptada - orchestrator manejará navegación',
+        tag: 'IncomingCall',
       );
-
     } catch (e) {
       ReleaseLogger.error('❌ Error aceptando llamada: $e', tag: 'IncomingCall');
       if (mounted) {
@@ -200,16 +173,20 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
 
     try {
       // Rechazar llamada en Firestore
-      await VideoCallOrchestrator().rejectCall(widget.callId);
+      await CallsOrchestrator().declineCall(widget.callId);
 
       if (!mounted) return;
 
       // Cerrar pantalla
-      Navigator.of(context).pop();
-
+      if (Navigator.of(context).canPop()) {
+        Navigator.of(context).pop();
+      }
     } catch (e) {
-      ReleaseLogger.error('❌ Error rechazando llamada: $e', tag: 'IncomingCall');
-      if (mounted) {
+      ReleaseLogger.error(
+        '❌ Error rechazando llamada: $e',
+        tag: 'IncomingCall',
+      );
+      if (mounted && Navigator.of(context).canPop()) {
         Navigator.of(context).pop();
       }
     }
@@ -221,22 +198,20 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
       backgroundColor: Colors.black,
       body: SafeArea(
         child: SlideTransition(
-          position: Tween<Offset>(
-            begin: const Offset(0, 1),
-            end: Offset.zero,
-          ).animate(CurvedAnimation(
-            parent: _slideController,
-            curve: Curves.easeOutCubic,
-          )),
+          position: Tween<Offset>(begin: const Offset(0, 1), end: Offset.zero)
+              .animate(
+                CurvedAnimation(
+                  parent: _slideController,
+                  curve: Curves.easeOutCubic,
+                ),
+              ),
           child: Column(
             children: [
               // Header con info de emergencia si aplica
               if (widget.isEmergency) _buildEmergencyHeader(),
 
               // Área principal con avatar y nombre
-              Expanded(
-                child: _buildMainContent(),
-              ),
+              Expanded(child: _buildMainContent()),
 
               // Botones de acción
               _buildActionButtons(),
@@ -261,11 +236,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
       ),
       child: Column(
         children: [
-          const Icon(
-            Icons.emergency,
-            color: Colors.white,
-            size: 32,
-          ),
+          const Icon(Icons.emergency, color: Colors.white, size: 32),
           const SizedBox(height: 8),
           const Text(
             'LLAMADA DE EMERGENCIA',
@@ -310,7 +281,8 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
                   ? Image.network(
                       widget.callerPhotoUrl!,
                       fit: BoxFit.cover,
-                      errorBuilder: (context, error, stackTrace) => _buildDefaultAvatar(),
+                      errorBuilder: (context, error, stackTrace) =>
+                          _buildDefaultAvatar(),
                     )
                   : _buildDefaultAvatar(),
             ),
@@ -355,9 +327,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
             textAlign: TextAlign.center,
           )
         else
-          const CircularProgressIndicator(
-            color: Colors.white,
-          ),
+          const CircularProgressIndicator(color: Colors.white),
       ],
     );
   }
@@ -375,7 +345,9 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
       ),
       child: Center(
         child: Text(
-          widget.callerName.isNotEmpty ? widget.callerName[0].toUpperCase() : '?',
+          widget.callerName.isNotEmpty
+              ? widget.callerName[0].toUpperCase()
+              : '?',
           style: const TextStyle(
             color: Colors.white,
             fontSize: 48,
@@ -433,7 +405,9 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
             color: onPressed != null ? color : Colors.grey,
             boxShadow: [
               BoxShadow(
-                color: (onPressed != null ? color : Colors.grey).withValues(alpha: 0.5),
+                color: (onPressed != null ? color : Colors.grey).withValues(
+                  alpha: 0.5,
+                ),
                 blurRadius: 20,
                 spreadRadius: 2,
               ),
@@ -444,13 +418,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
             child: InkWell(
               onTap: onPressed,
               borderRadius: BorderRadius.circular(40),
-              child: Center(
-                child: Icon(
-                  icon,
-                  color: Colors.white,
-                  size: 36,
-                ),
-              ),
+              child: Center(child: Icon(icon, color: Colors.white, size: 36)),
             ),
           ),
         ),
