@@ -177,11 +177,12 @@ class MockVoIPService implements VoIPService {
 /// Mock class para CallKitService
 class MockCallKitService implements CallKitService {
   @override
-  void initialize({
+  Future<void> initialize({
     Function(Map<String, dynamic>)? onCallAccepted,
     Function(String)? onCallDeclined,
     Function(String)? onCallEnded,
-  }) {}
+    Function(String)? onCallKitShown,
+  }) async {}
 
   @override
   Future<void> dispose() async {}

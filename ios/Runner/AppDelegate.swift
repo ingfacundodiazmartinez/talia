@@ -270,12 +270,14 @@ import flutter_callkit_incoming
       return
     }
 
-    let callType = payloadDict["callType"] as? String ?? "video"
+    let callType = payloadDict["callType"] as? String ?? "UNKNOWN"
     let isVideo = (callType == "video")
 
     NSLog("🚨 TALIA_DEBUG: Showing CallKit for caller: \(callerName)")
     NSLog("🚨 TALIA_DEBUG: Firestore callId: \(callId)")
-    NSLog("🚨 TALIA_DEBUG: Call type: \(callType)")
+    NSLog("🚨 TALIA_DEBUG: Call type from payload: '\(callType)'")
+    NSLog("🚨 TALIA_DEBUG: isVideo calculated as: \(isVideo)")
+    NSLog("🚨 TALIA_DEBUG: Raw payload callType value: \(payloadDict["callType"] ?? "NIL")")
 
     // ✅ PROTECCIÓN: Verificar si ya existe una llamada con este callId
     for (existingUUID, existingCallId) in self.callUUIDToFirestoreID {

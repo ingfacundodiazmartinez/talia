@@ -46,6 +46,7 @@ class CallController {
   RtcEngine? _agoraEngine;
   bool _isMuted = false;
   bool _isCameraOff = false;
+  bool _isSpeakerOn = false;
   bool _isJoined = false;
   int? _localUid;
   final Set<int> _remoteUids = {};
@@ -136,6 +137,7 @@ class CallController {
   bool get isInitialized => _isInitialized;
   bool get isMuted => _isMuted;
   bool get isCameraOff => _isCameraOff;
+  bool get isSpeakerOn => _isSpeakerOn;
   bool get isJoined => _isJoined;
   bool get isDisposed => _disposed;
   int? get localUid => _localUid;
@@ -775,6 +777,29 @@ class CallController {
         tag: 'CallController',
       );
       onError?.call('Error alternando micrófono: $e');
+      return false;
+    }
+  }
+
+  /// Alternar altavoz (speakerphone)
+  Future<bool> toggleSpeaker() async {
+    if (_disposed || _agoraEngine == null) return false;
+
+    try {
+      _isSpeakerOn = !_isSpeakerOn;
+      await _agoraEngine!.setEnableSpeakerphone(_isSpeakerOn);
+      onStateChanged?.call();
+      ReleaseLogger.log(
+        '🔊 [CallController] Altavoz ${_isSpeakerOn ? 'activado' : 'desactivado'}',
+        tag: 'CallController',
+      );
+      return true;
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [CallController] Error alternando altavoz: $e',
+        tag: 'CallController',
+      );
+      onError?.call('Error alternando altavoz: $e');
       return false;
     }
   }

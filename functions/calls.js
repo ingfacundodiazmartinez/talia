@@ -85,6 +85,8 @@ exports.createCall = onCall(
       }
 
       console.log(`📞 [createCall] Creando llamada ${callType} con ${participantIds.length} participantes`);
+      console.log(`📞 [createCall] ParticipantIds: ${JSON.stringify(participantIds)}`);
+      console.log(`📞 [createCall] CallerId: ${callerId}`);
 
       // ✅ Verificar que todos los participantes existen
       const userPromises = participantIds.map(id =>
@@ -105,32 +107,40 @@ exports.createCall = onCall(
       console.log('🎫 [createCall] Generando token de Agora...');
       const agoraToken = await generateAgoraToken(channelName, 0); // 0 = auto-assign UID
 
-      // ✅ Preparar estructura de participantes
-      const participants = {};
+      // ✅ Preparar estructura de participantes (MODELO HÍBRIDO CORRECTO)
+      const participants = participantIds; // Array con IDs
+      const participantDetails = {}; // Object con detalles
+
+      console.log(`📞 [createCall] PREPARANDO PARTICIPANTES para callType: ${callType}`);
       for (const participantId of participantIds) {
         if (participantId === callerId) {
           // Creator empieza como 'joined'
-          participants[participantId] = {
+          participantDetails[participantId] = {
             status: 'joined',
             joinedAt: admin.firestore.FieldValue.serverTimestamp()
           };
+          console.log(`📞 [createCall] ✅ CALLER ${participantId} -> status: joined`);
         } else {
           // Otros empiezan como 'waiting'
-          participants[participantId] = {
+          participantDetails[participantId] = {
             status: 'waiting',
             waitingAt: admin.firestore.FieldValue.serverTimestamp()
           };
+          console.log(`📞 [createCall] ⏳ RECEIVER ${participantId} -> status: waiting`);
         }
       }
+      console.log(`📞 [createCall] PARTICIPANTES FINALES: ${JSON.stringify(participants)}`);
+      console.log(`📞 [createCall] TOTAL PARTICIPANTES: ${participants.length}`);
 
-      // ✅ Crear documento de llamada
+      // ✅ Crear documento de llamada con modelo híbrido
       const callData = {
         type: callType,
         channelName: channelName,
         token: agoraToken.token,
         createdBy: callerId,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        participants: participants,
+        participants: participants,  // ✅ NUEVO: Array para consultas eficientes (Firestore index)
+        participantDetails: participantDetails,  // ✅ RENOMBRADO: Mapa para estados individuales
         // endedAt se agrega cuando la llamada termina
       };
 
@@ -214,8 +224,10 @@ exports.addParticipants = onCall(
       const callData = callDoc.data();
 
       // ✅ Verificar que el requester está en la llamada
-      if (!callData.participants[requesterId] ||
-          !['joined', 'waiting'].includes(callData.participants[requesterId].status)) {
+      // ✅ FIX MODELO HÍBRIDO: Usar participantDetails para acceso a estados individuales
+      const participantDetails = callData.participantDetails || {};
+      if (!participantDetails[requesterId] ||
+          !['joined', 'waiting'].includes(participantDetails[requesterId].status)) {
         throw new HttpsError('permission-denied', 'No tienes permisos para agregar participantes');
       }
 
@@ -225,7 +237,7 @@ exports.addParticipants = onCall(
       }
 
       // ✅ Verificar límite máximo de participantes ACTIVOS
-      const activeParticipants = Object.entries(callData.participants).filter(([id, participant]) => {
+      const activeParticipants = Object.entries(participantDetails).filter(([id, participant]) => {
         const status = participant.status;
         return status === 'joined' || status === 'waiting';
       });
@@ -233,7 +245,7 @@ exports.addParticipants = onCall(
 
       // Contar solo los nuevos participantes que realmente son nuevos (no re-invitaciones)
       const actualNewCount = newParticipantIds.filter(id => {
-        const existing = callData.participants[id];
+        const existing = participantDetails[id];
         return !existing || (existing.status !== 'joined' && existing.status !== 'waiting');
       }).length;
 
@@ -251,7 +263,7 @@ exports.addParticipants = onCall(
         }
 
         // Verificar que no está ya en la llamada ACTIVA
-        const existingParticipant = callData.participants[participantId];
+        const existingParticipant = participantDetails[participantId];
         if (existingParticipant) {
           const status = existingParticipant.status;
           // Solo rechazar si el participante está activo (joined o waiting)
@@ -263,13 +275,25 @@ exports.addParticipants = onCall(
         }
       }
 
-      // ✅ Agregar nuevos participantes como 'waiting'
+      // ✅ Agregar nuevos participantes como 'waiting' - mantener modelo híbrido
       const updates = {};
+
+      // Actualizar participantDetails (mapa de estados)
       for (const participantId of newParticipantIds) {
-        updates[`participants.${participantId}`] = {
+        updates[`participantDetails.${participantId}`] = {
           status: 'waiting',
           waitingAt: admin.firestore.FieldValue.serverTimestamp()
         };
+      }
+
+      // ✅ Actualizar participants (array) agregando nuevos IDs
+      const currentParticipantIds = callData.participants || [];
+      console.log(`🔍 [addParticipants] callData.participants:`, typeof callData.participants, callData.participants);
+      console.log(`🔍 [addParticipants] currentParticipantIds:`, typeof currentParticipantIds, Array.isArray(currentParticipantIds), currentParticipantIds);
+
+      const uniqueNewIds = newParticipantIds.filter(id => !currentParticipantIds.includes(id));
+      if (uniqueNewIds.length > 0) {
+        updates.participants = admin.firestore.FieldValue.arrayUnion(...uniqueNewIds);
       }
 
       console.log('📝 [addParticipants] Actualizando documento de llamada...');
@@ -326,9 +350,15 @@ exports.updateCallStatus = onDocumentUpdated(
         return null;
       }
 
-      // ✅ Analizar estados de participantes
-      const participants = afterData.participants || {};
-      const participantStates = Object.values(participants).map(p => p.status);
+      // ✅ Analizar estados de participantes - FIX MODELO HÍBRIDO
+      const participantDetails = afterData.participantDetails || {};
+      const participantStates = Object.values(participantDetails).map(p => p.status);
+
+      // ✅ LOGGING DETALLADO PARA DEBUG
+      console.log(`🔍 [updateCallStatus] Call ${callId} - type: ${afterData.type}`);
+      console.log(`🔍 [updateCallStatus] Participants raw: ${JSON.stringify(participantDetails)}`);
+      console.log(`🔍 [updateCallStatus] Participant keys: ${Object.keys(participantDetails)}`);
+      console.log(`🔍 [updateCallStatus] Participant states: ${participantStates}`);
 
       const waitingCount = participantStates.filter(s => s === 'waiting').length;
       const joinedCount = participantStates.filter(s => s === 'joined').length;

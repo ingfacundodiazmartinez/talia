@@ -720,7 +720,14 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
 
                 if (_currentUserRole != null && _currentUserRole != newRole) {
                   ReleaseLogger.log(
-                    '🔄 Role cambió de $_currentUserRole a $newRole - Reconstruyendo navegación',
+                    '🔄 Role cambió de $_currentUserRole a $newRole - Verificando si necesita navegación',
+                  );
+
+                  // ✅ FIX ESCENARIO CALLKIT: Prevenir navegaciones destructivas innecesarias
+                  // Verificar si hay listeners de llamadas activos antes de navegar
+                  final hasActiveListeners = CallsOrchestrator().areGlobalListenersInitialized;
+                  ReleaseLogger.log(
+                    '🔍 [RoleListener] Listeners activos: $hasActiveListeners',
                   );
 
                   // Actualizar role primero
@@ -731,17 +738,20 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
                   // PROBLEMA ANTERIOR: disableNetwork() y enableNetwork() cancelaban TODOS los
                   // StreamBuilders activos, causando spinner infinito después de videollamadas.
                   //
-                  // SOLUCIÓN: Usar delay simple para permitir refresh natural de datos
+                  // NUEVA ESTRATEGIA: Si hay listeners activos, usar delay más largo para evitar
+                  // interrumpir inicializaciones de CallListenerService en curso
+                  //
+                  final delayMs = hasActiveListeners ? 1000 : 300;
                   ReleaseLogger.log(
-                    '🔄Esperando refresh de datos de Firestore...',
+                    '🔄 Esperando ${delayMs}ms para refresh de datos de Firestore (listeners activos: $hasActiveListeners)',
                   );
 
-                  // Navegar después de un breve delay para refresh natural
-                  Future.delayed(Duration(milliseconds: 300), () {
+                  // Navegar después de un delay apropiado
+                  Future.delayed(Duration(milliseconds: delayMs), () {
                     final navigator = _navigatorKey.currentState;
                     if (navigator != null && navigator.mounted) {
                       ReleaseLogger.log(
-                        '✅Navegando a AuthWrapper con nuevo rol: $newRole',
+                        '✅ Navegando a AuthWrapper con nuevo rol: $newRole (post-delay)',
                       );
                       navigator.pushAndRemoveUntil(
                         MaterialPageRoute(builder: (_) => const AuthWrapper()),

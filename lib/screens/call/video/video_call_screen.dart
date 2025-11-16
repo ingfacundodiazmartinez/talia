@@ -5,14 +5,15 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../../../controllers/call_controller.dart';
 import '../../../utils/release_logger.dart';
 import '../../../services/calls/calls_orchestrator.dart';
+import '../../../services/calls/call_stack_navigator.dart';
 import '../../../main.dart' show AuthWrapper;
 
 /// Pantalla de videollamada refactorizada siguiendo CODING_RULES.md
 ///
 /// Responsabilidades:
 /// - SOLO UI y gestión de eventos de usuario
-/// - Delegación total a VideoCallController para toda la lógica
-/// - ZERO Firebase calls (todas están en VideoCallController → VideoCallOrchestrator)
+/// - Delegación total a CallController para toda la lógica
+/// - ZERO Firebase calls (todas están en CallController → CallsOrchestrator)
 /// - Estado UI mínimo, todo coordinado por controller
 class VideoCallScreen extends StatefulWidget {
   final String callId;
@@ -454,12 +455,17 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
           timer.cancel();
 
           if (mounted) {
-            // Terminar llamada local y navegar de vuelta
+            // Terminar llamada local y notificar al stack navigator
             await _controller.endCall();
+
+            // ✅ CALL STACK: Notificar cierre y cerrar pantalla automáticamente
+            CallStackNavigator.onCallScreenClosed(widget.callId);
+
             if (Navigator.canPop(context)) {
               Navigator.pop(context);
             } else {
-              Navigator.pushReplacementNamed(context, '/');
+              // ✅ FIX SPINNER INFINITO: Usar navegación segura en lugar de pushReplacementNamed('/')
+              CallsOrchestrator().navigateBackSafely(context, source: 'video_call_end');
             }
           }
         }
@@ -517,6 +523,9 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
         );
         _attemptCallKitNavigation();
       } else {
+        // ✅ CALL STACK: Notificar cierre al stack navigator
+        CallStackNavigator.onCallScreenClosed(widget.callId);
+
         if (canPop) {
           ReleaseLogger.log(
             '📱 [VideoCallScreen] NAVEGACIÓN NORMAL - Navigator.pop() inmediato',
@@ -525,10 +534,11 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
           Navigator.of(context).pop();
         } else {
           ReleaseLogger.log(
-            '📱 [VideoCallScreen] NAVEGACIÓN NORMAL - pushReplacementNamed inmediato',
+            '📱 [VideoCallScreen] NAVEGACIÓN NORMAL - usando navegación segura',
             tag: 'VideoCallScreen',
           );
-          Navigator.pushReplacementNamed(context, '/');
+          // ✅ FIX SPINNER INFINITO: Usar navegación segura en lugar de pushReplacementNamed('/')
+          CallsOrchestrator().navigateBackSafely(context, source: 'video_call_normal');
         }
       }
 
@@ -556,6 +566,9 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
         '🔍 [VideoCallScreen] Navigation stack analysis: canPop=$canPopSafely',
         tag: 'VideoCallScreen',
       );
+
+      // ✅ CALL STACK: Notificar cierre al stack navigator en todos los casos
+      CallStackNavigator.onCallScreenClosed(widget.callId);
 
       if (canPopSafely) {
         // Stack tiene elementos - usar pop normal
@@ -591,11 +604,12 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   void _recreateAppNavigation() {
     try {
       ReleaseLogger.log(
-        '🔄 [VideoCallScreen] Navegación conservadora de emergencia',
+        '🔄 [VideoCallScreen] Navegación conservadora de emergencia - usando navegación segura',
         tag: 'VideoCallScreen',
       );
 
-      Navigator.of(context).pushReplacementNamed('/');
+      // ✅ FIX SPINNER INFINITO: Usar navegación segura en lugar de pushReplacementNamed('/')
+      CallsOrchestrator().navigateBackSafely(context, source: 'video_call_emergency');
     } catch (e) {
       ReleaseLogger.error(
         '❌ [VideoCallScreen] Error en navegación conservadora: $e',
@@ -1213,7 +1227,8 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                 if (Navigator.canPop(context)) {
                   Navigator.of(context).pop();
                 } else {
-                  Navigator.pushReplacementNamed(context, '/');
+                  // ✅ FIX SPINNER INFINITO: Usar navegación segura en lugar de pushReplacementNamed('/')
+                  CallsOrchestrator().navigateBackSafely(context, source: 'video_call_emergency_button');
                 }
               },
               style: ElevatedButton.styleFrom(
@@ -1702,7 +1717,8 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                           if (Navigator.canPop(context)) {
                             Navigator.pop(context);
                           } else {
-                            Navigator.pushReplacementNamed(context, '/');
+                            // ✅ FIX SPINNER INFINITO: Usar navegación segura en lugar de pushReplacementNamed('/')
+                            CallsOrchestrator().navigateBackSafely(context, source: 'video_call_exit_button');
                           }
                         },
                         child: const Text('Salir'),

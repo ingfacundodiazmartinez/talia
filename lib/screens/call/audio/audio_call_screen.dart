@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../../controllers/audio_call_controller.dart';
+import '../../../controllers/call_controller.dart';
 import '../../../utils/release_logger.dart';
 
 /// Pantalla de llamada de audio
@@ -8,7 +8,7 @@ import '../../../utils/release_logger.dart';
 /// - Mostrar interfaz de llamada de audio
 /// - Manejar controles de audio (mute, speaker)
 /// - Mostrar estado de llamada
-/// - Delegar toda lógica al AudioCallController
+/// - Delegar toda lógica al CallController
 /// - Cumplir con CODING_RULES.md: ZERO Firebase calls
 class AudioCallScreen extends StatefulWidget {
   final String callId;
@@ -35,7 +35,7 @@ class AudioCallScreen extends StatefulWidget {
 }
 
 class _AudioCallScreenState extends State<AudioCallScreen> {
-  late AudioCallController _controller;
+  late CallController _controller;
 
   // UI State (managed by controller)
   bool _isMuted = false;
@@ -49,24 +49,47 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
     super.initState();
 
     // Inicializar controller con todos los parámetros
-    _controller = AudioCallController(
+    _controller = CallController(
       callId: widget.callId,
+      isVideo: false, // ✅ Audio call
       channelName: widget.channelName,
       token: widget.token,
       uid: widget.uid,
       isCaller: widget.isCaller,
       remoteName: widget.remoteName,
-      receiverId: widget.receiverId,
+      receiverId: widget.receiverId ?? '',
     );
 
     // Configurar callbacks para actualizar UI
     _controller.onStateChanged = _handleStateChanged;
     _controller.onError = _handleError;
-    _controller.onCallEnded = _handleCallEnded;
+    // ✅ onCallEnded removido - ahora lo maneja CallsOrchestrator globalmente
 
     // Inicializar llamada a través del controller
-    _controller.initializeCall().catchError((error) {
-      ReleaseLogger.error('Error en initializeCall: $error', tag: 'AudioCallScreen');
+    _controller.initialize().then((initSuccess) async {
+      if (initSuccess && widget.channelName != null && widget.token != null && widget.uid != null) {
+        // Unirse al canal de Agora después de inicializar
+        final joinSuccess = await _controller.joinExistingCall(
+          channelName: widget.channelName!,
+          token: widget.token!,
+          uid: widget.uid!,
+          isVideo: false, // Audio call
+        );
+
+        if (!joinSuccess) {
+          ReleaseLogger.error('Error en joinExistingCall', tag: 'AudioCallScreen');
+          if (mounted) {
+            Navigator.of(context).pop();
+          }
+        }
+      } else if (!initSuccess) {
+        ReleaseLogger.error('Error en initialize', tag: 'AudioCallScreen');
+        if (mounted) {
+          Navigator.of(context).pop();
+        }
+      }
+    }).catchError((error) {
+      ReleaseLogger.error('Error en initialize: $error', tag: 'AudioCallScreen');
       if (mounted) {
         Navigator.of(context).pop();
       }
@@ -80,14 +103,29 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
   }
 
   /// Manejar cambios de estado del controller
-  void _handleStateChanged(Map<String, dynamic> state) {
+  void _handleStateChanged() {
     if (mounted) {
       setState(() {
-        _isMuted = state['isMuted'] ?? false;
-        _remoteUid = state['remoteUid'];
-        _isConnecting = state['isConnecting'] ?? true;
-        _isEnding = state['isEnding'] ?? false;
-        _isSpeakerOn = state['isSpeakerOn'] ?? false;
+        _isMuted = _controller.isMuted;
+        _remoteUid = _controller.remoteUids.isNotEmpty ? _controller.remoteUids.first : null;
+        _isSpeakerOn = _controller.isSpeakerOn;
+        _isEnding = _controller.isDisposed;
+
+        // Lógica mejorada para _isConnecting
+        if (_controller.isDisposed) {
+          _isConnecting = false; // Call ended
+        } else if (!_controller.isJoined) {
+          _isConnecting = true;  // Still connecting to channel
+        } else {
+          // Local user joined channel
+          if (widget.isCaller) {
+            // For caller: consider connected once joined to channel (waiting for receiver)
+            _isConnecting = false;
+          } else {
+            // For receiver: consider connected once joined to channel
+            _isConnecting = false;
+          }
+        }
       });
     }
   }
@@ -104,12 +142,7 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
     }
   }
 
-  /// Manejar finalización de llamada
-  void _handleCallEnded() {
-    if (mounted) {
-      Navigator.of(context).pop();
-    }
-  }
+  // ✅ _handleCallEnded REMOVIDO - ahora CallsOrchestrator maneja terminación globalmente
 
   /// Alternar mute del micrófono
   void _toggleMute() {
@@ -122,8 +155,11 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
   }
 
   /// Finalizar llamada
+  /// ✅ Igual que en video_call_screen.dart: llama controller.endCall() y deja que CallsOrchestrator maneje la navegación
   void _endCall() {
+    ReleaseLogger.log('📞 [AudioCallScreen] Usuario finalizó llamada - llamando controller.endCall()', tag: 'AudioCallScreen');
     _controller.endCall();
+    // ✅ NO navegar aquí - el callStateStream detectará el cambio y CallsOrchestrator navegará globalmente
   }
 
   @override
@@ -201,8 +237,13 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
       return 'Finalizando llamada...';
     } else if (_isConnecting) {
       return widget.isCaller ? 'Llamando...' : 'Conectando...';
-    } else if (_remoteUid != null) {
-      return 'En llamada';
+    } else if (_controller.isJoined) {
+      // Local user is connected to channel
+      if (_remoteUid != null) {
+        return 'En llamada'; // Both users connected
+      } else {
+        return widget.isCaller ? 'Esperando respuesta...' : 'Conectado';
+      }
     } else {
       return 'Conectando...';
     }
@@ -226,24 +267,47 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
           ),
         ],
       );
-    } else if (_remoteUid != null) {
-      return Column(
-        children: [
-          Icon(
-            Icons.call,
-            size: 48,
-            color: Colors.green,
-          ),
-          SizedBox(height: 16),
-          Text(
-            'Llamada activa',
-            style: TextStyle(
-              fontSize: 16,
+    } else if (_controller.isJoined) {
+      // Local user is connected to channel
+      if (_remoteUid != null) {
+        // Both users in call
+        return Column(
+          children: [
+            Icon(
+              Icons.call,
+              size: 48,
               color: Colors.green,
             ),
-          ),
-        ],
-      );
+            SizedBox(height: 16),
+            Text(
+              'Llamada activa',
+              style: TextStyle(
+                fontSize: 16,
+                color: Colors.green,
+              ),
+            ),
+          ],
+        );
+      } else {
+        // Only local user connected, waiting for remote
+        return Column(
+          children: [
+            Icon(
+              Icons.phone_in_talk,
+              size: 48,
+              color: Colors.orange,
+            ),
+            SizedBox(height: 16),
+            Text(
+              widget.isCaller ? 'Esperando respuesta...' : 'Conectado',
+              style: TextStyle(
+                fontSize: 16,
+                color: Colors.orange,
+              ),
+            ),
+          ],
+        );
+      }
     } else {
       return Column(
         children: [

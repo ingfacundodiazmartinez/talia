@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../widgets/profile_photo_viewer.dart';
 import '../../../controllers/group_chat_app_bar_controller.dart';
-import '../../call/video/video_call_screen.dart';
 
 /// AppBar personalizado para pantallas de chat grupal
 class GroupChatAppBar extends StatefulWidget implements PreferredSizeWidget {
@@ -48,13 +47,9 @@ class _GroupChatAppBarState extends State<GroupChatAppBar> {
       }
     };
 
+    // El CallsOrchestrator maneja la navegación automáticamente
     _controller.onNavigateToCall = () {
-      if (mounted) {
-        final callData = _controller.getCallData();
-        if (callData != null) {
-          _navigateToCall(callData);
-        }
-      }
+      // No es necesario navegar manualmente, CallsOrchestrator lo hace
     };
   }
 
@@ -166,23 +161,7 @@ class _GroupChatAppBarState extends State<GroupChatAppBar> {
     _controller.startGroupAudioCall();
   }
 
-  void _navigateToCall(Map<String, dynamic> callData) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => VideoCallScreen(
-          callId: callData['callId'],
-          channelName: callData['channelName'],
-          token: callData['token'],
-          uid: callData['uid'],
-          isCaller: callData['isCaller'],
-          remoteName: callData['remoteName'],
-          receiverId: callData['receiverId'],
-          isVideo: callData['isVideo'],
-        ),
-      ),
-    );
-  }
+  // Método eliminado: CallsOrchestrator maneja navegación automáticamente
 
   // ==================== SNACKBARS ====================
 

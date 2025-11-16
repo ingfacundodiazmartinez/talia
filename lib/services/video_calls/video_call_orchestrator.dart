@@ -299,6 +299,7 @@ class VideoCallOrchestrator {
         channelId: channelName,
         token: token,
         uid: uid,
+        isVideo: isVideo, // ✅ Configurar según tipo de llamada
       );
 
       if (!joined) {
@@ -545,6 +546,7 @@ class VideoCallOrchestrator {
         channelId: channelName,
         token: token,
         uid: uid,
+        isVideo: isVideo, // ✅ Configurar según tipo de llamada
       );
 
       if (!joined) {
@@ -558,10 +560,11 @@ class VideoCallOrchestrator {
       // Configurar timeout de conexión
       _setupConnectionTimeout();
 
-      // ✅ CRÍTICO: Iniciar monitoreo de estado de llamada
-      // Sin esto, la UI no detecta cuando el otro usuario termina la llamada
+      // ✅ DESHABILITADO: Monitoreo legacy de estado de llamada
+      // PROBLEMA: Legacy CallStateService monitoreaba video_calls pero las nuevas están en calls
+      // SOLUCIÓN: Nuevo CallsOrchestrator maneja todo el monitoreo
       _currentCallId = callId;
-      _callStateService.startMonitoringCall(callId);
+      // _callStateService.startMonitoringCall(callId); // ❌ DESHABILITADO
 
       ReleaseLogger.log(
         '🔧 [Orchestrator] Iniciando monitoreo de estado para callId: $callId',

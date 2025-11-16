@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 /// Estados posibles de una llamada desde la perspectiva del usuario actual
 enum CallState {
+  connecting,
   incomingVideo,
   incomingAudio,
   activeVideo,
@@ -55,8 +56,11 @@ class Call {
 
   /// Crear desde documento Firestore
   /// ✅ FIXED: Maneja tanto Timestamp como String de Firestore
+  /// ✅ UPDATED: Usa participantDetails (mapa) en lugar de participants (array)
   factory Call.fromFirestore(String id, Map<String, dynamic> data) {
-    final participantsData = data['participants'] as Map<String, dynamic>? ?? {};
+    // ✅ FIX ÍNDICE FIRESTORE: Usar participantDetails para estados individuales
+    // participants ahora es un array para consultas, participantDetails contiene los estados
+    final participantsData = data['participantDetails'] as Map<String, dynamic>;
     final participants = <String, CallParticipant>{};
 
     for (final entry in participantsData.entries) {
@@ -76,6 +80,7 @@ class Call {
   }
 
   /// Convertir a mapa para Firestore
+  /// ✅ UPDATED: Usa modelo híbrido (array + mapa) para resolver índice Firestore
   Map<String, dynamic> toFirestore() {
     final participantsMap = <String, dynamic>{};
     for (final entry in participants.entries) {
@@ -88,7 +93,8 @@ class Call {
       'token': token,
       'createdBy': createdBy,
       'createdAt': createdAt.toIso8601String(),
-      'participants': participantsMap,
+      'participants': participants.keys.toList(), // ✅ Array para consultas eficientes
+      'participantDetails': participantsMap,       // ✅ Mapa para estados individuales
       'endedAt': endedAt?.toIso8601String(),
     };
   }

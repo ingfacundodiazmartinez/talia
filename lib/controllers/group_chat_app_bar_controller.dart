@@ -1,8 +1,7 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
-import 'package:cloud_functions/cloud_functions.dart';
-import '../services/video_calls/video_call_orchestrator.dart';
+import '../services/calls/calls_orchestrator.dart';
 import '../utils/release_logger.dart';
 
 /// Controller para manejar la lógica del AppBar de chat grupal
@@ -10,17 +9,15 @@ import '../utils/release_logger.dart';
 /// Responsabilidades:
 /// - Gestión de datos del grupo en tiempo real
 /// - Iniciar videollamadas y llamadas grupales
-/// - Generar tokens de Agora para llamadas
-/// - Coordinar con VideoCallOrchestrator
+/// - Coordinar con CallsOrchestrator (nuevo sistema)
 /// - Manejo de estados de error y loading
 class GroupChatAppBarController {
   final String groupId;
 
   // Servicios privados
-  final VideoCallOrchestrator _videoCallService;
+  final CallsOrchestrator _callsOrchestrator;
   final FirebaseFirestore _firestore;
   final firebase_auth.FirebaseAuth _auth;
-  final FirebaseFunctions _functions;
 
   // Estado del controller
   Map<String, dynamic>? _groupData;
@@ -41,14 +38,12 @@ class GroupChatAppBarController {
   // Constructor
   GroupChatAppBarController({
     required this.groupId,
-    VideoCallOrchestrator? videoCallService,
+    CallsOrchestrator? callsOrchestrator,
     FirebaseFirestore? firestore,
     firebase_auth.FirebaseAuth? auth,
-    FirebaseFunctions? functions,
-  }) : _videoCallService = videoCallService ?? VideoCallOrchestrator(),
+  }) : _callsOrchestrator = callsOrchestrator ?? CallsOrchestrator(),
        _firestore = firestore ?? FirebaseFirestore.instance,
-       _auth = auth ?? firebase_auth.FirebaseAuth.instance,
-       _functions = functions ?? FirebaseFunctions.instance;
+       _auth = auth ?? firebase_auth.FirebaseAuth.instance;
 
   // Getters para el estado
   Map<String, dynamic>? get groupData => _groupData;
@@ -160,55 +155,22 @@ class GroupChatAppBarController {
         }
       }
 
-      // Crear llamada grupal
+      // Crear llamada grupal usando nuevo CallsOrchestrator
       ReleaseLogger.log('Iniciando ${isVideo ? "videollamada" : "llamada"} grupal', tag: 'GroupChatAppBar');
 
-      final result = isVideo
-          ? await _videoCallService.startGroupCall(
-              groupId: groupId,
-              groupName: groupData['name'] ?? 'Grupo',
-              memberIds: participantIds,
-            )
-          : await _videoCallService.startGroupAudioCall(
-              groupId: groupId,
-              groupName: groupData['name'] ?? 'Grupo',
-              memberIds: participantIds,
-            );
+      final result = await _callsOrchestrator.createCall(
+        participantIds: participantIds,
+        type: isVideo ? 'video' : 'audio',
+      );
 
       // Check if call was successful
       if (result['success'] != true) {
         throw result['error'] ?? 'Error al iniciar llamada grupal';
       }
 
-      final channelName = result['channelName'] ?? 'group_${groupId}_${DateTime.now().millisecondsSinceEpoch}';
-
-      // Obtener token de Agora
-      ReleaseLogger.log('Generando token de Agora para llamada grupal', tag: 'GroupChatAppBar');
-
-      final callable = _functions.httpsCallable('generateAgoraToken');
-      final tokenResult = await callable.call({
-        'channelName': channelName,
-        'uid': 0, // 0 = Agora asigna automáticamente
-      });
-
-      final token = tokenResult.data['token'] as String;
-      final uid = tokenResult.data['uid'] as int;
-
-      ReleaseLogger.log('Token de Agora generado exitosamente', tag: 'GroupChatAppBar');
-
-      // Notificar que debe navegar con los datos de la llamada
-      _callData = {
-        'callId': channelName,
-        'channelName': channelName,
-        'token': token,
-        'uid': uid,
-        'isCaller': true,
-        'remoteName': groupData['name'] ?? 'Grupo',
-        'receiverId': groupId,
-        'isVideo': isVideo,
-      };
-
-      onNavigateToCall?.call();
+      // ✅ CallsOrchestrator maneja la navegación automáticamente
+      // No necesitamos generar tokens manualmente ni navegar
+      ReleaseLogger.log('Llamada grupal creada exitosamente', tag: 'GroupChatAppBar');
       onSuccess?.call('${isVideo ? "Videollamada" : "Llamada"} grupal iniciada');
 
     } catch (e) {
@@ -219,15 +181,7 @@ class GroupChatAppBarController {
     }
   }
 
-  // Datos de llamada para navegación
-  Map<String, dynamic>? _callData;
-
-  /// Obtener datos de llamada para navegación
-  Map<String, dynamic>? getCallData() {
-    final data = _callData;
-    _callData = null; // Limpiar después de obtener
-    return data;
-  }
+  // ✅ LEGACY CODE REMOVED: CallsOrchestrator maneja navegación automáticamente
 
   /// Verificar si se puede iniciar llamadas (más de 1 miembro)
   bool canStartCall() {

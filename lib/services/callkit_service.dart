@@ -1,16 +1,12 @@
 import 'dart:async';
-import 'dart:io' show Platform;
-import 'package:flutter/services.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:uuid/uuid.dart';
 import '../utils/release_logger.dart';
-import 'video_calls/services/call_state_service.dart';
 
-// Method channel para comunicación con AppDelegate nativo (iOS)
-const MethodChannel _nativeCallKitChannel = MethodChannel('com.talia.chat/callkit');
+// Method channel para comunicación con AppDelegate nativo (iOS) - removido por no uso
 
-/// Servicio para manejar llamadas entrantes con CallKit (iOS) y Full-Screen Intent (Android)
+/// Servicio para manejar llamadas entrantes con CallKit (iOS) y ConnectionService (Android)
 /// Muestra llamadas en pantalla completa incluso con la app cerrada
 class CallKitService {
   // Singleton pattern
@@ -29,12 +25,12 @@ class CallKitService {
   bool get isInitialized => _isInitialized;
 
   /// Inicializar el servicio de CallKit
-  void initialize({
+  Future<void> initialize({
     Function(Map<String, dynamic>)? onCallAccepted,
     Function(String)? onCallDeclined,
     Function(String)? onCallEnded,
     Function(String)? onCallKitShown,
-  }) {
+  }) async {
     // 🔒 Prevenir re-inicialización innecesaria
     if (_isInitialized) {
       ReleaseLogger.log('📞 CallKit Service ya estaba inicializado', tag: 'CallKitService');
@@ -57,6 +53,7 @@ class CallKitService {
     _isInitialized = true;
     ReleaseLogger.log('✅ CallKit Service inicializado exitosamente', tag: 'CallKitService');
   }
+
 
   /// Manejar eventos de llamadas
   void _handleCallEvent(CallEvent event) {
@@ -131,73 +128,47 @@ class CallKitService {
     Map<String, dynamic>? extraData,
   }) async {
     try {
-      // SOLUCIÓN AL CRASH: En iOS, usar el CXProvider nativo de AppDelegate
-      // No usar flutter_callkit_incoming porque crea conflictos con CXProvider
-      if (Platform.isIOS) {
-        ReleaseLogger.log('📱 [iOS] Usando implementación nativa de CallKit vía Method Channel', tag: 'CallKitService');
-
-        try {
-          // Llamar al AppDelegate nativo para mostrar CallKit UI
-          await _nativeCallKitChannel.invokeMethod('showIncomingCall', {
-            'callId': callId,
-            'callerId': callerId,
-            'callerName': callerName,
-            'callerPhotoURL': callerPhotoUrl ?? '',
-            'callType': callType,
-            'isEmergency': isEmergency,
-            'channelName': extraData?['channelName'] ?? callId,
-          });
-          ReleaseLogger.log('✅ [iOS] CallKit UI mostrado desde AppDelegate nativo', tag: 'CallKitService');
-        } catch (e) {
-          ReleaseLogger.error('❌ [iOS] Error llamando a método nativo showIncomingCall: $e', tag: 'CallKitService');
-          // Si falla, intentar con VoIP push como fallback
-          ReleaseLogger.log('⚠️ [iOS] Esperando VoIP push notification para mostrar llamada', tag: 'CallKitService');
-        }
-        return;
-      }
-
-      // ANDROID: Continuar con flutter_callkit_incoming
-      ReleaseLogger.log('📱 [Android] Usando flutter_callkit_incoming para mostrar llamada', tag: 'CallKitService');
-
-      // Verificar llamadas activas primero
-      List<dynamic> activeCalls = [];
-      try {
-        activeCalls = await FlutterCallkitIncoming.activeCalls();
-        ReleaseLogger.log('📱 Llamadas activas antes de mostrar nueva: ${activeCalls.length}', tag: 'CallKitService');
-      } catch (e) {
-        ReleaseLogger.log('⚠️ Error obteniendo llamadas activas: $e', tag: 'CallKitService');
-        // Asumir que no hay llamadas activas si falla
-      }
-
-      // Solo finalizar si hay llamadas activas
-      if (activeCalls.isNotEmpty) {
-        try {
-          ReleaseLogger.log('🧹 Finalizando ${activeCalls.length} llamada(s) anterior(es)...', tag: 'CallKitService');
-          await FlutterCallkitIncoming.endAllCalls();
-          // Pequeño delay para que el sistema procese el cierre
-          await Future.delayed(const Duration(milliseconds: 500));
-          ReleaseLogger.log('✅ Llamadas anteriores finalizadas', tag: 'CallKitService');
-        } catch (e) {
-          ReleaseLogger.log('⚠️ Error finalizando llamadas anteriores: $e', tag: 'CallKitService');
-          // Continuar de todas formas
-        }
-      }
-
-      ReleaseLogger.log('📞 Preparando para mostrar llamada en Android...', tag: 'CallKitService');
+      ReleaseLogger.log('📞 [CallKeep] Mostrando llamada entrante: $callId', tag: 'CallKitService');
+      ReleaseLogger.log('🔍 [CallKeep Debug] callType: "$callType", caller: $callerName', tag: 'CallKitService');
+      ReleaseLogger.log('🖼️ [CallKeep Debug] callerPhotoUrl: ${callerPhotoUrl ?? "Sin foto"}', tag: 'CallKitService');
 
       // Generar UUID único si no se proporciona
       final uuid = callId.isNotEmpty ? callId : const Uuid().v4();
-      ReleaseLogger.log('🔑 UUID de llamada: $uuid', tag: 'CallKitService');
+
+      // Determinar si es llamada grupal por el tipo de datos extra
+      final isGroupCall = extraData?['isGroupCall'] == true ||
+                         extraData?['groupName'] != null ||
+                         callType.contains('group');
+
+      // Para llamadas individuales: usar foto del caller
+      // Para llamadas grupales: usar ícono de la app
+      String? avatarUrl;
+      if (isGroupCall) {
+        // Llamada grupal - usar ícono de app (null para que use el default)
+        avatarUrl = null;
+        ReleaseLogger.log('👥 [CallKeep] Llamada grupal detectada - usando ícono de app', tag: 'CallKitService');
+      } else {
+        // Llamada individual - usar foto del caller
+        avatarUrl = callerPhotoUrl;
+        ReleaseLogger.log('👤 [CallKeep] Llamada individual - usando foto del caller: ${avatarUrl ?? "Sin foto"}', tag: 'CallKitService');
+      }
+
+      // ✅ FIX APLICADO: Bug de textAccept resuelto en versión local
+      final isAudioCall = (callType == 'audio');
+      String displayName = callerName;
+
+      // 🔍 DEBUG: Logging para depurar el problema
+      ReleaseLogger.log('🔍 [CallKit DEBUG] callType="$callType", isAudioCall=$isAudioCall', tag: 'CallKitService');
 
       final params = CallKitParams(
         id: uuid,
-        nameCaller: callerName,
+        nameCaller: displayName,
         appName: 'Talia',
-        avatar: callerPhotoUrl,
+        avatar: avatarUrl, // Foto del caller o null para grupales
         handle: callerId,
-        type: callType == 'audio' ? 1 : 0, // 0 = video, 1 = audio
-        duration: 60000, // 60 segundos timeout
-        textAccept: 'Aceptar',
+        type: isAudioCall ? 1 : 0, // 1 = audio, 0 = video
+        duration: 60000,
+        textAccept: isAudioCall ? 'Audio' : 'Video',
         textDecline: 'Rechazar',
         missedCallNotification: const NotificationParams(
           showNotification: true,
@@ -206,26 +177,18 @@ class CallKitService {
           callbackText: 'Devolver llamada',
         ),
         extra: <String, dynamic>{
-          ...?extraData,
           'callType': callType,
           'callerId': callerId,
           'callerName': callerName,
-          'isEmergency': isEmergency,
-        },
-        headers: <String, dynamic>{
-          'apiKey': 'talia_call_key',
-          'platform': 'flutter',
+          'isGroupCall': isGroupCall,
         },
         android: AndroidParams(
           isCustomNotification: true,
           isShowLogo: true,
-          ringtonePath: 'default',  // Usar tono predeterminado del sistema
+          ringtonePath: 'default',
           backgroundColor: '#9D7FE8',
-          backgroundUrl: '',
           actionColor: '#9D7FE8',
           incomingCallNotificationChannelName: 'Llamadas entrantes',
-          missedCallNotificationChannelName: 'Llamadas perdidas',
-          isShowCallID: false,  // Evitar conflictos de UI
         ),
         ios: IOSParams(
           iconName: 'AppIcon',
@@ -241,19 +204,25 @@ class CallKitService {
           supportsHolding: false,
           supportsGrouping: false,
           supportsUngrouping: false,
-          ringtonePath: '',  // Dejar vacío para evitar banner de audio UNKNOWN_DURATION
+          ringtonePath: '',
         ),
       );
 
-      ReleaseLogger.log('🚀 Llamando a FlutterCallkitIncoming.showCallkitIncoming()...', tag: 'CallKitService');
+      ReleaseLogger.log('🚀 [CallKit] Mostrando CallKit con: isAudioCall=$isAudioCall, textAccept=${params.textAccept}, displayName=$displayName', tag: 'CallKitService');
       await FlutterCallkitIncoming.showCallkitIncoming(params);
-      ReleaseLogger.log('✅ CallKit mostrado exitosamente: $uuid', tag: 'CallKitService');
+
+      ReleaseLogger.log('✅ [CallKeep] Llamada mostrada exitosamente: $uuid', tag: 'CallKitService');
+
+      // Notificar que CallKit se mostró
+      if (onCallKitShown != null) {
+        onCallKitShown!(uuid);
+      }
+
     } catch (e, stackTrace) {
-      ReleaseLogger.error('❌ Error mostrando CallKit: $e', tag: 'CallKitService');
+      ReleaseLogger.error('❌ Error mostrando CallKeep: $e', tag: 'CallKitService');
       ReleaseLogger.log('📍 Stack trace: $stackTrace', tag: 'CallKitService');
       ReleaseLogger.log('📦 Call data: callId=$callId, callerName=$callerName, callerId=$callerId', tag: 'CallKitService');
       // NO hacer rethrow para evitar crash de la app
-      // En su lugar, loggear el error y continuar
     }
   }
 
@@ -308,6 +277,7 @@ class CallKitService {
   void dispose() {
     ReleaseLogger.log('🗑️ Limpiando recursos CallKit Service...', tag: 'CallKitService');
 
+    // Cancelar subscription de eventos de llamadas
     _callEventSubscription?.cancel();
     _callEventSubscription = null;
 
@@ -337,32 +307,4 @@ class CallKitService {
     }
   }
 
-  /// Iniciar monitoreo de cancelación para una llamada específica
-  void _startCallCancellationMonitoring(String callId) {
-    try {
-      ReleaseLogger.log('🔍 [CallKit] Iniciando monitoreo de cancelación para: $callId', tag: 'CallKitService');
-
-      // Importar CallStateService dinámicamente para evitar dependencia circular
-      final callStateService = _getCallStateService();
-      if (callStateService != null) {
-        callStateService.startMonitoringCall(callId);
-        ReleaseLogger.log('✅ [CallKit] Monitoreo de cancelación iniciado para: $callId', tag: 'CallKitService');
-      } else {
-        ReleaseLogger.log('⚠️ [CallKit] CallStateService no disponible - no se puede monitorear cancelación', tag: 'CallKitService');
-      }
-    } catch (e) {
-      ReleaseLogger.error('❌ [CallKit] Error iniciando monitoreo de cancelación: $e', tag: 'CallKitService');
-    }
-  }
-
-  /// Helper para obtener CallStateService sin dependencia circular
-  dynamic _getCallStateService() {
-    try {
-      // Crear instancia directa de CallStateService (singleton)
-      return CallStateService();
-    } catch (e) {
-      ReleaseLogger.log('⚠️ [CallKit] Error obteniendo CallStateService: $e', tag: 'CallKitService');
-      return null;
-    }
-  }
 }

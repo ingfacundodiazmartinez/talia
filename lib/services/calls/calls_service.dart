@@ -160,13 +160,21 @@ class CallsService {
       final currentUserStatus = call.participants[_currentUserId]?.status;
 
       if (previousCall == null) {
-        // ✅ Nueva call detectada
+        // ✅ RACE CONDITION FIX: Verificar si realmente es nueva o solo cache vacío
         ReleaseLogger.log(
-          '📞 [CallsService] Nueva call detectada: ${call.id} (status: $currentUserStatus)',
+          '📞 [CallsService] Call ${call.id} detectada sin cache previo (status: $currentUserStatus)',
           tag: 'CallsService',
         );
 
-        if (currentUserStatus == 'waiting' && call.endedAt == null) {
+        // Para calls con status 'joined' sin cache previo, probablemente es reinicialización
+        if (currentUserStatus == 'joined' && call.endedAt == null) {
+          ReleaseLogger.log(
+            '🔄 [CallsService] Call ${call.id} ya aceptada - notificando cambio de estado',
+            tag: 'CallsService',
+          );
+          // Notificar como cambio de estado para que orchestrator navegue a CallScreen
+          onCallStatusChanged?.call(call);
+        } else if (currentUserStatus == 'waiting' && call.endedAt == null) {
           // Call entrante activa - mostrar notificación
           _handleIncomingCall(call);
         } else if (currentUserStatus == 'waiting' && call.endedAt != null) {

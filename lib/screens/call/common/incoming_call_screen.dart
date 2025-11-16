@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:vibration/vibration.dart';
 import '../../../services/calls/calls_orchestrator.dart';
+import '../../../services/calls/call_stack_navigator.dart';
 import '../../../controllers/call_controller.dart';
 import '../../../utils/release_logger.dart';
 
@@ -81,6 +82,10 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
       _callStateSubscription = tempController.callStateStream.listen((update) {
         if (update.status == 'ended' && mounted && !_isProcessing) {
           _stopVibration();
+
+          // ✅ CALL STACK: Notificar cierre al stack navigator
+          CallStackNavigator.onCallScreenClosed(widget.callId);
+
           // ✅ Verificar si se puede hacer pop antes de cerrar pantalla
           if (Navigator.of(context).canPop()) {
             Navigator.of(context).pop();
@@ -177,6 +182,9 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
 
       if (!mounted) return;
 
+      // ✅ CALL STACK: Notificar cierre al stack navigator
+      CallStackNavigator.onCallScreenClosed(widget.callId);
+
       // Cerrar pantalla
       if (Navigator.of(context).canPop()) {
         Navigator.of(context).pop();
@@ -186,6 +194,10 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
         '❌ Error rechazando llamada: $e',
         tag: 'IncomingCall',
       );
+
+      // ✅ CALL STACK: Notificar cierre incluso en caso de error
+      CallStackNavigator.onCallScreenClosed(widget.callId);
+
       if (mounted && Navigator.of(context).canPop()) {
         Navigator.of(context).pop();
       }

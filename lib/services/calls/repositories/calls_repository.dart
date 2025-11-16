@@ -92,23 +92,48 @@ class CallsRepository {
     required String participantId,
     required CallParticipant newParticipantData,
   }) async {
-    try {
-      ReleaseLogger.log(
-        '📝 [CallsRepo] Actualizando participante $participantId → ${newParticipantData.status}',
-        tag: 'CallsRepository'
-      );
+    const maxRetries = 3;
+    const baseDelay = Duration(milliseconds: 500);
 
-      await _callsCollection.doc(callId).update({
-        'participants.$participantId': newParticipantData.toMap(),
-      });
+    for (int attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        ReleaseLogger.log(
+          '📝 [CallsRepo] Actualizando participante $participantId → ${newParticipantData.status} (attempt ${attempt + 1}/${maxRetries + 1})',
+          tag: 'CallsRepository'
+        );
 
-      ReleaseLogger.log('✅ [CallsRepo] Estado actualizado exitosamente', tag: 'CallsRepository');
-      return true;
+        // ✅ HYBRID MODEL: Actualizar participantDetails y asegurar que esté en array participants
+        await _callsCollection.doc(callId).update({
+          'participantDetails.$participantId': newParticipantData.toMap(),
+          'participants': FieldValue.arrayUnion([participantId]), // Asegurar que esté en array
+        });
 
-    } catch (e) {
-      ReleaseLogger.error('❌ [CallsRepo] Error actualizando participante: $e', tag: 'CallsRepository');
-      return false;
+        ReleaseLogger.log('✅ [CallsRepo] Estado actualizado exitosamente', tag: 'CallsRepository');
+        return true;
+      } catch (e) {
+        final isLastAttempt = attempt == maxRetries;
+
+        ReleaseLogger.log(
+          '⚠️ [CallsRepo] Error actualizando participante (attempt ${attempt + 1}): $e',
+          tag: 'CallsRepository'
+        );
+
+        if (isLastAttempt) {
+          ReleaseLogger.error('❌ [CallsRepo] Falló después de $maxRetries reintentos: $e', tag: 'CallsRepository');
+          return false;
+        }
+
+        // Exponential backoff: 500ms, 1s, 2s
+        final delay = Duration(milliseconds: baseDelay.inMilliseconds * (1 << attempt));
+        ReleaseLogger.log(
+          '🔄 [CallsRepo] Reintentando en ${delay.inMilliseconds}ms...',
+          tag: 'CallsRepository'
+        );
+        await Future.delayed(delay);
+      }
     }
+
+    return false;
   }
 
   /// Agregar participantes a llamada existente
@@ -121,11 +146,14 @@ class CallsRepository {
     try {
       ReleaseLogger.log('📝 [CallsRepo] Agregando participantes a $callId: $newParticipantIds', tag: 'CallsRepository');
 
-      // Preparar nuevos participants como waiting
+      // Preparar nuevos participantDetails como waiting y agregar al array participants
       final updates = <String, dynamic>{};
       for (final participantId in newParticipantIds) {
-        updates['participants.$participantId'] = CallParticipant.waiting().toMap();
+        updates['participantDetails.$participantId'] = CallParticipant.waiting().toMap();
       }
+
+      // También agregar al array participants para queries eficientes
+      updates['participants'] = FieldValue.arrayUnion(newParticipantIds);
 
       await _callsCollection.doc(callId).update(updates);
 
@@ -169,7 +197,7 @@ class CallsRepository {
     ReleaseLogger.log('👀 [CallsRepo] Iniciando watch para usuario: $currentUserId', tag: 'CallsRepository');
 
     return _callsCollection
-        .where('participants.$currentUserId', isNull: false)
+        .where('participants', arrayContains: currentUserId)
         .snapshots()
         .map((snapshot) {
       final calls = <Call>[];
@@ -297,7 +325,7 @@ class CallsRepository {
 
     try {
       final snapshot = await _callsCollection
-          .where('participants.$currentUserId', isNull: false)
+          .where('participants', arrayContains: currentUserId)
           .where('endedAt', isNull: true)
           .get();
 

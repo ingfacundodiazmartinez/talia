@@ -13,7 +13,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:image/image.dart' as img;
 import 'constants/notification_types.dart';
-import 'services/video_calls/video_call_orchestrator.dart';
 import 'services/calls/calls_orchestrator.dart';
 import 'services/notification_filter.dart';
 import 'services/callkit_service.dart';
@@ -176,13 +175,22 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     }
 
     try {
+      // ✅ DEBUG: Log para verificar el tipo de llamada que llega
+      final messageType = message.data['type'];
+      final isAudioCall = (messageType == 'audio_call' || messageType == 'group_audio_call');
+      final resolvedCallType = isAudioCall ? 'audio' : 'video';
+
+      ReleaseLogger.log('🔍 [CallKit Debug] message.data[\'type\']: "$messageType"', tag: 'NotificationService');
+      ReleaseLogger.log('🔍 [CallKit Debug] isAudioCall: $isAudioCall', tag: 'NotificationService');
+      ReleaseLogger.log('🔍 [CallKit Debug] resolvedCallType: "$resolvedCallType"', tag: 'NotificationService');
+
       final callKit = CallKitService();
       await callKit.showIncomingCall(
         callId: callId,
         callerName: message.data['callerName'] ?? 'Usuario',
         callerId: message.data['callerId'] ?? message.data['senderId'] ?? '',
         callerPhotoUrl: message.data['callerPhotoURL'] ?? message.data['senderPhotoUrl'],
-        callType: (message.data['type'] == 'audio_call' || message.data['type'] == 'group_audio_call') ? 'audio' : 'video',
+        callType: resolvedCallType,
         isEmergency: message.data['isEmergency'] == 'true' || message.data['isEmergency'] == true,
         extraData: message.data,
       );
@@ -313,31 +321,14 @@ class NotificationService {
 
       ReleaseLogger.log('🔧 [NotificationService] Iniciando monitoreo de llamadas entrantes para: ${currentUser.uid}', tag: 'NotificationService');
 
-      // Obtener instancia del VideoCallOrchestrator
-      final videoCallOrchestrator = _getVideoCallOrchestrator();
-      if (videoCallOrchestrator != null) {
-        await videoCallOrchestrator.initialize();
-        videoCallOrchestrator.startMonitoringIncomingCalls();
-        ReleaseLogger.log('✅ [NotificationService] Monitoreo de llamadas entrantes iniciado', tag: 'NotificationService');
-      } else {
-        ReleaseLogger.log('⚠️ [NotificationService] VideoCallOrchestrator no disponible - monitoreo se iniciará más tarde', tag: 'NotificationService');
-      }
+      // ✅ Los listeners globales de llamadas se manejan en main.dart via CallsOrchestrator.initializeGlobalListeners()
+      ReleaseLogger.log('✅ [NotificationService] Listeners globales de llamadas ya iniciados en main.dart', tag: 'NotificationService');
     } catch (e) {
       ReleaseLogger.error('❌ [NotificationService] Error iniciando monitoreo de llamadas: $e', tag: 'NotificationService');
     }
   }
 
-  /// Helper para obtener VideoCallOrchestrator dinámicamente
-  VideoCallOrchestrator? _getVideoCallOrchestrator() {
-    try {
-      // Crear instancia del VideoCallOrchestrator
-      // Este import ya está disponible al principio del archivo
-      return VideoCallOrchestrator();
-    } catch (e) {
-      ReleaseLogger.log('⚠️ [NotificationService] VideoCallOrchestrator no disponible: $e', tag: 'NotificationService');
-      return null;
-    }
-  }
+  // ✅ Helper eliminado: _getCallsOrchestrator() - ya no se usa porque los listeners globales se manejan en main.dart
 
   /// Verificar si hay usuario autenticado e iniciar monitoreo automáticamente
   Future<void> _checkAndStartCallMonitoring() async {
@@ -654,6 +645,16 @@ class NotificationService {
 
         if (isAppInForeground) {
           ReleaseLogger.log('✅ App en foreground - NO mostrar CallKit, delegando al CallListenerService', tag: 'NotificationService');
+
+          // ✅ RECOVERY: Verificar health del CallListenerService antes de delegar
+          try {
+            ReleaseLogger.log('🔍 [NotificationService] Verificando health de CallListenerService antes de delegar...', tag: 'NotificationService');
+            await CallsOrchestrator().attemptListenerRecovery();
+            ReleaseLogger.log('✅ [NotificationService] Health check y recovery completado', tag: 'NotificationService');
+          } catch (e) {
+            ReleaseLogger.error('❌ [NotificationService] Error en health check: $e', tag: 'NotificationService');
+          }
+
           // Cuando la app está en foreground, el CallListenerService debe manejar las llamadas
           // Esto evita conflictos entre CallKit y IncomingCallScreen
           return;

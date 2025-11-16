@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/location_service.dart';
-import '../services/video_calls/video_call_orchestrator.dart';
+import '../services/calls/calls_orchestrator.dart';
 import '../services/callkit_service.dart';
 import '../services/voip_service.dart';
 import '../notification_service.dart';
@@ -25,7 +25,6 @@ class ChildHomeController {
 
   // Servicios
   final LocationService _locationService;
-  final VideoCallOrchestrator _videoCallService;
   final NotificationService _notificationService;
   final UserRoleService _userRoleService;
   final FirebaseFirestore _firestore;
@@ -42,12 +41,10 @@ class ChildHomeController {
     required this.childId,
     required this.context,
     LocationService? locationService,
-    VideoCallOrchestrator? videoCallService,
     NotificationService? notificationService,
     UserRoleService? userRoleService,
     FirebaseFirestore? firestore,
   })  : _locationService = locationService ?? LocationService(),
-        _videoCallService = videoCallService ?? VideoCallOrchestrator(),
         _notificationService = notificationService ?? NotificationService(),
         _userRoleService = userRoleService ?? UserRoleService(),
         _firestore = firestore ?? FirebaseFirestore.instance;
@@ -55,7 +52,7 @@ class ChildHomeController {
   /// Inicializar todos los servicios y listeners
   Future<void> initialize() async {
     await _initializeLocationTracking();
-    _listenForIncomingCalls();
+    // ✅ _listenForIncomingCalls() ELIMINADO - CallsOrchestrator en main.dart maneja esto globalmente
     _listenForChatNotifications();
   }
 
@@ -123,90 +120,8 @@ class ChildHomeController {
     }
   }
 
-  /// Escuchar llamadas entrantes
-  void _listenForIncomingCalls() {
-    ReleaseLogger.log('Escuchando llamadas entrantes para usuario: $childId', tag: 'ChildHomeController');
-
-    _incomingCallsSubscription = _videoCallService
-        .watchIncomingCalls(childId)
-        .listen(
-      (snapshot) {
-        ReleaseLogger.log('Snapshot de llamadas recibido: ${snapshot.docs.length} documentos', tag: 'ChildHomeController');
-        for (var change in snapshot.docChanges) {
-          ReleaseLogger.log('Cambio detectado: ${change.type}', tag: 'ChildHomeController');
-          if (change.type == DocumentChangeType.added) {
-            final callData = change.doc.data() as Map<String, dynamic>;
-            final callId = change.doc.id;
-            final callerName = callData['callerName'] ?? 'Desconocido';
-            final callerId = callData['callerId'];
-            final channelName = callData['channelName'];
-            final callType = callData['callType'] ?? 'video';
-
-            ReleaseLogger.log('Llamada entrante detectada: ID: $callId, De: $callerName ($callerId), Tipo: $callType, Canal: $channelName', tag: 'ChildHomeController');
-
-            // Verificar el estado de la llamada antes de mostrar diálogo
-            // Si ya fue aceptada, no mostrar el diálogo (la navegación a videollamada se maneja por el listener de CallKit)
-            final status = callData['status'] ?? 'ringing';
-            if (status != 'ringing') {
-              ReleaseLogger.log('Llamada ya no está en estado ringing (status: $status) - omitiendo procesamiento', tag: 'ChildHomeController');
-              return;
-            }
-
-            // Configurar listener específico para esta llamada
-            // para detectar si es cancelada por el caller
-            _setupCallCancellationListener(callId);
-
-            // Las llamadas se manejan completamente por CallKit (Android) y VoIP (iOS)
-            // No se necesita mostrar diálogo de Flutter ni obtener datos adicionales del caller
-            ReleaseLogger.log('Llamada entrante detectada - CallKit/VoIP debe manejarla', tag: 'ChildHomeController');
-          } else if (change.type == DocumentChangeType.removed) {
-            // IMPORTANTE: DocumentChangeType.removed NO significa que el documento fue eliminado
-            // Puede significar que ya no coincide con el filtro del query (status != 'ringing')
-            // Por ejemplo, cuando se acepta una llamada, cambia de 'ringing' a 'accepted'
-            // y sale del query que filtra por status='ringing'
-
-            final callId = change.doc.id;
-            ReleaseLogger.log('Llamada $callId removida del query (cambió status o fue eliminada)', tag: 'ChildHomeController');
-
-            // NO cerramos CallKit aquí porque puede ser simplemente un cambio de status
-            // CallKit se cerrará cuando el usuario termine la llamada desde VideoCallScreen
-            ReleaseLogger.log('CallKit permanece abierto - se cerrará desde VideoCallScreen', tag: 'ChildHomeController');
-          } else if (change.type == DocumentChangeType.modified) {
-            // Verificar si la llamada fue cancelada antes de ser aceptada
-            final callData = change.doc.data() as Map<String, dynamic>?;
-            final status = callData?['status'] ?? '';
-            final callId = change.doc.id;
-
-            if (status == 'cancelled') {
-              ReleaseLogger.log('Llamada $callId fue cancelada antes de aceptar - cerrando CallKit', tag: 'ChildHomeController');
-
-              // Solo cerrar CallKit si la llamada fue cancelada (no aceptada)
-              // Usar el method channel nativo en iOS para evitar reinicio de app
-              if (Platform.isIOS) {
-                VoIPService().notifyCallEnded(callId).catchError((error) {
-                  ReleaseLogger.error('Error cerrando VoIP en iOS: $error', tag: 'ChildHomeController');
-                });
-              } else if (Platform.isAndroid) {
-                CallKitService().endCall(callId).catchError((error) {
-                  ReleaseLogger.error('Error cerrando CallKit en Android: $error', tag: 'ChildHomeController');
-                });
-              }
-            } else {
-              ReleaseLogger.log('Llamada $callId modificada (status: $status) - CallKit permanece abierto', tag: 'ChildHomeController');
-            }
-          }
-        }
-      },
-      onError: (error) {
-        // Ignorar errores de permisos durante cierre de sesión
-        if (error.toString().contains('permission-denied')) {
-          ReleaseLogger.log('Listener de video_calls cancelado (cierre de sesión)', tag: 'ChildHomeController');
-        } else {
-          ReleaseLogger.error('Error en listener de video_calls: $error', tag: 'ChildHomeController');
-        }
-      },
-    );
-  }
+  // ✅ MÉTODO ELIMINADO: _listenForIncomingCalls()
+  // RAZÓN: Redundante con CallsOrchestrator.initializeGlobalListeners() en main.dart
 
   /// Escuchar notificaciones de chat
   void _listenForChatNotifications() {

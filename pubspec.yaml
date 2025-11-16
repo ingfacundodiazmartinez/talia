@@ -85,7 +85,8 @@ dependencies:
   provider: ^6.1.2
   otp: ^3.1.4
   cached_network_image: ^3.4.1
-  flutter_callkit_incoming: ^2.0.0+2
+  flutter_callkit_incoming:
+    path: ../flutter_callkit_incoming
   connectivity_plus: ^6.0.5
   vibration: ^3.1.4
   flutter_slidable: ^3.1.1

@@ -100,6 +100,7 @@ class AgoraEngineManager {
     required String channelId,
     required String token,
     required int uid,
+    bool? isVideo, // Añadir parámetro para configurar audio/video
   }) async {
     if (!_isInitialized || _engine == null) {
       ReleaseLogger.error('❌ Agora Engine no inicializado', tag: 'AgoraManager');
@@ -116,9 +117,16 @@ class AgoraEngineManager {
       ReleaseLogger.log('🔗 Iniciando conexión a canal Agora...', tag: 'AgoraManager');
       ReleaseLogger.log('📋 Parámetros: channelId=$channelId, uid=$uid, token=${token.substring(0, 20)}...', tag: 'AgoraManager');
 
+      // ✅ CRÍTICO: Configurar media options según tipo de llamada
       final options = ChannelMediaOptions(
         clientRoleType: ClientRoleType.clientRoleBroadcaster,
         channelProfile: ChannelProfileType.channelProfileCommunication,
+        // Audio configurations (always needed)
+        publishMicrophoneTrack: true,
+        autoSubscribeAudio: true,
+        // Video configurations (only for video calls)
+        publishCameraTrack: isVideo ?? false,
+        autoSubscribeVideo: isVideo ?? false,
       );
 
       if (token.isEmpty) {

@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 import '../controllers/contact_profile_controller.dart';
 import '../models/contact_user.dart';
-import 'call/video/video_call_screen.dart';
-import 'call/audio/audio_call_screen.dart';
 import '../widgets/profile_photo_viewer.dart';
 import 'child/profile/widgets/media_gallery_widget.dart';
 import '../services/calls/calls_orchestrator.dart';
@@ -32,7 +30,6 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
   bool _isBlocked = false;
   bool _isLoadingBlockStatus = true;
   bool _isStartingVideoCall = false;
-  bool _isStartingAudioCall = false;
   String? _contactAlias;
   ContactUser? _contactUser;
 
@@ -216,36 +213,15 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
     });
 
     try {
-      // ✅ MIGRADO: Usar CallsOrchestrator siguiendo nueva arquitectura
+      // ✅ SIMPLIFICADO: CallsOrchestrator maneja navegación automáticamente
       final result = await CallsOrchestrator().createCall(
         participantIds: [widget.contactId],
         type: 'video',
       );
 
       if (result['success']) {
-        final callId = result['callId'];
-        final channelName = result['channelName'];
-        final token = result['token'];
-
-        // Navegar con los datos correctos del orchestrator
-        if (mounted) {
-          await Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (context) => VideoCallScreen(
-                callId: callId,
-                channelName: channelName,
-                token: token,
-                uid: 0, // Se generará dinámicamente
-                isCaller: true,
-                receiverId: widget.contactId,
-                remoteName: widget.contactName,
-                isVideo: true,
-              ),
-            ),
-          );
-        }
-
-        // Cerrar el perfil después de que termine la videollamada
+        // ✅ CallsOrchestrator ya navegó automáticamente
+        // Cerrar el perfil ya que la llamada se inició exitosamente
         if (mounted) {
           Navigator.pop(context);
         }
@@ -375,33 +351,15 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
     if (!mounted) return;
 
     try {
-      // ✅ MIGRADO: Usar CallsOrchestrator siguiendo nueva arquitectura
+      // ✅ SIMPLIFICADO: CallsOrchestrator maneja navegación automáticamente
       final result = await CallsOrchestrator().createCall(
         participantIds: [widget.contactId],
         type: 'audio',
       );
 
       if (result['success']) {
-        final callId = result['callId'];
-        final channelName = result['channelName'];
-        final token = result['token'];
-
-        // Navegar con los datos correctos del orchestrator
-        await Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (context) => AudioCallScreen(
-              callId: callId,
-              channelName: channelName,
-              token: token,
-              uid: 0, // Se generará dinámicamente
-              remoteName: widget.contactName,
-              receiverId: widget.contactId,
-              isCaller: true,
-            ),
-          ),
-        );
-
-        // Cerrar el perfil después de que termine la llamada
+        // ✅ CallsOrchestrator ya navegó automáticamente
+        // Cerrar el perfil ya que la llamada se inició exitosamente
         if (mounted) {
           Navigator.pop(context);
         }

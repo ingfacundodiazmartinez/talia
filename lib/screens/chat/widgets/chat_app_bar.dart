@@ -4,6 +4,7 @@ import '../../../widgets/profile_photo_viewer.dart';
 import '../../../services/block_service.dart';
 import '../../../services/typing_indicator_service.dart';
 import '../../../controllers/chat_app_bar_controller.dart';
+import '../../../services/calls/calls_orchestrator.dart';
 import '../../chat_moderation_settings_screen.dart';
 
 /// AppBar personalizado para pantallas de chat
@@ -125,6 +126,74 @@ class _ChatAppBarState extends State<ChatAppBar> {
       foregroundColor:
           isDarkMode ? colorScheme.onSurface : colorScheme.onPrimary,
       actions: [
+        // ✅ Botón de llamada de audio
+        IconButton(
+          icon: const Icon(Icons.call),
+          onPressed: () async {
+            try {
+              final result = await CallsOrchestrator().createCall(
+                participantIds: [widget.contactId],
+                type: 'audio',
+              );
+
+              if (!result['success']) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Error iniciando llamada: ${result['error'] ?? 'Error desconocido'}'),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                }
+              }
+            } catch (e) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Error iniciando llamada: $e'),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+              }
+            }
+          },
+          tooltip: 'Llamada de audio',
+        ),
+
+        // ✅ Botón de videollamada
+        IconButton(
+          icon: const Icon(Icons.videocam),
+          onPressed: () async {
+            try {
+              final result = await CallsOrchestrator().createCall(
+                participantIds: [widget.contactId],
+                type: 'video',
+              );
+
+              if (!result['success']) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Error iniciando videollamada: ${result['error'] ?? 'Error desconocido'}'),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                }
+              }
+            } catch (e) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Error iniciando videollamada: $e'),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+              }
+            }
+          },
+          tooltip: 'Videollamada',
+        ),
+
         StreamBuilder<bool>(
           stream: _blockService.isBlockedStream(widget.contactId),
           initialData: false,

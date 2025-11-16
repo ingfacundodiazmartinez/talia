@@ -1,14 +1,10 @@
 import 'dart:async';
 import 'package:flutter/services.dart';
-import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
-import 'package:flutter_callkit_incoming/entities/call_event.dart';
-import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'video_calls/video_call_orchestrator.dart';
 import 'calls/calls_orchestrator.dart';
-import 'app_state_service.dart';
 import '../utils/release_logger.dart';
 
 class VoIPService {
@@ -24,7 +20,8 @@ class VoIPService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
   static const MethodChannel _voipChannel = MethodChannel('com.talia.chat/voip');
-  StreamSubscription<CallEvent?>? _callEventSubscription;
+  // CallKeep no tiene un stream de eventos como flutter_callkit_incoming
+  // StreamSubscription? _callEventSubscription;
 
   // Stream para notificar cuando hay llamadas pendientes
   late StreamController<Map<String, dynamic>> _pendingCallNotifier;
@@ -52,6 +49,30 @@ class VoIPService {
     ReleaseLogger.log('📞 [VOIP COORDINATION] Llamada $callId desmarcada de VoIP', tag: 'VoIPService');
   }
 
+  /// ✅ FIX ESCENARIO CALLKIT: Limpiar tracking de llamadas VoIP más agresivamente
+  void cleanupOldVoIPCalls() {
+    ReleaseLogger.log(
+      '🧹 [VOIP COORDINATION] Limpiando tracking VoIP. Llamadas activas: ${_voipActiveCallIds.length}',
+      tag: 'VoIPService'
+    );
+    if (_voipActiveCallIds.isNotEmpty) {
+      ReleaseLogger.log(
+        '🧹 [VOIP COORDINATION] CallIds en tracking: ${_voipActiveCallIds.toList()}',
+        tag: 'VoIPService'
+      );
+      _voipActiveCallIds.clear();
+      ReleaseLogger.log('🧹 [VOIP COORDINATION] Tracking VoIP limpiado completamente', tag: 'VoIPService');
+    }
+  }
+
+  /// ✅ DIAGNOSTICO: Ver qué llamadas están marcadas como VoIP
+  void debugVoIPTracking() {
+    ReleaseLogger.log(
+      '🔍 [VOIP DEBUG] Llamadas marcadas como VoIP: ${_voipActiveCallIds.isEmpty ? "NINGUNA" : _voipActiveCallIds.toList()}',
+      tag: 'VoIPService'
+    );
+  }
+
   // 🔒 LIFECYCLE MANAGEMENT para prevenir memory leaks
   bool _isInitialized = false;
   bool get isInitialized => _isInitialized;
@@ -73,8 +94,10 @@ class VoIPService {
       _voipChannel.setMethodCallHandler(_handleVoIPMethodCall);
 
       // Escuchar eventos de CallKit (con cleanup previo por seguridad)
-      _callEventSubscription?.cancel();
-      _callEventSubscription = FlutterCallkitIncoming.onEvent.listen(_handleCallKitEvent);
+      // _callEventSubscription?.cancel();
+      // CallKeep no tiene un stream de eventos global como flutter_callkit_incoming
+      // Los eventos se manejan individualmente en CallKitService
+      // _callEventSubscription = FlutterCallkitIncoming.onEvent.listen(_handleCallKitEvent);
 
       // ✅ INTELIGENTE: Solo validar token existente, no forzar refresh inmediato
       await _validateExistingVoIPToken();
@@ -208,7 +231,7 @@ class VoIPService {
       // ✅ OPTIMIZACIÓN 4: Lanzar operaciones restantes EN PARALELO
       final acceptCallFuture = CallsOrchestrator().acceptCall(callId).catchError((e) {
         ReleaseLogger.log('⚠️ [VoIP] AcceptCall falló - continúa: $e', tag: 'VoIPService');
-        return null;
+        return false;
       });
 
       // Re-lanzar token con channelName correcto si es necesario
@@ -452,6 +475,9 @@ class VoIPService {
   }
 
   /// Manejar eventos de CallKit (aceptar, rechazar, colgar)
+  /// ⚠️ DEPRECATED: Este método ya no se usa con callkeep
+  /// Los eventos ahora se manejan en CallKitService directamente
+  /*
   Future<void> _handleCallKitEvent(CallEvent? event) async {
     if (event == null) {
       ReleaseLogger.log('📱[CallKit] EVENTO NULO RECIBIDO', tag: 'VoIPService');
@@ -482,6 +508,7 @@ class VoIPService {
         ReleaseLogger.log('⚠️ [CallKit] Evento desconocido: ${event.event}', tag: 'VoIPService');
     }
   }
+  */
 
   /// Cuando el usuario acepta la llamada desde CallKit
   Future<void> _handleCallAccepted(Map<String, dynamic>? data) async {
@@ -818,8 +845,8 @@ class VoIPService {
   void dispose() {
     ReleaseLogger.log('🗑️ Limpiando recursos VoIP Service...', tag: 'VoIPService');
 
-    _callEventSubscription?.cancel();
-    _callEventSubscription = null;
+    // _callEventSubscription?.cancel();
+    // _callEventSubscription = null;
 
     _pendingCallNotifier.close();
 
