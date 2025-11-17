@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../controllers/group_profile_controller.dart';
+import '../../controllers/call_controller.dart';
 import '../../services/calls/calls_orchestrator.dart';
 import 'widgets/add_members_dialog.dart';
 import '../call/video/video_call_screen.dart';
@@ -607,20 +608,11 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
         final token = result['token'];
 
         if (mounted) {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => VideoCallScreen(
-                callId: callId,
-                channelName: channelName,
-                token: token,
-                uid: 0, // Se generará dinámicamente
-                isCaller: true,
-                remoteName: userName,
-                receiverId: userId,
-                isVideo: true,
-              ),
-            ),
+          await CallController.startCall(
+            context: context,
+            receiverId: userId,
+            remoteName: userName,
+            isVideo: true,
           );
         }
       } else {

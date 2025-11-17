@@ -14,6 +14,7 @@ import 'dart:convert';
 import 'package:image/image.dart' as img;
 import 'constants/notification_types.dart';
 import 'services/calls/calls_orchestrator.dart';
+import 'services/calls/call_listener_service.dart';
 import 'services/notification_filter.dart';
 import 'services/callkit_service.dart';
 import 'services/app_state_service.dart';
@@ -646,10 +647,23 @@ class NotificationService {
         if (isAppInForeground) {
           ReleaseLogger.log('✅ App en foreground - NO mostrar CallKit, delegando al CallListenerService', tag: 'NotificationService');
 
-          // ✅ RECOVERY: Verificar health del CallListenerService antes de delegar
+          // ✅ FIX LLAMADA SEGUNDA: Detectar y solucionar listener zombificado
           try {
             ReleaseLogger.log('🔍 [NotificationService] Verificando health de CallListenerService antes de delegar...', tag: 'NotificationService');
-            await CallsOrchestrator().attemptListenerRecovery();
+
+            final isZombified = await CallListenerService().detectZombifiedListener();
+            if (isZombified) {
+              ReleaseLogger.log(
+                '🧟 [NotificationService] LISTENER ZOMBIFICADO detectado - forzando refresh completo',
+                tag: 'NotificationService',
+              );
+              await CallListenerService().forceListenerRefresh(
+                onCallDetected: (callId, source) => CallsOrchestrator().processIncomingCall(callId, source: source),
+                onCallEnded: (callId) => CallsOrchestrator().endCall(callId),
+              );
+            } else {
+              await CallsOrchestrator().attemptListenerRecovery();
+            }
             ReleaseLogger.log('✅ [NotificationService] Health check y recovery completado', tag: 'NotificationService');
           } catch (e) {
             ReleaseLogger.error('❌ [NotificationService] Error en health check: $e', tag: 'NotificationService');

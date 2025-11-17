@@ -1,0 +1,125 @@
+================================================================================
+QUICK REFERENCE: LEGACY VS NEW VIDEO CALLS SYSTEM
+================================================================================
+
+SYSTEM STATUS:
+├─ LEGACY (lib/services/video_calls/)     → STILL ACTIVE, 20% usage
+├─ NEW (lib/services/calls/)              → DOMINANT, 80% usage
+└─ VOIP_SERVICE                           → ACTIVE (iOS-specific)
+
+================================================================================
+LEGACY SYSTEM USERS (Only 3):
+================================================================================
+1. ContactProfileController (LINE 8)
+   ├─ startVideoCall() at line 242 uses VideoCallOrchestrator
+   ├─ startAudioCall() at line 277 uses VideoCallOrchestrator
+   └─ STATUS: ACTIVELY USED ⚠️
+
+2. call_state_service.dart (legacy system internal)
+3. video_call_orchestrator.dart (itself)
+
+================================================================================
+NEW SYSTEM USERS (15+ files):
+================================================================================
+ENTRY POINTS:
+1. main.dart (line 655)              → CallsOrchestrator.initializeGlobalListeners()
+2. call_controller.dart (line 7)     → Unified call control
+
+SCREENS:
+3. video_call_screen.dart            → Shows video calls
+4. audio_call_screen.dart            → Shows audio calls
+5. incoming_call_screen.dart         → Shows incoming calls
+6. call_screen.dart                  → Routes to appropriate screen
+
+APP BARS (Call buttons):
+7. chat_app_bar.dart                 → 1-1 call buttons
+8. group_chat_app_bar.dart           → Group call buttons
+9. contact_profile_screen.dart       → Contact profile buttons
+10. group_profile_screen.dart        → Group profile buttons
+
+CONTROLLERS:
+11. child_home_controller.dart
+12. group_chat_app_bar_controller.dart
+13. parent_dashboard_controller.dart
+
+SERVICES:
+14. notification_service.dart
+15. call_listener_service.dart
+
+================================================================================
+VOIP_SERVICE USAGE (6+ files):
+================================================================================
+PURPOSE: iOS CallKit coordination (NOT for call initiation)
+
+USED IN:
+1. main.dart                         → iOS initialization
+2. child_home_controller.dart        → Notify call ended
+3. calls_orchestrator.dart           → Coordination
+4. call_listener_service.dart        → Coordination
+5. call_navigation_service.dart      → Coordination
+6. video_calls/video_call_orchestrator.dart (legacy)
+7. video_calls/call_state_service.dart (legacy)
+8. phone_verification_service.dart
+
+STATUS: ACTIVE AND NEEDED for iOS
+
+================================================================================
+CALL INITIATION PATHS:
+================================================================================
+
+PATH 1 (LEGACY - 20%):
+  User taps call in ContactProfileScreen
+    → ContactProfileController.startVideoCall()
+    → VideoCallOrchestrator.startCall()  ⚠️ THIS IS THE PROBLEM
+    → CallInitiationService
+    → Agora setup
+
+PATH 2 (NEW - 80%, correct):
+  User taps call in ChatAppBar/GroupChatAppBar
+    → CallsOrchestrator.initiateCall()   ✓ Preferred
+    → CallsService
+    → Agora setup via CallController
+
+================================================================================
+WHAT NEEDS TO CHANGE:
+================================================================================
+
+CRITICAL FIX (Path 1 → Path 2):
+  File: lib/controllers/contact_profile_controller.dart
+  
+  Current (line 262):
+    await _videoCallService.startCall(
+      receiverId: contactId,
+      receiverName: contactName,
+      isVideo: true,
+    );
+
+  Should be:
+    await CallsOrchestrator().initiateCall(
+      receiverId: contactId,
+      receiverName: contactName,
+      isVideo: true,
+    );
+
+  Also remove import at line 8:
+    import '../services/video_calls/video_call_orchestrator.dart';
+
+  And change line 71:
+    _videoCallService = videoCallService ?? VideoCallOrchestrator(),
+    
+  To:
+    (Remove this, use CallsOrchestrator directly)
+
+================================================================================
+CAN BE DEPRECATED (after ContactProfileController is fixed):
+================================================================================
+- lib/services/video_calls/video_call_orchestrator.dart
+- lib/services/video_calls/services/call_initiation_service.dart
+- lib/services/video_calls/services/call_state_service.dart
+- lib/services/video_calls/managers/agora_engine_manager.dart
+
+CAN BE DELETED (already marked):
+- lib/controllers/audio_call_controller.dart (D in git)
+- lib/controllers/video_call_controller.dart (D in git)
+
+================================================================================

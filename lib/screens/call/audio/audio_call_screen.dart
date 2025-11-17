@@ -66,34 +66,46 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
     // ✅ onCallEnded removido - ahora lo maneja CallsOrchestrator globalmente
 
     // Inicializar llamada a través del controller
-    _controller.initialize().then((initSuccess) async {
-      if (initSuccess && widget.channelName != null && widget.token != null && widget.uid != null) {
-        // Unirse al canal de Agora después de inicializar
-        final joinSuccess = await _controller.joinExistingCall(
-          channelName: widget.channelName!,
-          token: widget.token!,
-          uid: widget.uid!,
-          isVideo: false, // Audio call
-        );
+    _controller
+        .initialize()
+        .then((initSuccess) async {
+          if (initSuccess &&
+              widget.channelName != null &&
+              widget.token != null &&
+              widget.uid != null) {
+            // Unirse al canal de Agora después de inicializar
+            final joinSuccess = await _controller.joinExistingCall(
+              channelName: widget.channelName!,
+              token: widget.token!,
+              uid: widget.uid!,
+              isVideo: false, // Audio call
+            );
 
-        if (!joinSuccess) {
-          ReleaseLogger.error('Error en joinExistingCall', tag: 'AudioCallScreen');
-          if (mounted) {
-            Navigator.of(context).pop();
+            if (!joinSuccess) {
+              ReleaseLogger.error(
+                'Error en joinExistingCall',
+                tag: 'AudioCallScreen',
+              );
+              _controller.handleInitializationError(
+                reason: 'Error en joinExistingCall',
+              );
+            }
+          } else if (!initSuccess) {
+            ReleaseLogger.error('Error en initialize', tag: 'AudioCallScreen');
+            _controller.handleInitializationError(
+              reason: 'Error en initialize del controller',
+            );
           }
-        }
-      } else if (!initSuccess) {
-        ReleaseLogger.error('Error en initialize', tag: 'AudioCallScreen');
-        if (mounted) {
-          Navigator.of(context).pop();
-        }
-      }
-    }).catchError((error) {
-      ReleaseLogger.error('Error en initialize: $error', tag: 'AudioCallScreen');
-      if (mounted) {
-        Navigator.of(context).pop();
-      }
-    });
+        })
+        .catchError((error) {
+          ReleaseLogger.error(
+            'Error en initialize: $error',
+            tag: 'AudioCallScreen',
+          );
+          _controller.handleInitializationError(
+            reason: 'Error en initialize: $error',
+          );
+        });
   }
 
   @override
@@ -107,7 +119,9 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
     if (mounted) {
       setState(() {
         _isMuted = _controller.isMuted;
-        _remoteUid = _controller.remoteUids.isNotEmpty ? _controller.remoteUids.first : null;
+        _remoteUid = _controller.remoteUids.isNotEmpty
+            ? _controller.remoteUids.first
+            : null;
         _isSpeakerOn = _controller.isSpeakerOn;
         _isEnding = _controller.isDisposed;
 
@@ -115,7 +129,7 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
         if (_controller.isDisposed) {
           _isConnecting = false; // Call ended
         } else if (!_controller.isJoined) {
-          _isConnecting = true;  // Still connecting to channel
+          _isConnecting = true; // Still connecting to channel
         } else {
           // Local user joined channel
           if (widget.isCaller) {
@@ -134,10 +148,7 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
   void _handleError(String error) {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(error),
-          backgroundColor: Colors.red,
-        ),
+        SnackBar(content: Text(error), backgroundColor: Colors.red),
       );
     }
   }
@@ -155,11 +166,15 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
   }
 
   /// Finalizar llamada
-  /// ✅ Igual que en video_call_screen.dart: llama controller.endCall() y deja que CallsOrchestrator maneje la navegación
+  /// ✅ FIX: Usar método estático que no depende de la instancia disposed del controller
   void _endCall() {
-    ReleaseLogger.log('📞 [AudioCallScreen] Usuario finalizó llamada - llamando controller.endCall()', tag: 'AudioCallScreen');
-    _controller.endCall();
-    // ✅ NO navegar aquí - el callStateStream detectará el cambio y CallsOrchestrator navegará globalmente
+    ReleaseLogger.log(
+      '📞 [AudioCallScreen] Usuario finalizó llamada - llamando CallController.endCallStatic()',
+      tag: 'AudioCallScreen',
+    );
+    // ✅ FIX: Usar método estático en lugar de instancia que puede estar disposed
+    CallController.endCallStatic(widget.callId);
+    // ✅ PURE WIDGET: CallScreen detectará el cambio y navegará automáticamente
   }
 
   @override
@@ -199,11 +214,7 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
           CircleAvatar(
             radius: 60,
             backgroundColor: Colors.grey[800],
-            child: Icon(
-              Icons.person,
-              size: 60,
-              color: Colors.white,
-            ),
+            child: Icon(Icons.person, size: 60, color: Colors.white),
           ),
           SizedBox(height: 20),
 
@@ -221,10 +232,7 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
           // Estado de la llamada
           Text(
             _getCallStatusText(),
-            style: TextStyle(
-              fontSize: 16,
-              color: Colors.grey[400],
-            ),
+            style: TextStyle(fontSize: 16, color: Colors.grey[400]),
           ),
         ],
       ),
@@ -260,10 +268,7 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
           SizedBox(height: 16),
           Text(
             'Conectando...',
-            style: TextStyle(
-              fontSize: 16,
-              color: Colors.grey[400],
-            ),
+            style: TextStyle(fontSize: 16, color: Colors.grey[400]),
           ),
         ],
       );
@@ -273,18 +278,11 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
         // Both users in call
         return Column(
           children: [
-            Icon(
-              Icons.call,
-              size: 48,
-              color: Colors.green,
-            ),
+            Icon(Icons.call, size: 48, color: Colors.green),
             SizedBox(height: 16),
             Text(
               'Llamada activa',
-              style: TextStyle(
-                fontSize: 16,
-                color: Colors.green,
-              ),
+              style: TextStyle(fontSize: 16, color: Colors.green),
             ),
           ],
         );
@@ -292,18 +290,11 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
         // Only local user connected, waiting for remote
         return Column(
           children: [
-            Icon(
-              Icons.phone_in_talk,
-              size: 48,
-              color: Colors.orange,
-            ),
+            Icon(Icons.phone_in_talk, size: 48, color: Colors.orange),
             SizedBox(height: 16),
             Text(
               widget.isCaller ? 'Esperando respuesta...' : 'Conectado',
-              style: TextStyle(
-                fontSize: 16,
-                color: Colors.orange,
-              ),
+              style: TextStyle(fontSize: 16, color: Colors.orange),
             ),
           ],
         );
@@ -311,18 +302,11 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
     } else {
       return Column(
         children: [
-          Icon(
-            Icons.call_end,
-            size: 48,
-            color: Colors.red,
-          ),
+          Icon(Icons.call_end, size: 48, color: Colors.red),
           SizedBox(height: 16),
           Text(
             'Sin conexión',
-            style: TextStyle(
-              fontSize: 16,
-              color: Colors.red,
-            ),
+            style: TextStyle(fontSize: 16, color: Colors.red),
           ),
         ],
       );
@@ -377,25 +361,12 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
           child: Container(
             width: size,
             height: size,
-            decoration: BoxDecoration(
-              color: color,
-              shape: BoxShape.circle,
-            ),
-            child: Icon(
-              icon,
-              color: Colors.white,
-              size: size * 0.4,
-            ),
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+            child: Icon(icon, color: Colors.white, size: size * 0.4),
           ),
         ),
         SizedBox(height: 8),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            color: Colors.grey[400],
-          ),
-        ),
+        Text(label, style: TextStyle(fontSize: 12, color: Colors.grey[400])),
       ],
     );
   }

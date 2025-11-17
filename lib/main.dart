@@ -20,6 +20,7 @@ import 'screens/auth/two_factor_verification_screen.dart';
 import 'screens/chat_moderation_settings_screen.dart';
 import 'screens/parent/chat_moderation_management_screen.dart';
 import 'services/calls/calls_orchestrator.dart';
+import 'screens/call/call_screen.dart';
 import 'screens/splash_wrapper.dart';
 import 'notification_service.dart';
 import 'theme_service.dart';
@@ -655,6 +656,55 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
     CallsOrchestrator().initializeGlobalListeners(
       navigatorKey: _navigatorKey,
     ); // ✅ NUEVO: Inicializar listeners via CallsOrchestrator
+
+    // ✅ CALLBACK: Configurar callback de navegación
+    CallsOrchestrator().onNavigateToCall = (String callId, {bool replaceTemporary = false}) {
+      ReleaseLogger.log(
+        '🚀 [Main] Navegando a CallScreen via callback: $callId (replace: $replaceTemporary)',
+        tag: 'Main',
+      );
+
+      // ✅ FIX: Si replaceTemporary=true, usar pushReplacement para evitar stack duplicado
+      if (replaceTemporary) {
+        ReleaseLogger.log(
+          '🔄 [Main] Usando pushReplacement para reemplazar CallScreen temporal',
+          tag: 'Main',
+        );
+        _navigatorKey.currentState?.pushReplacement(
+          MaterialPageRoute(
+            builder: (context) => CallScreen(callId: callId),
+          ),
+        );
+      } else {
+        _navigatorKey.currentState?.push(
+          MaterialPageRoute(
+            builder: (context) => CallScreen(callId: callId),
+          ),
+        );
+      }
+    };
+
+    // ✅ CALLBACK: Configurar callback de terminación para cerrar CallScreen automáticamente
+    CallsOrchestrator().onCallEnded = (String callId) {
+      ReleaseLogger.log(
+        '🔚 [Main] Llamada terminada via callback: $callId - cerrando CallScreen',
+        tag: 'Main',
+      );
+      // ✅ SINGLE SOURCE OF TRUTH: Solo este callback maneja cierre de CallScreen
+      if (_navigatorKey.currentContext != null &&
+          _navigatorKey.currentState?.canPop() == true) {
+        _navigatorKey.currentState?.pop();
+        ReleaseLogger.log(
+          '✅ [Main] CallScreen cerrada para llamada: $callId',
+          tag: 'Main',
+        );
+      } else {
+        ReleaseLogger.log(
+          '⚠️ [Main] No se puede cerrar CallScreen - no hay navegación activa',
+          tag: 'Main',
+        );
+      }
+    };
   }
 
   @override

@@ -1,8 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:vibration/vibration.dart';
-import '../../../services/calls/calls_orchestrator.dart';
-import '../../../services/calls/call_stack_navigator.dart';
 import '../../../controllers/call_controller.dart';
 import '../../../utils/release_logger.dart';
 
@@ -43,7 +41,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
   late AnimationController _pulseController;
   late AnimationController _slideController;
   bool _isProcessing = false;
-  StreamSubscription? _callStateSubscription;
+  // ✅ PURE WIDGET: Sin listeners - CallScreen maneja el estado
 
   @override
   void initState() {
@@ -65,48 +63,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
     // ✅ VIBRACIÓN INICIAL: Simular comportamiento de CallKit
     _startVibration();
 
-    // ✅ LISTENER PARA DETECTAR CANCELACIÓN REMOTA VIA CONTROLLER
-    // Crear instancia temporal solo para monitorear estado de llamada
-    try {
-      final tempController = CallController(
-        callId: widget.callId,
-        channelName: widget.channelName,
-        token: widget.token,
-        uid: widget.uid,
-        isCaller: false, // En IncomingCall siempre somos receiver
-        remoteName: widget.callerName,
-        receiverId: widget.callerId,
-        isVideo: widget.callType == 'video',
-      );
-
-      _callStateSubscription = tempController.callStateStream.listen((update) {
-        if (update.status == 'ended' && mounted && !_isProcessing) {
-          _stopVibration();
-
-          // ✅ CALL STACK: Notificar cierre al stack navigator
-          CallStackNavigator.onCallScreenClosed(widget.callId);
-
-          // ✅ Verificar si se puede hacer pop antes de cerrar pantalla
-          if (Navigator.of(context).canPop()) {
-            Navigator.of(context).pop();
-            ReleaseLogger.log(
-              '🔚 [IncomingCallScreen] Llamada cancelada remotamente - cerrando pantalla',
-              tag: 'IncomingCall',
-            );
-          } else {
-            ReleaseLogger.log(
-              '⚠️ [IncomingCallScreen] No se puede hacer pop - stack vacío',
-              tag: 'IncomingCall',
-            );
-          }
-        }
-      });
-    } catch (e) {
-      ReleaseLogger.error(
-        '❌ [IncomingCallScreen] Error configurando listener de estado: $e',
-        tag: 'IncomingCall',
-      );
-    }
+    // ✅ PURE WIDGET: CallScreen manejará la detectación de cancelación automáticamente
   }
 
   @override
@@ -114,7 +71,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
     _pulseController.dispose();
     _slideController.dispose();
     _stopVibration();
-    _callStateSubscription?.cancel();
+    // ✅ PURE WIDGET: No hay listeners que cancelar
     super.dispose();
   }
 
@@ -150,8 +107,14 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
     _stopVibration();
 
     try {
-      // Aceptar llamada en Firestore
-      await CallsOrchestrator().acceptCall(widget.callId);
+      // ✅ ARQUITECTURA CORRECTA: Screen → Controller
+      final success = await CallController.acceptCallStatic(widget.callId);
+      if (!success) {
+        if (mounted) {
+          setState(() => _isProcessing = false);
+        }
+        return;
+      }
 
       if (!mounted) return;
 
@@ -177,30 +140,19 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
     _stopVibration();
 
     try {
-      // Rechazar llamada en Firestore
-      await CallsOrchestrator().declineCall(widget.callId);
-
+      // ✅ ARQUITECTURA CORRECTA: Screen → Controller
       if (!mounted) return;
 
-      // ✅ CALL STACK: Notificar cierre al stack navigator
-      CallStackNavigator.onCallScreenClosed(widget.callId);
-
-      // Cerrar pantalla
-      if (Navigator.of(context).canPop()) {
-        Navigator.of(context).pop();
-      }
+      // ✅ CALL STACK: Notificar cierre al stack navigator (maneja navegación automáticamente)
+      // CallStackNavigator eliminado - cierre automático por CallScreen.onCallScreenClosed(widget.callId);
     } catch (e) {
       ReleaseLogger.error(
         '❌ Error rechazando llamada: $e',
         tag: 'IncomingCall',
       );
 
-      // ✅ CALL STACK: Notificar cierre incluso en caso de error
-      CallStackNavigator.onCallScreenClosed(widget.callId);
-
-      if (mounted && Navigator.of(context).canPop()) {
-        Navigator.of(context).pop();
-      }
+      // ✅ CALL STACK: Notificar cierre incluso en caso de error (maneja navegación automáticamente)
+      // CallStackNavigator eliminado - cierre automático por CallScreen.onCallScreenClosed(widget.callId);
     }
   }
 

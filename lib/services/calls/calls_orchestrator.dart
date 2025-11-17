@@ -6,13 +6,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'calls_service.dart';
 import '../../models/call.dart';
 import '../../utils/release_logger.dart';
-import '../../screens/call/common/incoming_call_screen.dart';
 import '../callkit_service.dart';
-import 'call_stack_navigator.dart';
 import '../voip_service.dart';
 import '../chat_permission_service.dart';
 import '../contact_alias_service.dart';
-import 'call_navigation_service.dart';
 import 'call_listener_service.dart';
 
 /// Orchestrator principal para la gestión de calls unificadas
@@ -43,7 +40,6 @@ class CallsOrchestrator {
   VoIPService? _voipService;
 
   // Services
-  final CallNavigationService _navigationService = CallNavigationService();
   final CallListenerService _listenerService = CallListenerService();
 
   // State management
@@ -70,6 +66,9 @@ class CallsOrchestrator {
   Function(String callId)? onCallEnded;
   Function(String error)? onError;
 
+  // ✅ NUEVO: Callback para navegación sin dependencia circular
+  Function(String callId, {bool replaceTemporary})? onNavigateToCall;
+
   // ✅ FIX ESCENARIO CALLKIT: Getter para verificar estado de listeners
   bool get areGlobalListenersInitialized => _globalListenersInitialized;
 
@@ -78,13 +77,36 @@ class CallsOrchestrator {
     _instance = null;
   }
 
+  /// ✅ SIMPLE: Helper para navegación usando callback limpio
+  void _navigateToCallScreen(String callId, {bool replaceTemporary = false}) {
+    if (onNavigateToCall == null) {
+      ReleaseLogger.error(
+        '❌ [CallsOrchestrator] onNavigateToCall callback no configurado',
+        tag: 'CallsOrchestrator',
+      );
+      return;
+    }
+
+    ReleaseLogger.log(
+      '🎯 [CallsOrchestrator] Navegando a CallScreen via callback: $callId (replace: $replaceTemporary)',
+      tag: 'CallsOrchestrator',
+    );
+
+    onNavigateToCall!(callId, replaceTemporary: replaceTemporary);
+  }
+
   /// Inicializar orchestrator - llamado desde main.dart
-  Future<void> initialize({required GlobalKey<NavigatorState> navigatorKey}) async {
+  Future<void> initialize({
+    required GlobalKey<NavigatorState> navigatorKey,
+  }) async {
     if (_isInitialized) return;
 
     _navigatorKey = navigatorKey;
 
-    ReleaseLogger.log('🎧 [CallsOrchestrator] Inicializando orchestrator', tag: 'CallsOrchestrator');
+    ReleaseLogger.log(
+      '🎧 [CallsOrchestrator] Inicializando orchestrator',
+      tag: 'CallsOrchestrator',
+    );
 
     // Configurar callbacks del CallsService
     _callsService.onIncomingCall = _handleIncomingCall;
@@ -107,22 +129,28 @@ class CallsOrchestrator {
     if (Platform.isIOS) {
       _voipService = VoIPService();
     }
-    ReleaseLogger.log('✅ [CallsOrchestrator] Servicios CallKit inicializados', tag: 'CallsOrchestrator');
+    ReleaseLogger.log(
+      '✅ [CallsOrchestrator] Servicios CallKit inicializados',
+      tag: 'CallsOrchestrator',
+    );
 
     _isInitialized = true;
-    ReleaseLogger.log('✅ [CallsOrchestrator] Orchestrator inicializado', tag: 'CallsOrchestrator');
+    ReleaseLogger.log(
+      '✅ [CallsOrchestrator] Orchestrator inicializado',
+      tag: 'CallsOrchestrator',
+    );
   }
 
   /// Dispose del orchestrator
   void dispose() {
-    ReleaseLogger.log('🔇 [CallsOrchestrator] Disposing orchestrator', tag: 'CallsOrchestrator');
+    ReleaseLogger.log(
+      '🔇 [CallsOrchestrator] Disposing orchestrator',
+      tag: 'CallsOrchestrator',
+    );
 
     _callsService.dispose();
     _navigatorKey = null;
     _isInitialized = false;
-
-    // ✅ CALL STACK: Limpiar tracking de llamadas activo al hacer dispose
-    CallStackNavigator.dispose();
 
     // Limpiar tracking de navegación
     _navigatingCallIds.clear();
@@ -132,6 +160,7 @@ class CallsOrchestrator {
     onCallStatusChanged = null;
     onCallEnded = null;
     onError = null;
+    onNavigateToCall = null;
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -148,20 +177,21 @@ class CallsOrchestrator {
 
       ReleaseLogger.log(
         '📞 [CallsOrchestrator] Manejando llamada entrante ${call.id} con estado: $currentUserStatus',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
 
       // Solo mostrar notificaciones para llamadas entrantes (status: waiting)
       if (currentUserStatus == 'waiting') {
         _showIncomingCallScreen(call);
 
-        // Notificar a main.dart para integración con CallKit/VoIP existente
-        onIncomingCall?.call(call);
+        // ✅ FIXED: Comentar callback redundante que causa triple IncomingCallScreen
+        // La integración con CallKit/VoIP ya se maneja en _showIncomingCallScreen
+        // onIncomingCall?.call(call);
       }
     } catch (e) {
       ReleaseLogger.error(
         '❌ [CallsOrchestrator] Error manejando llamada entrante: $e',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
     }
   }
@@ -173,7 +203,7 @@ class CallsOrchestrator {
       if (currentUserId == null) {
         ReleaseLogger.log(
           '❌ [CallsOrchestrator] No hay usuario logueado en _handleCallStatusChanged',
-          tag: 'CallsOrchestrator'
+          tag: 'CallsOrchestrator',
         );
         return;
       }
@@ -182,20 +212,32 @@ class CallsOrchestrator {
 
       ReleaseLogger.log(
         '🔄 [CallsOrchestrator] Estado de llamada ${call.id} cambió: $currentUserStatus (endedAt: ${call.endedAt})',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
 
       // Si el usuario se unió a la llamada, navegar automáticamente SOLO si no está ya en una call screen Y la llamada NO ha terminado
       if (currentUserStatus == 'joined' && call.endedAt == null) {
+        // ✅ FIX: Si soy el caller, ya tengo CallScreen temporal activo
+        // El polling del temporal manejará la navegación a la llamada real
+        // NO navegar aquí para evitar duplicados
+        final isCaller = call.createdBy == currentUserId;
+        if (isCaller) {
+          ReleaseLogger.log(
+            '⚠️ [CallsOrchestrator] Soy el caller de ${call.id} - ya tengo CallScreen temporal, NO navegar',
+            tag: 'CallsOrchestrator',
+          );
+          return;
+        }
+
         ReleaseLogger.log(
           '✅ [CallsOrchestrator] Usuario se unió a llamada ${call.id} - intentando navegar',
-          tag: 'CallsOrchestrator'
+          tag: 'CallsOrchestrator',
         );
         _navigateToCallScreenIfNeeded(call);
       } else {
         ReleaseLogger.log(
           '⚠️ [CallsOrchestrator] No navegando para ${call.id}: status=$currentUserStatus, endedAt=${call.endedAt}',
-          tag: 'CallsOrchestrator'
+          tag: 'CallsOrchestrator',
         );
       }
 
@@ -204,7 +246,7 @@ class CallsOrchestrator {
     } catch (e) {
       ReleaseLogger.error(
         '❌ [CallsOrchestrator] Error manejando cambio de estado: $e',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
     }
   }
@@ -216,55 +258,53 @@ class CallsOrchestrator {
 
     ReleaseLogger.log(
       '✅ [CallsOrchestrator] Llamada aceptada desde CallKit: $callId',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
 
-    // ✅ FIXED: Solo cambiar el estado - el listener manejará la UI
+    // ✅ CRITICAL: Marcar como CallKitHandled INMEDIATAMENTE para evitar IncomingCallScreen
+    // Esto previene que cuando la app vuelva a foreground, _showIncomingCallScreen() se ejecute
+    markCallAsCallKitHandled(callId);
+
+    ReleaseLogger.log(
+      '✅ [CallsOrchestrator] Llamada marcada como CallKitHandled - IncomingCallScreen bloqueada',
+      tag: 'CallsOrchestrator',
+    );
+
+    // ✅ UX FIX: Navegar INMEDIATAMENTE para evitar demora de 7+ segundos
+    // No esperar a que Firebase actualice el estado
     try {
+      // Primero: Cargar la call actual desde Firebase
+      final call = await _callsService.getCall(callId);
+
+      if (call == null) {
+        ReleaseLogger.error(
+          '❌ [CallsOrchestrator] No se pudo cargar call para navegar: $callId',
+          tag: 'CallsOrchestrator',
+        );
+        return;
+      }
+
+      ReleaseLogger.log(
+        '🚀 [CallsOrchestrator] Aceptando llamada en Firebase antes de navegar',
+        tag: 'CallsOrchestrator',
+      );
+
+      // ✅ CRITICAL FIX: Aceptar llamada PRIMERO para que VideoCallScreen tenga todo listo
+      // Esto agrega ~200-500ms pero evita que VideoCallScreen se quede en "Inicializando..."
       await acceptCall(callId);
 
       ReleaseLogger.log(
-        '✅ [CallsOrchestrator] Estado de llamada actualizado a "accepted" - listener manejará UI',
-        tag: 'CallsOrchestrator'
+        '✅ [CallsOrchestrator] Llamada aceptada, navegando a CallScreen',
+        tag: 'CallsOrchestrator',
       );
 
-      // ✅ CALLKIT FALLBACK: Si el listener no funciona, navegar directamente después de un delay
-      Future.delayed(Duration(seconds: 2), () async {
-        ReleaseLogger.log(
-          '🔄 [CallsOrchestrator] Verificando si navegación CallKit funcionó...',
-          tag: 'CallsOrchestrator'
-        );
+      // Navegar DESPUÉS de aceptar (VideoCallScreen espera que acceptCall() ya se ejecutó)
+      _navigateToCallScreenIfNeeded(call);
 
-        // Verificar si ya hay una llamada activa en el stack
-        if (!CallStackNavigator.hasActiveCall) {
-          ReleaseLogger.log(
-            '⚠️ [CallsOrchestrator] No hay overlay activo después de 2s - navegando directamente',
-            tag: 'CallsOrchestrator'
-          );
-
-          // Obtener la llamada actualizada y navegar
-          final call = await getCall(callId);
-          if (call != null && _navigatorKey?.currentContext != null) {
-            ReleaseLogger.log(
-              '🚀 [CallsOrchestrator] Navegando directamente desde CallKit fallback',
-              tag: 'CallsOrchestrator'
-            );
-            _navigationService.navigateToCall(
-              callId: callId,
-              source: 'callkit_fallback',
-            );
-          }
-        } else {
-          ReleaseLogger.log(
-            '✅ [CallsOrchestrator] Llamada ya activa en stack - navegación CallKit exitosa',
-            tag: 'CallsOrchestrator'
-          );
-        }
-      });
     } catch (e) {
       ReleaseLogger.error(
         '❌ [CallsOrchestrator] Error aceptando llamada desde CallKit: $e',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
     }
   }
@@ -273,7 +313,7 @@ class CallsOrchestrator {
   Future<void> _handleCallDeclined(String callId) async {
     ReleaseLogger.log(
       '❌ [CallsOrchestrator] Llamada rechazada desde CallKit: $callId',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
 
     // Marcar la llamada como rechazada en Firestore
@@ -282,7 +322,7 @@ class CallsOrchestrator {
     } catch (e) {
       ReleaseLogger.error(
         '❌ Error marcando llamada como rechazada: $e',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
     }
   }
@@ -291,35 +331,47 @@ class CallsOrchestrator {
   void _handleCallKitShown(String callId) {
     ReleaseLogger.log(
       '📞 [CallsOrchestrator] CallKit mostrado para llamada: $callId',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
+
+    // ✅ FIX: Marcar como manejada por CallKit para evitar mostrar IncomingCallScreen
+    markCallAsCallKitHandled(callId);
   }
 
   /// Manejar llamada terminada
   Future<void> _handleCallEnded(String callId) async {
     ReleaseLogger.log(
       '📞 [CallsOrchestrator] Llamada terminada: $callId',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
 
     ReleaseLogger.log(
       '🔍 [DEBUG] CallsOrchestrator _handleCallEnded called for callId: $callId',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
+
+    // Context no longer needed with simplified navigation
 
     // ✅ CRÍTICO: Terminar notificaciones CallKit activas para esta llamada
     ReleaseLogger.log(
       '📞 [DEBUG] CallsOrchestrator calling _terminateCallKitNotification for $callId',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
     await _terminateCallKitNotification(callId);
 
-    // ✅ CALL STACK: Cerrar pantallas de llamada cuando la llamada termina
-    ReleaseLogger.log(
-      '🔚 [CallsOrchestrator] Cerrando pantallas de llamada para $callId',
-      tag: 'CallsOrchestrator'
-    );
-    // Note: No podemos cerrar sin contexto, se hará desde las pantallas mismas
+    // ✅ SINGLE SOURCE: Notificar callback para cerrar CallScreen automáticamente
+    if (onCallEnded != null) {
+      onCallEnded!(callId);
+      ReleaseLogger.log(
+        '🔚 [CallsOrchestrator] Llamada $callId terminada - callback notificado para cerrar CallScreen',
+        tag: 'CallsOrchestrator',
+      );
+    } else {
+      ReleaseLogger.log(
+        '⚠️ [CallsOrchestrator] onCallEnded callback no configurado - CallScreen no se cerrará automáticamente',
+        tag: 'CallsOrchestrator',
+      );
+    }
 
     // Limpiar tracking de navegación para esta llamada
     _navigatingCallIds.remove(callId);
@@ -339,7 +391,7 @@ class CallsOrchestrator {
     // sin afectar el stack principal de navegación
     ReleaseLogger.log(
       '✅ [CallsOrchestrator] Llamada $callId limpiada y overlay cerrado',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
 
     // Notificar a main.dart
@@ -350,7 +402,7 @@ class CallsOrchestrator {
   void _handleError(String error) {
     ReleaseLogger.error(
       '❌ [CallsOrchestrator] Error en CallsService: $error',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
 
     // Notificar a main.dart
@@ -365,22 +417,20 @@ class CallsOrchestrator {
   Future<void> _showIncomingCallScreen(Call call) async {
     if (_navigatorKey?.currentContext == null) return;
 
-    final context = _navigatorKey!.currentContext!;
-
     // ✅ NUEVO: Verificar si la llamada ya terminó
     if (call.endedAt != null) {
       ReleaseLogger.log(
         '⚠️ [CallsOrchestrator] Llamada ${call.id} ya terminó (endedAt: ${call.endedAt}) - NO mostrar IncomingCallScreen',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
       return;
     }
 
     // ✅ FIXED: Verificar si CallKit ya está manejando esta llamada
-    if (_isCallBeingHandledByCallKit(call.id)) {
+    if (isCallBeingHandledByCallKit(call.id)) {
       ReleaseLogger.log(
         '⚠️ [CallsOrchestrator] Llamada ${call.id} ya siendo manejada por CallKit - NO mostrar IncomingCallScreen',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
       return;
     }
@@ -389,45 +439,48 @@ class CallsOrchestrator {
     if (_voipService != null && _voipService!.isCallHandledByVoIP(call.id)) {
       ReleaseLogger.log(
         '⚠️ [CallsOrchestrator] Llamada ${call.id} ya siendo manejada por VoIP - NO mostrar IncomingCallScreen',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
       return;
     }
 
+    // ✅ FIX: Marcar como handled by VoIP ANTES de mostrar IncomingCallScreen
+    // Esto previene que listeners posteriores disparen notificaciones duplicadas
+    if (_voipService != null) {
+      _voipService!.markCallAsVoIPHandled(call.id);
+      ReleaseLogger.log(
+        '🔄 [CallsOrchestrator] Llamada ${call.id} marcada como handled by VoIP',
+        tag: 'CallsOrchestrator',
+      );
+    }
+
     ReleaseLogger.log(
       '📱 [CallsOrchestrator] Mostrando IncomingCallScreen para ${call.id}',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
 
-    // Obtener el nombre del caller de forma asíncrona
-    final callerName = await _getCallerName(call);
+    // Caller name no longer needed with simplified navigation
 
-    // ✅ OVERLAY STACK: Mostrar IncomingCallScreen en overlay independiente
-    CallStackNavigator.showIncomingCallLegacy(
-      context: context,
-      callId: call.id,
-      callerName: callerName,
-      callerId: call.createdBy,
-      callerPhotoUrl: null, // TODO: Obtener desde user profile data
-      callType: call.type,
-      channelName: call.channelName,
-      token: call.token,
-      uid: 0, // Se generará dinámicamente
-      isEmergency: false, // TODO: Agregar campo isEmergency al modelo Call
+    // ✅ SIMPLIFIED: Usar callback para mostrar IncomingCallScreen
+    ReleaseLogger.log(
+      '📱 [CallsOrchestrator] Usando callback para navegar a IncomingCallScreen: ${call.id}',
+      tag: 'CallsOrchestrator',
     );
+
+    _navigateToCallScreen(call.id);
   }
 
   /// Navegar a call screen solo si no está ya en una
   void _navigateToCallScreenIfNeeded(Call call) {
     ReleaseLogger.log(
       '🔍 [CallsOrchestrator] _navigateToCallScreenIfNeeded llamado para ${call.id}',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
 
     if (_navigatorKey?.currentContext == null) {
       ReleaseLogger.log(
         '❌ [CallsOrchestrator] Navigator context es null - reintentando en 1 segundo',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
 
       // ✅ CONTEXT RETRY: Reintentar navegación cuando el context esté disponible
@@ -435,13 +488,13 @@ class CallsOrchestrator {
         if (_navigatorKey?.currentContext != null) {
           ReleaseLogger.log(
             '🔄 [CallsOrchestrator] Context disponible después de delay - reintentando navegación',
-            tag: 'CallsOrchestrator'
+            tag: 'CallsOrchestrator',
           );
           _navigateToCallScreenIfNeeded(call);
         } else {
           ReleaseLogger.log(
             '❌ [CallsOrchestrator] Context sigue null después de delay - navegación fallida',
-            tag: 'CallsOrchestrator'
+            tag: 'CallsOrchestrator',
           );
         }
       });
@@ -450,7 +503,7 @@ class CallsOrchestrator {
 
     ReleaseLogger.log(
       '✅ [CallsOrchestrator] Navigator context disponible',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
 
     // Si el usuario actual es el creador de la llamada (caller),
@@ -458,30 +511,35 @@ class CallsOrchestrator {
     if (_isUserCaller(call)) {
       ReleaseLogger.log(
         '⚠️ [CallsOrchestrator] Evitando navegación automática para caller - ya debe estar en VideoCallScreen',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
       return;
     }
 
-    // ✅ VoIP FIX: Para llamadas CallKit/VoIP, SÍ necesitamos navegar cuando se unen
-    // Solo bloquear navegación para incoming calls que ya están en foreground
-    if (_isCallBeingHandledByCallKit(call.id)) {
+    // ✅ UX FIX: Para llamadas CallKit/VoIP, navegar INMEDIATAMENTE si el receptor acepta
+    // No esperar a que Firebase actualice (puede tardar 7+ segundos)
+    if (isCallBeingHandledByCallKit(call.id)) {
       // Obtener status del participante actual
       final currentUserId = FirebaseAuth.instance.currentUser?.uid;
       final currentParticipant = call.participants[currentUserId];
       final participantStatus = currentParticipant?.status;
 
-      // Para VoIP/CallKit calls, permitir navegación cuando status = 'joined'
-      if (participantStatus == 'joined') {
+      // ✅ CRITICAL FIX: Si soy el RECEPTOR (no caller) y mi status es 'waiting',
+      // significa que CallKit aceptó pero Firebase aún no actualizó
+      // → Navegar INMEDIATAMENTE para mejor UX
+      final isReceiver = call.createdBy != currentUserId;
+      final shouldNavigateImmediately = isReceiver && participantStatus == 'waiting';
+
+      if (participantStatus == 'joined' || shouldNavigateImmediately) {
         ReleaseLogger.log(
-          '🚀 [CallsOrchestrator] Llamada VoIP/CallKit ${call.id} se unió - SÍ navegar a VideoCallScreen',
-          tag: 'CallsOrchestrator'
+          '🚀 [CallsOrchestrator] Llamada VoIP/CallKit ${call.id} - navegando (status: $participantStatus, isReceiver: $isReceiver)',
+          tag: 'CallsOrchestrator',
         );
         // Continuar con la navegación
       } else {
         ReleaseLogger.log(
           '⚠️ [CallsOrchestrator] Llamada ${call.id} ya siendo manejada por CallKit - NO navegar automáticamente (status: $participantStatus)',
-          tag: 'CallsOrchestrator'
+          tag: 'CallsOrchestrator',
         );
         return;
       }
@@ -492,43 +550,42 @@ class CallsOrchestrator {
     if (_navigatingCallIds.contains(call.id)) {
       ReleaseLogger.log(
         '⚠️ [CallsOrchestrator] Ya navegando a call ${call.id} - evitando navegación duplicada',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
       return;
     }
 
     ReleaseLogger.log(
       '📱 [CallsOrchestrator] Navegando automáticamente para receiver a call ${call.id}',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
 
     // Marcar como "navegando" ANTES de navegar
     _navigatingCallIds.add(call.id);
 
-    _navigateToCallScreen(call);
+    _navigateToCallScreenForCall(call);
   }
 
   /// Navegar automáticamente a call screen cuando usuario se une
-  void _navigateToCallScreen(Call call) {
+  void _navigateToCallScreenForCall(Call call) {
     ReleaseLogger.log(
       '✅ [CallsOrchestrator] Navegando a CallScreen para ${call.id}',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
 
-    _navigationService.navigateToCall(
-      callId: call.id,
-      source: 'auto_join',
-    );
+    _navigateToCallScreen(call.id);
   }
 
   /// Navegar inmediatamente a call screen cuando usuario crea una llamada (caller)
-  void _navigateToCallScreenAsCreator(String callId, bool isVideo, {
+  void _navigateToCallScreenAsCreator(
+    String callId,
+    bool isVideo, {
     List<String>? participantIds,
     Map<String, dynamic>? callData,
   }) {
     ReleaseLogger.log(
       '🚀 [CallsOrchestrator] Navegando a CallScreen como creador para $callId (video: $isVideo)',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
 
     final metadata = <String, dynamic>{
@@ -545,11 +602,7 @@ class CallsOrchestrator {
       metadata.addAll(callData);
     }
 
-    _navigationService.navigateToCall(
-      callId: callId,
-      source: 'creator',
-      metadata: metadata,
-    );
+    _navigateToCallScreen(callId);
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -568,7 +621,7 @@ class CallsOrchestrator {
 
     ReleaseLogger.log(
       '🚀 [CallsOrchestrator] Navegando inmediatamente como caller (UX optimizada) - callId temporal: $tempCallId',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
 
     // Navegar inmediatamente mientras se crea la llamada en background
@@ -588,18 +641,18 @@ class CallsOrchestrator {
     if (result['success'] == true) {
       ReleaseLogger.log(
         '✅ [CallsOrchestrator] Llamada creada exitosamente en background: ${result['callId']}',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
 
       // ✅ DEBUG: Log para verificar que no hay interferencias después de crear la llamada
       ReleaseLogger.log(
         '🔍 [CallsOrchestrator] Llamada ${result['callId']} creada, usuario debería estar en CallScreen temporal $tempCallId',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
     } else {
       ReleaseLogger.error(
         '❌ [CallsOrchestrator] Error creando llamada en background: ${result['error']}',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
     }
 
@@ -632,12 +685,16 @@ class CallsOrchestrator {
     return await _callsService.endCall(callId);
   }
 
-  /// Navegar de regreso de manera segura sin reiniciar AuthWrapper
+  /// Limpiar tracking de llamadas
   ///
-  /// Usa esta función desde las pantallas de llamada en lugar de
-  /// Navigator.pushReplacementNamed('/') para evitar el spinner infinito.
-  void navigateBackSafely(BuildContext context, {String? source}) {
-    _navigationService.navigateBackSafely(context, source: source);
+  /// ✅ SIMPLIFICADO: Solo limpia tracking interno
+  void cleanupCallTracking() {
+    _navigatingCallIds.clear();
+    _callKitActiveCallIds.clear();
+    ReleaseLogger.log(
+      '✅ [CallsOrchestrator] Tracking de llamadas limpiado',
+      tag: 'CallsOrchestrator',
+    );
   }
 
   /// Obtener call específica por ID
@@ -653,23 +710,28 @@ class CallsOrchestrator {
 
       final querySnapshot = await FirebaseFirestore.instance
           .collection('calls')
-          .where('createdAt', isGreaterThan: Timestamp.fromDate(thirtySecondsAgo))
+          .where(
+            'createdAt',
+            isGreaterThan: Timestamp.fromDate(thirtySecondsAgo),
+          )
           .orderBy('createdAt', descending: true)
           .limit(10)
           .get();
 
       final calls = querySnapshot.docs
           .map((doc) => Call.fromFirestore(doc.id, doc.data()))
-          .where((call) =>
-              call.endedAt == null && // Solo llamadas activas
-              call.participants.containsKey(userId)) // Usuario participa
+          .where(
+            (call) =>
+                call.endedAt == null && // Solo llamadas activas
+                call.participants.containsKey(userId),
+          ) // Usuario participa
           .toList();
 
       return calls;
     } catch (e) {
       ReleaseLogger.error(
         '❌ [CallsOrchestrator] Error obteniendo llamadas recientes: $e',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
       return [];
     }
@@ -681,27 +743,24 @@ class CallsOrchestrator {
   Future<void> processCallKitCall(String callId) async {
     ReleaseLogger.log(
       '📞 [CallsOrchestrator] Procesando llamada CallKit: $callId',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
 
-    await _navigationService.navigateToCall(
-      callId: callId,
-      source: 'callkit',
-    );
+    _navigateToCallScreen(callId);
   }
 
   /// Procesar llamada entrante en foreground
   Future<void> processForegroundCall(String callId) async {
     ReleaseLogger.log(
       '📱 [CallsOrchestrator] Procesando llamada foreground: $callId',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
 
     // ✅ RECOVERY: Verificar y recuperar listeners antes de procesar
     if (!_listenerService.isHealthy) {
       ReleaseLogger.log(
         '⚠️ [CallsOrchestrator] Listener unhealthy detected before processing - attempting recovery',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
       await attemptListenerRecovery();
     }
@@ -717,19 +776,10 @@ class CallsOrchestrator {
         return;
       }
 
-      // Obtener nombre del caller
-      final callerName = await getOtherParticipantName(call);
+      // Caller name no longer needed with simplified navigation
 
-      // ✅ FIX: Usar nuevo método que muestra IncomingCallScreen directamente
-      _navigationService.showIncomingCallForForeground(
-        callId: callId,
-        callerName: callerName,
-        callerId: call.createdBy,
-        callType: call.type, // 'video' o 'audio'
-        channelName: call.channelName,
-        token: call.token,
-        callerPhotoUrl: null, // TODO: Obtener del perfil si es necesario
-      );
+      // ✅ SIMPLIFIED: Usar callback para navegación
+      _navigateToCallScreen(callId);
 
       ReleaseLogger.log(
         '✅ [CallsOrchestrator] IncomingCallScreen mostrado para foreground: $callId',
@@ -747,26 +797,20 @@ class CallsOrchestrator {
   Future<void> processVoIPCall(String callId) async {
     ReleaseLogger.log(
       '📞 [CallsOrchestrator] Procesando llamada VoIP: $callId',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
 
-    await _navigationService.navigateToCall(
-      callId: callId,
-      source: 'voip',
-    );
+    _navigateToCallScreen(callId);
   }
 
   /// Procesar cualquier llamada (método genérico)
   Future<void> processIncomingCall(String callId, {String? source}) async {
     ReleaseLogger.log(
       '📲 [CallsOrchestrator] Procesando llamada entrante: $callId (source: $source)',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
 
-    await _navigationService.navigateToCall(
-      callId: callId,
-      source: source,
-    );
+    _navigateToCallScreen(callId);
   }
 
   /// Stream de una call específica
@@ -786,14 +830,13 @@ class CallsOrchestrator {
 
     ReleaseLogger.log(
       '🚀🚀🚀 [CallsOrchestrator] INITIALIZEGLOBALLISTENERS EJECUTANDOSE!!! 🚀🚀🚀',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
 
     // Inicializar orchestrator si no está inicializado
     await initialize(navigatorKey: navigatorKey);
 
-    // Inicializar navigation service
-    _navigationService.initialize(navigatorKey);
+    // ✅ SIMPLIFICADO: Ya no usamos navigation service
 
     // ✅ RECOVERY: Guardar callbacks para recuperación posterior
     _lastDetectedCallCallback = _handleDetectedCall;
@@ -812,7 +855,7 @@ class CallsOrchestrator {
 
     ReleaseLogger.log(
       '✅ [CallsOrchestrator] Listeners globales inicializados',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
   }
 
@@ -820,7 +863,7 @@ class CallsOrchestrator {
   void disposeGlobalListeners() {
     ReleaseLogger.log(
       '🧹 [CallsOrchestrator] Disposing global listeners...',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
 
     _listenerService.dispose();
@@ -843,7 +886,7 @@ class CallsOrchestrator {
 
     ReleaseLogger.log(
       '🧹 [CallsOrchestrator] Listeners globales disposed',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
   }
 
@@ -851,15 +894,16 @@ class CallsOrchestrator {
   Future<void> attemptListenerRecovery() async {
     ReleaseLogger.log(
       '🔍 [CallsOrchestrator] attemptListenerRecovery called - globalInit=$_globalListenersInitialized',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
 
-    final isHealthy = _listenerService.isHealthy; // Esto triggerea el log del health check
+    final isHealthy =
+        _listenerService.isHealthy; // Esto triggerea el log del health check
 
     if (_globalListenersInitialized && isHealthy) {
       ReleaseLogger.log(
         '✅ [CallsOrchestrator] Listeners are already healthy',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
       return;
     }
@@ -867,14 +911,14 @@ class CallsOrchestrator {
     if (!_globalListenersInitialized) {
       ReleaseLogger.log(
         '⚠️ [CallsOrchestrator] Listeners not initialized - cannot recover',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
       return;
     }
 
     ReleaseLogger.log(
       '🔄 [CallsOrchestrator] Listener health check detected failure - recovering...',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
 
     try {
@@ -886,18 +930,18 @@ class CallsOrchestrator {
 
         ReleaseLogger.log(
           '✅ [CallsOrchestrator] Listener recovery completed',
-          tag: 'CallsOrchestrator'
+          tag: 'CallsOrchestrator',
         );
       } else {
         ReleaseLogger.error(
           '❌ [CallsOrchestrator] Cannot recover - callbacks were not saved',
-          tag: 'CallsOrchestrator'
+          tag: 'CallsOrchestrator',
         );
       }
     } catch (e) {
       ReleaseLogger.error(
         '❌ [CallsOrchestrator] Listener recovery failed: $e',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
     }
   }
@@ -906,13 +950,12 @@ class CallsOrchestrator {
   Future<void> _handleDetectedCall(String callId, String source) async {
     ReleaseLogger.log(
       '📲 [CallsOrchestrator] Llamada detectada por listener: $callId (source: $source)',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
 
     // Delegar al método correspondiente según la source
     await processIncomingCall(callId, source: source);
   }
-
 
   /// Inicializar integración con VoIP (usa métodos existentes del VoIPService)
   Future<void> _initializeVoIPIntegration() async {
@@ -924,10 +967,12 @@ class CallsOrchestrator {
         await _voipService!.initialize();
 
         // Suscribirse al stream de llamadas pendientes
-        _pendingCallSubscription = _voipService!.pendingCallStream.listen((callData) {
+        _pendingCallSubscription = _voipService!.pendingCallStream.listen((
+          callData,
+        ) {
           ReleaseLogger.log(
             '📞 [CallsOrchestrator] VoIP call detected: ${callData['callId']}',
-            tag: 'CallsOrchestrator'
+            tag: 'CallsOrchestrator',
           );
 
           final callId = callData['callId'] as String;
@@ -940,7 +985,7 @@ class CallsOrchestrator {
         if (pendingData != null) {
           ReleaseLogger.log(
             '📞 [CallsOrchestrator] Pending VoIP call found: ${pendingData['callId']}',
-            tag: 'CallsOrchestrator'
+            tag: 'CallsOrchestrator',
           );
 
           final callId = pendingData['callId'] as String;
@@ -950,7 +995,7 @@ class CallsOrchestrator {
     } catch (e) {
       ReleaseLogger.error(
         '❌ [CallsOrchestrator] Error initializing VoIP integration: $e',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
     }
   }
@@ -972,7 +1017,7 @@ class CallsOrchestrator {
 
       ReleaseLogger.log(
         '🔍 [CallsOrchestrator] Obteniendo contactos disponibles para call $currentCallId',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
 
       // Obtener contactos con aprobación bidireccional usando ChatPermissionService
@@ -1001,7 +1046,10 @@ class CallsOrchestrator {
 
           // Usar ContactAliasService para obtener el nombre con alias si existe
           final contactAliasService = ContactAliasService();
-          final displayName = await contactAliasService.getDisplayName(contactId, realName);
+          final displayName = await contactAliasService.getDisplayName(
+            contactId,
+            realName,
+          );
 
           contacts.add({
             'contactId': contactId,
@@ -1014,13 +1062,15 @@ class CallsOrchestrator {
 
       ReleaseLogger.log(
         '✅ [CallsOrchestrator] Encontrados ${contacts.length} contactos disponibles',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
 
       return contacts;
-
     } catch (e) {
-      ReleaseLogger.error('❌ [CallsOrchestrator] Error obteniendo contactos: $e', tag: 'CallsOrchestrator');
+      ReleaseLogger.error(
+        '❌ [CallsOrchestrator] Error obteniendo contactos: $e',
+        tag: 'CallsOrchestrator',
+      );
       return [];
     }
   }
@@ -1035,18 +1085,6 @@ class CallsOrchestrator {
     return call.createdBy == currentUserId;
   }
 
-  /// Obtener nombre del caller para llamadas entrantes
-  Future<String> _getCallerName(Call call) async {
-    try {
-      return await _callsService.getUserDisplayName(call.createdBy);
-    } catch (e) {
-      ReleaseLogger.error(
-        '❌ [CallsOrchestrator] Error obteniendo nombre de caller: $e',
-        tag: 'CallsOrchestrator'
-      );
-      return 'Usuario';
-    }
-  }
 
   /// Obtener nombre del otro participante
   Future<String> getOtherParticipantName(Call call) async {
@@ -1063,11 +1101,97 @@ class CallsOrchestrator {
     } catch (e) {
       ReleaseLogger.error(
         '❌ [CallsOrchestrator] Error obteniendo nombre de participante: $e',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
       return 'Usuario';
     }
   }
+
+  /// Obtener nombre de participante específico por userId
+  Future<String> getParticipantName(String userId) async {
+    try {
+      return await _callsService.getUserDisplayName(userId);
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [CallsOrchestrator] Error obteniendo nombre de participante $userId: $e',
+        tag: 'CallsOrchestrator',
+      );
+      return 'Usuario';
+    }
+  }
+
+  /// Iniciar nueva llamada y navegar (outgoing calls)
+  Future<void> startCallAndNavigate({
+    required BuildContext context,
+    required String receiverId,
+    required String remoteName,
+    required bool isVideo,
+    bool isEmergency = false,
+  }) async {
+    try {
+      ReleaseLogger.log(
+        '📞 [CallsOrchestrator] Iniciando nueva llamada - receiver: $receiverId, video: $isVideo',
+        tag: 'CallsOrchestrator',
+      );
+
+      // Crear la llamada usando el service
+      final result = await createCall(
+        participantIds: [receiverId],
+        type: isVideo ? 'video' : 'audio',
+      );
+
+      if (result['success'] == true) {
+        final callId = result['callId'];
+
+        // ✅ SIMPLIFIED: Usar callback para navegación directa
+        _navigateToCallScreen(callId);
+
+        ReleaseLogger.log(
+          '✅ [CallsOrchestrator] Call iniciado exitosamente: $callId',
+          tag: 'CallsOrchestrator',
+        );
+      } else {
+        throw Exception('Failed to create call: ${result['error']}');
+      }
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [CallsOrchestrator] Error iniciando call: $e',
+        tag: 'CallsOrchestrator',
+      );
+      rethrow;
+    }
+  }
+
+  /// Navegar a una llamada usando el sistema de navegación centralizado
+  Future<void> navigateToCall({
+    required String callId,
+    String? source,
+    Map<String, dynamic>? metadata,
+  }) async {
+    try {
+      // ✅ Extraer flag de metadata
+      final replaceTemporary = metadata?['replaceTemporary'] as bool? ?? false;
+
+      ReleaseLogger.log(
+        '🧭 [CallsOrchestrator] Navegando a llamada - callId: $callId, source: $source, replace: $replaceTemporary',
+        tag: 'CallsOrchestrator',
+      );
+
+      _navigateToCallScreen(callId, replaceTemporary: replaceTemporary);
+
+      ReleaseLogger.log(
+        '✅ [CallsOrchestrator] Navegación exitosa: $callId',
+        tag: 'CallsOrchestrator',
+      );
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [CallsOrchestrator] Error en navegación: $e',
+        tag: 'CallsOrchestrator',
+      );
+      rethrow;
+    }
+  }
+
 
   // ═══════════════════════════════════════════════════════════════
   // CALLKIT COORDINATION
@@ -1078,7 +1202,7 @@ class CallsOrchestrator {
     _callKitActiveCallIds.add(callId);
     ReleaseLogger.log(
       '📞 [CallsOrchestrator] Llamada $callId marcada como manejada por CallKit',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
   }
 
@@ -1091,16 +1215,17 @@ class CallsOrchestrator {
 
     ReleaseLogger.log(
       '📞 [CallsOrchestrator] Llamada $callId desmarcada de CallKit y tracking limpiado',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
   }
 
   /// Verificar si una llamada está siendo manejada por CallKit
-  bool _isCallBeingHandledByCallKit(String callId) {
+  /// ✅ PÚBLICO: Usado por CallController para determinar estado de UI
+  bool isCallBeingHandledByCallKit(String callId) {
     final isHandled = _callKitActiveCallIds.contains(callId);
     ReleaseLogger.log(
       '🔍 [CallsOrchestrator] Verificando CallKit para $callId: ${isHandled ? "SÍ manejada" : "NO manejada"}',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
     return isHandled;
   }
@@ -1111,7 +1236,7 @@ class CallsOrchestrator {
     _navigatingCallIds.add(callId);
     ReleaseLogger.log(
       '📱 [CallsOrchestrator] Llamada $callId marcada como navegando desde IncomingCallScreen',
-      tag: 'CallsOrchestrator'
+      tag: 'CallsOrchestrator',
     );
   }
 
@@ -1127,37 +1252,40 @@ class CallsOrchestrator {
     try {
       ReleaseLogger.log(
         '📞 [CallsOrchestrator] Terminando notificación CallKit para callId: $callId',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
 
       ReleaseLogger.log(
         '🔍 [DEBUG] _terminateCallKitNotification - Platform: ${Platform.operatingSystem}',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
 
       // Verificar si tenemos servicios disponibles
       if (_callKitService == null) {
         ReleaseLogger.error(
           '❌ [CallsOrchestrator] CallKitService no disponible - no se puede terminar notificación',
-          tag: 'CallsOrchestrator'
+          tag: 'CallsOrchestrator',
         );
         ReleaseLogger.error(
           '❌ [DEBUG] _terminateCallKitNotification - _callKitService is NULL!',
-          tag: 'CallsOrchestrator'
+          tag: 'CallsOrchestrator',
         );
         return;
       }
 
       ReleaseLogger.log(
         '✅ [DEBUG] _terminateCallKitNotification - _callKitService is available',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
 
       // ✅ ANDROID: Terminar CallKit notification
       if (Platform.isAndroid) {
         await _callKitService!.endCall(callId);
         await _callKitService!.endAllCalls();
-        ReleaseLogger.log('✅ [CallsOrchestrator] CallKit terminado para $callId', tag: 'CallsOrchestrator');
+        ReleaseLogger.log(
+          '✅ [CallsOrchestrator] CallKit terminado para $callId',
+          tag: 'CallsOrchestrator',
+        );
       }
 
       // ✅ iOS: Terminar CallKit y VoIP
@@ -1167,13 +1295,15 @@ class CallsOrchestrator {
         if (_voipService != null) {
           await _voipService!.notifyCallEnded(callId);
         }
-        ReleaseLogger.log('✅ [CallsOrchestrator] CallKit y VoIP terminados para $callId', tag: 'CallsOrchestrator');
+        ReleaseLogger.log(
+          '✅ [CallsOrchestrator] CallKit y VoIP terminados para $callId',
+          tag: 'CallsOrchestrator',
+        );
       }
-
     } catch (e) {
       ReleaseLogger.error(
         '❌ [CallsOrchestrator] Error crítico terminando CallKit para $callId: $e',
-        tag: 'CallsOrchestrator'
+        tag: 'CallsOrchestrator',
       );
     }
   }

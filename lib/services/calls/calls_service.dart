@@ -445,25 +445,27 @@ class CallsService {
         tag: 'CallsService',
       );
 
-      final participant = CallParticipant(
-        status: 'joined',
-        joinedAt: DateTime.now(),
-      );
+      // ✅ MIGRADO: Usar Cloud Function en lugar de escritura directa de Firestore
+      final callable = _functions.httpsCallable('acceptCall');
+      final result = await callable.call({
+        'callId': callId,
+      });
 
-      final success = await _repository.updateParticipantStatus(
-        callId: callId,
-        participantId: _currentUserId!,
-        newParticipantData: participant,
-      );
+      final data = result.data as Map<String, dynamic>;
 
-      if (success) {
+      if (data['success'] == true) {
         ReleaseLogger.log(
-          '✅ [CallsService] Call aceptada exitosamente',
+          '✅ [CallsService] Call aceptada exitosamente via Cloud Function',
           tag: 'CallsService',
         );
+        return true;
+      } else {
+        ReleaseLogger.error(
+          '❌ [CallsService] Error aceptando call: ${data['error'] ?? 'Error desconocido'}',
+          tag: 'CallsService',
+        );
+        return false;
       }
-
-      return success;
     } catch (e) {
       ReleaseLogger.error(
         '❌ [CallsService] Error aceptando call: $e',
@@ -517,6 +519,22 @@ class CallsService {
         '📞 [CallsService] Terminando call: $callId',
         tag: 'CallsService',
       );
+
+      // ✅ DEBUG: Stack trace para identificar quién llama endCall incorrectamente
+      ReleaseLogger.log(
+        '🔍 [DEBUG] endCall stack trace: ${StackTrace.current}',
+        tag: 'CallsService',
+      );
+
+      // TODO: PROTECCIÓN contra race conditions comentada temporalmente
+      // final recentlyExpanded = await _wasRecentlyExpanded(callId);
+      // if (recentlyExpanded) {
+      //   ReleaseLogger.log(
+      //     '⚠️ [CallsService] Call $callId fue expandida recientemente - BLOQUEANDO endCall para evitar race condition',
+      //     tag: 'CallsService',
+      //   );
+      //   return false;
+      // }
 
       // ✅ NUEVO: Primero obtener la call para verificar si es 1-1
       final call = await _repository.getCallById(callId);

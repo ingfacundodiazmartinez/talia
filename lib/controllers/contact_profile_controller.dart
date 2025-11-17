@@ -5,7 +5,7 @@ import 'package:intl/intl.dart';
 import '../services/block_service.dart';
 import '../services/contact_alias_service.dart';
 import '../services/favorite_service.dart';
-import '../services/video_calls/video_call_orchestrator.dart';
+import '../services/calls/calls_orchestrator.dart';
 import '../models/child.dart';
 import '../models/contact_user.dart';
 
@@ -26,7 +26,7 @@ class ContactProfileController {
   final BlockService _blockService;
   final ContactAliasService _aliasService;
   final FavoriteService _favoriteService;
-  final VideoCallOrchestrator _videoCallService;
+  final CallsOrchestrator _videoCallService;
   final FirebaseFirestore _firestore;
   final firebase_auth.FirebaseAuth _auth;
 
@@ -62,13 +62,13 @@ class ContactProfileController {
     BlockService? blockService,
     ContactAliasService? aliasService,
     FavoriteService? favoriteService,
-    VideoCallOrchestrator? videoCallService,
+    CallsOrchestrator? videoCallService,
     FirebaseFirestore? firestore,
     firebase_auth.FirebaseAuth? auth,
   }) : _blockService = blockService ?? BlockService(),
        _aliasService = aliasService ?? ContactAliasService(),
        _favoriteService = favoriteService ?? FavoriteService(),
-       _videoCallService = videoCallService ?? VideoCallOrchestrator(),
+       _videoCallService = videoCallService ?? CallsOrchestrator(),
        _firestore = firestore ?? FirebaseFirestore.instance,
        _auth = auth ?? firebase_auth.FirebaseAuth.instance;
 
@@ -252,21 +252,18 @@ class ContactProfileController {
         return false;
       }
 
-      // Obtener datos del usuario actual
-      final currentUserDoc = await _firestore
-          .collection('users')
-          .doc(currentUser.uid)
-          .get();
-      final currentUserName = currentUserDoc.data()?['name'] ?? 'Usuario';
-
-      await _videoCallService.startCall(
-        receiverId: contactId,
-        receiverName: contactName,
-        isVideo: true,
+      final result = await _videoCallService.createCall(
+        participantIds: [currentUser.uid, contactId],
+        type: 'video',
       );
 
-      onSuccess?.call('Videollamada iniciada');
-      return true;
+      if (result['success'] == true) {
+        onSuccess?.call('Videollamada iniciada');
+        return true;
+      } else {
+        onError?.call(result['error'] ?? 'Error iniciando videollamada');
+        return false;
+      }
     } catch (e) {
       onError?.call('Error iniciando videollamada');
       return false;
@@ -287,21 +284,18 @@ class ContactProfileController {
         return false;
       }
 
-      // Obtener datos del usuario actual
-      final currentUserDoc = await _firestore
-          .collection('users')
-          .doc(currentUser.uid)
-          .get();
-      final currentUserName = currentUserDoc.data()?['name'] ?? 'Usuario';
-
-      await _videoCallService.startCall(
-        receiverId: contactId,
-        receiverName: contactName,
-        isVideo: false,
+      final result = await _videoCallService.createCall(
+        participantIds: [currentUser.uid, contactId],
+        type: 'audio',
       );
 
-      onSuccess?.call('Llamada de audio iniciada');
-      return true;
+      if (result['success'] == true) {
+        onSuccess?.call('Llamada de audio iniciada');
+        return true;
+      } else {
+        onError?.call(result['error'] ?? 'Error iniciando llamada de audio');
+        return false;
+      }
     } catch (e) {
       onError?.call('Error iniciando llamada de audio');
       return false;

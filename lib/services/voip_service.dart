@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
-import 'video_calls/video_call_orchestrator.dart';
+// REMOVED: import 'video_calls/video_call_orchestrator.dart'; - legacy system deleted
 import 'calls/calls_orchestrator.dart';
 import '../utils/release_logger.dart';
 
@@ -148,10 +148,8 @@ class VoIPService {
           await CallsOrchestrator().declineCall(callId);
           ReleaseLogger.log('✅ [VoIP] Llamada rechazada en Firestore via CallsOrchestrator', tag: 'VoIPService');
         } catch (e) {
-          // Fallback a legacy si falla
-          ReleaseLogger.log('⚠️ [VoIP] Fallback a VideoCallOrchestrator para rechazo: $e', tag: 'VoIPService');
-          await VideoCallOrchestrator().rejectCall(callId);
-          ReleaseLogger.log('✅ [VoIP] Llamada rechazada en Firestore via VideoCallOrchestrator', tag: 'VoIPService');
+          ReleaseLogger.error('❌ [VoIP] Error rechazando llamada via CallsOrchestrator: $e', tag: 'VoIPService');
+          rethrow; // Re-throw error since no fallback available
         }
         break;
 
@@ -171,149 +169,29 @@ class VoIPService {
     }
   }
 
-  /// ✅ OPTIMIZADO: Manejar aceptación de llamada desde CallKit nativo (5s → <1s)
+  /// ✅ SIMPLIFICADO: Manejar aceptación de llamada desde CallKit nativo (súper rápido)
   Future<void> _handleNativeCallAccepted(String callId) async {
-    final startTime = DateTime.now();
     try {
-      ReleaseLogger.log('⚡ [VoIP OPTIMIZED] Iniciando aceptación acelerada: $callId', tag: 'VoIPService');
+      ReleaseLogger.log('🚀 [VoIP SIMPLE] Aceptación directa con callId real: $callId', tag: 'VoIPService');
 
       // ✅ CRITICAL: Marcar como manejada por VoIP ANTES de procesar para evitar IncomingCallScreen
       markCallAsVoIPHandled(callId);
-      // ✅ OPTIMIZACIÓN 1: Paralelizar TODAS las operaciones
-      ReleaseLogger.log('🚀 [VoIP OPTIMIZED] Lanzando operaciones paralelas', tag: 'VoIPService');
 
-      // Lanzar búsquedas en paralelo
-      final callDocFuture = _firestore.collection('calls').doc(callId).get().then((doc) {
-        return doc.exists ? doc : null;
-      }).catchError((e) => null);
+      // ✅ FLUJO SIMPLIFICADO: Solo 2 pasos en paralelo
+      ReleaseLogger.log('⚡ [VoIP SIMPLE] Aceptando llamada y navegando inmediatamente...', tag: 'VoIPService');
 
-      final legacyCallDocFuture = _firestore.collection('video_calls').doc(callId).get().then((doc) {
-        return doc.exists ? doc : null;
-      }).catchError((e) => null);
+      final List<dynamic> results = await Future.wait([
+        CallsOrchestrator().acceptCall(callId),  // Actualizar Firestore
+        CallsOrchestrator().navigateToCall(callId: callId, source: 'callkit_accepted'),  // Navegar inmediatamente
+      ], eagerError: false);
 
-      // ✅ OPTIMIZACIÓN 2: Pre-generar token en paralelo
-      final tokenFuture = FirebaseFunctions.instance.httpsCallable('generateAgoraToken').call({
-        'channelName': callId, // Usar callId como fallback inicial
-        'uid': 0,
-      }).catchError((e) {
-        ReleaseLogger.error('❌ [VoIP] Error token future: $e', tag: 'VoIPService');
-        throw e;
-      });
-
-      // Esperar queries de documentos PRIMERO (rápido)
-      final results = await Future.wait([callDocFuture, legacyCallDocFuture], eagerError: false);
-      final callDoc = results[0] as DocumentSnapshot?;
-      final legacyCallDoc = results[1] as DocumentSnapshot?;
-
-      // Determinar cuál usar
-      final activeDoc = callDoc ?? legacyCallDoc;
-      if (activeDoc == null) {
-        ReleaseLogger.error('❌ [VoIP OPTIMIZED] No se encontró llamada', tag: 'VoIPService');
+      final acceptSuccess = results[0] as bool;
+      if (!acceptSuccess) {
+        ReleaseLogger.error('❌ [VoIP SIMPLE] AcceptCall falló', tag: 'VoIPService');
         return;
       }
 
-      final callData = activeDoc.data() as Map<String, dynamic>;
-      ReleaseLogger.log('✅ [VoIP OPTIMIZED] Datos obtenidos, procesando', tag: 'VoIPService');
-
-      // Determinar arquitectura y extraer campos
-      final bool isNewArch = callDoc != null;
-      final String callerId = isNewArch ?
-          callData['createdBy'] as String :
-          callData['callerId'] as String;
-      final String channelName = callData['channelName'] as String;
-      final String? callType = isNewArch ?
-          callData['type'] as String? :
-          callData['callType'] as String?;
-
-      // ✅ OPTIMIZACIÓN 3: Corregir channelName para token si es necesario
-      final tokenChannelName = channelName;
-
-      // ✅ OPTIMIZACIÓN 4: Lanzar operaciones restantes EN PARALELO
-      final acceptCallFuture = CallsOrchestrator().acceptCall(callId).catchError((e) {
-        ReleaseLogger.log('⚠️ [VoIP] AcceptCall falló - continúa: $e', tag: 'VoIPService');
-        return false;
-      });
-
-      // Re-lanzar token con channelName correcto si es necesario
-      final correctedTokenFuture = tokenChannelName == callId ?
-        tokenFuture :
-        FirebaseFunctions.instance.httpsCallable('generateAgoraToken').call({
-          'channelName': tokenChannelName,
-          'uid': 0,
-        });
-
-      // ✅ OPTIMIZACIÓN 5: Usar callerName del documento si está disponible
-      String callerName = 'Unknown Caller';
-      Future<String>? callerNameFuture;
-
-      if (isNewArch && callData.containsKey('callerName')) {
-        callerName = callData['callerName'] as String? ?? callerName;
-        ReleaseLogger.log('✅ [VoIP OPTIMIZED] CallerName directo: $callerName', tag: 'VoIPService');
-      } else {
-        // ✅ OPTIMIZACIÓN: Query rápida con timeout en paralelo
-        callerNameFuture = _firestore.collection('users').doc(callerId).get().timeout(
-          const Duration(milliseconds: 300), // Timeout muy corto
-        ).then((userDoc) {
-          if (userDoc.exists) {
-            final userData = userDoc.data()!;
-            return userData['name'] as String? ?? userData['email'] as String? ?? 'Unknown Caller';
-          }
-          return 'Unknown Caller';
-        }).catchError((e) {
-          ReleaseLogger.log('⚠️ [VoIP OPTIMIZED] Usando fallback name (${e.runtimeType})', tag: 'VoIPService');
-          return 'Unknown Caller';
-        });
-      }
-
-      // ✅ OPTIMIZACIÓN 6: Esperar TODAS las operaciones en paralelo
-      final List<dynamic> finalResults = await Future.wait([
-        acceptCallFuture,
-        correctedTokenFuture,
-        if (callerNameFuture != null) callerNameFuture,
-      ], eagerError: false);
-
-      final tokenResult = finalResults[1] as Map<String, dynamic>;
-      final token = tokenResult['token'] as String;
-      final uid = tokenResult['uid'] as int;
-
-      if (callerNameFuture != null) {
-        callerName = finalResults[2] as String;
-      }
-
-      final elapsedMs = DateTime.now().difference(startTime).inMilliseconds;
-      ReleaseLogger.log('⚡ [VoIP OPTIMIZED] Operaciones completadas en ${elapsedMs}ms', tag: 'VoIPService');
-
-      ReleaseLogger.log('✅ [VoIP] Token generado - UID: $uid', tag: 'VoIPService');
-
-      // Guardar datos para navegación
-      _pendingCallData = {
-        'callId': callId,
-        'channelName': channelName,
-        'token': token,
-        'uid': uid,
-        'callType': callType,
-        'callerName': callerName,
-        'callerId': callerId,
-      };
-
-      ReleaseLogger.log('✅ [VoIP] Datos de llamada guardados para navegación', tag: 'VoIPService');
-      ReleaseLogger.log('   - Caller ID: $callerId', tag: 'VoIPService');
-
-      // Notificar inmediatamente que hay datos pendientes
-      ReleaseLogger.log('🚀 [VoIP] Enviando datos al stream pendingCall', tag: 'VoIPService');
-      _pendingCallNotifier.add(_pendingCallData!);
-      ReleaseLogger.log('✅ [VoIP] Datos enviados al stream exitosamente', tag: 'VoIPService');
-
-      // ✅ FIX NAVEGACIÓN: No limpiar inmediatamente - dejar que el listener procese
-      // Limpiar después de un timeout para evitar memory leaks
-      Timer(const Duration(seconds: 10), () {
-        if (_pendingCallData != null) {
-          ReleaseLogger.log('🧹 [VoIP] Limpieza automática de pendingCallData por timeout', tag: 'VoIPService');
-          _pendingCallData = null;
-        }
-      });
-
-      ReleaseLogger.log('✅ [VoIP] _handleNativeCallAccepted completado exitosamente', tag: 'VoIPService');
+      ReleaseLogger.log('✅ [VoIP SIMPLE] Aceptación y navegación completadas inmediatamente', tag: 'VoIPService');
     } catch (e, stackTrace) {
       ReleaseLogger.error('❌ [VoIP] Error manejando aceptación nativa: $e', tag: 'VoIPService');
       ReleaseLogger.error('❌ [VoIP] Stack trace: $stackTrace', tag: 'VoIPService');
@@ -328,67 +206,7 @@ class VoIPService {
     }
   }
 
-  /// Procesar aceptación de llamada legacy (video_calls collection)
-  Future<void> _processLegacyCallAcceptance(String callId, Map<String, dynamic> callData) async {
-    try {
-      ReleaseLogger.log('🔍 [VoIP] Procesando legacy - extrayendo campos', tag: 'VoIPService');
-      final callerId = callData['callerId'] as String;
-      final callerName = callData['callerName'] as String;
-      final channelName = callData['channelName'] as String;
-      final callType = callData['callType'] as String?;
-      ReleaseLogger.log('🔍 [VoIP] Legacy fields extraídos exitosamente', tag: 'VoIPService');
-
-      ReleaseLogger.log('📞 [VoIP] Procesando llamada aceptada (legacy):', tag: 'VoIPService');
-      ReleaseLogger.log('   - Call ID: $callId', tag: 'VoIPService');
-      ReleaseLogger.log('   - Channel: $channelName', tag: 'VoIPService');
-      ReleaseLogger.log('   - Type: $callType', tag: 'VoIPService');
-
-      // Actualizar estado en Firestore usando VideoCallOrchestrator legacy
-      await VideoCallOrchestrator().acceptCall(callId);
-
-      // Obtener token de Agora
-      ReleaseLogger.log('🎫 [VoIP] Generando token de Agora (legacy): $channelName', tag: 'VoIPService');
-      final functions = FirebaseFunctions.instance;
-      final result = await functions.httpsCallable('generateAgoraToken').call({
-        'channelName': channelName,
-        'uid': 0,
-      });
-
-      final token = result.data['token'] as String;
-      final uid = result.data['uid'] as int;
-
-      ReleaseLogger.log('✅ [VoIP] Token legacy generado - UID: $uid', tag: 'VoIPService');
-
-      // Guardar datos para navegación
-      _pendingCallData = {
-        'callId': callId,
-        'channelName': channelName,
-        'token': token,
-        'uid': uid,
-        'callType': callType,
-        'callerName': callerName,
-        'callerId': callerId,
-      };
-
-      ReleaseLogger.log('✅ [VoIP] Datos de llamada legacy guardados', tag: 'VoIPService');
-
-      // Notificar al stream
-      ReleaseLogger.log('🚀 [VoIP] Enviando datos legacy al stream', tag: 'VoIPService');
-      _pendingCallNotifier.add(_pendingCallData!);
-      ReleaseLogger.log('✅ [VoIP] Datos legacy enviados al stream exitosamente', tag: 'VoIPService');
-
-      // ✅ FIX NAVEGACIÓN: No limpiar inmediatamente - dejar que el listener procese
-      // Limpiar después de un timeout para evitar memory leaks
-      Timer(const Duration(seconds: 10), () {
-        if (_pendingCallData != null) {
-          ReleaseLogger.log('🧹 [VoIP] Limpieza automática de pendingCallData por timeout (legacy)', tag: 'VoIPService');
-          _pendingCallData = null;
-        }
-      });
-    } catch (e) {
-      ReleaseLogger.error('❌ [VoIP] Error procesando llamada legacy: $e', tag: 'VoIPService');
-    }
-  }
+  // REMOVED: _processLegacyCallAcceptance - no longer needed after video_calls deletion
 
   /// Verificar y procesar token VoIP pendiente después del login exitoso
   /// En iOS, el token VoIP se recibe automáticamente pero solo se puede guardar cuando el usuario está autenticado
@@ -538,15 +356,13 @@ class VoIPService {
       ReleaseLogger.log('   - Type: $callType', tag: 'VoIPService');
       ReleaseLogger.log('   - Emergency: $isEmergency', tag: 'VoIPService');
 
-      // ✅ NEW: Usar CallsOrchestrator en lugar de VideoCallOrchestrator
-      try {
-        await CallsOrchestrator().acceptCall(callId);
-        ReleaseLogger.log('✅ [CallKit] Llamada aceptada via CallsOrchestrator', tag: 'VoIPService');
-      } catch (e) {
-        ReleaseLogger.log('⚠️ [CallKit] Fallback a VideoCallOrchestrator: $e', tag: 'VoIPService');
-        await VideoCallOrchestrator().acceptCall(callId);
-        ReleaseLogger.log('✅ [CallKit] Llamada aceptada via VideoCallOrchestrator (fallback)', tag: 'VoIPService');
+      // ✅ UPDATED: Usar CallsOrchestrator únicamente (no fallback)
+      final acceptSuccess = await CallsOrchestrator().acceptCall(callId);
+      if (!acceptSuccess) {
+        ReleaseLogger.error('❌ [CallKit] AcceptCall falló - abortando flujo CallKit', tag: 'VoIPService');
+        return; // Abortar flujo completo
       }
+      ReleaseLogger.log('✅ [CallKit] Llamada aceptada via CallsOrchestrator', tag: 'VoIPService');
 
       // Obtener token de Agora directamente (sin crear nueva llamada)
       ReleaseLogger.log('🎫 [CallKit] Generando token de Agora para unirse al canal: $channelName', tag: 'VoIPService');
@@ -608,17 +424,11 @@ class VoIPService {
       final callId = extra['callId'] as String;
 
       ReleaseLogger.log('🔥 [DEBUG] _handleCallDeclined - callId extraído: $callId', tag: 'VoIPService');
-      ReleaseLogger.log('🔥 [DEBUG] _handleCallDeclined - llamando a VideoCallOrchestrator().rejectCall()', tag: 'VoIPService');
+      ReleaseLogger.log('🔥 [DEBUG] _handleCallDeclined - llamando a CallsOrchestrator().declineCall()', tag: 'VoIPService');
 
-      // ✅ NEW: Usar CallsOrchestrator en lugar de VideoCallOrchestrator
-      try {
-        await CallsOrchestrator().declineCall(callId);
-        ReleaseLogger.log('✅ [CallKit] Llamada rechazada via CallsOrchestrator', tag: 'VoIPService');
-      } catch (e) {
-        ReleaseLogger.log('⚠️ [CallKit] Fallback a VideoCallOrchestrator para rechazo: $e', tag: 'VoIPService');
-        await VideoCallOrchestrator().rejectCall(callId);
-        ReleaseLogger.log('✅ [CallKit] Llamada rechazada via VideoCallOrchestrator (fallback)', tag: 'VoIPService');
-      }
+      // ✅ UPDATED: Usar CallsOrchestrator únicamente (no fallback)
+      await CallsOrchestrator().declineCall(callId);
+      ReleaseLogger.log('✅ [CallKit] Llamada rechazada via CallsOrchestrator', tag: 'VoIPService');
       ReleaseLogger.log('✅ [CallKit] Llamada rechazada en Firestore', tag: 'VoIPService');
 
       // ✅ FIX: Cerrar CallKit UI inmediatamente después del rechazo
@@ -696,8 +506,6 @@ class VoIPService {
       if (userDoc.exists) {
         final data = userDoc.data() as Map<String, dynamic>;
         final voipToken = data['voipToken'] as String?;
-        final tokenUpdatedAt = data['voipTokenUpdatedAt'] as Timestamp?;
-        final refreshNeeded = data['voipTokenRefreshNeeded'] as bool?;
 
         if (voipToken != null && voipToken.isNotEmpty) {
           // ✅ SIMPLE: Token existe → mantenerlo (Apple dice que no expiran por tiempo)

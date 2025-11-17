@@ -5,8 +5,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../../../controllers/call_controller.dart';
 import '../../../utils/release_logger.dart';
 import '../../../services/calls/calls_orchestrator.dart';
-import '../../../services/calls/call_stack_navigator.dart';
-import '../../../main.dart' show AuthWrapper;
 
 /// Pantalla de videollamada refactorizada siguiendo CODING_RULES.md
 ///
@@ -56,7 +54,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   bool _showError = false;
   String _errorMessage = '';
 
-  StreamSubscription? _callStateSubscription;
+  // ✅ PURE WIDGET: Eliminado _callStateSubscription - no más listeners
 
   bool _isTerminating = false;
 
@@ -64,6 +62,12 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
   Timer? _endCallTimer;
   Timer? _periodicTimer;
+
+  // Cache para nombres de participantes (userId -> nombre)
+  final Map<String, String> _participantNamesCache = {};
+
+  // ✅ FIX: Cache para VideoViews por UID para evitar recreaciones múltiples
+  final Map<int?, Widget> _videoViewCache = {};
 
   @override
   void initState() {
@@ -84,7 +88,8 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     // Configurar callbacks para comunicación controller → screen
     _setupControllerCallbacks();
 
-    _setupCallStateListener();
+    // ✅ PURE WIDGET: No más listeners - CallScreen maneja el estado
+    // Eliminado: _setupCallStateListener();
 
     _initializeCall();
   }
@@ -214,13 +219,13 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
     if (callSetupSuccess) {
       ReleaseLogger.log(
-        '🔧 [VideoCallScreen] Llamando _setupCallStateListener()...',
+        '✅ [VideoCallScreen] Configuración de llamada exitosa - PURE WIDGET sin listeners',
         tag: 'VideoCallScreen',
       );
-      _setupCallStateListener();
+      // ✅ PURE WIDGET: Eliminado _setupCallStateListener() - CallScreen maneja estado
     } else {
       ReleaseLogger.log(
-        '❌ [VideoCallScreen] No configurando listener - configuración de llamada falló',
+        '❌ [VideoCallScreen] Configuración de llamada falló',
         tag: 'VideoCallScreen',
       );
     }
@@ -236,8 +241,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       }
     };
 
-    // ✅ FIX: Eliminar onCallEnded callback para unificar flujos de terminación
-    // Solo el callStateStream debe manejar la terminación para evitar race conditions
+    // ✅ PURE WIDGET: Sin listeners - CallScreen maneja terminación automáticamente
     _controller.onCallEnded = null;
 
     _controller.onError = (message) {
@@ -280,449 +284,16 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     };
   }
 
-  ///
-  /// Esto resuelve el problema de sincronización cuando el otro usuario termina la llamada
-  void _setupCallStateListener() {
-    ReleaseLogger.log(
-      '🔧 [VideoCallScreen] Configurando callStateStream listener para callId: ${widget.callId}',
-      tag: 'VideoCallScreen',
-    );
-    ReleaseLogger.log(
-      '🔍 [VideoCallScreen] DEBUG - Controller instance: ${_controller.hashCode}',
-      tag: 'VideoCallScreen',
-    );
-    ReleaseLogger.log(
-      '🔍 [VideoCallScreen] DEBUG - Orchestrator instance: ${_controller.currentCallId}',
-      tag: 'VideoCallScreen',
-    );
 
-    try {
-      final stream = _controller.callStateStream;
-      ReleaseLogger.log(
-        '🔍 [VideoCallScreen] DEBUG - Stream obtained: ${stream.hashCode}',
-        tag: 'VideoCallScreen',
-      );
-
-      _callStateSubscription = stream.listen(
-        (callStateUpdate) {
-          if (!mounted) return;
-
-          ReleaseLogger.log(
-            '📡 [VideoCallScreen] Call state changed: ${callStateUpdate.status} for call ${callStateUpdate.callId}',
-            tag: 'VideoCallScreen',
-          );
-
-          // Solo procesar cambios de estado para esta llamada específica
-          if (callStateUpdate.callId != widget.callId) {
-            return;
-          }
-
-
-          ReleaseLogger.log(
-            '🔍 [DEBUG_LISTENER] CallState listener triggered - status: ${callStateUpdate.status}, callId: ${callStateUpdate.callId}',
-            tag: 'VideoCallScreen',
-          );
-
-          switch (callStateUpdate.status) {
-            case 'ended':
-              ReleaseLogger.log(
-                '🔍 [DEBUG_LISTENER] Case ENDED detected - _isTerminating: $_isTerminating',
-                tag: 'VideoCallScreen',
-              );
-              if (_isTerminating) {
-                ReleaseLogger.log(
-                  '⚠️ [VideoCallScreen] Call already terminating - ignoring duplicate event',
-                  tag: 'VideoCallScreen',
-                );
-                return;
-              }
-
-              setState(() {
-                _isTerminating = true;
-              });
-              ReleaseLogger.log(
-                '🔚 [VideoCallScreen] Call ended - terminating local call',
-                tag: 'VideoCallScreen',
-              );
-
-              if (mounted && !_isNavigating) {
-                ReleaseLogger.log(
-                  '⚡ [VideoCallScreen] NAVEGACIÓN INMEDIATA - sin delays ni timers',
-                  tag: 'VideoCallScreen',
-                );
-                _navigateBackSafely('call ended - IMMEDIATE');
-              }
-
-              // ✅ FIX: Solo limpiar localmente - la llamada ya está terminada en Firestore
-              // No llamar endCall() nuevamente para evitar loops
-              break;
-
-            case 'declined':
-            case 'cancelled':
-            case 'missed':
-              ReleaseLogger.log(
-                '📞 [VideoCallScreen] Call ${callStateUpdate.status} by other user',
-                tag: 'VideoCallScreen',
-              );
-
-              // La llamada fue rechazada, cancelada o perdida
-              if (mounted) {
-                setState(() {
-                  _connectionStatus = 'Llamada ${callStateUpdate.status}';
-                });
-
-                // Esperar un poco y navegar de vuelta
-                Future.delayed(const Duration(seconds: 2), () {
-                  if (mounted && !_isNavigating) {
-                    _navigateBackSafely('call ${callStateUpdate.status}');
-                  } else {
-                  }
-                });
-              } else {
-              }
-              break;
-
-            case 'accepted':
-              ReleaseLogger.log(
-                '✅ [VideoCallScreen] Call accepted',
-                tag: 'VideoCallScreen',
-              );
-
-              if (mounted) {
-                setState(() {
-                  _connectionStatus = 'Conectando...';
-                });
-              }
-              break;
-
-            default:
-              // Otros estados (calling, connecting, etc.) - solo log
-              ReleaseLogger.log(
-                'ℹ️ [VideoCallScreen] Call status: ${callStateUpdate.status}',
-                tag: 'VideoCallScreen',
-              );
-              break;
-          }
-        },
-        onError: (error) {
-          ReleaseLogger.error(
-            '❌ [VideoCallScreen] Error in call state stream: $error',
-            tag: 'VideoCallScreen',
-          );
-        },
-      );
-
-      ReleaseLogger.log(
-        '✅ [VideoCallScreen] CallStateStream listener configurado exitosamente',
-        tag: 'VideoCallScreen',
-      );
-    } catch (e) {
-      ReleaseLogger.error(
-        '❌ [VideoCallScreen] Error configurando callStateStream listener: $e',
-        tag: 'VideoCallScreen',
-      );
-
-      _setupFallbackTerminationCheck();
-    }
-  }
-
-  void _setupFallbackTerminationCheck() {
-    ReleaseLogger.log(
-      '🔄 [VideoCallScreen] Configurando verificación de respaldo para terminación de llamada',
-      tag: 'VideoCallScreen',
-    );
-
-    _periodicTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
-      if (!mounted) {
-        timer.cancel();
-        return;
-      }
-
-      try {
-        // Verificar manualmente el estado de la llamada en Firestore
-        final currentState = await _controller.getActiveCalls();
-
-        // Si no hay llamadas activas para este usuario, significa que la llamada terminó
-        final hasThisCall = currentState.any(
-          (call) => call.callId == widget.callId && call.status != 'ended',
-        );
-
-        if (!hasThisCall) {
-          ReleaseLogger.log(
-            '🔚 [VideoCallScreen] Fallback: Detectada terminación de llamada - cerrando',
-            tag: 'VideoCallScreen',
-          );
-          timer.cancel();
-
-          if (mounted) {
-            // Terminar llamada local y notificar al stack navigator
-            await _controller.endCall();
-
-            // ✅ CALL STACK: Notificar cierre y cerrar pantalla automáticamente
-            CallStackNavigator.onCallScreenClosed(widget.callId);
-
-            if (Navigator.canPop(context)) {
-              Navigator.pop(context);
-            } else {
-              // ✅ FIX SPINNER INFINITO: Usar navegación segura en lugar de pushReplacementNamed('/')
-              CallsOrchestrator().navigateBackSafely(context, source: 'video_call_end');
-            }
-          }
-        }
-      } catch (e) {
-        ReleaseLogger.error(
-          '❌ [VideoCallScreen] Error en verificación de respaldo: $e',
-          tag: 'VideoCallScreen',
-        );
-      }
-    });
-  }
-
-  ///
-  /// Solo usa navegación agresiva para casos específicos de CallKit
-  void _navigateBackSafely(String reason) {
-    if (_isNavigating) {
-      ReleaseLogger.log(
-        '⚠️ [VideoCallScreen] Navigation already in progress - ignoring $reason',
-        tag: 'VideoCallScreen',
-      );
-      return;
-    }
-
-    if (!mounted) {
-      ReleaseLogger.log(
-        '⚠️ [VideoCallScreen] Widget not mounted - cannot navigate for $reason',
-        tag: 'VideoCallScreen',
-      );
-      return;
-    }
-
-    _isNavigating = true;
-
-    ReleaseLogger.log(
-      '📱 [VideoCallScreen] Navigating back safely - reason: $reason',
-      tag: 'VideoCallScreen',
-    );
-
-    final isRemoteEndedCall = reason.contains('call ended by remote user');
-    final isReceiver = !widget.isCaller;
-    final isCallKitScenario = isRemoteEndedCall && isReceiver;
-
-    try {
-      final canPop = Navigator.canPop(context);
-
-      ReleaseLogger.log(
-        '🔍 [VideoCallScreen] Navigator state - canPop: $canPop, isReceiver: $isReceiver, remoteEnded: $isRemoteEndedCall, useCallKitFix: $isCallKitScenario',
-        tag: 'VideoCallScreen',
-      );
-
-      if (isCallKitScenario) {
-        ReleaseLogger.log(
-          '📞 [VideoCallScreen] CALLKIT RECEIVER SCENARIO - Usando navegación especial',
-          tag: 'VideoCallScreen',
-        );
-        _attemptCallKitNavigation();
-      } else {
-        // ✅ CALL STACK: Notificar cierre al stack navigator
-        CallStackNavigator.onCallScreenClosed(widget.callId);
-
-        if (canPop) {
-          ReleaseLogger.log(
-            '📱 [VideoCallScreen] NAVEGACIÓN NORMAL - Navigator.pop() inmediato',
-            tag: 'VideoCallScreen',
-          );
-          Navigator.of(context).pop();
-        } else {
-          ReleaseLogger.log(
-            '📱 [VideoCallScreen] NAVEGACIÓN NORMAL - usando navegación segura',
-            tag: 'VideoCallScreen',
-          );
-          // ✅ FIX SPINNER INFINITO: Usar navegación segura en lugar de pushReplacementNamed('/')
-          CallsOrchestrator().navigateBackSafely(context, source: 'video_call_normal');
-        }
-      }
-
-      _monitorNavigationSuccess(isCallKitScenario);
-    } catch (e) {
-      ReleaseLogger.error(
-        '❌ [VideoCallScreen] Error during navigation: $e',
-        tag: 'VideoCallScreen',
-      );
-      _fallbackNavigation();
-    }
-  }
-
-  void _attemptCallKitNavigation() {
-    ReleaseLogger.log(
-      '🔧 [VideoCallScreen] CallKit navigation - implementando fix para navigation stack vacío',
-      tag: 'VideoCallScreen',
-    );
-
-    try {
-      final navigator = Navigator.of(context);
-      final canPopSafely = navigator.canPop();
-
-      ReleaseLogger.log(
-        '🔍 [VideoCallScreen] Navigation stack analysis: canPop=$canPopSafely',
-        tag: 'VideoCallScreen',
-      );
-
-      // ✅ CALL STACK: Notificar cierre al stack navigator en todos los casos
-      CallStackNavigator.onCallScreenClosed(widget.callId);
-
-      if (canPopSafely) {
-        // Stack tiene elementos - usar pop normal
-        ReleaseLogger.log(
-          '📱 [VideoCallScreen] Stack has elements - using Navigator.pop()',
-          tag: 'VideoCallScreen',
-        );
-        Navigator.of(context).pop();
-        return;
-      } else {
-        // Stack vacío - necesitamos recrear la app completamente
-        ReleaseLogger.log(
-          '⚠️ [VideoCallScreen] EMPTY STACK DETECTED - recreating app navigation',
-          tag: 'VideoCallScreen',
-        );
-
-        Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (context) => const AuthWrapper()),
-          (route) => false, // Remove all existing routes
-        );
-        return;
-      }
-    } catch (e) {
-      ReleaseLogger.error(
-        '❌ [VideoCallScreen] Error checking navigation stack: $e',
-        tag: 'VideoCallScreen',
-      );
-
-      _recreateAppNavigation();
-    }
-  }
-
-  void _recreateAppNavigation() {
-    try {
-      ReleaseLogger.log(
-        '🔄 [VideoCallScreen] Navegación conservadora de emergencia - usando navegación segura',
-        tag: 'VideoCallScreen',
-      );
-
-      // ✅ FIX SPINNER INFINITO: Usar navegación segura en lugar de pushReplacementNamed('/')
-      CallsOrchestrator().navigateBackSafely(context, source: 'video_call_emergency');
-    } catch (e) {
-      ReleaseLogger.error(
-        '❌ [VideoCallScreen] Error en navegación conservadora: $e',
-        tag: 'VideoCallScreen',
-      );
-
-      try {
-        if (Navigator.canPop(context)) {
-          Navigator.of(context).pop();
-        } else {
-          if (mounted) {
-            setState(() {
-              _showError = true;
-              _errorMessage =
-                  'Error de navegación. Usa el botón "Volver" para continuar.';
-            });
-          }
-        }
-      } catch (fallbackError) {
-        ReleaseLogger.error(
-          '💥 [VideoCallScreen] CRITICAL: All navigation strategies failed: $fallbackError',
-          tag: 'VideoCallScreen',
-        );
-
-        if (mounted) {
-          setState(() {
-            _showError = true;
-            _errorMessage =
-                'Error de navegación. Usa el botón "Volver" para continuar.';
-          });
-        }
-      }
-    }
-  }
-
-  void _fallbackNavigation() {
-    try {
-      if (mounted) {
-        ReleaseLogger.log(
-          '🔄 [VideoCallScreen] FALLBACK navigation - verificando stack primero',
-          tag: 'VideoCallScreen',
-        );
-
-        if (Navigator.canPop(context)) {
-          ReleaseLogger.log(
-            '📱 [VideoCallScreen] FALLBACK - usando pop normal',
-            tag: 'VideoCallScreen',
-          );
-          Navigator.of(context).pop();
-        } else {
-          ReleaseLogger.log(
-            '⚠️ [VideoCallScreen] FALLBACK - stack vacío, recreando navegación',
-            tag: 'VideoCallScreen',
-          );
-          _recreateAppNavigation();
-        }
-      }
-    } catch (fallbackError) {
-      ReleaseLogger.error(
-        '💥 [VideoCallScreen] CRITICAL: All navigation strategies failed: $fallbackError',
-        tag: 'VideoCallScreen',
-      );
-
-      try {
-        _recreateAppNavigation();
-      } catch (e) {
-        ReleaseLogger.error(
-          '💀 [VideoCallScreen] ULTIMATE FAILURE: Cannot navigate anywhere: $e',
-          tag: 'VideoCallScreen',
-        );
-
-        if (mounted) {
-          setState(() {
-            _showError = true;
-            _errorMessage = 'Error crítico de navegación. Reinicia la app.';
-          });
-        }
-      }
-    }
-  }
-
-  void _monitorNavigationSuccess(bool isCallKitScenario) {
-    final checkInterval = isCallKitScenario ? 300 : 500;
-
-    Future.delayed(Duration(milliseconds: checkInterval), () {
-      if (mounted) {
-        ReleaseLogger.error(
-          '⚠️ [VideoCallScreen] ADVERTENCIA: VideoCallScreen aún montado ${checkInterval}ms después de navegación',
-          tag: 'VideoCallScreen',
-        );
-
-        ReleaseLogger.log(
-          'ℹ️ [VideoCallScreen] Usuario puede usar botón "Volver" si necesario',
-          tag: 'VideoCallScreen',
-        );
-      } else {
-        ReleaseLogger.log(
-          '✅ [VideoCallScreen] Navegación exitosa - widget correctamente desmontado',
-          tag: 'VideoCallScreen',
-        );
-      }
-    });
-  }
 
   @override
   void dispose() {
     ReleaseLogger.log(
-      '🧹 [VideoCallScreen] dispose() - cleaning up all resources',
+      '🧹 [VideoCallScreen] dispose() - cleaning up all resources for callId: ${widget.callId}',
       tag: 'VideoCallScreen',
     );
 
-    _callStateSubscription?.cancel();
-    _callStateSubscription = null;
+    // ✅ PURE WIDGET: No hay listeners que cancelar - CallScreen maneja el estado
 
     _endCallTimer?.cancel();
     _endCallTimer = null;
@@ -731,6 +302,9 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
     _isTerminating = false;
     _isNavigating = false;
+
+    // ✅ FIX: Limpiar caché de VideoViews
+    _videoViewCache.clear();
 
     _controller.dispose();
 
@@ -763,24 +337,62 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   Widget? _createSafeVideoView(RtcEngine engine, VideoCanvas canvas) {
     // Double-check engine validity right before creating VideoViewController
     if (_controller.isDisposed || _controller.agoraEngine == null) {
+      ReleaseLogger.error(
+        '❌ [VideoCallScreen] _createSafeVideoView: Controller disposed or engine null - disposed=${_controller.isDisposed}, engine=${_controller.agoraEngine != null}',
+        tag: 'VideoCallScreen',
+      );
       return null; // Return null instead of crashing
     }
 
-    try {
-      return AgoraVideoView(
-        controller: VideoViewController(rtcEngine: engine, canvas: canvas),
-      );
-    } catch (e) {
-      ReleaseLogger.error(
-        '❌ [VideoCallScreen] Error creating VideoViewController: $e',
+    // ✅ FIX: Verificar caché primero para evitar recreaciones múltiples
+    if (_videoViewCache.containsKey(canvas.uid)) {
+      ReleaseLogger.log(
+        '♻️ [VideoCallScreen] Reutilizando VideoView desde caché para UID: ${canvas.uid}',
         tag: 'VideoCallScreen',
       );
-      return Container(
+      return _videoViewCache[canvas.uid];
+    }
+
+    try {
+      ReleaseLogger.log(
+        '🎥 [VideoCallScreen] Creando VideoView para UID: ${canvas.uid}, renderMode: ${canvas.renderMode}',
+        tag: 'VideoCallScreen',
+      );
+
+      final videoView = AgoraVideoView(
+        controller: VideoViewController(rtcEngine: engine, canvas: canvas),
+      );
+
+      // ✅ FIX: Guardar en caché para evitar recreaciones
+      _videoViewCache[canvas.uid] = videoView;
+
+      ReleaseLogger.log(
+        '✅ [VideoCallScreen] VideoView creado exitosamente y guardado en caché para UID: ${canvas.uid}',
+        tag: 'VideoCallScreen',
+      );
+
+      return videoView;
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [VideoCallScreen] Error creating VideoViewController para UID ${canvas.uid}: $e',
+        tag: 'VideoCallScreen',
+      );
+      ReleaseLogger.error(
+        '❌ [VideoCallScreen] StackTrace: ${StackTrace.current}',
+        tag: 'VideoCallScreen',
+      );
+
+      final errorWidget = Container(
         color: Colors.grey[800],
         child: const Center(
           child: Icon(Icons.error, color: Colors.white, size: 48),
         ),
       );
+
+      // ✅ FIX: Guardar widget de error en caché también
+      _videoViewCache[canvas.uid] = errorWidget;
+
+      return errorWidget;
     }
   }
 
@@ -792,48 +404,12 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
         if (didPop) return;
 
         ReleaseLogger.log(
-          '🔙 [VideoCallScreen] Botón back presionado - terminando llamada',
+          '🔙 [VideoCallScreen] Botón back presionado - usando controller',
           tag: 'VideoCallScreen',
         );
 
-        ReleaseLogger.log(
-          '⚡ [VideoCallScreen] BOTÓN BACK - usando navegación robusta contra stack vacío',
-          tag: 'VideoCallScreen',
-        );
-
-        try {
-          if (Navigator.canPop(context)) {
-            ReleaseLogger.log(
-              '📱 [VideoCallScreen] BOTÓN BACK - Stack OK, usando Navigator.pop()',
-              tag: 'VideoCallScreen',
-            );
-            Navigator.of(context).pop();
-          } else {
-            ReleaseLogger.log(
-              '⚠️ [VideoCallScreen] BOTÓN BACK - Stack vacío, recreando navegación',
-              tag: 'VideoCallScreen',
-            );
-            _recreateAppNavigation();
-          }
-        } catch (e) {
-          ReleaseLogger.error(
-            '❌ [VideoCallScreen] Error en navegación de botón back: $e',
-            tag: 'VideoCallScreen',
-          );
-          // Emergency fallback
-          _recreateAppNavigation();
-        }
-
-        // Limpiar en background (sin bloquear navegación)
-        if (!_isTerminating) {
-          _controller.endCall().catchError((e) {
-            ReleaseLogger.error(
-              'Error cleaning up call: $e',
-              tag: 'VideoCallScreen',
-            );
-            return false;
-          });
-        }
+        // ✅ ARQUITECTURA CORRECTA: Screen → Controller
+        _controller.handleManualExit();
       },
       child: Scaffold(
         backgroundColor: Colors.black,
@@ -842,7 +418,6 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
             children: [
               // Vista principal de video
               _buildMainView(),
-
 
               // Controles de llamada
               _buildControls(),
@@ -864,8 +439,15 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     final remoteUids = _controller.remoteUids;
     final firestoreParticipants = _controller.firestoreParticipants;
 
+    // ✅ FIX: No mostrar vista de terminación nunca
+    // // CallStackNavigator eliminado - cierre automático por CallScreen maneja el cierre automáticamente
     if (_isTerminating) {
-      return _buildTerminatingView();
+      ReleaseLogger.log(
+        '⚠️ [VideoCallScreen] Intento de mostrar vista de terminación bloqueado - // CallStackNavigator eliminado - cierre automático por CallScreen debe manejar cierre',
+        tag: 'VideoCallScreen',
+      );
+      // Mostrar vista normal en lugar de terminación para evitar mostrar "Llamada terminada"
+      // // CallStackNavigator eliminado - cierre automático por CallScreen cerrará la pantalla automáticamente
     }
 
     // Si es video y está conectado, mostrar vista de video
@@ -878,13 +460,52 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       if (activeParticipants >= 3) {
         // Layout grupal: 3+ participantes activos (incluyendo pending)
         return _buildGroupCallGridEnhanced(remoteUids, firestoreParticipants);
-      } else if (remoteUids.isNotEmpty) {
-        // Layout 1-1: Menos de 3 participantes activos y al menos 1 conectado
-        final remoteUid = remoteUids.first;
-        return _buildVideoView(remoteUid);
       } else {
-        // Vista de espera: 2 participantes pero ninguno conectado aún
-        return _buildLocalPreviewView();
+        // ✅ FIX: Verificar participantes 'joined' en Firestore, no solo remoteUids de Agora
+        // remoteUids puede estar vacío si el otro usuario se conectó antes (no onUserJoined)
+        final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+
+        final joinedParticipants = firestoreParticipants.where((p) {
+          final userId = p['userId'] as String;
+          final status = p['status'] as String;
+          final isOtherUser = userId != currentUserId;
+          final isJoined = status == 'joined';
+          return isOtherUser && isJoined;
+        }).length;
+
+        ReleaseLogger.log(
+          '🔍 [VideoCallScreen] Estado: remoteUids=$remoteUids, joinedInFirestore=$joinedParticipants',
+          tag: 'VideoCallScreen',
+        );
+
+        if (joinedParticipants > 0) {
+          // Hay otros usuarios conectados según Firestore - mostrar video aunque Agora no los detecte
+          ReleaseLogger.log(
+            '🔍 [VideoCallScreen] Firestore muestra $joinedParticipants usuarios conectados, usando video view aunque remoteUids=$remoteUids',
+            tag: 'VideoCallScreen',
+          );
+
+          if (remoteUids.isNotEmpty) {
+            // Usar UID de Agora si está disponible
+            final remoteUid = remoteUids.first;
+            return _buildVideoView(remoteUid);
+          } else {
+            // ✅ FIX: Forzar sincronización de usuarios cuando Firestore indica joined pero Agora no los detecta
+            ReleaseLogger.log(
+              '🔧 [VideoCallScreen] Firestore indica joined pero Agora no los detecta, refrescando...',
+              tag: 'VideoCallScreen',
+            );
+
+            // Forzar al controller a refrescar la lista de usuarios remotos
+            _controller.refreshRemoteUsers();
+
+            // Mientras tanto, mostrar la vista de "conectando video"
+            return _buildConnectedButNoVideoView();
+          }
+        } else {
+          // Realmente no hay nadie conectado - mostrar esperando
+          return _buildLocalPreviewView();
+        }
       }
     } else {
       return _buildLocalPreviewView();
@@ -1077,10 +698,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [
-                  Colors.grey[800]!,
-                  Colors.grey[900]!,
-                ],
+                colors: [Colors.grey[800]!, Colors.grey[900]!],
               ),
             ),
             child: Center(
@@ -1091,9 +709,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                   Container(
                     width: 80,
                     height: 80,
-                    decoration: const BoxDecoration(
-                      shape: BoxShape.circle,
-                    ),
+                    decoration: const BoxDecoration(shape: BoxShape.circle),
                     child: ClipOval(
                       child: photoUrl != null && photoUrl.isNotEmpty
                           ? Image.network(
@@ -1124,7 +740,10 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
                   // ✅ Indicador de llamada más elegante
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.blue[400]!.withOpacity(0.2),
                       borderRadius: BorderRadius.circular(20),
@@ -1137,7 +756,9 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                           height: 16,
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(Colors.blue[300]!),
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              Colors.blue[300]!,
+                            ),
                           ),
                         ),
                         const SizedBox(width: 8),
@@ -1189,57 +810,125 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     );
   }
 
-  /// Vista cuando la llamada está terminando
+  /// Vista cuando la llamada está terminando (ELIMINADO - // CallStackNavigator eliminado - cierre automático por CallScreen maneja cierre automático)
+  /// No se debe mostrar "Llamada terminada" - // CallStackNavigator eliminado - cierre automático por CallScreen cierra automáticamente
+  @Deprecated('No usar - // CallStackNavigator eliminado - cierre automático por CallScreen maneja el cierre automáticamente')
   Widget _buildTerminatingView() {
-    // ✅ FIX: Si ya estamos navegando, mostrar vista normal para evitar spinner
-    if (_isNavigating) {
+    // ✅ FIX: Esta vista ya no se usa - // CallStackNavigator eliminado - cierre automático por CallScreen maneja el cierre
+    // Si por alguna razón se llama, mostrar vista normal
+    ReleaseLogger.log(
+      '⚠️ [VideoCallScreen] _buildTerminatingView() called pero está deprecated - mostrando vista normal',
+      tag: 'VideoCallScreen',
+    );
+    return _buildWaitingView();
+  }
+
+  /// Vista cuando Firestore indica usuarios conectados pero Agora no los detecta aún
+  Widget _buildConnectedButNoVideoView() {
+    final engine = _controller.agoraEngine;
+
+    if (engine == null || _controller.isDisposed) {
       return _buildWaitingView();
     }
 
-    return Container(
-      color: Colors.black,
-      child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.call_end, color: Colors.red, size: 64),
-            const SizedBox(height: 24),
-            const Text(
-              'Llamada terminada',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Positioned.fill(
+          child:
+              _createSafeVideoView(
+                engine,
+                const VideoCanvas(
+                  uid: 0, // Local user is always uid 0
+                  renderMode: RenderModeType.renderModeHidden,
+                ),
+              ) ??
+              Container(
+                color: Colors.black,
+                child: const Center(
+                  child: Icon(
+                    Icons.videocam_off,
+                    color: Colors.white,
+                    size: 64,
+                  ),
+                ),
               ),
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              'Regresando...',
-              style: TextStyle(color: Colors.grey, fontSize: 16),
-            ),
-            const SizedBox(height: 24),
-            ElevatedButton(
-              onPressed: () {
-                ReleaseLogger.log(
-                  '🆘 [VideoCallScreen] BOTÓN EMERGENCIA presionado - navegación manual',
-                  tag: 'VideoCallScreen',
-                );
-                if (Navigator.canPop(context)) {
-                  Navigator.of(context).pop();
-                } else {
-                  // ✅ FIX SPINNER INFINITO: Usar navegación segura en lugar de pushReplacementNamed('/')
-                  CallsOrchestrator().navigateBackSafely(context, source: 'video_call_emergency_button');
-                }
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.white,
-                foregroundColor: Colors.black,
-              ),
-              child: const Text('Volver'),
-            ),
-          ],
         ),
-      ),
+
+        // Overlay con mensaje de conexión establecida (sobre el video)
+        Container(
+          width: double.infinity,
+          height: double.infinity,
+          color: Colors.black.withValues(
+            alpha: 0.3,
+          ), // Transparente para ver el video
+          child: const Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.check_circle, color: Colors.green, size: 48),
+                SizedBox(height: 16),
+                Text(
+                  'Conectado - sincronizando video...',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    shadows: [
+                      Shadow(
+                        color: Colors.black87,
+                        offset: Offset(0, 1),
+                        blurRadius: 3,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        Positioned(
+          top: 60,
+          right: 20,
+          width: 100,
+          height: 140,
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white, width: 2),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black26,
+                  blurRadius: 8,
+                  offset: Offset(0, 4),
+                ),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child:
+                  _createSafeVideoView(
+                    engine,
+                    const VideoCanvas(
+                      uid: 0, // Local user is always uid 0
+                      renderMode: RenderModeType.renderModeHidden,
+                    ),
+                  ) ??
+                  Container(
+                    color: Colors.grey[800],
+                    child: const Center(
+                      child: Icon(
+                        Icons.videocam_off,
+                        color: Colors.white,
+                        size: 32,
+                      ),
+                    ),
+                  ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1464,15 +1153,21 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                 color: Colors.black.withValues(alpha: 0.7),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: Text(
-                _getParticipantName(uid),
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                ),
-                textAlign: TextAlign.center,
-                overflow: TextOverflow.ellipsis,
+              child: FutureBuilder<String>(
+                future: _getParticipantName(uid),
+                builder: (context, snapshot) {
+                  final name = snapshot.data ?? 'Participante $uid';
+                  return Text(
+                    name,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    textAlign: TextAlign.center,
+                    overflow: TextOverflow.ellipsis,
+                  );
+                },
               ),
             ),
           ),
@@ -1714,12 +1409,8 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                     Expanded(
                       child: TextButton(
                         onPressed: () {
-                          if (Navigator.canPop(context)) {
-                            Navigator.pop(context);
-                          } else {
-                            // ✅ FIX SPINNER INFINITO: Usar navegación segura en lugar de pushReplacementNamed('/')
-                            CallsOrchestrator().navigateBackSafely(context, source: 'video_call_exit_button');
-                          }
+                          // ✅ ARQUITECTURA CORRECTA: Botón "Salir" usa controller
+                          _controller.handleManualExit();
                         },
                         child: const Text('Salir'),
                       ),
@@ -1735,6 +1426,10 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   }
 
   void _showAddParticipantDialog() {
+    ReleaseLogger.log(
+      '🐛 [DEBUG] _showAddParticipantDialog called - StackTrace: ${StackTrace.current}',
+      tag: 'VideoCallScreen',
+    );
     showDialog(
       context: context,
       builder: (context) => _AddParticipantDialog(
@@ -1781,14 +1476,32 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     } else {
       // En cualquier otro caso (caller cancela, o call ya fue aceptada), es END CALL
       ReleaseLogger.log(
-        '📞 [VideoCallScreen] Terminando llamada normal - isCaller: ${widget.isCaller}, isJoined: ${_controller.isJoined}',
+        '📞 [VideoCallScreen] Terminando llamada normal - isCaller: ${widget.isCaller}, isJoined: ${_controller.isJoined}, callId: ${widget.callId}',
         tag: 'VideoCallScreen',
       );
-      _controller.endCall();
+
+      ReleaseLogger.log(
+        '🔍 [DEBUG_END_CALL] Llamando CallController.endCallStatic() para callId: ${widget.callId} (PURE WIDGET)',
+        tag: 'VideoCallScreen',
+      );
+
+      // ✅ FIX: Usar método estático en lugar de instancia que puede estar disposed
+      CallController.endCallStatic(widget.callId)
+          .then((success) {
+            ReleaseLogger.log(
+              '🔍 [DEBUG_END_CALL] endCallStatic() completado - success: $success, callId: ${widget.callId}',
+              tag: 'VideoCallScreen',
+            );
+          })
+          .catchError((e) {
+            ReleaseLogger.error(
+              '❌ [DEBUG_END_CALL] endCallStatic() falló: $e, callId: ${widget.callId}',
+              tag: 'VideoCallScreen',
+            );
+          });
     }
 
-    // ✅ FIX: No se necesita backup timer - el callStateStream manejará la navegación
-    // cuando detecte el estado 'ended' en Firestore
+    // ✅ PURE WIDGET: CallScreen maneja la navegación automáticamente
   }
 
   Widget _buildRemoteVideoForTile(int uid) {
@@ -1814,14 +1527,49 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
         );
   }
 
-  String _getParticipantName(int uid) {
+  Future<String> _getParticipantName(int uid) async {
     if (uid == 0) {
       return 'Tú';
     }
 
-    // TODO: Implementar mapeo de UID a nombre real desde Firestore
-    // Por ahora retornamos el UID formateado hasta que implementemos el mapeo
-    return 'Participante $uid';
+    try {
+      // Estrategia más simple: obtener nombres de todos los participantes remotos joined
+      // y asignar el primer nombre disponible al UID
+      final firestoreParticipants = _controller.firestoreParticipants;
+      final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+
+      // Obtener todos los participantes remotos con status 'joined'
+      final remoteParticipants = firestoreParticipants.where((participant) {
+        final userId = participant['userId'] as String;
+        final status = participant['status'] as String;
+        return userId != currentUserId && status == 'joined';
+      }).toList();
+
+      // Si hay participantes, usar el primero como ejemplo
+      // En llamadas 1-1, solo hay un remoto. En grupales, se mostrarán todos eventualmente
+      if (remoteParticipants.isNotEmpty) {
+        final firstRemoteParticipant = remoteParticipants.first;
+        final userId = firstRemoteParticipant['userId'] as String;
+
+        // Usar cache para evitar múltiples llamadas
+        if (_participantNamesCache.containsKey(userId)) {
+          return _participantNamesCache[userId]!;
+        }
+
+        final name = await _controller.getParticipantName(userId);
+        _participantNamesCache[userId] = name;
+        return name;
+      }
+
+      // Fallback si no se encuentra participante
+      return 'Participante $uid';
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [VideoCallScreen] Error obteniendo nombre para UID $uid: $e',
+        tag: 'VideoCallScreen',
+      );
+      return 'Participante $uid';
+    }
   }
 }
 
@@ -1912,6 +1660,10 @@ class _AddParticipantDialogState extends State<_AddParticipantDialog> {
       if (result['success'] == true) {
         // Cerrar dialog y notificar éxito
         if (mounted) {
+          ReleaseLogger.log(
+            '🐛 [DEBUG] Cerrando dialog exitosamente y llamando callback',
+            tag: 'VideoCallScreen',
+          );
           Navigator.pop(context);
           widget.onParticipantsAdded?.call(result);
         }

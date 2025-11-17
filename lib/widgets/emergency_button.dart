@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/emergency_service.dart';
-import '../screens/call/video/video_call_screen.dart';
+import '../controllers/call_controller.dart';
 
 class EmergencyButton extends StatefulWidget {
   final VoidCallback? onEmergencyActivated;
@@ -180,20 +180,14 @@ class _EmergencyButtonState extends State<EmergencyButton>
     try {
       print('📞 Uniéndose a llamada de emergencia...');
 
-      // LÓGICA OPTIMISTA: Abrir pantalla inmediatamente
+      // LÓGICA OPTIMISTA: Abrir pantalla inmediatamente usando CallController
       if (mounted) {
-        await Navigator.of(context, rootNavigator: true).push(
-          MaterialPageRoute(
-            builder: (context) => VideoCallScreen(
-              callId: emergencyId,
-              channelName: channelName,
-              receiverId: 'emergency_parents', // ID especial para emergencias
-              isCaller: true,
-              remoteName: 'Padres',
-              isVideo: true,
-              // Token y uid se generarán en background dentro del VideoCallScreen
-            ),
-          ),
+        await CallController.startCall(
+          context: context,
+          receiverId: 'emergency_parents', // ID especial para emergencias
+          remoteName: 'Padres',
+          isVideo: true,
+          isEmergency: true,
         );
       }
     } catch (e) {

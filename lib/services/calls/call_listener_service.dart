@@ -1,11 +1,10 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../voip_service.dart';
 import '../app_state_service.dart';
-import 'call_stack_navigator.dart';
 import '../../utils/release_logger.dart';
+import '../../models/call.dart';
 
 /// Servicio dedicado para manejar todos los listeners de llamadas
 ///
@@ -22,6 +21,9 @@ class CallListenerService {
   // State
   StreamSubscription<QuerySnapshot>? _foregroundCallSubscription;
   bool _isListening = false;
+
+  // ✅ UNIFICADO: Streams individuales por callId para CallScreen
+  final Map<String, StreamController<Call?>> _callStreamControllers = {};
 
   // Callbacks para notificar al orchestrator
   Function(String callId, String source)? onCallDetected;
@@ -64,6 +66,31 @@ class CallListenerService {
     );
   }
 
+  /// ✅ UNIFICADO: Obtener stream individual para una llamada específica
+  /// Reemplaza CallController.watchCall() para eliminar redundancia
+  Stream<Call?> getCallStream(String callId) {
+    if (!_callStreamControllers.containsKey(callId)) {
+      _callStreamControllers[callId] = StreamController<Call?>.broadcast();
+      ReleaseLogger.log(
+        '📡 [CallListenerService] Creando stream individual para callId: $callId',
+        tag: 'CallListenerService',
+      );
+    }
+    return _callStreamControllers[callId]!.stream;
+  }
+
+  /// ✅ UNIFICADO: Cerrar stream individual cuando ya no se necesite
+  void closeCallStream(String callId) {
+    final controller = _callStreamControllers.remove(callId);
+    if (controller != null) {
+      controller.close();
+      ReleaseLogger.log(
+        '🗑️ [CallListenerService] Stream cerrado para callId: $callId',
+        tag: 'CallListenerService',
+      );
+    }
+  }
+
   /// Dispose listeners
   void dispose() {
     // ✅ DEBUG: Logging detallado antes de dispose
@@ -93,6 +120,12 @@ class CallListenerService {
     _isListening = false;
     onCallDetected = null;
     onCallEnded = null;
+
+    // ✅ UNIFICADO: Limpiar todos los stream controllers individuales
+    for (final controller in _callStreamControllers.values) {
+      controller.close();
+    }
+    _callStreamControllers.clear();
 
     ReleaseLogger.log(
       '🧹 [CallListenerService] DISPOSE COMPLETADO - subscription=null, listening=false',
@@ -162,17 +195,15 @@ class CallListenerService {
         return false;
       }
 
-      final cutoffTime = DateTime.now().subtract(Duration(minutes: 5));
-
       ReleaseLogger.log(
-        '🔍 [DEBUG TEST] Ejecutando test manual de Firestore...',
+        '🔍 [DEBUG TEST] Ejecutando test manual de Firestore (UNIFICADO - sin filtro temporal)...',
         tag: 'CallListenerService',
       );
 
       final testSnapshot = await FirebaseFirestore.instance
           .collection('calls')
           .where('participants', arrayContains: currentUserId)
-          .where('createdAt', isGreaterThan: cutoffTime)
+          .limit(10) // Limitar para evitar queries muy grandes
           .get();
 
       final foundDocs = testSnapshot.docs.length;
@@ -278,10 +309,7 @@ class CallListenerService {
     await Future.delayed(Duration(milliseconds: 100));
 
     // Re-inicializar completamente
-    await initialize(
-      onCallDetected: onCallDetected,
-      onCallEnded: onCallEnded,
-    );
+    await initialize(onCallDetected: onCallDetected, onCallEnded: onCallEnded);
 
     ReleaseLogger.log(
       '✅ [CallListenerService] Listener refresh completado',
@@ -322,19 +350,8 @@ class CallListenerService {
     try {
       final callsCollection = FirebaseFirestore.instance.collection('calls');
 
-      // ✅ FIX CUTOFFTIME: Siempre usar tiempo ACTUAL para evitar filtros obsoletos
-      final cutoffTime = DateTime.now().subtract(Duration(minutes: 5));
-      final now = DateTime.now();
-
       ReleaseLogger.log(
-        '🔍 [CallListenerService] Configurando query FRESH: participants arrayContains $currentUserId, createdAt > ${cutoffTime.toIso8601String()}',
-        tag: 'CallListenerService',
-      );
-
-      // ✅ DEEP DEBUG: Log tiempo actual vs cutoff (FRESH cada vez)
-      final cutoffDiff = now.difference(cutoffTime).inMinutes;
-      ReleaseLogger.log(
-        '🔍 [DEBUG DEEP] Time check FRESH: now=${now.toIso8601String()}, cutoff=${cutoffTime.toIso8601String()}, diff=${cutoffDiff}min',
+        '🔍 [CallListenerService] Configurando query UNIFICADO: participants arrayContains $currentUserId (SIN filtro createdAt para detectar TODOS los cambios)',
         tag: 'CallListenerService',
       );
 
@@ -350,40 +367,40 @@ class CallListenerService {
         tag: 'CallListenerService',
       );
 
-      // ✅ DEBUG QUERY: Verificar que la query está bien formada
+      // ✅ UNIFICADO: Query sin filtro createdAt para detectar TODOS los cambios
       ReleaseLogger.log(
-        '🔍 [DEBUG QUERY] Query details: collection=calls, participants arrayContains $currentUserId, createdAt > ${cutoffTime.millisecondsSinceEpoch}',
+        '🔍 [DEBUG QUERY] Query details: collection=calls, participants arrayContains $currentUserId (SIN filtro temporal)',
         tag: 'CallListenerService',
       );
 
       // ✅ TEMPORAL DEBUG: Hacer query sin filtros para ver todos los documentos
-      callsCollection.limit(10).get().then((allCallsSnapshot) {
-        ReleaseLogger.log(
-          '🔍 [DEBUG TEMP] Total calls en collection: ${allCallsSnapshot.docs.length}',
-          tag: 'CallListenerService',
-        );
-        for (var doc in allCallsSnapshot.docs) {
-          final data = doc.data() as Map<String, dynamic>?;
-          final participants = data?['participants'];
-          final createdAt = data?['createdAt'];
-          ReleaseLogger.log(
-            '🔍 [DEBUG TEMP] Call ${doc.id}: participants=$participants, createdAt=$createdAt',
-            tag: 'CallListenerService',
-          );
-        }
-      }).catchError((e) {
-        ReleaseLogger.log(
-          '🔍 [DEBUG TEMP] Error getting all calls: $e',
-          tag: 'CallListenerService',
-        );
-      });
+      callsCollection
+          .limit(10)
+          .get()
+          .then((allCallsSnapshot) {
+            ReleaseLogger.log(
+              '🔍 [DEBUG TEMP] Total calls en collection: ${allCallsSnapshot.docs.length}',
+              tag: 'CallListenerService',
+            );
+            for (var doc in allCallsSnapshot.docs) {
+              final data = doc.data() as Map<String, dynamic>?;
+              final participants = data?['participants'];
+              final createdAt = data?['createdAt'];
+              ReleaseLogger.log(
+                '🔍 [DEBUG TEMP] Call ${doc.id}: participants=$participants, createdAt=$createdAt',
+                tag: 'CallListenerService',
+              );
+            }
+          })
+          .catchError((e) {
+            ReleaseLogger.log(
+              '🔍 [DEBUG TEMP] Error getting all calls: $e',
+              tag: 'CallListenerService',
+            );
+          });
 
       _foregroundCallSubscription = callsCollection
           .where('participants', arrayContains: currentUserId)
-          .where(
-            'createdAt',
-            isGreaterThan: cutoffTime,
-          )
           .snapshots()
           .listen(
             (snapshot) {
@@ -461,6 +478,18 @@ class CallListenerService {
         );
 
         if (docChange.type == DocumentChangeType.added) {
+          // ✅ FIX SEGUNDA LLAMADA: Filtrar llamadas ya terminadas
+          final callData = docChange.doc.data() as Map<String, dynamic>?;
+          final endedAt = callData?['endedAt'];
+
+          if (endedAt != null) {
+            ReleaseLogger.log(
+              '⏭️ [CallListenerService] Saltando llamada terminada: ${docChange.doc.id}',
+              tag: 'CallListenerService',
+            );
+            continue; // Saltar llamadas ya terminadas
+          }
+
           await _processForegroundCall(docChange.doc, isNewCall: true);
         } else if (docChange.type == DocumentChangeType.modified) {
           await _processForegroundCall(docChange.doc, isNewCall: false);
@@ -490,15 +519,33 @@ class CallListenerService {
         tag: 'CallListenerService',
       );
 
-      // ✅ FIX: Para llamadas modificadas, verificar si terminaron
+      // ✅ UNIFICADO: Emitir update al stream individual si existe
+      if (_callStreamControllers.containsKey(callId) && callData != null) {
+        try {
+          final call = Call.fromFirestore(callId, callData);
+          _callStreamControllers[callId]!.add(call);
+          ReleaseLogger.log(
+            '📡 [CallListenerService] Update emitido al stream de $callId',
+            tag: 'CallListenerService',
+          );
+        } catch (e) {
+          ReleaseLogger.error(
+            '❌ [CallListenerService] Error emitiendo update a stream $callId: $e',
+            tag: 'CallListenerService',
+          );
+        }
+      }
+
+      // ✅ FIX LOOP INFINITO: Para llamadas modificadas, solo emitir al stream - NO llamar onCallEnded
       if (!isNewCall && callData != null) {
         final endedAt = callData['endedAt'];
         if (endedAt != null) {
           ReleaseLogger.log(
-            '🔚 [CallListenerService] Llamada $callId terminada - notificando onCallEnded',
+            '🔚 [CallListenerService] Llamada $callId terminada - solo actualizando stream (NO onCallEnded para evitar loop)',
             tag: 'CallListenerService',
           );
-          onCallEnded?.call(callId);
+          // ✅ NO llamar onCallEnded?.call(callId) - causaría loop infinito
+          // El CallScreen detectará el estado "ended" via stream y se cerrará automáticamente
           return; // No procesar más esta llamada
         }
       }
@@ -548,20 +595,11 @@ class CallListenerService {
           return;
         }
 
-        // ✅ FIX: Verificar si ya hay una CallScreen activa para evitar navegaciones duplicadas
-        final hasActiveCallScreen = CallStackNavigator.hasActiveCall;
+        // ✅ SIMPLIFIED: CallScreen maneja estados internamente - siempre notificar
         ReleaseLogger.log(
-          '📱 [DEBUG DEEP] CallScreen check: hasActiveCallScreen = $hasActiveCallScreen',
+          '📱 [CallListenerService] Notificando llamada entrante (CallScreen manejará estados)',
           tag: 'CallListenerService',
         );
-
-        if (hasActiveCallScreen) {
-          ReleaseLogger.log(
-            '📱 [DEBUG DEEP] ⚠️ BLOQUEADO POR CALLSCREEN: Ya hay CallScreen activa - saltando navegación para $callId',
-            tag: 'CallListenerService',
-          );
-          return;
-        }
 
         // ✅ FIX: En foreground, AMBAS plataformas necesitan IncomingCallScreen
         // Android: CallKit nativo NO muestra nada en foreground
@@ -586,5 +624,4 @@ class CallListenerService {
       );
     }
   }
-
 }

@@ -300,6 +300,7 @@ exports.addParticipants = onCall(
       await db.collection('calls').doc(callId).update(updates);
 
       console.log('🔔 [addParticipants] Enviando notificaciones...');
+      console.log(`🐛 [DEBUG] callData.type: "${callData.type}" (should be "video" for video calls)`);
       // ✅ Enviar notificaciones a nuevos participantes
       const notificationPromises = newParticipantIds.map(participantId =>
         sendCallNotification(participantId, callId, callData.type, requesterId)
@@ -318,6 +319,92 @@ exports.addParticipants = onCall(
     } catch (error) {
       console.error('❌ [addParticipants] Error crítico:', error);
       throw new HttpsError('internal', `Error agregando participantes: ${error.message}`);
+    }
+  });
+
+/**
+ * Aceptar llamada
+ *
+ * Actualiza el estado del participante de 'waiting' a 'joined'
+ * Reemplaza la escritura directa desde el frontend para mantener consistencia con la arquitectura
+ */
+exports.acceptCall = onCall(
+  {
+    region: 'us-central1',
+    timeoutSeconds: 15,
+    memory: '256MB',
+    cors: true,
+  },
+  async (request) => {
+    const data = request.data;
+    const context = { auth: request.auth };
+    try {
+      console.log('✅ [acceptCall] INICIANDO - data:', JSON.stringify(data, null, 2));
+
+      // ✅ Validación de autenticación
+      if (!context.auth || !context.auth.uid) {
+        throw new HttpsError('unauthenticated', 'Usuario no autenticado');
+      }
+      const userId = context.auth.uid;
+
+      // ✅ Validar campos requeridos
+      if (!data.callId || typeof data.callId !== 'string') {
+        throw new HttpsError('invalid-argument', 'callId debe ser un string');
+      }
+
+      const callId = data.callId;
+
+      console.log(`✅ [acceptCall] Usuario ${userId} aceptando llamada ${callId}`);
+
+      // ✅ Verificar que la llamada existe y está activa
+      const callDoc = await db.collection('calls').doc(callId).get();
+      if (!callDoc.exists) {
+        throw new HttpsError('not-found', 'Llamada no encontrada');
+      }
+
+      const callData = callDoc.data();
+
+      // ✅ Verificar que la llamada no ha terminado
+      if (callData.endedAt) {
+        throw new HttpsError('failed-precondition', 'La llamada ya ha terminado');
+      }
+
+      // ✅ Verificar que el usuario está en la llamada como participante
+      const participantDetails = callData.participantDetails || {};
+      if (!participantDetails[userId]) {
+        throw new HttpsError('permission-denied', 'No estás invitado a esta llamada');
+      }
+
+      // ✅ Verificar que el usuario está en estado 'waiting'
+      const currentStatus = participantDetails[userId].status;
+      if (currentStatus !== 'waiting') {
+        throw new HttpsError('failed-precondition',
+          `No puedes aceptar la llamada. Estado actual: ${currentStatus}`);
+      }
+
+      // ✅ Actualizar estado del participante a 'joined'
+      await db.collection('calls').doc(callId).update({
+        [`participantDetails.${userId}.status`]: 'joined',
+        [`participantDetails.${userId}.joinedAt`]: admin.firestore.FieldValue.serverTimestamp(),
+        // Remover waitingAt al hacer join
+        [`participantDetails.${userId}.waitingAt`]: admin.firestore.FieldValue.delete()
+      });
+
+      console.log(`✅ [acceptCall] Usuario ${userId} aceptó llamada ${callId} exitosamente`);
+
+      return {
+        success: true,
+        callId: callId,
+        status: 'joined',
+        // Devolver datos de la llamada necesarios para conectarse
+        channelName: callData.channelName,
+        token: callData.token,
+        appId: process.env.AGORA_APP_ID
+      };
+
+    } catch (error) {
+      console.error('❌ [acceptCall] Error crítico:', error);
+      throw new HttpsError('internal', `Error aceptando llamada: ${error.message}`);
     }
   });
 
@@ -386,7 +473,11 @@ exports.updateCallStatus = onDocumentUpdated(
       const isOldCall = callAge > 2 * 60 * 1000; // 2 minutos
 
       // ✅ FIX: Cambiar hasEnded por activeCount < 2 para permitir llamadas grupales → 1-1
-      const shouldEnd = (activeCount < 2) || allDeclined || someone1on1Declined || (activeCount === 0 && isOldCall);
+      // ✅ FIX RACE CONDITION: Para llamadas 1-1, NO terminar si hay alguien waiting (puede estar aceptando)
+      const hasWaitingParticipant = waitingCount > 0;
+      const isAcceptingCall = is1on1Call && hasWaitingParticipant && joinedCount > 0;
+
+      const shouldEnd = (activeCount < 2 && !isAcceptingCall) || allDeclined || someone1on1Declined || (activeCount === 0 && isOldCall);
 
       if (shouldEnd) {
         console.log(`🚫 [updateCallStatus] Terminando call ${callId} - activeCount: ${activeCount}, allDeclined: ${allDeclined}, someone1on1Declined: ${someone1on1Declined}, isOldCall: ${isOldCall}`);

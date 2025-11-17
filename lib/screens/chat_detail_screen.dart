@@ -9,6 +9,7 @@ import '../controllers/chat_controller_optimistic.dart';
 import '../notification_service.dart';
 import '../services/reaction_service.dart';
 import '../services/calls/calls_orchestrator.dart';
+import '../controllers/call_controller.dart';
 import '../widgets/reaction_picker.dart';
 import 'chat/widgets/chat_app_bar.dart';
 import 'chat/widgets/chat_input_bar.dart';
@@ -580,21 +581,13 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
             );
           }
         } else {
-          // Navegar a llamada de video con datos correctos del orchestrator
+          // Usar CallController para navegación centralizada
           if (mounted) {
-            Navigator.of(context, rootNavigator: true).push(
-              MaterialPageRoute(
-                builder: (context) => VideoCallScreen(
-                  callId: callId,
-                  channelName: channelName,
-                  token: token,
-                  uid: 0, // Se generará dinámicamente
-                  receiverId: widget.contactId,
-                  remoteName: widget.contactName,
-                  isCaller: true,
-                  isVideo: true,
-                ),
-              ),
+            await CallController.startCall(
+              context: context,
+              receiverId: widget.contactId,
+              remoteName: widget.contactName,
+              isVideo: true,
             );
           }
         }

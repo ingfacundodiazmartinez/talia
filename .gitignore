@@ -82,3 +82,4 @@ v2-files/
 
 # Firebase Admin SDK Service Account
 *firebase*adminsdk*.json
+tmp/

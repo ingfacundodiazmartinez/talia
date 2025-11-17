@@ -1,21 +1,30 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import '../../services/calls/calls_orchestrator.dart';
-import '../../services/calls/call_stack_navigator.dart';
+import '../../controllers/call_controller.dart';
 import '../../models/call.dart';
 import '../../utils/release_logger.dart';
+import '../../services/calls/call_listener_service.dart';
+// ✅ IMPORTAR WIDGETS EXISTENTES COMO COMPONENTES
 import 'video/video_call_screen.dart';
 import 'audio/audio_call_screen.dart';
 import 'common/incoming_call_screen.dart';
 
-/// Router principal para llamadas que decide qué widget mostrar
+/// PANTALLA UNIFICADA DE LLAMADAS
 ///
-/// Responsabilidades:
-/// - Determinar si es llamada entrante o activa
-/// - Determinar si es audio o video
-/// - Navegar al widget apropiado
-/// - Manejar transiciones entre estados
+/// ✅ NUEVO ENFOQUE SIMPLIFICADO:
+/// - Una sola pantalla que maneja TODOS los estados de llamada internamente
+/// - Renderiza la UI correcta según el estado (incoming, active video, active audio)
+/// - Un solo dispose() y cleanup cuando termina
+/// - Navegación mucho más simple en CallStackNavigator
+///
+/// Estados que maneja:
+/// - connecting: Creando/conectando llamada
+/// - incomingVideo/incomingAudio: Llamada entrante (mostrar botones aceptar/rechazar)
+/// - activeVideo: Videollamada activa (mostrar video + controles)
+/// - activeAudio: Llamada de audio activa (mostrar audio UI + controles)
+/// - ended: Llamada terminada (cerrar automáticamente)
+/// - error: Error (mostrar error + botón salir)
 class CallScreen extends StatefulWidget {
   final String callId;
 
@@ -26,79 +35,103 @@ class CallScreen extends StatefulWidget {
 }
 
 class _CallScreenState extends State<CallScreen> {
+  // ✅ ESTADO MÍNIMO - Solo lo necesario para routing
   Call? _currentCall;
   bool _isLoading = true;
   String _otherParticipantName = 'Usuario';
   bool _isCreatingCall = false;
-  StreamSubscription? _callEndListener;
+  String _errorMessage = '';
+  bool _isClosing = false; // Flag para evitar renders después de cerrar
+
+  // ✅ LISTENER AUTOMÁTICO DE ESTADO
+  StreamSubscription? _callStateListener;
 
   @override
   void initState() {
     super.initState();
+
+    // ✅ CONFIGURACIÓN MÍNIMA - Solo cargar datos y configurar listener automático
     _loadCallData();
-    _setupCallTerminationListener();
+    _setupAutomaticStateListener();
   }
 
-  /// Configurar listener para detectar cuando la llamada termina
-  void _setupCallTerminationListener() {
-    // Solo configurar si no es una llamada temporal
-    if (widget.callId.startsWith('temp_')) return;
+  /// ✅ LISTENER UNIFICADO: CallScreen usa CallListenerService directamente
+  /// Elimina redundancia con CallController.watchCall()
+  void _setupAutomaticStateListener() {
+    // ✅ UNIFICADO: Usar CallListenerService en lugar de CallController.watchCall()
+    _callStateListener = CallListenerService().getCallStream(widget.callId).listen(
+      (call) {
+        if (!mounted || _isClosing) return;
 
-    try {
-      _callEndListener = CallsOrchestrator()
-          .watchCall(widget.callId)
-          .listen((call) {
-        if (call?.endedAt != null && mounted) {
+        // ✅ CRITICAL: Cerrar automáticamente si la llamada terminó
+        if (call?.endedAt != null) {
           ReleaseLogger.log(
-            '🔚 [CallScreen] Detectada terminación de llamada ${widget.callId} - cerrando automáticamente',
+            '🔚 [CallScreen] Llamada terminada - cerrando CallScreen automáticamente',
             tag: 'CallScreen',
           );
 
-          // ✅ CALL STACK: Notificar cierre al stack navigator
-          CallStackNavigator.onCallScreenClosed(widget.callId);
+          _isClosing = true;
 
-          // Cerrar la pantalla
-          if (Navigator.of(context).canPop()) {
-            Navigator.of(context).pop();
-          } else {
-            CallsOrchestrator().navigateBackSafely(context, source: 'call_screen_ended');
-          }
+          // Cerrar después de un frame para evitar problemas de setState durante build
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              Navigator.of(context).pop();
+            }
+          });
+          return;
         }
-      });
-    } catch (e) {
-      ReleaseLogger.error(
-        '❌ [CallScreen] Error configurando listener de terminación: $e',
-        tag: 'CallScreen',
-      );
-    }
+
+        // ✅ SIMPLIFIED: Solo actualizar UI si la llamada sigue activa
+        ReleaseLogger.log(
+          '📱 [CallScreen] UNIFICADO - Actualizando UI via CallListenerService para ${widget.callId}',
+          tag: 'CallScreen',
+        );
+
+        setState(() {
+          _currentCall = call;
+        });
+      },
+      onError: (error) {
+        ReleaseLogger.error(
+          '❌ [CallScreen] Error en listener unificado: $error',
+          tag: 'CallScreen',
+        );
+        if (mounted && !_isClosing) {
+          setState(() {
+            _errorMessage = 'Error monitoreando llamada: $error';
+          });
+        }
+      },
+    );
   }
 
-  /// Cargar datos de la llamada desde Firestore
+
+  /// ✅ SIMPLIFICADO: Solo cargar datos de la llamada para routing
   Future<void> _loadCallData() async {
     try {
       // ✅ UX FIX: Detectar si es una llamada temporal (en proceso de creación)
       if (widget.callId.startsWith('temp_')) {
-        setState(() {
-          _isCreatingCall = true;
-          _isLoading = false;
-        });
+        if (!_isClosing) {
+          setState(() {
+            _isCreatingCall = true;
+            _isLoading = false;
+          });
 
-        // Iniciar polling para esperar que la llamada real se cree
-        _pollForRealCall();
+          // Iniciar polling para esperar que la llamada real se cree
+          _pollForRealCall();
+        }
         return;
       }
 
-      final call = await CallsOrchestrator().getCall(widget.callId);
+      final call = await CallController.getCall(widget.callId);
 
       // Si tenemos la call, obtener el nombre del otro participante
       String participantName = 'Usuario';
       if (call != null) {
-        participantName = await CallsOrchestrator().getOtherParticipantName(
-          call,
-        );
+        participantName = await CallController.getOtherParticipantName(call);
       }
 
-      if (mounted) {
+      if (mounted && !_isClosing) {
         setState(() {
           _currentCall = call;
           _otherParticipantName = participantName;
@@ -111,10 +144,11 @@ class _CallScreenState extends State<CallScreen> {
         '❌ [CallScreen] Error cargando datos de llamada: $e',
         tag: 'CallScreen',
       );
-      if (mounted) {
+      if (mounted && !_isClosing) {
         setState(() {
           _isLoading = false;
           _isCreatingCall = false;
+          _errorMessage = 'Error cargando llamada: $e';
         });
       }
     }
@@ -138,7 +172,7 @@ class _CallScreenState extends State<CallScreen> {
         );
 
         // Buscar llamadas activas del usuario actual en los últimos 30 segundos
-        final recentCalls = await CallsOrchestrator().getRecentCalls(
+        final recentCalls = await CallController.getRecentCalls(
           currentUserId,
         );
 
@@ -151,7 +185,7 @@ class _CallScreenState extends State<CallScreen> {
             tag: 'CallScreen',
           );
 
-          if (mounted) {
+          if (mounted && !_isClosing) {
             ReleaseLogger.log(
               '🔄 [CallScreen] Actualizando estado con llamada real: ${realCall.id}, state: ${realCall.getStateForUser(currentUserId)}',
               tag: 'CallScreen',
@@ -162,11 +196,12 @@ class _CallScreenState extends State<CallScreen> {
               tag: 'CallScreen',
             );
 
-            // ✅ FIX CRÍTICO: Usar CallStackNavigator para evitar dispose del CallController
-            // pushReplacement destruye el CallController singleton que necesita la pantalla real
-            CallStackNavigator.showCallScreen(
+            // ✅ ARQUITECTURA CORRECTA: UI → CallController → CallsOrchestrator → CallNavigationService → CallStackNavigator
+            // ✅ FIX: replaceTemporary=true para usar pushReplacement y evitar stack duplicado
+            await CallController.navigateToRealCall(
               context: context,
               callId: realCall.id,
+              replaceTemporary: true,
             );
           }
           return;
@@ -180,21 +215,25 @@ class _CallScreenState extends State<CallScreen> {
     }
 
     // Si llegamos aquí y seguimos creando, mostrar error
-    if (mounted && _isCreatingCall) {
+    if (mounted && _isCreatingCall && !_isClosing) {
       setState(() {
         _isCreatingCall = false;
       });
     }
   }
 
+  /// ✅ MÉTODOS AUXILIARES SIMPLIFICADOS
+
   /// Determinar el estado actual del usuario en la llamada
-  CallState _determineCallState() {
+  CallState _determineCallState([Call? call]) {
+    call = call ?? _currentCall;
+
     // ✅ UX FIX: Si estamos creando la llamada, mostrar estado de "connecting"
     if (_isCreatingCall) {
       return CallState.connecting;
     }
 
-    if (_currentCall == null) {
+    if (call == null) {
       return CallState.error;
     }
 
@@ -203,18 +242,36 @@ class _CallScreenState extends State<CallScreen> {
       return CallState.error;
     }
 
-    return _currentCall!.getStateForUser(currentUserId);
+    // ✅ UX FIX: Si CallKit aceptó la llamada, mostrar pantalla activa inmediatamente
+    // No esperar a que Firebase actualice el status de 'waiting' → 'joined'
+    // Esto elimina el delay de 7+ segundos después de aceptar desde CallKit
+    if (CallController.isCallKitHandled(widget.callId)) {
+      final isReceiver = call.createdBy != currentUserId;
+      final myStatus = call.participants[currentUserId]?.status;
+
+      if (isReceiver && myStatus == 'waiting') {
+        // CallKit aceptó pero Firebase no actualizó → tratar como activo
+        ReleaseLogger.log(
+          '🚀 [CallScreen] CallKit activo + status waiting → forzando estado activo para UX inmediata',
+          tag: 'CallScreen',
+        );
+        return call.type == 'video' ? CallState.activeVideo : CallState.activeAudio;
+      }
+    }
+
+    return call.getStateForUser(currentUserId);
   }
 
   /// Obtener el ID del otro usuario (para llamadas 1-1)
-  String _getOtherUserId() {
-    if (_currentCall == null) return '';
+  String _getOtherUserId([Call? call]) {
+    call = call ?? _currentCall;
+    if (call == null) return '';
 
     final currentUserId = FirebaseAuth.instance.currentUser?.uid;
     if (currentUserId == null) return '';
 
     // Buscar el primer participante que NO sea el usuario actual
-    for (String participantId in _currentCall!.participants.keys) {
+    for (String participantId in call.participants.keys) {
       if (participantId != currentUserId) {
         return participantId;
       }
@@ -223,22 +280,41 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   /// Determinar si el usuario actual es quien inició la llamada
-  bool _isCurrentUserCaller() {
-    if (_currentCall == null) return false;
+  bool _isCurrentUserCaller([Call? call]) {
+    call = call ?? _currentCall;
+    if (call == null) return false;
 
     final currentUserId = FirebaseAuth.instance.currentUser?.uid;
-    return _currentCall!.createdBy == currentUserId;
+    return call.createdBy == currentUserId;
   }
+
 
   @override
   void dispose() {
-    // Limpiar listener de terminación
-    _callEndListener?.cancel();
+    ReleaseLogger.log(
+      '🧹 [CallScreen] dispose() - cleaning up unified call screen router: ${widget.callId}',
+      tag: 'CallScreen',
+    );
+
+    // ✅ CLEANUP UNIFICADO - Cancelar listener y limpiar stream de CallListenerService
+    _callStateListener?.cancel();
+
+    // ✅ UNIFICADO: Cerrar stream individual en CallListenerService
+    CallListenerService().closeCallStream(widget.callId);
+
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    // ✅ FIXED: Si ya estamos cerrando, no renderizar nada más
+    if (_isClosing) {
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(child: CircularProgressIndicator(color: Colors.white)),
+      );
+    }
+
     if (_isLoading) {
       return const Scaffold(
         backgroundColor: Colors.black,
@@ -249,42 +325,17 @@ class _CallScreenState extends State<CallScreen> {
     final state = _determineCallState();
 
     ReleaseLogger.log(
-      '📱 [CallScreen] Routing to state: $state for call ${widget.callId}',
+      '📱 [CallScreen] UNIFIED - Rendering state: $state for call ${widget.callId}',
       tag: 'CallScreen',
     );
 
-    ReleaseLogger.log(
-      '🔍 [CallScreen] Debug info - isCreating: $_isCreatingCall, currentCall: ${_currentCall?.id}, callEnded: ${_currentCall?.endedAt != null}',
-      tag: 'CallScreen',
-    );
-
+    // ✅ RENDER PARCIAL - Usar widgets existentes como componentes
     switch (state) {
       case CallState.connecting:
-        return Scaffold(
-          backgroundColor: Colors.black,
-          body: Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                CircularProgressIndicator(
-                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                ),
-                SizedBox(height: 24),
-                Text(
-                  'Conectando...',
-                  style: TextStyle(color: Colors.white, fontSize: 18),
-                ),
-                SizedBox(height: 8),
-                Text(
-                  _otherParticipantName,
-                  style: TextStyle(color: Colors.white70, fontSize: 16),
-                ),
-              ],
-            ),
-          ),
-        );
+        return _buildConnectingView();
 
       case CallState.incomingVideo:
+        // ✅ RENDER PARCIAL: Usar IncomingCallScreen existente
         return IncomingCallScreen(
           callId: widget.callId,
           callerName: _otherParticipantName,
@@ -298,6 +349,7 @@ class _CallScreenState extends State<CallScreen> {
         );
 
       case CallState.incomingAudio:
+        // ✅ RENDER PARCIAL: Usar IncomingCallScreen existente
         return IncomingCallScreen(
           callId: widget.callId,
           callerName: _otherParticipantName,
@@ -311,6 +363,7 @@ class _CallScreenState extends State<CallScreen> {
         );
 
       case CallState.activeVideo:
+        // ✅ RENDER PARCIAL: Usar VideoCallScreen existente
         return VideoCallScreen(
           callId: widget.callId,
           channelName: _currentCall!.channelName,
@@ -323,6 +376,7 @@ class _CallScreenState extends State<CallScreen> {
         );
 
       case CallState.activeAudio:
+        // ✅ RENDER PARCIAL: Usar AudioCallScreen existente
         return AudioCallScreen(
           callId: widget.callId,
           channelName: _currentCall!.channelName,
@@ -334,32 +388,77 @@ class _CallScreenState extends State<CallScreen> {
         );
 
       case CallState.ended:
+        // ✅ FIXED: No renderizar nada - dejar que Navigator.pop() del listener cierre inmediatamente
+        // Fallback: mostrar loading mientras se completa el cierre
+        return _buildConnectingView();
+
       case CallState.error:
-        return Scaffold(
-          backgroundColor: Colors.black,
-          body: Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.error_outline, color: Colors.white, size: 64),
-                SizedBox(height: 16),
-                Text(
-                  'Llamada no disponible',
-                  style: TextStyle(color: Colors.white, fontSize: 18),
-                ),
-                SizedBox(height: 24),
-                ElevatedButton(
-                  onPressed: () {
-                    // ✅ CALL STACK: Notificar cierre al stack navigator
-                    CallStackNavigator.onCallScreenClosed(widget.callId);
-                    Navigator.of(context).pop();
-                  },
-                  child: Text('Volver'),
-                ),
-              ],
-            ),
-          ),
-        );
+        return _buildErrorView();
     }
+  }
+
+  /// ✅ VISTAS MÍNIMAS - Solo las que no tenemos como componentes
+
+  /// Vista de conectando/creando llamada
+  Widget _buildConnectingView() {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+            ),
+            SizedBox(height: 24),
+            Text(
+              'Conectando...',
+              style: TextStyle(color: Colors.white, fontSize: 18),
+            ),
+            SizedBox(height: 8),
+            Text(
+              _otherParticipantName,
+              style: TextStyle(color: Colors.white70, fontSize: 16),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+
+  /// Vista de error
+  Widget _buildErrorView() {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.error_outline, color: Colors.white, size: 64),
+            SizedBox(height: 16),
+            Text(
+              'Error en la llamada',
+              style: TextStyle(color: Colors.white, fontSize: 18),
+            ),
+            if (_errorMessage.isNotEmpty) ...[
+              SizedBox(height: 8),
+              Text(
+                _errorMessage,
+                style: TextStyle(color: Colors.white70, fontSize: 14),
+                textAlign: TextAlign.center,
+              ),
+            ],
+            SizedBox(height: 24),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              child: Text('Volver'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

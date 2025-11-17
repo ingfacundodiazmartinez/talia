@@ -51,6 +51,10 @@ class CallController {
   int? _localUid;
   final Set<int> _remoteUids = {};
   String _connectionStatus = 'Inicializando...';
+
+  // ✅ FIX: Grace period para evitar auto-termination por desconexiones temporales
+  Timer? _autoTerminationTimer;
+  static const Duration _autoTerminationGracePeriod = Duration(seconds: 3);
   List<Map<String, dynamic>> _firestoreParticipants = []; // ✅ PROBLEMA 1
 
   // ✅ FIX PROBLEMA #2: Stream subscriptions para evitar garbage collection
@@ -561,6 +565,16 @@ class CallController {
             _remoteUids.add(remoteUid);
             onRemoteUsersChanged?.call(_remoteUids);
             onStateChanged?.call();
+
+            // ✅ FIX: Cancelar auto-termination si alguien se reconecta
+            if (_autoTerminationTimer != null) {
+              ReleaseLogger.log(
+                '✅ [CallController] Usuario se reconectó, cancelando auto-termination',
+                tag: 'CallController',
+              );
+              _autoTerminationTimer?.cancel();
+              _autoTerminationTimer = null;
+            }
           },
           onUserOffline:
               (
@@ -577,18 +591,32 @@ class CallController {
                 onStateChanged?.call();
 
                 // ✅ NUEVO: En llamada 1-1, si el otro usuario se va, terminar la llamada
+                // ✅ FIX: Agregar grace period para evitar auto-termination por desconexiones temporales (VoIP transitions)
                 if (_remoteUids.isEmpty && _isJoined) {
                   ReleaseLogger.log(
-                    '🔚 [CallController] Todos los usuarios remotos se fueron, terminando llamada automáticamente',
+                    '⏳ [CallController] Todos los usuarios remotos se fueron, iniciando grace period de ${_autoTerminationGracePeriod.inSeconds}s',
                     tag: 'CallController',
                   );
-                  // Terminar llamada local y actualizar Firestore
-                  endCall().catchError((error) {
-                    ReleaseLogger.error(
-                      '❌ [CallController] Error terminando llamada automáticamente: $error',
-                      tag: 'CallController',
-                    );
-                    return false;
+
+                  // Cancelar timer previo si existe
+                  _autoTerminationTimer?.cancel();
+
+                  // Iniciar grace period para auto-termination
+                  _autoTerminationTimer = Timer(_autoTerminationGracePeriod, () {
+                    if (_remoteUids.isEmpty && _isJoined) {
+                      ReleaseLogger.log(
+                        '🔚 [CallController] Grace period expirado, terminando llamada automáticamente',
+                        tag: 'CallController',
+                      );
+                      // Terminar llamada local y actualizar Firestore
+                      endCall().catchError((error) {
+                        ReleaseLogger.error(
+                          '❌ [CallController] Error terminando llamada automáticamente: $error',
+                          tag: 'CallController',
+                        );
+                        return false;
+                      });
+                    }
                   });
                 }
               },
@@ -652,8 +680,9 @@ class CallController {
 
   /// Aceptar llamada entrante
   Future<Map<String, dynamic>> acceptCall(String callId) async {
-    if (_disposed || _agoraEngine == null)
+    if (_disposed || _agoraEngine == null) {
       return {'success': false, 'error': 'Controller disposed'};
+    }
 
     try {
       ReleaseLogger.log(
@@ -737,6 +766,16 @@ class CallController {
         '📞 [CallsVideoController] Terminando llamada: $callId',
         tag: 'CallsVideoController',
       );
+
+      // ✅ FORCE IMMEDIATE AGORA CLEANUP: Limpiar recursos locales inmediatamente
+      // para evitar que la cámara/micrófono queden activos mientras se actualiza Firestore
+      ReleaseLogger.log(
+        '🧹 [CallController] Forzando limpieza inmediata de Agora antes de actualizar Firestore',
+        tag: 'CallController',
+      );
+
+      await _leaveChannel();
+
       final success = await _callsOrchestrator.endCall(callId);
 
       if (success) {
@@ -877,95 +916,117 @@ class CallController {
       return false;
     }
 
-    try {
-      ReleaseLogger.log(
-        '📞 [CallController] Uniéndose a llamada existente: $channelName',
-        tag: 'CallController',
-      );
-      ReleaseLogger.log(
-        '🔑 [CallController] Token: ${token.length > 20 ? '${token.substring(0, 20)}...' : token}',
-        tag: 'CallController',
-      );
-      ReleaseLogger.log('👤 [CallController] UID: $uid', tag: 'CallController');
-      ReleaseLogger.log(
-        '📺 [CallController] Is Video: $isVideo',
-        tag: 'CallController',
-      );
+    // ✅ RETRY MECHANISM: Reintentar automáticamente en caso de errores temporales de Agora
+    const maxRetries = 3;
+    const retryDelay = Duration(seconds: 1);
 
-      // Verificar que Agora Engine esté disponible
-      if (_agoraEngine == null) {
-        ReleaseLogger.error(
-          '❌ [CallController] Agora Engine es null!',
-          tag: 'CallController',
-        );
-        return false;
-      }
-
-      // ✅ NUEVO: Verificar si ya estamos en un canal y salir primero
+    for (int attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        await _agoraEngine!.leaveChannel();
+        if (attempt > 1) {
+          ReleaseLogger.log(
+            '🔄 [CallController] Intento $attempt/$maxRetries para unirse al canal',
+            tag: 'CallController',
+          );
+          await Future.delayed(retryDelay);
+        }
+
         ReleaseLogger.log(
-          '🚪 [CallController] Salido de canal previo (si existía)',
+          '📞 [CallController] Uniéndose a llamada existente: $channelName',
           tag: 'CallController',
         );
-      } catch (leaveError) {
         ReleaseLogger.log(
-          'ℹ️ [CallController] No había canal previo: $leaveError',
+          '🔑 [CallController] Token: ${token.length > 20 ? '${token.substring(0, 20)}...' : token}',
           tag: 'CallController',
         );
+        ReleaseLogger.log('👤 [CallController] UID: $uid', tag: 'CallController');
+        ReleaseLogger.log(
+          '📺 [CallController] Is Video: $isVideo',
+          tag: 'CallController',
+        );
+
+        // Verificar que Agora Engine esté disponible
+        if (_agoraEngine == null) {
+          ReleaseLogger.error(
+            '❌ [CallController] Agora Engine es null!',
+            tag: 'CallController',
+          );
+          return false;
+        }
+
+        // ✅ NUEVO: Verificar si ya estamos en un canal y salir primero
+        try {
+          await _agoraEngine!.leaveChannel();
+          ReleaseLogger.log(
+            '🚪 [CallController] Salido de canal previo (si existía)',
+            tag: 'CallController',
+          );
+        } catch (leaveError) {
+          ReleaseLogger.log(
+            'ℹ️ [CallController] No había canal previo: $leaveError',
+            tag: 'CallController',
+          );
+        }
+
+        // Configurar el canal antes de unirse
+        final channelMediaOptions = ChannelMediaOptions(
+          autoSubscribeAudio: true,
+          autoSubscribeVideo: isVideo,
+          publishCameraTrack: isVideo,
+          publishMicrophoneTrack: true,
+          clientRoleType: ClientRoleType.clientRoleBroadcaster,
+        );
+
+        ReleaseLogger.log(
+          '🎯 [CallController] Intentando joinChannel... (intento $attempt/$maxRetries)',
+          tag: 'CallController',
+        );
+
+        // Unirse al canal real de Agora
+        await _agoraEngine!.joinChannel(
+          token: token,
+          channelId: channelName,
+          uid: uid,
+          options: channelMediaOptions,
+        );
+
+        ReleaseLogger.log(
+          '✅ [CallController] Unido al canal exitosamente (intento $attempt)',
+          tag: 'CallController',
+        );
+        ReleaseLogger.log(
+          '🚀 [CallController] ===== FIN joinExistingCall: SUCCESS =====',
+          tag: 'CallController',
+        );
+        return true;
+
+      } catch (e) {
+        ReleaseLogger.error(
+          '❌ [CallController] Error en intento $attempt/$maxRetries: $e',
+          tag: 'CallController',
+        );
+        ReleaseLogger.error(
+          '🔍 [CallController] Error type: ${e.runtimeType}',
+          tag: 'CallController',
+        );
+
+        // Si es el último intento, fallar definitivamente
+        if (attempt == maxRetries) {
+          ReleaseLogger.error(
+            '🚀 [CallController] ===== FIN joinExistingCall: ERROR FINAL tras $maxRetries intentos =====',
+            tag: 'CallController',
+          );
+          onError?.call('Error uniéndose a llamada tras $maxRetries intentos: $e');
+          return false;
+        } else {
+          ReleaseLogger.log(
+            '🔄 [CallController] Reintentando en ${retryDelay.inSeconds}s... (intento ${attempt + 1}/$maxRetries)',
+            tag: 'CallController',
+          );
+        }
       }
-
-      // Configurar el canal antes de unirse
-      final channelMediaOptions = ChannelMediaOptions(
-        autoSubscribeAudio: true,
-        autoSubscribeVideo: isVideo,
-        publishCameraTrack: isVideo,
-        publishMicrophoneTrack: true,
-        clientRoleType: ClientRoleType.clientRoleBroadcaster,
-      );
-
-      ReleaseLogger.log(
-        '🎯 [CallController] Intentando joinChannel...',
-        tag: 'CallController',
-      );
-
-      // Unirse al canal real de Agora
-      await _agoraEngine!.joinChannel(
-        token: token,
-        channelId: channelName,
-        uid: uid,
-        options: channelMediaOptions,
-      );
-
-      ReleaseLogger.log(
-        '✅ [CallController] Unido al canal exitosamente',
-        tag: 'CallController',
-      );
-      ReleaseLogger.log(
-        '🚀 [CallController] ===== FIN joinExistingCall: SUCCESS =====',
-        tag: 'CallController',
-      );
-      return true;
-    } catch (e) {
-      ReleaseLogger.error(
-        '❌ [CallController] Error uniéndose a llamada existente: $e',
-        tag: 'CallController',
-      );
-      ReleaseLogger.error(
-        '🔍 [CallController] Error type: ${e.runtimeType}',
-        tag: 'CallController',
-      );
-      ReleaseLogger.error(
-        '🔍 [CallController] Error details: $e',
-        tag: 'CallController',
-      );
-      ReleaseLogger.error(
-        '🚀 [CallController] ===== FIN joinExistingCall: ERROR =====',
-        tag: 'CallController',
-      );
-      onError?.call('Error uniéndose a llamada existente: $e');
-      return false;
     }
+
+    return false;
   }
 
   /// Obtener llamadas activas (adaptado para compatibilidad)
@@ -1252,6 +1313,88 @@ class CallController {
     return FirebaseAuth.instance.currentUser?.uid;
   }
 
+  /// Manejar error de inicialización de pantalla de llamada
+  void handleInitializationError({String? reason}) {
+    if (_disposed) return;
+
+    ReleaseLogger.error(
+      '❌ [CallController] Error de inicialización: ${reason ?? "sin razón especificada"}',
+      tag: 'CallController',
+    );
+
+    try {
+      // Cleanup local resources
+      _isJoined = false;
+      _remoteUids.clear();
+      _connectionStatus = 'Error';
+
+      // Notificar error a la UI
+      onError?.call('Error de inicialización: ${reason ?? "error desconocido"}');
+
+      // Terminar la llamada en Firestore si es posible
+      _callsOrchestrator.endCall(callId).catchError((e) {
+        ReleaseLogger.log(
+          '⚠️ [CallController] No se pudo terminar llamada en Firestore: $e',
+          tag: 'CallController',
+        );
+        return false; // ✅ Return bool to fix catchError type
+      });
+
+      ReleaseLogger.log(
+        '✅ [CallController] Error de inicialización manejado exitosamente',
+        tag: 'CallController',
+      );
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [CallController] Error manejando inicialización: $e',
+        tag: 'CallController',
+      );
+    }
+  }
+
+  /// Manejar salida manual del usuario (botón "Salir", etc.)
+  Future<void> handleManualExit() async {
+    if (_disposed) return;
+
+    ReleaseLogger.log(
+      '🚪 [CallController] Usuario solicitó salir manualmente de llamada: $callId',
+      tag: 'CallController',
+    );
+
+    try {
+      // 1. Terminar la llamada en Firestore
+      final success = await _callsOrchestrator.endCall(callId);
+
+      if (success) {
+        ReleaseLogger.log(
+          '✅ [CallController] Llamada terminada exitosamente en Firestore',
+          tag: 'CallController',
+        );
+      } else {
+        ReleaseLogger.log(
+          '⚠️ [CallController] No se pudo terminar llamada en Firestore',
+          tag: 'CallController',
+        );
+      }
+
+      // 2. Cleanup local - esto automáticamente triggereará el listener que cierra las pantallas
+      await _endCallLocally();
+
+      ReleaseLogger.log(
+        '✅ [CallController] Salida manual procesada exitosamente',
+        tag: 'CallController',
+      );
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [CallController] Error en salida manual: $e',
+        tag: 'CallController',
+      );
+
+      // Fallback: al menos cleanup local
+      await _endCallLocally();
+    }
+  }
+
   /// Dispose del controller
   Future<void> dispose() async {
     if (_disposed) return;
@@ -1271,6 +1414,10 @@ class CallController {
     onLocalUserJoined = null;
     onError = null;
     onCallEnded = null;
+
+    // ✅ FIX: Cancelar timer de auto-termination
+    _autoTerminationTimer?.cancel();
+    _autoTerminationTimer = null;
 
     // ✅ Cancelar subscripciones para evitar memory leaks
     await _callStateSubscription?.cancel();
@@ -1293,6 +1440,218 @@ class CallController {
       );
       _instance = null;
       _currentCallId = null;
+    }
+  }
+
+  /// Obtener nombre de participante basado en su userId
+  /// Delega al CallsOrchestrator que tiene acceso al CallsService
+  Future<String> getParticipantName(String userId) async {
+    try {
+      return await _callsOrchestrator.getParticipantName(userId);
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [CallController] Error obteniendo nombre de participante $userId: $e',
+        tag: 'CallController',
+      );
+      return 'Usuario';
+    }
+  }
+
+  /// Iniciar nueva llamada (método estático para UI)
+  /// Delega al CallsOrchestrator
+  static Future<void> startCall({
+    required BuildContext context,
+    required String receiverId,
+    required String remoteName,
+    required bool isVideo,
+    bool isEmergency = false,
+  }) async {
+    try {
+      final orchestrator = CallsOrchestrator();
+      await orchestrator.startCallAndNavigate(
+        context: context,
+        receiverId: receiverId,
+        remoteName: remoteName,
+        isVideo: isVideo,
+        isEmergency: isEmergency,
+      );
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [CallController] Error iniciando call: $e',
+        tag: 'CallController',
+      );
+      rethrow;
+    }
+  }
+
+  /// Navegar a llamada real encontrada (método estático para UI)
+  /// Delega al CallsOrchestrator siguiendo arquitectura correcta
+  static Future<void> navigateToRealCall({
+    required BuildContext context,
+    required String callId,
+    bool replaceTemporary = false,
+  }) async {
+    try {
+      final orchestrator = CallsOrchestrator();
+      await orchestrator.navigateToCall(
+        callId: callId,
+        source: 'real_call_found',
+        metadata: {
+          'context': context,
+          'replaceTemporary': replaceTemporary,
+        },
+      );
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [CallController] Error navegando a llamada real: $e',
+        tag: 'CallController',
+      );
+      rethrow;
+    }
+  }
+
+  /// Obtener una llamada por ID (static method para call_screen.dart)
+  static Future<Call?> getCall(String callId) async {
+    try {
+      final orchestrator = CallsOrchestrator();
+      return await orchestrator.getCall(callId);
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [CallController] Error obteniendo llamada: $e',
+        tag: 'CallController',
+      );
+      return null;
+    }
+  }
+
+  /// Obtener nombre del otro participante (static method para call_screen.dart)
+  static Future<String> getOtherParticipantName(Call call) async {
+    try {
+      final orchestrator = CallsOrchestrator();
+      return await orchestrator.getOtherParticipantName(call);
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [CallController] Error obteniendo nombre de participante: $e',
+        tag: 'CallController',
+      );
+      return 'Usuario';
+    }
+  }
+
+  /// Obtener llamadas recientes (static method para call_screen.dart)
+  static Future<List<Call>> getRecentCalls(String userId) async {
+    try {
+      final orchestrator = CallsOrchestrator();
+      return await orchestrator.getRecentCalls(userId);
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [CallController] Error obteniendo llamadas recientes: $e',
+        tag: 'CallController',
+      );
+      return [];
+    }
+  }
+
+  // ✅ ELIMINADO: watchCall() - ahora CallScreen usa CallListenerService.getCallStream() directamente
+  // Esto elimina redundancia y unifica todos los listeners en CallListenerService
+
+  /// Finalizar llamada (static method para call_screen.dart error button)
+  static Future<bool> endCallStatic(String callId) async {
+    try {
+      final orchestrator = CallsOrchestrator();
+      return await orchestrator.endCall(callId);
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [CallController] Error finalizando llamada: $e',
+        tag: 'CallController',
+      );
+      return false;
+    }
+  }
+
+  /// Aceptar llamada (static method para incoming_call_screen.dart)
+  static Future<bool> acceptCallStatic(String callId) async {
+    try {
+      final orchestrator = CallsOrchestrator();
+      await orchestrator.acceptCall(callId);
+      return true;
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [CallController] Error aceptando llamada: $e',
+        tag: 'CallController',
+      );
+      return false;
+    }
+  }
+
+  /// Rechazar llamada (static method para incoming_call_screen.dart)
+  static Future<bool> declineCallStatic(String callId) async {
+    try {
+      final orchestrator = CallsOrchestrator();
+      await orchestrator.declineCall(callId);
+      return true;
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [CallController] Error rechazando llamada: $e',
+        tag: 'CallController',
+      );
+      return false;
+    }
+  }
+
+  /// Verificar si llamada está siendo manejada por CallKit (static method para call_screen.dart)
+  /// Usado para determinar el estado correcto de UI cuando CallKit aceptó pero Firebase no actualizó
+  static bool isCallKitHandled(String callId) {
+    try {
+      final orchestrator = CallsOrchestrator();
+      return orchestrator.isCallBeingHandledByCallKit(callId);
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [CallController] Error verificando CallKit: $e',
+        tag: 'CallController',
+      );
+      return false;
+    }
+  }
+
+  /// Forzar sincronización de usuarios remotos cuando Firestore indica joined pero Agora no los detecta
+  void refreshRemoteUsers() {
+    if (_disposed || _agoraEngine == null || !_isJoined) {
+      ReleaseLogger.log(
+        '❌ [CallController] No se puede refrescar usuarios remotos - disposed=$_disposed, engine=${_agoraEngine != null}, joined=$_isJoined',
+        tag: 'CallController',
+      );
+      return;
+    }
+
+    try {
+      ReleaseLogger.log(
+        '🔧 [CallController] Intentando refrescar usuarios remotos en canal',
+        tag: 'CallController',
+      );
+
+      // ✅ SOLUTION: Forzar re-join para detectar usuarios ya existentes en el canal
+      // Esto es necesario porque onUserJoined solo detecta usuarios que se unen DESPUÉS
+      final channelMediaOptions = ChannelMediaOptions(
+        autoSubscribeAudio: true,
+        autoSubscribeVideo: isVideo,
+        publishCameraTrack: isVideo,
+        publishMicrophoneTrack: true,
+        clientRoleType: ClientRoleType.clientRoleBroadcaster,
+      );
+
+      // Actualizar opciones del canal para forzar sincronización
+      _agoraEngine!.updateChannelMediaOptions(channelMediaOptions);
+
+      ReleaseLogger.log(
+        '✅ [CallController] Opciones de canal actualizadas para refrescar usuarios remotos',
+        tag: 'CallController',
+      );
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [CallController] Error refrescando usuarios remotos: $e',
+        tag: 'CallController',
+      );
     }
   }
 }

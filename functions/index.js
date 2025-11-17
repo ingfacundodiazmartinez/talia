@@ -108,6 +108,7 @@ exports.initiateVideoCall = videoCalls.initiateVideoCall;
 // Llamadas (Calls Management)
 exports.createCall = calls.createCall;
 exports.addParticipants = calls.addParticipants;
+exports.acceptCall = calls.acceptCall;
 exports.updateCallStatus = calls.updateCallStatus;
 
 // Reportes
