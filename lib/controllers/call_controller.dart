@@ -14,11 +14,12 @@ import '../models/call.dart';
 /// Controller principal para gestión de llamadas
 ///
 /// Responsabilidades:
-/// 1. Manejo global de listeners de llamadas (VoIP, CallKit, foreground)
+/// 1. Manejo de Agora RTC Engine (video/audio)
 /// 2. Lógica específica para VideoCallScreen/AudioCallScreen
 /// 3. Coordinación con CallsOrchestrator
 ///
-/// Flujo: main.dart → CallController → CallsOrchestrator → CallNavigationService
+/// ✅ REFACTORIZADO: Ahora usa CallsOrchestrator unificado en lugar de CallsOrchestrator
+/// Flujo: main.dart → CallController → CallsOrchestrator → Firebase/CallKit
 ///
 /// ✅ SINGLETON: Evita múltiples instancias que causan AgoraRtcException(-17)
 class CallController {
@@ -26,7 +27,7 @@ class CallController {
   static CallController? _instance;
   static String? _currentCallId;
 
-  // Dependencies
+  // ✅ REFACTORIZADO: Usar CallsOrchestrator en lugar de CallsOrchestrator
   final CallsOrchestrator _callsOrchestrator;
 
   // State
@@ -446,10 +447,16 @@ class CallController {
         tag: 'CallController',
       );
 
-      // ✅ ANDROID: Verificar permisos ANTES de inicializar Agora
-      // ✅ FIX: Si Agora Engine ya existe, significa que es VoIP/CallKit en progreso
-      if (context != null && _agoraEngine == null) {
-        final permissionsGranted = await _checkCallPermissions(context);
+      // ✅ FIX: Detectar si es llamada VoIP (context null o Agora Engine ya existe)
+      final isVoIPCall = context == null || _agoraEngine != null;
+
+      // Verificar permisos con flag explícito de VoIP
+      if (context != null) {
+        final permissionsGranted = await _checkCallPermissions(
+          context,
+          isVoIPCall: isVoIPCall,
+        );
+
         if (!permissionsGranted) {
           ReleaseLogger.error(
             '❌ [CallController] Permisos de llamada no concedidos',
@@ -460,20 +467,10 @@ class CallController {
           );
           return false;
         }
-      } else if (context != null && _agoraEngine != null) {
-        ReleaseLogger.log(
-          '✅ [CallController] Llamada VoIP/CallKit ya en progreso, saltando verificación de permisos',
-          tag: 'CallController',
-        );
       } else {
-        // ✅ VoIP CALL: Context is null, proceed without permission check
-        // Los permisos se solicitarán cuando la app esté en foreground
+        // Context null = definitivamente VoIP call
         ReleaseLogger.log(
-          '📞 [CallController] Llamada VoIP detectada (context=null), procediendo sin verificación de permisos inmediata',
-          tag: 'CallController',
-        );
-        ReleaseLogger.log(
-          '⚠️ [CallController] Los permisos se verificarán/solicitarán cuando la app esté en foreground',
+          '📞 [CallController] Llamada VoIP detectada (context=null), procediendo sin verificación de permisos',
           tag: 'CallController',
         );
       }
@@ -1029,28 +1026,7 @@ class CallController {
     return false;
   }
 
-  /// Obtener llamadas activas (adaptado para compatibilidad)
-  Future<List<ActiveCall>> getActiveCalls() async {
-    if (_disposed) return [];
-
-    try {
-      final activeCalls = _callsOrchestrator.activeCalls;
-      return activeCalls
-          .map(
-            (call) => ActiveCall(
-              callId: call.id,
-              status: 'active', // Simplificado
-            ),
-          )
-          .toList();
-    } catch (e) {
-      ReleaseLogger.error(
-        '❌ [CallsVideoController] Error obteniendo calls activas: $e',
-        tag: 'CallsVideoController',
-      );
-      return [];
-    }
-  }
+  // ✅ ELIMINADO: getActiveCalls() - método obsoleto que nunca se usaba
 
   /// Obtener contactos disponibles para agregar
   Future<List<Map<String, dynamic>>> getAvailableContacts() async {
@@ -1129,16 +1105,26 @@ class CallController {
   }
 
   /// Verificar permisos de llamada (cámara y micrófono)
-  Future<bool> _checkCallPermissions(BuildContext context) async {
+  /// ✅ FIX: Flag explícito isVoIPCall para eliminar heurística de "todos denied"
+  Future<bool> _checkCallPermissions(BuildContext context, {bool isVoIPCall = false}) async {
     try {
       ReleaseLogger.log(
-        '🔒 [CallController] Verificando permisos para llamada',
+        '🔒 [CallController] Verificando permisos para llamada (VoIP: $isVoIPCall)',
         tag: 'CallController',
       );
-      ReleaseLogger.log(
-        '🔍 [CallController] DEBUG - Context disponible: true, esVideo: $isVideo',
-        tag: 'CallController',
-      );
+
+      // ✅ FIX: Si es llamada VoIP en iOS, skip permission check y solicitar después
+      if (isVoIPCall && Platform.isIOS) {
+        ReleaseLogger.log(
+          '📞 [CallController] Llamada VoIP detectada - saltando verificación de permisos',
+          tag: 'CallController',
+        );
+        ReleaseLogger.log(
+          '⚠️ [CallController] Los permisos se solicitarán asíncronamente después de unirse',
+          tag: 'CallController',
+        );
+        return true;
+      }
 
       // ✅ FIX: Guardar context antes de async gaps
       final localContext = context;
@@ -1170,24 +1156,6 @@ class CallController {
         '🔍 [CallController] Estado actual de permisos: $currentStatuses',
         tag: 'CallController',
       );
-
-      // ✅ iOS VoIP EXCEPTION: Si todos los permisos están "denied" en iOS,
-      // esto probablemente significa que es una llamada VoIP aceptada desde CallKit
-      final allDenied = currentStatuses.values.every(
-        (status) => status == PermissionResult.denied,
-      );
-      if (allDenied && Platform.isIOS) {
-        ReleaseLogger.log(
-          '📞 [CallController] iOS VoIP: Todos los permisos denegados en iOS',
-          tag: 'CallController',
-        );
-        ReleaseLogger.log(
-          '⚠️ [CallController] Permitiendo continuar - permisos se solicitarán cuando sea posible',
-          tag: 'CallController',
-        );
-        // Devolver true para permitir continuar, pero marcar que necesitamos permisos
-        return true; // ✅ ALLOW iOS VoIP TO PROCEED
-      }
 
       // Solo hacer request si realmente necesitamos permisos
       if (needsRequest) {
@@ -1252,6 +1220,126 @@ class CallController {
         tag: 'CallController',
       );
       return false;
+    }
+  }
+
+  /// Solicitar permisos de forma asíncrona después de unirse a la llamada
+  /// ✅ FIX: Para iOS VoIP - los permisos se solicitan DESPUÉS de aceptar desde CallKit
+  Future<void> requestPermissionsAsync(BuildContext? context) async {
+    if (_disposed) return;
+
+    // Si no hay context, intentar solicitar permisos directamente (puede fallar en algunas plataformas)
+    if (context == null) {
+      ReleaseLogger.log(
+        '⚠️ [CallController] No hay BuildContext disponible, saltando solicitud de permisos',
+        tag: 'CallController',
+      );
+      return;
+    }
+
+    try {
+      ReleaseLogger.log(
+        '🔒 [CallController] Solicitando permisos asíncronamente para llamada VoIP/CallKit',
+        tag: 'CallController',
+      );
+
+      final permissionService = PermissionService();
+      final requiredPermissions = [AppPermission.microphone];
+
+      if (isVideo) {
+        requiredPermissions.add(AppPermission.camera);
+      }
+
+      // Verificar estado actual
+      final currentStatuses = <AppPermission, PermissionResult>{};
+      bool needsRequest = false;
+
+      for (final permission in requiredPermissions) {
+        final currentStatus = await permissionService.checkStatus(permission);
+        currentStatuses[permission] = currentStatus;
+
+        if (currentStatus != PermissionResult.granted &&
+            currentStatus != PermissionResult.limited) {
+          needsRequest = true;
+        }
+      }
+
+      ReleaseLogger.log(
+        '🔍 [CallController] Estado de permisos antes de solicitar: $currentStatuses',
+        tag: 'CallController',
+      );
+
+      if (!needsRequest) {
+        ReleaseLogger.log(
+          '✅ [CallController] Permisos ya concedidos, no es necesario solicitarlos',
+          tag: 'CallController',
+        );
+        return;
+      }
+
+      // Solicitar permisos
+      ReleaseLogger.log(
+        '🙋 [CallController] Solicitando permisos al usuario...',
+        tag: 'CallController',
+      );
+
+      final results = await permissionService.requestMultiple(
+        requiredPermissions,
+        context: context,
+      );
+
+      ReleaseLogger.log(
+        '📊 [CallController] Resultados de solicitud de permisos: $results',
+        tag: 'CallController',
+      );
+
+      // Verificar si se concedieron todos los permisos
+      bool allGranted = true;
+      for (final entry in results.entries) {
+        if (entry.value != PermissionResult.granted &&
+            entry.value != PermissionResult.limited) {
+          allGranted = false;
+          break;
+        }
+      }
+
+      if (allGranted) {
+        ReleaseLogger.log(
+          '✅ [CallController] Permisos concedidos - cámara y micrófono ahora disponibles',
+          tag: 'CallController',
+        );
+
+        // ✅ FIX: Si ya estamos unidos al canal, habilitar cámara/micrófono ahora
+        if (_isJoined && _agoraEngine != null) {
+          if (isVideo) {
+            await _agoraEngine!.enableVideo();
+            await _agoraEngine!.startPreview();
+            ReleaseLogger.log(
+              '📹 [CallController] Video habilitado después de conceder permisos',
+              tag: 'CallController',
+            );
+          }
+          await _agoraEngine!.enableAudio();
+          ReleaseLogger.log(
+            '🎤 [CallController] Audio habilitado después de conceder permisos',
+            tag: 'CallController',
+          );
+
+          // Notificar cambio de estado para actualizar UI
+          onStateChanged?.call();
+        }
+      } else {
+        ReleaseLogger.log(
+          '⚠️ [CallController] Algunos permisos fueron denegados - funcionalidad limitada',
+          tag: 'CallController',
+        );
+      }
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [CallController] Error solicitando permisos asíncronamente: $e',
+        tag: 'CallController',
+      );
+      // No lanzar error - la llamada puede continuar sin permisos (solo audio/sin cámara)
     }
   }
 

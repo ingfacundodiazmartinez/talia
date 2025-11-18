@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../controllers/call_controller.dart';
 import '../../models/call.dart';
 import '../../utils/release_logger.dart';
@@ -154,40 +155,36 @@ class _CallScreenState extends State<CallScreen> {
     }
   }
 
-  /// Polling para esperar que se cree la llamada real
+  /// ✅ FIX: Usar listener en lugar de polling (elimina 30 queries innecesarias)
   void _pollForRealCall() async {
-    int attempts = 0;
-    const maxAttempts = 30; // 15 segundos máximo
     final currentUserId = FirebaseAuth.instance.currentUser?.uid;
     if (currentUserId == null) return;
 
-    while (attempts < maxAttempts && mounted && _isCreatingCall) {
-      await Future.delayed(Duration(milliseconds: 500));
-      attempts++;
+    ReleaseLogger.log(
+      '🔄 [CallScreen] Esperando creación de llamada real con listener...',
+      tag: 'CallScreen',
+    );
 
-      try {
-        ReleaseLogger.log(
-          '🔄 [CallScreen] Buscando llamada real... intento $attempts/$maxAttempts',
-          tag: 'CallScreen',
-        );
+    // ✅ FIX: Listener directo en lugar de polling
+    // Busca llamadas creadas en los últimos 10 segundos por el usuario actual
+    final cutoffTime = DateTime.now().subtract(Duration(seconds: 10));
 
-        // Buscar llamadas activas del usuario actual en los últimos 30 segundos
-        final recentCalls = await CallController.getRecentCalls(
-          currentUserId,
-        );
+    final callListener = FirebaseFirestore.instance
+      .collection('calls')
+      .where('createdBy', isEqualTo: currentUserId)
+      .where('createdAt', isGreaterThan: Timestamp.fromDate(cutoffTime))
+      .limit(1)
+      .snapshots()
+      .listen(
+        (snapshot) {
+          if (!mounted || _isClosing || !_isCreatingCall) return;
 
-        if (recentCalls.isNotEmpty) {
-          // Encontramos una llamada real, usarla
-          final realCall = recentCalls.first;
+          if (snapshot.docs.isNotEmpty) {
+            final doc = snapshot.docs.first;
+            final realCall = Call.fromFirestore(doc.id, doc.data());
 
-          ReleaseLogger.log(
-            '✅ [CallScreen] Llamada real encontrada: ${realCall.id}',
-            tag: 'CallScreen',
-          );
-
-          if (mounted && !_isClosing) {
             ReleaseLogger.log(
-              '🔄 [CallScreen] Actualizando estado con llamada real: ${realCall.id}, state: ${realCall.getStateForUser(currentUserId)}',
+              '✅ [CallScreen] Llamada real encontrada via listener: ${realCall.id}',
               tag: 'CallScreen',
             );
 
@@ -196,30 +193,37 @@ class _CallScreenState extends State<CallScreen> {
               tag: 'CallScreen',
             );
 
-            // ✅ ARQUITECTURA CORRECTA: UI → CallController → CallsOrchestrator → CallNavigationService → CallStackNavigator
-            // ✅ FIX: replaceTemporary=true para usar pushReplacement y evitar stack duplicado
-            await CallController.navigateToRealCall(
+            // Navegar a la llamada real
+            CallController.navigateToRealCall(
               context: context,
               callId: realCall.id,
               replaceTemporary: true,
             );
           }
-          return;
-        }
-      } catch (e) {
+        },
+        onError: (error) {
+          ReleaseLogger.error(
+            '❌ [CallScreen] Error en listener de llamada real: $error',
+            tag: 'CallScreen',
+          );
+        },
+      );
+
+    // ✅ Timeout de seguridad (15 segundos)
+    Future.delayed(Duration(seconds: 15), () {
+      callListener.cancel();
+
+      if (mounted && _isCreatingCall && !_isClosing) {
         ReleaseLogger.error(
-          '❌ [CallScreen] Error en polling: $e',
+          '⏱️ [CallScreen] Timeout esperando llamada real',
           tag: 'CallScreen',
         );
+        setState(() {
+          _isCreatingCall = false;
+          _errorMessage = 'Error: Timeout creando llamada';
+        });
       }
-    }
-
-    // Si llegamos aquí y seguimos creando, mostrar error
-    if (mounted && _isCreatingCall && !_isClosing) {
-      setState(() {
-        _isCreatingCall = false;
-      });
-    }
+    });
   }
 
   /// ✅ MÉTODOS AUXILIARES SIMPLIFICADOS

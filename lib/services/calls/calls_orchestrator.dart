@@ -148,12 +148,18 @@ class CallsOrchestrator {
       tag: 'CallsOrchestrator',
     );
 
+    // ✅ FIX MEMORY LEAK: Cancelar pending call subscription
+    _pendingCallSubscription?.cancel();
+    _pendingCallSubscription = null;
+
     _callsService.dispose();
     _navigatorKey = null;
     _isInitialized = false;
+    _globalListenersInitialized = false;
 
     // Limpiar tracking de navegación
     _navigatingCallIds.clear();
+    _callKitActiveCallIds.clear();
 
     // Limpiar callbacks
     onIncomingCall = null;
@@ -1169,6 +1175,15 @@ class CallsOrchestrator {
     Map<String, dynamic>? metadata,
   }) async {
     try {
+      // ✅ FIX: Prevenir navegación duplicada
+      if (_navigatingCallIds.contains(callId)) {
+        ReleaseLogger.log(
+          '⚠️ [CallsOrchestrator] Ya navegando a call $callId (source: $source) - evitando navegación duplicada',
+          tag: 'CallsOrchestrator',
+        );
+        return;
+      }
+
       // ✅ Extraer flag de metadata
       final replaceTemporary = metadata?['replaceTemporary'] as bool? ?? false;
 
@@ -1177,7 +1192,16 @@ class CallsOrchestrator {
         tag: 'CallsOrchestrator',
       );
 
+      // Marcar como navegando ANTES de navegar
+      _navigatingCallIds.add(callId);
+
       _navigateToCallScreen(callId, replaceTemporary: replaceTemporary);
+
+      // ✅ FIX: Remover del set después de 2 segundos para permitir futuras navegaciones
+      // (en caso de que el usuario cierre y vuelva a abrir la llamada)
+      Future.delayed(Duration(seconds: 2), () {
+        _navigatingCallIds.remove(callId);
+      });
 
       ReleaseLogger.log(
         '✅ [CallsOrchestrator] Navegación exitosa: $callId',
@@ -1188,6 +1212,8 @@ class CallsOrchestrator {
         '❌ [CallsOrchestrator] Error en navegación: $e',
         tag: 'CallsOrchestrator',
       );
+      // ✅ FIX: Remover del set en caso de error para no bloquear futuras navegaciones
+      _navigatingCallIds.remove(callId);
       rethrow;
     }
   }
@@ -1219,12 +1245,16 @@ class CallsOrchestrator {
     );
   }
 
-  /// Verificar si una llamada está siendo manejada por CallKit
+  /// Verificar si una llamada está siendo manejada por CallKit/VoIP
   /// ✅ PÚBLICO: Usado por CallController para determinar estado de UI
   bool isCallBeingHandledByCallKit(String callId) {
-    final isHandled = _callKitActiveCallIds.contains(callId);
+    // ✅ FIX: Verificar AMBOS sets (CallKit y VoIP) para iOS
+    final isHandledByCallKit = _callKitActiveCallIds.contains(callId);
+    final isHandledByVoIP = _voipService?.isCallHandledByVoIP(callId) ?? false;
+    final isHandled = isHandledByCallKit || isHandledByVoIP;
+
     ReleaseLogger.log(
-      '🔍 [CallsOrchestrator] Verificando CallKit para $callId: ${isHandled ? "SÍ manejada" : "NO manejada"}',
+      '🔍 [CallsOrchestrator] Verificando CallKit/VoIP para $callId: ${isHandled ? "SÍ manejada" : "NO manejada"} (CallKit:$isHandledByCallKit, VoIP:$isHandledByVoIP)',
       tag: 'CallsOrchestrator',
     );
     return isHandled;

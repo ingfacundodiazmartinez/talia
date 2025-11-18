@@ -595,6 +595,18 @@ class CallListenerService {
           return;
         }
 
+        // ✅ FIX DUPLICACIÓN: No navegar si el usuario es el caller (ya tiene CallScreen temporal)
+        if (callData != null) {
+          final createdBy = callData['createdBy'] as String?;
+          if (createdBy == currentUserId) {
+            ReleaseLogger.log(
+              '⚠️ [CallListenerService] Soy el caller de $callId - ya tengo CallScreen temporal, NO navegar',
+              tag: 'CallListenerService',
+            );
+            return; // ✅ El polling de CallScreen manejará la navegación a la llamada real
+          }
+        }
+
         // ✅ SIMPLIFIED: CallScreen maneja estados internamente - siempre notificar
         ReleaseLogger.log(
           '📱 [CallListenerService] Notificando llamada entrante (CallScreen manejará estados)',

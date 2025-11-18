@@ -58,10 +58,9 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
   bool _isTerminating = false;
 
-  bool _isNavigating = false;
-
   Timer? _endCallTimer;
-  Timer? _periodicTimer;
+  // ✅ ELIMINADO: _periodicTimer innecesario - los listeners de Firestore detectan cambios automáticamente
+  // ✅ ELIMINADO: _isNavigating nunca se usaba
 
   // Cache para nombres de participantes (userId -> nombre)
   final Map<String, String> _participantNamesCache = {};
@@ -144,6 +143,13 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
             '✅ [VideoCallScreen] Caller - joinExistingCall exitoso',
             tag: 'VideoCallScreen',
           );
+
+          // ✅ FIX: Solicitar permisos asíncronamente después de unirse (para iOS VoIP)
+          ReleaseLogger.log(
+            '🔒 [VideoCallScreen] Solicitando permisos después de unirse al canal',
+            tag: 'VideoCallScreen',
+          );
+          _controller.requestPermissionsAsync(context);
         } else {
           ReleaseLogger.error(
             '❌ [VideoCallScreen] Caller - joinExistingCall falló',
@@ -185,6 +191,13 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
             '✅ [VideoCallScreen] Receiver - joinExistingCall exitoso',
             tag: 'VideoCallScreen',
           );
+
+          // ✅ FIX: Solicitar permisos asíncronamente después de unirse (para iOS VoIP)
+          ReleaseLogger.log(
+            '🔒 [VideoCallScreen] Solicitando permisos después de unirse al canal',
+            tag: 'VideoCallScreen',
+          );
+          _controller.requestPermissionsAsync(context);
         } else {
           ReleaseLogger.error(
             '❌ [VideoCallScreen] Receiver - joinExistingCall falló',
@@ -297,11 +310,10 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
     _endCallTimer?.cancel();
     _endCallTimer = null;
-    _periodicTimer?.cancel();
-    _periodicTimer = null;
+    // ✅ ELIMINADO: _periodicTimer ya no existe
+    // ✅ ELIMINADO: _isNavigating ya no existe
 
     _isTerminating = false;
-    _isNavigating = false;
 
     // ✅ FIX: Limpiar caché de VideoViews
     _videoViewCache.clear();
@@ -810,18 +822,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     );
   }
 
-  /// Vista cuando la llamada está terminando (ELIMINADO - // CallStackNavigator eliminado - cierre automático por CallScreen maneja cierre automático)
-  /// No se debe mostrar "Llamada terminada" - // CallStackNavigator eliminado - cierre automático por CallScreen cierra automáticamente
-  @Deprecated('No usar - // CallStackNavigator eliminado - cierre automático por CallScreen maneja el cierre automáticamente')
-  Widget _buildTerminatingView() {
-    // ✅ FIX: Esta vista ya no se usa - // CallStackNavigator eliminado - cierre automático por CallScreen maneja el cierre
-    // Si por alguna razón se llama, mostrar vista normal
-    ReleaseLogger.log(
-      '⚠️ [VideoCallScreen] _buildTerminatingView() called pero está deprecated - mostrando vista normal',
-      tag: 'VideoCallScreen',
-    );
-    return _buildWaitingView();
-  }
+  // ✅ ELIMINADO: _buildTerminatingView() - método obsoleto que nunca se llamaba
 
   /// Vista cuando Firestore indica usuarios conectados pero Agora no los detecta aún
   Widget _buildConnectedButNoVideoView() {

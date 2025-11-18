@@ -89,6 +89,13 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
               _controller.handleInitializationError(
                 reason: 'Error en joinExistingCall',
               );
+            } else {
+              // ✅ FIX: Solicitar permisos asíncronamente después de unirse (para iOS VoIP)
+              ReleaseLogger.log(
+                '🔒 [AudioCallScreen] Solicitando permisos después de unirse al canal',
+                tag: 'AudioCallScreen',
+              );
+              _controller.requestPermissionsAsync(context);
             }
           } else if (!initSuccess) {
             ReleaseLogger.error('Error en initialize', tag: 'AudioCallScreen');

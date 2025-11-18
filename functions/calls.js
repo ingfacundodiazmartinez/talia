@@ -21,6 +21,7 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const admin = require('firebase-admin');
 const { v4: uuidv4 } = require('uuid');
+const { sendVoIPPush } = require('./helpers');
 // Helper functions were not defined, using direct validation instead
 
 // Usar admin ya inicializado si existe
@@ -536,7 +537,7 @@ async function sendCallNotification(userId, callId, callType, callerId) {
   try {
     console.log(`🔔 [sendCallNotification] Enviando notificación a ${userId} para call ${callId}`);
 
-    // ✅ FIXED: Obtener token FCM del usuario (corregir mismatch fcmToken vs fcmTokens)
+    // ✅ Obtener datos del usuario
     const userDoc = await db.collection('users').doc(userId).get();
     if (!userDoc.exists) {
       console.log(`⚠️ [sendCallNotification] Usuario ${userId} no encontrado`);
@@ -544,79 +545,93 @@ async function sendCallNotification(userId, callId, callType, callerId) {
     }
 
     const userData = userDoc.data();
-    // FIXED: La app guarda 'fcmToken' (singular), no 'fcmTokens' (plural)
-    const fcmToken = userData.fcmToken;
 
-    if (!fcmToken || typeof fcmToken !== 'string' || fcmToken.trim() === '') {
-      console.log(`⚠️ [sendCallNotification] Usuario ${userId} sin token FCM válido. Token: ${fcmToken}`);
-      return;
-    }
+    // ✅ CRITICAL: Detectar si es iOS usando activeDeviceInfo
+    const activeDeviceInfo = userData.activeDeviceInfo || {};
+    const platform = activeDeviceInfo.platform || '';
+    const isIOS = platform.toLowerCase() === 'ios';
 
-    console.log(`📲 [sendCallNotification] Token FCM encontrado para ${userId}: ${fcmToken.substring(0, 20)}...`);
+    console.log(`📱 [sendCallNotification] Plataforma detectada: ${platform} (isIOS: ${isIOS})`);
 
-    // Obtener nombre del caller
+    // ✅ Obtener nombre del caller
     const callerDoc = await db.collection('users').doc(callerId).get();
     const callerName = callerDoc.exists ? callerDoc.data().name : 'Usuario';
 
-    // ✅ FIXED: Obtener datos de la llamada para incluir channelName y token
+    // ✅ Obtener datos de la llamada para incluir channelName y token
     const callDoc = await db.collection('calls').doc(callId).get();
     const callData = callDoc.exists ? callDoc.data() : {};
 
-    // ✅ FIXED: Preparar notificación con datos compatibles para CallKit Android
+    // ✅ Preparar datos de notificación
     const notificationTitle = `${callType === 'video' ? 'Videollamada' : 'Llamada'} entrante`;
     const notificationBody = `${callerName} te está llamando`;
 
-    // ✅ CRÍTICO: Datos en el formato exacto que espera el background handler de Flutter
-    // ✅ FIXED: Incluir channelName y token para CallKit acceptance
     const notificationData = {
-      // Campos requeridos por firebaseMessagingBackgroundHandler
-      type: callType === 'video' ? 'video_call' : 'audio_call', // FIXED: Debe ser 'video_call' no 'incoming_call'
+      type: callType === 'video' ? 'video_call' : 'audio_call',
       callId: callId,
       callerName: callerName,
       callerId: callerId,
-      callerPhotoURL: userData.photoUrl || '', // Agregar foto si está disponible
+      callerPhotoURL: userData.photoUrl || '',
       isEmergency: 'false',
-      // ✅ FIXED: Agregar campos críticos para CallKit acceptance
       channelName: callData.channelName || `call_${callId}`,
       token: callData.token || ''
     };
 
     console.log(`📦 [sendCallNotification] Datos de notificación:`, notificationData);
 
-    // ✅ FIXED: Enviar a token único, no array
-    const message = {
-      token: fcmToken,
-      // Para Android: Solo datos, sin notification para que llegue al background handler
-      data: notificationData,
-      android: {
-        priority: 'high',
-        ttl: 30000, // 30 segundos
-        // Para CallKit Android, necesitamos que los datos lleguen al background handler
-        // No usar 'notification' para que siempre pase por firebaseMessagingBackgroundHandler
-      },
-      // Para iOS: VoIP push notifications
-      apns: {
-        headers: {
-          'apns-priority': '10',
-          'apns-push-type': 'background', // Para VoIP
-          'apns-expiration': (Math.floor(Date.now() / 1000) + 30).toString()
-        },
-        payload: {
-          aps: {
-            alert: {
-              title: notificationTitle,
-              body: notificationBody
-            },
-            sound: 'default',
-            'content-available': 1,
-            category: 'CALL_INVITATION'
-          }
-        }
-      }
-    };
+    // ✅ CRITICAL FIX: iOS SIEMPRE usa VoIP, Android usa FCM
+    if (isIOS) {
+      // ✅ iOS: Usar VoIP token con APNs directamente (NO FCM)
+      const voipToken = userData.voipToken;
 
-    await admin.messaging().send(message);
-    console.log(`✅ [sendCallNotification] Notificación enviada a ${userId}`);
+      if (!voipToken || typeof voipToken !== 'string' || voipToken.trim() === '') {
+        console.log(`⚠️ [sendCallNotification] Usuario iOS ${userId} sin voipToken válido. Token: ${voipToken}`);
+        return;
+      }
+
+      console.log(`📲 [sendCallNotification] Enviando VoIP notification a iOS: ${voipToken.substring(0, 20)}...`);
+
+      // ✅ CRITICAL: Usar APNs directamente (sendVoIPPush) en lugar de FCM
+      // FCM no soporta VoIP tokens, solo APNs HTTP/2 API
+      const voipPayload = {
+        ...notificationData,
+        callerName: callerName,
+        callType: callType,
+      };
+
+      const success = await sendVoIPPush(voipToken, voipPayload);
+
+      if (success === 'invalid_token') {
+        console.warn(`⚠️ [sendCallNotification] VoIP token inválido para user ${userId} - debería limpiarse de Firestore`);
+        // TODO: Limpiar voipToken inválido de Firestore
+      } else if (success) {
+        console.log(`✅ [sendCallNotification] VoIP notification enviada exitosamente a iOS user ${userId}`);
+      } else {
+        console.error(`❌ [sendCallNotification] Error enviando VoIP notification a iOS user ${userId}`);
+      }
+
+    } else {
+      // ✅ Android: Usar FCM token
+      const fcmToken = userData.fcmToken;
+
+      if (!fcmToken || typeof fcmToken !== 'string' || fcmToken.trim() === '') {
+        console.log(`⚠️ [sendCallNotification] Usuario Android ${userId} sin fcmToken válido. Token: ${fcmToken}`);
+        return;
+      }
+
+      console.log(`📲 [sendCallNotification] Enviando FCM notification a Android: ${fcmToken.substring(0, 20)}...`);
+
+      const fcmMessage = {
+        token: fcmToken,
+        data: notificationData,
+        android: {
+          priority: 'high',
+          ttl: 30000, // 30 segundos
+        }
+      };
+
+      await admin.messaging().send(fcmMessage);
+      console.log(`✅ [sendCallNotification] FCM notification enviada a Android user ${userId}`);
+    }
 
   } catch (error) {
     console.error(`❌ [sendCallNotification] Error enviando notificación a ${userId}:`, error);

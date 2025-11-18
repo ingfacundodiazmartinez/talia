@@ -46,7 +46,10 @@ class ReleaseLogger {
       }
 
       // ✅ Crear archivo ÚNICO para este emulador
-      final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-').split('.')[0];
+      final timestamp = DateTime.now()
+          .toIso8601String()
+          .replaceAll(':', '-')
+          .split('.')[0];
       final logFileName = '$_deviceId-$timestamp.txt';
       _logFile = File('${logDir.path}/$logFileName');
 
@@ -59,13 +62,9 @@ class ReleaseLogger {
         flush: true,
       );
 
-      if (kDebugMode) {
-        print('📝 [ReleaseLogger] Logs escribiendo a: ${_logFile!.path}');
-      }
+      print('📝 [ReleaseLogger] Logs escribiendo a: ${_logFile!.path}');
     } catch (e) {
-      if (kDebugMode) {
-        print('❌ [ReleaseLogger] Error inicializando logger: $e');
-      }
+      print('❌ [ReleaseLogger] Error inicializando logger: $e');
     }
   }
 
@@ -110,9 +109,7 @@ class ReleaseLogger {
     final consoleMessage = '$time = $fullMessage';
 
     // En debug, usar print normal
-    if (kDebugMode) {
-      print(consoleMessage);
-    }
+    print(consoleMessage);
 
     // ✅ Escribir a archivo propio (async, no bloqueante)
     inst._writeToFile(fileMessage);
@@ -144,10 +141,8 @@ class ReleaseLogger {
     // ✅ Formato para consola
     final consoleMessage = '❌ $fullMessage';
 
-    if (kDebugMode) {
-      print(consoleMessage);
-      if (error != null) print('Error: $error');
-    }
+    print(consoleMessage);
+    if (error != null) print('Error: $error');
 
     // ✅ Escribir a archivo propio
     inst._writeToFile(fileMessage);
