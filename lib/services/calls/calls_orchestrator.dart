@@ -60,6 +60,9 @@ class CallsOrchestrator {
   // ✅ ADDED: CallKit coordination para evitar IncomingCallScreen duplicado
   final Set<String> _callKitActiveCallIds = <String>{};
 
+  // ✅ FIX CRÍTICO: Deduplicación centralizada de llamadas entrantes procesadas
+  final Map<String, DateTime> _processedIncomingCalls = {};
+
   // Callbacks para main.dart (interfaz mínima)
   Function(Call call)? onIncomingCall;
   Function(Call call)? onCallStatusChanged;
@@ -75,6 +78,28 @@ class CallsOrchestrator {
   /// Reset singleton for testing
   static void resetInstance() {
     _instance = null;
+  }
+
+  /// ✅ FIX CRÍTICO: Operación atómica para prevenir navegación duplicada
+  /// Retorna true si debemos proceder con la navegación, false si ya está navegando
+  bool _tryStartNavigation(String callId) {
+    if (_navigatingCallIds.contains(callId)) {
+      ReleaseLogger.log(
+        '⚠️ [CallsOrchestrator] Ya navegando a $callId - evitando duplicado',
+        tag: 'CallsOrchestrator',
+      );
+      return false;
+    }
+
+    // Marcar como navegando
+    _navigatingCallIds.add(callId);
+
+    // Auto-cleanup después de 3 segundos
+    Future.delayed(Duration(seconds: 3), () {
+      _navigatingCallIds.remove(callId);
+    });
+
+    return true;
   }
 
   /// ✅ SIMPLE: Helper para navegación usando callback limpio
@@ -423,6 +448,29 @@ class CallsOrchestrator {
   Future<void> _showIncomingCallScreen(Call call) async {
     if (_navigatorKey?.currentContext == null) return;
 
+    // ✅ FIX CRÍTICO: Deduplicación basada en callId + timestamp
+    // Previene que CallsService Y CallListenerService muestren la misma llamada 2+ veces
+    final callTimestamp = call.createdAt;
+
+    if (_processedIncomingCalls.containsKey(call.id)) {
+      final previousTimestamp = _processedIncomingCalls[call.id]!;
+      if (previousTimestamp == callTimestamp) {
+        ReleaseLogger.log(
+          '⚠️ [CallsOrchestrator] Llamada ${call.id} ya procesada (timestamp: $callTimestamp) - evitando duplicado',
+          tag: 'CallsOrchestrator',
+        );
+        return;
+      }
+    }
+
+    // Marcar como procesada
+    _processedIncomingCalls[call.id] = callTimestamp;
+
+    // Limpiar después de 10 segundos
+    Future.delayed(Duration(seconds: 10), () {
+      _processedIncomingCalls.remove(call.id);
+    });
+
     // ✅ NUEVO: Verificar si la llamada ya terminó
     if (call.endedAt != null) {
       ReleaseLogger.log(
@@ -551,23 +599,15 @@ class CallsOrchestrator {
       }
     }
 
-    // ✅ ROOT CAUSE FIX: Usar tracking interno en lugar de ModalRoute detection
-    // Para receivers: verificar si ya estamos navegando a esta llamada
-    if (_navigatingCallIds.contains(call.id)) {
-      ReleaseLogger.log(
-        '⚠️ [CallsOrchestrator] Ya navegando a call ${call.id} - evitando navegación duplicada',
-        tag: 'CallsOrchestrator',
-      );
-      return;
+    // ✅ FIX CRÍTICO: Usar operación atómica para prevenir race conditions
+    if (!_tryStartNavigation(call.id)) {
+      return; // Ya navegando
     }
 
     ReleaseLogger.log(
       '📱 [CallsOrchestrator] Navegando automáticamente para receiver a call ${call.id}',
       tag: 'CallsOrchestrator',
     );
-
-    // Marcar como "navegando" ANTES de navegar
-    _navigatingCallIds.add(call.id);
 
     _navigateToCallScreenForCall(call);
   }
@@ -1175,15 +1215,6 @@ class CallsOrchestrator {
     Map<String, dynamic>? metadata,
   }) async {
     try {
-      // ✅ FIX: Prevenir navegación duplicada
-      if (_navigatingCallIds.contains(callId)) {
-        ReleaseLogger.log(
-          '⚠️ [CallsOrchestrator] Ya navegando a call $callId (source: $source) - evitando navegación duplicada',
-          tag: 'CallsOrchestrator',
-        );
-        return;
-      }
-
       // ✅ Extraer flag de metadata
       final replaceTemporary = metadata?['replaceTemporary'] as bool? ?? false;
 
@@ -1192,16 +1223,12 @@ class CallsOrchestrator {
         tag: 'CallsOrchestrator',
       );
 
-      // Marcar como navegando ANTES de navegar
-      _navigatingCallIds.add(callId);
+      // ✅ FIX CRÍTICO: Usar operación atómica para prevenir race conditions
+      if (!_tryStartNavigation(callId)) {
+        return; // Ya navegando
+      }
 
       _navigateToCallScreen(callId, replaceTemporary: replaceTemporary);
-
-      // ✅ FIX: Remover del set después de 2 segundos para permitir futuras navegaciones
-      // (en caso de que el usuario cierre y vuelva a abrir la llamada)
-      Future.delayed(Duration(seconds: 2), () {
-        _navigatingCallIds.remove(callId);
-      });
 
       ReleaseLogger.log(
         '✅ [CallsOrchestrator] Navegación exitosa: $callId',

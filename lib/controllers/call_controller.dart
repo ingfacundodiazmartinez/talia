@@ -27,6 +27,11 @@ class CallController {
   static CallController? _instance;
   static String? _currentCallId;
 
+  // ✅ FIX CRÍTICO: Throttling de solicitudes de permisos para evitar múltiples dialogs
+  static DateTime? _lastPermissionRequestTime;
+  static Map<AppPermission, PermissionResult>? _lastPermissionResults;
+  static const Duration _permissionThrottleDuration = Duration(seconds: 3);
+
   // ✅ REFACTORIZADO: Usar CallsOrchestrator en lugar de CallsOrchestrator
   final CallsOrchestrator _callsOrchestrator;
 
@@ -1113,6 +1118,26 @@ class CallController {
         tag: 'CallController',
       );
 
+      // ✅ FIX CRÍTICO: Throttling para evitar solicitudes múltiples
+      if (_lastPermissionRequestTime != null && _lastPermissionResults != null) {
+        final timeSinceLastRequest = DateTime.now().difference(_lastPermissionRequestTime!);
+
+        if (timeSinceLastRequest < _permissionThrottleDuration) {
+          ReleaseLogger.log(
+            '⚠️ [CallController] Permisos solicitados hace ${timeSinceLastRequest.inMilliseconds}ms - reutilizando resultados',
+            tag: 'CallController',
+          );
+
+          // Verificar si los resultados previos son suficientes
+          final hasCamera = _lastPermissionResults!.containsKey(AppPermission.camera)
+              ? _lastPermissionResults![AppPermission.camera] == PermissionResult.granted
+              : !isVideo;
+          final hasMicrophone = _lastPermissionResults![AppPermission.microphone] == PermissionResult.granted;
+
+          return hasMicrophone && hasCamera;
+        }
+      }
+
       // ✅ FIX: Si es llamada VoIP en iOS, skip permission check y solicitar después
       if (isVoIPCall && Platform.isIOS) {
         ReleaseLogger.log(
@@ -1212,6 +1237,10 @@ class CallController {
             : '❌ [CallController] Permisos insuficientes',
         tag: 'CallController',
       );
+
+      // ✅ FIX CRÍTICO: Guardar resultados y timestamp para throttling
+      _lastPermissionRequestTime = DateTime.now();
+      _lastPermissionResults = Map.from(results);
 
       return allPermissionsGranted;
     } catch (e) {

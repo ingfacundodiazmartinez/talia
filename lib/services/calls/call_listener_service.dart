@@ -184,6 +184,7 @@ class CallListenerService {
   }
 
   /// Test manual de conexión Firestore y detección de listener zombificado
+  /// ✅ FIX CRÍTICO: Corregir falsos positivos filtrando solo llamadas RECIENTES y ACTIVAS
   Future<bool> _testFirestoreConnection() async {
     try {
       final currentUserId = FirebaseAuth.instance.currentUser?.uid;
@@ -195,36 +196,39 @@ class CallListenerService {
         return false;
       }
 
+      // ✅ FIX: Solo buscar llamadas RECIENTES (últimos 30 segundos) NO TERMINADAS
+      final thirtySecondsAgo = DateTime.now().subtract(Duration(seconds: 30));
+
       ReleaseLogger.log(
-        '🔍 [DEBUG TEST] Ejecutando test manual de Firestore (UNIFICADO - sin filtro temporal)...',
+        '🔍 [DEBUG TEST] Ejecutando test de llamadas activas recientes (después de ${thirtySecondsAgo.toIso8601String()})...',
         tag: 'CallListenerService',
       );
 
       final testSnapshot = await FirebaseFirestore.instance
           .collection('calls')
           .where('participants', arrayContains: currentUserId)
-          .limit(10) // Limitar para evitar queries muy grandes
+          .where('endedAt', isEqualTo: null) // ✅ FIX: Solo llamadas NO terminadas
+          .where('createdAt', isGreaterThan: Timestamp.fromDate(thirtySecondsAgo)) // ✅ FIX: Solo recientes
+          .limit(1) // Solo necesitamos saber si existe al menos una
           .get();
 
       final foundDocs = testSnapshot.docs.length;
       ReleaseLogger.log(
-        '🔍 [DEBUG TEST] Test manual Firestore: $foundDocs docs encontrados',
+        '🔍 [DEBUG TEST] Llamadas activas recientes encontradas: $foundDocs',
         tag: 'CallListenerService',
       );
 
-      for (var doc in testSnapshot.docs) {
-        final data = doc.data() as Map<String, dynamic>?;
-        final participants = data?['participants'];
-        final createdAt = data?['createdAt'];
+      if (foundDocs > 0) {
+        final doc = testSnapshot.docs.first;
+        final data = doc.data();
         ReleaseLogger.log(
-          '🔍 [DEBUG TEST] Doc: ${doc.id}, participants=$participants, createdAt=$createdAt',
+          '🔍 [DEBUG TEST] Llamada reciente no detectada: ${doc.id}, createdAt=${data['createdAt']}',
           tag: 'CallListenerService',
         );
       }
 
       // ✅ DETECCIÓN DE LISTENER ZOMBIFICADO:
-      // Si el test manual encuentra documentos pero el listener no disparó recientemente,
-      // es probable que esté zombificado
+      // Solo zombificado si hay llamadas RECIENTES ACTIVAS que el listener no detectó
       return foundDocs > 0;
     } catch (e) {
       ReleaseLogger.log(
