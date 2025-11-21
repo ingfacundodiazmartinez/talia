@@ -144,6 +144,7 @@ exports.incrementUnreadCount = chats.incrementUnreadCount;
 exports.incrementGroupUnreadCount = chats.incrementGroupUnreadCount;
 exports.sendChatMessage = chats.sendChatMessage;
 exports.sendGroupMessage = chats.sendGroupMessage;
+exports.createChat = chats.createChat;
 
 // Emergencias
 exports.createEmergency = emergency.createEmergency;
