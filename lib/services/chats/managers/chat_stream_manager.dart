@@ -92,6 +92,26 @@ class ChatStreamManager {
     return _cacheChangeControllers[chatId]!.stream;
   }
 
+  /// Ensure Firestore listener is active for a chat (without returning stream)
+  /// This is used by cache-first architecture to start background sync
+  void ensureListenerActive(String chatId, {bool isGroup = false}) {
+    // If controller already exists, listener is already active
+    if (_messageControllers.containsKey(chatId)) {
+      ReleaseLogger.log('Firestore listener already active for chat $chatId');
+      return;
+    }
+
+    // Create controller and start listener
+    final controller = StreamController<List<ChatMessage>>.broadcast();
+    _messageControllers[chatId] = controller;
+    _chatIsGroupMap[chatId] = isGroup;
+
+    _setupMessageStream(chatId, controller, isGroup: isGroup);
+    _activeStreamCount++;
+
+    ReleaseLogger.log('Started Firestore listener for chat $chatId (isGroup: $isGroup)');
+  }
+
   /// Configurar stream de mensajes desde Firestore
   void _setupMessageStream(String chatId, StreamController<List<ChatMessage>> controller, {bool isGroup = false}) {
     final firestoreStream = _messageRepository.watchMessages(chatId: chatId, isGroup: isGroup, limit: 50);

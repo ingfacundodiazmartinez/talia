@@ -47,22 +47,22 @@ class ChatRetrievalService {
   /// 1. Initial data from Hive cache (instant, works offline)
   /// 2. Updates when background listener updates cache
   Stream<List<ChatMessage>> watchMessages(String chatId) async* {
-    ReleaseLogger.log('Reading messages from cache for chat $chatId');
+    ReleaseLogger.log('📖 [ChatRetrieval] Reading messages from cache for chat $chatId');
 
     // STEP 1: Emit initial cached data immediately (from Hive)
     final cachedMessages = await MessageCacheService().getMessages(chatId);
     yield cachedMessages;
-    ReleaseLogger.log('Emitted ${cachedMessages.length} cached messages for chat $chatId');
+    ReleaseLogger.log('✅ [ChatRetrieval] Emitted ${cachedMessages.length} cached messages for chat $chatId');
 
-    // STEP 2: Start background Firestore listener if not already running
-    // This will automatically update the cache
-    _streamManager.getMessagesStream(chatId);
+    // STEP 2: Ensure background Firestore listener is active
+    // This will automatically update the cache when Firestore changes
+    _streamManager.ensureListenerActive(chatId);
 
     // STEP 3: Listen for cache updates from background listener
     await for (final _ in _streamManager.watchCacheChanges(chatId)) {
       final updatedMessages = await MessageCacheService().getMessages(chatId);
       yield updatedMessages;
-      ReleaseLogger.log('Cache updated: ${updatedMessages.length} messages for chat $chatId');
+      ReleaseLogger.log('🔄 [ChatRetrieval] Cache updated: ${updatedMessages.length} messages for chat $chatId');
     }
   }
 

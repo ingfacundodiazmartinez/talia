@@ -34,7 +34,7 @@ class MessageRepository {
         .collection(collection)
         .doc(chatId)
         .collection('messages')
-        .orderBy('createdAt', descending: true)
+        .orderBy('timestamp', descending: true)  // ✅ FIX: Use 'timestamp' to match model and Firestore indexes
         .limit(limit)
         .snapshots();
   }
