@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../../../../utils/chat_utils.dart';
+import '../../../../services/create_chat_service.dart';
 import '../../../chat_detail_screen.dart';
 import '../../../child_location_screen.dart';
 
@@ -43,15 +44,11 @@ class ContactCardWidget extends StatelessWidget {
 
     return GestureDetector(
       onTap: () {
-        final chatId = ChatUtils.getChatId(currentUserId, contactId);
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (context) => ChatDetailScreen(
-              chatId: chatId,
-              contactId: contactId,
-              contactName: displayName,
-            ),
-          ),
+        // ✅ SEGURIDAD: Crear chat mediante Cloud Function antes de navegar
+        CreateChatService.createAndNavigateToChat(
+          context: context,
+          otherUserId: contactId,
+          otherUserName: displayName,
         );
       },
       child: Container(

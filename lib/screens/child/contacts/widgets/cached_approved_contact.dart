@@ -4,6 +4,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../../../services/block_service.dart';
 import '../../../../services/contact_service.dart';
+import '../../../../services/create_chat_service.dart';
 import '../../../chat_detail_screen.dart';
 
 /// Widget cacheado para mostrar un contacto aprobado
@@ -134,6 +135,16 @@ class _CachedApprovedContactState extends State<CachedApprovedContact> {
     }
   }
 
+  /// Crear/obtener chat y navegar a pantalla de chat
+  Future<void> _openChat(BuildContext context, String contactId, String contactName) async {
+    // ✅ SEGURIDAD: Crear chat mediante Cloud Function (valida contactos, bloqueos, restricciones)
+    await CreateChatService.createAndNavigateToChat(
+      context: context,
+      otherUserId: contactId,
+      otherUserName: contactName,
+    );
+  }
+
   Future<void> _deleteContact(String contactName) async {
     try {
       final confirm = await showDialog<bool>(
@@ -244,18 +255,7 @@ class _CachedApprovedContactState extends State<CachedApprovedContact> {
         ],
       ),
       child: GestureDetector(
-        onTap: () {
-          final chatId = _getChatId(widget.currentUserId, contactId);
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (context) => ChatDetailScreen(
-                chatId: chatId,
-                contactId: contactId,
-                contactName: name,
-              ),
-            ),
-          );
-        },
+        onTap: () => _openChat(context, contactId, name),
         child: Row(
           children: [
             CircleAvatar(
