@@ -1,0 +1,619 @@
+import 'dart:async';
+import 'dart:io';
+import 'package:flutter/foundation.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:file_picker/file_picker.dart';
+import '../models/chat_message.dart';
+import '../services/chats/chat_orchestrator.dart';
+import '../services/chats/services/chat_messaging_service.dart';  // For MessageType enum
+import '../services/typing_indicator_service.dart';
+import '../services/block_service.dart';
+import '../services/audio_processing_service.dart';
+import '../notification_service.dart';
+import '../utils/release_logger.dart';
+import 'package:uuid/uuid.dart';
+
+/// Controller for chat functionality (CACHE-FIRST ARCHITECTURE)
+///
+/// This controller properly delegates all operations to services.
+/// It NEVER directly accesses Firestore.
+///
+/// Responsibilities:
+/// - Coordinate between UI and services
+/// - Manage stream subscriptions
+/// - Transform data for UI presentation
+/// - Handle cleanup on dispose
+class ChatControllerCacheFirst extends ChangeNotifier {
+  final String chatId;
+  final String contactId;
+  final String contactName;
+  final bool isGroup;
+
+  // Services
+  late final ChatOrchestrator _orchestrator;
+  late final TypingIndicatorService _typingService;
+  late final BlockService _blockService;
+  late final AudioProcessingService _audioService;
+  late final NotificationService _notificationService;
+
+  // Stream subscription management
+  StreamSubscription<List<ChatMessage>>? _messagesSubscription;
+  StreamSubscription<bool>? _isBlockedSubscription;
+  StreamSubscription<bool>? _isBlockedBySubscription;
+  StreamSubscription? _notificationSubscription;
+
+  // State
+  List<ChatMessage> _messages = [];
+  final List<ChatMessage> _pendingMessages = [];
+  bool _isInitialized = false;
+  final bool _isLoading = false;  // Currently unused, but may be needed for loading states
+  bool _hasLoadedInitialMessages = false;
+  bool _isLoadingMore = false;
+
+  // Contact state
+  String _contactPhotoURL = '';
+  bool _contactIsOnline = false;
+
+  // Block state
+  bool _isBlocked = false;
+  bool _isBlockedBy = false;
+
+  // Current user
+  String get currentUserId => FirebaseAuth.instance.currentUser?.uid ?? '';
+
+  // Public getters
+  List<ChatMessage> get messages => [..._messages];
+  List<ChatMessage> get pendingMessages => [..._pendingMessages];
+  bool get isInitialized => _isInitialized;
+  bool get isLoading => _isLoading;
+  bool get hasLoadedInitialMessages => _hasLoadedInitialMessages;
+  bool get isLoadingMore => _isLoadingMore;
+  String get contactPhotoURL => _contactPhotoURL;
+  bool get contactIsOnline => _contactIsOnline;
+  bool get isBlocked => _isBlocked;
+  bool get isBlockedBy => _isBlockedBy;
+  bool get hasMoreMessages => _messages.length >= 20; // Simple heuristic
+
+  ChatControllerCacheFirst({
+    required this.chatId,
+    required this.contactId,
+    required this.contactName,
+    this.isGroup = false,
+    ChatOrchestrator? orchestrator,
+    TypingIndicatorService? typingService,
+    BlockService? blockService,
+    AudioProcessingService? audioService,
+    NotificationService? notificationService,
+  }) {
+    // Initialize services (dependency injection pattern)
+    _orchestrator = orchestrator ?? ChatOrchestrator();
+    _typingService = typingService ?? TypingIndicatorService();
+    _blockService = blockService ?? BlockService();
+    _audioService = audioService ?? AudioProcessingService();
+    _notificationService = notificationService ?? NotificationService();
+  }
+
+  /// Initialize the controller and start listening to messages
+  Future<void> initialize() async {
+    if (_isInitialized) {
+      ReleaseLogger.log('ChatController already initialized for chat $chatId');
+      return;
+    }
+
+    try {
+      ReleaseLogger.log('Initializing ChatController for chat $chatId');
+
+      // Load contact info
+      await _loadContactInfo();
+
+      // Start listening to messages (CACHE-FIRST)
+      await _startListeningToMessages();
+
+      // Setup block listeners
+      _setupBlockListeners();
+
+      // Setup notification listener
+      _setupNotificationListener();
+
+      // Mark chat as read
+      await markChatAsRead();
+
+      _isInitialized = true;
+      _hasLoadedInitialMessages = true;
+      ReleaseLogger.log('ChatController initialized successfully for chat $chatId');
+    } catch (e) {
+      ReleaseLogger.error('Failed to initialize ChatController for chat $chatId: $e');
+      rethrow;
+    }
+  }
+
+  /// Load contact information
+  Future<void> _loadContactInfo() async {
+    try {
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(contactId)
+          .get();
+      final userData = userDoc.data();
+      if (userData != null) {
+        _contactPhotoURL = userData['photoURL'] ?? '';
+        _contactIsOnline = userData['isOnline'] ?? false;
+        notifyListeners();
+      }
+    } catch (e) {
+      ReleaseLogger.error('Error loading contact info: $e');
+    }
+  }
+
+  /// Setup block status listeners
+  void _setupBlockListeners() {
+    _isBlockedSubscription = _blockService.isBlockedStream(contactId).listen((isBlocked) {
+      _isBlocked = isBlocked;
+      notifyListeners();
+    });
+
+    _isBlockedBySubscription = _blockService.isBlockedByStream(contactId).listen((isBlockedBy) {
+      _isBlockedBy = isBlockedBy;
+      notifyListeners();
+    });
+  }
+
+  /// Setup notification listener
+  void _setupNotificationListener() {
+    _notificationSubscription = _notificationService.chatNotificationTapStream.listen((data) {
+      final notifChatId = data['chatId'] as String?;
+      if (notifChatId == chatId) {
+        loadMoreMessages();
+      }
+    });
+  }
+
+  /// Start listening to messages stream (CACHE-FIRST)
+  Future<void> _startListeningToMessages() async {
+    // Cancel existing subscription if any
+    await _messagesSubscription?.cancel();
+
+    // Create new subscription to CACHE-FIRST stream via orchestrator
+    _messagesSubscription = _orchestrator.getMessagesStream(chatId).listen(
+      (messages) {
+        ReleaseLogger.log('Received ${messages.length} messages from cache for chat $chatId');
+        _messages = messages;
+        notifyListeners();
+      },
+      onError: (error) {
+        ReleaseLogger.error('Error in messages stream for chat $chatId: $error');
+      },
+    );
+  }
+
+  /// Get messages stream for UI (CACHE-FIRST)
+  Stream<List<ChatMessage>> get messagesStream {
+    // Return cache-first stream via orchestrator
+    return _orchestrator.getMessagesStream(chatId);
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // MESSAGE SENDING - Optimistic updates
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Send text message with optimistic update
+  Future<void> sendTextMessage({
+    required String text,
+    Map<String, dynamic>? replyTo,
+  }) async {
+    if (text.trim().isEmpty || currentUserId.isEmpty) return;
+
+    // 1. Create optimistic message
+    final tempId = const Uuid().v4();
+    final optimisticMessage = ChatMessage.optimistic(
+      id: tempId,
+      senderId: currentUserId,
+      text: text,
+      replyTo: replyTo,
+      type: 'text',
+    );
+
+    // 2. Add to local state immediately
+    _pendingMessages.add(optimisticMessage);
+    _messages.insert(0, optimisticMessage);
+    notifyListeners();
+
+    try {
+      // 3. Send to backend via orchestrator
+      await _orchestrator.sendMessage(
+        chatId: chatId,
+        content: text,
+        type: MessageType.text,
+        replyToId: replyTo?['id'] as String?,
+      );
+
+      // 4. Remove from pending when successful
+      _pendingMessages.removeWhere((m) => m.id == tempId);
+      ReleaseLogger.log('Text message sent successfully to chat $chatId');
+    } catch (e) {
+      // 5. Handle error - update optimistic message to error status
+      final failedIndex = _messages.indexWhere((m) => m.id == tempId);
+      if (failedIndex != -1) {
+        _messages[failedIndex] = optimisticMessage.copyWith(
+          status: MessageStatus.error,
+        );
+        notifyListeners();
+      }
+      ReleaseLogger.error('Failed to send text message to chat $chatId: $e');
+      rethrow;
+    }
+  }
+
+  /// Create optimistic audio bubble
+  Future<void> createOptimisticAudioBubble(String audioPath) async {
+    final tempId = const Uuid().v4();
+
+    // Process audio to get waveform
+    final audioFile = File(audioPath);
+    final waveform = await _audioService.extractWaveform(audioFile);
+    // Duration could be used for UI display if needed
+    // final duration = await _audioService.getAudioDuration(audioFile);
+
+    final optimisticMessage = ChatMessage.optimistic(
+      id: tempId,
+      senderId: currentUserId,
+      type: 'audio',
+      audioUrl: audioPath, // Local path temporarily
+      waveformData: waveform,  // Correct parameter name from ChatMessage
+    );
+
+    _pendingMessages.add(optimisticMessage);
+    _messages.insert(0, optimisticMessage);
+    notifyListeners();
+  }
+
+  /// Process and upload audio in background
+  Future<void> processAndUploadAudio(String audioPath) async {
+    try {
+      await _orchestrator.sendMessage(
+        chatId: chatId,
+        content: '', // Audio messages don't need text content
+        type: MessageType.audio,
+        mediaPath: audioPath,
+      );
+
+      // Remove from pending messages
+      _pendingMessages.removeWhere((m) => m.audioUrl == audioPath);
+      ReleaseLogger.log('Audio uploaded successfully');
+    } catch (e) {
+      ReleaseLogger.error('Failed to upload audio: $e');
+      // Update optimistic message to error status
+      final failedIndex = _messages.indexWhere((m) => m.audioUrl == audioPath);
+      if (failedIndex != -1) {
+        _messages[failedIndex] = _messages[failedIndex].copyWith(
+          status: MessageStatus.error,
+        );
+        notifyListeners();
+      }
+      rethrow;
+    }
+  }
+
+  /// Send image with optimistic updates
+  Future<void> sendImage({required ImageSource source}) async {
+    try {
+      final picker = ImagePicker();
+      final pickedFile = await picker.pickImage(source: source);
+
+      if (pickedFile == null) return;
+
+      // Create optimistic message
+      final tempId = const Uuid().v4();
+      final optimisticMessage = ChatMessage.optimistic(
+        id: tempId,
+        senderId: currentUserId,
+        type: 'image',
+        imageUrl: pickedFile.path, // Local path temporarily
+      );
+
+      _pendingMessages.add(optimisticMessage);
+      _messages.insert(0, optimisticMessage);
+      notifyListeners();
+
+      // Upload in background via orchestrator
+      await _orchestrator.sendMessage(
+        chatId: chatId,
+        content: '', // Image messages don't need text content
+        type: MessageType.image,
+        mediaPath: pickedFile.path,
+      );
+
+      // Remove from pending
+      _pendingMessages.removeWhere((m) => m.id == tempId);
+    } catch (e) {
+      ReleaseLogger.error('Failed to send image: $e');
+      rethrow;
+    }
+  }
+
+  /// Send video with optimistic updates
+  Future<void> sendVideo({String? path, PlatformFile? file}) async {
+    try {
+      String? videoPath = path;
+
+      if (videoPath == null && file == null) {
+        // Pick video from gallery
+        final picker = ImagePicker();
+        final pickedFile = await picker.pickVideo(source: ImageSource.gallery);
+        if (pickedFile == null) return;
+        videoPath = pickedFile.path;
+      } else if (file != null) {
+        videoPath = file.path;
+      }
+
+      if (videoPath == null) return;
+
+      // Create optimistic message
+      final tempId = const Uuid().v4();
+      final optimisticMessage = ChatMessage.optimistic(
+        id: tempId,
+        senderId: currentUserId,
+        type: 'video',
+        videoUrl: videoPath, // Local path temporarily
+      );
+
+      _pendingMessages.add(optimisticMessage);
+      _messages.insert(0, optimisticMessage);
+      notifyListeners();
+
+      // Upload in background via orchestrator
+      await _orchestrator.sendMessage(
+        chatId: chatId,
+        content: '', // Video messages don't need text content
+        type: MessageType.video,
+        mediaPath: videoPath,
+      );
+
+      // Remove from pending
+      _pendingMessages.removeWhere((m) => m.id == tempId);
+    } catch (e) {
+      ReleaseLogger.error('Failed to send video: $e');
+      rethrow;
+    }
+  }
+
+  /// Create optimistic video message for immediate display
+  void createOptimisticVideoMessage({
+    required String videoPath,
+    String? thumbnailPath,
+  }) {
+    final tempId = const Uuid().v4();
+    final optimisticMessage = ChatMessage.optimistic(
+      id: tempId,
+      senderId: currentUserId,
+      type: 'video',
+      videoUrl: videoPath,
+      imageUrl: thumbnailPath, // Use image URL for thumbnail preview
+    );
+
+    _pendingMessages.add(optimisticMessage);
+    _messages.insert(0, optimisticMessage);
+    notifyListeners();
+  }
+
+  /// Process and upload video in background
+  Future<void> processAndUploadVideo({required String videoPath}) async {
+    try {
+      await _orchestrator.sendMessage(
+        chatId: chatId,
+        content: '', // Video messages don't need text content
+        type: MessageType.video,
+        mediaPath: videoPath,
+      );
+
+      // Remove from pending
+      _pendingMessages.removeWhere((m) => m.videoUrl == videoPath);
+      ReleaseLogger.log('Video uploaded successfully');
+    } catch (e) {
+      ReleaseLogger.error('Failed to upload video: $e');
+      // Update optimistic message to error status
+      final failedIndex = _messages.indexWhere((m) => m.videoUrl == videoPath);
+      if (failedIndex != -1) {
+        _messages[failedIndex] = _messages[failedIndex].copyWith(
+          status: MessageStatus.error,
+        );
+        notifyListeners();
+      }
+      rethrow;
+    }
+  }
+
+  /// Send a media message (image/video)
+  Future<void> sendMediaMessage({
+    required String mediaPath,
+    required String mediaType,
+    String? caption,
+    Function(String messageId, double progress)? onProgressUpdate,
+  }) async {
+    ReleaseLogger.log('Uploading $mediaType message to chat $chatId');
+
+    try {
+      final type = mediaType == 'image'
+          ? MessageType.image
+          : mediaType == 'video'
+              ? MessageType.video
+              : mediaType == 'audio'
+                  ? MessageType.audio
+                  : MessageType.text;
+
+      await _orchestrator.sendMessage(
+        chatId: chatId,
+        content: caption ?? '',
+        type: type,
+        mediaPath: mediaPath,
+        onProgressUpdate: onProgressUpdate,
+      );
+      ReleaseLogger.log('$mediaType message uploaded successfully to chat $chatId');
+    } catch (e) {
+      ReleaseLogger.error('Failed to upload $mediaType message to chat $chatId: $e');
+      rethrow;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // MESSAGE MANAGEMENT
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Delete a message
+  Future<bool> deleteMessage(String messageId, Timestamp? timestamp) async {
+    ReleaseLogger.log('Deleting message $messageId from chat $chatId');
+
+    try {
+      await _orchestrator.deleteMessage(chatId, messageId);
+      ReleaseLogger.log('Message $messageId deleted successfully');
+      return true;
+    } catch (e) {
+      ReleaseLogger.error('Failed to delete message $messageId: $e');
+      return false;
+    }
+  }
+
+  /// Update blocked message (edit)
+  Future<void> updateBlockedMessage(String messageId, String newContent) async {
+    ReleaseLogger.log('Editing blocked message $messageId in chat $chatId');
+
+    try {
+      await _orchestrator.editMessage(chatId, messageId, newContent);
+      ReleaseLogger.log('Message $messageId edited successfully');
+    } catch (e) {
+      ReleaseLogger.error('Failed to edit message $messageId: $e');
+      rethrow;
+    }
+  }
+
+  /// Clear chat history
+  Future<bool> clearChat() async {
+    try {
+      // Clear from Firestore
+      await FirebaseFirestore.instance
+          .collection('chats')
+          .doc(chatId)
+          .update({
+        'clearedAt_$currentUserId': FieldValue.serverTimestamp(),
+      });
+
+      // Clear local cache
+      _messages.clear();
+      notifyListeners();
+
+      ReleaseLogger.log('Chat $chatId cleared successfully');
+      return true;
+    } catch (e) {
+      ReleaseLogger.error('Failed to clear chat: $e');
+      return false;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // UTILITY METHODS
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Set typing indicator
+  void setTyping(bool isTyping) {
+    _typingService.setTyping(
+      chatId,
+      isTyping,
+      isGroup: isGroup,
+    );
+  }
+
+  /// Mark chat as read
+  Future<void> markChatAsRead() async {
+    try {
+      await _orchestrator.markChatAsRead(chatId);
+      ReleaseLogger.log('Chat $chatId marked as read');
+    } catch (e) {
+      ReleaseLogger.error('Failed to mark chat $chatId as read: $e');
+    }
+  }
+
+  /// Get current user data
+  Future<Map<String, dynamic>?> getCurrentUserData() async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUserId)
+          .get();
+      return doc.data();
+    } catch (e) {
+      ReleaseLogger.error('Failed to get current user data: $e');
+      return null;
+    }
+  }
+
+  /// Load more messages (pagination)
+  Future<void> loadMoreMessages() async {
+    if (_isLoadingMore || !hasMoreMessages) {
+      ReleaseLogger.log('Cannot load more messages');
+      return;
+    }
+
+    _isLoadingMore = true;
+    notifyListeners();
+
+    try {
+      final lastMessage = _messages.isNotEmpty ? _messages.last : null;
+      final moreMessages = await _orchestrator.loadMoreMessages(
+        chatId: chatId,
+        lastMessage: lastMessage,
+      );
+
+      if (moreMessages.isNotEmpty) {
+        _messages.addAll(moreMessages);
+        notifyListeners();
+        ReleaseLogger.log('Loaded ${moreMessages.length} more messages');
+      }
+    } catch (e) {
+      ReleaseLogger.error('Failed to load more messages: $e');
+    } finally {
+      _isLoadingMore = false;
+      notifyListeners();
+    }
+  }
+
+  /// Refresh messages from cache
+  Future<void> refreshMessages() async {
+    ReleaseLogger.log('Refreshing messages for chat $chatId');
+
+    try {
+      // Force refresh from cache - just re-listen to the stream
+      // The stream manager will automatically fetch from cache first
+      await _startListeningToMessages();
+      ReleaseLogger.log('Refreshed messages from cache');
+    } catch (e) {
+      ReleaseLogger.error('Failed to refresh messages: $e');
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // LIFECYCLE MANAGEMENT
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Dispose of controller resources
+  @override
+  void dispose() {
+    ReleaseLogger.log('Disposing ChatController for chat $chatId');
+
+    // Cancel stream subscriptions
+    _messagesSubscription?.cancel();
+    _isBlockedSubscription?.cancel();
+    _isBlockedBySubscription?.cancel();
+    _notificationSubscription?.cancel();
+
+    // Clear state
+    _messages.clear();
+    _pendingMessages.clear();
+    _isInitialized = false;
+
+    super.dispose();
+
+    ReleaseLogger.log('ChatController disposed for chat $chatId');
+  }
+}

@@ -9,6 +9,7 @@ import '../managers/chat_cache_manager.dart';
 import '../repositories/chat_repository.dart';
 import '../repositories/message_repository.dart';
 import '../../../utils/release_logger.dart';
+import '../../../services/message_cache_service.dart';
 
 /// Servicio especializado para recuperación y búsqueda de datos de chat
 ///
@@ -40,10 +41,42 @@ class ChatRetrievalService {
   // STREAMS DE DATOS EN TIEMPO REAL
   // ═══════════════════════════════════════════════════════════════
 
-  /// Obtener stream de mensajes de un chat específico
+  /// Watch messages for a chat (CACHE-FIRST)
+  ///
+  /// This stream emits:
+  /// 1. Initial data from Hive cache (instant, works offline)
+  /// 2. Updates when background listener updates cache
+  Stream<List<ChatMessage>> watchMessages(String chatId) async* {
+    ReleaseLogger.log('Reading messages from cache for chat $chatId');
+
+    // STEP 1: Emit initial cached data immediately (from Hive)
+    final cachedMessages = await MessageCacheService().getMessages(chatId);
+    yield cachedMessages;
+    ReleaseLogger.log('Emitted ${cachedMessages.length} cached messages for chat $chatId');
+
+    // STEP 2: Start background Firestore listener if not already running
+    // This will automatically update the cache
+    _streamManager.getMessagesStream(chatId);
+
+    // STEP 3: Listen for cache updates from background listener
+    await for (final _ in _streamManager.watchCacheChanges(chatId)) {
+      final updatedMessages = await MessageCacheService().getMessages(chatId);
+      yield updatedMessages;
+      ReleaseLogger.log('Cache updated: ${updatedMessages.length} messages for chat $chatId');
+    }
+  }
+
+  /// Get messages synchronously from cache (for one-time reads)
+  Future<List<ChatMessage>> getMessagesFromCache(String chatId) async {
+    ReleaseLogger.log('Getting messages from cache for chat $chatId');
+    return await MessageCacheService().getMessages(chatId);
+  }
+
+  /// Obtener stream de mensajes de un chat específico (LEGACY - for backwards compatibility)
   Stream<List<ChatMessage>> getMessagesStream(String chatId) {
     try {
-      return _streamManager.getMessagesStream(chatId);
+      // For now, use the new cache-first method
+      return watchMessages(chatId);
     } catch (e) {
       ReleaseLogger.error('Error obteniendo stream de mensajes: $e', tag: 'ChatRetrieval');
       // Retornar stream vacío en caso de error

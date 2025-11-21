@@ -43,7 +43,61 @@ class ChatMessagingService {
   // MESSAGE SENDING - OPTIMISTIC UX
   // ═══════════════════════════════════════════════════════════════
 
-  /// Enviar mensaje con UX optimista
+  /// Write a text message to a chat
+  Future<String?> writeMessage({
+    required String chatId,
+    required String content,
+    String? replyToId,
+    Map<String, dynamic>? metadata,
+    bool isGroup = false,
+  }) async {
+    return await sendMessage(
+      chatId: chatId,
+      content: content,
+      type: MessageType.text,
+      replyToId: replyToId,
+      metadata: metadata,
+      isGroup: isGroup,
+    );
+  }
+
+  /// Upload a media message (image, video, audio)
+  Future<String?> uploadMessage({
+    required String chatId,
+    required String mediaPath,
+    required String mediaType,
+    String? caption,
+    String? replyToId,
+    bool isGroup = false,
+    Function(String messageId, double progress)? onProgressUpdate,
+  }) async {
+    MessageType type;
+    switch (mediaType.toLowerCase()) {
+      case 'image':
+        type = MessageType.image;
+        break;
+      case 'video':
+        type = MessageType.video;
+        break;
+      case 'audio':
+        type = MessageType.audio;
+        break;
+      default:
+        throw Exception('Invalid media type: $mediaType');
+    }
+
+    return await sendMessage(
+      chatId: chatId,
+      content: caption ?? '',
+      type: type,
+      mediaPath: mediaPath,
+      replyToId: replyToId,
+      isGroup: isGroup,
+      onProgressUpdate: onProgressUpdate,
+    );
+  }
+
+  /// Enviar mensaje con UX optimista (internal method)
   Future<String?> sendMessage({
     required String chatId,
     required String content,

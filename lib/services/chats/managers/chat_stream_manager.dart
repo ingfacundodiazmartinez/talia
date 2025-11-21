@@ -10,6 +10,7 @@ import '../../../utils/release_logger.dart';
 import '../chat_orchestrator.dart';
 import '../../unread_messages_service.dart';
 import '../../read_receipts_service.dart';
+import '../../message_cache_service.dart';
 
 /// Manager para coordinación de streams de chats
 ///
@@ -34,6 +35,9 @@ class ChatStreamManager {
   final Map<String, StreamController<List<ChatMessage>>> _messageControllers = {};
   final StreamController<List<Chat>> _chatListController =
       StreamController<List<Chat>>.broadcast();
+
+  // Cache change notification controllers (for cache-first architecture)
+  final Map<String, StreamController<void>> _cacheChangeControllers = {};
 
   // Performance tracking
   int _activeStreamCount = 0;
@@ -78,6 +82,16 @@ class ChatStreamManager {
     return controller.stream;
   }
 
+  /// Watch for cache changes for a specific chat (CACHE-FIRST ARCHITECTURE)
+  /// This ONLY notifies when cache is updated, doesn't emit data
+  Stream<void> watchCacheChanges(String chatId) {
+    if (!_cacheChangeControllers.containsKey(chatId)) {
+      _cacheChangeControllers[chatId] = StreamController<void>.broadcast();
+      ReleaseLogger.log('Created cache change controller for chat $chatId');
+    }
+    return _cacheChangeControllers[chatId]!.stream;
+  }
+
   /// Configurar stream de mensajes desde Firestore
   void _setupMessageStream(String chatId, StreamController<List<ChatMessage>> controller, {bool isGroup = false}) {
     final firestoreStream = _messageRepository.watchMessages(chatId: chatId, isGroup: isGroup, limit: 50);
@@ -96,7 +110,18 @@ class ChatStreamManager {
               .map((doc) => ChatMessage.fromFirestore(doc))
               .toList();
 
-          // Actualizar cache
+          // ✅ CRITICAL: Save to Hive cache (persistent) - CACHE-FIRST ARCHITECTURE
+          await MessageCacheService().saveMessages(chatId, messages);
+          ReleaseLogger.log('Saved ${messages.length} messages to Hive cache for chat $chatId');
+
+          // ✅ Notify cache change listeners (no data emission, just notification)
+          if (_cacheChangeControllers.containsKey(chatId) &&
+              !_cacheChangeControllers[chatId]!.isClosed) {
+            _cacheChangeControllers[chatId]!.add(null);
+            ReleaseLogger.log('Notified cache change for chat $chatId');
+          }
+
+          // Actualizar cache in-memory (for quick access)
           _cacheManager.updateCacheForChat(chatId, messages);
 
           // ✅ NUEVA LÓGICA CENTRALIZADA: Detectar mensajes nuevos y actualizar contadores
@@ -105,7 +130,7 @@ class ChatStreamManager {
           // Combinar con cache optimista
           final finalMessages = _cacheManager.getCachedMessages(chatId);
 
-          // Emitir al stream
+          // Emitir al stream (legacy compatibility)
           if (!controller.isClosed) {
             controller.add(finalMessages);
           }
@@ -306,6 +331,10 @@ class ChatStreamManager {
     _messageControllers[chatId]?.close();
     _messageControllers.remove(chatId);
 
+    // Close cache change controller too
+    _cacheChangeControllers[chatId]?.close();
+    _cacheChangeControllers.remove(chatId);
+
     _chatIsGroupMap.remove(chatId);
     _lastUpdateTimes.remove(chatId);
     _activeStreamCount = _messageControllers.length;
@@ -457,6 +486,13 @@ class ChatStreamManager {
   void dispose() {
     stopBackgroundStreams();
     _chatListController.close();
+
+    // Close all cache change controllers
+    for (final controller in _cacheChangeControllers.values) {
+      controller.close();
+    }
+    _cacheChangeControllers.clear();
+
     _chatIsGroupMap.clear();
     _lastUpdateTimes.clear();
   }

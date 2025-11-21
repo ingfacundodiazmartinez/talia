@@ -1,11 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
-import '../controllers/chat_controller_optimistic.dart';
+import '../controllers/chat_controller_cache_first.dart';
 import '../notification_service.dart';
 import '../services/reaction_service.dart';
 import '../calls_v2/controllers/call_controller.dart' as calls_v2;
@@ -52,8 +51,8 @@ class ChatDetailScreen extends StatefulWidget {
 
 class _ChatDetailScreenState extends State<ChatDetailScreen>
     with WidgetsBindingObserver, MediaHandlersMixin {
-  // Controller
-  ChatControllerOptimistic? _controller;
+  // Controller - MIGRATED TO CACHE-FIRST
+  ChatControllerCacheFirst? _controller;
   bool _isControllerInitialized = false;
 
   // UI Controllers
@@ -76,7 +75,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
 
   // Controller getter required by MediaHandlersMixin
   @override
-  ChatControllerOptimistic get controller {
+  ChatControllerCacheFirst get controller {
     if (_controller == null) {
       throw StateError('Controller accessed before initialization');
     }
@@ -103,17 +102,16 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     // 🗑️ PASO 2: Limpiar notificaciones de este chat al abrirlo
     NotificationService().clearChatNotifications(widget.chatId);
 
-    // 🔒 PASO 3: Ahora inicializar controller sabiendo que SharedPreferences ya está actualizado
-    _controller = ChatControllerOptimistic(
+    // 🔒 PASO 3: Ahora inicializar controller con CACHE-FIRST architecture
+    _controller = ChatControllerCacheFirst(
       chatId: widget.chatId,
       contactId: widget.contactId,
       contactName: widget.contactName,
+      isGroup: false,  // This is a 1-on-1 chat screen
     );
     await _controller!.initialize();
-    _controller!.addListener(_onControllerChanged);
     _messageController.addListener(_onTypingChanged);
     _scrollController.addListener(_onScroll);
-    _controller!.markChatAsRead();
 
     // 🔒 CRITICAL FIX: Marcar controller como inicializado y triggear rebuild
     if (mounted) {
@@ -139,7 +137,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     // Es una operación de limpieza - fire-and-forget está bien aquí
     NotificationService().clearCurrentChat();
     WidgetsBinding.instance.removeObserver(this);
-    _controller?.removeListener(_onControllerChanged);
     _controller?.dispose();
     _messageController.removeListener(_onTypingChanged);
     _messageController.dispose();
@@ -158,19 +155,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   }
 
   // Event Handlers
-
-  void _onControllerChanged() {
-    if (!mounted) return;
-    setState(() {});
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (widget.scrollToMessageId == null || _hasScrolledToMessage) {
-        _scrollToBottom();
-      } else {
-        _scrollToSpecificMessage(widget.scrollToMessageId!);
-      }
-    });
-  }
 
   void _onTypingChanged() {
     _controller?.setTyping(_messageController.text.isNotEmpty);
@@ -560,7 +544,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
 
       if (result.success && result.data != null) {
         final callId = result.data!['callId'];
-        final token = result.data!['token'];
+        // Token is available in result.data!['token'] if needed
 
         // Navegar a AgoraCallScreen para ambos tipos de llamada
         if (mounted) {
@@ -606,7 +590,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
       );
     }
 
-    return Scaffold(
+    // Use ListenableBuilder for ChangeNotifier pattern
+    return ListenableBuilder(
+      listenable: _controller!,
+      builder: (context, child) => Scaffold(
       appBar: _isSelectionMode
           ? ChatSelectionBarWidget(
               selectedCount: _selectedMessageIds.length,
@@ -665,6 +652,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
             ),
         ],
       ),
+    ),
     );
   }
 

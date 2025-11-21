@@ -3,7 +3,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
 import 'package:path_provider/path_provider.dart';
-import '../../../controllers/chat_controller_optimistic.dart';
+import '../../../controllers/chat_controller_cache_first.dart';
 
 /// Mixin que proporciona handlers para envío de medios
 ///
@@ -14,7 +14,7 @@ import '../../../controllers/chat_controller_optimistic.dart';
 /// - Verificaciones de bloqueo
 mixin MediaHandlersMixin<T extends StatefulWidget> on State<T> {
   // Debe ser implementado por el widget que usa este mixin
-  ChatControllerOptimistic get controller;
+  ChatControllerCacheFirst get controller;
   @override
   BuildContext get context;
 

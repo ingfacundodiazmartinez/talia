@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import '../../../controllers/chat_controller_optimistic.dart';
+import '../../../controllers/chat_controller_cache_first.dart';
 import 'message_bubble.dart';
 import 'date_separator_widget.dart';
 
@@ -14,7 +14,7 @@ import 'date_separator_widget.dart';
 /// - Manejar modo de selección
 /// - Coordinar highlight de mensajes
 class MessageListWidget extends StatelessWidget {
-  final ChatControllerOptimistic controller;
+  final ChatControllerCacheFirst controller;
   final ScrollController scrollController;
   final String chatId;
   final String contactName;
