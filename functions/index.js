@@ -45,11 +45,14 @@ console.log("✅ Firebase Cloud Functions initialized (modular structure)");
 // Notificaciones
 const notifications = require("./notifications");
 
-// Videollamadas
-const videoCalls = require("./video-calls");
+// ❌ LEGACY - Videollamadas (Agora) - DESACTIVADO
+// const videoCalls = require("./video-calls");
 
-// Llamadas (Calls Management)
-const calls = require("./calls");
+// ✅ Videollamadas V2 (Agora) - ÚNICA ARQUITECTURA ACTIVA
+const callsV2 = require("./calls_v2/index");
+
+// ❌ LEGACY - Llamadas (Calls Management) - DESACTIVADO
+// const calls = require("./calls");
 
 // Reportes
 const reports = require("./reports");
@@ -101,15 +104,15 @@ const storyApproval = require("./story-approval");
 // exports.sendNotificationOnCreate = notifications.sendNotificationOnCreate; // ❌ DESACTIVADA - causa duplicación
 exports.sendInstantPushNotification = notifications.sendInstantPushNotification;
 
-// Videollamadas
-exports.generateAgoraToken = videoCalls.generateAgoraToken;
-exports.initiateVideoCall = videoCalls.initiateVideoCall;
+// ❌ LEGACY VIDEOLLAMADAS - DESACTIVADAS (solo usar V2)
+// exports.generateAgoraToken = videoCalls.generateAgoraToken;
+// exports.initiateVideoCall = videoCalls.initiateVideoCall;
 
-// Llamadas (Calls Management)
-exports.createCall = calls.createCall;
-exports.addParticipants = calls.addParticipants;
-exports.acceptCall = calls.acceptCall;
-exports.updateCallStatus = calls.updateCallStatus;
+// ❌ LEGACY CALLS MANAGEMENT - DESACTIVADO (solo usar V2)
+// exports.createCall = calls.createCall;
+// exports.addParticipants = calls.addParticipants;
+// exports.acceptCall = calls.acceptCall;
+// exports.updateCallStatus = calls.updateCallStatus;
 
 // Reportes
 exports.generateChildReport = reports.generateChildReport;
@@ -181,4 +184,10 @@ exports.createStory = storyApproval.createStory;
 exports.approveStory = storyApproval.approveStory;
 exports.rejectStory = storyApproval.rejectStory;
 
-console.log("✅ Todas las funciones exportadas correctamente");
+// ═══════════════════════════════════════════════════════════════
+// VIDEOLLAMADAS V2 (Agora) - NUEVA ARQUITECTURA
+// ═══════════════════════════════════════════════════════════════
+
+exports.createAgoraCall = callsV2.createAgoraCall;
+
+console.log("✅ Todas las funciones exportadas correctamente (incluye Agora V2)");

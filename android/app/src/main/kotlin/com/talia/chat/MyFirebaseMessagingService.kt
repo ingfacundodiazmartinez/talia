@@ -75,10 +75,15 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
 
         // ✅ FILTRAR LLAMADAS: No mostrar notificación para llamadas
         // Las llamadas son manejadas por el background handler de Flutter que muestra CallKit
-        val isCall = type == "audio_call" || type == "video_call" || type == "emergency_call"
+        val isCall = type == "audio_call" ||
+                     type == "video_call" ||
+                     type == "emergency_call" ||
+                     type == "incoming_call" ||          // V2 call system
+                     type == "group_video_call" ||
+                     type == "group_audio_call"
 
         if (isCall) {
-            Log.e(TAG, "📞 Llamada detectada - delegando a Flutter background handler")
+            Log.e(TAG, "📞 Llamada detectada ($type) - delegando a Flutter background handler")
             Log.e(TAG, "   (El servicio nativo NO mostrará notificación)")
             return
         }

@@ -3,7 +3,7 @@ import '../controllers/contact_profile_controller.dart';
 import '../models/contact_user.dart';
 import '../widgets/profile_photo_viewer.dart';
 import 'child/profile/widgets/media_gallery_widget.dart';
-import '../services/calls/calls_orchestrator.dart';
+import '../calls_v2/screens/agora_call_screen.dart';
 
 class ContactProfileScreen extends StatefulWidget {
   final String contactId;
@@ -213,39 +213,21 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
     });
 
     try {
-      // ✅ SIMPLIFICADO: CallsOrchestrator maneja navegación automáticamente
-      final result = await CallsOrchestrator().createCall(
-        participantIds: [widget.contactId],
-        type: 'video',
-      );
-
-      if (result['success']) {
-        // ✅ CallsOrchestrator ya navegó automáticamente
-        // Cerrar el perfil ya que la llamada se inició exitosamente
-        if (mounted) {
-          Navigator.pop(context);
-        }
-      } else {
-        // Manejar error de inicio de llamada
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Error al iniciar videollamada: ${result['error']}',
-              ),
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      // Manejar errores al iniciar la llamada
+      // ✅ WHATSAPP-STYLE: Navigate immediately with creating mode
+      // Camera starts and call creates in background
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error al iniciar videollamada: $e')),
+        Navigator.of(context, rootNavigator: true).push(
+          MaterialPageRoute(
+            builder: (context) => AgoraCallScreen.create(
+              participantIds: [widget.contactId],
+              isVideo: true,
+              isGroup: false,
+            ),
+          ),
         );
       }
     } finally {
-      // ✅ FIXED: Restablecer estado loading
+      // Reset loading state after navigation
       if (mounted) {
         setState(() {
           _isStartingVideoCall = false;
@@ -351,32 +333,19 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
     if (!mounted) return;
 
     try {
-      // ✅ SIMPLIFICADO: CallsOrchestrator maneja navegación automáticamente
-      final result = await CallsOrchestrator().createCall(
-        participantIds: [widget.contactId],
-        type: 'audio',
-      );
-
-      if (result['success']) {
-        // ✅ CallsOrchestrator ya navegó automáticamente
-        // Cerrar el perfil ya que la llamada se inició exitosamente
-        if (mounted) {
-          Navigator.pop(context);
-        }
-      } else {
-        // Manejar error de inicio de llamada
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Error al iniciar llamada de audio: ${result['error']}',
-              ),
+      // ✅ WHATSAPP-STYLE: Navigate immediately with creating mode
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).push(
+          MaterialPageRoute(
+            builder: (context) => AgoraCallScreen.create(
+              participantIds: [widget.contactId],
+              isVideo: false,
+              isGroup: false,
             ),
-          );
-        }
+          ),
+        );
       }
     } catch (e) {
-      // Manejar errores al iniciar la llamada
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error al iniciar llamada de audio: $e')),

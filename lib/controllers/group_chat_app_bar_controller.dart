@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
-import '../services/calls/calls_orchestrator.dart';
+import '../calls_v2/controllers/call_controller.dart' as calls_v2;
 import '../utils/release_logger.dart';
 
 /// Controller para manejar la lógica del AppBar de chat grupal
@@ -15,7 +15,6 @@ class GroupChatAppBarController {
   final String groupId;
 
   // Servicios privados
-  final CallsOrchestrator _callsOrchestrator;
   final FirebaseFirestore _firestore;
   final firebase_auth.FirebaseAuth _auth;
 
@@ -38,11 +37,9 @@ class GroupChatAppBarController {
   // Constructor
   GroupChatAppBarController({
     required this.groupId,
-    CallsOrchestrator? callsOrchestrator,
     FirebaseFirestore? firestore,
     firebase_auth.FirebaseAuth? auth,
-  }) : _callsOrchestrator = callsOrchestrator ?? CallsOrchestrator(),
-       _firestore = firestore ?? FirebaseFirestore.instance,
+  }) : _firestore = firestore ?? FirebaseFirestore.instance,
        _auth = auth ?? firebase_auth.FirebaseAuth.instance;
 
   // Getters para el estado
@@ -155,20 +152,22 @@ class GroupChatAppBarController {
         }
       }
 
-      // Crear llamada grupal usando nuevo CallsOrchestrator
+      // Crear llamada grupal usando CallController de calls_v2
       ReleaseLogger.log('Iniciando ${isVideo ? "videollamada" : "llamada"} grupal', tag: 'GroupChatAppBar');
 
-      final result = await _callsOrchestrator.createCall(
+      final callController = calls_v2.CallController();
+      final result = await callController.createCall(
         participantIds: participantIds,
-        type: isVideo ? 'video' : 'audio',
+        isVideo: isVideo,
+        isGroup: true,
       );
 
       // Check if call was successful
-      if (result['success'] != true) {
-        throw result['error'] ?? 'Error al iniciar llamada grupal';
+      if (!result.success) {
+        throw result.error ?? 'Error al iniciar llamada grupal';
       }
 
-      // ✅ CallsOrchestrator maneja la navegación automáticamente
+      // ✅ CallController maneja la navegación automáticamente a través del orchestrator
       // No necesitamos generar tokens manualmente ni navegar
       ReleaseLogger.log('Llamada grupal creada exitosamente', tag: 'GroupChatAppBar');
       onSuccess?.call('${isVideo ? "Videollamada" : "Llamada"} grupal iniciada');

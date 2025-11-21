@@ -13,6 +13,7 @@ import flutter_callkit_incoming
   private var callProvider: CXProvider!
   private var callController: CXCallController!
   private var callUUIDToFirestoreID: [UUID: String] = [:] // Mapeo de UUID CallKit -> callId Firestore
+  private var firestoreIDToCallUUID: [String: UUID] = [:] // ✅ PHASE 1B: Reverse mapping for duplicate prevention
   private var pendingVoIPToken: String? = nil // ✅ Guardar token VoIP temporalmente
 
   override func application(
@@ -89,20 +90,27 @@ import flutter_callkit_incoming
 
         NSLog("📞 [CallKit] Mostrando llamada: \(callerName) (\(callType))")
 
-        // ✅ PROTECCIÓN: Verificar si ya existe una llamada con este callId
-        for (existingUUID, existingCallId) in self.callUUIDToFirestoreID {
-          if existingCallId == callId {
-            NSLog("⚠️ [CallKit] Ya existe una llamada con callId \(callId), ignorando duplicado")
-            result(FlutterError(code: "DUPLICATE_CALL", message: "Call already exists", details: nil))
-            return
-          }
+        // ✅ PHASE 1B: Check for duplicates using reverse mapping and auto-end old ones
+        if let existingUUID = self.firestoreIDToCallUUID[callId] {
+          NSLog("⚠️ [CallKit] Duplicate call detected for callId \(callId)")
+          NSLog("🧹 [CallKit] Auto-ending old CallKit call with UUID: \(existingUUID.uuidString)")
+
+          // End the old CallKit call
+          self.callProvider.reportCall(with: existingUUID, endedAt: Date(), reason: .failed)
+
+          // Clean up old mappings
+          self.callUUIDToFirestoreID.removeValue(forKey: existingUUID)
+          self.firestoreIDToCallUUID.removeValue(forKey: callId)
+
+          NSLog("✅ [CallKit] Old call ended, proceeding with new call")
         }
 
         // Crear UUID para CallKit
         let uuid = UUID()
 
-        // Guardar mapping
+        // ✅ PHASE 1B: Save both forward and reverse mappings
         self.callUUIDToFirestoreID[uuid] = callId
+        self.firestoreIDToCallUUID[callId] = uuid
 
         // Crear update de llamada
         let update = CXCallUpdate()
@@ -120,6 +128,14 @@ import flutter_callkit_incoming
             result(true)
           }
         }
+      } else if call.method == "getActiveCalls" {
+        // ✅ PHASE 1B: Return list of active Firestore call IDs
+        NSLog("📋 [CallKit] Getting active calls")
+
+        let activeCallIds = Array(self.firestoreIDToCallUUID.keys)
+        NSLog("📋 [CallKit] Active call count: \(activeCallIds.count)")
+
+        result(activeCallIds)
       } else {
         result(FlutterMethodNotImplemented)
       }
@@ -128,7 +144,24 @@ import flutter_callkit_incoming
     voipChannel.setMethodCallHandler { [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) in
       guard let self = self else { return }
 
-      if call.method == "endCallKit" {
+      if call.method == "requestVoIPToken" {
+        // ✅ CRITICAL: Force VoIP re-registration to get a fresh token
+        NSLog("🔄 [VoIP] Requesting fresh VoIP token...")
+
+        // Re-initialize VoIP registry to trigger token callback
+        let voipRegistry = PKPushRegistry(queue: DispatchQueue.main)
+        voipRegistry.delegate = self
+        voipRegistry.desiredPushTypes = [.voIP]
+
+        // If we already have a pending token, send it immediately
+        if let pendingToken = self.pendingVoIPToken {
+          NSLog("✅ [VoIP] Sending existing pending token")
+          let channel = FlutterMethodChannel(name: "com.talia.chat/voip", binaryMessenger: (self.window?.rootViewController as! FlutterViewController).binaryMessenger)
+          channel.invokeMethod("onVoipToken", arguments: pendingToken)
+        }
+
+        result(true)
+      } else if call.method == "endCallKit" {
         NSLog("📵 [CallKit] Recibido endCallKit desde Flutter")
 
         guard let args = call.arguments as? [String: Any],
@@ -155,9 +188,10 @@ import flutter_callkit_incoming
           // CRÍTICO: Guardar referencia antes de limpiar
           let uuidToEnd = uuid
 
-          // Limpiar mapping PRIMERO para evitar re-entrada
+          // ✅ PHASE 1B: Limpiar AMBOS mappings PRIMERO para evitar re-entrada
           self.callUUIDToFirestoreID.removeValue(forKey: uuid)
-          NSLog("🧹 [CallKit] Mapping limpiado preventivamente")
+          self.firestoreIDToCallUUID.removeValue(forKey: callId)
+          NSLog("🧹 [CallKit] Mappings limpiados preventivamente")
 
           // CRÍTICO: Ejecutar en main thread y con manejo de errores
           DispatchQueue.main.async {
@@ -279,13 +313,19 @@ import flutter_callkit_incoming
     NSLog("🚨 TALIA_DEBUG: isVideo calculated as: \(isVideo)")
     NSLog("🚨 TALIA_DEBUG: Raw payload callType value: \(payloadDict["callType"] ?? "NIL")")
 
-    // ✅ PROTECCIÓN: Verificar si ya existe una llamada con este callId
-    for (existingUUID, existingCallId) in self.callUUIDToFirestoreID {
-      if existingCallId == callId {
-        NSLog("⚠️ [VoIP] Ya existe una llamada con callId \(callId), ignorando VoIP push duplicado")
-        completion()
-        return
-      }
+    // ✅ PHASE 1B: Check for duplicates using reverse mapping and auto-end old ones
+    if let existingUUID = self.firestoreIDToCallUUID[callId] {
+      NSLog("⚠️ [VoIP] Duplicate VoIP push for callId \(callId)")
+      NSLog("🧹 [VoIP] Auto-ending old CallKit call with UUID: \(existingUUID.uuidString)")
+
+      // End the old CallKit call
+      self.callProvider.reportCall(with: existingUUID, endedAt: Date(), reason: .failed)
+
+      // Clean up old mappings
+      self.callUUIDToFirestoreID.removeValue(forKey: existingUUID)
+      self.firestoreIDToCallUUID.removeValue(forKey: callId)
+
+      NSLog("✅ [VoIP] Old call ended, proceeding with new VoIP push")
     }
 
     // Create CallKit call update
@@ -294,10 +334,11 @@ import flutter_callkit_incoming
     update.localizedCallerName = callerName
     update.hasVideo = isVideo
 
-    // Generate new UUID for CallKit and store mapping to Firestore callId
+    // Generate new UUID for CallKit and store both mappings
     let callUUID = UUID()
     callUUIDToFirestoreID[callUUID] = callId
-    NSLog("🚨 TALIA_DEBUG: Created mapping - CallKit UUID: \(callUUID.uuidString) -> Firestore ID: \(callId)")
+    firestoreIDToCallUUID[callId] = callUUID // ✅ PHASE 1B: Reverse mapping
+    NSLog("🚨 TALIA_DEBUG: Created bidirectional mapping - CallKit UUID: \(callUUID.uuidString) <-> Firestore ID: \(callId)")
 
     // Report incoming call to CallKit
     NSLog("🚨 TALIA_DEBUG: Reporting call to CallKit...")
@@ -381,9 +422,10 @@ import flutter_callkit_incoming
     // Get Firestore callId from mapping (if exists)
     let firestoreCallId = callUUIDToFirestoreID[action.callUUID] ?? action.callUUID.uuidString
 
-    // Clean up mapping PRIMERO para evitar doble procesamiento
+    // ✅ PHASE 1B: Clean up BOTH mappings PRIMERO para evitar doble procesamiento
     callUUIDToFirestoreID.removeValue(forKey: action.callUUID)
-    NSLog("🧹 [CallKit] Mapping limpiado para UUID: \(action.callUUID.uuidString)")
+    firestoreIDToCallUUID.removeValue(forKey: firestoreCallId)
+    NSLog("🧹 [CallKit] Bidirectional mappings limpiados para UUID: \(action.callUUID.uuidString)")
 
     // Notify Flutter - CRÍTICO: En main thread
     DispatchQueue.main.async {

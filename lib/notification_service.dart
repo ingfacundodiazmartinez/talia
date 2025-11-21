@@ -3,6 +3,8 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart' as scheduler;
 import 'firebase_options.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
@@ -13,12 +15,15 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:image/image.dart' as img;
 import 'constants/notification_types.dart';
-import 'services/calls/calls_orchestrator.dart';
-import 'services/calls/call_listener_service.dart';
 import 'services/notification_filter.dart';
 import 'services/callkit_service.dart';
+import 'services/voip_service.dart';
 import 'services/app_state_service.dart';
 import 'utils/release_logger.dart';
+// V2 Call System imports
+import 'calls_v2/controllers/call_controller.dart' as calls_v2;
+import 'calls_v2/screens/agora_call_screen.dart';
+import 'calls_v2/services/call_state_cache_service.dart';
 
 // ═══════════════════════════════════════════════════════════════
 // 🔥 BACKGROUND MESSAGE HANDLER (CRITICAL FCM FIX)
@@ -147,8 +152,11 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     // En caso de error, permitir notificación (fail-safe)
   }
 
-  // Si es una llamada, mostrar CallKit en pantalla completa
-  if (message.data['type'] == 'video_call' ||
+  // ✅ FIX NOTIFICACIÓN PUSH DUPLICADA: Si es una llamada, mostrar SOLO CallKit
+  // NO generar notificación push adicional - CallKit/ConnectionService maneja toda la UI
+  // ✅ PHASE 2: Support new 'incoming_call' type from calls_v2
+  if (message.data['type'] == 'incoming_call' ||
+      message.data['type'] == 'video_call' ||
       message.data['type'] == 'audio_call' ||
       message.data['type'] == 'group_video_call' ||
       message.data['type'] == 'group_audio_call' ||
@@ -163,25 +171,33 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     final callId = message.data['callId'] ?? message.messageId ?? '';
     if (_globalProcessedCallIds.contains(callId)) {
       ReleaseLogger.log('⚠️ CallId $callId ya procesado - SALTANDO para evitar duplicados', tag: 'NotificationService');
-      return;
+      return; // ✅ CRÍTICO: Salir INMEDIATAMENTE para evitar notificación duplicada
     }
     _globalProcessedCallIds.add(callId);
+
+    // ✅ FIX DUPLICATE INCOMINGCALLSCREEN: Mark as VoIP handled IMMEDIATELY (background)
+    // This prevents IncomingCallsListenerService from showing duplicate screen
+    VoIPService().markCallAsVoIPHandled(callId);
+    ReleaseLogger.log('✅ [Background] Call $callId marked as VoIP handled to prevent duplicate', tag: 'NotificationService');
 
     // ✅ CRÍTICO: Verificar timestamp para evitar mostrar notificaciones de llamadas expiradas
     // Las notificaciones FCM pueden llegar después de que la llamada ya fue cancelada
     final sentTime = message.sentTime;
     if (sentTime != null && DateTime.now().difference(sentTime).inSeconds > 30) {
       ReleaseLogger.log('⚠️ [NotificationService] Notificación muy vieja: ${DateTime.now().difference(sentTime).inSeconds} segundos - SALTANDO (background)', tag: 'NotificationService');
-      return;
+      return; // ✅ CRÍTICO: Salir INMEDIATAMENTE
     }
 
     try {
       // ✅ DEBUG: Log para verificar el tipo de llamada que llega
       final messageType = message.data['type'];
-      final isAudioCall = (messageType == 'audio_call' || messageType == 'group_audio_call');
+      final isVideoFromData = message.data['isVideo'] == 'true' || message.data['isVideo'] == true;
+      final isAudioCall = (messageType == 'audio_call' || messageType == 'group_audio_call') ||
+                          (!isVideoFromData && messageType == 'incoming_call');
       final resolvedCallType = isAudioCall ? 'audio' : 'video';
 
       ReleaseLogger.log('🔍 [CallKit Debug] message.data[\'type\']: "$messageType"', tag: 'NotificationService');
+      ReleaseLogger.log('🔍 [CallKit Debug] isVideo from data: $isVideoFromData', tag: 'NotificationService');
       ReleaseLogger.log('🔍 [CallKit Debug] isAudioCall: $isAudioCall', tag: 'NotificationService');
       ReleaseLogger.log('🔍 [CallKit Debug] resolvedCallType: "$resolvedCallType"', tag: 'NotificationService');
 
@@ -196,15 +212,24 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         extraData: message.data,
       );
       ReleaseLogger.log('✅ CallKit mostrado exitosamente', tag: 'NotificationService');
+
+      // ✅ CRÍTICO: SALIR INMEDIATAMENTE después de mostrar CallKit
+      // NO continuar con el flujo normal de notificaciones push
+      // Esto previene que Android muestre una notificación push adicional
+      ReleaseLogger.log('🔥 ============================================', tag: 'NotificationService');
+      ReleaseLogger.log('📩 BACKGROUND HANDLER FINALIZADO (CallKit shown, NO push notification)', tag: 'NotificationService');
+      ReleaseLogger.log('🔥 ============================================', tag: 'NotificationService');
+      return; // ✅ CRÍTICO: Salir INMEDIATAMENTE - NO mostrar notificación push
     } catch (e) {
       ReleaseLogger.error('ERROR mostrando CallKit: $e', tag: 'NotificationService');
       ReleaseLogger.error('Stack trace: ${StackTrace.current}', tag: 'NotificationService');
+      return; // ✅ CRÍTICO: Salir incluso en error para evitar notificación push
     }
   }
 
-  // Las demás notificaciones se manejan automáticamente por FCM
+  // Las demás notificaciones (NO llamadas) se manejan automáticamente por FCM
   ReleaseLogger.log('🔥 ============================================', tag: 'NotificationService');
-  ReleaseLogger.log('📩 BACKGROUND HANDLER FINALIZADO', tag: 'NotificationService');
+  ReleaseLogger.log('📩 BACKGROUND HANDLER FINALIZADO (non-call notification)', tag: 'NotificationService');
   ReleaseLogger.log('🔥 ============================================', tag: 'NotificationService');
 }
 
@@ -223,9 +248,18 @@ class NotificationService {
 
   String? _fcmToken;
   bool _isInitialized = false;
+  GlobalKey<NavigatorState>? _navigatorKey;
 
   // Trackear el chat actual para suprimir notificaciones solo cuando estás dentro de él
   String? _currentChatId;
+
+  // ✅ FIX: Pending navigation for calls accepted from background
+  String? _pendingCallNavigation;
+  Timer? _navigationTimeoutTimer;
+  StreamSubscription<bool>? _appStateSubscription;
+
+  // ✅ V2 NAVIGATION: Callback para navegar a call screen (Android CallKit path)
+  Function(String callId, {bool isIncoming})? onNavigateToCall;
 
   // ✅ FIXED: Deduplicación para evitar notificaciones duplicadas
   final Set<String> _processedCallIds = {};
@@ -395,6 +429,123 @@ class NotificationService {
   }
 
   // Inicializar servicio de notificaciones
+  /// Set navigator key for navigation from background
+  void setNavigatorKey(GlobalKey<NavigatorState> navigatorKey) {
+    _navigatorKey = navigatorKey;
+    ReleaseLogger.log('✅ Navigator key configurado en NotificationService', tag: 'NotificationService');
+  }
+
+  /// ✅ CLEAN: Navegar cuando el navigator esté disponible (solución reactiva)
+  void _navigateWhenReady(String callId) {
+    ReleaseLogger.log('🔄 Programando navegación para $callId', tag: 'NotificationService');
+
+    // Limpiar cualquier navegación pendiente anterior
+    _cancelPendingNavigation();
+
+    // Guardar como pendiente
+    _pendingCallNavigation = callId;
+
+    // Configurar timeout de 10 segundos para evitar navegación zombie
+    _navigationTimeoutTimer = Timer(const Duration(seconds: 10), () {
+      if (_pendingCallNavigation != null) {
+        ReleaseLogger.error('❌ Timeout esperando Navigator para $callId', tag: 'NotificationService');
+        _pendingCallNavigation = null;
+      }
+    });
+
+    // Intentar navegar inmediatamente
+    if (_navigatorKey?.currentState?.mounted == true) {
+      ReleaseLogger.log('✅ Navigator disponible INMEDIATAMENTE', tag: 'NotificationService');
+      _attemptPendingNavigation();
+    } else {
+      // Navigator no disponible, esperar al siguiente frame
+      ReleaseLogger.log('⏳ Navigator no disponible, esperando frames...', tag: 'NotificationService');
+      _waitForNavigatorWithFrameCallbacks(0);
+    }
+  }
+
+  /// Cancelar cualquier navegación pendiente
+  void _cancelPendingNavigation() {
+    _navigationTimeoutTimer?.cancel();
+    _navigationTimeoutTimer = null;
+    _pendingCallNavigation = null;
+  }
+
+  /// Intentar navegar a la llamada pendiente (sin reintentos)
+  void _attemptPendingNavigation() {
+    if (_pendingCallNavigation == null) return;
+
+    final callId = _pendingCallNavigation!;
+
+    if (_navigatorKey?.currentState?.mounted == true) {
+      ReleaseLogger.log('✅ Navigator disponible - navegando a $callId', tag: 'NotificationService');
+
+      _navigatorKey!.currentState!.push(
+        MaterialPageRoute(
+          builder: (_) => AgoraCallScreen(
+            callId: callId,
+            isIncoming: true,
+          ),
+        ),
+      );
+
+      // Limpiar navegación pendiente
+      _cancelPendingNavigation();
+    } else {
+      ReleaseLogger.log('⏳ Navigator no disponible aún para $callId', tag: 'NotificationService');
+      // No hacer nada - onAppResumed se encargará
+    }
+  }
+
+  /// Llamar cuando la app vuelva al foreground (solución reactiva)
+  void onAppResumed() {
+    ReleaseLogger.log('▶️ App resumed - verificando navegación pendiente', tag: 'NotificationService');
+
+    if (_pendingCallNavigation == null) return;
+
+    // Usar SchedulerBinding para ejecutar después del frame actual
+    // Esto garantiza que el widget tree esté completamente reconstruido
+    scheduler.SchedulerBinding.instance.addPostFrameCallback((_) {
+      _scheduleNavigationAfterBuild();
+    });
+  }
+
+  /// Programar navegación después de que el build esté completo
+  void _scheduleNavigationAfterBuild() {
+    if (_pendingCallNavigation == null) return;
+
+    // El widget tree ya se reconstruyó, ahora esperamos al siguiente frame
+    // donde el Navigator debería estar disponible
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_navigatorKey?.currentState?.mounted == true) {
+        _attemptPendingNavigation();
+      } else {
+        // Si aún no está disponible, esperar al siguiente frame
+        // Esto es raro pero puede pasar si hay animaciones complejas
+        ReleaseLogger.log('⏳ Esperando siguiente frame para Navigator', tag: 'NotificationService');
+        _waitForNavigatorWithFrameCallbacks();
+      }
+    });
+  }
+
+  /// Esperar al Navigator usando frame callbacks (máximo 10 frames)
+  void _waitForNavigatorWithFrameCallbacks([int frameCount = 0]) {
+    if (_pendingCallNavigation == null) return;
+    if (frameCount >= 10) {
+      ReleaseLogger.error('❌ Navigator no disponible después de 10 frames', tag: 'NotificationService');
+      _cancelPendingNavigation();
+      return;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_navigatorKey?.currentState?.mounted == true) {
+        _attemptPendingNavigation();
+      } else {
+        _waitForNavigatorWithFrameCallbacks(frameCount + 1);
+      }
+    });
+  }
+
   Future<void> initialize() async {
     if (_isInitialized) return;
 
@@ -426,6 +577,14 @@ class NotificationService {
 
       // 6. Configurar listeners
       _setupListeners();
+
+      // 6.5. ✅ FIX: Suscribirse a cambios de estado de app para navegación pendiente
+      _appStateSubscription = AppStateService().foregroundStateStream.listen((isInForeground) {
+        if (isInForeground) {
+          ReleaseLogger.log('📱 App volvió a foreground - verificando navegación pendiente', tag: 'NotificationService');
+          onAppResumed();
+        }
+      });
 
       // 7. ✅ CRÍTICO: Verificar si hay usuario autenticado e iniciar monitoreo automáticamente
       await _checkAndStartCallMonitoring();
@@ -586,38 +745,73 @@ class NotificationService {
   void _initializeCallKit() {
     _callKit.initialize(
       onCallKitShown: (callId) {
-        // ✅ CRITICAL FIX: Marcar como manejada por CallKit ANTES de que app vuelva al foreground
-        CallsOrchestrator().markCallAsCallKitHandled(callId);
-        ReleaseLogger.log('✅ CallKit mostrado y marcado como handled: $callId', tag: 'NotificationService');
+        // V2: CallKit handling (no orchestrator needed)
+        ReleaseLogger.log('✅ CallKit mostrado: $callId', tag: 'NotificationService');
       },
-      onCallAccepted: (callData) {
+      onCallAccepted: (callData) async {
+        ReleaseLogger.log('🔥 ============================================', tag: 'NotificationService');
         ReleaseLogger.log('✅ CallKit: Llamada aceptada', tag: 'NotificationService');
+        ReleaseLogger.log('📦 Call data completo: $callData', tag: 'NotificationService');
+        ReleaseLogger.log('🔥 ============================================', tag: 'NotificationService');
 
-        // Aceptar llamada y navegar directamente
+        // ✅ V2: Aceptar llamada y navegar directamente a AgoraCallScreen
         final callId = callData['id'] as String?;
+        ReleaseLogger.log('🔍 Call ID extraído: $callId', tag: 'NotificationService');
+
         if (callId != null) {
-          CallsOrchestrator().acceptCall(callId).then((_) {
-            ReleaseLogger.log('✅ Llamada $callId aceptada desde CallKit', tag: 'NotificationService');
-            // ✅ CRITICAL: Navegar directamente a la pantalla de videollamada
-            return CallsOrchestrator().processVoIPCall(callId);
-          }).then((_) {
-            ReleaseLogger.log('✅ Navegación a videollamada iniciada para $callId', tag: 'NotificationService');
-          }).catchError((e) {
-            ReleaseLogger.error('❌ Error en flujo CallKit: $e', tag: 'NotificationService');
-          });
+          try {
+            // ✅ CRITICAL: Mark call as being processed IMMEDIATELY to prevent IncomingCallScreen
+            final cache = CallStateCacheService();
+            if (!cache.markAsProcessing(callId, CallProcessingSource.callKitAccept)) {
+              ReleaseLogger.log('⏭️ Call $callId already being processed', tag: 'NotificationService');
+              return;
+            }
+
+            // ✅ CRITICAL: Mark as handled by VoIP to prevent IncomingCallScreen
+            VoIPService().markCallAsVoIPHandled(callId);
+            ReleaseLogger.log('✅ Call $callId marked as handled by VoIP', tag: 'NotificationService');
+
+            // ✅ OPTIMISTIC UI: Navigate IMMEDIATELY - don't wait for Firebase
+            // This ensures WhatsApp-style instant screen appearance
+            if (onNavigateToCall != null) {
+              ReleaseLogger.log('⚡ [OPTIMISTIC] Navegando INMEDIATAMENTE a call screen (Android CallKit)', tag: 'NotificationService');
+              onNavigateToCall!(callId, isIncoming: true);
+              ReleaseLogger.log('✅ [OPTIMISTIC] Navegación ejecutada - usuario ve pantalla inmediatamente', tag: 'NotificationService');
+            } else {
+              ReleaseLogger.error('❌ [NotificationService V2] onNavigateToCall callback NOT configured', tag: 'NotificationService');
+            }
+
+            // ✅ BACKGROUND: Accept call in background (non-blocking)
+            // V2 controller initialization
+            final controller = calls_v2.CallController();
+            controller.initialize();
+
+            ReleaseLogger.log('🚀 [BACKGROUND] Aceptando llamada $callId desde CallKit (V2)', tag: 'NotificationService');
+            final result = await controller.acceptCall(callId);
+
+            if (result.success) {
+              ReleaseLogger.log('✅ [BACKGROUND] Llamada $callId aceptada desde CallKit (V2)', tag: 'NotificationService');
+            } else {
+              ReleaseLogger.error('❌ [BACKGROUND] Error aceptando llamada: ${result.error}', tag: 'NotificationService');
+            }
+          } catch (e) {
+            ReleaseLogger.error('❌ Error en flujo CallKit (V2): $e', tag: 'NotificationService');
+          }
         } else {
           ReleaseLogger.error('❌ CallKit: callId es null en callData', tag: 'NotificationService');
         }
       },
-      onCallDeclined: (callId) {
+      onCallDeclined: (callId) async {
         ReleaseLogger.log('❌ CallKit: Llamada rechazada - $callId', tag: 'NotificationService');
 
-        // ✅ FIX: Rechazar la llamada en Firestore para que el caller detecte el rechazo
-        CallsOrchestrator().declineCall(callId, reason: 'declined').then((_) {
+        // V2: Decline call using CallController
+        try {
+          final controller = calls_v2.CallController();
+          await controller.declineCall(callId);
           ReleaseLogger.log('✅ CallKit: Rechazo propagado a Firestore para callId: $callId', tag: 'NotificationService');
-        }).catchError((error) {
+        } catch (error) {
           ReleaseLogger.error('❌ CallKit: Error rechazando llamada en Firestore: $error', tag: 'NotificationService');
-        });
+        }
       },
       onCallEnded: (callId) {
         ReleaseLogger.log('🔚 CallKit: Llamada finalizada - $callId', tag: 'NotificationService');
@@ -633,48 +827,67 @@ class NotificationService {
     FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
       ReleaseLogger.log('📨 Mensaje recibido en primer plano: ${message.notification?.title}', tag: 'NotificationService');
 
-      // Verificar si es una videollamada o llamada de audio
-      if (message.data['type'] == 'video_call' ||
+      // Verificar si es una videollamada o llamada de audio (legacy o V2)
+      final isLegacyCall = message.data['type'] == 'video_call' ||
           message.data['type'] == 'audio_call' ||
           message.data['type'] == 'group_video_call' ||
           message.data['type'] == 'group_audio_call' ||
-          message.data['type'] == 'emergency_call') {
+          message.data['type'] == 'emergency_call';
+
+      final isV2Call = message.data['type'] == 'incoming_call';
+
+      if (isLegacyCall || isV2Call) {
         ReleaseLogger.log('📞 ${message.data['type']} entrante detectada en FOREGROUND', tag: 'NotificationService');
 
-        // ✅ FIX: Verificar si la app realmente está en foreground
-        final isAppInForeground = AppStateService().isAppInForeground();
+        // ✅ V2 SYSTEM: Always show CallKit (IncomingCallsListenerService + VoIPService handle coordination)
+        if (isV2Call) {
+          ReleaseLogger.log('📞 [V2] Incoming call detected - showing CallKit in foreground', tag: 'NotificationService');
 
-        if (isAppInForeground) {
-          ReleaseLogger.log('✅ App en foreground - NO mostrar CallKit, delegando al CallListenerService', tag: 'NotificationService');
+          // ✅ CRITICAL: Check for duplicates
+          final callId = message.data['callId'] ?? message.messageId ?? '';
+          if (_processedCallIds.contains(callId) || _globalProcessedCallIds.contains(callId)) {
+            ReleaseLogger.log('⚠️ CallId $callId already processed - SKIPPING', tag: 'NotificationService');
+            return;
+          }
+          _processedCallIds.add(callId);
+          _globalProcessedCallIds.add(callId);
 
-          // ✅ FIX LLAMADA SEGUNDA: Detectar y solucionar listener zombificado
-          try {
-            ReleaseLogger.log('🔍 [NotificationService] Verificando health de CallListenerService antes de delegar...', tag: 'NotificationService');
-
-            final isZombified = await CallListenerService().detectZombifiedListener();
-            if (isZombified) {
-              ReleaseLogger.log(
-                '🧟 [NotificationService] LISTENER ZOMBIFICADO detectado - forzando refresh completo',
-                tag: 'NotificationService',
-              );
-              await CallListenerService().forceListenerRefresh(
-                onCallDetected: (callId, source) => CallsOrchestrator().processIncomingCall(callId, source: source),
-                onCallEnded: (callId) => CallsOrchestrator().endCall(callId),
-              );
-            } else {
-              await CallsOrchestrator().attemptListenerRecovery();
-            }
-            ReleaseLogger.log('✅ [NotificationService] Health check y recovery completado', tag: 'NotificationService');
-          } catch (e) {
-            ReleaseLogger.error('❌ [NotificationService] Error en health check: $e', tag: 'NotificationService');
+          // ✅ Check timestamp to avoid showing expired calls
+          final sentTime = message.sentTime;
+          if (sentTime != null && DateTime.now().difference(sentTime).inSeconds > 30) {
+            ReleaseLogger.log('⚠️ [NotificationService] Notification too old: ${DateTime.now().difference(sentTime).inSeconds} seconds - SKIPPING', tag: 'NotificationService');
+            return;
           }
 
-          // Cuando la app está en foreground, el CallListenerService debe manejar las llamadas
-          // Esto evita conflictos entre CallKit y IncomingCallScreen
+          // ✅ FIX DUPLICATE INCOMINGCALLSCREEN: Mark as VoIP handled IMMEDIATELY
+          // This prevents IncomingCallsListenerService from showing duplicate screen
+          VoIPService().markCallAsVoIPHandled(callId);
+          ReleaseLogger.log('✅ [V2] Call $callId marked as VoIP handled to prevent duplicate', tag: 'NotificationService');
+
+          try {
+            if (Platform.isAndroid) {
+              await _callKit.showIncomingCall(
+                callId: callId,
+                callerName: message.data['callerName'] ?? 'Usuario',
+                callerId: message.data['callerId'] ?? message.data['senderId'] ?? '',
+                callerPhotoUrl: message.data['callerPhotoURL'] ?? message.data['senderPhotoUrl'],
+                callType: (message.data['isVideo'] == 'false' || message.data['isVideo'] == false) ? 'audio' : 'video',
+                isEmergency: message.data['isEmergency'] == 'true' || message.data['isEmergency'] == true,
+                extraData: message.data,
+              );
+              ReleaseLogger.log('✅ [V2] CallKit (Android) shown successfully in foreground', tag: 'NotificationService');
+            } else if (Platform.isIOS) {
+              // iOS VoIP push shows CallKit natively, also mark as handled
+              ReleaseLogger.log('✅ [V2] iOS VoIP - handled by system', tag: 'NotificationService');
+            }
+          } catch (e) {
+            ReleaseLogger.error('❌ [V2] Error showing CallKit: $e', tag: 'NotificationService');
+          }
           return;
         }
 
-        ReleaseLogger.log('⬇️ App en background - mostrando CallKit para experiencia nativa', tag: 'NotificationService');
+        // V2 SYSTEM: Uses VoIP/CallKit directly (no listener health checks needed)
+        ReleaseLogger.log('📱 Mostrando CallKit para experiencia nativa', tag: 'NotificationService');
 
         // ✅ FIXED: Deduplicación también en background
         final callId = message.data['callId'] ?? message.messageId ?? '';
@@ -1623,5 +1836,19 @@ class NotificationService {
   /// Limpia todas las notificaciones de un grupo específico (alias para claridad)
   Future<void> clearGroupNotifications(String groupId) async {
     return clearChatNotifications(groupId, isGroup: true);
+  }
+
+  /// ✅ Cleanup cuando se destruya el servicio (para prevenir memory leaks)
+  void dispose() {
+    ReleaseLogger.log('🧹 Limpiando NotificationService...', tag: 'NotificationService');
+
+    // Cancelar navegación pendiente
+    _cancelPendingNavigation();
+
+    // Cancelar suscripción a cambios de estado de app
+    _appStateSubscription?.cancel();
+    _appStateSubscription = null;
+
+    ReleaseLogger.log('✅ NotificationService limpiado', tag: 'NotificationService');
   }
 }

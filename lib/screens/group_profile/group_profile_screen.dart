@@ -2,10 +2,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../controllers/group_profile_controller.dart';
-import '../../controllers/call_controller.dart';
-import '../../services/calls/calls_orchestrator.dart';
+import '../../calls_v2/controllers/call_controller.dart' as calls_v2;
+import '../../calls_v2/screens/agora_call_screen.dart';
 import 'widgets/add_members_dialog.dart';
-import '../call/video/video_call_screen.dart';
 
 /// Pantalla de perfil de grupo refactorizada siguiendo CODING_RULES.md
 ///
@@ -30,7 +29,6 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
   // ✅ CORRECTO: Solo controller y estado UI local
   late GroupProfileController _controller;
   final ImagePicker _picker = ImagePicker();
-  final CallsOrchestrator _callsOrchestrator = CallsOrchestrator();
 
   // Estado UI únicamente
   final TextEditingController _nameController = TextEditingController();
@@ -596,23 +594,27 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
 
   Future<void> _startVideoCall(String userId, String userName) async {
     try {
-      // ✅ MIGRADO: Usar CallsOrchestrator para crear llamadas con nueva arquitectura
-      final result = await _callsOrchestrator.createCall(
+      // ✅ MIGRADO: Usar CallController de calls_v2
+      final callController = calls_v2.CallController();
+      final result = await callController.createCall(
         participantIds: [userId],
-        type: 'video',
+        isVideo: true,
+        isGroup: false,
       );
 
-      if (result['success']) {
-        final callId = result['callId'];
-        final channelName = result['channelName'];
-        final token = result['token'];
+      if (result.success && result.data != null) {
+        final callId = result.data!['callId'];
+        final token = result.data!['token'];
 
+        // Navegar a AgoraCallScreen
         if (mounted) {
-          await CallController.startCall(
-            context: context,
-            receiverId: userId,
-            remoteName: userName,
-            isVideo: true,
+          Navigator.of(context, rootNavigator: true).push(
+            MaterialPageRoute(
+              builder: (context) => AgoraCallScreen(
+                callId: callId,
+                isIncoming: false,
+              ),
+            ),
           );
         }
       } else {
@@ -621,7 +623,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(
-                'Error al iniciar videollamada: ${result['error']}',
+                'Error al iniciar videollamada: ${result.error ?? "Unknown error"}',
               ),
             ),
           );

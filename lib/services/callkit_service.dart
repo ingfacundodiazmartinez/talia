@@ -165,7 +165,7 @@ class CallKitService {
         nameCaller: displayName,
         appName: 'Talia',
         avatar: avatarUrl, // Foto del caller o null para grupales
-        handle: callerId,
+        handle: displayName, // ✅ FIX: Use nombre en lugar de UID para Android ConnectionService
         type: isAudioCall ? 1 : 0, // 1 = audio, 0 = video
         duration: 60000,
         textAccept: isAudioCall ? 'Audio' : 'Video',
@@ -183,7 +183,7 @@ class CallKitService {
           'isGroupCall': isGroupCall,
         },
         android: AndroidParams(
-          isCustomNotification: true,
+          isCustomNotification: false, // ✅ FIX: Use solo notificación nativa del sistema (ConnectionService)
           isShowLogo: true,
           ringtonePath: 'default',
           backgroundColor: '#9D7FE8',

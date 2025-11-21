@@ -5,7 +5,7 @@ import 'package:intl/intl.dart';
 import '../services/block_service.dart';
 import '../services/contact_alias_service.dart';
 import '../services/favorite_service.dart';
-import '../services/calls/calls_orchestrator.dart';
+import '../calls_v2/controllers/call_controller.dart' as calls_v2;
 import '../models/child.dart';
 import '../models/contact_user.dart';
 
@@ -26,7 +26,6 @@ class ContactProfileController {
   final BlockService _blockService;
   final ContactAliasService _aliasService;
   final FavoriteService _favoriteService;
-  final CallsOrchestrator _videoCallService;
   final FirebaseFirestore _firestore;
   final firebase_auth.FirebaseAuth _auth;
 
@@ -62,13 +61,11 @@ class ContactProfileController {
     BlockService? blockService,
     ContactAliasService? aliasService,
     FavoriteService? favoriteService,
-    CallsOrchestrator? videoCallService,
     FirebaseFirestore? firestore,
     firebase_auth.FirebaseAuth? auth,
   }) : _blockService = blockService ?? BlockService(),
        _aliasService = aliasService ?? ContactAliasService(),
        _favoriteService = favoriteService ?? FavoriteService(),
-       _videoCallService = videoCallService ?? CallsOrchestrator(),
        _firestore = firestore ?? FirebaseFirestore.instance,
        _auth = auth ?? firebase_auth.FirebaseAuth.instance;
 
@@ -252,16 +249,18 @@ class ContactProfileController {
         return false;
       }
 
-      final result = await _videoCallService.createCall(
-        participantIds: [currentUser.uid, contactId],
-        type: 'video',
+      final callController = calls_v2.CallController();
+      final result = await callController.createCall(
+        participantIds: [contactId],
+        isVideo: true,
+        isGroup: false,
       );
 
-      if (result['success'] == true) {
+      if (result.success) {
         onSuccess?.call('Videollamada iniciada');
         return true;
       } else {
-        onError?.call(result['error'] ?? 'Error iniciando videollamada');
+        onError?.call(result.error ?? 'Error iniciando videollamada');
         return false;
       }
     } catch (e) {
@@ -284,16 +283,18 @@ class ContactProfileController {
         return false;
       }
 
-      final result = await _videoCallService.createCall(
-        participantIds: [currentUser.uid, contactId],
-        type: 'audio',
+      final callController = calls_v2.CallController();
+      final result = await callController.createCall(
+        participantIds: [contactId],
+        isVideo: false,
+        isGroup: false,
       );
 
-      if (result['success'] == true) {
+      if (result.success) {
         onSuccess?.call('Llamada de audio iniciada');
         return true;
       } else {
-        onError?.call(result['error'] ?? 'Error iniciando llamada de audio');
+        onError?.call(result.error ?? 'Error iniciando llamada de audio');
         return false;
       }
     } catch (e) {

@@ -8,8 +8,8 @@ import 'package:path_provider/path_provider.dart';
 import '../controllers/chat_controller_optimistic.dart';
 import '../notification_service.dart';
 import '../services/reaction_service.dart';
-import '../services/calls/calls_orchestrator.dart';
-import '../controllers/call_controller.dart';
+import '../calls_v2/controllers/call_controller.dart' as calls_v2;
+import '../calls_v2/screens/agora_call_screen.dart';
 import '../widgets/reaction_picker.dart';
 import 'chat/widgets/chat_app_bar.dart';
 import 'chat/widgets/chat_input_bar.dart';
@@ -23,8 +23,6 @@ import 'chat/widgets/message_list_widget.dart';
 import 'chat/widgets/chat_selection_bar_widget.dart';
 import 'chat/widgets/media_handlers_mixin.dart';
 import 'contact_profile_screen.dart';
-import 'call/video/video_call_screen.dart';
-import 'call/audio/audio_call_screen.dart';
 import 'forward_messages_screen.dart';
 
 /// Pantalla de chat individual (1 a 1) - REFACTORIZADA
@@ -552,50 +550,36 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     if (!mounted) return;
 
     try {
-      // ✅ MIGRADO: Usar CallsOrchestrator para crear llamadas con nueva arquitectura
-      final result = await CallsOrchestrator().createCall(
+      // ✅ MIGRADO: Usar CallController de calls_v2
+      final callController = calls_v2.CallController();
+      final result = await callController.createCall(
         participantIds: [widget.contactId],
-        type: callType,
+        isVideo: callType == 'video',
+        isGroup: false,
       );
 
-      if (result['success']) {
-        final callId = result['callId'];
-        final channelName = result['channelName'];
-        final token = result['token'];
+      if (result.success && result.data != null) {
+        final callId = result.data!['callId'];
+        final token = result.data!['token'];
 
-        if (callType == 'audio') {
-          // Navegar a llamada de audio con datos correctos del orchestrator
-          if (mounted) {
-            Navigator.of(context, rootNavigator: true).push(
-              MaterialPageRoute(
-                builder: (context) => AudioCallScreen(
-                  callId: callId,
-                  channelName: channelName,
-                  token: token,
-                  uid: 0, // Se generará dinámicamente
-                  receiverId: widget.contactId,
-                  remoteName: widget.contactName,
-                  isCaller: true,
-                ),
+        // Navegar a AgoraCallScreen para ambos tipos de llamada
+        if (mounted) {
+          Navigator.of(context, rootNavigator: true).push(
+            MaterialPageRoute(
+              builder: (context) => AgoraCallScreen(
+                callId: callId,
+                isIncoming: false,
               ),
-            );
-          }
-        } else {
-          // Usar CallController para navegación centralizada
-          if (mounted) {
-            await CallController.startCall(
-              context: context,
-              receiverId: widget.contactId,
-              remoteName: widget.contactName,
-              isVideo: true,
-            );
-          }
+            ),
+          );
         }
       } else {
         // Manejar error de inicio de llamada
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error al iniciar llamada ($callType): ${result['error']}')),
+            SnackBar(
+              content: Text('Error al iniciar llamada ($callType): ${result.error ?? "Unknown error"}'),
+            ),
           );
         }
       }

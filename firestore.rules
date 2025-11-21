@@ -716,6 +716,57 @@ service cloud.firestore {
         resource.data.userId == request.auth.uid;
     }
 
+    // ============================================================================
+    // CALLS V2 (100ms Video Calls)
+    // ============================================================================
+    match /calls_v2/{callId} {
+      // Función auxiliar para verificar si el usuario es participante
+      function isParticipant() {
+        return resource.data.participants != null &&
+               resource.data.participants[request.auth.uid] != null;
+      }
+
+      // Permitir leer si eres participante
+      allow read: if request.auth != null && (
+        resource == null ||
+        isParticipant()
+      );
+
+      // Solo Cloud Functions pueden crear llamadas
+      allow create: if false;
+
+      // Permitir actualizar si eres participante
+      allow update: if request.auth != null &&
+        resource != null &&
+        isParticipant();
+
+      // Permitir eliminar si eres el creador
+      allow delete: if request.auth != null &&
+        resource != null &&
+        resource.data.createdBy == request.auth.uid;
+    }
+
+    // User calls - Para notificaciones de llamadas entrantes sin índices
+    match /user_calls/{userId} {
+      // Permitir leer solo tus propios user_calls
+      allow read: if request.auth != null && request.auth.uid == userId;
+
+      // Solo Cloud Functions pueden escribir
+      // Nota: Cloud Functions usando Admin SDK bypasean estas reglas completamente,
+      // así que 'allow write: if false' solo afecta a clientes, no a Cloud Functions
+      allow write: if false;
+
+      // Incoming calls subcollection
+      match /incoming/{callId} {
+        // Permitir leer solo tus propias llamadas entrantes
+        allow read: if request.auth != null && request.auth.uid == userId;
+
+        // Solo Cloud Functions pueden escribir
+        // Nota: Admin SDK bypasea esta regla - Cloud Functions pueden escribir sin restricción
+        allow write: if false;
+      }
+    }
+
     // Video calls
     match /video_calls/{callId} {
       // Función auxiliar para verificar si el usuario es padre del caller (para emergencias)

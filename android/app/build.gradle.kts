@@ -15,7 +15,7 @@ plugins {
 android {
     namespace = "com.talia.chat"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    ndkVersion = "27.2.12479018"  // Required by hmssdk_flutter
 
     compileOptions {
         isCoreLibraryDesugaringEnabled = true

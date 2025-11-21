@@ -19,8 +19,6 @@ import 'screens/common/profile_completion_screen.dart';
 import 'screens/auth/two_factor_verification_screen.dart';
 import 'screens/chat_moderation_settings_screen.dart';
 import 'screens/parent/chat_moderation_management_screen.dart';
-import 'services/calls/calls_orchestrator.dart';
-import 'screens/call/call_screen.dart';
 import 'screens/splash_wrapper.dart';
 import 'notification_service.dart';
 import 'theme_service.dart';
@@ -32,6 +30,7 @@ import 'services/device_session_service.dart';
 import 'services/online_status_service.dart';
 import 'services/screenshot_protection_service.dart';
 import 'services/voip_service.dart';
+import 'services/call_service_wrapper.dart';
 import 'services/app_state_service.dart';
 import 'services/analytics_service.dart';
 import 'services/performance_service.dart';
@@ -653,67 +652,58 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _setupRoleListener();
-    CallsOrchestrator().initializeGlobalListeners(
-      navigatorKey: _navigatorKey,
-    ); // ✅ NUEVO: Inicializar listeners via CallsOrchestrator
 
-    // ✅ CALLBACK: Configurar callback de navegación
-    CallsOrchestrator().onNavigateToCall = (String callId, {bool replaceTemporary = false}) {
+    // ✅ FIX PERMISSION_DENIED: Only initialize LEGACY CallsOrchestrator when NOT using V2
+    // V2 system uses VoIPService + CallServiceWrapper directly (no orchestrator needed)
+    _initializeCallSystem();
+  }
+
+  /// Initialize V2 Agora call system (legacy system removed)
+  Future<void> _initializeCallSystem() async {
+    ReleaseLogger.log(
+      '🚀 [Main] Initializing V2 Agora call system (VoIP/CallKit only)',
+      tag: 'Main',
+    );
+
+    // V2 NAVIGATION: Shared navigation callback for both iOS and Android
+    final navigateToCall = (String callId, {bool isIncoming = false}) {
       ReleaseLogger.log(
-        '🚀 [Main] Navegando a CallScreen via callback: $callId (replace: $replaceTemporary)',
+        '🚀 [Main] Navigating to AgoraCallScreen: $callId (incoming: $isIncoming)',
         tag: 'Main',
       );
 
-      // ✅ FIX: Si replaceTemporary=true, usar pushReplacement para evitar stack duplicado
-      if (replaceTemporary) {
-        ReleaseLogger.log(
-          '🔄 [Main] Usando pushReplacement para reemplazar CallScreen temporal',
-          tag: 'Main',
-        );
-        _navigatorKey.currentState?.pushReplacement(
-          MaterialPageRoute(
-            builder: (context) => CallScreen(callId: callId),
-          ),
-        );
-      } else {
-        _navigatorKey.currentState?.push(
-          MaterialPageRoute(
-            builder: (context) => CallScreen(callId: callId),
-          ),
-        );
-      }
+      // Navigate using CallServiceWrapper which returns AgoraCallScreen for V2
+      final callScreen = CallServiceWrapper().getCallScreen(
+        callId: callId,
+        isIncoming: isIncoming,
+      );
+
+      _navigatorKey.currentState?.push(
+        MaterialPageRoute(
+          builder: (context) => callScreen,
+        ),
+      );
+
+      ReleaseLogger.log('✅ [Main] Navigation to AgoraCallScreen completed', tag: 'Main');
     };
 
-    // ✅ CALLBACK: Configurar callback de terminación para cerrar CallScreen automáticamente
-    CallsOrchestrator().onCallEnded = (String callId) {
-      ReleaseLogger.log(
-        '🔚 [Main] Llamada terminada via callback: $callId - cerrando CallScreen',
-        tag: 'Main',
-      );
-      // ✅ SINGLE SOURCE OF TRUTH: Solo este callback maneja cierre de CallScreen
-      if (_navigatorKey.currentContext != null &&
-          _navigatorKey.currentState?.canPop() == true) {
-        _navigatorKey.currentState?.pop();
-        ReleaseLogger.log(
-          '✅ [Main] CallScreen cerrada para llamada: $callId',
-          tag: 'Main',
-        );
-      } else {
-        ReleaseLogger.log(
-          '⚠️ [Main] No se puede cerrar CallScreen - no hay navegación activa',
-          tag: 'Main',
-        );
-      }
-    };
+    // Configure iOS path (VoIPService)
+    VoIPService().onNavigateToCall = navigateToCall;
+
+    // Configure Android path (NotificationService)
+    NotificationService().onNavigateToCall = navigateToCall;
+
+    ReleaseLogger.log(
+      '✅ [Main] V2 navigation callbacks configured for both platforms',
+      tag: 'Main',
+    );
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _userRoleSubscription?.cancel();
-    CallsOrchestrator()
-        .disposeGlobalListeners(); // ✅ NUEVO: Cleanup CallsOrchestrator
-    _authSubscription?.cancel(); // ✅ NUEVO: Limpiar auth listener independiente
+    _authSubscription?.cancel();
     super.dispose();
   }
 
@@ -773,27 +763,14 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
                     '🔄 Role cambió de $_currentUserRole a $newRole - Verificando si necesita navegación',
                   );
 
-                  // ✅ FIX ESCENARIO CALLKIT: Prevenir navegaciones destructivas innecesarias
-                  // Verificar si hay listeners de llamadas activos antes de navegar
-                  final hasActiveListeners = CallsOrchestrator().areGlobalListenersInitialized;
-                  ReleaseLogger.log(
-                    '🔍 [RoleListener] Listeners activos: $hasActiveListeners',
-                  );
-
                   // Actualizar role primero
                   _currentUserRole = newRole;
 
-                  // ✅ CORREGIDO: Refresh suave sin romper StreamSubscriptions activos
-                  //
-                  // PROBLEMA ANTERIOR: disableNetwork() y enableNetwork() cancelaban TODOS los
-                  // StreamBuilders activos, causando spinner infinito después de videollamadas.
-                  //
-                  // NUEVA ESTRATEGIA: Si hay listeners activos, usar delay más largo para evitar
-                  // interrumpir inicializaciones de CallListenerService en curso
-                  //
-                  final delayMs = hasActiveListeners ? 1000 : 300;
+                  // V2 system: No Firestore listeners for calls (VoIP/CallKit only)
+                  // Safe to use short delay
+                  const delayMs = 300;
                   ReleaseLogger.log(
-                    '🔄 Esperando ${delayMs}ms para refresh de datos de Firestore (listeners activos: $hasActiveListeners)',
+                    '🔄 Esperando ${delayMs}ms para refresh de datos de Firestore',
                   );
 
                   // Navegar después de un delay apropiado

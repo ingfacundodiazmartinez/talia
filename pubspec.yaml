@@ -57,10 +57,10 @@ dependencies:
   url_launcher: ^6.3.2
   shared_preferences: ^2.3.3
   image_picker: ^1.0.7
-  permission_handler: ^11.3.1
+  permission_handler: ^12.0.1  # Actualizado para compatibilidad con hms_room_kit
   device_info_plus: ^12.1.0
   path_provider: ^2.1.1
-  share_plus: ^7.2.1
+  share_plus: ^12.0.1  # Actualizado para compatibilidad con hms_room_kit
   camera: ^0.10.5+5
   image: ^4.0.17
   geolocator: ^9.0.2
@@ -74,7 +74,9 @@ dependencies:
   qr_flutter: ^4.1.0
   mobile_scanner: ^7.1.2
   uuid: ^4.5.1
-  agora_rtc_engine: ^6.5.3
+  # Video Calling - Agora RTC Engine
+  agora_rtc_engine: ^6.3.2  # Agora RTC Engine for video/audio calls
+
   intl: ^0.19.0
   file_picker: ^8.1.4
   video_player: ^2.10.0

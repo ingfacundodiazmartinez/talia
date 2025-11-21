@@ -1188,60 +1188,58 @@ PODS:
     - abseil/meta/type_traits
     - abseil/xcprivacy
   - abseil/xcprivacy (1.20240722.0)
-  - agora_rtc_engine (6.5.3):
-    - AgoraIrisRTC_iOS (= 4.5.2-build.1)
-    - AgoraRtcEngine_iOS (= 4.5.2)
-    - Flutter
-  - AgoraInfra_iOS (1.2.13.1)
-  - AgoraIrisRTC_iOS (4.5.2-build.1)
-  - AgoraRtcEngine_iOS (4.5.2):
-    - AgoraRtcEngine_iOS/AIAEC (= 4.5.2)
-    - AgoraRtcEngine_iOS/AIAECLL (= 4.5.2)
-    - AgoraRtcEngine_iOS/AINS (= 4.5.2)
-    - AgoraRtcEngine_iOS/AINSLL (= 4.5.2)
-    - AgoraRtcEngine_iOS/AudioBeauty (= 4.5.2)
-    - AgoraRtcEngine_iOS/ClearVision (= 4.5.2)
-    - AgoraRtcEngine_iOS/ContentInspect (= 4.5.2)
-    - AgoraRtcEngine_iOS/FaceCapture (= 4.5.2)
-    - AgoraRtcEngine_iOS/FaceDetection (= 4.5.2)
-    - AgoraRtcEngine_iOS/LipSync (= 4.5.2)
-    - AgoraRtcEngine_iOS/ReplayKit (= 4.5.2)
-    - AgoraRtcEngine_iOS/RtcBasic (= 4.5.2)
-    - AgoraRtcEngine_iOS/SpatialAudio (= 4.5.2)
-    - AgoraRtcEngine_iOS/VideoAv1CodecDec (= 4.5.2)
-    - AgoraRtcEngine_iOS/VideoAv1CodecEnc (= 4.5.2)
-    - AgoraRtcEngine_iOS/VideoCodecDec (= 4.5.2)
-    - AgoraRtcEngine_iOS/VideoCodecEnc (= 4.5.2)
-    - AgoraRtcEngine_iOS/VirtualBackground (= 4.5.2)
-    - AgoraRtcEngine_iOS/VQA (= 4.5.2)
-  - AgoraRtcEngine_iOS/AIAEC (4.5.2)
-  - AgoraRtcEngine_iOS/AIAECLL (4.5.2)
-  - AgoraRtcEngine_iOS/AINS (4.5.2)
-  - AgoraRtcEngine_iOS/AINSLL (4.5.2)
-  - AgoraRtcEngine_iOS/AudioBeauty (4.5.2)
-  - AgoraRtcEngine_iOS/ClearVision (4.5.2)
-  - AgoraRtcEngine_iOS/ContentInspect (4.5.2)
-  - AgoraRtcEngine_iOS/FaceCapture (4.5.2)
-  - AgoraRtcEngine_iOS/FaceDetection (4.5.2)
-  - AgoraRtcEngine_iOS/LipSync (4.5.2)
-  - AgoraRtcEngine_iOS/ReplayKit (4.5.2)
-  - AgoraRtcEngine_iOS/RtcBasic (4.5.2):
-    - AgoraInfra_iOS (= 1.2.13.1)
-  - AgoraRtcEngine_iOS/SpatialAudio (4.5.2)
-  - AgoraRtcEngine_iOS/VideoAv1CodecDec (4.5.2)
-  - AgoraRtcEngine_iOS/VideoAv1CodecEnc (4.5.2)
-  - AgoraRtcEngine_iOS/VideoCodecDec (4.5.2)
-  - AgoraRtcEngine_iOS/VideoCodecEnc (4.5.2)
-  - AgoraRtcEngine_iOS/VirtualBackground (4.5.2)
-  - AgoraRtcEngine_iOS/VQA (4.5.2)
+  - agora_rtc_engine (0.0.1):
+    - AgoraIrisRTC_macOS (= 4.5.2-build.2)
+    - AgoraRtcEngine_macOS (= 4.5.2)
+    - FlutterMacOS
+  - AgoraInfra_macOS (1.2.13.1)
+  - AgoraIrisRTC_macOS (4.5.2-build.2)
+  - AgoraRtcEngine_macOS (4.5.2):
+    - AgoraRtcEngine_macOS/AIAEC (= 4.5.2)
+    - AgoraRtcEngine_macOS/AIAECLL (= 4.5.2)
+    - AgoraRtcEngine_macOS/AINS (= 4.5.2)
+    - AgoraRtcEngine_macOS/AINSLL (= 4.5.2)
+    - AgoraRtcEngine_macOS/AudioBeauty (= 4.5.2)
+    - AgoraRtcEngine_macOS/ClearVision (= 4.5.2)
+    - AgoraRtcEngine_macOS/ContentInspect (= 4.5.2)
+    - AgoraRtcEngine_macOS/FaceCapture (= 4.5.2)
+    - AgoraRtcEngine_macOS/FaceDetection (= 4.5.2)
+    - AgoraRtcEngine_macOS/LipSync (= 4.5.2)
+    - AgoraRtcEngine_macOS/RtcBasic (= 4.5.2)
+    - AgoraRtcEngine_macOS/ScreenCapture (= 4.5.2)
+    - AgoraRtcEngine_macOS/SpatialAudio (= 4.5.2)
+    - AgoraRtcEngine_macOS/VideoAv1CodecDec (= 4.5.2)
+    - AgoraRtcEngine_macOS/VideoAv1CodecEnc (= 4.5.2)
+    - AgoraRtcEngine_macOS/VideoCodecDec (= 4.5.2)
+    - AgoraRtcEngine_macOS/VideoCodecEnc (= 4.5.2)
+    - AgoraRtcEngine_macOS/VirtualBackground (= 4.5.2)
+    - AgoraRtcEngine_macOS/VQA (= 4.5.2)
+  - AgoraRtcEngine_macOS/AIAEC (4.5.2)
+  - AgoraRtcEngine_macOS/AIAECLL (4.5.2)
+  - AgoraRtcEngine_macOS/AINS (4.5.2)
+  - AgoraRtcEngine_macOS/AINSLL (4.5.2)
+  - AgoraRtcEngine_macOS/AudioBeauty (4.5.2)
+  - AgoraRtcEngine_macOS/ClearVision (4.5.2)
+  - AgoraRtcEngine_macOS/ContentInspect (4.5.2)
+  - AgoraRtcEngine_macOS/FaceCapture (4.5.2)
+  - AgoraRtcEngine_macOS/FaceDetection (4.5.2)
+  - AgoraRtcEngine_macOS/LipSync (4.5.2)
+  - AgoraRtcEngine_macOS/RtcBasic (4.5.2):
+    - AgoraInfra_macOS (= 1.2.13.1)
+  - AgoraRtcEngine_macOS/ScreenCapture (4.5.2)
+  - AgoraRtcEngine_macOS/SpatialAudio (4.5.2)
+  - AgoraRtcEngine_macOS/VideoAv1CodecDec (4.5.2)
+  - AgoraRtcEngine_macOS/VideoAv1CodecEnc (4.5.2)
+  - AgoraRtcEngine_macOS/VideoCodecDec (4.5.2)
+  - AgoraRtcEngine_macOS/VideoCodecEnc (4.5.2)
+  - AgoraRtcEngine_macOS/VirtualBackground (4.5.2)
+  - AgoraRtcEngine_macOS/VQA (4.5.2)
   - app_badge_plus (1.2.3):
-    - Flutter
+    - FlutterMacOS
   - AppCheckCore (11.2.0):
     - GoogleUtilities/Environment (~> 8.0)
     - GoogleUtilities/UserDefaults (~> 8.0)
     - PromisesObjC (~> 2.4)
-  - audio_waveforms (0.0.1):
-    - Flutter
   - audioplayers_darwin (0.0.1):
     - Flutter
     - FlutterMacOS
@@ -1251,58 +1249,29 @@ PODS:
   - BoringSSL-GRPC/Implementation (0.0.37):
     - BoringSSL-GRPC/Interface (= 0.0.37)
   - BoringSSL-GRPC/Interface (0.0.37)
-  - camera_avfoundation (0.0.1):
-    - Flutter
   - cloud_firestore (6.0.3):
-    - Firebase/Firestore (= 12.4.0)
+    - Firebase/CoreOnly (~> 12.4.0)
+    - Firebase/Firestore (~> 12.4.0)
     - firebase_core
-    - Flutter
+    - FlutterMacOS
   - cloud_functions (6.0.3):
-    - Firebase/Functions (= 12.4.0)
+    - Firebase/CoreOnly (~> 12.4.0)
+    - Firebase/Functions (~> 12.4.0)
     - firebase_core
-    - Flutter
+    - FlutterMacOS
   - connectivity_plus (0.0.1):
-    - Flutter
-  - CryptoSwift (1.8.4)
-  - DeepAR (5.6.20)
+    - FlutterMacOS
   - device_info_plus (0.0.1):
-    - Flutter
-  - DKImagePickerController/Core (4.3.9):
-    - DKImagePickerController/ImageDataManager
-    - DKImagePickerController/Resource
-  - DKImagePickerController/ImageDataManager (4.3.9)
-  - DKImagePickerController/PhotoGallery (4.3.9):
-    - DKImagePickerController/Core
-    - DKPhotoGallery
-  - DKImagePickerController/Resource (4.3.9)
-  - DKPhotoGallery (0.0.19):
-    - DKPhotoGallery/Core (= 0.0.19)
-    - DKPhotoGallery/Model (= 0.0.19)
-    - DKPhotoGallery/Preview (= 0.0.19)
-    - DKPhotoGallery/Resource (= 0.0.19)
-    - SDWebImage
-    - SwiftyGif
-  - DKPhotoGallery/Core (0.0.19):
-    - DKPhotoGallery/Model
-    - DKPhotoGallery/Preview
-    - SDWebImage
-    - SwiftyGif
-  - DKPhotoGallery/Model (0.0.19):
-    - SDWebImage
-    - SwiftyGif
-  - DKPhotoGallery/Preview (0.0.19):
-    - DKPhotoGallery/Model
-    - DKPhotoGallery/Resource
-    - SDWebImage
-    - SwiftyGif
-  - DKPhotoGallery/Resource (0.0.19):
-    - SDWebImage
-    - SwiftyGif
+    - FlutterMacOS
   - emoji_picker_flutter (0.0.1):
-    - Flutter
+    - FlutterMacOS
   - file_picker (0.0.1):
-    - DKImagePickerController/PhotoGallery
-    - Flutter
+    - FlutterMacOS
+  - file_selector_macos (0.0.1):
+    - FlutterMacOS
+  - Firebase/AppCheck (12.4.0):
+    - Firebase/CoreOnly
+    - FirebaseAppCheck (~> 12.4.0)
   - Firebase/Auth (12.4.0):
     - Firebase/CoreOnly
     - FirebaseAuth (~> 12.4.0)
@@ -1323,9 +1292,6 @@ PODS:
   - Firebase/Messaging (12.4.0):
     - Firebase/CoreOnly
     - FirebaseMessaging (~> 12.4.0)
-  - Firebase/Performance (12.4.0):
-    - Firebase/CoreOnly
-    - FirebasePerformance (~> 12.4.0)
   - Firebase/RemoteConfig (12.4.0):
     - Firebase/CoreOnly
     - FirebaseRemoteConfig (~> 12.4.0)
@@ -1335,43 +1301,45 @@ PODS:
   - firebase_analytics (12.0.3):
     - firebase_core
     - FirebaseAnalytics (= 12.4.0)
-    - Flutter
+    - FlutterMacOS
   - firebase_app_check (0.4.1-1):
+    - Firebase/AppCheck (~> 12.4.0)
     - Firebase/CoreOnly (~> 12.4.0)
     - firebase_core
-    - FirebaseAppCheck (~> 12.4.0)
-    - Flutter
+    - FlutterMacOS
   - firebase_auth (6.1.1):
-    - Firebase/Auth (= 12.4.0)
+    - Firebase/Auth (~> 12.4.0)
+    - Firebase/CoreOnly (~> 12.4.0)
     - firebase_core
-    - Flutter
+    - FlutterMacOS
   - firebase_core (4.2.0):
-    - Firebase/CoreOnly (= 12.4.0)
-    - Flutter
+    - Firebase/CoreOnly (~> 12.4.0)
+    - FlutterMacOS
   - firebase_crashlytics (5.0.3):
-    - Firebase/Crashlytics (= 12.4.0)
+    - Firebase/CoreOnly (~> 12.4.0)
+    - Firebase/Crashlytics (~> 12.4.0)
     - firebase_core
-    - Flutter
+    - FlutterMacOS
   - firebase_database (12.0.3):
-    - Firebase/Database (= 12.4.0)
+    - Firebase/CoreOnly (~> 12.4.0)
+    - Firebase/Database (~> 12.4.0)
     - firebase_core
-    - Flutter
+    - FlutterMacOS
   - firebase_messaging (16.0.3):
-    - Firebase/Messaging (= 12.4.0)
+    - Firebase/CoreOnly (~> 12.4.0)
+    - Firebase/Messaging (~> 12.4.0)
     - firebase_core
-    - Flutter
-  - firebase_performance (0.11.1-1):
-    - Firebase/Performance (= 12.4.0)
-    - firebase_core
-    - Flutter
+    - FlutterMacOS
   - firebase_remote_config (6.1.0):
-    - Firebase/RemoteConfig (= 12.4.0)
+    - Firebase/CoreOnly (~> 12.4.0)
+    - Firebase/RemoteConfig (~> 12.4.0)
     - firebase_core
-    - Flutter
+    - FlutterMacOS
   - firebase_storage (13.0.3):
-    - Firebase/Storage (= 12.4.0)
+    - Firebase/CoreOnly (~> 12.4.0)
+    - Firebase/Storage (~> 12.4.0)
     - firebase_core
-    - Flutter
+    - FlutterMacOS
   - FirebaseABTesting (12.4.0):
     - FirebaseCore (~> 12.4.0)
   - FirebaseAnalytics (12.4.0):
@@ -1475,16 +1443,6 @@ PODS:
     - GoogleUtilities/UserDefaults (~> 8.1)
     - nanopb (~> 3.30910.0)
   - FirebaseMessagingInterop (12.4.0)
-  - FirebasePerformance (12.4.0):
-    - FirebaseCore (~> 12.4.0)
-    - FirebaseInstallations (~> 12.4.0)
-    - FirebaseRemoteConfig (~> 12.4.0)
-    - FirebaseSessions (~> 12.4.0)
-    - GoogleDataTransport (~> 10.1)
-    - GoogleUtilities/Environment (~> 8.1)
-    - GoogleUtilities/MethodSwizzler (~> 8.1)
-    - GoogleUtilities/UserDefaults (~> 8.1)
-    - nanopb (~> 3.30910.0)
   - FirebaseRemoteConfig (12.4.0):
     - FirebaseABTesting (~> 12.4.0)
     - FirebaseCore (~> 12.4.0)
@@ -1511,42 +1469,14 @@ PODS:
     - FirebaseCoreExtension (~> 12.4.0)
     - GoogleUtilities/Environment (~> 8.1)
     - GTMSessionFetcher/Core (< 6.0, >= 3.4)
-  - Flutter (1.0.0)
-  - flutter_callkit_incoming (0.0.1):
-    - CryptoSwift
-    - Flutter
-  - flutter_contacts (0.0.1):
-    - Flutter
-  - flutter_keyboard_visibility (0.0.1):
-    - Flutter
   - flutter_local_notifications (0.0.1):
-    - Flutter
-  - flutter_native_splash (2.4.3):
-    - Flutter
-  - flutter_native_video_trimmer (1.0.0):
-    - Flutter
-  - flutter_secure_storage (6.0.0):
-    - Flutter
+    - FlutterMacOS
+  - flutter_secure_storage_macos (6.1.3):
+    - FlutterMacOS
+  - FlutterMacOS (1.0.0)
   - geolocator_apple (1.2.0):
     - Flutter
     - FlutterMacOS
-  - Google-Maps-iOS-Utils (6.1.0):
-    - GoogleMaps (~> 9.0)
-  - Google-Mobile-Ads-SDK (11.13.0):
-    - GoogleUserMessagingPlatform (>= 1.1)
-  - google_maps_flutter_ios (0.0.1):
-    - Flutter
-    - Google-Maps-iOS-Utils (< 7.0, >= 5.0)
-    - GoogleMaps (< 10.0, >= 8.4)
-  - google_mobile_ads (5.3.1):
-    - Flutter
-    - Google-Mobile-Ads-SDK (~> 11.13.0)
-    - webview_flutter_wkwebview
-  - GoogleAdsOnDeviceConversion (3.1.0):
-    - GoogleUtilities/Environment (~> 8.1)
-    - GoogleUtilities/Logger (~> 8.1)
-    - GoogleUtilities/Network (~> 8.1)
-    - nanopb (~> 3.30910.0)
   - GoogleAppMeasurement/Core (12.4.0):
     - GoogleUtilities/AppDelegateSwizzler (~> 8.1)
     - GoogleUtilities/MethodSwizzler (~> 8.1)
@@ -1572,10 +1502,6 @@ PODS:
   - GoogleDataTransport (10.1.0):
     - nanopb (~> 3.30910.0)
     - PromisesObjC (~> 2.4)
-  - GoogleMaps (9.4.0):
-    - GoogleMaps/Maps (= 9.4.0)
-  - GoogleMaps/Maps (9.4.0)
-  - GoogleUserMessagingPlatform (3.0.0)
   - GoogleUtilities/AppDelegateSwizzler (8.1.0):
     - GoogleUtilities/Environment
     - GoogleUtilities/Logger
@@ -1696,25 +1622,9 @@ PODS:
   - gRPC-Core/Interface (1.69.0)
   - gRPC-Core/Privacy (1.69.0)
   - GTMSessionFetcher/Core (5.0.0)
-  - image_picker_ios (0.0.1):
-    - Flutter
-  - integration_test (0.0.1):
-    - Flutter
   - iris_method_channel (0.0.1):
-    - Flutter
+    - FlutterMacOS
   - leveldb-library (1.22.6)
-  - libwebp (1.5.0):
-    - libwebp/demux (= 1.5.0)
-    - libwebp/mux (= 1.5.0)
-    - libwebp/sharpyuv (= 1.5.0)
-    - libwebp/webp (= 1.5.0)
-  - libwebp/demux (1.5.0):
-    - libwebp/webp
-  - libwebp/mux (1.5.0):
-    - libwebp/demux
-  - libwebp/sharpyuv (1.5.0)
-  - libwebp/webp (1.5.0):
-    - libwebp/sharpyuv
   - mobile_scanner (7.0.0):
     - Flutter
     - FlutterMacOS
@@ -1726,108 +1636,74 @@ PODS:
   - path_provider_foundation (0.0.1):
     - Flutter
     - FlutterMacOS
-  - permission_handler_apple (9.3.0):
-    - Flutter
   - PromisesObjC (2.4.0)
   - PromisesSwift (2.4.0):
     - PromisesObjC (= 2.4.0)
-  - RecaptchaInterop (101.0.0)
-  - record_ios (1.1.0):
-    - Flutter
-  - SDWebImage (5.21.3):
-    - SDWebImage/Core (= 5.21.3)
-  - SDWebImage/Core (5.21.3)
+  - record_macos (1.1.0):
+    - FlutterMacOS
   - share_plus (0.0.1):
-    - Flutter
+    - FlutterMacOS
   - shared_preferences_foundation (0.0.1):
     - Flutter
     - FlutterMacOS
   - sqflite_darwin (0.0.4):
     - Flutter
     - FlutterMacOS
-  - SwiftyGif (5.4.5)
-  - url_launcher_ios (0.0.1):
-    - Flutter
-  - vibration (3.0.0):
-    - Flutter
+  - url_launcher_macos (0.0.1):
+    - FlutterMacOS
   - video_compress (0.3.0):
-    - Flutter
+    - FlutterMacOS
   - video_player_avfoundation (0.0.1):
     - Flutter
     - FlutterMacOS
-  - video_thumbnail (0.0.1):
-    - Flutter
-    - libwebp
   - webview_flutter_wkwebview (0.0.1):
     - Flutter
     - FlutterMacOS
-  - workmanager_apple (0.0.1):
-    - Flutter
 
 DEPENDENCIES:
-  - agora_rtc_engine (from `.symlinks/plugins/agora_rtc_engine/ios`)
-  - app_badge_plus (from `.symlinks/plugins/app_badge_plus/ios`)
-  - audio_waveforms (from `.symlinks/plugins/audio_waveforms/ios`)
-  - audioplayers_darwin (from `.symlinks/plugins/audioplayers_darwin/darwin`)
-  - camera_avfoundation (from `.symlinks/plugins/camera_avfoundation/ios`)
-  - cloud_firestore (from `.symlinks/plugins/cloud_firestore/ios`)
-  - cloud_functions (from `.symlinks/plugins/cloud_functions/ios`)
-  - connectivity_plus (from `.symlinks/plugins/connectivity_plus/ios`)
-  - DeepAR (~> 5.6.4)
-  - device_info_plus (from `.symlinks/plugins/device_info_plus/ios`)
-  - emoji_picker_flutter (from `.symlinks/plugins/emoji_picker_flutter/ios`)
-  - file_picker (from `.symlinks/plugins/file_picker/ios`)
-  - firebase_analytics (from `.symlinks/plugins/firebase_analytics/ios`)
-  - firebase_app_check (from `.symlinks/plugins/firebase_app_check/ios`)
-  - firebase_auth (from `.symlinks/plugins/firebase_auth/ios`)
-  - firebase_core (from `.symlinks/plugins/firebase_core/ios`)
-  - firebase_crashlytics (from `.symlinks/plugins/firebase_crashlytics/ios`)
-  - firebase_database (from `.symlinks/plugins/firebase_database/ios`)
-  - firebase_messaging (from `.symlinks/plugins/firebase_messaging/ios`)
-  - firebase_performance (from `.symlinks/plugins/firebase_performance/ios`)
-  - firebase_remote_config (from `.symlinks/plugins/firebase_remote_config/ios`)
-  - firebase_storage (from `.symlinks/plugins/firebase_storage/ios`)
-  - Flutter (from `Flutter`)
-  - flutter_callkit_incoming (from `.symlinks/plugins/flutter_callkit_incoming/ios`)
-  - flutter_contacts (from `.symlinks/plugins/flutter_contacts/ios`)
-  - flutter_keyboard_visibility (from `.symlinks/plugins/flutter_keyboard_visibility/ios`)
-  - flutter_local_notifications (from `.symlinks/plugins/flutter_local_notifications/ios`)
-  - flutter_native_splash (from `.symlinks/plugins/flutter_native_splash/ios`)
-  - flutter_native_video_trimmer (from `.symlinks/plugins/flutter_native_video_trimmer/ios`)
-  - flutter_secure_storage (from `.symlinks/plugins/flutter_secure_storage/ios`)
-  - geolocator_apple (from `.symlinks/plugins/geolocator_apple/darwin`)
-  - google_maps_flutter_ios (from `.symlinks/plugins/google_maps_flutter_ios/ios`)
-  - google_mobile_ads (from `.symlinks/plugins/google_mobile_ads/ios`)
-  - image_picker_ios (from `.symlinks/plugins/image_picker_ios/ios`)
-  - integration_test (from `.symlinks/plugins/integration_test/ios`)
-  - iris_method_channel (from `.symlinks/plugins/iris_method_channel/ios`)
-  - mobile_scanner (from `.symlinks/plugins/mobile_scanner/darwin`)
-  - path_provider_foundation (from `.symlinks/plugins/path_provider_foundation/darwin`)
-  - permission_handler_apple (from `.symlinks/plugins/permission_handler_apple/ios`)
-  - record_ios (from `.symlinks/plugins/record_ios/ios`)
-  - share_plus (from `.symlinks/plugins/share_plus/ios`)
-  - shared_preferences_foundation (from `.symlinks/plugins/shared_preferences_foundation/darwin`)
-  - sqflite_darwin (from `.symlinks/plugins/sqflite_darwin/darwin`)
-  - url_launcher_ios (from `.symlinks/plugins/url_launcher_ios/ios`)
-  - vibration (from `.symlinks/plugins/vibration/ios`)
-  - video_compress (from `.symlinks/plugins/video_compress/ios`)
-  - video_player_avfoundation (from `.symlinks/plugins/video_player_avfoundation/darwin`)
-  - video_thumbnail (from `.symlinks/plugins/video_thumbnail/ios`)
-  - webview_flutter_wkwebview (from `.symlinks/plugins/webview_flutter_wkwebview/darwin`)
-  - workmanager_apple (from `.symlinks/plugins/workmanager_apple/ios`)
+  - agora_rtc_engine (from `Flutter/ephemeral/.symlinks/plugins/agora_rtc_engine/macos`)
+  - app_badge_plus (from `Flutter/ephemeral/.symlinks/plugins/app_badge_plus/macos`)
+  - audioplayers_darwin (from `Flutter/ephemeral/.symlinks/plugins/audioplayers_darwin/darwin`)
+  - cloud_firestore (from `Flutter/ephemeral/.symlinks/plugins/cloud_firestore/macos`)
+  - cloud_functions (from `Flutter/ephemeral/.symlinks/plugins/cloud_functions/macos`)
+  - connectivity_plus (from `Flutter/ephemeral/.symlinks/plugins/connectivity_plus/macos`)
+  - device_info_plus (from `Flutter/ephemeral/.symlinks/plugins/device_info_plus/macos`)
+  - emoji_picker_flutter (from `Flutter/ephemeral/.symlinks/plugins/emoji_picker_flutter/macos`)
+  - file_picker (from `Flutter/ephemeral/.symlinks/plugins/file_picker/macos`)
+  - file_selector_macos (from `Flutter/ephemeral/.symlinks/plugins/file_selector_macos/macos`)
+  - firebase_analytics (from `Flutter/ephemeral/.symlinks/plugins/firebase_analytics/macos`)
+  - firebase_app_check (from `Flutter/ephemeral/.symlinks/plugins/firebase_app_check/macos`)
+  - firebase_auth (from `Flutter/ephemeral/.symlinks/plugins/firebase_auth/macos`)
+  - firebase_core (from `Flutter/ephemeral/.symlinks/plugins/firebase_core/macos`)
+  - firebase_crashlytics (from `Flutter/ephemeral/.symlinks/plugins/firebase_crashlytics/macos`)
+  - firebase_database (from `Flutter/ephemeral/.symlinks/plugins/firebase_database/macos`)
+  - firebase_messaging (from `Flutter/ephemeral/.symlinks/plugins/firebase_messaging/macos`)
+  - firebase_remote_config (from `Flutter/ephemeral/.symlinks/plugins/firebase_remote_config/macos`)
+  - firebase_storage (from `Flutter/ephemeral/.symlinks/plugins/firebase_storage/macos`)
+  - flutter_local_notifications (from `Flutter/ephemeral/.symlinks/plugins/flutter_local_notifications/macos`)
+  - flutter_secure_storage_macos (from `Flutter/ephemeral/.symlinks/plugins/flutter_secure_storage_macos/macos`)
+  - FlutterMacOS (from `Flutter/ephemeral`)
+  - geolocator_apple (from `Flutter/ephemeral/.symlinks/plugins/geolocator_apple/darwin`)
+  - iris_method_channel (from `Flutter/ephemeral/.symlinks/plugins/iris_method_channel/macos`)
+  - mobile_scanner (from `Flutter/ephemeral/.symlinks/plugins/mobile_scanner/darwin`)
+  - path_provider_foundation (from `Flutter/ephemeral/.symlinks/plugins/path_provider_foundation/darwin`)
+  - record_macos (from `Flutter/ephemeral/.symlinks/plugins/record_macos/macos`)
+  - share_plus (from `Flutter/ephemeral/.symlinks/plugins/share_plus/macos`)
+  - shared_preferences_foundation (from `Flutter/ephemeral/.symlinks/plugins/shared_preferences_foundation/darwin`)
+  - sqflite_darwin (from `Flutter/ephemeral/.symlinks/plugins/sqflite_darwin/darwin`)
+  - url_launcher_macos (from `Flutter/ephemeral/.symlinks/plugins/url_launcher_macos/macos`)
+  - video_compress (from `Flutter/ephemeral/.symlinks/plugins/video_compress/macos`)
+  - video_player_avfoundation (from `Flutter/ephemeral/.symlinks/plugins/video_player_avfoundation/darwin`)
+  - webview_flutter_wkwebview (from `Flutter/ephemeral/.symlinks/plugins/webview_flutter_wkwebview/darwin`)
 
 SPEC REPOS:
   trunk:
     - abseil
-    - AgoraInfra_iOS
-    - AgoraIrisRTC_iOS
-    - AgoraRtcEngine_iOS
+    - AgoraInfra_macOS
+    - AgoraIrisRTC_macOS
+    - AgoraRtcEngine_macOS
     - AppCheckCore
     - BoringSSL-GRPC
-    - CryptoSwift
-    - DeepAR
-    - DKImagePickerController
-    - DKPhotoGallery
     - Firebase
     - FirebaseABTesting
     - FirebaseAnalytics
@@ -1846,165 +1722,119 @@ SPEC REPOS:
     - FirebaseInstallations
     - FirebaseMessaging
     - FirebaseMessagingInterop
-    - FirebasePerformance
     - FirebaseRemoteConfig
     - FirebaseRemoteConfigInterop
     - FirebaseSessions
     - FirebaseSharedSwift
     - FirebaseStorage
-    - Google-Maps-iOS-Utils
-    - Google-Mobile-Ads-SDK
-    - GoogleAdsOnDeviceConversion
     - GoogleAppMeasurement
     - GoogleDataTransport
-    - GoogleMaps
-    - GoogleUserMessagingPlatform
     - GoogleUtilities
     - "gRPC-C++"
     - gRPC-Core
     - GTMSessionFetcher
     - leveldb-library
-    - libwebp
     - nanopb
     - PromisesObjC
     - PromisesSwift
-    - RecaptchaInterop
-    - SDWebImage
-    - SwiftyGif
 
 EXTERNAL SOURCES:
   agora_rtc_engine:
-    :path: ".symlinks/plugins/agora_rtc_engine/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/agora_rtc_engine/macos
   app_badge_plus:
-    :path: ".symlinks/plugins/app_badge_plus/ios"
-  audio_waveforms:
-    :path: ".symlinks/plugins/audio_waveforms/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/app_badge_plus/macos
   audioplayers_darwin:
-    :path: ".symlinks/plugins/audioplayers_darwin/darwin"
-  camera_avfoundation:
-    :path: ".symlinks/plugins/camera_avfoundation/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/audioplayers_darwin/darwin
   cloud_firestore:
-    :path: ".symlinks/plugins/cloud_firestore/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/cloud_firestore/macos
   cloud_functions:
-    :path: ".symlinks/plugins/cloud_functions/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/cloud_functions/macos
   connectivity_plus:
-    :path: ".symlinks/plugins/connectivity_plus/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/connectivity_plus/macos
   device_info_plus:
-    :path: ".symlinks/plugins/device_info_plus/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/device_info_plus/macos
   emoji_picker_flutter:
-    :path: ".symlinks/plugins/emoji_picker_flutter/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/emoji_picker_flutter/macos
   file_picker:
-    :path: ".symlinks/plugins/file_picker/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/file_picker/macos
+  file_selector_macos:
+    :path: Flutter/ephemeral/.symlinks/plugins/file_selector_macos/macos
   firebase_analytics:
-    :path: ".symlinks/plugins/firebase_analytics/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/firebase_analytics/macos
   firebase_app_check:
-    :path: ".symlinks/plugins/firebase_app_check/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/firebase_app_check/macos
   firebase_auth:
-    :path: ".symlinks/plugins/firebase_auth/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/firebase_auth/macos
   firebase_core:
-    :path: ".symlinks/plugins/firebase_core/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/firebase_core/macos
   firebase_crashlytics:
-    :path: ".symlinks/plugins/firebase_crashlytics/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/firebase_crashlytics/macos
   firebase_database:
-    :path: ".symlinks/plugins/firebase_database/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/firebase_database/macos
   firebase_messaging:
-    :path: ".symlinks/plugins/firebase_messaging/ios"
-  firebase_performance:
-    :path: ".symlinks/plugins/firebase_performance/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/firebase_messaging/macos
   firebase_remote_config:
-    :path: ".symlinks/plugins/firebase_remote_config/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/firebase_remote_config/macos
   firebase_storage:
-    :path: ".symlinks/plugins/firebase_storage/ios"
-  Flutter:
-    :path: Flutter
-  flutter_callkit_incoming:
-    :path: ".symlinks/plugins/flutter_callkit_incoming/ios"
-  flutter_contacts:
-    :path: ".symlinks/plugins/flutter_contacts/ios"
-  flutter_keyboard_visibility:
-    :path: ".symlinks/plugins/flutter_keyboard_visibility/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/firebase_storage/macos
   flutter_local_notifications:
-    :path: ".symlinks/plugins/flutter_local_notifications/ios"
-  flutter_native_splash:
-    :path: ".symlinks/plugins/flutter_native_splash/ios"
-  flutter_native_video_trimmer:
-    :path: ".symlinks/plugins/flutter_native_video_trimmer/ios"
-  flutter_secure_storage:
-    :path: ".symlinks/plugins/flutter_secure_storage/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/flutter_local_notifications/macos
+  flutter_secure_storage_macos:
+    :path: Flutter/ephemeral/.symlinks/plugins/flutter_secure_storage_macos/macos
+  FlutterMacOS:
+    :path: Flutter/ephemeral
   geolocator_apple:
-    :path: ".symlinks/plugins/geolocator_apple/darwin"
-  google_maps_flutter_ios:
-    :path: ".symlinks/plugins/google_maps_flutter_ios/ios"
-  google_mobile_ads:
-    :path: ".symlinks/plugins/google_mobile_ads/ios"
-  image_picker_ios:
-    :path: ".symlinks/plugins/image_picker_ios/ios"
-  integration_test:
-    :path: ".symlinks/plugins/integration_test/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/geolocator_apple/darwin
   iris_method_channel:
-    :path: ".symlinks/plugins/iris_method_channel/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/iris_method_channel/macos
   mobile_scanner:
-    :path: ".symlinks/plugins/mobile_scanner/darwin"
+    :path: Flutter/ephemeral/.symlinks/plugins/mobile_scanner/darwin
   path_provider_foundation:
-    :path: ".symlinks/plugins/path_provider_foundation/darwin"
-  permission_handler_apple:
-    :path: ".symlinks/plugins/permission_handler_apple/ios"
-  record_ios:
-    :path: ".symlinks/plugins/record_ios/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/path_provider_foundation/darwin
+  record_macos:
+    :path: Flutter/ephemeral/.symlinks/plugins/record_macos/macos
   share_plus:
-    :path: ".symlinks/plugins/share_plus/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/share_plus/macos
   shared_preferences_foundation:
-    :path: ".symlinks/plugins/shared_preferences_foundation/darwin"
+    :path: Flutter/ephemeral/.symlinks/plugins/shared_preferences_foundation/darwin
   sqflite_darwin:
-    :path: ".symlinks/plugins/sqflite_darwin/darwin"
-  url_launcher_ios:
-    :path: ".symlinks/plugins/url_launcher_ios/ios"
-  vibration:
-    :path: ".symlinks/plugins/vibration/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/sqflite_darwin/darwin
+  url_launcher_macos:
+    :path: Flutter/ephemeral/.symlinks/plugins/url_launcher_macos/macos
   video_compress:
-    :path: ".symlinks/plugins/video_compress/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/video_compress/macos
   video_player_avfoundation:
-    :path: ".symlinks/plugins/video_player_avfoundation/darwin"
-  video_thumbnail:
-    :path: ".symlinks/plugins/video_thumbnail/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/video_player_avfoundation/darwin
   webview_flutter_wkwebview:
-    :path: ".symlinks/plugins/webview_flutter_wkwebview/darwin"
-  workmanager_apple:
-    :path: ".symlinks/plugins/workmanager_apple/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/webview_flutter_wkwebview/darwin
 
 SPEC CHECKSUMS:
   abseil: a05cc83bf02079535e17169a73c5be5ba47f714b
-  agora_rtc_engine: 0c7d50312967c4dc31c3c45e50589ce48f57e08a
-  AgoraInfra_iOS: 3691b2b277a1712a35ae96de25af319de0d73d08
-  AgoraIrisRTC_iOS: eab58c126439adf5ec99632828a558ea216860da
-  AgoraRtcEngine_iOS: 97e2398a2addda9057815a2a583a658e36796ff6
-  app_badge_plus: 0e3470f993dd08094e16463f57a7e0db04c6b587
+  agora_rtc_engine: c76a42e7b1b617c4d7b23d84bd6d26c4f53a2bd6
+  AgoraInfra_macOS: 9bc9cea2486446c87d3ee3e69325cdb45ecf99c2
+  AgoraIrisRTC_macOS: 66c134edf52e1dd9863b00494207345e2140b286
+  AgoraRtcEngine_macOS: ca423379ffb023c12a267e9ce6234f90a431f4d2
+  app_badge_plus: 60ebdbfa6c11558e89f1ac58d3364cd014a41cd2
   AppCheckCore: cc8fd0a3a230ddd401f326489c99990b013f0c4f
-  audio_waveforms: a6dde7fe7c0ea05f06ffbdb0f7c1b2b2ba6cedcf
   audioplayers_darwin: 4f9ca89d92d3d21cec7ec580e78ca888e5fb68bd
   BoringSSL-GRPC: dded2a44897e45f28f08ae87a55ee4bcd19bc508
-  camera_avfoundation: 5675ca25298b6f81fa0a325188e7df62cc217741
-  cloud_firestore: 79014bb3b303d451717ed5fe69fded8a2b2e8dc2
-  cloud_functions: b4b361e8761821da45aca2928849bb95648c77b5
-  connectivity_plus: cb623214f4e1f6ef8fe7403d580fdad517d2f7dd
-  CryptoSwift: e64e11850ede528a02a0f3e768cec8e9d92ecb90
-  DeepAR: f9ad421a6d87d2b45518c821193f0ef3db2781d9
-  device_info_plus: 21fcca2080fbcd348be798aa36c3e5ed849eefbe
-  DKImagePickerController: 946cec48c7873164274ecc4624d19e3da4c1ef3c
-  DKPhotoGallery: b3834fecb755ee09a593d7c9e389d8b5d6deed60
-  emoji_picker_flutter: ed468d9746c21711e66b2788880519a9de5de211
-  file_picker: a0560bc09d61de87f12d246fc47d2119e6ef37be
+  cloud_firestore: 85e8c77be37e5e038e89795b9e650e22769b82be
+  cloud_functions: bf6bc1274fcfb08ac4454c40e6a04e7e8d1b7e46
+  connectivity_plus: 4adf20a405e25b42b9c9f87feff8f4b6fde18a4e
+  device_info_plus: 4fb280989f669696856f8b129e4a5e3cd6c48f76
+  emoji_picker_flutter: b9d4f4d08bdf3168fa3827f1290d435083745a14
+  file_picker: 7584aae6fa07a041af2b36a2655122d42f578c1a
+  file_selector_macos: 6280b52b459ae6c590af5d78fc35c7267a3c4b31
   Firebase: f07b15ae5a6ec0f93713e30b923d9970d144af3e
-  firebase_analytics: 1d024068b1d4707d5ba7a42a12976ddf3316d835
-  firebase_app_check: 3a60c006e89c21f177e6e052df59d176d2cdead0
-  firebase_auth: c2b8be95d602d4e8a9148fae72333ef78e69cc20
-  firebase_core: 744984dbbed8b3036abf34f0b98d80f130a7e464
-  firebase_crashlytics: f3a9a4338ab99b67042f64e9e22e1bf349cb44ed
-  firebase_database: 1a97f66efbcf238d1107aa0160aa9942478b38d3
-  firebase_messaging: 82c70650c426a0a14873e1acdb9ec2b443c4e8b4
-  firebase_performance: 9c861582d34f8117446af8a700c5cf1c89f216f9
-  firebase_remote_config: 8a9f8724eb6d1a3c23c6e3e7275e90a004ca08a7
-  firebase_storage: 0ba617a05b24aec050395e4d5d3773c0d7518a15
+  firebase_analytics: d876586269c1d8d2b3dcac085bc2d97c62abc9df
+  firebase_app_check: 2867673487fa2f49865f6d7e7f20d65c40f5cb0f
+  firebase_auth: b6e7af6050a882814c2450b4302f680abde292a9
+  firebase_core: d81d1a44df95699ce074ae63d8cb43e9df21e142
+  firebase_crashlytics: 723622cc39a9fa7320585424f5864c5699893ce1
+  firebase_database: bd408220297261fdfdb1dea48d22dac9341009f0
+  firebase_messaging: 31f412ae5a54e02d1c46d467969f7ad92c4b81ec
+  firebase_remote_config: c00e722e85188ad6a5f9c14214e88680540fe6c5
+  firebase_storage: 3bc0aa7385dbd2d17ff2f8bd7a530fde829c70b0
   FirebaseABTesting: c05b5ec9f1d9f21a65909525de301d375032d9a4
   FirebaseAnalytics: 0fc2b20091f0ddd21bf73397cf8f0eb5346dc24f
   FirebaseAppCheck: 73721d98fa29cf199da6004e57715cbaddd49651
@@ -2022,60 +1852,37 @@ SPEC CHECKSUMS:
   FirebaseInstallations: ae9f4902cb5bf1d0c5eaa31ec1f4e5495a0714e2
   FirebaseMessaging: d33971b7bb252745ea6cd31ab190d1a1df4b8ed5
   FirebaseMessagingInterop: c1454390729ce3c91c184cffd0c347369d7cc48a
-  FirebasePerformance: ab6284808a5157a4c93a50d780803b8ccc36845f
   FirebaseRemoteConfig: 28e071a214ec66cdb113ed9ff4ce63e9abe018db
   FirebaseRemoteConfigInterop: 1e31ec72b89c9924367c59bfb5ec9ab60d1d6766
   FirebaseSessions: ba7c7a7ca8696a8d540eb3fe3800fbe98c79786d
   FirebaseSharedSwift: 93426a1de92f19e1199fac5295a4f8df16458daa
   FirebaseStorage: 20d6b56fb8a40ebaa03d6a2889fe33dac64adb73
-  Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
-  flutter_callkit_incoming: cb8138af67cda6dd981f7101a5d709003af21502
-  flutter_contacts: 5383945387e7ca37cf963d4be57c21f2fc15ca9f
-  flutter_keyboard_visibility: 4625131e43015dbbe759d9b20daaf77e0e3f6619
-  flutter_local_notifications: a5a732f069baa862e728d839dd2ebb904737effb
-  flutter_native_splash: c32d145d68aeda5502d5f543ee38c192065986cf
-  flutter_native_video_trimmer: 11f6c679971dc3844519b485b9c878df8675ae3a
-  flutter_secure_storage: 1ed9476fba7e7a782b22888f956cce43e2c62f13
+  flutter_local_notifications: 4bf37a31afde695b56091b4ae3e4d9c7a7e6cda0
+  flutter_secure_storage_macos: 7f45e30f838cf2659862a4e4e3ee1c347c2b3b54
+  FlutterMacOS: d0db08ddef1a9af05a5ec4b724367152bb0500b1
   geolocator_apple: ab36aa0e8b7d7a2d7639b3b4e48308394e8cef5e
-  Google-Maps-iOS-Utils: 0a484b05ed21d88c9f9ebbacb007956edd508a96
-  Google-Mobile-Ads-SDK: 14f57f2dc33532a24db288897e26494640810407
-  google_maps_flutter_ios: 0291eb2aa252298a769b04d075e4a9d747ff7264
-  google_mobile_ads: 16ad301354fa6a7ea55770c6254bd4339bf8558b
-  GoogleAdsOnDeviceConversion: e03a386840803ea7eef3fd22a061930142c039c1
   GoogleAppMeasurement: 1e718274b7e015cefd846ac1fcf7820c70dc017d
   GoogleDataTransport: aae35b7ea0c09004c3797d53c8c41f66f219d6a7
-  GoogleMaps: 0608099d4870cac8754bdba9b6953db543432438
-  GoogleUserMessagingPlatform: f8d0cdad3ca835406755d0a69aa634f00e76d576
   GoogleUtilities: 00c88b9a86066ef77f0da2fab05f65d7768ed8e1
   "gRPC-C++": cc207623316fb041a7a3e774c252cf68a058b9e8
   gRPC-Core: 860978b7db482de8b4f5e10677216309b5ff6330
   GTMSessionFetcher: 02d6e866e90bc236f48a703a041dfe43e6221a29
-  image_picker_ios: 7fe1ff8e34c1790d6fff70a32484959f563a928a
-  integration_test: 4a889634ef21a45d28d50d622cf412dc6d9f586e
-  iris_method_channel: 7d661cf3259b3009ae423508470dbeb9374446ee
+  iris_method_channel: 06ef372f01b31866748a3c45da2c89c93b666daa
   leveldb-library: cc8b8f8e013647a295ad3f8cd2ddf49a6f19be19
-  libwebp: 02b23773aedb6ff1fd38cec7a77b81414c6842a8
   mobile_scanner: 9157936403f5a0644ca3779a38ff8404c5434a93
   nanopb: fad817b59e0457d11a5dfbde799381cd727c1275
   path_provider_foundation: 080d55be775b7414fd5a5ef3ac137b97b097e564
-  permission_handler_apple: 4ed2196e43d0651e8ff7ca3483a069d469701f2d
   PromisesObjC: f5707f49cb48b9636751c5b2e7d227e43fba9f47
   PromisesSwift: 9d77319bbe72ebf6d872900551f7eeba9bce2851
-  RecaptchaInterop: 11e0b637842dfb48308d242afc3f448062325aba
-  record_ios: f75fa1d57f840012775c0e93a38a7f3ceea1a374
-  SDWebImage: 16309af6d214ba3f77a7c6f6fdda888cb313a50a
-  share_plus: 50da8cb520a8f0f65671c6c6a99b3617ed10a58a
+  record_macos: 43194b6c06ca6f8fa132e2acea72b202b92a0f5b
+  share_plus: 510bf0af1a42cd602274b4629920c9649c52f4cc
   shared_preferences_foundation: 9e1978ff2562383bd5676f64ec4e9aa8fa06a6f7
   sqflite_darwin: 20b2a3a3b70e43edae938624ce550a3cbf66a3d0
-  SwiftyGif: 706c60cf65fa2bc5ee0313beece843c8eb8194d4
-  url_launcher_ios: 694010445543906933d732453a59da0a173ae33d
-  vibration: 69774ad57825b11c951ee4c46155f455d7a592ce
-  video_compress: f2133a07762889d67f0711ac831faa26f956980e
+  url_launcher_macos: 0fba8ddabfc33ce0a9afe7c5fef5aab3d8d2d673
+  video_compress: 752b161da855df2492dd1a8fa899743cc8fe9534
   video_player_avfoundation: 2cef49524dd1f16c5300b9cd6efd9611ce03639b
-  video_thumbnail: b637e0ad5f588ca9945f6e2c927f73a69a661140
   webview_flutter_wkwebview: 8ebf4fded22593026f7dbff1fbff31ea98573c8d
-  workmanager_apple: f540d652595dfe5c8b8200c4c85ba622d6fb5c5b
 
-PODFILE CHECKSUM: bb79cc802dbc77ab06808873930810e230af16de
+PODFILE CHECKSUM: 54d867c82ac51cbd61b565781b9fada492027009
 
 COCOAPODS: 1.16.2

@@ -4,7 +4,8 @@ import '../../../widgets/profile_photo_viewer.dart';
 import '../../../services/block_service.dart';
 import '../../../services/typing_indicator_service.dart';
 import '../../../controllers/chat_app_bar_controller.dart';
-import '../../../services/calls/calls_orchestrator.dart';
+import '../../../calls_v2/controllers/call_controller.dart' as calls_v2;
+import '../../../calls_v2/screens/agora_call_screen.dart';
 import '../../chat_moderation_settings_screen.dart';
 
 /// AppBar personalizado para pantallas de chat
@@ -131,16 +132,31 @@ class _ChatAppBarState extends State<ChatAppBar> {
           icon: const Icon(Icons.call),
           onPressed: () async {
             try {
-              final result = await CallsOrchestrator().createCall(
+              final callController = calls_v2.CallController();
+              final result = await callController.createCall(
                 participantIds: [widget.contactId],
-                type: 'audio',
+                isVideo: false,
+                isGroup: false,
               );
 
-              if (!result['success']) {
+              if (result.success && result.data != null) {
+                final callId = result.data!['callId'];
+                final token = result.data!['token'];
+                if (context.mounted) {
+                  Navigator.of(context, rootNavigator: true).push(
+                    MaterialPageRoute(
+                      builder: (context) => AgoraCallScreen(
+                        callId: callId,
+                        isIncoming: false,
+                      ),
+                    ),
+                  );
+                }
+              } else {
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
-                      content: Text('Error iniciando llamada: ${result['error'] ?? 'Error desconocido'}'),
+                      content: Text('Error iniciando llamada: ${result.error ?? 'Error desconocido'}'),
                       backgroundColor: Colors.red,
                     ),
                   );
@@ -165,16 +181,31 @@ class _ChatAppBarState extends State<ChatAppBar> {
           icon: const Icon(Icons.videocam),
           onPressed: () async {
             try {
-              final result = await CallsOrchestrator().createCall(
+              final callController = calls_v2.CallController();
+              final result = await callController.createCall(
                 participantIds: [widget.contactId],
-                type: 'video',
+                isVideo: true,
+                isGroup: false,
               );
 
-              if (!result['success']) {
+              if (result.success && result.data != null) {
+                final callId = result.data!['callId'];
+                final token = result.data!['token'];
+                if (context.mounted) {
+                  Navigator.of(context, rootNavigator: true).push(
+                    MaterialPageRoute(
+                      builder: (context) => AgoraCallScreen(
+                        callId: callId,
+                        isIncoming: false,
+                      ),
+                    ),
+                  );
+                }
+              } else {
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
-                      content: Text('Error iniciando videollamada: ${result['error'] ?? 'Error desconocido'}'),
+                      content: Text('Error iniciando videollamada: ${result.error ?? 'Error desconocido'}'),
                       backgroundColor: Colors.red,
                     ),
                   );

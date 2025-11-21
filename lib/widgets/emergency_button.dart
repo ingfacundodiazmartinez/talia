@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../calls_v2/controllers/call_controller.dart' as calls_v2;
 import '../services/emergency_service.dart';
-import '../controllers/call_controller.dart';
 
 class EmergencyButton extends StatefulWidget {
   final VoidCallback? onEmergencyActivated;
@@ -180,14 +180,15 @@ class _EmergencyButtonState extends State<EmergencyButton>
     try {
       print('📞 Uniéndose a llamada de emergencia...');
 
-      // LÓGICA OPTIMISTA: Abrir pantalla inmediatamente usando CallController
+      // TODO: Implement emergency call with V2 architecture
+      // The legacy CallController.startCall static method was removed
+      // Need to implement emergency call flow with calls_v2.CallController
       if (mounted) {
-        await CallController.startCall(
-          context: context,
-          receiverId: 'emergency_parents', // ID especial para emergencias
-          remoteName: 'Padres',
-          isVideo: true,
-          isEmergency: true,
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Llamada de emergencia en desarrollo'),
+            backgroundColor: Colors.orange,
+          ),
         );
       }
     } catch (e) {
