@@ -199,15 +199,18 @@ service cloud.firestore {
                  request.resource.data.type == 'answered_call';
         }
 
-        // Permitir crear mensaje si:
-        // 1. Eres el sender y el texto no excede 5000 caracteres, O
-        // 2. Es un mensaje de llamada (missed_call/answered_call) Y eres participante del chat
-        allow create: if request.auth != null && (
+        // 🔒 SEGURIDAD CRÍTICA: Validación completa para crear mensajes
+        // Permitir crear mensaje SOLO si:
+        // 1. Eres el sender (senderId == auth.uid), Y
+        // 2. Eres PARTICIPANTE del chat (validado en Firestore), Y
+        // 3. El texto no excede 5000 caracteres
+        // 4. O es un mensaje de llamada Y eres participante
+        allow create: if request.auth != null && isParticipant() && (
           (request.auth.uid == request.resource.data.senderId &&
            (!request.resource.data.keys().hasAny(['text']) ||
             request.resource.data.text == null ||
             request.resource.data.text.size() <= 5000)) ||
-          (isCallMessage() && isParticipant())
+          isCallMessage()
         );
 
         // Función auxiliar para verificar si solo se están actualizando campos de metadata (reacciones, estado, etc.)
@@ -596,19 +599,26 @@ service cloud.firestore {
         resource.data.createdBy == request.auth.uid;
 
       match /messages/{messageId} {
-        // Solo miembros del grupo pueden leer/escribir mensajes
-        allow read: if request.auth != null &&
-          request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.members;
+        // Función auxiliar para verificar si eres miembro del grupo
+        function isGroupMember() {
+          let groupDoc = get(/databases/$(database)/documents/groups/$(groupId));
+          return request.auth.uid in groupDoc.data.members;
+        }
 
-        // Permitir crear mensaje si eres miembro del grupo
+        // Solo miembros del grupo pueden leer mensajes
+        allow read: if request.auth != null && isGroupMember();
+
+        // 🔒 SEGURIDAD CRÍTICA: Permitir crear mensaje SOLO si:
+        // 1. Eres el sender (senderId == auth.uid), Y
+        // 2. Eres MIEMBRO del grupo (validado en Firestore)
         allow create: if request.auth != null &&
-          request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.members;
+          isGroupMember() &&
+          request.auth.uid == request.resource.data.senderId;
 
         // Permitir actualizar si:
         // 1. Eres el sender (para editar/eliminar), O
         // 2. Eres miembro del grupo (para marcar como leído, delivered, etc.)
-        allow update: if request.auth != null &&
-          request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.members;
+        allow update: if request.auth != null && isGroupMember();
 
         // Permitir eliminar si eres el sender
         allow delete: if request.auth != null &&
