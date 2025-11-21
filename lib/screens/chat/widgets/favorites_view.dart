@@ -249,6 +249,8 @@ class FavoritesView extends StatelessWidget {
   Future<List<ChatMessage>> _getFavoriteMessages(List<QueryDocumentSnapshot> allMessages) async {
     final favoriteService = FavoriteService();
     final favoriteMessages = <ChatMessage>[];
+    // ✅ FIX: Get current user ID for status calculation
+    final currentUserId = FirebaseAuth.instance.currentUser?.uid;
 
     for (final doc in allMessages) {
       try {
@@ -259,7 +261,7 @@ class FavoritesView extends StatelessWidget {
         );
 
         if (isFav) {
-          final message = ChatMessage.fromFirestore(doc);
+          final message = ChatMessage.fromFirestore(doc, currentUserId: currentUserId);
           favoriteMessages.add(message);
         }
       } catch (e) {

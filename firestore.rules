@@ -124,9 +124,13 @@ service cloud.firestore {
         isParentOfParticipant()
       );
 
-      // Permitir crear chat si el usuario está en participants
-      allow create: if request.auth != null &&
-        request.auth.uid in request.resource.data.participants;
+      // 🔒 SEGURIDAD CRÍTICA: Solo Cloud Functions pueden crear chats
+      // Los clientes DEBEN usar la Cloud Function `createChat` que valida:
+      // - Contactos aprobados
+      // - Bloqueos
+      // - Restricciones parentales
+      // - Rate limiting
+      allow create: if false;
 
       // Función auxiliar para verificar si solo se están actualizando campos de archivado
       function isUpdatingOnlyArchiveFields() {
@@ -574,9 +578,9 @@ service cloud.firestore {
       allow read: if request.auth != null &&
         request.auth.uid in resource.data.members;
 
-      // Permitir crear si el usuario está en members
-      allow create: if request.auth != null &&
-        request.auth.uid in request.resource.data.members;
+      // 🔒 SEGURIDAD CRÍTICA: Solo Cloud Functions pueden crear grupos
+      // Los clientes DEBEN usar la Cloud Function correspondiente que valida permisos
+      allow create: if false;
 
       // 🔒 FUNCIÓN DE SEGURIDAD: Verificar si se están actualizando campos críticos que solo Cloud Functions pueden modificar
       function isUpdatingCriticalGroupFields() {

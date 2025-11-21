@@ -125,9 +125,12 @@ class ChatStreamManager {
           }
           _lastUpdateTimes[chatId] = DateTime.now();
 
+          // ✅ FIX: Get current user ID for status calculation
+          final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+
           // Convertir QuerySnapshot a List<ChatMessage>
           final messages = snapshot.docs
-              .map((doc) => ChatMessage.fromFirestore(doc))
+              .map((doc) => ChatMessage.fromFirestore(doc, currentUserId: currentUserId))
               .toList();
 
           // ✅ CRITICAL: Save to Hive cache (persistent) - CACHE-FIRST ARCHITECTURE

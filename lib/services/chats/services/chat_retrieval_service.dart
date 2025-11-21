@@ -134,8 +134,10 @@ class ChatRetrievalService {
         limit: limit,
       );
 
+      // ✅ FIX: Pass currentUserId for status calculation
+      final currentUserId = FirebaseAuth.instance.currentUser?.uid;
       final firestoreResults = firestoreSnapshot.docs
-          .map((doc) => ChatMessage.fromFirestore(doc))
+          .map((doc) => ChatMessage.fromFirestore(doc, currentUserId: currentUserId))
           .toList();
 
       ReleaseLogger.info('Búsqueda Firestore encontró ${firestoreResults.length} mensajes', tag: 'ChatRetrieval');
@@ -213,8 +215,10 @@ class ChatRetrievalService {
         limit: limit,
       );
 
+      // ✅ FIX: Pass currentUserId for status calculation
+      final currentUserId = FirebaseAuth.instance.currentUser?.uid;
       final messages = snapshot.docs
-          .map((doc) => ChatMessage.fromFirestore(doc))
+          .map((doc) => ChatMessage.fromFirestore(doc, currentUserId: currentUserId))
           .toList();
 
       // Actualizar cache con mensajes cargados

@@ -341,6 +341,197 @@ exports.incrementGroupUnreadCount = onDocumentCreated(
 );
 
 // ═══════════════════════════════════════════════════════════════
+// CREACIÓN SEGURA DE CHATS
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Crear chat de forma segura con validaciones completas
+ *
+ * Validaciones:
+ * 1. Ambos usuarios son contactos aprobados
+ * 2. No están bloqueados entre sí
+ * 3. Restricciones parentales (si aplica)
+ * 4. Rate limiting
+ */
+exports.createChat = onCall(
+  { region: "us-central1", consumeAppCheckToken: true },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Usuario no autenticado");
+    }
+
+    const { otherUserId } = request.data;
+    const currentUserId = request.auth.uid;
+
+    if (!otherUserId) {
+      throw new HttpsError("invalid-argument", "otherUserId es requerido");
+    }
+
+    if (currentUserId === otherUserId) {
+      throw new HttpsError("invalid-argument", "No puedes crear un chat contigo mismo");
+    }
+
+    try {
+      console.log(`🔐 [createChat] ${currentUserId} intenta crear chat con ${otherUserId}`);
+
+      const db = getFirestore();
+
+      // ✅ RATE LIMITING: Máximo 10 chats nuevos por hora
+      const rateLimitCheck = await checkRateLimit(
+        currentUserId,
+        "createChat",
+        RATE_LIMITS.createChat || { maxRequests: 10, windowMs: 60 * 60 * 1000 }
+      );
+
+      if (!rateLimitCheck.allowed) {
+        throw new HttpsError(
+          "resource-exhausted",
+          `Límite de creación de chats excedido. Espera ${rateLimitCheck.retryAfter} segundos.`
+        );
+      }
+
+      // ✅ VALIDACIÓN 1: Verificar que son contactos aprobados
+      console.log(`🔍 [createChat] Verificando relación de contacto...`);
+
+      const contactQuery = await db
+        .collection("contacts")
+        .where("users", "array-contains", currentUserId)
+        .where("status", "==", "approved")
+        .get();
+
+      let contactExists = false;
+      let contactDoc = null;
+
+      for (const doc of contactQuery.docs) {
+        const contactData = doc.data();
+        const users = contactData.users || [];
+        if (users.includes(otherUserId)) {
+          contactExists = true;
+          contactDoc = doc;
+          break;
+        }
+      }
+
+      if (!contactExists) {
+        throw new HttpsError(
+          "permission-denied",
+          "No tienes autorización para crear un chat con este usuario. Deben ser contactos aprobados."
+        );
+      }
+
+      console.log(`✅ [createChat] Contacto aprobado verificado`);
+
+      // ✅ VALIDACIÓN 2: Verificar bloqueos bidireccionales
+      console.log(`🔍 [createChat] Verificando bloqueos...`);
+
+      // Verificar si currentUser bloqueó a otherUser
+      const blockedByCurrentUser = await db
+        .collection("blocked_contacts")
+        .where("userId", "==", currentUserId)
+        .where("blockedUserId", "==", otherUserId)
+        .get();
+
+      if (!blockedByCurrentUser.empty) {
+        throw new HttpsError(
+          "permission-denied",
+          "Has bloqueado a este usuario. Desbloquéalo para crear un chat."
+        );
+      }
+
+      // Verificar si otherUser bloqueó a currentUser
+      const blockedByOtherUser = await db
+        .collection("blocked_contacts")
+        .where("userId", "==", otherUserId)
+        .where("blockedUserId", "==", currentUserId)
+        .get();
+
+      if (!blockedByOtherUser.empty) {
+        throw new HttpsError(
+          "permission-denied",
+          "Este usuario te ha bloqueado. No puedes crear un chat."
+        );
+      }
+
+      console.log(`✅ [createChat] Sin bloqueos detectados`);
+
+      // ✅ VALIDACIÓN 3: Verificar restricciones parentales (si currentUser es child)
+      console.log(`🔍 [createChat] Verificando restricciones parentales...`);
+
+      const currentUserDoc = await db.collection("users").doc(currentUserId).get();
+      const currentUserData = currentUserDoc.data() || {};
+      const currentUserRole = currentUserData.role || "child";
+
+      if (currentUserRole === "child") {
+        // Verificar si hay un padre que bloqueó este chat
+        const blockedChatQuery = await db
+          .collection("blocked_chats")
+          .where("childId", "==", currentUserId)
+          .where("contactId", "==", otherUserId)
+          .get();
+
+        if (!blockedChatQuery.empty) {
+          throw new HttpsError(
+            "permission-denied",
+            "Tu padre/madre ha bloqueado los mensajes con este contacto."
+          );
+        }
+      }
+
+      console.log(`✅ [createChat] Sin restricciones parentales`);
+
+      // ✅ CREAR CHAT: Usar formato estándar userId1_userId2 (ordenado alfabéticamente)
+      const participants = [currentUserId, otherUserId].sort();
+      const chatId = participants.join("_");
+
+      console.log(`📝 [createChat] Creando chat: ${chatId}`);
+
+      // Verificar si el chat ya existe
+      const chatRef = db.collection("chats").doc(chatId);
+      const existingChat = await chatRef.get();
+
+      if (existingChat.exists) {
+        console.log(`ℹ️ [createChat] Chat ya existe: ${chatId}`);
+        return {
+          success: true,
+          chatId: chatId,
+          alreadyExists: true,
+        };
+      }
+
+      // Crear documento del chat
+      await chatRef.set({
+        participants: participants,
+        createdAt: FieldValue.serverTimestamp(),
+        createdBy: currentUserId,
+        lastMessageTime: FieldValue.serverTimestamp(),
+        lastMessage: "",
+        lastMessageSender: "",
+        deletedBy: [],
+        [`unreadCount_${participants[0]}`]: 0,
+        [`unreadCount_${participants[1]}`]: 0,
+      });
+
+      console.log(`✅ [createChat] Chat creado exitosamente: ${chatId}`);
+
+      return {
+        success: true,
+        chatId: chatId,
+        participants: participants,
+      };
+    } catch (error) {
+      console.error("❌ [createChat] Error:", error);
+
+      // Re-throw HttpsError directamente
+      if (error instanceof HttpsError) {
+        throw error;
+      }
+
+      throw new HttpsError("internal", error.message);
+    }
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
 // EMERGENCIAS - Creación segura con rate limiting
 // ═══════════════════════════════════════════════════════════════
 
