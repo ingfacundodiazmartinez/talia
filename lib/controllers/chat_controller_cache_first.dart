@@ -8,6 +8,7 @@ import 'package:file_picker/file_picker.dart';
 import '../models/chat_message.dart';
 import '../services/chats/chat_orchestrator.dart';
 import '../services/chats/repositories/user_repository.dart';
+import '../services/chats/repositories/chat_repository.dart';
 import '../services/chats/services/chat_messaging_service.dart';  // For MessageType enum
 import '../services/typing_indicator_service.dart';
 import '../services/block_service.dart';
@@ -36,6 +37,7 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   // Services
   late final ChatOrchestrator _orchestrator;
   late final UserRepository _userRepository;
+  late final ChatRepository _chatRepository;
   late final TypingIndicatorService _typingService;
   late final BlockService _blockService;
   late final AudioProcessingService _audioService;
@@ -86,6 +88,7 @@ class ChatControllerCacheFirst extends ChangeNotifier {
     this.isGroup = false,
     ChatOrchestrator? orchestrator,
     UserRepository? userRepository,
+    ChatRepository? chatRepository,
     TypingIndicatorService? typingService,
     BlockService? blockService,
     AudioProcessingService? audioService,
@@ -94,6 +97,10 @@ class ChatControllerCacheFirst extends ChangeNotifier {
     // Initialize services (dependency injection pattern)
     _orchestrator = orchestrator ?? ChatOrchestrator();
     _userRepository = userRepository ?? UserRepository(
+      firestore: FirebaseFirestore.instance,
+      auth: FirebaseAuth.instance,
+    );
+    _chatRepository = chatRepository ?? ChatRepository(
       firestore: FirebaseFirestore.instance,
       auth: FirebaseAuth.instance,
     );
@@ -676,13 +683,11 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   }
 
   /// Clear chat history
+  /// ✅ REFACTORED: Now uses ChatRepository instead of direct Firestore access
   Future<bool> clearChat() async {
     try {
-      // ✅ FIX: Limpiar en Firestore (marca clearedAt)
-      await FirebaseFirestore.instance
-          .collection('chats')
-          .doc(chatId)
-          .update({
+      // ✅ FIX: Limpiar en Firestore usando ChatRepository (marca clearedAt)
+      await _chatRepository.updateChat(chatId, {
         'clearedAt_$currentUserId': FieldValue.serverTimestamp(),
       });
 
