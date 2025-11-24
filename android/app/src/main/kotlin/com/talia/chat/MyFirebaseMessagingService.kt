@@ -235,7 +235,8 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                         // PASO 3: Vincular notificación al shortcut con setShortcutId
                         val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
                             .setSmallIcon(R.drawable.ic_notification)  // Ícono monocromático blanco (required)
-                            .setLargeIcon(circularBitmap)  // ✅ Avatar circular en la esquina (fallback si no hay shortcut)
+                            // ❌ NO usar setLargeIcon() con MessagingStyle - causa que se muestre como attachment
+                            // La foto viene del Person object en MessagingStyle.addMessage()
                             .setShortcutId(shortcutId)  // ⭐ CLAVE: vincula shortcut para foto a la izquierda
                             .setPriority(NotificationCompat.PRIORITY_HIGH)
                             .setAutoCancel(true)
