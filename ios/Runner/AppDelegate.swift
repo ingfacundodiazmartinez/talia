@@ -66,6 +66,29 @@ import Intents  // ✅ Necesario para INPerson e INImage
     // CallKit channel para mostrar llamadas desde Flutter
     let callKitChannel = FlutterMethodChannel(name: "com.talia.chat/callkit", binaryMessenger: controller.binaryMessenger)
 
+    // ✅ Photo Cache channel para guardar fotos en App Group
+    let photoCacheChannel = FlutterMethodChannel(name: "com.talia.chat/photo_cache", binaryMessenger: controller.binaryMessenger)
+
+    // ✅ Handle photo updates from Dart
+    photoCacheChannel.setMethodCallHandler { (call: FlutterMethodCall, result: @escaping FlutterResult) in
+      if call.method == "photoUpdated" {
+        guard let args = call.arguments as? [String: Any],
+              let userId = args["userId"] as? String,
+              let photoBytes = args["photoBytes"] as? FlutterStandardTypedData else {
+          NSLog("❌ [PhotoCache] Invalid arguments for photoUpdated")
+          result(FlutterError(code: "INVALID_ARGS", message: "Missing userId or photoBytes", details: nil))
+          return
+        }
+
+        let data = photoBytes.data
+        TaliaPhotoCache.savePhotoData(userId: userId, data: data)
+        NSLog("✅ [PhotoCache] Saved photo to App Group for: \(userId) (\(data.count) bytes)")
+        result(true)
+      } else {
+        result(FlutterMethodNotImplemented)
+      }
+    }
+
     // ✅ REENVIAR token VoIP guardado si existe
     if let pendingToken = self.pendingVoIPToken {
       NSLog("🔄 [VoIP] Reenviando token guardado a Flutter")

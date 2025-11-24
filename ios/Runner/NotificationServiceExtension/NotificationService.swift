@@ -41,18 +41,30 @@ class NotificationService: UNNotificationServiceExtension {
 
         NSLog("[NSE] Data received: sender=%@, chatId=%@", senderName, chatId)
 
-        if let photoUrl = senderPhotoUrl, !photoUrl.isEmpty, photoUrl != "null" {
-            NSLog("[NSE] Downloading sender photo: %@", photoUrl)
+        // ✅ UNIFIED: Try to get cached photo from shared App Group (0ms latency)
+        if let cachedImage = TaliaPhotoCache.getCachedPhoto(userId: senderId) {
+            NSLog("[NSE] Using cached photo for: %@", senderName)
 
-            // Descargar imagen y crear Communication Notification
+            createCommunicationNotification(
+                content: bestAttemptContent,
+                senderName: senderName,
+                senderId: senderId,
+                chatId: chatId,
+                image: cachedImage
+            )
+        } else if let photoUrl = senderPhotoUrl, !photoUrl.isEmpty, photoUrl != "null" {
+            NSLog("[NSE] Cache MISS - Downloading photo (fallback): %@", photoUrl)
+
+            // ⚠️ FALLBACK: Descargar si no está en cache (solo para mensajes antiguos)
             downloadImage(from: photoUrl) { [weak self] imageData in
                 guard let self = self else { return }
 
                 if let imageData = imageData, let image = UIImage(data: imageData) {
-                    NSLog("[NSE] Photo downloaded, creating Communication Notification")
+                    NSLog("[NSE] Photo downloaded (fallback), creating Communication Notification")
 
-                    // ✅ Crear Communication Notification con foto circular
-                    // El método createCommunicationNotification ya llama a contentHandler internamente
+                    // ✅ Save to cache for next time
+                    TaliaPhotoCache.savePhoto(userId: senderId, image: image)
+
                     self.createCommunicationNotification(
                         content: bestAttemptContent,
                         senderName: senderName,
