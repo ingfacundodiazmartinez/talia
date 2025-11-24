@@ -977,7 +977,7 @@ class NotificationService {
       _initializeCallKit();
 
       // 6. Configurar listeners
-      _setupListeners();
+      await _setupListeners();
 
       // 6.5. ✅ FIX: Suscribirse a cambios de estado de app para navegación pendiente
       _appStateSubscription = AppStateService().foregroundStateStream.listen((
@@ -1381,7 +1381,7 @@ class NotificationService {
   }
 
   // Configurar listeners de mensajes
-  void _setupListeners() {
+  Future<void> _setupListeners() async {
     // Mensajes cuando la app está en primer plano
     FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
       ReleaseLogger.log(
