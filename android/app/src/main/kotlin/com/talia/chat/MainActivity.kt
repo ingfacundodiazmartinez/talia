@@ -14,6 +14,11 @@ class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.talia.chat/notifications"
     private var startIntent: Intent? = null
 
+    companion object {
+        // ✅ Static reference to FlutterEngine for FCM service to access photo cache
+        var flutterEngineInstance: FlutterEngine? = null
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // Cambiar el tema ANTES de llamar a super.onCreate()
         // Esto determina qué splash se muestra (con imagen o sin imagen)
@@ -44,6 +49,9 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+
+        // ✅ Store FlutterEngine reference for FCM service to access
+        flutterEngineInstance = flutterEngine
 
         Log.d("MainActivity", "🔧 Configurando ArFiltersPlugin manualmente...")
 

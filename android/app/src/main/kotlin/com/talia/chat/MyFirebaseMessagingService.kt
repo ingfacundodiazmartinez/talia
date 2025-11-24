@@ -13,9 +13,6 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
-import android.graphics.Rect
-import android.graphics.RectF
-import android.graphics.Matrix
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -24,11 +21,8 @@ import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.content.LocusIdCompat
 import androidx.core.graphics.drawable.IconCompat
-import androidx.exifinterface.media.ExifInterface
-import java.net.HttpURLConnection
-import java.net.URL
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodChannel
 import kotlin.concurrent.thread
 
 class MyFirebaseMessagingService : FirebaseMessagingService() {
@@ -37,10 +31,13 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         private const val TAG = "FCMService"
         private const val CHANNEL_ID = "high_importance_channel"
         private const val CHANNEL_NAME = "Notificaciones Importantes"
+        private const val PHOTO_CACHE_CHANNEL = "com.talia.chat/photo_cache"
 
         /**
-         * Método estático para mostrar notificaciones desde el foreground (llamado desde MainActivity)
-         * Duplica la lógica de showNotification para ser callable sin instancia del servicio
+         * ✅ UNIFIED: Mostrar notificación usando cache de fotos proactivo
+         *
+         * Elimina 200+ líneas de código duplicado de descarga HTTP.
+         * Usa ContactPhotoCacheService vía MethodChannel (0ms latency).
          */
         fun showNotificationFromForeground(
             context: Context,
@@ -53,16 +50,15 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         ) {
             Log.d(TAG, "📨 [Foreground] Creando notificación desde MainActivity")
 
-            // Crear canal de notificación
             createNotificationChannelStatic(context)
 
-            // Intent para abrir la app
-            val intent = Intent(context, MainActivity::class.java)
-            intent.action = Intent.ACTION_VIEW
-            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            intent.putExtra("chatId", chatId)
-            intent.putExtra("senderId", senderId)
-            intent.putExtra("senderName", senderName)
+            val intent = Intent(context, MainActivity::class.java).apply {
+                action = Intent.ACTION_VIEW
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra("chatId", chatId)
+                putExtra("senderId", senderId)
+                putExtra("senderName", senderName)
+            }
 
             val pendingIntent = PendingIntent.getActivity(
                 context,
@@ -71,146 +67,139 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
-            val shortcutId = "chat_$senderId"
+            // ✅ Try to get cached photo via MethodChannel (instant, no HTTP)
+            val cachedPhoto = getCachedPhoto(senderId)
 
-            // Si hay foto, descargarla y mostrar notificación
-            if (!senderPhotoUrl.isNullOrEmpty() && senderPhotoUrl != "null") {
-                thread {
-                    try {
-                        Log.d(TAG, "📥 Descargando foto: $senderPhotoUrl")
+            buildAndShowNotification(
+                context = context,
+                body = body,
+                senderName = senderName,
+                senderId = senderId,
+                cachedPhotoBytes = cachedPhoto,
+                intent = intent,
+                pendingIntent = pendingIntent
+            )
+        }
 
-                        // Download image - inline logic
-                        val url = URL(senderPhotoUrl)
-                        val connection = url.openConnection() as HttpURLConnection
-                        connection.doInput = true
-                        connection.connect()
-                        val input = connection.inputStream
-                        val bitmap = BitmapFactory.decodeStream(input)
-
-                        if (bitmap != null) {
-                            // Create circular bitmap - inline logic from getCircularBitmap
-                            val size = 192
-                            val scaledBitmap = Bitmap.createScaledBitmap(bitmap, size, size, true)
-                            val output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-                            val canvas = Canvas(output)
-                            val paint = Paint()
-                            paint.isAntiAlias = true
-                            canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint)
-                            paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN)
-                            canvas.drawBitmap(scaledBitmap, 0f, 0f, paint)
-
-                            // Create Person
-                            val sender = Person.Builder()
-                                .setName(senderName)
-                                .build()
-
-                            // Create ShortcutInfo
-                            val shortcut = ShortcutInfoCompat.Builder(context, shortcutId)
-                                .setShortLabel(senderName)
-                                .setLongLabel(senderName)
-                                .setIcon(IconCompat.createWithBitmap(output))
-                                .setPerson(sender)
-                                .setLongLived(true)
-                                .setLocusId(LocusIdCompat(shortcutId))
-                                .setIntent(intent)
-                                .build()
-
-                            ShortcutManagerCompat.pushDynamicShortcut(context, shortcut)
-
-                            // Create MessagingStyle
-                            val user = Person.Builder().setName("Yo").build()
-                            val messagingStyle = NotificationCompat.MessagingStyle(user)
-                                .setGroupConversation(false)
-                                .addMessage(body, System.currentTimeMillis(), sender)
-
-                            // Create notification
-                            val notificationBuilder = NotificationCompat.Builder(context, CHANNEL_ID)
-                                .setSmallIcon(R.drawable.ic_notification)
-                                .setLargeIcon(output)
-                                .setShortcutId(shortcutId)
-                                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                                .setAutoCancel(true)
-                                .setContentIntent(pendingIntent)
-                                .setStyle(messagingStyle)
-
-                            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                            notificationManager.notify(System.currentTimeMillis().toInt(), notificationBuilder.build())
-                            Log.d(TAG, "✅ Notificación mostrada con avatar")
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "❌ Error descargando imagen: ${e.message}", e)
-                        // Si falla la descarga de imagen, mostrar notificación sin foto
-                        showSimpleNotification(context, title, body, senderName, senderId, chatId, shortcutId, pendingIntent)
-                    }
+        /**
+         * ✅ Get cached photo from ContactPhotoCacheService via MethodChannel
+         * Returns ByteArray if cached, null otherwise (0ms lookup)
+         */
+        private fun getCachedPhoto(senderId: String): ByteArray? {
+            return try {
+                // Access Flutter's MethodChannel to get cached photo
+                val flutterEngine = (MainActivity.flutterEngineInstance as? FlutterEngine)
+                if (flutterEngine == null) {
+                    Log.w(TAG, "⚠️ FlutterEngine not available, can't access photo cache")
+                    return null
                 }
-            } else {
-                // No hay foto - mostrar notificación simple
-                Log.d(TAG, "ℹ️ No hay foto del sender - mostrando notificación simple")
-                showSimpleNotification(context, title, body, senderName, senderId, chatId, shortcutId, pendingIntent)
+
+                val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, PHOTO_CACHE_CHANNEL)
+
+                // Synchronous call to Dart (blocking, but instant from memory)
+                val result = channel.invokeMethod("getCachedPhoto", senderId)
+
+                if (result is ByteArray && result.isNotEmpty()) {
+                    Log.d(TAG, "✅ [PhotoCache] Cache HIT for $senderId (${result.size} bytes)")
+                    result
+                } else {
+                    Log.d(TAG, "⚠️ [PhotoCache] Cache MISS for $senderId")
+                    null
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ [PhotoCache] Error accessing cache: ${e.message}", e)
+                null
             }
         }
 
         /**
-         * Mostrar notificación simple sin foto del sender
+         * ✅ UNIFIED: Build and show notification (used by both foreground and background)
+         * Eliminates duplication between showNotificationFromForeground() and onMessageReceived()
          */
-        private fun showSimpleNotification(
+        private fun buildAndShowNotification(
             context: Context,
-            title: String,
             body: String,
             senderName: String,
             senderId: String,
-            chatId: String,
-            shortcutId: String,
+            cachedPhotoBytes: ByteArray?,
+            intent: Intent,
             pendingIntent: PendingIntent
         ) {
-            try {
-                Log.d(TAG, "📨 Mostrando notificación simple sin foto")
+            val shortcutId = "chat_$senderId"
 
-                // Create Person sin foto
-                val sender = Person.Builder()
-                    .setName(senderName)
-                    .build()
+            // Create Person
+            val sender = Person.Builder()
+                .setName(senderName)
+                .build()
 
-                // Create ShortcutInfo sin icon
-                val intent = Intent(context, MainActivity::class.java)
-                intent.action = Intent.ACTION_VIEW
-                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                intent.putExtra("chatId", chatId)
-                intent.putExtra("senderId", senderId)
-                intent.putExtra("senderName", senderName)
-
-                val shortcut = ShortcutInfoCompat.Builder(context, shortcutId)
-                    .setShortLabel(senderName)
-                    .setLongLabel(senderName)
-                    .setPerson(sender)
-                    .setLongLived(true)
-                    .setLocusId(LocusIdCompat(shortcutId))
-                    .setIntent(intent)
-                    .build()
-
-                ShortcutManagerCompat.pushDynamicShortcut(context, shortcut)
-
-                // Create MessagingStyle
-                val user = Person.Builder().setName("Yo").build()
-                val messagingStyle = NotificationCompat.MessagingStyle(user)
-                    .setGroupConversation(false)
-                    .addMessage(body, System.currentTimeMillis(), sender)
-
-                // Create notification sin largeIcon
-                val notificationBuilder = NotificationCompat.Builder(context, CHANNEL_ID)
-                    .setSmallIcon(R.drawable.ic_notification)
-                    .setShortcutId(shortcutId)
-                    .setPriority(NotificationCompat.PRIORITY_HIGH)
-                    .setAutoCancel(true)
-                    .setContentIntent(pendingIntent)
-                    .setStyle(messagingStyle)
-
-                val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                notificationManager.notify(System.currentTimeMillis().toInt(), notificationBuilder.build())
-                Log.d(TAG, "✅ Notificación simple mostrada sin avatar")
-            } catch (e: Exception) {
-                Log.e(TAG, "❌ Error mostrando notificación simple: ${e.message}", e)
+            // Create circular bitmap if photo is cached
+            val circularBitmap = cachedPhotoBytes?.let { bytes ->
+                try {
+                    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    createCircularBitmap(bitmap)
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ Error decoding cached photo: ${e.message}", e)
+                    null
+                }
             }
+
+            // Create ShortcutInfo (with or without icon)
+            val shortcutBuilder = ShortcutInfoCompat.Builder(context, shortcutId)
+                .setShortLabel(senderName)
+                .setLongLabel(senderName)
+                .setPerson(sender)
+                .setLongLived(true)
+                .setLocusId(LocusIdCompat(shortcutId))
+                .setIntent(intent)
+
+            if (circularBitmap != null) {
+                shortcutBuilder.setIcon(IconCompat.createWithBitmap(circularBitmap))
+            }
+
+            ShortcutManagerCompat.pushDynamicShortcut(context, shortcutBuilder.build())
+
+            // Create MessagingStyle
+            val user = Person.Builder().setName("Yo").build()
+            val messagingStyle = NotificationCompat.MessagingStyle(user)
+                .setGroupConversation(false)
+                .addMessage(body, System.currentTimeMillis(), sender)
+
+            // Create notification
+            val notificationBuilder = NotificationCompat.Builder(context, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setShortcutId(shortcutId)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(pendingIntent)
+                .setStyle(messagingStyle)
+
+            // Add large icon if photo is available
+            if (circularBitmap != null) {
+                notificationBuilder.setLargeIcon(circularBitmap)
+                Log.d(TAG, "✅ Notificación con avatar desde cache")
+            } else {
+                Log.d(TAG, "ℹ️ Notificación sin avatar (no cached)")
+            }
+
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.notify(System.currentTimeMillis().toInt(), notificationBuilder.build())
+        }
+
+        /**
+         * Create circular bitmap (192x192, optimized for notifications)
+         */
+        private fun createCircularBitmap(bitmap: Bitmap): Bitmap {
+            val size = 192
+            val scaledBitmap = Bitmap.createScaledBitmap(bitmap, size, size, true)
+            val output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(output)
+            val paint = Paint().apply {
+                isAntiAlias = true
+            }
+            canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint)
+            paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN)
+            canvas.drawBitmap(scaledBitmap, 0f, 0f, paint)
+            return output
         }
 
         private fun createNotificationChannelStatic(context: Context) {
@@ -367,16 +356,14 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         photoUrl: String?,
         data: Map<String, String>
     ) {
-        // Crear canal de notificación (Android 8.0+)
         createNotificationChannel()
 
-        // Intent para abrir la app cuando se toca la notificación
-        val intent = Intent(this, MainActivity::class.java)
-        intent.action = Intent.ACTION_VIEW  // Requerido para ShortcutInfo
-        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        // Agregar datos para que Flutter pueda navegar
-        data.forEach { (key, value) ->
-            intent.putExtra(key, value)
+        val intent = Intent(this, MainActivity::class.java).apply {
+            action = Intent.ACTION_VIEW
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            data.forEach { (key, value) ->
+                putExtra(key, value)
+            }
         }
 
         val pendingIntent = PendingIntent.getActivity(
@@ -386,102 +373,21 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Extraer nombre del sender, senderId y chatId para el shortcut
         val senderName = data["senderName"] ?: "Usuario"
         val senderId = data["senderId"] ?: (data["chatId"] ?: "unknown")
-        val shortcutId = "chat_$senderId"
 
-        // Si hay foto de perfil, descargarla en background y mostrar notificación
-        if (!photoUrl.isNullOrEmpty() && photoUrl != "null") {
-            thread {
-                try {
-                    Log.e(TAG, "📥 Descargando foto de perfil: $photoUrl")
-                    val bitmap = downloadImage(photoUrl)
+        // ✅ UNIFIED: Use the same logic as foreground - get cached photo
+        val cachedPhoto = getCachedPhoto(senderId)
 
-                    if (bitmap != null) {
-                        Log.e(TAG, "✅ Imagen descargada: ${bitmap.width}x${bitmap.height}")
-
-                        // Crear bitmap circular (con corrección de rotación)
-                        val circularBitmap = getCircularBitmap(bitmap)
-                        Log.e(TAG, "✅ Bitmap circular creado: ${circularBitmap.width}x${circularBitmap.height}")
-
-                        // Crear Person para el sender SIN foto
-                        // ❌ NO usar setIcon() - causa que aparezca como adjunto pequeño
-                        val sender = Person.Builder()
-                            .setName(senderName)
-                            .build()
-
-                        // PASO 1: Crear ShortcutInfo para el chat (CRUCIAL para foto a la izquierda)
-                        val shortcut = ShortcutInfoCompat.Builder(this, shortcutId)
-                            .setShortLabel(senderName)
-                            .setLongLabel(senderName)
-                            .setIcon(IconCompat.createWithBitmap(circularBitmap))
-                            .setPerson(sender)
-                            .setLongLived(true)
-                            .setLocusId(LocusIdCompat(shortcutId))
-                            .setIntent(intent)
-                            .build()
-
-                        // PASO 2: Publicar el shortcut (requerido para Android 11+)
-                        ShortcutManagerCompat.pushDynamicShortcut(this, shortcut)
-                        Log.e(TAG, "✅ Shortcut publicado con ID: $shortcutId")
-
-                        // Crear Person para el usuario (receptor)
-                        val user = Person.Builder()
-                            .setName("Yo")
-                            .build()
-
-                        // Usar MessagingStyle con configuración para Android 11+
-                        val messagingStyle = NotificationCompat.MessagingStyle(user)
-                            // ❌ NO usar setConversationTitle() en chats 1-1, causa "Talia · Sender"
-                            // Solo para chats grupales debe tener título
-                            .setGroupConversation(false)  // ✅ CRÍTICO: false = chat 1-1 (muestra foto a la izquierda)
-                            .addMessage(body, System.currentTimeMillis(), sender)
-
-                        // PASO 3: Vincular notificación al shortcut con setShortcutId
-                        val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
-                            .setSmallIcon(R.drawable.ic_notification)  // Ícono monocromático blanco (required)
-                            .setLargeIcon(circularBitmap)  // ✅ Avatar circular grande a la izquierda
-                            .setShortcutId(shortcutId)  // ⭐ CLAVE: vincula shortcut para foto a la izquierda
-                            .setPriority(NotificationCompat.PRIORITY_HIGH)
-                            .setAutoCancel(true)
-                            .setContentIntent(pendingIntent)
-                            .setStyle(messagingStyle)
-
-                        Log.e(TAG, "✅ Notificación configurada con ShortcutId (foto a la izquierda)")
-
-                        // Mostrar notificación
-                        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                        notificationManager.notify(System.currentTimeMillis().toInt(), notificationBuilder.build())
-                        Log.e(TAG, "📤 Notificación mostrada con foto del sender a la izquierda")
-                    } else {
-                        Log.e(TAG, "⚠️ No se pudo descargar la imagen, mostrando sin foto")
-                        showBasicNotification(title, body, pendingIntent)
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "❌ Error procesando foto de perfil: ${e.message}", e)
-                    showBasicNotification(title, body, pendingIntent)
-                }
-            }
-        } else {
-            // Sin foto, mostrar inmediatamente
-            showBasicNotification(title, body, pendingIntent)
-        }
-    }
-
-    private fun showBasicNotification(title: String, body: String, pendingIntent: PendingIntent) {
-        val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_notification)  // ✅ Usar ic_notification en lugar de ic_launcher
-            .setContentTitle(title)
-            .setContentText(body)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setAutoCancel(true)
-            .setContentIntent(pendingIntent)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
-
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.notify(System.currentTimeMillis().toInt(), notificationBuilder.build())
-        Log.e(TAG, "📤 Notificación básica mostrada (sin foto)")
+        buildAndShowNotification(
+            context = this,
+            body = body,
+            senderName = senderName,
+            senderId = senderId,
+            cachedPhotoBytes = cachedPhoto,
+            intent = intent,
+            pendingIntent = pendingIntent
+        )
     }
 
     private fun createNotificationChannel() {
@@ -499,87 +405,6 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.createNotificationChannel(channel)
         }
-    }
-
-    private fun downloadImage(urlString: String): Bitmap? {
-        return try {
-            val url = URL(urlString)
-            val connection = url.openConnection() as HttpURLConnection
-            connection.doInput = true
-            connection.connectTimeout = 5000
-            connection.readTimeout = 5000
-            connection.connect()
-
-            if (connection.responseCode == HttpURLConnection.HTTP_OK) {
-                val input = connection.inputStream
-
-                // Leer los bytes para poder procesarlos dos veces (EXIF y Bitmap)
-                val bytes = input.readBytes()
-                input.close()
-
-                // Decodificar el bitmap
-                var bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-
-                // Intentar leer orientación EXIF
-                try {
-                    val exif = ExifInterface(ByteArrayInputStream(bytes))
-                    val orientation = exif.getAttributeInt(
-                        ExifInterface.TAG_ORIENTATION,
-                        ExifInterface.ORIENTATION_NORMAL
-                    )
-
-                    // Corregir rotación según EXIF
-                    val matrix = Matrix()
-                    when (orientation) {
-                        ExifInterface.ORIENTATION_ROTATE_90 -> {
-                            matrix.postRotate(90f)
-                            Log.e(TAG, "🔄 Corrigiendo rotación: 90°")
-                        }
-                        ExifInterface.ORIENTATION_ROTATE_180 -> {
-                            matrix.postRotate(180f)
-                            Log.e(TAG, "🔄 Corrigiendo rotación: 180°")
-                        }
-                        ExifInterface.ORIENTATION_ROTATE_270 -> {
-                            matrix.postRotate(270f)
-                            Log.e(TAG, "🔄 Corrigiendo rotación: 270°")
-                        }
-                        else -> Log.e(TAG, "✅ Sin necesidad de corregir rotación")
-                    }
-
-                    // Aplicar rotación si es necesario
-                    if (!matrix.isIdentity) {
-                        bitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "⚠️ No se pudo leer EXIF, usando imagen sin rotación")
-                }
-
-                // Redimensionar a 192x192 (tamaño óptimo para largeIcon)
-                Bitmap.createScaledBitmap(bitmap, 192, 192, true)
-            } else {
-                Log.w(TAG, "⚠️ HTTP ${connection.responseCode} al descargar imagen")
-                null
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ Error descargando imagen: ${e.message}", e)
-            null
-        }
-    }
-
-    private fun getCircularBitmap(bitmap: Bitmap): Bitmap {
-        // ✅ Usar misma lógica que showNotificationFromForeground para consistencia
-        val size = 192
-        val scaledBitmap = Bitmap.createScaledBitmap(bitmap, size, size, true)
-        val output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(output)
-        val paint = Paint()
-        paint.isAntiAlias = true
-        canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint)
-        paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN)
-        canvas.drawBitmap(scaledBitmap, 0f, 0f, paint)
-
-        Log.e(TAG, "✅ Bitmap circular creado con técnica SRC_IN (igual que foreground)")
-        return output
     }
 
     /**
