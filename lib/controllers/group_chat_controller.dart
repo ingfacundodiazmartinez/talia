@@ -8,9 +8,14 @@ import '../notification_service.dart';
 import '../services/typing_indicator_service.dart';
 import '../services/media_service.dart';
 import '../services/media_compression_service.dart';
+import '../services/chats/repositories/user_repository.dart';
+import '../services/chats/repositories/message_repository.dart';
+import '../services/chats/repositories/chat_repository.dart';
 import '../utils/release_logger.dart';
 
 /// Controller que maneja la lógica de un chat grupal
+/// ⚠️ DEPRECATED: Este controller está siendo migrado a usar ChatOrchestrator
+/// que respeta la arquitectura definida en CLAUDE.md
 class GroupChatController {
   final String groupId;
   final String groupName;
@@ -20,6 +25,11 @@ class GroupChatController {
   final NotificationService _notificationService;
   final TypingIndicatorService _typingService;
   final MediaService _mediaService;
+
+  // ✅ NEW: Repositories para acceso a datos
+  final UserRepository _userRepository;
+  final MessageRepository _messageRepository;
+  final ChatRepository _chatRepository;
 
   // Paginación
   static const int messagesPerPage = 30;
@@ -40,11 +50,26 @@ class GroupChatController {
     NotificationService? notificationService,
     TypingIndicatorService? typingService,
     MediaService? mediaService,
+    UserRepository? userRepository,
+    MessageRepository? messageRepository,
+    ChatRepository? chatRepository,
   })  : _firestore = firestore ?? FirebaseFirestore.instance,
         _auth = auth ?? FirebaseAuth.instance,
         _notificationService = notificationService ?? NotificationService(),
         _typingService = typingService ?? TypingIndicatorService(),
-        _mediaService = mediaService ?? MediaService();
+        _mediaService = mediaService ?? MediaService(),
+        _userRepository = userRepository ?? UserRepository(
+          firestore: firestore ?? FirebaseFirestore.instance,
+          auth: auth ?? FirebaseAuth.instance,
+        ),
+        _messageRepository = messageRepository ?? MessageRepository(
+          firestore: firestore ?? FirebaseFirestore.instance,
+          auth: auth ?? FirebaseAuth.instance,
+        ),
+        _chatRepository = chatRepository ?? ChatRepository(
+          firestore: firestore ?? FirebaseFirestore.instance,
+          auth: auth ?? FirebaseAuth.instance,
+        );
 
   // Getters
   String get currentUserId => _auth.currentUser?.uid ?? '';
@@ -93,13 +118,53 @@ class GroupChatController {
     try {
       if (currentUserId.isEmpty) return;
 
+      // 1. Resetear contador de no leídos
       await _firestore.collection('groups').doc(groupId).update({
         'unreadCount_$currentUserId': 0,
       });
 
-      ReleaseLogger.log('Mensajes marcados como leídos para grupo: $groupId', tag: 'GroupChatController');
+      // 2. Marcar mensajes individuales como leídos (actualizar array readBy[])
+      // NO usar where() para evitar problemas de índices - leer todos y filtrar
+      final messagesSnapshot = await _firestore
+          .collection('groups')
+          .doc(groupId)
+          .collection('messages')
+          .orderBy('timestamp', descending: true)
+          .limit(50) // Últimos 50 mensajes
+          .get();
+
+      ReleaseLogger.log('📖 [markMessagesAsRead] Leyendo mensajes del grupo $groupId: ${messagesSnapshot.docs.length} mensajes encontrados', tag: 'GroupChatController');
+
+      // Batch write para eficiencia
+      final batch = _firestore.batch();
+      int updateCount = 0;
+
+      for (final doc in messagesSnapshot.docs) {
+        final data = doc.data();
+        final senderId = data['senderId'] as String?;
+        final readBy = List<String>.from(data['readBy'] ?? []);
+
+        // Solo actualizar mensajes de OTROS usuarios que NO estén ya en readBy
+        if (senderId != null &&
+            senderId != currentUserId &&
+            !readBy.contains(currentUserId)) {
+          batch.update(doc.reference, {
+            'readBy': FieldValue.arrayUnion([currentUserId]),
+          });
+          updateCount++;
+          ReleaseLogger.log('📝 [markMessagesAsRead] Agregando $currentUserId a readBy[] del mensaje ${doc.id}', tag: 'GroupChatController');
+        }
+      }
+
+      // Ejecutar batch si hay updates
+      if (updateCount > 0) {
+        await batch.commit();
+        ReleaseLogger.log('✅ [markMessagesAsRead] Marcados $updateCount mensajes como leídos en grupo $groupId', tag: 'GroupChatController');
+      } else {
+        ReleaseLogger.log('ℹ️ [markMessagesAsRead] No hay mensajes para marcar como leídos en grupo $groupId', tag: 'GroupChatController');
+      }
     } catch (e) {
-      ReleaseLogger.error('Error marcando mensajes como leídos: $e', tag: 'GroupChatController');
+      ReleaseLogger.error('⚠️ [markMessagesAsRead] Error marcando mensajes como leídos: $e', tag: 'GroupChatController');
     }
   }
 
@@ -402,14 +467,13 @@ class GroupChatController {
   }
 
   /// Stream de mensajes recientes
+  /// ✅ REFACTORED: Now uses MessageRepository instead of direct Firestore access
   Stream<QuerySnapshot> watchRecentMessages() {
-    return _firestore
-        .collection('groups')
-        .doc(groupId)
-        .collection('messages')
-        .orderBy('timestamp', descending: true)
-        .limit(messagesPerPage)
-        .snapshots(includeMetadataChanges: false);
+    return _messageRepository.watchMessages(
+      chatId: groupId,
+      isGroup: true,
+      limit: messagesPerPage,
+    );
   }
 
   /// Stream de usuarios escribiendo

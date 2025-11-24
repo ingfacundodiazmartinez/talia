@@ -5,8 +5,14 @@ import 'package:image_picker/image_picker.dart';
 import '../notification_service.dart';
 import '../services/typing_indicator_service.dart';
 import '../services/media_service.dart';
+import '../services/chat/message_sending_service.dart';
+import '../services/chats/repositories/user_repository.dart';
+import '../services/chats/repositories/message_repository.dart';
+import '../services/chats/repositories/chat_repository.dart';
 
 /// Controller que maneja la lógica de un chat individual (1 a 1)
+/// ⚠️ DEPRECATED: Este controller está siendo migrado a ChatControllerCacheFirst
+/// que respeta la arquitectura definida en CLAUDE.md
 class ChatController {
   final String chatId;
   final String contactId;
@@ -17,6 +23,12 @@ class ChatController {
   final NotificationService _notificationService;
   final TypingIndicatorService _typingService;
   final MediaService _mediaService;
+  final MessageSendingService _messageSendingService;
+
+  // ✅ NEW: Repositories para acceso a datos
+  final UserRepository _userRepository;
+  final MessageRepository _messageRepository;
+  final ChatRepository _chatRepository;
 
   // Paginación
   static const int messagesPerPage = 30;
@@ -37,11 +49,28 @@ class ChatController {
     NotificationService? notificationService,
     TypingIndicatorService? typingService,
     MediaService? mediaService,
+    MessageSendingService? messageSendingService,
+    UserRepository? userRepository,
+    MessageRepository? messageRepository,
+    ChatRepository? chatRepository,
   }) : _firestore = firestore ?? FirebaseFirestore.instance,
        _auth = auth ?? FirebaseAuth.instance,
        _notificationService = notificationService ?? NotificationService(),
        _typingService = typingService ?? TypingIndicatorService(),
-       _mediaService = mediaService ?? MediaService();
+       _mediaService = mediaService ?? MediaService(),
+       _messageSendingService = messageSendingService ?? MessageSendingService(),
+       _userRepository = userRepository ?? UserRepository(
+         firestore: firestore ?? FirebaseFirestore.instance,
+         auth: auth ?? FirebaseAuth.instance,
+       ),
+       _messageRepository = messageRepository ?? MessageRepository(
+         firestore: firestore ?? FirebaseFirestore.instance,
+         auth: auth ?? FirebaseAuth.instance,
+       ),
+       _chatRepository = chatRepository ?? ChatRepository(
+         firestore: firestore ?? FirebaseFirestore.instance,
+         auth: auth ?? FirebaseAuth.instance,
+       );
 
   // Getters
   String get currentUserId => _auth.currentUser?.uid ?? '';
@@ -57,10 +86,10 @@ class ChatController {
   }
 
   /// Cargar información del contacto
+  /// ✅ REFACTORED: Now uses UserRepository instead of direct Firestore access
   Future<void> loadContactInfo() async {
     try {
-      final userDoc = await _firestore.collection('users').doc(contactId).get();
-      final userData = userDoc.data();
+      final userData = await _userRepository.getUserData(contactId);
       if (userData != null) {
         _contactPhotoURL = userData['photoURL'] ?? '';
         _contactIsOnline = userData['isOnline'] ?? false;
@@ -75,10 +104,53 @@ class ChatController {
     try {
       if (currentUserId.isEmpty) return;
 
+      // 1. Resetear contador de no leídos
       await _firestore.collection('chats').doc(chatId).update({
         'unreadCount_$currentUserId': 0,
       });
+
+      // 2. Marcar mensajes individuales como leídos (actualizar array readBy[])
+      // NO usar where() para evitar problemas de índices - leer todos y filtrar
+      final messagesSnapshot = await _firestore
+          .collection('chats')
+          .doc(chatId)
+          .collection('messages')
+          .orderBy('timestamp', descending: true)
+          .limit(50) // Últimos 50 mensajes
+          .get();
+
+      print('📖 [markMessagesAsRead] Leyendo mensajes del chat $chatId: ${messagesSnapshot.docs.length} mensajes encontrados');
+
+      // Batch write para eficiencia
+      final batch = _firestore.batch();
+      int updateCount = 0;
+
+      for (final doc in messagesSnapshot.docs) {
+        final data = doc.data();
+        final senderId = data['senderId'] as String?;
+        final readBy = List<String>.from(data['readBy'] ?? []);
+
+        // Solo actualizar mensajes de OTROS usuarios que NO estén ya en readBy
+        if (senderId != null &&
+            senderId != currentUserId &&
+            !readBy.contains(currentUserId)) {
+          batch.update(doc.reference, {
+            'readBy': FieldValue.arrayUnion([currentUserId]),
+          });
+          updateCount++;
+          print('📝 [markMessagesAsRead] Agregando $currentUserId a readBy[] del mensaje ${doc.id}');
+        }
+      }
+
+      // Ejecutar batch si hay updates
+      if (updateCount > 0) {
+        await batch.commit();
+        print('✅ [markMessagesAsRead] Marcados $updateCount mensajes como leídos en chat $chatId');
+      } else {
+        print('ℹ️ [markMessagesAsRead] No hay mensajes para marcar como leídos en chat $chatId');
+      }
     } catch (e) {
+      print('⚠️ [markMessagesAsRead] Error marcando mensajes como leídos: $e');
       // Error marcando mensajes como leídos - no crítico
     }
   }
@@ -117,39 +189,31 @@ class ChatController {
   }
 
   /// Enviar mensaje de texto
+  /// OPTIMIZADO: Usa MessageSendingService que escribe directamente a Firestore
+  /// cuando no hay moderación activa (<500ms vs 8+ segundos)
   Future<bool> sendTextMessage({
     required String text,
     Map<String, dynamic>? replyTo,
+    String? localId,
   }) async {
     if (text.trim().isEmpty || currentUserId.isEmpty) return false;
 
     try {
-      final messageData = {
-        'senderId': currentUserId,
-        'text': text,
-        'timestamp': FieldValue.serverTimestamp(),
-        'isRead': false,
-      };
+      // Usar el servicio optimizado que decide si escribir directo o usar Cloud Function
+      final messageId = await _messageSendingService.sendTextMessage(
+        chatId: chatId,
+        currentUserId: currentUserId,
+        text: text,
+        contactId: contactId,
+        replyTo: replyTo,
+        localId: localId,
+      );
 
-      if (replyTo != null) {
-        messageData['replyTo'] = replyTo;
-      }
-
-      // Enviar mensaje
-      await _firestore
-          .collection('chats')
-          .doc(chatId)
-          .collection('messages')
-          .add(messageData);
-
-      // Actualizar documento del chat
-      await _updateChatDocument(text);
-
-      // Enviar notificación
-      await _sendNotification(text);
-
-      return true;
+      // Mensaje enviado exitosamente
+      // La notificación ya se maneja desde el listener de mensajes
+      return messageId.isNotEmpty;
     } catch (e) {
+      // El servicio ya maneja errores específicos (moderación, etc)
       return false;
     }
   }
@@ -287,19 +351,19 @@ class ChatController {
   }
 
   /// Stream de mensajes recientes
+  /// ✅ REFACTORED: Now uses MessageRepository instead of direct Firestore access
   Stream<QuerySnapshot> watchRecentMessages() {
-    return _firestore
-        .collection('chats')
-        .doc(chatId)
-        .collection('messages')
-        .orderBy('timestamp', descending: true)
-        .limit(messagesPerPage)
-        .snapshots(includeMetadataChanges: false);
+    return _messageRepository.watchMessages(
+      chatId: chatId,
+      isGroup: false,
+      limit: messagesPerPage,
+    );
   }
 
   /// Stream del estado online del contacto
+  /// ✅ REFACTORED: Now uses UserRepository instead of direct Firestore access
   Stream<DocumentSnapshot> watchContactStatus() {
-    return _firestore.collection('users').doc(contactId).snapshots();
+    return _userRepository.watchUser(contactId);
   }
 
   /// Stream de indicador de escritura
