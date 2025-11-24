@@ -1278,6 +1278,32 @@ service cloud.firestore {
     }
 
     // ============================================================================
+    // NOTIFICATION LOCKS (P0 - Anti-duplicación cross-platform atómica)
+    // ============================================================================
+    // Esta colección usa Firestore Transactions para garantizar que SOLO UN listener
+    // (Dart Background, Native Android, Native iOS, AppDelegate) pueda mostrar cada notificación.
+    //
+    // Arquitectura:
+    // - Document ID: messageId (el ID del mensaje de chat/group)
+    // - TTL: 24 horas (auto-cleanup via Firestore TTL policy en campo 'expiresAt')
+    // - Platform: 'dart', 'android', 'ios' (para debugging)
+    //
+    // Seguridad:
+    // - Solo lectura permitida (para verificar si lock existe)
+    // - Escritura bloqueada (Dart usa Transactions, que bypasean estas reglas)
+    // - Cloud Functions con Admin SDK pueden escribir sin restricciones
+    match /notification_locks/{messageId} {
+      // Permitir leer locks a usuarios autenticados
+      // Esto permite que el servicio verifique si un lock ya existe
+      allow read: if request.auth != null;
+
+      // ❌ BLOQUEAR escritura directa desde clientes
+      // Solo Firestore Transactions (en Dart) pueden escribir aquí
+      // Las transactions bypasean estas reglas y ejecutan lógica atómica
+      allow create, update, delete: if false;
+    }
+
+    // ============================================================================
     // COLLECTION GROUP QUERIES
     // ============================================================================
     // Reglas para queries usando collectionGroup() que atraviesan múltiples chats
