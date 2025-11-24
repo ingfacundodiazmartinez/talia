@@ -153,6 +153,9 @@ class ContactPhotoCacheService {
         ReleaseLogger.log(
           '✅ [PhotoCache] Cached photo for $userId (${response.bodyBytes.length} bytes)'
         );
+
+        // ✅ iOS: También notificar al AppDelegate para que actualice App Group
+        _notifyNativePhotoUpdate(userId, response.bodyBytes);
       } else {
         ReleaseLogger.error(
           '❌ [PhotoCache] Failed to download photo for $userId: ${response.statusCode}'
@@ -160,6 +163,20 @@ class ContactPhotoCacheService {
       }
     } catch (e) {
       ReleaseLogger.error('❌ [PhotoCache] Error downloading photo for $userId: $e');
+    }
+  }
+
+  /// Notify native code (iOS AppDelegate) about photo cache updates
+  void _notifyNativePhotoUpdate(String userId, Uint8List photoBytes) async {
+    try {
+      await _channel.invokeMethod('photoUpdated', {
+        'userId': userId,
+        'photoBytes': photoBytes,
+      });
+      ReleaseLogger.log('📱 [PhotoCache] Notified native code about photo update for: $userId');
+    } catch (e) {
+      // Android doesn't need this, so silently ignore
+      ReleaseLogger.log('ℹ️ [PhotoCache] Native notification not available (Android): $e');
     }
   }
 
@@ -256,6 +273,18 @@ class ContactPhotoCacheService {
         }
 
         return photo;
+      }
+
+      if (call.method == 'getAllCachedPhotos') {
+        // ✅ iOS: Retorna todas las fotos cacheadas para escribir en App Group
+        ReleaseLogger.log('📦 [PhotoCache MethodChannel] Returning all cached photos (${_photoCache.length} items)');
+
+        final Map<String, Uint8List> result = {};
+        _photoCache.forEach((userId, photoBytes) {
+          result[userId] = photoBytes;
+        });
+
+        return result;
       }
 
       ReleaseLogger.error('❌ [PhotoCache MethodChannel] Unknown method: ${call.method}');
