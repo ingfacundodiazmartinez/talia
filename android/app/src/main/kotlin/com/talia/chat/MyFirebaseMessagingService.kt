@@ -99,15 +99,15 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             val timestampKey1 = "flutter.instant_notification_$messageId"
             val timestampKey2 = "instant_notification_$messageId"
 
-            val existingTimestamp1 = sharedPrefs.getString(timestampKey1, null)
-            val existingTimestamp2 = sharedPrefs.getString(timestampKey2, null)
+            // ✅ FIX: Usar getLong() en lugar de getString() porque Flutter guarda timestamps como Long
+            val existingTimestamp1 = if (sharedPrefs.contains(timestampKey1)) sharedPrefs.getLong(timestampKey1, 0) else null
+            val existingTimestamp2 = if (sharedPrefs.contains(timestampKey2)) sharedPrefs.getLong(timestampKey2, 0) else null
 
             val existingTimestamp = existingTimestamp1 ?: existingTimestamp2
 
-            if (existingTimestamp != null) {
-                val timestamp = existingTimestamp.toLongOrNull() ?: 0
+            if (existingTimestamp != null && existingTimestamp > 0) {
                 val now = System.currentTimeMillis()
-                val age = now - timestamp
+                val age = now - existingTimestamp
 
                 // Si la notificación instantánea se mostró hace menos de 10 segundos, es duplicado
                 if (age < 10000) {
