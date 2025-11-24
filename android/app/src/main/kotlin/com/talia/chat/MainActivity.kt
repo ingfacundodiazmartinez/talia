@@ -82,6 +82,25 @@ class MainActivity : FlutterActivity() {
                         result.success(null)
                     }
                 }
+                "showChatNotification" -> {
+                    Log.d("MainActivity", "📨 showChatNotification llamado desde Dart")
+                    val args = call.arguments as? Map<String, Any>
+                    if (args != null) {
+                        // Crear servicio y llamar método showNotification
+                        MyFirebaseMessagingService.showNotificationFromForeground(
+                            context = this,
+                            title = args["title"] as? String ?: "",
+                            body = args["body"] as? String ?: "",
+                            senderName = args["senderName"] as? String ?: "Usuario",
+                            senderId = args["senderId"] as? String ?: "",
+                            senderPhotoUrl = args["senderPhotoUrl"] as? String ?: "",
+                            chatId = args["chatId"] as? String ?: ""
+                        )
+                        result.success(true)
+                    } else {
+                        result.error("INVALID_DATA", "No se recibieron datos de notificación", null)
+                    }
+                }
                 else -> result.notImplemented()
             }
         }
