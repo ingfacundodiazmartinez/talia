@@ -7,10 +7,12 @@ import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
 import '../models/chat_message.dart';
 import '../services/chats/chat_orchestrator.dart';
+import '../services/chats/repositories/user_repository.dart';
 import '../services/chats/services/chat_messaging_service.dart';  // For MessageType enum
 import '../services/typing_indicator_service.dart';
 import '../services/block_service.dart';
 import '../services/audio_processing_service.dart';
+import '../services/message_cache_service.dart';
 import '../notification_service.dart';
 import '../utils/release_logger.dart';
 import 'package:uuid/uuid.dart';
@@ -33,6 +35,7 @@ class ChatControllerCacheFirst extends ChangeNotifier {
 
   // Services
   late final ChatOrchestrator _orchestrator;
+  late final UserRepository _userRepository;
   late final TypingIndicatorService _typingService;
   late final BlockService _blockService;
   late final AudioProcessingService _audioService;
@@ -82,6 +85,7 @@ class ChatControllerCacheFirst extends ChangeNotifier {
     required this.contactName,
     this.isGroup = false,
     ChatOrchestrator? orchestrator,
+    UserRepository? userRepository,
     TypingIndicatorService? typingService,
     BlockService? blockService,
     AudioProcessingService? audioService,
@@ -89,6 +93,10 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   }) {
     // Initialize services (dependency injection pattern)
     _orchestrator = orchestrator ?? ChatOrchestrator();
+    _userRepository = userRepository ?? UserRepository(
+      firestore: FirebaseFirestore.instance,
+      auth: FirebaseAuth.instance,
+    );
     _typingService = typingService ?? TypingIndicatorService();
     _blockService = blockService ?? BlockService();
     _audioService = audioService ?? AudioProcessingService();
@@ -130,13 +138,10 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   }
 
   /// Load contact information
+  /// ✅ REFACTORED: Now uses UserRepository instead of direct Firestore access
   Future<void> _loadContactInfo() async {
     try {
-      final userDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(contactId)
-          .get();
-      final userData = userDoc.data();
+      final userData = await _userRepository.getUserData(contactId);
       if (userData != null) {
         _contactPhotoURL = userData['photoURL'] ?? '';
         _contactIsOnline = userData['isOnline'] ?? false;
@@ -198,7 +203,14 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   // MESSAGE SENDING - Optimistic updates
   // ═══════════════════════════════════════════════════════════════
 
-  /// Send text message with optimistic update
+  /// Send text message with optimistic update (SIMPLIFIED FLOW)
+  ///
+  /// Flow:
+  /// 1. Create message
+  /// 2. Save to cache IMMEDIATELY
+  /// 3. Add to UI state
+  /// 4. Send to backend/moderation
+  /// 5. If blocked: UPDATE the same message (not create new)
   Future<void> sendTextMessage({
     required String text,
     Map<String, dynamic>? replyTo,
@@ -215,33 +227,208 @@ class ChatControllerCacheFirst extends ChangeNotifier {
       type: 'text',
     );
 
-    // 2. Add to local state immediately
+    // 2. ✅ Guardar en Hive inmediatamente (se actualizará cuando llegue el mensaje real)
+    await MessageCacheService().saveMessage(chatId, optimisticMessage);
+    final textPreview = text.length > 10 ? text.substring(0, 10) : text;
+    ReleaseLogger.log('💾 [DEBUG] Mensaje optimista guardado en Hive: ID=${tempId.substring(0, 8)}..., text=$textPreview...');
+
+    // 3. Add to UI state
     _pendingMessages.add(optimisticMessage);
     _messages.insert(0, optimisticMessage);
     notifyListeners();
 
     try {
-      // 3. Send to backend via orchestrator
+      // 4. Send to backend via orchestrator (includes moderation check)
       await _orchestrator.sendMessage(
         chatId: chatId,
         content: text,
         type: MessageType.text,
         replyToId: replyTo?['id'] as String?,
+        metadata: {'localId': tempId},  // ✅ FIX: Pasar tempId para correlación
       );
 
-      // 4. Remove from pending when successful
+      // 5. Success - remove from pending
       _pendingMessages.removeWhere((m) => m.id == tempId);
       ReleaseLogger.log('Text message sent successfully to chat $chatId');
-    } catch (e) {
-      // 5. Handle error - update optimistic message to error status
+    } on ModerationBlockedException catch (e) {
+      // 6. Moderation blocked - UPDATE the same message (not create new)
       final failedIndex = _messages.indexWhere((m) => m.id == tempId);
       if (failedIndex != -1) {
-        _messages[failedIndex] = optimisticMessage.copyWith(
+        final updatedMessage = optimisticMessage.copyWith(
+          text: null, // Clear text for blocked display
+          status: MessageStatus.sent,
+          moderationStatus: ModerationStatus.blocked,
+          moderationReason: e.reason,
+          originalText: text, // Preserve for editing
+        );
+
+        // Update in UI state
+        _messages[failedIndex] = updatedMessage;
+        _pendingMessages.removeWhere((m) => m.id == tempId);
+
+        // Update in persistent cache
+        await MessageCacheService().updateMessage(chatId, updatedMessage);
+
+        notifyListeners();
+        ReleaseLogger.log('Message blocked by moderation in chat $chatId: ${e.reason}');
+        // NO rethrow - show as blocked bubble in UI
+      }
+    } catch (e) {
+      // 7. Other errors (network, etc) - mark as error
+      final failedIndex = _messages.indexWhere((m) => m.id == tempId);
+      if (failedIndex != -1) {
+        final errorMessage = optimisticMessage.copyWith(
           status: MessageStatus.error,
         );
+
+        _messages[failedIndex] = errorMessage;
+        await MessageCacheService().updateMessage(chatId, errorMessage);
+
         notifyListeners();
+        ReleaseLogger.error('Failed to send text message to chat $chatId: $e');
+        rethrow;
+      } else {
+        ReleaseLogger.error('Failed to send text message to chat $chatId: $e');
+        rethrow;
       }
-      ReleaseLogger.error('Failed to send text message to chat $chatId: $e');
+    }
+  }
+
+  /// Edit a blocked message (calls moderation directly, no Firestore message)
+  ///
+  /// Flow:
+  /// 1. Find blocked message
+  /// 2. Update to "sending" state (clear moderation fields for UI)
+  /// 3. Call Cloud Function for moderation check ONLY
+  /// 4. If approved: update to normal message
+  /// 5. If blocked: update with new blocked text and reason
+  ///
+  /// IMPORTANT: NEVER creates two bubbles - always updates the same message
+  Future<void> editBlockedMessage({
+    required String messageId,
+    required String newText,
+  }) async {
+    if (newText.trim().isEmpty || currentUserId.isEmpty) return;
+
+    // 1. Find the blocked message
+    final messageIndex = _messages.indexWhere((m) => m.id == messageId);
+    if (messageIndex == -1) {
+      ReleaseLogger.error('Cannot edit blocked message: message not found $messageId');
+      return;
+    }
+
+    final blockedMessage = _messages[messageIndex];
+
+    // 2. Update to "sending" state (clear moderation for pending UI)
+    // Create new message directly instead of copyWith to ensure fields are properly cleared
+    final sendingMessage = ChatMessage(
+      id: blockedMessage.id,
+      senderId: blockedMessage.senderId,
+      text: newText, // Show new text while sending
+      status: MessageStatus.sending, // Show as pending (spinner)
+      localTimestamp: DateTime.now(),
+      // Clear all moderation fields so UI shows normal pending bubble
+      moderationStatus: null,
+      moderationReason: null,
+      originalText: null,
+      // Preserve other fields
+      imageUrl: blockedMessage.imageUrl,
+      videoUrl: blockedMessage.videoUrl,
+      audioUrl: blockedMessage.audioUrl,
+      timestamp: blockedMessage.timestamp,
+      isRead: blockedMessage.isRead,
+      replyTo: blockedMessage.replyTo,
+      reactions: blockedMessage.reactions,
+      type: blockedMessage.type,
+    );
+
+    _messages[messageIndex] = sendingMessage;
+    await MessageCacheService().updateMessage(chatId, sendingMessage);
+    notifyListeners();
+
+    try {
+      // 3. Call moderation check via orchestrator (no Firestore message creation)
+      await _orchestrator.checkModerationOnly(chatId: chatId, content: newText);
+
+      // 4. If approved: update to normal message and write to Firestore
+      final approvedMessage = ChatMessage(
+        id: sendingMessage.id,
+        senderId: sendingMessage.senderId,
+        text: newText,
+        status: MessageStatus.sent,
+        timestamp: sendingMessage.timestamp,
+        localTimestamp: sendingMessage.localTimestamp,
+        // Clear all moderation fields
+        moderationStatus: ModerationStatus.approved,
+        moderationReason: null,
+        originalText: null,
+        // Preserve other fields
+        imageUrl: sendingMessage.imageUrl,
+        videoUrl: sendingMessage.videoUrl,
+        audioUrl: sendingMessage.audioUrl,
+        isRead: sendingMessage.isRead,
+        replyTo: sendingMessage.replyTo,
+        reactions: sendingMessage.reactions,
+        type: sendingMessage.type,
+      );
+
+      // Update local state first (optimistic update)
+      _messages[messageIndex] = approvedMessage;
+      await MessageCacheService().updateMessage(chatId, approvedMessage);
+      notifyListeners();
+
+      // Create approved message in Firestore via orchestrator
+      await _orchestrator.createApprovedMessage(
+        chatId: chatId,
+        messageId: messageId,
+        senderId: currentUserId,
+        text: newText,
+        localId: messageId, // ✅ FIX: Pasar messageId como localId para deduplicación
+      );
+
+      ReleaseLogger.log('Blocked message edited and approved: $messageId');
+    } on ModerationBlockedException catch (e) {
+      // 5. If blocked: update with new blocked text
+      final reblockedMessage = ChatMessage(
+        id: blockedMessage.id,
+        senderId: blockedMessage.senderId,
+        text: null, // Clear text for blocked display
+        status: MessageStatus.sent,
+        localTimestamp: DateTime.now(),
+        // Set moderation fields
+        moderationStatus: ModerationStatus.blocked,
+        moderationReason: e.reason,
+        originalText: newText, // Save new text for next edit attempt
+        // Preserve other fields
+        imageUrl: blockedMessage.imageUrl,
+        videoUrl: blockedMessage.videoUrl,
+        audioUrl: blockedMessage.audioUrl,
+        timestamp: blockedMessage.timestamp,
+        isRead: blockedMessage.isRead,
+        replyTo: blockedMessage.replyTo,
+        reactions: blockedMessage.reactions,
+        type: blockedMessage.type,
+      );
+
+      // Update local state only (blocked messages don't go to Firestore)
+      _messages[messageIndex] = reblockedMessage;
+      await MessageCacheService().updateMessage(chatId, reblockedMessage);
+      notifyListeners();
+
+      ReleaseLogger.log('Edited message blocked again: $messageId - ${e.reason}');
+      // NO rethrow - show as blocked bubble in UI
+    } catch (e) {
+      // 6. Other errors - restore to blocked state with original text
+      final errorMessage = blockedMessage.copyWith(
+        status: MessageStatus.error,
+        text: blockedMessage.originalText, // Restore original for retry
+      );
+
+      _messages[messageIndex] = errorMessage;
+      await MessageCacheService().updateMessage(chatId, errorMessage);
+      notifyListeners();
+
+      ReleaseLogger.error('Failed to edit blocked message $messageId: $e');
       rethrow;
     }
   }
@@ -491,7 +678,7 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   /// Clear chat history
   Future<bool> clearChat() async {
     try {
-      // Clear from Firestore
+      // ✅ FIX: Limpiar en Firestore (marca clearedAt)
       await FirebaseFirestore.instance
           .collection('chats')
           .doc(chatId)
@@ -499,9 +686,21 @@ class ChatControllerCacheFirst extends ChangeNotifier {
         'clearedAt_$currentUserId': FieldValue.serverTimestamp(),
       });
 
-      // Clear local cache
+      // ✅ FIX: Invalidar cache de clearedAt para forzar refresh
+      _orchestrator.invalidateClearedAtCache(chatId, currentUserId);
+
+      // ✅ FIX: Cerrar stream actual (con clearedAt antiguo) para recrear con nuevo
+      _orchestrator.resetChatStream(chatId);
+
+      // ✅ FIX: Limpiar cache de Hive (persistente)
+      await MessageCacheService().clearChat(chatId);
+
+      // ✅ FIX: Limpiar cache local en memoria
       _messages.clear();
       notifyListeners();
+
+      // ✅ FIX: Forzar refresh del stream para recrearlo con nuevo clearedAt
+      await refreshMessages();
 
       ReleaseLogger.log('Chat $chatId cleared successfully');
       return true;
@@ -535,13 +734,10 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   }
 
   /// Get current user data
+  /// ✅ REFACTORED: Now uses UserRepository instead of direct Firestore access
   Future<Map<String, dynamic>?> getCurrentUserData() async {
     try {
-      final doc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(currentUserId)
-          .get();
-      return doc.data();
+      return await _userRepository.getCurrentUserData();
     } catch (e) {
       ReleaseLogger.error('Failed to get current user data: $e');
       return null;
