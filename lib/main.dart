@@ -43,6 +43,7 @@ import 'services/stickers_service.dart';
 import 'services/unread_messages_service.dart';
 import 'services/ad_service.dart';
 import 'services/story_service_refactored.dart';
+import 'services/contact_photo_cache_service.dart';
 import 'dart:async';
 import 'utils/release_logger.dart';
 
@@ -97,16 +98,7 @@ void main() async {
     );
   }
 
-  // ✅ FIX #7: Inicializar NotificationDeduplicationService
-  try {
-    await NotificationDeduplicationService().initialize();
-    ReleaseLogger.log('✅ NotificationDeduplicationService inicializado', tag: 'MainApp');
-  } catch (e) {
-    ReleaseLogger.error(
-      '❌ Error inicializando NotificationDeduplicationService: $e',
-      tag: 'MainApp',
-    );
-  }
+  // ✅ NotificationDeduplicationService ahora usa solo cache en memoria (no requiere initialize)
 
   // ✅ DEBUG: Escuchar eventos de notificaciones desde iOS nativo
   if (Platform.isIOS) {
@@ -753,6 +745,14 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
         ReleaseLogger.log('🔔Inicializando badge listener...');
         UnreadMessagesService().startBadgeListener();
         ReleaseLogger.log('✅Badge listener inicializado');
+
+        // ✅ P1: Inicializar cache proactivo de fotos de contactos
+        ReleaseLogger.log('📸 Inicializando ContactPhotoCacheService...');
+        ContactPhotoCacheService().initialize().then((_) {
+          ReleaseLogger.log('✅ ContactPhotoCacheService inicializado');
+        }).catchError((e) {
+          ReleaseLogger.error('❌ Error inicializando ContactPhotoCacheService: $e');
+        });
 
         // Inicializar stream background de historias
         ReleaseLogger.log('📱Iniciando stream background de historias...');
