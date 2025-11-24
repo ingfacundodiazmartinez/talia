@@ -372,4 +372,22 @@ class ChatRepository {
       throw Exception('Error verificando membresía: $e');
     }
   }
+
+  /// Actualizar campos de un chat
+  Future<void> updateChat(String chatId, Map<String, dynamic> data) async {
+    try {
+      await _firestore.collection('chats').doc(chatId).update(data);
+    } catch (e) {
+      throw Exception('Error actualizando chat: $e');
+    }
+  }
+
+  /// Actualizar campos de un grupo
+  Future<void> updateGroup(String groupId, Map<String, dynamic> data) async {
+    try {
+      await _firestore.collection('groups').doc(groupId).update(data);
+    } catch (e) {
+      throw Exception('Error actualizando grupo: $e');
+    }
+  }
 }

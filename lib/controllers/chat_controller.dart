@@ -100,52 +100,50 @@ class ChatController {
   }
 
   /// Marcar mensajes como leídos
+  /// ✅ REFACTORED: Now uses ChatRepository and MessageRepository
+  /// ⚠️ NOTE: Mantiene lógica de batch para eficiencia (solo marca últimos 50)
   Future<void> markMessagesAsRead() async {
     try {
       if (currentUserId.isEmpty) return;
 
-      // 1. Resetear contador de no leídos
-      await _firestore.collection('chats').doc(chatId).update({
+      // 1. Resetear contador de no leídos usando ChatRepository
+      await _chatRepository.updateChat(chatId, {
         'unreadCount_$currentUserId': 0,
       });
 
-      // 2. Marcar mensajes individuales como leídos (actualizar array readBy[])
-      // NO usar where() para evitar problemas de índices - leer todos y filtrar
-      final messagesSnapshot = await _firestore
-          .collection('chats')
-          .doc(chatId)
-          .collection('messages')
-          .orderBy('timestamp', descending: true)
-          .limit(50) // Últimos 50 mensajes
-          .get();
+      // 2. Obtener mensajes recientes para marcar como leídos
+      final messagesSnapshot = await _messageRepository.watchMessages(
+        chatId: chatId,
+        isGroup: false,
+        limit: 50,
+      ).first;
 
       print('📖 [markMessagesAsRead] Leyendo mensajes del chat $chatId: ${messagesSnapshot.docs.length} mensajes encontrados');
 
-      // Batch write para eficiencia
-      final batch = _firestore.batch();
-      int updateCount = 0;
-
+      // 3. Filtrar mensajes que necesitan ser marcados
+      final messagesToMark = <String>[];
       for (final doc in messagesSnapshot.docs) {
         final data = doc.data();
         final senderId = data['senderId'] as String?;
         final readBy = List<String>.from(data['readBy'] ?? []);
 
-        // Solo actualizar mensajes de OTROS usuarios que NO estén ya en readBy
+        // Solo marcar mensajes de OTROS usuarios que NO estén ya en readBy
         if (senderId != null &&
             senderId != currentUserId &&
             !readBy.contains(currentUserId)) {
-          batch.update(doc.reference, {
-            'readBy': FieldValue.arrayUnion([currentUserId]),
-          });
-          updateCount++;
-          print('📝 [markMessagesAsRead] Agregando $currentUserId a readBy[] del mensaje ${doc.id}');
+          messagesToMark.add(doc.id);
+          print('📝 [markMessagesAsRead] Agregando mensaje ${doc.id} a lista para marcar');
         }
       }
 
-      // Ejecutar batch si hay updates
-      if (updateCount > 0) {
-        await batch.commit();
-        print('✅ [markMessagesAsRead] Marcados $updateCount mensajes como leídos en chat $chatId');
+      // 4. Marcar mensajes usando MessageRepository
+      if (messagesToMark.isNotEmpty) {
+        await _messageRepository.markMessagesAsRead(
+          chatId: chatId,
+          messageIds: messagesToMark,
+          isGroup: false,
+        );
+        print('✅ [markMessagesAsRead] Marcados ${messagesToMark.length} mensajes como leídos en chat $chatId');
       } else {
         print('ℹ️ [markMessagesAsRead] No hay mensajes para marcar como leídos en chat $chatId');
       }
