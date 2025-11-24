@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 
 import '../../../models/chat_message.dart';
 import '../repositories/message_repository.dart';
@@ -9,6 +10,15 @@ import '../../../services/chat_block_service.dart';
 import '../utils/chat_exceptions.dart';
 import '../../../utils/release_logger.dart';
 import 'rate_limiting_service.dart';
+
+/// Excepción específica para bloqueos de moderación
+class ModerationBlockedException implements Exception {
+  final String reason;
+  ModerationBlockedException(this.reason);
+
+  @override
+  String toString() => reason;
+}
 
 // Tipo temporal para compatibilidad hasta adaptar al modelo existente
 enum MessageType { text, image, audio, video }
@@ -119,8 +129,15 @@ class ChatMessagingService {
     // 🚦 VALIDACIÓN DE RATE LIMITING P2: Verificar throttling y rate limits
     await _rateLimitingService.validateMessageSending(currentUserId);
 
-    // 1. Generar ID temporal
-    final tempMessageId = _generateTempMessageId();
+    // 1. Usar localId del metadata si está disponible, sino generar ID temporal
+    final providedLocalId = metadata?['localId'] as String?;
+    final tempMessageId = providedLocalId ?? _generateTempMessageId();
+
+    if (providedLocalId != null) {
+      ReleaseLogger.log('✅ [ChatMessagingService] Usando localId del controller: ${providedLocalId.substring(0, 8)}...');
+    } else {
+      ReleaseLogger.log('⚠️ [ChatMessagingService] No se recibió localId, generando nuevo: ${tempMessageId.substring(0, 8)}...');
+    }
 
     try {
       // 2. Crear mensaje optimista
@@ -324,7 +341,16 @@ class ChatMessagingService {
         );
       }
 
-      // 2. Crear mensaje final en Firestore - usar constructor adaptor
+      // 🔒 2. PRE-MODERACIÓN: Verificar si el mensaje debe ser moderado
+      await _checkModeration(
+        chatId: chatId,
+        content: optimisticMessage.text ?? '',
+        type: optimisticMessage.type ?? 'text',
+        mediaUrl: mediaUrl,
+      );
+
+      // 3. Crear mensaje final en Firestore - usar constructor adaptor
+      // ✅ FIX: Incluir localId para deduplicación con mensaje optimista
       final finalMessage = ChatMessage(
         id: optimisticMessage.id,
         senderId: optimisticMessage.senderId,
@@ -340,6 +366,7 @@ class ChatMessagingService {
         status: MessageStatus.sent,
         localTimestamp: optimisticMessage.localTimestamp,
         localPath: null, // Limpiar path local después del upload
+        localId: tempMessageId, // ✅ NEW: Guardar ID temporal para deduplicación
       );
 
       final realMessageId = await _messageRepository.createOptimisticMessage(
@@ -348,7 +375,9 @@ class ChatMessagingService {
         isGroup: isGroup,
       );
 
-      // 3. Actualizar cache optimista con datos reales
+      // 4. Actualizar mensaje optimista con ID real (sin eliminarlo para evitar flash en UI)
+      // ✅ FIX: UPDATE en vez de REMOVE para UX suave
+      // La deduplicación por localId evitará duplicados cuando llegue del stream
       _cacheManager.updateOptimisticMessage(
         chatId,
         tempMessageId,
@@ -482,5 +511,165 @@ class ChatMessagingService {
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     final random = (timestamp % 10000).toString().padLeft(4, '0');
     return 'temp_message_${timestamp}_$random';
+  }
+
+  /// 🔒 Verificar moderación si está activada
+  /// Solo llama a Cloud Function si la moderación está activada
+  Future<void> _checkModeration({
+    required String chatId,
+    required String content,
+    required String type,
+    String? mediaUrl,
+  }) async {
+    try {
+      final currentUserId = _messageRepository.currentUserId;
+      if (currentUserId == null) return;
+
+      // 1. Verificar moderación a nivel de CHAT (solo si el chat existe)
+      bool moderationEnabled = false;
+      try {
+        final chatDoc = await FirebaseFirestore.instance
+            .collection('chats')
+            .doc(chatId)
+            .get();
+        if (chatDoc.exists) {
+          moderationEnabled = chatDoc.data()?['moderationEnabled'] ?? false;
+        }
+      } catch (e) {
+        // Continuar sin moderación del chat si hay error
+        ReleaseLogger.warning('Error verificando moderación del chat: $e', tag: 'Moderation');
+      }
+
+      // 2. Verificar moderación a nivel de CONTACTO (del receptor) si no está activada en chat
+      if (!moderationEnabled) {
+        try {
+          // Extraer contactId del chatId
+          final userIds = _extractUserIdsFromChatId(chatId);
+          final contactId = userIds.firstWhere((id) => id != currentUserId, orElse: () => '');
+
+          if (contactId.isNotEmpty) {
+            final sortedUsers = [currentUserId, contactId]..sort();
+            final contactsQuery = await FirebaseFirestore.instance
+                .collection('contacts')
+                .where('users', isEqualTo: sortedUsers)
+                .limit(1)
+                .get();
+
+            if (contactsQuery.docs.isNotEmpty) {
+              final contactDoc = contactsQuery.docs.first;
+              final moderationSettings =
+                  contactDoc.data()['moderationSettings'] as Map<String, dynamic>?;
+
+              if (moderationSettings != null) {
+                final senderSettings =
+                    moderationSettings[currentUserId] as Map<String, dynamic>?;
+                if (senderSettings != null && senderSettings['enabled'] == true) {
+                  moderationEnabled = true;
+                }
+              }
+            }
+          }
+        } catch (e) {
+          // Continuar sin moderación del contacto si hay error
+          ReleaseLogger.warning('Error verificando moderación del contacto: $e', tag: 'Moderation');
+        }
+      }
+
+      // 3. Si NO hay moderación activada, permitir envío directo
+      if (!moderationEnabled) {
+        ReleaseLogger.info('✅ Sin moderación activada - enviando mensaje directamente', tag: 'Moderation');
+        return;
+      }
+
+      // 4. Hay moderación activada - llamar a Cloud Function
+      ReleaseLogger.log('🔒 Moderación activada - verificando mensaje con Cloud Function', tag: 'Moderation');
+
+      final functions = FirebaseFunctions.instance;
+      final result = await functions.httpsCallable('checkMessageBeforeSending').call({
+        'chatId': chatId,
+        'text': content,
+        'type': type,
+        if (mediaUrl != null) 'mediaUrl': mediaUrl,
+      });
+
+      final approved = result.data['approved'] as bool;
+
+      if (!approved) {
+        final reason =
+            result.data['reason'] as String? ?? 'Contenido inapropiado detectado';
+        ReleaseLogger.log('🚫 Mensaje bloqueado por moderación: $reason', tag: 'Moderation');
+        // Usar un tipo específico de excepción para identificar bloqueos de moderación
+        throw ModerationBlockedException(reason);
+      }
+
+      ReleaseLogger.log('✅ Mensaje aprobado por moderación', tag: 'Moderation');
+    } on ModerationBlockedException {
+      // Re-lanzar bloqueos de moderación sin modificar
+      rethrow;
+    } catch (e) {
+      // Si es otro error (network, etc), loguearlo pero continuar
+      ReleaseLogger.error('⚠️ Error técnico en verificación de moderación (continuando): $e', tag: 'Moderation');
+      // Continuar - permitir que el mensaje se envíe si hay error técnico de red/timeout
+    }
+  }
+
+  /// Verificar moderación de contenido sin crear mensaje en Firestore
+  ///
+  /// Usado para edición de mensajes bloqueados.
+  /// Lanza ModerationBlockedException si el contenido es bloqueado.
+  Future<void> checkModerationOnly({
+    required String chatId,
+    required String content,
+  }) async {
+    try {
+      // Reutilizar la lógica existente de _checkModeration
+      await _checkModeration(
+        chatId: chatId,
+        content: content,
+        type: 'text',
+      );
+
+      ReleaseLogger.log('Moderation check passed for content', tag: 'Moderation');
+    } on ModerationBlockedException {
+      // Re-lanzar para que el llamador maneje el bloqueo
+      rethrow;
+    } catch (e) {
+      // Errores técnicos - loguear pero no bloquear
+      ReleaseLogger.error('Moderation check failed (network/technical): $e', tag: 'Moderation');
+      // No rethrow - permitir mensaje en caso de error técnico
+    }
+  }
+
+  /// Crear mensaje aprobado en Firestore después de pasar moderación
+  ///
+  /// Usado cuando un mensaje bloqueado es editado y aprobado.
+  /// IMPORTANTE: Solo llamar después de verificar moderación con checkModerationOnly().
+  ///
+  /// Utiliza una Cloud Function para evitar problemas de permisos de Firestore
+  Future<void> createApprovedMessage({
+    required String chatId,
+    required String messageId,
+    required String senderId,
+    required String text,
+    String? localId, // ✅ FIX: Agregar localId para deduplicación
+  }) async {
+    try {
+      // Llamar a la Cloud Function que crea el mensaje y actualiza el chat
+      final functions = FirebaseFunctions.instanceFor(region: 'us-central1');
+      final callable = functions.httpsCallable('createApprovedMessage');
+
+      final result = await callable.call<Map<String, dynamic>>({
+        'chatId': chatId,
+        'messageId': messageId,
+        'senderId': senderId,
+        'text': text,
+        'localId': localId, // ✅ FIX: Pasar localId a Cloud Function
+      });
+
+      ReleaseLogger.log('Approved message created via Cloud Function: ${result.data['messageId']}', tag: 'Moderation');
+    } catch (e) {
+      ReleaseLogger.error('Failed to create approved message: $e', tag: 'Moderation');
+      rethrow;
+    }
   }
 }

@@ -26,6 +26,7 @@ import 'services/two_factor_session_service.dart';
 import 'services/app_config_service.dart';
 import 'services/message_cache_service.dart';
 import 'services/dashboard_cache_service.dart';
+import 'services/notification_deduplication_service.dart';
 import 'services/device_session_service.dart';
 import 'services/online_status_service.dart';
 import 'services/screenshot_protection_service.dart';
@@ -94,6 +95,34 @@ void main() async {
       '❌ Error inicializando MessageCacheService: $e',
       tag: 'MainApp',
     );
+  }
+
+  // ✅ FIX #7: Inicializar NotificationDeduplicationService
+  try {
+    await NotificationDeduplicationService().initialize();
+    ReleaseLogger.log('✅ NotificationDeduplicationService inicializado', tag: 'MainApp');
+  } catch (e) {
+    ReleaseLogger.error(
+      '❌ Error inicializando NotificationDeduplicationService: $e',
+      tag: 'MainApp',
+    );
+  }
+
+  // ✅ DEBUG: Escuchar eventos de notificaciones desde iOS nativo
+  if (Platform.isIOS) {
+    const MethodChannel('com.talia.chat/debug').setMethodCallHandler((call) async {
+      if (call.method == 'onNotificationWillPresent') {
+        final args = call.arguments as Map;
+        ReleaseLogger.log(
+          '📱 [iOS Native] willPresent notification:\n'
+          '   Type: ${args['type']}\n'
+          '   Source: ${args['source']}\n'
+          '   Title: ${args['title']}\n'
+          '   Body: ${args['body']}',
+          tag: 'iOS',
+        );
+      }
+    });
   }
 
   // Inicializar Firebase solo si no está inicializado

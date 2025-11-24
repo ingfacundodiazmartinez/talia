@@ -126,9 +126,9 @@ class CreateChatService {
         otherUserId: otherUserId,
       );
 
-      // Cerrar loading dialog
+      // Cerrar loading dialog (usar rootNavigator para cerrar dialog correcto)
       if (context.mounted) {
-        Navigator.of(context).pop();
+        Navigator.of(context, rootNavigator: true).pop();
 
         // Navegar a chat
         Navigator.of(context).push(
@@ -142,9 +142,9 @@ class CreateChatService {
         );
       }
     } catch (e) {
-      // Cerrar loading dialog
+      // Cerrar loading dialog (usar rootNavigator para cerrar dialog correcto)
       if (context.mounted) {
-        Navigator.of(context).pop();
+        Navigator.of(context, rootNavigator: true).pop();
 
         // Mostrar error
         ScaffoldMessenger.of(context).showSnackBar(

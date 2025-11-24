@@ -247,7 +247,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
       }
 
       if (editingMessageId != null) {
-        await _controller!.updateBlockedMessage(editingMessageId, text);
+        // Edit blocked message flow (re-sends with moderation check)
+        await _controller!.editBlockedMessage(
+          messageId: editingMessageId,
+          newText: text,
+        );
       } else {
         await _controller!.sendTextMessage(text: text, replyTo: replyToCapture);
       }

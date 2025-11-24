@@ -268,6 +268,9 @@ class ChatCacheManager {
   }
 
   /// Combinar cache principal con cache optimista para un chat
+  ///
+  /// ✅ FIX: Deduplicación usando localId para evitar duplicados
+  /// cuando mensaje optimista (tempId) y mensaje real (firestoreId) coexisten
   List<ChatMessage> _mergeOptimisticMessages(String chatId) {
     final mainMessages = _messageCache[chatId] ?? <ChatMessage>[];
     final optimisticMessages = _optimisticCache[chatId]?.values.toList() ?? <ChatMessage>[];
@@ -275,17 +278,32 @@ class ChatCacheManager {
     // Combinar y deduplicar
     final allMessages = <ChatMessage>[];
     final seenIds = <String>{};
+    final seenLocalIds = <String>{}; // ✅ NEW: Track localIds from main messages
 
-    // Agregar mensajes optimistas primero (más recientes)
-    for (final message in optimisticMessages) {
+    // Primero, recolectar todos los localIds de mensajes principales (de Firestore)
+    for (final message in mainMessages) {
+      if (message.localId != null) {
+        seenLocalIds.add(message.localId!);
+      }
+    }
+
+    // Agregar mensajes del cache principal PRIMERO (tienen precedencia - son los reales de Firestore)
+    for (final message in mainMessages) {
       if (!seenIds.contains(message.id)) {
         allMessages.add(message);
         seenIds.add(message.id);
       }
     }
 
-    // Agregar mensajes del cache principal
-    for (final message in mainMessages) {
+    // Agregar mensajes optimistas SOLO si NO duplican (no existe mensaje real con su localId)
+    for (final message in optimisticMessages) {
+      // ✅ Skip si ya existe un mensaje real cuyo localId matchea este tempId
+      if (seenLocalIds.contains(message.id)) {
+        // Este mensaje optimista ya tiene su versión real en Firestore
+        continue;
+      }
+
+      // Skip si ya existe por ID
       if (!seenIds.contains(message.id)) {
         allMessages.add(message);
         seenIds.add(message.id);

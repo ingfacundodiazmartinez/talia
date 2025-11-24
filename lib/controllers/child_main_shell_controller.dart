@@ -6,6 +6,7 @@ import '../utils/release_logger.dart';
 import '../utils/chat_utils.dart';
 import '../controllers/child_home_controller.dart';
 import '../notification_service.dart';
+import '../services/chats/chat_orchestrator.dart';
 
 /// Controller para el shell principal de niños
 ///
@@ -62,6 +63,17 @@ class ChildMainShellController {
       await _verifyUserRoleAndInitialize();
       _setupRoleChangeListener();
       _setupNotificationListeners();
+
+      // ⚡ Iniciar listener global de mensajes para notificaciones instantáneas
+      // Esto reduce el delay de 1-2 segundos de FCM a ~100ms
+      ReleaseLogger.log('⚡ Iniciando listener global de mensajes...', tag: 'ChildMainShell');
+      try {
+        await ChatOrchestrator().startGlobalMessageListener();
+        ReleaseLogger.log('✅ Listener global de mensajes iniciado', tag: 'ChildMainShell');
+      } catch (e) {
+        ReleaseLogger.error('❌ Error iniciando listener global: $e', tag: 'ChildMainShell');
+        // No es crítico, las notificaciones seguirán funcionando con FCM
+      }
 
       _isInitialized = true;
       ReleaseLogger.log('ChildMainShellController inicializado exitosamente', tag: 'ChildMainShell');

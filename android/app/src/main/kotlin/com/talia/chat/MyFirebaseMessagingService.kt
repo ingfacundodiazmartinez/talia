@@ -88,6 +88,39 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             return
         }
 
+        // ✅ FILTRO ANTI-DUPLICADO: Verificar si Stream Detector ya mostró esta notificación
+        val messageId = data["messageId"]
+        Log.e(TAG, "🔍 [ANTI-DUPLICADO] Message ID: $messageId")
+
+        if (messageId != null) {
+            val sharedPrefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+
+            // Buscar con diferentes formatos de clave (igual que en Flutter)
+            val timestampKey1 = "flutter.instant_notification_$messageId"
+            val timestampKey2 = "instant_notification_$messageId"
+
+            val existingTimestamp1 = sharedPrefs.getString(timestampKey1, null)
+            val existingTimestamp2 = sharedPrefs.getString(timestampKey2, null)
+
+            val existingTimestamp = existingTimestamp1 ?: existingTimestamp2
+
+            if (existingTimestamp != null) {
+                val timestamp = existingTimestamp.toLongOrNull() ?: 0
+                val now = System.currentTimeMillis()
+                val age = now - timestamp
+
+                // Si la notificación instantánea se mostró hace menos de 10 segundos, es duplicado
+                if (age < 10000) {
+                    Log.e(TAG, "🚫 [ANTI-DUPLICADO] Stream Detector ya mostró esta notificación hace ${age}ms - SKIP")
+                    return
+                } else {
+                    Log.e(TAG, "⏳ [ANTI-DUPLICADO] Notificación antigua (${age}ms) - permitiendo FCM push")
+                }
+            } else {
+                Log.e(TAG, "✅ [ANTI-DUPLICADO] Primera notificación para este mensaje - permitida")
+            }
+        }
+
         // ✅ FILTRO CHAT ACTUAL: Verificar si el usuario está viendo este chat
         Log.e(TAG, "🔍 [FILTRO] Iniciando verificación de chat actual...")
         val messageChatId = data["chatId"]
@@ -193,8 +226,10 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                             .setName("Yo")
                             .build()
 
-                        // Usar MessagingStyle
+                        // Usar MessagingStyle con configuración para Android 11+
                         val messagingStyle = NotificationCompat.MessagingStyle(user)
+                            .setConversationTitle(senderName)  // ✅ CRÍTICO para Android 11+
+                            .setGroupConversation(false)  // ✅ CRÍTICO: false = chat 1-1 (muestra foto a la izquierda)
                             .addMessage(body, System.currentTimeMillis(), sender)
 
                         // PASO 3: Vincular notificación al shortcut con setShortcutId

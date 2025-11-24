@@ -101,7 +101,7 @@ const storyApproval = require("./story-approval");
 // ═══════════════════════════════════════════════════════════════
 
 // Notificaciones
-// exports.sendNotificationOnCreate = notifications.sendNotificationOnCreate; // ❌ DESACTIVADA - causa duplicación
+exports.sendNotificationOnCreate = notifications.sendNotificationOnCreate; // ✅ REACTIVADA - procesa notificaciones con pushSent: false
 exports.sendInstantPushNotification = notifications.sendInstantPushNotification;
 
 // ❌ LEGACY VIDEOLLAMADAS - DESACTIVADAS (solo usar V2)
@@ -128,6 +128,7 @@ exports.createContactRequest = contacts.createContactRequest;
 exports.updateContactRequestStatus = contacts.updateContactRequestStatus;
 exports.blockChat = contacts.blockChat;
 exports.unblockChat = contacts.unblockChat;
+exports.invalidateChatOnContactDelete = contacts.invalidateChatOnContactDelete;
 
 // Grupos
 exports.createGroup = groups.createGroup;
@@ -138,6 +139,7 @@ exports.processGroupInvitationsAfterContactApproval = groups.processGroupInvitat
 // Moderación de contenido
 exports.checkMessageBeforeSending = moderation.checkMessageBeforeSending;
 exports.moderateMessage = moderation.moderateMessage;
+exports.createApprovedMessage = moderation.createApprovedMessage;
 
 // Chats
 exports.incrementUnreadCount = chats.incrementUnreadCount;

@@ -1,6 +1,6 @@
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
-const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
 const { sendInstantPushNotification } = require("./notifications");
 const { checkRateLimit, RATE_LIMITS } = require("./helpers");
 
@@ -8,6 +8,9 @@ const { checkRateLimit, RATE_LIMITS } = require("./helpers");
 // CHATS
 // ═══════════════════════════════════════════════════════════════
 
+// ⚡ OPTIMIZADO: Trigger simplificado sin rate limiting ni validación de contacto
+// La validación de contacto se hace via Firestore rules (campo isValidChat)
+// El rate limiting se eliminó para reducir latencia
 exports.incrementUnreadCount = onDocumentCreated(
   {
     document: "chats/{chatId}/messages/{messageId}",
@@ -17,61 +20,21 @@ exports.incrementUnreadCount = onDocumentCreated(
     try {
       const messageData = event.data.data();
       const chatId = event.params.chatId;
-      const messageId = event.params.messageId;
 
       console.log(`📨 Nuevo mensaje en chat ${chatId}`);
 
-      const senderId = messageData.senderId;
-
-      // ✅ RATE LIMITING: Verificar límite de mensajes
-      const rateLimitCheck = await checkRateLimit(
-        senderId,
-        "sendMessage",
-        RATE_LIMITS.sendMessage
-      );
-
-      if (!rateLimitCheck.allowed) {
-        console.warn(
-          `🚫 Rate limit excedido para ${senderId} - ${RATE_LIMITS.sendMessage.maxRequests} mensajes por minuto`
-        );
-
-        // Eliminar el mensaje que excede el límite
-        try {
-          await event.data.ref.delete();
-          console.log(`🗑️ Mensaje ${messageId} eliminado por spam`);
-        } catch (deleteError) {
-          console.error(`❌ Error eliminando mensaje de spam:`, deleteError);
-        }
-
-        // Notificar al usuario sobre el límite
-        try {
-          await getFirestore().collection("notifications").add({
-            userId: senderId,
-            type: "rate_limit_exceeded",
-            title: "⚠️ Límite de mensajes excedido",
-            body: `Has enviado demasiados mensajes. Espera ${rateLimitCheck.retryAfter} segundos antes de enviar más.`,
-            priority: "normal",
-            read: false,
-            createdAt: new Date(),
-            data: {
-              retryAfter: rateLimitCheck.retryAfter,
-              limit: RATE_LIMITS.sendMessage.maxRequests,
-            },
-          });
-        } catch (notifError) {
-          console.error(`❌ Error enviando notificación:`, notifError);
-        }
-
-        return null;
-      }
-
-      // Obtener información del chat para saber quién es el receptor
+      // Obtener información del chat
       const chatRef = getFirestore().collection("chats").doc(chatId);
       const chatDoc = await chatRef.get();
 
       let participants = [];
 
-      if (!chatDoc.exists) {
+      // Obtener participantes del chat
+      if (chatDoc.exists) {
+        const chatData = chatDoc.data();
+        participants = chatData.participants || [];
+      } else {
+        // Si el chat NO existe, crearlo
         console.log(`⚠️ Chat ${chatId} no existe, creando documento...`);
 
         // Extraer participants del chatId (formato: userId1_userId2)
@@ -82,98 +45,104 @@ exports.incrementUnreadCount = onDocumentCreated(
           return null;
         }
 
-        console.log(`📊 DEBUG - senderId: ${senderId}`);
-        console.log(`📊 DEBUG - participants extraídos: [${participants.join(", ")}]`);
-
-        // Crear documento del chat con todos los campos necesarios
+        // ✅ Crear documento del chat con isValidChat: true por defecto
+        const now = Timestamp.now();  // ✅ FIX: Timestamp inmediato
         await chatRef.set({
           participants: participants,
-          createdAt: FieldValue.serverTimestamp(),
-          lastMessageTime: FieldValue.serverTimestamp(),
-          lastMessage: "",
-          lastMessageSender: "",
+          isValidChat: true, // ✅ NUEVO CAMPO: indica si el chat es válido para mensajes
+          createdAt: now,
+          lastMessageTime: now,
+          lastMessageAt: now,  // ✅ FIX: Agregar campo que el listener espera
+          lastMessage: messageData.text || "",  // ✅ FIX: Usar texto del mensaje
+          lastMessageSender: messageData.senderId || "",  // ✅ FIX: Usar sender real
           deletedBy: [],
-        });
+        }, {merge: true});  // ✅ CRITICAL FIX: merge=true para no sobrescribir si Flutter ya creó el chat
 
-        console.log(`✅ Chat ${chatId} creado con participants: [${participants.join(", ")}]`);
-      } else {
-        const chatData = chatDoc.data();
-        participants = chatData.participants || [];
-        console.log(`📊 DEBUG - Chat existente. Participants: [${participants.join(", ")}]`);
+        console.log(`✅ Chat ${chatId} creado con isValidChat: true`);
       }
 
-      console.log(`📊 DEBUG - Buscando receiverId. senderId=${senderId}, participants=[${participants.join(", ")}]`);
+      // ✅ FIX #2: VALIDACIÓN DE SEGURIDAD CRÍTICA
+      const senderId = messageData.senderId;
+      const authenticatedUserId = event.auth?.uid;
 
-      // El receptor es el participante que NO es el sender
+      // Validación 1: Verificar que senderId coincide con usuario autenticado
+      if (!authenticatedUserId) {
+        console.error(`❌ SECURITY: No authenticated user for message in chat ${chatId}`);
+        return null; // Bloquear procesamiento
+      }
+
+      if (senderId !== authenticatedUserId) {
+        console.error(`❌ SECURITY: senderId spoofing attempt detected!`);
+        console.error(`   - Claimed senderId: ${senderId}`);
+        console.error(`   - Authenticated userId: ${authenticatedUserId}`);
+        return null; // Bloquear procesamiento
+      }
+
+      // Validación 2: Verificar que sender es participante del chat
+      if (!participants.includes(senderId)) {
+        console.error(`❌ SECURITY: Non-participant trying to send message to chat ${chatId}`);
+        console.error(`   - SenderId: ${senderId}`);
+        console.error(`   - Participants: ${participants.join(", ")}`);
+        return null; // Bloquear procesamiento
+      }
+
+      console.log(`✅ Security validations passed for sender ${senderId}`);
+
+      // ✅ CREAR NOTIFICACIÓN para que sendNotificationOnCreate envíe FCM
+      const messageId = event.params.messageId;
+      const messageText = messageData.text || "📷 Imagen";
+
+      // Determinar quién es el receiver (el otro participante)
       const receiverId = participants.find((id) => id !== senderId);
 
-      if (!receiverId) {
-        console.log(`⚠️ No se pudo identificar receptor en chat ${chatId}`);
-        console.log(`❌ DEBUG - senderId NO está en participants. senderId: ${senderId}, participants: [${participants.join(", ")}]`);
-        return null;
-      }
-
-      // ✅ VALIDACIÓN: Verificar que el contacto no esté eliminado
-      console.log(`🔍 Verificando status del contacto entre ${senderId} y ${receiverId}...`);
-      const contactQuery = await getFirestore()
-        .collection("contacts")
-        .where("users", "array-contains", senderId)
-        .where("status", "==", "approved")
-        .get();
-
-      let contactExists = false;
-      for (const doc of contactQuery.docs) {
-        const contactData = doc.data();
-        const users = contactData.users || [];
-        if (users.includes(receiverId)) {
-          contactExists = true;
-          break;
-        }
-      }
-
-      if (!contactExists) {
-        console.log(`🚫 Contacto eliminado entre ${senderId} y ${receiverId}. Bloqueando mensaje.`);
-
-        // Eliminar el mensaje
+      if (receiverId) {
         try {
-          await event.data.ref.delete();
-          console.log(`🗑️ Mensaje ${messageId} eliminado (contacto no disponible)`);
-        } catch (deleteError) {
-          console.error(`❌ Error eliminando mensaje:`, deleteError);
-        }
-
-        // Notificar al sender
-        try {
-          await getFirestore().collection("notifications").add({
-            userId: senderId,
-            type: "contact_deleted",
-            title: "❌ Mensaje no enviado",
-            body: "Este contacto ya no está disponible",
-            priority: "normal",
-            read: false,
-            createdAt: new Date(),
-            data: {
-              chatId: chatId,
-              contactId: receiverId,
-            },
+          // ✅ INCREMENTAR unreadCount del receptor
+          const unreadCountField = `unreadCount_${receiverId}`;
+          await chatRef.update({
+            [unreadCountField]: FieldValue.increment(1),
           });
-          console.log(`📧 Notificación enviada a ${senderId}: contacto eliminado`);
-        } catch (notifError) {
-          console.error(`❌ Error enviando notificación:`, notifError);
+          console.log(`✅ unreadCount incrementado para ${receiverId}`);
+
+          // ✅ Obtener datos del sender para incluir en notificación (igual que Stream Detector)
+          let senderName = "Usuario";
+          let senderPhotoUrl = null;
+
+          try {
+            const senderDoc = await getFirestore().collection("users").doc(senderId).get();
+            if (senderDoc.exists) {
+              const senderData = senderDoc.data();
+              senderName = senderData.name || "Usuario";
+              senderPhotoUrl = senderData.photoURL || null;
+            }
+          } catch (e) {
+            console.error(`⚠️ Error obteniendo datos del sender: ${e}`);
+          }
+
+          await getFirestore().collection("notifications").add({
+            userId: receiverId,
+            senderId: senderId,
+            senderName: senderName, // ✅ NUEVO: nombre del sender para mostrar en notificación
+            senderPhotoUrl: senderPhotoUrl, // ✅ NUEVO: foto del sender para mostrar circular
+            type: "chat_message",
+            chatId: chatId,
+            messageId: messageId, // ✅ CRÍTICO: para anti-duplicados con Stream Detector
+            title: "Nuevo mensaje",
+            body: messageText.substring(0, 100),
+            createdAt: Timestamp.now(),
+            isRead: false,
+            pushSent: false, // ✅ CRÍTICO: para que sendNotificationOnCreate procese este documento
+          });
+
+          console.log(`✅ Notificación creada para ${receiverId} (sender: ${senderName}, messageId: ${messageId})`);
+        } catch (error) {
+          console.error(`❌ Error creando notificación: ${error}`);
         }
-
-        return null;
       }
-
-      console.log(`✅ Contacto válido. Enviando notificación a ${receiverId}...`);
-
-      // ❌ INCREMENTO ELIMINADO - El cliente ahora es responsable de actualizar contadores
-      // La lógica de unread count se maneja completamente en el stream detector de mensajes
-      console.log(`✅ Notificación enviada (sin incremento automático de contador)`);
 
       return null;
     } catch (error) {
-      console.error("❌ Error incrementando unreadCount:", error);
+      console.error("❌ Error en trigger de mensaje:", error);
       return null;
     }
   },
@@ -183,6 +152,7 @@ exports.incrementUnreadCount = onDocumentCreated(
 // GRUPOS - Trigger automático para mensajes (replica lógica 1-1)
 // ═══════════════════════════════════════════════════════════════
 
+// ⚡ OPTIMIZADO: Trigger simplificado para grupos (sin rate limiting)
 exports.incrementGroupUnreadCount = onDocumentCreated(
   {
     document: "groups/{groupId}/messages/{messageId}",
@@ -192,53 +162,10 @@ exports.incrementGroupUnreadCount = onDocumentCreated(
     try {
       const messageData = event.data.data();
       const groupId = event.params.groupId;
+      const senderId = messageData.senderId;  // ✅ FIX: Definir senderId desde messageData
       const messageId = event.params.messageId;
 
       console.log(`📨 Nuevo mensaje en grupo ${groupId}`);
-
-      const senderId = messageData.senderId;
-
-      // ✅ RATE LIMITING: Verificar límite de mensajes (igual que 1-1)
-      const rateLimitCheck = await checkRateLimit(
-        senderId,
-        "sendMessage",
-        RATE_LIMITS.sendMessage
-      );
-
-      if (!rateLimitCheck.allowed) {
-        console.warn(
-          `🚫 Rate limit excedido para ${senderId} - ${RATE_LIMITS.sendMessage.maxRequests} mensajes por minuto`
-        );
-
-        // Eliminar el mensaje que excede el límite
-        try {
-          await event.data.ref.delete();
-          console.log(`🗑️ Mensaje ${messageId} eliminado por spam`);
-        } catch (deleteError) {
-          console.error(`❌ Error eliminando mensaje de spam:`, deleteError);
-        }
-
-        // Notificar al usuario sobre el límite
-        try {
-          await getFirestore().collection("notifications").add({
-            userId: senderId,
-            type: "rate_limit_exceeded",
-            title: "⚠️ Límite de mensajes excedido",
-            body: `Has enviado demasiados mensajes. Espera ${rateLimitCheck.retryAfter} segundos antes de enviar más.`,
-            priority: "normal",
-            read: false,
-            createdAt: new Date(),
-            data: {
-              retryAfter: rateLimitCheck.retryAfter,
-              limit: RATE_LIMITS.sendMessage.maxRequests,
-            },
-          });
-        } catch (notifError) {
-          console.error(`❌ Error enviando notificación:`, notifError);
-        }
-
-        return null;
-      }
 
       // Obtener información del grupo
       const groupRef = getFirestore().collection("groups").doc(groupId);
@@ -255,16 +182,37 @@ exports.incrementGroupUnreadCount = onDocumentCreated(
 
       console.log(`📊 DEBUG - Grupo: ${groupName}, Miembros: [${members.join(", ")}]`);
 
-      // Verificar que el sender es miembro del grupo
-      if (!members.includes(senderId)) {
-        console.log(`🚫 ${senderId} no es miembro del grupo ${groupId}`);
+      // ✅ FIX #2: VALIDACIÓN DE SEGURIDAD CRÍTICA
+      const authenticatedUserId = event.auth?.uid;
+
+      // Validación 1: Verificar que senderId coincide con usuario autenticado
+      if (!authenticatedUserId) {
+        console.error(`❌ SECURITY: No authenticated user for group message in ${groupId}`);
         return null;
       }
+
+      if (senderId !== authenticatedUserId) {
+        console.error(`❌ SECURITY: senderId spoofing attempt in group ${groupId}!`);
+        console.error(`   - Claimed senderId: ${senderId}`);
+        console.error(`   - Authenticated userId: ${authenticatedUserId}`);
+        return null;
+      }
+
+      // Validación 2: Verificar que el sender es miembro del grupo
+      if (!members.includes(senderId)) {
+        console.error(`❌ SECURITY: Non-member trying to send message to group ${groupId}`);
+        console.error(`   - SenderId: ${senderId}`);
+        console.error(`   - Members: ${members.join(", ")}`);
+        return null;
+      }
+
+      console.log(`✅ Security validations passed for group sender ${senderId}`);
 
       // Obtener información del sender para las notificaciones
       const senderDoc = await getFirestore().collection("users").doc(senderId).get();
       const senderData = senderDoc.data() || {};
       const senderName = senderData.name || "Usuario";
+      const senderPhotoUrl = senderData.photoURL || ""; // ✅ FIX: Agregar foto del sender
 
       // Crear preview del mensaje
       const messageType = messageData.type || "text";
@@ -279,56 +227,61 @@ exports.incrementGroupUnreadCount = onDocumentCreated(
       console.log(`📝 Preview del mensaje: "${messagePreview}"`);
 
       // Preparar datos de actualización del grupo
+      const now = Timestamp.now();  // ✅ FIX: Timestamp inmediato
       const groupUpdateData = {
         lastMessage: messagePreview,
-        lastMessageTime: FieldValue.serverTimestamp(),
+        lastMessageTime: now,
+        lastMessageAt: now,  // ✅ FIX: Agregar campo que el listener espera
         lastMessageSender: senderId,
       };
 
-      // 🔔 CREAR NOTIFICACIONES para cada miembro (excepto el sender)
+      // 🔔 CREAR NOTIFICACIONES EN FIRESTORE para cada miembro (excepto el sender)
+      // ✅ INCREMENTAR unreadCount para cada miembro (excepto el sender)
       const db = getFirestore();
+      const unreadCountUpdates = {};
+
       for (const memberId of members) {
         if (memberId !== senderId) {
           try {
-            // ❌ INCREMENTO ELIMINADO - El cliente ahora es responsable de actualizar contadores
-            // La lógica de unread count se maneja completamente en el stream detector de mensajes
+            // ✅ Preparar incremento de unreadCount
+            const unreadCountField = `unreadCount_${memberId}`;
+            unreadCountUpdates[unreadCountField] = FieldValue.increment(1);
 
-            // 📱 ENVÍO DIRECTO DE PUSH - sin crear documento en Firestore
-            try {
-              const pushResult = await sendInstantPushNotification.handler({
-                data: {
-                  userId: memberId,
-                  type: "group_message",
-                  title: `💬 ${groupName}`,
-                  body: `${senderName}: ${messagePreview}`,
-                  chatId: groupId,
-                  messageId: messageId,
-                  senderId: senderId,
-                  senderName: senderName,
-                  groupName: groupName,
-                  isGroup: true,
-                },
-                auth: null // Llamada interna, no requiere auth
-              });
-              console.log(`🔔 [incrementGroupUnreadCount] Push directo enviado para miembro: ${memberId}, resultado:`, pushResult.data);
-            } catch (pushError) {
-              console.error(`❌ [incrementGroupUnreadCount] Error enviando push directo para ${memberId}:`, pushError);
-              // No fallar por error de push individual
-            }
-          } catch (notificationError) {
-            console.error(`❌ [incrementGroupUnreadCount] Error creando notificación para ${memberId}:`, notificationError);
+            // ✅ CREAR DOCUMENTO EN FIRESTORE - sendNotificationOnCreate enviará FCM
+            await db.collection("notifications").add({
+              userId: memberId,
+              senderId: senderId,
+              type: "group_message",
+              chatId: groupId,
+              messageId: messageId, // ✅ CRÍTICO: para anti-duplicados con Stream Detector
+              title: `💬 ${groupName}`,
+              body: `${senderName}: ${messagePreview}`,
+              groupName: groupName,
+              senderName: senderName,
+              senderPhotoUrl: senderPhotoUrl,
+              isGroup: true,
+              createdAt: now,
+              isRead: false,
+              pushSent: false, // ✅ CRÍTICO: para que sendNotificationOnCreate procese este documento
+            });
+
+            console.log(`✅ Notificación creada para miembro ${memberId} (messageId: ${messageId})`);
+          } catch (error) {
+            console.error(`❌ Error creando notificación para ${memberId}:`, error);
             // No fallar por error de notificación individual
           }
         }
       }
 
-      // ✅ ACTUALIZAR SOLO METADATA DEL GRUPO (sin contadores automáticos)
-      // Los contadores se manejan desde el cliente
+      // ✅ ACTUALIZAR METADATA DEL GRUPO + unreadCount de cada miembro
       await groupRef.update({
         lastMessage: groupUpdateData.lastMessage,
         lastMessageTime: groupUpdateData.lastMessageTime,
         lastMessageSender: groupUpdateData.lastMessageSender,
+        ...unreadCountUpdates, // ✅ Incrementar unreadCount de cada miembro (excepto sender)
       });
+
+      console.log(`✅ unreadCount incrementado para ${Object.keys(unreadCountUpdates).length} miembros`);
 
       console.log(`✅ Grupo ${groupId} actualizado con ${members.length - 1} notificaciones enviadas`);
 
@@ -354,7 +307,7 @@ exports.incrementGroupUnreadCount = onDocumentCreated(
  * 4. Rate limiting
  */
 exports.createChat = onCall(
-  { region: "us-central1", consumeAppCheckToken: true },
+  { region: "us-central1" }, // ⚠️ App Check desactivado temporalmente para desarrollo
   async (request) => {
     if (!request.auth) {
       throw new HttpsError("unauthenticated", "Usuario no autenticado");
@@ -654,8 +607,17 @@ exports.sendChatMessage = onCall(
           messageData.replyTo = replyTo;
         }
 
-        // Moderación si es necesario
-        if (text && text.trim()) {
+        // 🚀 OPTIMIZACIÓN: Moderación SOLO si viene desde el cliente con moderationEnabled
+        // El cliente YA verificó la moderación, no duplicar aquí
+        // Esta función solo se llama cuando:
+        // 1. Hay moderación activa (ya validada por cliente)
+        // 2. Es un mensaje multimedia (imagen/video/audio)
+        // 3. Es un fallback cuando falla escritura directa
+
+        // Comentado para evitar doble moderación (ya se hace en cliente)
+        // Solo descomentar si se quiere validación adicional del servidor
+        /*
+        if (text && text.trim() && data.requiresModeration) {
           try {
             const moderationResult = await functions
                 .httpsCallable("checkMessageBeforeSending")
@@ -679,16 +641,19 @@ exports.sendChatMessage = onCall(
             // Continuar sin moderación si hay error
           }
         }
+        */
 
         // Añadir mensaje
         const messageRef = await chatRef.collection("messages").add(messageData);
 
         // Actualizar lastMessage y timestamp del chat
+        const now = Timestamp.now();  // ✅ FIX: Timestamp inmediato para evitar NULL en listeners
         const lastMessageData = {
           lastMessage: text || (messageType === "image" ? "📷 Imagen" : messageType === "video" ? "🎥 Video" : messageType === "audio" ? "🎤 Audio" : ""),
-          lastMessageTime: FieldValue.serverTimestamp(),
+          lastMessageAt: now,  // ✅ FIX: Timestamp inmediato (no serverTimestamp que es NULL inicialmente)
+          lastMessageTime: now, // Legacy (mantener por compatibilidad)
           lastMessageSender: senderId,
-          updatedAt: FieldValue.serverTimestamp(),
+          updatedAt: now,
         };
 
         await chatRef.update(lastMessageData);
@@ -791,11 +756,13 @@ exports.sendGroupMessage = onCall(
         // Actualizar lastMessage del grupo
         const lastMessagePreview = text || (messageType === "image" ? "📷 Imagen" : messageType === "video" ? "🎥 Video" : messageType === "audio" ? "🎤 Audio" : "");
 
+        const now = Timestamp.now();  // ✅ FIX: Timestamp inmediato para evitar NULL en listeners
         const groupUpdateData = {
           lastMessage: lastMessagePreview,
-          lastMessageTime: FieldValue.serverTimestamp(),
+          lastMessageAt: now,  // ✅ FIX: Timestamp inmediato (no serverTimestamp que es NULL inicialmente)
+          lastMessageTime: now, // Legacy (mantener por compatibilidad)
           lastMessageSender: senderId,
-          updatedAt: FieldValue.serverTimestamp(),
+          updatedAt: now,
         };
 
         // ❌ INCREMENTO ELIMINADO - El cliente ahora es responsable de actualizar contadores

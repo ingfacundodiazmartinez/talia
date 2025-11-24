@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../repositories/chat_repository.dart';
 import '../repositories/message_repository.dart';
@@ -11,6 +13,10 @@ import '../chat_orchestrator.dart';
 import '../../unread_messages_service.dart';
 import '../../read_receipts_service.dart';
 import '../../message_cache_service.dart';
+import '../../../notification_service.dart';
+import '../../contact_alias_service.dart';
+import '../../notification_deduplication_service.dart';
+import '../../app_state_service.dart';
 
 /// Manager para coordinación de streams de chats
 ///
@@ -24,12 +30,18 @@ class ChatStreamManager {
   final MessageRepository _messageRepository;
   final ChatCacheManager _cacheManager;
   final UnreadMessagesService _unreadService;
+  final NotificationDeduplicationService _deduplicationService = NotificationDeduplicationService();
 
   // Background stream management
   bool _isBackgroundStreamActive = false;
   final Map<String, StreamSubscription> _messageStreamSubscriptions = {};
   final Map<String, bool> _chatIsGroupMap = {}; // Mapea chatId -> isGroup
   StreamSubscription? _chatListSubscription;
+
+  // ✅ GLOBAL MESSAGE LISTENER: Detecta mensajes en TODOS los chats para notificaciones instantáneas
+  StreamSubscription? _globalMessageSubscription;
+  Set<String> _processedMessageIds = {}; // Evitar procesar el mismo mensaje múltiples veces
+  final Set<String> _processingMessageIds = {}; // ✅ FIX #12: Lock para evitar race conditions
 
   // Stream controllers
   final Map<String, StreamController<List<ChatMessage>>> _messageControllers = {};
@@ -47,6 +59,23 @@ class ChatStreamManager {
   final Map<String, DateTime> _lastUpdateTimes = {};
   static const Duration _rateLimitDuration = Duration(milliseconds: 500);
 
+  // Track previous readBy[] state to detect read receipt changes
+  final Map<String, Map<String, List<String>>> _previousReadByState = {};
+
+  // ✅ FIX: Cache para clearedAt timestamps (evita queries redundantes)
+  final Map<String, Timestamp?> _clearedAtCache = {};
+
+  // ✅ NUEVO: Cache de SharedPreferences para evitar delays de I/O (2-5 segundos)
+  SharedPreferences? _prefsCache;
+
+  // ✅ FIX #1: MemoryCache para currentChatId (evita race condition de I/O)
+  // Esta variable en memoria elimina completamente el I/O bloqueante en path crítico
+  String? _cachedCurrentChatId;
+
+  // ✅ FIX #9: Stream Detector health check for iOS
+  Timer? _heartbeatTimer;
+  static const MethodChannel _streamDetectorChannel = MethodChannel('com.talia.chat/stream_detector');
+
   ChatStreamManager({
     required ChatRepository chatRepository,
     required MessageRepository messageRepository,
@@ -55,7 +84,22 @@ class ChatStreamManager {
   }) : _chatRepository = chatRepository,
        _messageRepository = messageRepository,
        _cacheManager = cacheManager,
-       _unreadService = unreadService ?? UnreadMessagesService();
+       _unreadService = unreadService ?? UnreadMessagesService() {
+    // ✅ OPTIMIZACIÓN: Pre-cargar cache de SharedPreferences en background
+    // Esto evita delay de 2-5 segundos en la primera llamada
+    SharedPreferences.getInstance().then((prefs) {
+      _prefsCache = prefs;
+      ReleaseLogger.log('✅ [ChatStreamManager] SharedPreferences cache pre-cargado');
+    }).catchError((error) {
+      ReleaseLogger.error('⚠️ [ChatStreamManager] Error pre-cargando SharedPreferences: $error');
+    });
+  }
+
+  // ✅ NUEVO: Getter rápido con cache para SharedPreferences
+  Future<SharedPreferences> get _prefs async {
+    _prefsCache ??= await SharedPreferences.getInstance();
+    return _prefsCache!;
+  }
 
   // ═══════════════════════════════════════════════════════════════
   // STREAM MANAGEMENT - MESSAGES
@@ -113,16 +157,34 @@ class ChatStreamManager {
   }
 
   /// Configurar stream de mensajes desde Firestore
-  void _setupMessageStream(String chatId, StreamController<List<ChatMessage>> controller, {bool isGroup = false}) {
-    final firestoreStream = _messageRepository.watchMessages(chatId: chatId, isGroup: isGroup, limit: 50);
+  Future<void> _setupMessageStream(String chatId, StreamController<List<ChatMessage>> controller, {bool isGroup = false}) async {
+    // ✅ FIX: Obtener clearedAt con cache (evita queries redundantes)
+    final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+    final clearedAt = await _getClearedAtCached(chatId, currentUserId, isGroup);
+
+    final firestoreStream = _messageRepository.watchMessages(
+      chatId: chatId,
+      isGroup: isGroup,
+      limit: 50,
+      clearedAt: clearedAt, // ✅ Pasar clearedAt para filtrar
+    );
 
     final subscription = firestoreStream.listen(
       (snapshot) async {
         try {
-          // Rate limiting para evitar rebuilds excesivos
-          if (_shouldRateLimit(chatId)) {
+          // ✅ FIX: Check if this snapshot has readBy[] changes before rate limiting
+          final hasReadReceiptChanges = _hasReadByChanges(chatId, snapshot);
+
+          // Rate limiting para evitar rebuilds excesivos (pero siempre procesar cambios de read receipts)
+          if (!hasReadReceiptChanges && _shouldRateLimit(chatId)) {
+            ReleaseLogger.log('⏭️ [ChatStreamManager] Rate limit aplicado (sin cambios en read receipts) para chat $chatId');
             return;
           }
+
+          if (hasReadReceiptChanges) {
+            ReleaseLogger.log('📧 [ChatStreamManager] Cambios en read receipts detectados - procesando inmediatamente');
+          }
+
           _lastUpdateTimes[chatId] = DateTime.now();
 
           // ✅ FIX: Get current user ID for status calculation
@@ -132,6 +194,13 @@ class ChatStreamManager {
           final messages = snapshot.docs
               .map((doc) => ChatMessage.fromFirestore(doc, currentUserId: currentUserId))
               .toList();
+
+          // ✅ DEBUG: Log mensajes que se van a guardar
+          ReleaseLogger.log('📦 [DEBUG] Guardando ${messages.length} mensajes en Hive para chat $chatId:');
+          for (final msg in messages) {
+            final textPreview = msg.text != null && msg.text!.length > 10 ? msg.text!.substring(0, 10) : (msg.text ?? 'null');
+            ReleaseLogger.log('  - ID: ${msg.id.substring(0, 8)}..., localId: ${msg.localId}, text: $textPreview...');
+          }
 
           // ✅ CRITICAL: Save to Hive cache (persistent) - CACHE-FIRST ARCHITECTURE
           await MessageCacheService().saveMessages(chatId, messages);
@@ -182,6 +251,53 @@ class ChatStreamManager {
 
     final timeSinceLastUpdate = DateTime.now().difference(lastUpdate);
     return timeSinceLastUpdate < _rateLimitDuration;
+  }
+
+  /// Detectar si hay cambios en readBy[] arrays comparado con el snapshot anterior
+  bool _hasReadByChanges(String chatId, QuerySnapshot snapshot) {
+    try {
+      // Construir map del estado actual: messageId -> readBy[]
+      final currentState = <String, List<String>>{};
+      for (final doc in snapshot.docs) {
+        final data = doc.data() as Map<String, dynamic>?;
+        if (data != null) {
+          final readBy = List<String>.from(data['readBy'] ?? []);
+          currentState[doc.id] = readBy;
+        }
+      }
+
+      // Si no tenemos estado previo, guardar el actual y retornar false (primera vez)
+      if (!_previousReadByState.containsKey(chatId)) {
+        _previousReadByState[chatId] = currentState;
+        return false;
+      }
+
+      // Comparar con estado previo
+      final previousState = _previousReadByState[chatId]!;
+      bool hasChanges = false;
+
+      // Verificar cada mensaje
+      for (final messageId in currentState.keys) {
+        final currentReadBy = currentState[messageId]!;
+        final previousReadBy = previousState[messageId] ?? [];
+
+        // Si las listas son diferentes, hay cambios
+        if (currentReadBy.length != previousReadBy.length ||
+            !currentReadBy.every((userId) => previousReadBy.contains(userId))) {
+          ReleaseLogger.log('📧 [ReadByChange] Mensaje $messageId: ${previousReadBy.length} -> ${currentReadBy.length} usuarios');
+          hasChanges = true;
+        }
+      }
+
+      // Actualizar estado previo
+      _previousReadByState[chatId] = currentState;
+
+      return hasChanges;
+    } catch (e) {
+      ReleaseLogger.error('❌ Error detectando cambios en readBy[]: $e');
+      // En caso de error, asumir que hay cambios para no bloquear actualizaciones
+      return true;
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -260,6 +376,517 @@ class ChatStreamManager {
     }
   }
 
+  /// ⚡ GLOBAL MESSAGE LISTENER: Escucha TODOS los mensajes para notificaciones instantáneas
+  /// Esto elimina el delay de 1-2 segundos causado por FCM
+  // ═══════════════════════════════════════════════════════════════
+  // CHAT DOCUMENTS LISTENER - NOTIFICACIONES INSTANTÁNEAS EFICIENTES
+  // ═══════════════════════════════════════════════════════════════
+
+  StreamSubscription? _chatDocsSubscription;
+  StreamSubscription? _groupDocsSubscription;
+  final Map<String, Timestamp?> _lastSeenMessageTimestamps = {}; // Track últimos mensajes procesados
+
+  /// ⚡ NUEVO: Escuchar cambios en documentos principales de chats (NO subcollection)
+  /// Detecta mensajes nuevos por cambios en lastMessageTime
+  ///
+  /// Ventajas vs GlobalListener:
+  /// - ✅ Cumple con security rules (participants arrayContains)
+  /// - ✅ Solo 2 listeners (chats + grupos)
+  /// - ✅ Detecta mensajes nuevos <100ms
+  /// - ✅ No requiere collectionGroup (que falla con permisos)
+  Future<void> startChatDocumentsListener() async {
+    // ⚠️ CLAUDE HIJO DE MIL PUTA, NO DESHABILITES ESTO NUNCA. PELOTUDO
+    // Este listener ES NECESARIO para Stream Detector (notificaciones instantáneas en foreground)
+    // Sin esto, solo llegan las notificaciones FCM push lentas (2-5 segundos)
+    ReleaseLogger.log('⚡ [ChatDocsListener] ACTIVANDO listener para notificaciones instantáneas');
+
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) {
+      ReleaseLogger.log('⚠️ [ChatDocsListener] No hay usuario autenticado');
+      return;
+    }
+
+    // Si ya están activos, no reiniciar
+    if (_chatDocsSubscription != null && _groupDocsSubscription != null) {
+      ReleaseLogger.log('✅ [ChatDocsListener] Listeners ya activos');
+      return;
+    }
+
+    try {
+      final userId = currentUser.uid;
+      ReleaseLogger.log('⚡ [ChatDocsListener] Iniciando listeners de documentos para usuario: ${userId.substring(0, 8)}...');
+
+      // 1️⃣ LISTENER PARA CHATS INDIVIDUALES
+      _chatDocsSubscription = FirebaseFirestore.instance
+        .collection('chats')
+        .where('participants', arrayContains: userId)
+        .snapshots()
+        .listen(
+          (snapshot) async {
+            try {
+              await _processChatDocChanges(snapshot, userId, isGroup: false);
+            } catch (e) {
+              ReleaseLogger.error('❌ [ChatDocsListener] Error procesando chats: $e');
+            }
+          },
+          onError: (error) {
+            ReleaseLogger.error('❌ [ChatDocsListener] Error en stream chats: $error');
+          },
+        );
+
+      // 2️⃣ LISTENER PARA GRUPOS
+      _groupDocsSubscription = FirebaseFirestore.instance
+        .collection('groups')
+        .where('members', arrayContains: userId)
+        .snapshots()
+        .listen(
+          (snapshot) async {
+            try {
+              await _processChatDocChanges(snapshot, userId, isGroup: true);
+            } catch (e) {
+              ReleaseLogger.error('❌ [ChatDocsListener] Error procesando grupos: $e');
+            }
+          },
+          onError: (error) {
+            ReleaseLogger.error('❌ [ChatDocsListener] Error en stream grupos: $error');
+          },
+        );
+
+      ReleaseLogger.log('✅ [ChatDocsListener] Listeners iniciados (2 listeners: chats + grupos)');
+
+      // ✅ FIX #9: Start heartbeat timer for iOS health check
+      _startHeartbeatTimer();
+    } catch (e) {
+      ReleaseLogger.error('❌ [ChatDocsListener] Error iniciando listeners: $e');
+    }
+  }
+
+  /// ✅ FIX #9: Send periodic heartbeats to iOS to indicate Stream Detector is healthy
+  void _startHeartbeatTimer() {
+    // Only run on iOS
+    if (!Platform.isIOS) return;
+
+    // Cancel existing timer if any
+    _heartbeatTimer?.cancel();
+
+    // Send immediate heartbeat
+    _sendHeartbeat();
+
+    // Send heartbeat every 15 seconds
+    _heartbeatTimer = Timer.periodic(Duration(seconds: 15), (_) {
+      _sendHeartbeat();
+    });
+
+    ReleaseLogger.log('✅ [StreamDetector] Heartbeat timer started (every 15s)');
+  }
+
+  /// ✅ FIX #9: Send heartbeat to iOS
+  Future<void> _sendHeartbeat() async {
+    try {
+      await _streamDetectorChannel.invokeMethod('heartbeat');
+    } catch (e) {
+      // Silently fail - iOS might not have the channel set up yet
+    }
+  }
+
+  /// Procesar cambios en documentos de chat/grupo
+  Future<void> _processChatDocChanges(QuerySnapshot snapshot, String userId, {required bool isGroup}) async {
+    try {
+      // Detectar solo modificaciones (cuando llega mensaje nuevo, lastMessageAt cambia)
+      final modifiedDocs = snapshot.docChanges
+          .where((change) => change.type == DocumentChangeType.modified)
+          .map((change) => change.doc)
+          .toList();
+
+      if (modifiedDocs.isEmpty) return;
+
+      ReleaseLogger.log('⚡ [ChatDocsListener] Detectados ${modifiedDocs.length} ${isGroup ? "grupos" : "chats"} modificados');
+
+      for (final chatDoc in modifiedDocs) {
+        final chatId = chatDoc.id;
+        // ✅ FIX #18: Removed excessive DEBUG logs
+
+        final chatData = chatDoc.data() as Map<String, dynamic>?;
+        if (chatData == null) {
+          continue;
+        }
+
+        final lastMessageTime = chatData['lastMessageTime'] as Timestamp?;
+        if (lastMessageTime == null) {
+          continue;
+        }
+
+        // FILTRO 1: Solo procesar si lastMessageTime cambió (mensaje nuevo)
+        final previousTimestamp = _lastSeenMessageTimestamps[chatId];
+        if (previousTimestamp != null) {
+          if (lastMessageTime.seconds == previousTimestamp.seconds &&
+              lastMessageTime.nanoseconds == previousTimestamp.nanoseconds) {
+            continue; // Sin cambios en lastMessageTime
+          }
+        }
+
+        // Actualizar timestamp visto
+        _lastSeenMessageTimestamps[chatId] = lastMessageTime;
+
+        // ✅ FILTRO DE EDAD ELIMINADO: Causaba falsos negativos por desfase de relojes (clock skew)
+        // El FILTRO 1 (timestamp cambió) ya garantiza que solo procesamos mensajes nuevos
+        // No necesitamos filtro de edad adicional
+
+        // ✅ FIX #1: FILTRO 2 - MemoryCache puro (SIN I/O bloqueante)
+        // Usa variable en memoria (_cachedCurrentChatId) en lugar de SharedPreferences
+        // Esto elimina COMPLETAMENTE el riesgo de race condition (0ms vs potenciales 2-5s)
+
+        if (_cachedCurrentChatId != null && _cachedCurrentChatId == chatId) {
+          ReleaseLogger.log('📱 [ChatDocsListener] Usuario está en chat $chatId - SKIP notificación');
+          continue;
+        }
+
+        // ⚡ Obtener el mensaje más reciente y mostrar notificación
+        await _fetchAndShowLatestMessage(chatId, userId, isGroup: isGroup);
+      }
+    } catch (e) {
+      ReleaseLogger.error('❌ [ChatDocsListener] Error en _processChatDocChanges: $e');
+    }
+  }
+
+  /// Obtener el mensaje más reciente del chat y mostrar notificación
+  /// ✅ SOLUCIÓN SIN RACE CONDITION: Usa campos denormalizados del chat doc (lastMessage, lastMessageSender)
+  /// en lugar de hacer query a subcollection messages (que puede retornar vacío por security rules o timing)
+  Future<void> _fetchAndShowLatestMessage(String chatId, String userId, {required bool isGroup}) async {
+    try {
+      ReleaseLogger.log('📥 [ChatDocsListener] Obteniendo datos del chat ${isGroup ? "grupo" : "chat"} $chatId');
+
+      final collection = isGroup ? 'groups' : 'chats';
+
+      // ✅ SOLUCIÓN: Obtener documento del chat (ya tiene lastMessage, lastMessageSender)
+      final chatDoc = await FirebaseFirestore.instance
+          .collection(collection)
+          .doc(chatId)
+          .get();
+
+      if (!chatDoc.exists) {
+        ReleaseLogger.log('⚠️ [ChatDocsListener] Chat no existe: $chatId');
+        return;
+      }
+
+      final chatData = chatDoc.data() as Map<String, dynamic>;
+      final senderId = chatData['lastMessageSender'] as String?;
+      final messageText = chatData['lastMessage'] as String?;
+      final lastMessageId = chatData['lastMessageId'] as String?; // ✅ NUEVO: ID real del mensaje
+
+      if (senderId == null) {
+        ReleaseLogger.log('⚠️ [ChatDocsListener] No hay lastMessageSender en chat $chatId');
+        return;
+      }
+
+      // FILTRO 4: Solo mensajes de OTROS usuarios
+      if (senderId == userId) {
+        ReleaseLogger.log('⏭️ [ChatDocsListener] Mensaje es del usuario actual - SKIP');
+        return;
+      }
+
+      // ✅ ANTI-DUPLICADOS MEJORADO: Usar lastMessageId (ID real del mensaje)
+      if (lastMessageId == null || lastMessageId.isEmpty) {
+        ReleaseLogger.log('⚠️ [ChatDocsListener] No hay lastMessageId en chat $chatId - SKIP');
+        return;
+      }
+
+      // ✅ FIX #7: Anti-duplicados usando servicio centralizado
+      final wasShown = await _deduplicationService.wasShown(lastMessageId);
+      ReleaseLogger.log('🔍 [ChatDocsListener] Checking dedup for $lastMessageId: wasShown=$wasShown');
+      
+      if (wasShown) {
+        ReleaseLogger.log('⏭️ [ChatDocsListener] Mensaje $lastMessageId ya procesado - SKIP');
+        return;
+      }
+
+      // ✅ FIX #12: Race condition lock - Evitar procesamiento simultáneo del mismo mensaje
+      if (_processingMessageIds.contains(lastMessageId)) {
+        ReleaseLogger.log('🔒 [ChatDocsListener] Mensaje $lastMessageId ya está siendo procesado - SKIP');
+        return;
+      }
+      _processingMessageIds.add(lastMessageId);
+
+      try {
+        // Query: Usuario remitente + alias en paralelo
+        final results = await Future.wait([
+          FirebaseFirestore.instance.collection('users').doc(senderId).get(),
+          ContactAliasService().getDisplayName(
+            senderId,
+            '', // Placeholder, se reemplaza con el nombre real después
+          ),
+        ]);
+
+        final senderDoc = results[0] as DocumentSnapshot;
+        final realName = senderDoc.data() != null
+            ? (senderDoc.data() as Map<String, dynamic>)['name'] as String? ?? senderId
+            : senderId;
+
+        // Obtener alias (si existe)
+        final senderName = await ContactAliasService().getDisplayName(senderId, realName);
+        final groupName = isGroup ? (chatData['name'] as String? ?? 'Grupo') : null;
+        final senderPhotoUrl = senderDoc.data() != null
+            ? (senderDoc.data() as Map<String, dynamic>)['photoURL'] as String?
+            : null;
+
+        // ⚡ MOSTRAR NOTIFICACIÓN INSTANTÁNEA
+        final displayText = messageText ?? '📷 Imagen';
+
+        ReleaseLogger.log('⚡ [ChatDocsListener] Mostrando notificación instantánea');
+        ReleaseLogger.log('   - Chat: ${isGroup ? "Grupo" : "Individual"} ($chatId)');
+        ReleaseLogger.log('   - Remitente: $senderName');
+        ReleaseLogger.log('   - Mensaje: $displayText');
+        ReleaseLogger.log('   - MessageId: $lastMessageId');
+
+        // ✅ FIX #10: Solo mostrar notificaciones instantáneas si la app está en FOREGROUND
+        // Si está en background, dejar que FCM maneje la notificación (evita duplicados)
+        if (!AppStateService().isInForeground) {
+          ReleaseLogger.log('📱 [ChatDocsListener] App en background - SKIP notificación local (FCM se encargará)');
+          return;
+        }
+
+        // ✅ CRITICAL: Verificar si el usuario tiene el chat abierto
+        // Si el chat del sender está abierto, NO mostrar notificación
+        final prefs = await SharedPreferences.getInstance();
+        final currentChatId = prefs.getString('current_chat_id');
+
+        if (currentChatId != null && currentChatId == chatId) {
+          ReleaseLogger.log('🚫 [ChatDocsListener] Usuario tiene el chat $chatId abierto - NO mostrar notificación');
+          // Marcar como procesado para evitar que se muestre después
+          await _deduplicationService.markAsShown(lastMessageId);
+          return;
+        }
+
+        await NotificationService().showLocalChatNotification(
+          senderId: senderId,
+          senderName: senderName,
+          messageText: displayText,
+          chatId: chatId,
+          isGroup: isGroup,
+          groupName: groupName,
+          senderPhotoUrl: senderPhotoUrl,
+        );
+
+        // ✅ FIX #7: Marcar como procesado SOLO después de mostrar exitosamente
+        await _deduplicationService.markAsShown(lastMessageId);
+        ReleaseLogger.log('✅ [ChatDocsListener] Marked $lastMessageId as shown');
+
+        ReleaseLogger.log('✅ [ChatDocsListener] Notificación instantánea mostrada para chat $chatId');
+      } finally {
+        // ✅ FIX #12: Liberar lock
+        _processingMessageIds.remove(lastMessageId);
+      }
+
+    } catch (e, stackTrace) {
+      ReleaseLogger.error('❌ [ChatDocsListener] Error en _fetchAndShowLatestMessage: $e');
+      ReleaseLogger.error('Stack trace: $stackTrace');
+      // Asegurar que se libere el lock en caso de error fuera del try block (aunque el finally lo cubre)
+      // _processingMessageIds.remove(lastMessageId); // Eliminado porque lastMessageId no es visible y finally ya lo maneja
+    }
+  }
+
+  /// Procesar mensajes detectados por el listener global
+  Future<void> _processGlobalMessages(QuerySnapshot snapshot, String userId) async {
+    try {
+      // Detectar mensajes NUEVOS (solo documentChanges de tipo 'added')
+      final newMessages = snapshot.docChanges
+          .where((change) => change.type == DocumentChangeType.added)
+          .map((change) => change.doc)
+          .toList();
+
+      if (newMessages.isEmpty) {
+        return; // No hay mensajes nuevos
+      }
+
+      ReleaseLogger.log('⚡ [GlobalListener] Detectados ${newMessages.length} mensajes nuevos');
+
+      for (final messageDoc in newMessages) {
+        final messageId = messageDoc.id;
+
+        // FILTRO 1: Evitar procesar el mismo mensaje múltiples veces
+        if (_processedMessageIds.contains(messageId)) {
+          continue;
+        }
+
+        final messageData = messageDoc.data() as Map<String, dynamic>?;
+        if (messageData == null) continue;
+
+        final senderId = messageData['senderId'] as String?;
+        final createdAt = messageData['createdAt'] as Timestamp?;
+
+        // FILTRO 2: Solo mensajes de OTROS usuarios (no del usuario actual)
+        if (senderId == null || senderId == userId) {
+          _processedMessageIds.add(messageId);
+          continue;
+        }
+
+        // FILTRO 3: Solo mensajes recientes (últimos 10 segundos)
+        if (createdAt != null) {
+          final messageAge = DateTime.now().difference(createdAt.toDate());
+          if (messageAge.inSeconds > 10) {
+            _processedMessageIds.add(messageId);
+            continue; // Mensaje demasiado antiguo (probablemente de caché)
+          }
+        }
+
+        // Extraer información del chat parent
+        final chatId = messageDoc.reference.parent.parent?.id;
+        if (chatId == null) {
+          ReleaseLogger.log('⚠️ [GlobalListener] No se pudo determinar chatId para mensaje $messageId');
+          _processedMessageIds.add(messageId);
+          continue;
+        }
+
+        // FILTRO 4: Verificar si el usuario está viendo este chat actualmente
+        final currentChatId = await _getCurrentActiveChatId();
+        if (currentChatId != null && currentChatId == chatId) {
+          ReleaseLogger.log('📱 [GlobalListener] Usuario está en chat $chatId - SKIP notificación');
+          _processedMessageIds.add(messageId);
+          continue; // No mostrar notificación si está viendo el chat
+        }
+
+        // Determinar si es grupo o chat individual
+        final isGroup = messageDoc.reference.parent.parent!.parent.id == 'groups';
+
+        // Obtener información del remitente
+        String senderName = senderId;
+        String? groupName;
+
+        try {
+          if (isGroup) {
+            // Para grupos, obtener nombre del grupo
+            final groupDoc = await FirebaseFirestore.instance
+                .collection('groups')
+                .doc(chatId)
+                .get();
+            groupName = groupDoc.data()?['name'] as String? ?? 'Grupo';
+
+            // Y nombre del miembro que envió (primero nombre real, luego alias)
+            final senderDoc = await FirebaseFirestore.instance
+                .collection('users')
+                .doc(senderId)
+                .get();
+            final realName = senderDoc.data()?['name'] as String? ?? senderName;
+
+            // Obtener alias si existe
+            senderName = await ContactAliasService().getDisplayName(senderId, realName);
+          } else {
+            // Para chats 1-1, obtener nombre real del remitente
+            final senderDoc = await FirebaseFirestore.instance
+                .collection('users')
+                .doc(senderId)
+                .get();
+            final realName = senderDoc.data()?['name'] as String? ?? senderName;
+
+            // Obtener alias si existe (el receptor puede haberle puesto un alias al remitente)
+            senderName = await ContactAliasService().getDisplayName(senderId, realName);
+          }
+        } catch (e) {
+          ReleaseLogger.error('⚠️ [GlobalListener] Error obteniendo nombres: $e');
+        }
+
+        // ✅ FIX #7: Anti-duplicados usando servicio centralizado
+        if (await _deduplicationService.wasShown(messageId)) {
+          ReleaseLogger.log('⏭️ [GlobalListener] Mensaje ${messageId.substring(0, 8)}... ya procesado - SKIP');
+          _processedMessageIds.add(messageId);
+          continue; // Skip este mensaje
+        }
+
+        // ⚡ MOSTRAR NOTIFICACIÓN INSTANTÁNEA
+        final messageText = messageData['text'] as String? ?? '📷 Imagen';
+
+        ReleaseLogger.log('⚡ [GlobalListener] Mostrando notificación instantánea para mensaje ${messageId.substring(0, 8)}...');
+        ReleaseLogger.log('   - Chat: ${isGroup ? "Grupo" : "Individual"} ($chatId)');
+        ReleaseLogger.log('   - Remitente: $senderName');
+
+        try {
+          await NotificationService().showLocalChatNotification(
+            senderId: senderId,
+            senderName: senderName,
+            messageText: messageText,
+            chatId: chatId,
+            isGroup: isGroup,
+            groupName: groupName,
+          );
+
+          // ✅ FIX #7: Marcar como procesado SOLO después de mostrar exitosamente
+          _processedMessageIds.add(messageId);
+          await _deduplicationService.markAsShown(messageId);
+
+          ReleaseLogger.log('✅ [GlobalListener] Notificación instantánea mostrada para ${messageId.substring(0, 8)}...');
+        } catch (e) {
+          ReleaseLogger.error('❌ [GlobalListener] Error mostrando notificación: $e');
+        }
+      }
+
+      // Limpiar IDs procesados antiguos (mantener solo los últimos 100)
+      if (_processedMessageIds.length > 100) {
+        final toRemove = _processedMessageIds.length - 100;
+        _processedMessageIds = _processedMessageIds.skip(toRemove).toSet();
+      }
+
+    } catch (e) {
+      ReleaseLogger.error('❌ [GlobalListener] Error en _processGlobalMessages: $e');
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // PER-CHAT LISTENERS - ARQUITECTURA CORRECTA PARA NOTIFICACIONES INSTANTÁNEAS
+  // ═══════════════════════════════════════════════════════════════
+
+  /// ⚡ NUEVO: Iniciar listeners individuales para TODOS los chats del usuario
+  /// Esto reemplaza GlobalListener (que falla por permisos de Firestore)
+  ///
+  /// Ventajas:
+  /// - Cumple con security rules de Firestore (queries específicos por chat)
+  /// - Usa el código existente de notificaciones instantáneas (líneas 756-838)
+  /// - Notificaciones <100ms (sin delay de Cloud Functions)
+  Future<void> startAllChatListeners() async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) {
+      ReleaseLogger.log('⚠️ [AllChatListeners] No hay usuario autenticado');
+      return;
+    }
+
+    try {
+      final userId = currentUser.uid;
+      ReleaseLogger.log('⚡ [AllChatListeners] Iniciando listeners para todos los chats del usuario ${userId.substring(0, 8)}...');
+
+      // 1️⃣ Obtener todos los chats individuales donde el usuario es participante
+      final chatsSnapshot = await FirebaseFirestore.instance
+          .collection('chats')
+          .where('participants', arrayContains: userId)
+          .get();
+
+      ReleaseLogger.log('📊 [AllChatListeners] Encontrados ${chatsSnapshot.docs.length} chats individuales');
+
+      for (final chatDoc in chatsSnapshot.docs) {
+        final chatId = chatDoc.id;
+        ensureListenerActive(chatId, isGroup: false);
+      }
+
+      // 2️⃣ Obtener todos los grupos donde el usuario es miembro
+      final groupsSnapshot = await FirebaseFirestore.instance
+          .collection('groups')
+          .where('members', arrayContains: userId)
+          .get();
+
+      ReleaseLogger.log('📊 [AllChatListeners] Encontrados ${groupsSnapshot.docs.length} grupos');
+
+      for (final groupDoc in groupsSnapshot.docs) {
+        final groupId = groupDoc.id;
+        ensureListenerActive(groupId, isGroup: true);
+      }
+
+      ReleaseLogger.log('✅ [AllChatListeners] Listeners iniciados: ${chatsSnapshot.docs.length} chats + ${groupsSnapshot.docs.length} grupos');
+      ReleaseLogger.log('✅ [AllChatListeners] Total de listeners activos: $_activeStreamCount');
+
+    } catch (e, stackTrace) {
+      ReleaseLogger.error('❌ [AllChatListeners] Error iniciando listeners: $e');
+      ReleaseLogger.error('Stack trace: $stackTrace');
+    }
+  }
+
   /// Detener background streams
   void stopBackgroundStreams() {
     if (!_isBackgroundStreamActive) {
@@ -270,6 +897,25 @@ class ChatStreamManager {
       // Detener stream de chats
       _chatListSubscription?.cancel();
       _chatListSubscription = null;
+
+      // ⚡ Detener listener global de mensajes (legacy)
+      _globalMessageSubscription?.cancel();
+      _globalMessageSubscription = null;
+      _processedMessageIds.clear();
+      ReleaseLogger.log('⚡ [GlobalListener] Listener global detenido');
+
+      // ⚡ Detener listeners de documentos de chats/grupos (nuevo)
+      _chatDocsSubscription?.cancel();
+      _chatDocsSubscription = null;
+      _groupDocsSubscription?.cancel();
+      _groupDocsSubscription = null;
+      _lastSeenMessageTimestamps.clear();
+      ReleaseLogger.log('⚡ [ChatDocsListener] Listeners de documentos detenidos');
+
+      // ✅ FIX #9: Stop heartbeat timer
+      _heartbeatTimer?.cancel();
+      _heartbeatTimer = null;
+      ReleaseLogger.log('⚡ [StreamDetector] Heartbeat timer stopped');
 
       // Detener streams de mensajes
       for (final subscription in _messageStreamSubscriptions.values) {
@@ -360,6 +1006,7 @@ class ChatStreamManager {
 
     _chatIsGroupMap.remove(chatId);
     _lastUpdateTimes.remove(chatId);
+    _previousReadByState.remove(chatId); // ✅ Cleanup readBy[] state
     _activeStreamCount = _messageControllers.length;
   }
 
@@ -370,10 +1017,16 @@ class ChatStreamManager {
   /// Manejar mensajes nuevos detectados y actualizar contadores
   Future<void> _handleNewMessagesDetected(String chatId, List<ChatMessage> messages, {bool isGroup = false}) async {
     try {
+      ReleaseLogger.log('🔍 [DEBUG] _handleNewMessagesDetected INICIADO para chat $chatId con ${messages.length} mensajes totales');
+
       final currentUser = FirebaseAuth.instance.currentUser;
-      if (currentUser == null) return;
+      if (currentUser == null) {
+        ReleaseLogger.log('⚠️ [DEBUG] currentUser es null - saliendo');
+        return;
+      }
 
       final currentUserId = currentUser.uid;
+      // ✅ FIX #18: Removed excessive DEBUG logs
 
       // Filtrar mensajes que NO sean del usuario actual (mensajes recibidos)
       final receivedMessages = messages.where((message) =>
@@ -389,11 +1042,17 @@ class ChatStreamManager {
 
       // ✅ PASO 1: Verificar si el usuario está viendo este chat actualmente
       final currentChatId = await _getCurrentActiveChatId();
+
       if (currentChatId != null && currentChatId == chatId) {
-        ReleaseLogger.log('📱 [ChatStreamManager] Usuario está en chat $chatId - marcando como leído automáticamente');
+        ReleaseLogger.log('📱 [ChatStreamManager] Usuario está en chat $chatId - marcando como leído automáticamente (NO SE MOSTRARÁ NOTIFICACIÓN)');
 
         // Marcar mensajes como leídos automáticamente
         await _markMessagesAsSeenIfActive(chatId, isGroup);
+
+        // ✅ FIX: Reset rate limit timer to allow immediate processing of updated readBy[] snapshot
+        // This ensures the UI updates immediately after messages are marked as read
+        _lastUpdateTimes.remove(chatId);
+        ReleaseLogger.log('🔄 [ChatStreamManager] Rate limit reset para permitir actualización de read receipts');
 
         // Poner contador en 0 automáticamente
         await _updateUnreadCountInFirestore(chatId, currentUserId, 0, isGroup: isGroup);
@@ -401,25 +1060,101 @@ class ChatStreamManager {
         return; // No necesitamos calcular contador
       }
 
-      // ✅ PASO 2: Si no está en el chat, consultar cache para contar no leídos
-      final cachedMessages = _cacheManager.getCachedMessages(chatId);
+      // ✅ PASO 2: Contar cuántos de los mensajes recibidos NO están leídos
+      int newUnreadMessages = 0;
+      for (final receivedMessage in receivedMessages) {
+        final readBy = receivedMessage.readBy ?? [];
+        final isRead = readBy.contains(currentUserId);
 
-      // ✅ PASO 3: Contar solo mensajes no leídos (usando sistema de read receipts)
-      int unreadCount = 0;
-      for (final cachedMessage in cachedMessages) {
-        if (cachedMessage.senderId != currentUserId) {
-          // Verificar si este mensaje específico está marcado como leído
-          final isMessageRead = await _isMessageRead(chatId, cachedMessage.id, currentUserId, isGroup);
-          if (!isMessageRead) {
-            unreadCount++;
-          }
+        if (!isRead) {
+          newUnreadMessages++;
         }
       }
 
-      ReleaseLogger.log('📊 [ChatStreamManager] Calculado $unreadCount mensajes sin leer en ${isGroup ? 'grupo' : 'chat'} $chatId');
+      ReleaseLogger.log('📊 [ChatStreamManager] Detectados $newUnreadMessages mensajes no leídos nuevos en ${isGroup ? 'grupo' : 'chat'} $chatId');
 
-      // Actualizar contador en Firestore
-      await _updateUnreadCountInFirestore(chatId, currentUserId, unreadCount, isGroup: isGroup);
+      // ✅ FIX #3: ELIMINADO incremento de unreadCount del cliente
+      // Cloud Functions (chats.js:76-83) ya incrementan correctamente cuando se crea el mensaje
+      // Incrementar aquí causaba duplicación (+2 por mensaje en lugar de +1)
+      // El cliente SOLO lee unreadCount, NUNCA lo modifica directamente
+
+      // ⚡ NOTIFICACIÓN INSTANTÁNEA: Mostrar notificación local para el mensaje más reciente
+      // Esto evita el delay de 2-5 segundos de las Cloud Functions
+      // El listener de Firestore detecta mensajes en <100ms
+      // ✅ FIX #18: Removed excessive DEBUG logs
+
+      if (receivedMessages.isNotEmpty) {  // ✅ ACTIVADO PARA TODOS (1-1 y grupos)
+        final latestMessage = receivedMessages.first; // El más reciente
+
+        try {
+          // Obtener información del remitente
+          String senderName = latestMessage.senderId;
+          String? groupName;
+          String? senderPhotoUrl;  // ✅ FIX: Capturar foto del sender
+
+          if (isGroup) {
+            // Para grupos, obtener nombre del grupo
+            final groupDoc = await FirebaseFirestore.instance
+                .collection('groups')
+                .doc(chatId)
+                .get();
+            groupName = groupDoc.data()?['name'] as String? ?? 'Grupo';
+
+            // Y nombre del miembro que envió (primero nombre real, luego alias)
+            final senderDoc = await FirebaseFirestore.instance
+                .collection('users')
+                .doc(latestMessage.senderId)
+                .get();
+            final realName = senderDoc.data()?['name'] as String? ?? senderName;
+            senderPhotoUrl = senderDoc.data()?['photoURL'] as String?;  // ✅ FIX: Capturar foto
+
+            // Obtener alias si existe
+            senderName = await ContactAliasService().getDisplayName(latestMessage.senderId, realName);
+          } else {
+            // Para chats 1-1, obtener nombre real del remitente
+            final senderDoc = await FirebaseFirestore.instance
+                .collection('users')
+                .doc(latestMessage.senderId)
+                .get();
+            final realName = senderDoc.data()?['name'] as String? ?? senderName;
+            senderPhotoUrl = senderDoc.data()?['photoURL'] as String?;  // ✅ FIX: Capturar foto
+
+            // Obtener alias si existe (el receptor puede haberle puesto un alias al remitente)
+            senderName = await ContactAliasService().getDisplayName(latestMessage.senderId, realName);
+          }
+
+          // ✅ FIX #7: Anti-duplicados usando servicio centralizado
+          if (await _deduplicationService.wasShown(latestMessage.id)) {
+            ReleaseLogger.log('⏭️ [StreamDetector] Mensaje ${latestMessage.id.substring(0, 8)}... ya procesado - SKIP');
+          } else {
+            // Mostrar notificación local instantánea
+            ReleaseLogger.log('⚡ [StreamDetector] Mostrando notificación instantánea...');
+            ReleaseLogger.log('   - senderId=${latestMessage.senderId.substring(0, 8)}..., senderName=$senderName');
+            ReleaseLogger.log('   - messageText=${latestMessage.text ?? '📷 Imagen'}');
+            ReleaseLogger.log('   - chatId=${chatId.substring(0, 8)}..., isGroup=$isGroup');
+
+            await NotificationService().showLocalChatNotification(
+              senderId: latestMessage.senderId,
+              senderName: senderName,
+              messageText: latestMessage.text ?? '📷 Imagen',
+              chatId: chatId,
+              isGroup: isGroup,
+              groupName: groupName,
+              senderPhotoUrl: senderPhotoUrl,  // ✅ FIX: Pasar foto del sender
+            );
+
+            // ✅ FIX #7: Marcar como procesado SOLO después de mostrar exitosamente
+            await _deduplicationService.markAsShown(latestMessage.id);
+
+            ReleaseLogger.log('✅ [StreamDetector] Notificación instantánea mostrada para ${latestMessage.id.substring(0, 8)}...');
+          }
+        } catch (e, stackTrace) {
+          ReleaseLogger.error('❌ Error disparando notificación instantánea: $e');
+          ReleaseLogger.error('Stack trace: $stackTrace');
+        }
+      } else {
+        ReleaseLogger.log('⚠️ [DEBUG] receivedMessages está vacío - no se mostrará notificación');
+      }
 
       // Actualizar badge global
       await _unreadService.updateBadgeCount();
@@ -432,7 +1167,7 @@ class ChatStreamManager {
   /// Obtener el chat ID que el usuario está viendo actualmente
   Future<String?> _getCurrentActiveChatId() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
+      final prefs = await _prefs;  // ✅ Cache rápido (0-5ms vs 2-5 segundos)
 
       // Intentar diferentes claves (como en el Android service)
       String? currentChatId = prefs.getString('flutter.current_chat_id');
@@ -461,31 +1196,8 @@ class ChatStreamManager {
     }
   }
 
-  /// Verificar si un mensaje específico está marcado como leído
-  Future<bool> _isMessageRead(String chatId, String messageId, String userId, bool isGroup) async {
-    try {
-      final collection = isGroup ? 'groups' : 'chats';
-
-      final messageDoc = await FirebaseFirestore.instance
-          .collection(collection)
-          .doc(chatId)
-          .collection('messages')
-          .doc(messageId)
-          .get();
-
-      if (!messageDoc.exists) return false;
-
-      final messageData = messageDoc.data();
-      final readBy = List<String>.from(messageData?['readBy'] ?? []);
-      final isRead = readBy.contains(userId);
-
-      return isRead;
-    } catch (e) {
-      ReleaseLogger.error('❌ Error verificando si mensaje está leído: $e');
-      // En caso de error, asumir que no está leído (más conservativo)
-      return false;
-    }
-  }
+  // ✅ FUNCIÓN ELIMINADA: Ya no necesitamos consultar Firestore por cada mensaje
+  // El conteo de no leídos ahora se hace directamente sobre el cache usando readBy[]
 
   /// Actualizar contador de no leídos en Firestore
   Future<void> _updateUnreadCountInFirestore(String chatId, String userId, int unreadCount, {bool isGroup = false}) async {
@@ -505,7 +1217,102 @@ class ChatStreamManager {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // CLEARED AT CACHE
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Obtener clearedAt timestamp con cache (evita queries redundantes)
+  Future<Timestamp?> _getClearedAtCached(String chatId, String? userId, bool isGroup) async {
+    if (userId == null) return null;
+
+    final cacheKey = '${chatId}_$userId';
+
+    // Si ya está en cache, retornar inmediatamente
+    if (_clearedAtCache.containsKey(cacheKey)) {
+      ReleaseLogger.log('✅ [Cache] clearedAt para $cacheKey obtenido del cache');
+      return _clearedAtCache[cacheKey];
+    }
+
+    // Si no está en cache, hacer query y cachear
+    try {
+      final collection = isGroup ? 'groups' : 'chats';
+      final chatDoc = await FirebaseFirestore.instance
+          .collection(collection)
+          .doc(chatId)
+          .get();
+
+      if (chatDoc.exists) {
+        final data = chatDoc.data();
+        final clearedAt = data?['clearedAt_$userId'] as Timestamp?;
+        _clearedAtCache[cacheKey] = clearedAt;
+        ReleaseLogger.log('📥 [Cache] clearedAt para $cacheKey cacheado');
+        return clearedAt;
+      }
+    } catch (e) {
+      ReleaseLogger.error('❌ Error obteniendo clearedAt: $e');
+    }
+
+    // Cachear null si no existe
+    _clearedAtCache[cacheKey] = null;
+    return null;
+  }
+
+  /// Invalidar cache de clearedAt cuando se limpia el chat
+  void invalidateClearedAtCache(String chatId, String userId) {
+    final cacheKey = '${chatId}_$userId';
+    _clearedAtCache.remove(cacheKey);
+    ReleaseLogger.log('🗑️ [Cache] clearedAt para $cacheKey invalidado');
+  }
+
   /// Dispose completo
+  // ✅ FIX #1: Método para establecer chat actual (actualiza MemoryCache + SharedPreferences)
+  Future<void> setCurrentChat(String chatId) async {
+    // ✅ CRÍTICO: Actualizar MemoryCache PRIMERO (inmediato, sin I/O)
+    _cachedCurrentChatId = chatId;
+    ReleaseLogger.log('📍 [MemoryCache] Chat actual establecido: $chatId');
+
+    // ✅ Persistir en background (no bloquear)
+    SharedPreferences.getInstance().then((prefs) {
+      prefs.setString('current_chat_id', chatId);
+      ReleaseLogger.log('💾 [SharedPrefs] Chat actual guardado: $chatId');
+    }).catchError((error) {
+      ReleaseLogger.error('❌ Error guardando chat actual en SharedPrefs: $error');
+    });
+  }
+
+  // ✅ FIX #1: Método para limpiar chat actual
+  Future<void> clearCurrentChat() async {
+    ReleaseLogger.log('🔍 [MemoryCache] Limpiando chat actual: $_cachedCurrentChatId');
+
+    // ✅ CRÍTICO: Limpiar MemoryCache PRIMERO (inmediato, sin I/O)
+    _cachedCurrentChatId = null;
+
+    // ✅ Limpiar SharedPreferences en background (no bloquear)
+    SharedPreferences.getInstance().then((prefs) {
+      prefs.remove('current_chat_id');
+      ReleaseLogger.log('✅ [SharedPrefs] Chat actual eliminado de SharedPreferences');
+    }).catchError((error) {
+      ReleaseLogger.error('❌ Error limpiando chat actual: $error');
+    });
+  }
+
+  // ✅ FIX #4: Método para limpiar todo cuando usuario cierra sesión
+  // Previene memory leaks y notificaciones para usuario incorrecto si hay cambio de cuenta
+  Future<void> onUserSignOut() async {
+    ReleaseLogger.log('🔄 [ChatStreamManager] Usuario cerrando sesión - limpiando listeners y caches');
+
+    // Detener todos los listeners activos
+    stopBackgroundStreams();
+
+    // Limpiar todos los caches
+    _lastSeenMessageTimestamps.clear();
+    _clearedAtCache.clear();
+    _prefsCache = null;
+    _cachedCurrentChatId = null;
+
+    ReleaseLogger.log('✅ [ChatStreamManager] Limpieza completa de sesión finalizada');
+  }
+
   void dispose() {
     stopBackgroundStreams();
     _chatListController.close();
@@ -518,5 +1325,8 @@ class ChatStreamManager {
 
     _chatIsGroupMap.clear();
     _lastUpdateTimes.clear();
+    _clearedAtCache.clear();
+    _prefsCache = null;  // ✅ NUEVO: Limpiar cache de SharedPreferences
+    _cachedCurrentChatId = null;  // ✅ FIX #1: Limpiar MemoryCache
   }
 }

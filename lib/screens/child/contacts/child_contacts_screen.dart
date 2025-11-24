@@ -5,6 +5,7 @@ import '../../../controllers/child_home_controller.dart';
 import '../../../controllers/child_contacts_controller.dart';
 import '../../../screens/add_contact_screen.dart';
 import '../../chat_detail_screen.dart';
+import '../../../services/create_chat_service.dart';
 
 /// Pantalla de contactos para niños con funcionalidad completa
 ///
@@ -646,18 +647,12 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
           ),
           IconButton(
             onPressed: () {
-              final chatId = _contactsController.getChatIdWithContact(contactId);
-              if (chatId.isNotEmpty) {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) => ChatDetailScreen(
-                      chatId: chatId,
-                      contactId: contactId,
-                      contactName: name,
-                    ),
-                  ),
-                );
-              }
+              // ✅ SEGURIDAD: Crear chat mediante Cloud Function (valida contactos, bloqueos, restricciones)
+              CreateChatService.createAndNavigateToChat(
+                context: context,
+                otherUserId: contactId,
+                otherUserName: name,
+              );
             },
             icon: Icon(
               Icons.chat_bubble_outline,

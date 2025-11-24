@@ -155,9 +155,13 @@ service cloud.firestore {
       // 🔒 FUNCIÓN DE SEGURIDAD: Verificar si se están actualizando campos críticos que solo Cloud Functions pueden modificar
       function isUpdatingCriticalChatFields() {
         let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
-        // CAMPOS CRÍTICOS que solo Cloud Functions pueden actualizar para prevenir bypass de filtros
-        let criticalFields = ['lastMessage', 'lastMessageTime', 'lastMessageSender'];
-        return changedKeys.hasAny(criticalFields);
+        // EXCEPCIÓN: Permitir actualización de lastMessage SI NO hay moderación activa
+        let chatHasModeration = resource.data.get('moderationEnabled', false) == true;
+
+        // Si hay moderación: bloquear lastMessage*, Si NO hay moderación: solo bloquear moderationEnabled
+        return chatHasModeration ?
+          changedKeys.hasAny(['lastMessage', 'lastMessageTime', 'lastMessageSender', 'lastMessageAt']) :
+          changedKeys.hasAny(['moderationEnabled']);
       }
 
       // Permitir actualizar si:
@@ -203,14 +207,37 @@ service cloud.firestore {
                  request.resource.data.type == 'answered_call';
         }
 
+        // ✅ FUNCIÓN: Verificar si el chat es válido para enviar mensajes
+        function isChatValid() {
+          let chatDoc = get(/databases/$(database)/documents/chats/$(chatId));
+          // Si no existe el campo isValidChat, asumimos true (compatibilidad con chats viejos)
+          // Si existe, debe ser true
+          return !chatDoc.data.keys().hasAny(['isValidChat']) || chatDoc.data.isValidChat == true;
+        }
+
+        // 🔒 FUNCIÓN: Verificar si el chat tiene moderación activa
+        function chatHasModeration() {
+          let chatDoc = get(/databases/$(database)/documents/chats/$(chatId));
+          return chatDoc.data.get('moderationEnabled', false) == true;
+        }
+
+        // 🔒 FUNCIÓN: Validar campos requeridos del mensaje
+        function hasRequiredMessageFields() {
+          return request.resource.data.keys().hasAll(['senderId', 'timestamp', 'type']) &&
+                 request.resource.data.senderId == request.auth.uid;
+        }
+
         // 🔒 SEGURIDAD CRÍTICA: Validación completa para crear mensajes
         // Permitir crear mensaje SOLO si:
         // 1. Eres el sender (senderId == auth.uid), Y
         // 2. Eres PARTICIPANTE del chat (validado en Firestore), Y
-        // 3. El texto no excede 5000 caracteres
-        // 4. O es un mensaje de llamada Y eres participante
-        allow create: if request.auth != null && isParticipant() && (
+        // 3. El chat es VÁLIDO (isValidChat = true o no existe), Y
+        // 4. El texto no excede 5000 caracteres, Y
+        // 5. Si hay moderación, NO se permite escritura directa (debe usar Cloud Function)
+        // 6. O es un mensaje de llamada Y eres participante Y chat válido
+        allow create: if request.auth != null && isParticipant() && isChatValid() && hasRequiredMessageFields() && (
           (request.auth.uid == request.resource.data.senderId &&
+           !chatHasModeration() &&  // NUEVO: Bloquear si hay moderación activa
            (!request.resource.data.keys().hasAny(['text']) ||
             request.resource.data.text == null ||
             request.resource.data.text.size() <= 5000)) ||
@@ -1255,17 +1282,25 @@ service cloud.firestore {
     // ============================================================================
     // Reglas para queries usando collectionGroup() que atraviesan múltiples chats
 
-    // Messages - Queries globales de mensajes (para galerías de medios, búsquedas, etc.)
-    match /{path=**}/messages/{messageId} {
-      // Permitir leer mensajes si eres el sender (para galerías de medios propios)
-      // IMPORTANTE: La app debe SIEMPRE filtrar por senderId en la query
-      allow get: if request.auth != null &&
-        resource.data.senderId == request.auth.uid;
+    // Messages - Queries globales de mensajes usando collectionGroup()
+    // Esto captura tanto /chats/{chatId}/messages como /groups/{groupId}/messages
+    match /{chatOrGroup}/{chatId}/messages/{messageId} {
+      // Función para verificar si el usuario es participante del chat/grupo padre
+      function isParticipantOfParent() {
+        // Si es un chat 1-1 (en /chats/)
+        return (chatOrGroup == 'chats' &&
+                request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants) ||
+               // Si es un grupo (en /groups/)
+               (chatOrGroup == 'groups' &&
+                request.auth.uid in get(/databases/$(database)/documents/groups/$(chatId)).data.members);
+      }
 
-      // Permitir list (queries) si eres el sender
-      // La app DEBE filtrar: .where('senderId', isEqualTo: userId)
-      allow list: if request.auth != null &&
-        resource.data.senderId == request.auth.uid;
+      // Permitir leer mensajes individuales si eres participante del chat/grupo padre
+      allow get: if request.auth != null && isParticipantOfParent();
+
+      // ⚡ GLOBAL MESSAGE LISTENER: Permitir queries solo si eres participante
+      // 🔒 SEGURIDAD: Validación SERVER-SIDE - el usuario DEBE ser participante del chat/grupo
+      allow list: if request.auth != null && isParticipantOfParent();
     }
   }
 }

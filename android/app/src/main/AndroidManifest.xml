@@ -122,14 +122,14 @@
             android:name="com.google.firebase.messaging.default_notification_channel_id"
             android:value="high_importance_channel" />
 
-        <!-- Canal de notificaciones para ubicación -->
+        <!-- Canal de notificaciones para Flutter Local Notifications (chat instantáneo) -->
         <meta-data
             android:name="com.dexterous.flutterlocalnotifications.default_notification_channel_id"
-            android:value="location_tracking" />
+            android:value="high_importance_channel" />
 
         <meta-data
             android:name="com.dexterous.flutterlocalnotifications.default_notification_channel_name"
-            android:value="Ubicación en Tiempo Real" />
+            android:value="Notificaciones Importantes" />
 
         <!-- Google Maps API Key -->
         <meta-data

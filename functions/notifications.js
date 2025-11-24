@@ -11,9 +11,184 @@ const apn = require('apn');
 // NOTIFICATIONS
 // ═══════════════════════════════════════════════════════════════
 
-// ❌ FUNCIÓN sendNotificationOnCreate ELIMINADA PARA EVITAR DUPLICACIÓN
-// Anteriormente causaba doble envío de notificaciones push
-// Ahora solo se usa sendInstantPushNotification para envío directo
+// ═══════════════════════════════════════════════════════════════
+// 📩 SEND NOTIFICATION ON CREATE (TRIGGER)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Envía notificación push cuando se crea un documento en la colección notifications
+ * con pushSent: false
+ *
+ * Este trigger se activa automáticamente y procesa las notificaciones creadas
+ * por otras Cloud Functions (ej: moderación, mensajes aprobados, etc.)
+ */
+exports.sendNotificationOnCreate = onDocumentCreated(
+  {
+    document: "notifications/{notificationId}",
+    region: "us-central1",
+  },
+  async (event) => {
+    try {
+      const notificationData = event.data.data();
+      const notificationId = event.params.notificationId;
+
+      console.log(`📩 [NotificationTrigger] Nueva notificación creada: ${notificationId}`);
+      console.log(`📩 [NotificationTrigger] pushSent: ${notificationData.pushSent}`);
+
+      // Solo procesar si pushSent es false (no se ha enviado aún)
+      if (notificationData.pushSent !== false) {
+        console.log(`⏭️ [NotificationTrigger] Notificación ya fue enviada o no requiere push - skipping`);
+        return null;
+      }
+
+      const {
+        userId,
+        type,
+        title,
+        body,
+        data,
+        senderId,
+        senderName,
+        senderPhotoUrl,
+        chatId,
+        messageId,
+        groupName,
+        isGroup,
+      } = notificationData;
+
+      console.log(`📱 [NotificationTrigger] Enviando push a ${userId}, tipo: ${type}`);
+
+      // Obtener usuario para FCM token
+      const userDoc = await getFirestore().collection("users").doc(userId).get();
+
+      if (!userDoc.exists) {
+        console.log(`❌ [NotificationTrigger] Usuario ${userId} no encontrado`);
+        return null;
+      }
+
+      const userData = userDoc.data();
+      let fcmTokens = [];
+
+      // Normalizar tokens FCM
+      if (userData.fcmTokens && Array.isArray(userData.fcmTokens) && userData.fcmTokens.length > 0) {
+        fcmTokens = userData.fcmTokens.filter(token => token && typeof token === 'string' && token.trim().length > 0);
+      }
+
+      if (fcmTokens.length === 0 && userData.fcmToken) {
+        const tokenString = String(userData.fcmToken).trim();
+        if (tokenString && tokenString !== 'null' && tokenString !== 'undefined' && tokenString.length > 10) {
+          fcmTokens = [tokenString];
+        }
+      }
+
+      if (fcmTokens.length === 0) {
+        console.log(`❌ [NotificationTrigger] No hay tokens FCM para ${userId}`);
+        // Marcar como enviada aunque no haya tokens para evitar reintentos
+        await event.data.ref.update({ pushSent: true });
+        return null;
+      }
+
+      console.log(`📱 [NotificationTrigger] Tokens FCM encontrados: ${fcmTokens.length}`);
+
+      // Preparar mensaje FCM con TODOS los datos del sender (igual que Stream Detector)
+      const fcmData = {
+        title: title || "Talia",
+        body: body || "",
+        type: type || "notification",
+        ...(data || {}),
+      };
+
+      // ✅ Agregar campos del sender para mostrar foto circular (igual que foreground)
+      if (senderId) fcmData.senderId = senderId;
+      if (senderName) fcmData.senderName = senderName;
+      if (senderPhotoUrl) fcmData.senderPhotoUrl = senderPhotoUrl;
+      if (chatId) fcmData.chatId = chatId;
+      if (messageId) fcmData.messageId = messageId;
+      if (groupName) fcmData.groupName = groupName;
+      if (isGroup !== undefined) fcmData.isGroup = String(isGroup);
+
+      console.log(`📦 [NotificationTrigger] fcmData completo:`, JSON.stringify(fcmData));
+
+      // ✅ ESTRATEGIA FINAL para iOS:
+      // 1. Enviar payload COMPLETO con alert + sound + content-available
+      // 2. Incluir foto del sender en fcmOptions.image (iOS la descarga automáticamente)
+      // 3. Foreground: AppDelegate suprime notificaciones FCM de chat (Stream Detector maneja)
+      // 4. Background: iOS muestra notificación inmediatamente CON foto
+      const isChatMessage = type === 'chat_message' || type === 'group_message';
+
+      // ✅ FIXED APPROACH: Usar notificaciones CON alert para garantizar entrega
+      // NSE descargará la foto manualmente (sin usar Firebase Messaging roto)
+      // Silent notifications son poco confiables en iOS (Apple las throttlea)
+
+      // ✅ CRITICAL: mutable-content DEBE estar SIEMPRE presente para mensajes de chat
+      // para que el NSE pueda descargar la foto del sender
+      const apsPayload = {
+        alert: {
+          title: title || "Talia",
+          body: body || "",
+        },
+        sound: "default",
+        "content-available": 1,  // ✅ Despierta background handler
+        // ✅ SIEMPRE activar NSE para mensajes de chat (con o sin foto)
+        ...(isChatMessage ? { "mutable-content": 1 } : {}),
+      };
+
+      const apnsPayload = {
+        headers: {
+          "apns-priority": "10",
+          "apns-push-type": "alert",
+        },
+        payload: {
+          aps: apsPayload,
+        },
+      };
+
+      const message = {
+        // ✅ NO incluir notification en root para iOS (el NSE lo manejará)
+        // Solo incluir para Android y para notificaciones no-chat
+        data: fcmData,
+        tokens: fcmTokens,
+        android: {
+          priority: "high",
+          notification: {
+            title: title || "Talia",
+            body: body || "",
+            channelId: isChatMessage ? "chat_messages" : "high_importance_channel",
+          },
+        },
+        apns: apnsPayload,
+      };
+
+      console.log(`📦 [NotificationTrigger] aps payload:`, JSON.stringify(apsPayload));
+      console.log(`📦 [NotificationTrigger] senderPhotoUrl:`, senderPhotoUrl);
+      console.log(`📦 [NotificationTrigger] hasMutableContent:`, !!senderPhotoUrl);
+      console.log(`📦 [NotificationTrigger] FULL apnsPayload:`, JSON.stringify(apnsPayload, null, 2));
+
+      // Enviar notificación
+      const response = await getMessaging().sendEachForMulticast(message);
+
+      console.log(`✅ [NotificationTrigger] Push enviado: ${response.successCount} exitosos, ${response.failureCount} fallidos`);
+
+      // ✅ LOG DETALLADO DE ERRORES
+      if (response.failureCount > 0) {
+        console.error(`❌ [NotificationTrigger] Detalles de fallos:`);
+        response.responses.forEach((resp, idx) => {
+          if (!resp.success) {
+            console.error(`  - Token ${idx}: ${resp.error?.code} - ${resp.error?.message}`);
+          }
+        });
+      }
+
+      // Marcar como enviada
+      await event.data.ref.update({ pushSent: true });
+
+      return null;
+    } catch (error) {
+      console.error(`❌ [NotificationTrigger] Error:`, error);
+      return null;
+    }
+  }
+);
 
 // ═══════════════════════════════════════════════════════════════
 // ⚡ INSTANT PUSH NOTIFICATION (OPTIMIZED - SINGLE QUERY)
@@ -51,7 +226,7 @@ exports.sendInstantPushNotification = onCall(
     const finalUserId = userId || receiverId;
 
     console.log(`📱 [INSTANT PUSH] Nueva notificación para ${finalUserId}, tipo: ${type}`);
-    console.log(`🔍 [DEBUG] request.data completo:`, JSON.stringify(request.data, null, 2));
+    // ✅ FIX #16: Removed excessive DEBUG log with request.data
 
     let sentViaVoIP = false;
 
@@ -66,26 +241,16 @@ exports.sendInstantPushNotification = onCall(
 
       const userData = userDoc.data();
 
-      // 🔍 DEBUG DETALLADO: Verificar estructura de datos del usuario
-      console.log(`🔍 [INSTANT PUSH] DEBUG - userData.fcmTokens:`, userData.fcmTokens);
-      console.log(`🔍 [INSTANT PUSH] DEBUG - userData.fcmToken:`, userData.fcmToken ? userData.fcmToken.substring(0, 20) + '...' : 'undefined');
-      console.log(`🔍 [INSTANT PUSH] DEBUG - Tipo fcmToken:`, typeof userData.fcmToken);
+      // ✅ FIX #17: Removed sensitive DEBUG logs with fcmToken data
 
       // ✅ COMPATIBILIDAD ROBUSTA: Normalizar tokens FCM con múltiples fallbacks
       let fcmTokens = [];
-
-      // 🔍 DEBUGGING: Verificar valores exactos ANTES de procesamiento
-      console.log(`🔍 [INSTANT PUSH] DEBUG - userData keys:`, Object.keys(userData));
-      console.log(`🔍 [INSTANT PUSH] DEBUG - userData.fcmTokens:`, userData.fcmTokens);
-      console.log(`🔍 [INSTANT PUSH] DEBUG - userData.fcmToken:`, userData.fcmToken ? `${userData.fcmToken.substring(0, 30)}...` : userData.fcmToken);
-      console.log(`🔍 [INSTANT PUSH] DEBUG - fcmToken tipo:`, typeof userData.fcmToken);
-      console.log(`🔍 [INSTANT PUSH] DEBUG - fcmToken length:`, userData.fcmToken ? userData.fcmToken.length : 0);
 
       // ✅ ROBUSTEZ 1: Formato nuevo (fcmTokens como array)
       if (userData.fcmTokens && Array.isArray(userData.fcmTokens) && userData.fcmTokens.length > 0) {
         // Filtrar tokens válidos (no vacíos, no null, no undefined)
         fcmTokens = userData.fcmTokens.filter(token => token && typeof token === 'string' && token.trim().length > 0);
-        console.log(`📱 [INSTANT PUSH] ✅ Formato nuevo - tokens FCM válidos encontrados: ${fcmTokens.length}`);
+        console.log(`📱 [INSTANT PUSH] ✅ Formato nuevo - tokens FCM encontrados: ${fcmTokens.length}`);
       }
 
       // ✅ ROBUSTEZ 2: Formato antiguo (fcmToken como string) - SOLO si no hay tokens del formato nuevo
@@ -95,23 +260,19 @@ exports.sendInstantPushNotification = onCall(
 
         if (tokenString && tokenString !== 'null' && tokenString !== 'undefined' && tokenString.length > 10) {
           fcmTokens = [tokenString];
-          console.log(`📱 [INSTANT PUSH] ✅ Formato antiguo - token FCM convertido exitosamente`);
-          console.log(`📱 [INSTANT PUSH] ✅ Token (primeros 30 chars): ${tokenString.substring(0, 30)}...`);
+          console.log(`📱 [INSTANT PUSH] ✅ Formato antiguo - token FCM convertido`);
+          // ✅ FIX #17: No log partial token data (security)
         } else {
-          console.log(`❌ [INSTANT PUSH] DEBUG - fcmToken inválido: "${tokenString}"`);
+          console.log(`❌ [INSTANT PUSH] Token FCM inválido (length: ${tokenString.length})`);
         }
       }
 
-      // ✅ ROBUSTEZ 3: Logging exhaustivo si no hay tokens
+      // ✅ ROBUSTEZ 3: Error logging si no hay tokens (sin datos sensibles)
       if (fcmTokens.length === 0) {
-        console.log(`❌ [INSTANT PUSH] ERROR - NO SE ENCONTRARON TOKENS FCM VÁLIDOS`);
-        console.log(`❌ [INSTANT PUSH] DEBUG - userData.fcmTokens existe?`, !!userData.fcmTokens);
-        console.log(`❌ [INSTANT PUSH] DEBUG - userData.fcmToken existe?`, !!userData.fcmToken);
-        console.log(`❌ [INSTANT PUSH] DEBUG - fcmToken raw value:`, JSON.stringify(userData.fcmToken));
-        console.log(`❌ [INSTANT PUSH] DEBUG - Documento completo:`, JSON.stringify(userData, null, 2));
+        console.log(`❌ [INSTANT PUSH] ERROR - No se encontraron tokens FCM válidos`);
+        console.log(`❌ [INSTANT PUSH] fcmTokens existe: ${!!userData.fcmTokens}, fcmToken existe: ${!!userData.fcmToken}`);
+        // ✅ FIX #17: Removed DEBUG logs with sensitive token data
       }
-
-      console.log(`🔍 [INSTANT PUSH] RESULTADO FINAL - fcmTokens.length: ${fcmTokens.length}`);
 
       console.log(`📱 [INSTANT PUSH] Tokens disponibles: FCM(${fcmTokens.length}) - usando FCM con headers VoIP para llamadas`);
 
@@ -240,21 +401,35 @@ exports.sendInstantPushNotification = onCall(
 
       // ✅ finalTitle y finalBody ya están definidos arriba
 
+      // Validar y extraer datos del sender
+      const senderPhotoUrl = request.data.senderPhotoUrl || request.data.data?.senderPhotoUrl || null;
+      const senderName = request.data.senderName || request.data.data?.senderName || "Usuario";
+
+      // ✅ LOGGING DETALLADO para debugging
+      console.log(`📸 [INSTANT PUSH] Datos del sender:`);
+      console.log(`   - senderPhotoUrl: ${senderPhotoUrl ? senderPhotoUrl.substring(0, 60) + '...' : 'NULL'}`);
+      console.log(`   - senderName: ${senderName}`);
+      console.log(`   - senderId: ${senderId || 'unknown'}`);
+
       // Construir payload de datos
       const dataPayload = {
         type: type,
         userId: finalUserId,
         ...(chatId && { chatId }),
         ...(senderId && { senderId }),
+        ...(senderPhotoUrl && { senderPhotoUrl }),  // ✅ Usar variable validada
         ...(isGroup && { isGroup: 'true' }),
         ...(request.data.messageId && { messageId: request.data.messageId }),
-        ...(request.data.senderName && { senderName: request.data.senderName }),
+        ...(senderName && { senderName }),  // ✅ Usar variable validada
         ...(request.data.groupName && { groupName: request.data.groupName }),
         // ✅ AGREGAR datos de llamada si es necesario
         ...(request.data.data && { ...request.data.data }),
       };
 
-      // ✅ CONFIGURACIÓN SIMPLE FCM (IGUAL QUE EN LA VERSIÓN QUE FUNCIONABA)
+      // ✅ CONFIGURACIÓN OPTIMIZADA FCM
+      // Detectar si es mensaje de chat
+      const isChatMessage = type === 'chat_message' || type === 'group_message';
+
       const message = {
         token: fcmTokens[0],
         data: Object.fromEntries(
@@ -264,41 +439,43 @@ exports.sendInstantPushNotification = onCall(
             body: finalBody,
           }).map(([k, v]) => [k, String(v)])
         ),
-        notification: {
-          title: finalTitle,
-          body: finalBody,
-        },
-        // ✅ CONFIGURACIÓN SIMPLE: iOS vs Android basado en voipToken
+        // ✅ CONFIGURACIÓN iOS vs Android basado en voipToken
         ...(voipToken ? {
-          // iOS - configuración simplificada
+          // iOS - configuración con soporte para fotos de perfil
           apns: {
             headers: {
               "apns-priority": "10",
+              "apns-push-type": "alert",
             },
             payload: {
               aps: {
+                alert: {
+                  title: finalTitle,
+                  body: finalBody,
+                },
                 "content-available": 1,
                 sound: "default",
+                badge: 1,
+                // ✅ CRÍTICO: mutable-content SIEMPRE activo para mensajes de chat
+                ...(isChatMessage ? { "mutable-content": 1 } : {}),
               },
             },
           },
         } : {
-          // Android - configuración para llamadas
+          // Android - configuración estándar
+          notification: {
+            title: finalTitle,
+            body: finalBody,
+          },
           android: {
             priority: "high",
-            ...(isCall && {
-              notification: {
-                channel_id: "video_calls",
+            notification: {
+              channelId: isChatMessage ? "chat_messages" : (isCall ? "video_calls" : "default"),
+              ...(isCall && {
                 category: "call",
                 click_action: "FLUTTER_NOTIFICATION_CLICK",
-              }
-            }),
-            ...(!isCall && {
-              notification: {
-                channel_id: "default",
-                click_action: "FLUTTER_NOTIFICATION_CLICK",
-              }
-            }),
+              }),
+            },
           }
         }),
       };

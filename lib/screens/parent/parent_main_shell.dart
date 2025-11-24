@@ -10,6 +10,7 @@ import '../chat_detail_screen.dart';
 import '../group_chat_screen.dart';
 import '../../controllers/parent_main_shell_controller.dart';
 import '../../utils/release_logger.dart';
+import '../../notification_service.dart';
 
 /// Clase para combinar todos los datos del BottomNavigationBar en un solo stream
 class BottomNavData {
@@ -131,6 +132,10 @@ class _ParentMainShellState extends State<ParentMainShell> {
 
     // ✅ OPTIMIZACIÓN: Inicializar stream combinado
     _initializeCombinedStream();
+
+    // ✅ FIX: Limpiar current_chat_id cuando llegas a ParentMainShell (lista de chats)
+    // Esto asegura que las notificaciones se muestren correctamente
+    NotificationService().clearCurrentChat();
   }
 
 

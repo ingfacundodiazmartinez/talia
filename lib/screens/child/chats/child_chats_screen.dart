@@ -15,6 +15,7 @@ import '../../../services/message_cache_service.dart';
 import '../../../services/typing_indicator_service.dart';
 import '../../../services/message_status_helper.dart';
 import '../../../services/group_chat_service.dart';
+import '../../../services/create_chat_service.dart';
 import '../../../models/chat_message.dart';
 import '../../../widgets/message_status_indicator.dart';
 import '../../chat_detail_screen.dart';

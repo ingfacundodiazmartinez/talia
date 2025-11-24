@@ -1,4 +1,4 @@
-const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/firestore");
+const { onDocumentCreated, onDocumentDeleted, onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
@@ -691,6 +691,84 @@ exports.unblockChat = onCall({ consumeAppCheckToken: true }, async (request) => 
     throw new HttpsError("internal", `Error desbloqueando chat: ${error.message}`);
   }
 });
+
+// ═══════════════════════════════════════════════════════════════
+// INVALIDAR CHATS CUANDO SE ELIMINA CONTACTO
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * ⚡ TRIGGER: Invalidar chat cuando se elimina o bloquea un contacto
+ * Actualiza el campo isValidChat = false para prevenir nuevos mensajes
+ * La validación se hace en Firestore rules (sin latencia de Cloud Functions)
+ */
+exports.invalidateChatOnContactDelete = onDocumentUpdated(
+  {
+    document: "contacts/{contactId}",
+    region: "us-central1",
+  },
+  async (event) => {
+    try {
+      const beforeData = event.data.before.data();
+      const afterData = event.data.after.data();
+
+      // Solo procesar si el status cambió a 'deleted' o 'blocked'
+      if (beforeData.status === afterData.status) {
+        return null; // Sin cambios en status
+      }
+
+      const newStatus = afterData.status;
+      const isInvalidStatus = newStatus === "deleted" || newStatus === "blocked";
+
+      if (!isInvalidStatus) {
+        // Si el status cambió a 'approved', asegurar que isValidChat = true
+        if (newStatus === "approved") {
+          const users = afterData.users || [];
+          if (users.length !== 2) {
+            console.error(`❌ Contacto inválido: users.length = ${users.length}`);
+            return null;
+          }
+
+          const chatId = users.sort().join("_");
+          const db = getFirestore();
+
+          console.log(`✅ Contacto aprobado - validando chat ${chatId}`);
+
+          await db.collection("chats").doc(chatId).set({
+            isValidChat: true,
+          }, { merge: true });
+
+          console.log(`✅ Chat ${chatId} marcado como válido (isValidChat: true)`);
+        }
+
+        return null;
+      }
+
+      // Contacto fue eliminado o bloqueado - invalidar chat
+      const users = afterData.users || [];
+      if (users.length !== 2) {
+        console.error(`❌ Contacto inválido: users.length = ${users.length}`);
+        return null;
+      }
+
+      const chatId = users.sort().join("_");
+      const db = getFirestore();
+
+      console.log(`🚫 Contacto ${newStatus} - invalidando chat ${chatId}`);
+
+      // Actualizar isValidChat = false
+      await db.collection("chats").doc(chatId).set({
+        isValidChat: false,
+      }, { merge: true });
+
+      console.log(`✅ Chat ${chatId} invalidado (isValidChat: false)`);
+
+      return null;
+    } catch (error) {
+      console.error("❌ Error invalidando chat:", error);
+      return null;
+    }
+  },
+);
 
 // ═══════════════════════════════════════════════════════════════
 // CONTADOR DE MENSAJES SIN LEER

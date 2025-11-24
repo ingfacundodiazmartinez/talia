@@ -497,7 +497,8 @@ exports.moderateMessage = onDocumentCreated(
           moderationReason: moderationReason,
         });
 
-        // Continuar al flujo de notificación (no hacer return)
+        // Continuar al flujo de notificación (crear en Firestore para que sendNotificationOnCreate envíe FCM si app está en background)
+        // El anti-duplicados en Flutter manejará el caso de foreground
       } else {
         console.log(`🔒 Moderación activa (tipo: ${moderationType}, nivel: ${moderationLevel})`);
 
@@ -706,10 +707,13 @@ exports.moderateMessage = onDocumentCreated(
         await db.collection("notifications").add({
           userId: receiverId,
           senderId: senderId,
+          senderName: senderName,  // ✅ CRÍTICO: Campo en nivel raíz para notifications.js
+          senderPhotoUrl: senderPhotoUrl,  // ✅ FIX: Cambiar imageUrl → senderPhotoUrl (debe coincidir con notifications.js:52)
           type: "chat_message",
+          chatId: chatId,  // ✅ CRÍTICO: Campo en nivel raíz para notifications.js
+          messageId: messageId,  // ✅ CRÍTICO: Para anti-duplicados
           title: `💬 ${senderName}`,
           body: messagePreview,
-          imageUrl: senderPhotoUrl,
           priority: "normal",
           read: false,
           pushSent: false, // FALSE para que sendNotificationOnCreate envíe el push
@@ -808,6 +812,80 @@ exports.moderateMessage = onDocumentCreated(
       } catch (updateError) {
         console.error(`❌ Error actualizando mensaje después de fallo:`, updateError);
       }
+    }
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
+// CREAR MENSAJE APROBADO DESPUÉS DE EDICIÓN
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Crea un mensaje aprobado después de que un mensaje bloqueado fue editado
+ * Esta función se ejecuta del lado del servidor para evitar problemas de permisos
+ */
+exports.createApprovedMessage = onCall(
+  { region: "us-central1" },
+  async (request) => {
+    const { chatId, messageId, senderId, text, localId } = request.data;
+    const userId = request.auth?.uid;
+
+    console.log(`📝 [CreateApprovedMessage] Creando mensaje aprobado para chat ${chatId}, userId: ${userId}, localId: ${localId}`);
+
+    // Verificar autenticación
+    if (!userId) {
+      console.error(`❌ [CreateApprovedMessage] Usuario no autenticado`);
+      throw new HttpsError("unauthenticated", "Usuario no autenticado");
+    }
+
+    // Verificar que el usuario sea el remitente
+    if (userId !== senderId) {
+      throw new HttpsError("permission-denied", "Solo el remitente puede crear este mensaje");
+    }
+
+    // Verificar parámetros requeridos
+    if (!chatId || !messageId || !text) {
+      throw new HttpsError("invalid-argument", "Faltan parámetros requeridos");
+    }
+
+    const db = getFirestore();
+
+    try {
+      // ✅ FIX: Preparar datos del mensaje con localId si está disponible
+      const messageData = {
+        senderId: senderId,
+        text: text,
+        timestamp: FieldValue.serverTimestamp(),
+        isRead: false,
+        readBy: [],
+        moderationStatus: "approved",
+        moderatedAt: FieldValue.serverTimestamp(),
+      };
+
+      // ✅ FIX: Incluir localId para deduplicación si está disponible
+      if (localId) {
+        messageData.localId = localId;
+        console.log(`✅ [CreateApprovedMessage] Incluyendo localId: ${localId}`);
+      }
+
+      // 1. Crear el mensaje aprobado en Firestore
+      await db.collection("chats").doc(chatId).collection("messages").doc(messageId).set(messageData);
+
+      console.log(`✅ [CreateApprovedMessage] Mensaje creado: ${messageId}`);
+
+      // 2. Actualizar lastMessage del chat inmediatamente
+      await db.collection("chats").doc(chatId).update({
+        lastMessage: text,
+        lastMessageTime: FieldValue.serverTimestamp(),
+        lastMessageSender: senderId,
+      });
+
+      console.log(`✅ [CreateApprovedMessage] Chat actualizado con lastMessage: "${text.substring(0, 30)}..."`);
+
+      return { success: true, messageId: messageId };
+    } catch (error) {
+      console.error(`❌ [CreateApprovedMessage] Error:`, error);
+      throw new HttpsError("internal", `Error creando mensaje: ${error.message}`);
     }
   }
 );

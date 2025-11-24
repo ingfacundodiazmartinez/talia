@@ -7,6 +7,7 @@ import '../services/contacts_sync_service.dart';
 import '../utils/chat_utils.dart';
 import '../utils/release_logger.dart';
 import '../constants/notification_types.dart';
+import '../services/chats/chat_orchestrator.dart';
 
 /// Controller para el shell principal de padres
 ///
@@ -65,6 +66,17 @@ class ParentMainShellController {
       _setupNotificationListeners();
       _setupRoleChangeListener();
       _syncContactsInBackground();
+
+      // ⚡ Iniciar listener global de mensajes para notificaciones instantáneas
+      // Esto reduce el delay de 1-2 segundos de FCM a ~100ms
+      ReleaseLogger.log('⚡ Iniciando listener global de mensajes...', tag: 'ParentMainShell');
+      try {
+        await ChatOrchestrator().startGlobalMessageListener();
+        ReleaseLogger.log('✅ Listener global de mensajes iniciado', tag: 'ParentMainShell');
+      } catch (e) {
+        ReleaseLogger.error('❌ Error iniciando listener global: $e', tag: 'ParentMainShell');
+        // No es crítico, las notificaciones seguirán funcionando con FCM
+      }
     } catch (e) {
       ReleaseLogger.error('Error inicializando ParentMainShellController: $e', tag: 'ParentMainShell');
     }

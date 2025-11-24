@@ -59,6 +59,12 @@ class MessageCacheService {
     if (_messagesBox == null) return;
 
     try {
+      // ✅ FIX: Si el mensaje tiene localId, eliminar el mensaje optimista anterior
+      if (message.localId != null) {
+        final oldKey = '${chatId}_${message.localId}';
+        await _messagesBox!.delete(oldKey);
+      }
+
       final key = '${chatId}_${message.id}';
       final data = {
         'id': message.id,
@@ -75,6 +81,11 @@ class MessageCacheService {
         'type': message.type,
         'status': message.status.name,
         'retryCount': message.retryCount,
+        'localId': message.localId, // ✅ FIX: Guardar localId para deduplicación
+        // Campos de moderación
+        'moderationStatus': message.moderationStatus?.name,
+        'moderationReason': message.moderationReason,
+        'originalText': message.originalText,
       };
 
       await _messagesBox!.put(key, data);
@@ -90,6 +101,20 @@ class MessageCacheService {
     if (_messagesBox == null) return;
 
     try {
+      // ✅ FIX: Primero eliminar mensajes optimistas que serán reemplazados
+      for (final message in messages) {
+        if (message.localId != null) {
+          final oldKey = '${chatId}_${message.localId}';
+          final existed = _messagesBox!.containsKey(oldKey);
+          await _messagesBox!.delete(oldKey);
+          if (existed) {
+            print('🗑️ [Hive] Eliminado mensaje optimista: $oldKey');
+          } else {
+            print('⚠️ [Hive] Mensaje optimista NO existía: $oldKey');
+          }
+        }
+      }
+
       final entries = <String, Map<String, dynamic>>{};
 
       for (final message in messages) {
@@ -109,6 +134,11 @@ class MessageCacheService {
           'type': message.type,
           'status': message.status.name,
           'retryCount': message.retryCount,
+          'localId': message.localId, // ✅ FIX: Guardar localId para deduplicación
+          // Campos de moderación
+          'moderationStatus': message.moderationStatus?.name,
+          'moderationReason': message.moderationReason,
+          'originalText': message.originalText,
         };
       }
 
@@ -163,6 +193,45 @@ class MessageCacheService {
         data['status'] = status.name;
         await _messagesBox!.put(key, data);
       }
+    } catch (e) {
+    }
+  }
+
+  /// Actualizar un mensaje completo en el cache
+  Future<void> updateMessage(String chatId, ChatMessage message) async {
+    if (_messagesBox == null) return;
+
+    try {
+      // ✅ FIX: Si el mensaje tiene localId, eliminar el mensaje optimista anterior
+      if (message.localId != null) {
+        final oldKey = '${chatId}_${message.localId}';
+        await _messagesBox!.delete(oldKey);
+      }
+
+      final key = '${chatId}_${message.id}';
+      final data = {
+        'id': message.id,
+        'senderId': message.senderId,
+        'text': message.text,
+        'imageUrl': message.imageUrl,
+        'videoUrl': message.videoUrl,
+        'audioUrl': message.audioUrl,
+        'timestamp': message.timestamp?.millisecondsSinceEpoch,
+        'localTimestamp': message.localTimestamp?.millisecondsSinceEpoch,
+        'isRead': message.isRead,
+        'replyTo': message.replyTo,
+        'reactions': message.reactions,
+        'type': message.type,
+        'status': message.status.name,
+        'retryCount': message.retryCount,
+        'localId': message.localId, // ✅ FIX: Guardar localId para deduplicación
+        // Campos de moderación
+        'moderationStatus': message.moderationStatus?.name,
+        'moderationReason': message.moderationReason,
+        'originalText': message.originalText,
+      };
+
+      await _messagesBox!.put(key, data);
     } catch (e) {
     }
   }
@@ -239,6 +308,11 @@ class MessageCacheService {
       type: data['type'] as String?,
       status: _parseMessageStatus(data['status'] as String?),
       retryCount: data['retryCount'] as int? ?? 0,
+      localId: data['localId'] as String?, // ✅ FIX: Cargar localId desde cache
+      // Campos de moderación
+      moderationStatus: _parseModerationStatus(data['moderationStatus'] as String?),
+      moderationReason: data['moderationReason'] as String?,
+      originalText: data['originalText'] as String?,
     );
   }
 
@@ -247,10 +321,32 @@ class MessageCacheService {
     switch (status) {
       case 'sending':
         return MessageStatus.sending;
+      case 'sent':
+        return MessageStatus.sent;
+      case 'delivered':
+        return MessageStatus.delivered;
+      case 'seen':
+        return MessageStatus.seen;
       case 'error':
         return MessageStatus.error;
       default:
         return MessageStatus.sent;
+    }
+  }
+
+  /// Parsear estado de moderación desde string
+  ModerationStatus? _parseModerationStatus(String? status) {
+    if (status == null) return null;
+
+    switch (status) {
+      case 'approved':
+        return ModerationStatus.approved;
+      case 'blocked':
+        return ModerationStatus.blocked;
+      case 'pending':
+        return ModerationStatus.pending;
+      default:
+        return null;
     }
   }
 

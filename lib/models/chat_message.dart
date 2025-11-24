@@ -26,6 +26,7 @@ class ChatMessage {
   final String? audioUrl;
   final Timestamp? timestamp;
   final bool isRead;
+  final List<String>? readBy; // ✅ Lista de usuarios que leyeron el mensaje (para unread count)
   final Map<String, dynamic>? replyTo;
   final Map<String, dynamic>? reactions;
   final String? type; // 'text', 'image', 'video', 'audio', 'missed_call', etc.
@@ -68,6 +69,7 @@ class ChatMessage {
     this.audioUrl,
     this.timestamp,
     this.isRead = false,
+    this.readBy, // ✅ Lista de usuarios que leyeron
     this.replyTo,
     this.reactions,
     this.type,
@@ -145,6 +147,7 @@ class ChatMessage {
       audioUrl: data['audioUrl'],
       timestamp: data['timestamp'] as Timestamp?,
       isRead: data['isRead'] ?? false,
+      readBy: data['readBy'] != null ? List<String>.from(data['readBy']) : null, // ✅ Parsear readBy
       replyTo: data['replyTo'] as Map<String, dynamic>?,
       reactions: data['reactions'] as Map<String, dynamic>?,
       type: data['type'],
@@ -195,6 +198,7 @@ class ChatMessage {
   }) {
     return ChatMessage(
       id: id,
+      localId: id,  // ✅ FIX: Asignar localId para correlacionar con mensaje confirmado
       senderId: senderId,
       text: text,
       imageUrl: imageUrl,
@@ -233,6 +237,9 @@ class ChatMessage {
     if (originalSenderId != null) map['originalSenderId'] = originalSenderId;
     if (originalChatId != null) map['originalChatId'] = originalChatId;
     if (originalContactName != null) map['originalContactName'] = originalContactName;
+
+    // ✅ FIX: Incluir localId para deduplicación
+    if (localId != null) map['localId'] = localId;
 
     return map;
   }
@@ -332,6 +339,7 @@ class ChatMessage {
     String? moderationSeverity,
     String? originalText,
     List<double>? waveformData,
+    String? localId, // ✅ FIX: Agregar localId como parámetro
   }) {
     return ChatMessage(
       id: id ?? this.id,
@@ -361,7 +369,7 @@ class ChatMessage {
       originalSenderId: originalSenderId,
       originalChatId: originalChatId,
       originalContactName: originalContactName,
-      localId: localId, // ✅ Preservar localId en copyWith
+      localId: localId ?? this.localId, // ✅ FIX: Usar valor pasado o preservar actual
     );
   }
 

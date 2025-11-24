@@ -23,23 +23,33 @@ class MessageRepository {
   String? get currentUserId => _auth.currentUser?.uid;
 
   /// Stream de mensajes de un chat
+  ///
+  /// ✅ FIX: Filtrar mensajes anteriores a clearedAt si está configurado
   Stream<QuerySnapshot> watchMessages({
     required String chatId,
     bool isGroup = false,
     int limit = 50,
+    Timestamp? clearedAt, // ✅ NEW: Timestamp desde cuando el usuario limpió el chat
   }) {
     final collection = isGroup ? 'groups' : 'chats';
 
-    return _firestore
+    var query = _firestore
         .collection(collection)
         .doc(chatId)
         .collection('messages')
         .orderBy('timestamp', descending: true)  // ✅ FIX: Use 'timestamp' to match model and Firestore indexes
-        .limit(limit)
-        .snapshots();
+        .limit(limit);
+
+    // ✅ FIX: Si hay clearedAt, solo mostrar mensajes posteriores
+    if (clearedAt != null) {
+      query = query.where('timestamp', isGreaterThan: clearedAt) as Query<Map<String, dynamic>>;
+    }
+
+    return query.snapshots();
   }
 
   /// Crear mensaje optimista
+  /// ✅ FIX: Actualiza también el chat document con lastMessage, lastMessageId, etc.
   Future<String> createOptimisticMessage({
     required String chatId,
     required ChatMessage message,
@@ -48,15 +58,80 @@ class MessageRepository {
     try {
       final collection = isGroup ? 'groups' : 'chats';
 
-      final docRef = await _firestore
+      // ✅ Usar batch write para operación atómica
+      final batch = _firestore.batch();
+
+      // 1. Crear mensaje en subcollection
+      final messageRef = _firestore
           .collection(collection)
           .doc(chatId)
           .collection('messages')
-          .add(message.toMap());
+          .doc(); // Genera ID automáticamente
 
-      return docRef.id;
+      final messageId = messageRef.id;
+      batch.set(messageRef, message.toMap());
+
+      // 2. Actualizar chat document con metadata del mensaje
+      final now = Timestamp.fromDate(DateTime.now());
+      final chatRef = _firestore.collection(collection).doc(chatId);
+
+      // Extraer texto preview (máximo 100 caracteres)
+      String messagePreview = '';
+      if (message.text != null && message.text!.isNotEmpty) {
+        messagePreview = message.text!.length > 100
+            ? '${message.text!.substring(0, 97)}...'
+            : message.text!;
+      } else if (message.imageUrl != null) {
+        messagePreview = '📷 Imagen';
+      } else if (message.videoUrl != null) {
+        messagePreview = '🎥 Video';
+      } else if (message.audioUrl != null) {
+        messagePreview = '🎤 Audio';
+      }
+
+      final chatUpdateData = {
+        'lastMessage': messagePreview,
+        'lastMessageAt': now,
+        'lastMessageTime': now, // Legacy compatibility
+        'lastMessageSender': currentUserId,
+        'lastMessageId': messageId, // ✅ CRÍTICO: Para anti-duplicados Stream Detector vs FCM
+        'updatedAt': now,
+      };
+
+      batch.set(chatRef, chatUpdateData, SetOptions(merge: true));
+
+      // 3. Commit batch (atómico)
+      await batch.commit();
+
+      print('✅ [MessageRepository] Mensaje creado Y chat actualizado con lastMessageId: $messageId');
+
+      return messageId;
     } catch (e) {
+      print('❌ [MessageRepository] Error creando mensaje optimista: $e');
       throw Exception('Error creando mensaje optimista: $e');
+    }
+  }
+
+  /// Crear mensaje con ID específico
+  ///
+  /// Usado para crear mensajes aprobados después de moderación
+  Future<void> createMessageWithId({
+    required String chatId,
+    required String messageId,
+    required Map<String, dynamic> data,
+    bool isGroup = false,
+  }) async {
+    try {
+      final collection = isGroup ? 'groups' : 'chats';
+
+      await _firestore
+          .collection(collection)
+          .doc(chatId)
+          .collection('messages')
+          .doc(messageId)
+          .set(data);
+    } catch (e) {
+      throw Exception('Error creando mensaje con ID: $e');
     }
   }
 

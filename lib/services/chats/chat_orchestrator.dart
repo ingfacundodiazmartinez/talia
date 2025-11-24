@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import '../../models/chat_message.dart';
 import '../../services/chat_block_service.dart';
+import '../../utils/release_logger.dart';
 import 'repositories/chat_repository.dart';
 import 'repositories/message_repository.dart';
 import 'services/chat_creation_service.dart';
@@ -219,6 +220,32 @@ class ChatOrchestrator {
   /// Marcar chat como leído
   Future<void> markChatAsRead(String chatId) async {
     await _managementService.markChatAsRead(chatId);
+  }
+
+  /// Invalidar cache de clearedAt después de limpiar chat
+  void invalidateClearedAtCache(String chatId, String userId) {
+    _streamManager.invalidateClearedAtCache(chatId, userId);
+  }
+
+  /// Resetear stream del chat (cerrar y recrear con nuevo clearedAt)
+  void resetChatStream(String chatId) {
+    _streamManager.closeChatStream(chatId);
+    ReleaseLogger.log('🔄 Chat stream cerrado para chat $chatId - se recreará con nuevo clearedAt');
+  }
+
+  /// ⚡ Iniciar listener global de mensajes para notificaciones instantáneas
+  /// Este listener elimina el delay de 1-2 segundos de FCM al detectar mensajes en tiempo real
+  /// ⚡ NUEVO: Iniciar listeners eficientes de documentos de chats
+  /// Reemplaza GlobalListener (que fallaba por permisos)
+  /// Solo 2 listeners (chats + grupos) para notificaciones instantáneas <100ms
+  Future<void> startChatDocumentsListener() async {
+    await _streamManager.startChatDocumentsListener();
+  }
+
+  /// @deprecated Usar startChatDocumentsListener() en su lugar
+  Future<void> startGlobalMessageListener() async {
+    // Redirigir al nuevo método
+    await startChatDocumentsListener();
   }
 
   /// Eliminar mensaje
@@ -552,6 +579,43 @@ class ChatOrchestrator {
       'pendingUploads': _uploadManager.getPendingUploadsCount(),
       'cacheHitRate': _cacheManager.getCacheHitRate(),
     };
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // MESSAGE MODERATION - Edit blocked messages
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Verificar moderación de contenido sin crear mensaje
+  ///
+  /// Usado para edición de mensajes bloqueados.
+  /// Lanza ModerationBlockedException si el contenido es bloqueado.
+  Future<void> checkModerationOnly({
+    required String chatId,
+    required String content,
+  }) async {
+    await _messagingService.checkModerationOnly(
+      chatId: chatId,
+      content: content,
+    );
+  }
+
+  /// Crear mensaje aprobado en Firestore después de pasar moderación
+  ///
+  /// Usado cuando un mensaje bloqueado es editado y aprobado.
+  Future<void> createApprovedMessage({
+    required String chatId,
+    required String messageId,
+    required String senderId,
+    required String text,
+    String? localId, // ✅ FIX: Agregar localId para deduplicación
+  }) async {
+    await _messagingService.createApprovedMessage(
+      chatId: chatId,
+      messageId: messageId,
+      senderId: senderId,
+      text: text,
+      localId: localId, // ✅ FIX: Pasar localId
+    );
   }
 }
 
