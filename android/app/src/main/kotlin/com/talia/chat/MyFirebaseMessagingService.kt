@@ -228,7 +228,8 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
 
                         // Usar MessagingStyle con configuración para Android 11+
                         val messagingStyle = NotificationCompat.MessagingStyle(user)
-                            .setConversationTitle(senderName)  // ✅ CRÍTICO para Android 11+
+                            // ❌ NO usar setConversationTitle() en chats 1-1, causa "Talia · Sender"
+                            // Solo para chats grupales debe tener título
                             .setGroupConversation(false)  // ✅ CRÍTICO: false = chat 1-1 (muestra foto a la izquierda)
                             .addMessage(body, System.currentTimeMillis(), sender)
 
