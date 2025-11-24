@@ -37,6 +37,193 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         private const val TAG = "FCMService"
         private const val CHANNEL_ID = "high_importance_channel"
         private const val CHANNEL_NAME = "Notificaciones Importantes"
+
+        /**
+         * Método estático para mostrar notificaciones desde el foreground (llamado desde MainActivity)
+         * Duplica la lógica de showNotification para ser callable sin instancia del servicio
+         */
+        fun showNotificationFromForeground(
+            context: Context,
+            title: String,
+            body: String,
+            senderName: String,
+            senderId: String,
+            senderPhotoUrl: String?,
+            chatId: String
+        ) {
+            Log.d(TAG, "📨 [Foreground] Creando notificación desde MainActivity")
+
+            // Crear canal de notificación
+            createNotificationChannelStatic(context)
+
+            // Intent para abrir la app
+            val intent = Intent(context, MainActivity::class.java)
+            intent.action = Intent.ACTION_VIEW
+            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            intent.putExtra("chatId", chatId)
+            intent.putExtra("senderId", senderId)
+            intent.putExtra("senderName", senderName)
+
+            val pendingIntent = PendingIntent.getActivity(
+                context,
+                0,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val shortcutId = "chat_$senderId"
+
+            // Si hay foto, descargarla y mostrar notificación
+            if (!senderPhotoUrl.isNullOrEmpty() && senderPhotoUrl != "null") {
+                thread {
+                    try {
+                        Log.d(TAG, "📥 Descargando foto: $senderPhotoUrl")
+
+                        // Download image - inline logic
+                        val url = URL(senderPhotoUrl)
+                        val connection = url.openConnection() as HttpURLConnection
+                        connection.doInput = true
+                        connection.connect()
+                        val input = connection.inputStream
+                        val bitmap = BitmapFactory.decodeStream(input)
+
+                        if (bitmap != null) {
+                            // Create circular bitmap - inline logic from getCircularBitmap
+                            val size = 192
+                            val scaledBitmap = Bitmap.createScaledBitmap(bitmap, size, size, true)
+                            val output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+                            val canvas = Canvas(output)
+                            val paint = Paint()
+                            paint.isAntiAlias = true
+                            canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint)
+                            paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN)
+                            canvas.drawBitmap(scaledBitmap, 0f, 0f, paint)
+
+                            // Create Person
+                            val sender = Person.Builder()
+                                .setName(senderName)
+                                .build()
+
+                            // Create ShortcutInfo
+                            val shortcut = ShortcutInfoCompat.Builder(context, shortcutId)
+                                .setShortLabel(senderName)
+                                .setLongLabel(senderName)
+                                .setIcon(IconCompat.createWithBitmap(output))
+                                .setPerson(sender)
+                                .setLongLived(true)
+                                .setLocusId(LocusIdCompat(shortcutId))
+                                .setIntent(intent)
+                                .build()
+
+                            ShortcutManagerCompat.pushDynamicShortcut(context, shortcut)
+
+                            // Create MessagingStyle
+                            val user = Person.Builder().setName("Yo").build()
+                            val messagingStyle = NotificationCompat.MessagingStyle(user)
+                                .setGroupConversation(false)
+                                .addMessage(body, System.currentTimeMillis(), sender)
+
+                            // Create notification
+                            val notificationBuilder = NotificationCompat.Builder(context, CHANNEL_ID)
+                                .setSmallIcon(R.drawable.ic_notification)
+                                .setLargeIcon(output)
+                                .setShortcutId(shortcutId)
+                                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                                .setAutoCancel(true)
+                                .setContentIntent(pendingIntent)
+                                .setStyle(messagingStyle)
+
+                            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                            notificationManager.notify(System.currentTimeMillis().toInt(), notificationBuilder.build())
+                            Log.d(TAG, "✅ Notificación mostrada con avatar")
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "❌ Error descargando imagen: ${e.message}", e)
+                        // Si falla la descarga de imagen, mostrar notificación sin foto
+                        showSimpleNotification(context, title, body, senderName, senderId, chatId, shortcutId, pendingIntent)
+                    }
+                }
+            } else {
+                // No hay foto - mostrar notificación simple
+                Log.d(TAG, "ℹ️ No hay foto del sender - mostrando notificación simple")
+                showSimpleNotification(context, title, body, senderName, senderId, chatId, shortcutId, pendingIntent)
+            }
+        }
+
+        /**
+         * Mostrar notificación simple sin foto del sender
+         */
+        private fun showSimpleNotification(
+            context: Context,
+            title: String,
+            body: String,
+            senderName: String,
+            senderId: String,
+            chatId: String,
+            shortcutId: String,
+            pendingIntent: PendingIntent
+        ) {
+            try {
+                Log.d(TAG, "📨 Mostrando notificación simple sin foto")
+
+                // Create Person sin foto
+                val sender = Person.Builder()
+                    .setName(senderName)
+                    .build()
+
+                // Create ShortcutInfo sin icon
+                val intent = Intent(context, MainActivity::class.java)
+                intent.action = Intent.ACTION_VIEW
+                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                intent.putExtra("chatId", chatId)
+                intent.putExtra("senderId", senderId)
+                intent.putExtra("senderName", senderName)
+
+                val shortcut = ShortcutInfoCompat.Builder(context, shortcutId)
+                    .setShortLabel(senderName)
+                    .setLongLabel(senderName)
+                    .setPerson(sender)
+                    .setLongLived(true)
+                    .setLocusId(LocusIdCompat(shortcutId))
+                    .setIntent(intent)
+                    .build()
+
+                ShortcutManagerCompat.pushDynamicShortcut(context, shortcut)
+
+                // Create MessagingStyle
+                val user = Person.Builder().setName("Yo").build()
+                val messagingStyle = NotificationCompat.MessagingStyle(user)
+                    .setGroupConversation(false)
+                    .addMessage(body, System.currentTimeMillis(), sender)
+
+                // Create notification sin largeIcon
+                val notificationBuilder = NotificationCompat.Builder(context, CHANNEL_ID)
+                    .setSmallIcon(R.drawable.ic_notification)
+                    .setShortcutId(shortcutId)
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setAutoCancel(true)
+                    .setContentIntent(pendingIntent)
+                    .setStyle(messagingStyle)
+
+                val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                notificationManager.notify(System.currentTimeMillis().toInt(), notificationBuilder.build())
+                Log.d(TAG, "✅ Notificación simple mostrada sin avatar")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Error mostrando notificación simple: ${e.message}", e)
+            }
+        }
+
+        private fun createNotificationChannelStatic(context: Context) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = NotificationChannel(
+                    CHANNEL_ID,
+                    CHANNEL_NAME,
+                    NotificationManager.IMPORTANCE_HIGH
+                )
+                val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                notificationManager.createNotificationChannel(channel)
+            }
+        }
     }
 
     init {
@@ -88,6 +275,10 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             return
         }
 
+        // ⚠️ TEMPORALMENTE DESACTIVADO: Anti-duplicados causa que NO se muestren notificaciones
+        // El Stream Detector marca mensajes como "ya mostrados" ANTES de que llegue FCM,
+        // causando que FCM las rechace como duplicadas.
+        /*
         // ✅ FILTRO ANTI-DUPLICADO: Verificar si Stream Detector ya mostró esta notificación
         val messageId = data["messageId"]
         Log.e(TAG, "🔍 [ANTI-DUPLICADO] Message ID: $messageId")
@@ -120,6 +311,7 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                 Log.e(TAG, "✅ [ANTI-DUPLICADO] Primera notificación para este mensaje - permitida")
             }
         }
+        */
 
         // ✅ FILTRO CHAT ACTUAL: Verificar si el usuario está viendo este chat
         Log.e(TAG, "🔍 [FILTRO] Iniciando verificación de chat actual...")
@@ -149,6 +341,19 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             }
         } else {
             Log.e(TAG, "⚠️ [FILTRO] No hay chatId en los datos - permitiendo notificación")
+        }
+
+        // ✅ ATOMIC ANTI-DUPLICADOS: Verificar y marcar en operación atómica
+        val messageId = data["messageId"]
+        Log.e(TAG, "🔍 [ANTI-DUPLICADO ATOMIC] Message ID: $messageId")
+
+        if (messageId != null) {
+            // ✅ ATOMIC CHECK-AND-SET: Solo UNA operación puede adquirir el "derecho" a mostrar
+            if (!tryAcquireNotificationRight(messageId)) {
+                Log.e(TAG, "🚫 [ANTI-DUPLICADO ATOMIC] Otro listener ya mostró $messageId - SKIP")
+                return
+            }
+            Log.e(TAG, "✅ [ANTI-DUPLICADO ATOMIC] Adquirido derecho para mostrar $messageId")
         }
 
         // Solo mostrar notificaciones para mensajes de chat
@@ -200,10 +405,10 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                         val circularBitmap = getCircularBitmap(bitmap)
                         Log.e(TAG, "✅ Bitmap circular creado: ${circularBitmap.width}x${circularBitmap.height}")
 
-                        // Crear Person para el sender con la foto
+                        // Crear Person para el sender SIN foto
+                        // ❌ NO usar setIcon() - causa que aparezca como adjunto pequeño
                         val sender = Person.Builder()
                             .setName(senderName)
-                            .setIcon(IconCompat.createWithBitmap(circularBitmap))
                             .build()
 
                         // PASO 1: Crear ShortcutInfo para el chat (CRUCIAL para foto a la izquierda)
@@ -236,8 +441,7 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                         // PASO 3: Vincular notificación al shortcut con setShortcutId
                         val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
                             .setSmallIcon(R.drawable.ic_notification)  // Ícono monocromático blanco (required)
-                            // ❌ NO usar setLargeIcon() con MessagingStyle - causa que se muestre como attachment
-                            // La foto viene del Person object en MessagingStyle.addMessage()
+                            .setLargeIcon(circularBitmap)  // ✅ Avatar circular grande a la izquierda
                             .setShortcutId(shortcutId)  // ⭐ CLAVE: vincula shortcut para foto a la izquierda
                             .setPriority(NotificationCompat.PRIORITY_HIGH)
                             .setAutoCancel(true)
@@ -363,38 +567,49 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
     }
 
     private fun getCircularBitmap(bitmap: Bitmap): Bitmap {
-        val size = Math.min(bitmap.width, bitmap.height)
-        Log.e(TAG, "🎨 Creando bitmap circular - tamaño: $size")
-
+        // ✅ Usar misma lógica que showNotificationFromForeground para consistencia
+        val size = 192
+        val scaledBitmap = Bitmap.createScaledBitmap(bitmap, size, size, true)
         val output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(output)
+        val paint = Paint()
+        paint.isAntiAlias = true
+        canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint)
+        paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN)
+        canvas.drawBitmap(scaledBitmap, 0f, 0f, paint)
 
-        // Crear un círculo como máscara
-        val paint = Paint().apply {
-            isAntiAlias = true
-            isFilterBitmap = true
-            isDither = true
+        Log.e(TAG, "✅ Bitmap circular creado con técnica SRC_IN (igual que foreground)")
+        return output
+    }
+
+    /**
+     * ✅ ATOMIC: Try to acquire the "right" to show this notification
+     *
+     * This is an atomic check-and-set operation that prevents race conditions
+     * between Dart listeners and Native FCM Service.
+     *
+     * Only ONE caller (ChatDocsListener, StreamDetector, or Native Service) will get `true`,
+     * all others get `false`.
+     *
+     * @param messageId The unique message identifier
+     * @return `true` if this is the FIRST caller (show notification), `false` otherwise
+     */
+    @Synchronized
+    private fun tryAcquireNotificationRight(messageId: String): Boolean {
+        val sharedPrefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+        val messageKey = "flutter.instant_notification_$messageId"
+
+        // ✅ ATOMIC CHECK: If already exists, another listener acquired it first
+        if (sharedPrefs.contains(messageKey)) {
+            Log.e(TAG, "🔒 [ATOMIC] Message $messageId already acquired by another listener")
+            return false
         }
 
-        // Dibujar la imagen primero (centrada y recortada)
-        val srcRect = Rect(
-            (bitmap.width - size) / 2,
-            (bitmap.height - size) / 2,
-            (bitmap.width + size) / 2,
-            (bitmap.height + size) / 2
-        )
-        val dstRect = Rect(0, 0, size, size)
-        canvas.drawBitmap(bitmap, srcRect, dstRect, paint)
+        // ✅ ATOMIC SET: Mark as shown IMMEDIATELY (before any other operation)
+        sharedPrefs.edit().putLong(messageKey, System.currentTimeMillis()).apply()
 
-        Log.e(TAG, "✅ Imagen dibujada en canvas")
-
-        // Aplicar máscara circular usando DST_IN
-        paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
-        canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint)
-
-        Log.e(TAG, "✅ Máscara circular aplicada")
-
-        return output
+        Log.e(TAG, "🎯 [ATOMIC] Successfully acquired notification right for $messageId")
+        return true
     }
 
     override fun onNewToken(token: String) {

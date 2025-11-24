@@ -591,15 +591,6 @@ class ChatStreamManager {
         return;
       }
 
-      // ✅ FIX #7: Anti-duplicados usando servicio centralizado
-      final wasShown = await _deduplicationService.wasShown(lastMessageId);
-      ReleaseLogger.log('🔍 [ChatDocsListener] Checking dedup for $lastMessageId: wasShown=$wasShown');
-      
-      if (wasShown) {
-        ReleaseLogger.log('⏭️ [ChatDocsListener] Mensaje $lastMessageId ya procesado - SKIP');
-        return;
-      }
-
       // ✅ FIX #12: Race condition lock - Evitar procesamiento simultáneo del mismo mensaje
       if (_processingMessageIds.contains(lastMessageId)) {
         ReleaseLogger.log('🔒 [ChatDocsListener] Mensaje $lastMessageId ya está siendo procesado - SKIP');
@@ -653,7 +644,14 @@ class ChatStreamManager {
         if (currentChatId != null && currentChatId == chatId) {
           ReleaseLogger.log('🚫 [ChatDocsListener] Usuario tiene el chat $chatId abierto - NO mostrar notificación');
           // Marcar como procesado para evitar que se muestre después
-          await _deduplicationService.markAsShown(lastMessageId);
+          _deduplicationService.tryAcquire(lastMessageId);
+          return;
+        }
+
+        // ✅ ATOMIC: Try to acquire the right to show this notification
+        // Only ONE listener (ChatDocsListener OR StreamDetector) will succeed
+        if (!_deduplicationService.tryAcquire(lastMessageId)) {
+          ReleaseLogger.log('⏭️ [ChatDocsListener] Otro listener ya mostró $lastMessageId - SKIP');
           return;
         }
 
@@ -666,10 +664,6 @@ class ChatStreamManager {
           groupName: groupName,
           senderPhotoUrl: senderPhotoUrl,
         );
-
-        // ✅ FIX #7: Marcar como procesado SOLO después de mostrar exitosamente
-        await _deduplicationService.markAsShown(lastMessageId);
-        ReleaseLogger.log('✅ [ChatDocsListener] Marked $lastMessageId as shown');
 
         ReleaseLogger.log('✅ [ChatDocsListener] Notificación instantánea mostrada para chat $chatId');
       } finally {
@@ -1123,9 +1117,10 @@ class ChatStreamManager {
             senderName = await ContactAliasService().getDisplayName(latestMessage.senderId, realName);
           }
 
-          // ✅ FIX #7: Anti-duplicados usando servicio centralizado
-          if (await _deduplicationService.wasShown(latestMessage.id)) {
-            ReleaseLogger.log('⏭️ [StreamDetector] Mensaje ${latestMessage.id.substring(0, 8)}... ya procesado - SKIP');
+          // ✅ ATOMIC: Try to acquire the right to show this notification
+          // Only ONE listener (ChatDocsListener OR StreamDetector) will succeed
+          if (!_deduplicationService.tryAcquire(latestMessage.id)) {
+            ReleaseLogger.log('⏭️ [StreamDetector] Otro listener ya mostró ${latestMessage.id.substring(0, 8)}... - SKIP');
           } else {
             // Mostrar notificación local instantánea
             ReleaseLogger.log('⚡ [StreamDetector] Mostrando notificación instantánea...');
@@ -1142,9 +1137,6 @@ class ChatStreamManager {
               groupName: groupName,
               senderPhotoUrl: senderPhotoUrl,  // ✅ FIX: Pasar foto del sender
             );
-
-            // ✅ FIX #7: Marcar como procesado SOLO después de mostrar exitosamente
-            await _deduplicationService.markAsShown(latestMessage.id);
 
             ReleaseLogger.log('✅ [StreamDetector] Notificación instantánea mostrada para ${latestMessage.id.substring(0, 8)}...');
           }

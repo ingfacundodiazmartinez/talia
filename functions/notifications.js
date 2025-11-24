@@ -144,17 +144,14 @@ exports.sendNotificationOnCreate = onDocumentCreated(
       };
 
       const message = {
-        // ✅ NO incluir notification en root para iOS (el NSE lo manejará)
-        // Solo incluir para Android y para notificaciones no-chat
+        // ✅ NO incluir notification en root ni en android para que onMessageReceived() se ejecute
+        // El Native Service (MyFirebaseMessagingService.kt) descargará la foto y mostrará la notificación
         data: fcmData,
         tokens: fcmTokens,
         android: {
           priority: "high",
-          notification: {
-            title: title || "Talia",
-            body: body || "",
-            channelId: isChatMessage ? "chat_messages" : "high_importance_channel",
-          },
+          // ❌ NO incluir android.notification - fuerza que onMessageReceived() se ejecute
+          // Nuestro código nativo descargará la foto del sender y mostrará la notificación
         },
         apns: apnsPayload,
       };

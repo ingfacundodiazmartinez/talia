@@ -78,6 +78,29 @@ class NotificationDeduplicationService {
     return exists;
   }
 
+  /// ✅ ATOMIC: Try to acquire the "right" to show this notification
+  ///
+  /// This is an atomic check-and-set operation that prevents race conditions.
+  /// Only ONE caller will get `true`, all others get `false`.
+  ///
+  /// Returns:
+  /// - `true` if this is the FIRST caller (show notification)
+  /// - `false` if already acquired by another caller (skip notification)
+  bool tryAcquire(String messageId) {
+    // Atomic check-and-set in single operation
+    if (_shownNotifications.contains(messageId)) {
+      return false; // Already acquired
+    }
+
+    // Mark as shown IMMEDIATELY (before any async operations)
+    _shownNotifications.add(messageId);
+
+    // Persist in background (non-blocking)
+    _persistInBackground(messageId);
+
+    return true; // Successfully acquired
+  }
+
   /// Mark a notification as shown
   ///
   /// This prevents duplicate notifications for the same message.

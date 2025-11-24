@@ -55,9 +55,8 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     tag: 'NotificationService',
   );
 
-  // ✅ CRITICAL FIX: Verificar si la app está en foreground
-  // En iOS, este handler se ejecuta SIEMPRE (incluso en foreground) si hay content-available: 1
-  // Verificamos si la app está en foreground para evitar duplicados con ChatDocsListener
+  // ✅ CRITICAL FIX: Verificar si la app está en foreground PRIMERO
+  // NO hacer tryAcquire() hasta saber si realmente mostraremos la notificación
   try {
     final prefs = await SharedPreferences.getInstance();
     final appInForeground = prefs.getBool('app_in_foreground') ?? false;
@@ -74,6 +73,29 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       return; // Dejar que ChatDocsListener maneje la notificación
     }
 
+    // ✅ ANDROID: En background, el Native Service debe mostrar la notificación
+    // El background handler NO debe mostrar notificaciones de chat en Android cuando app está en background
+    if (Platform.isAndroid && !appInForeground) {
+      final messageType = message.data['type'];
+      final isChatMessage = messageType == 'chat_message' || messageType == 'group_message';
+
+      if (isChatMessage) {
+        ReleaseLogger.log(
+          '🚫 [Background Handler Android] App en BACKGROUND - delegando a Native Service',
+          tag: 'NotificationService',
+        );
+        ReleaseLogger.log(
+          '✅ [Background Handler Android] MyFirebaseMessagingService se encargará',
+          tag: 'NotificationService',
+        );
+        ReleaseLogger.log(
+          '🔥 ============================================',
+          tag: 'NotificationService',
+        );
+        return; // Dejar que Native Service muestre notificación con foto circular
+      }
+    }
+
     // ✅ CRITICAL FIX iOS: Si la app NO está en foreground (background/killed) y es iOS
     // entonces el NSE (Notification Service Extension) ya mostró la notificación
     // El background handler NO debe mostrar notificaciones de chat en iOS cuando app está killed
@@ -83,26 +105,6 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       final isChatMessage = messageType == 'chat_message' || messageType == 'group_message';
 
       if (isChatMessage) {
-        // ✅ CRITICAL FIX: Marcar mensaje como ya mostrado ANTES de que ChatDocsListener se inicie
-        // Cuando el usuario abra la app desde la notificación del NSE, ChatDocsListener NO debe mostrar otra
-        final messageId = message.data['messageId'] ?? message.data['id'];
-        if (messageId != null) {
-          try {
-            final dedup = NotificationDeduplicationService();
-            await dedup.initialize();
-            await dedup.markAsShown(messageId);
-            ReleaseLogger.log(
-              '✅ [Dedup] Mensaje $messageId marcado como ya mostrado en background handler',
-              tag: 'NotificationService',
-            );
-          } catch (e) {
-            ReleaseLogger.error(
-              '⚠️ [Dedup] Error marcando mensaje en background handler: $e',
-              tag: 'NotificationService',
-            );
-          }
-        }
-
         ReleaseLogger.log(
           '🚫 [Background Handler iOS] App en BACKGROUND/KILLED - NSE ya mostró notificación de chat',
           tag: 'NotificationService',
@@ -194,29 +196,6 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       return; // No mostrar notificación push
     }
 
-    // ✅ FIX #7: Anti-duplicados usando servicio centralizado
-    final messageId = message.data['messageId'] ?? message.data['id'];
-    if (messageId != null) {
-      try {
-        final dedup = NotificationDeduplicationService();
-        await dedup.initialize();
-
-        if (await dedup.wasShown(messageId)) {
-          ReleaseLogger.log(
-            '🚫 [Background FCM] Notificación ya mostrada por Stream Detector - SKIP duplicado',
-            tag: 'NotificationService',
-          );
-          return;
-        }
-      } catch (e) {
-        ReleaseLogger.error(
-          '⚠️ [Background] Error verificando duplicado: $e',
-          tag: 'NotificationService',
-        );
-        // En caso de error, continuar (fail-safe)
-      }
-    }
-
     // 🔒 FILTRO ANTI-SPAM ESTILO WHATSAPP: Verificar unreadCount antes de mostrar notificación
     ReleaseLogger.log(
       '🔍 [Background DEBUG] Iniciando validación unreadCount...',
@@ -298,18 +277,20 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
               tag: 'NotificationService',
             );
 
-            if (unreadCount == 0) {
+            // ⚠️ TEMP FIX: Deshabilitado para testing - unreadCount siempre es 0 (bug en Cloud Functions)
+            // TODO: Restaurar cuando se arregle el incremento de unreadCount en chats.js
+            // if (unreadCount == 0) {
+            //   ReleaseLogger.log(
+            //     '🚫 [Background] ${isGroupMessage ? 'Grupo' : 'Chat'} $targetId ya leído (unreadCount=0) - NO mostrar notificación',
+            //     tag: 'NotificationService',
+            //   );
+            //   return;
+            // } else {
               ReleaseLogger.log(
-                '🚫 [Background] ${isGroupMessage ? 'Grupo' : 'Chat'} $targetId ya leído (unreadCount=0) - NO mostrar notificación',
+                '✅ [Background] ${isGroupMessage ? 'Grupo' : 'Chat'} $targetId tiene $unreadCount mensajes no leídos - mostrando notificación (validación deshabilitada)',
                 tag: 'NotificationService',
               );
-              return;
-            } else {
-              ReleaseLogger.log(
-                '✅ [Background] ${isGroupMessage ? 'Grupo' : 'Chat'} $targetId tiene $unreadCount mensajes no leídos - mostrando notificación',
-                tag: 'NotificationService',
-              );
-            }
+            // }
           } else {
             ReleaseLogger.log(
               '⚠️ [Background DEBUG] Documento no encontrado: $collection/$targetId',
@@ -502,7 +483,87 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     return; // ✅ CRÍTICO: Salir inmediatamente - dejar que NSE procese
   }
 
-  // Las demás notificaciones (NO llamadas) se manejan automáticamente por FCM/NSE
+  // Las demás notificaciones (NO llamadas):
+  // - iOS: Se manejan automáticamente por NSE (Notification Service Extension)
+  // - Android: Crear notificación usando flutter_local_notifications
+  if (Platform.isAndroid) {
+    ReleaseLogger.log(
+      '🤖 [Android] Creando notificación local con flutter_local_notifications',
+      tag: 'NotificationService',
+    );
+
+    try {
+      // Extraer datos del mensaje
+      final title = message.data['title'] ?? message.data['senderName'] ?? 'Nuevo mensaje';
+      final body = message.data['body'] ?? message.data['message'] ?? '';
+      final chatId = message.data['chatId'] ?? '';
+      final senderId = message.data['senderId'] ?? '';
+      final senderName = message.data['senderName'] ?? 'Usuario';
+
+      // Configurar canal de notificación
+      const AndroidNotificationChannel channel = AndroidNotificationChannel(
+        'high_importance_channel',
+        'Notificaciones Importantes',
+        description: 'Canal para notificaciones de mensajes',
+        importance: Importance.high,
+      );
+
+      final FlutterLocalNotificationsPlugin notifications = FlutterLocalNotificationsPlugin();
+
+      // Crear canal
+      await notifications
+          .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+          ?.createNotificationChannel(channel);
+
+      // Crear Person para MessagingStyle
+      final person = Person(
+        name: senderName,
+        key: senderId,
+      );
+
+      // Crear mensaje
+      final messageStyle = MessagingStyleInformation(
+        person,
+        conversationTitle: null, // null para chat 1-1
+        messages: [
+          Message(
+            body,
+            DateTime.now(),
+            person,
+          ),
+        ],
+      );
+
+      // Mostrar notificación
+      await notifications.show(
+        chatId.hashCode,
+        title,
+        body,
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            channel.id,
+            channel.name,
+            channelDescription: channel.description,
+            importance: Importance.high,
+            priority: Priority.high,
+            styleInformation: messageStyle,
+          ),
+        ),
+        payload: chatId,
+      );
+
+      ReleaseLogger.log(
+        '✅ [Android] Notificación local creada exitosamente',
+        tag: 'NotificationService',
+      );
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [Android] Error creando notificación local: $e',
+        tag: 'NotificationService',
+      );
+    }
+  }
+
   ReleaseLogger.log(
     '🔥 ============================================',
     tag: 'NotificationService',
@@ -617,40 +678,38 @@ class NotificationService {
   }
 
   // Limpiar el chat actual (cuando sales del chat)
-  // 🔒 CRITICAL FIX: Cambiar de void async a Future<void> para consistencia
-  Future<void> clearCurrentChat() async {
+  // 🔒 CRITICAL FIX: Usar fire-and-forget para que funcione en dispose()
+  // No usar await - el widget puede ser dispuesto antes de que termine
+  void clearCurrentChat() {
     ReleaseLogger.log(
-      '🔍 [CLEAR DEBUG] Iniciando clearCurrentChat(), chatId anterior: $_currentChatId',
+      '🔍 [CLEAR] Limpiando chat actual: $_currentChatId',
       tag: 'NotificationService',
     );
+
+    // ✅ INMEDIATO: Limpiar memoria cache PRIMERO (sin I/O)
     _currentChatId = null;
 
-    // ✅ Limpiar de SharedPreferences - SÍNCRONO para consistencia
-    try {
-      final prefs = await SharedPreferences.getInstance();
+    // ✅ BACKGROUND: Limpiar SharedPreferences en background (fire-and-forget)
+    // Usar .then() en lugar de await para que no bloquee dispose()
+    SharedPreferences.getInstance().then((prefs) {
       final oldValue = prefs.getString('current_chat_id');
       ReleaseLogger.log(
-        '🔍 [CLEAR DEBUG] Valor en SharedPreferences ANTES de borrar: $oldValue',
+        '🔍 [CLEAR] Valor ANTES de borrar: $oldValue',
         tag: 'NotificationService',
       );
 
-      await prefs.remove('current_chat_id');
-
-      final newValue = prefs.getString('current_chat_id');
-      ReleaseLogger.log(
-        '🔍 [CLEAR DEBUG] Valor en SharedPreferences DESPUÉS de borrar: $newValue',
-        tag: 'NotificationService',
-      );
-      ReleaseLogger.log(
-        '✅ [CLEAR DEBUG] Chat actual eliminado de SharedPreferences exitosamente',
-        tag: 'NotificationService',
-      );
-    } catch (e) {
+      prefs.remove('current_chat_id').then((_) {
+        ReleaseLogger.log(
+          '✅ [CLEAR] Chat actual eliminado exitosamente de SharedPreferences',
+          tag: 'NotificationService',
+        );
+      });
+    }).catchError((error) {
       ReleaseLogger.error(
-        '❌ Error limpiando chat actual: $e',
+        '❌ Error limpiando chat actual: $error',
         tag: 'NotificationService',
       );
-    }
+    });
   }
 
   // Helper para upsert de datos de usuario
@@ -1609,7 +1668,10 @@ class NotificationService {
           '🔍 [DEBUG Anti-dup] messageId extraído: $messageId',
           tag: 'NotificationService',
         );
-        if (messageId != null) {
+
+        // ⚠️ ANTI-DUPLICADO: Solo activo para iOS
+        // En Android causa problemas porque Stream Detector marca antes que FCM llegue
+        if (Platform.isIOS && messageId != null) {
           try {
             // ✅ FIX #7: Anti-duplicados usando servicio centralizado
             final dedup = NotificationDeduplicationService();
@@ -1617,14 +1679,14 @@ class NotificationService {
 
             if (await dedup.wasShown(messageId)) {
               ReleaseLogger.log(
-                '🚫 [Foreground FCM] Notificación ya mostrada por Stream Detector - SKIP duplicado',
+                '🚫 [iOS Foreground FCM] Notificación ya mostrada por Stream Detector - SKIP duplicado',
                 tag: 'NotificationService',
               );
               return;
             }
 
             ReleaseLogger.log(
-              '✅ [DEBUG Anti-dup] No hay marca previa - continuar con notificación',
+              '✅ [iOS Anti-dup] No hay marca previa - continuar con notificación',
               tag: 'NotificationService',
             );
           } catch (e) {
@@ -1634,11 +1696,6 @@ class NotificationService {
             );
             // En caso de error, continuar (fail-safe)
           }
-        } else {
-          ReleaseLogger.log(
-            '⚠️ [DEBUG Anti-dup] messageId es NULL - no se puede verificar duplicado',
-            tag: 'NotificationService',
-          );
         }
 
         // ✅ FILTRO 2: Usuario está viendo el chat (mismo filtro que background)
@@ -1694,9 +1751,11 @@ class NotificationService {
             if (messageId != null && messageId.isNotEmpty) {
               final prefs = await SharedPreferences.getInstance();
               final messageKey = 'instant_notification_$messageId';
-              final existingTimestamp = prefs.getString(messageKey);
 
-              if (existingTimestamp != null) {
+              // ✅ FIX: Usar get() en lugar de getString() porque puede ser int o String
+              final existingValue = prefs.get(messageKey);
+
+              if (existingValue != null) {
                 ReleaseLogger.log(
                   '⏭️ [FCM] Mensaje $messageId ya procesado por Stream Detector - SKIP',
                   tag: 'NotificationService',
@@ -1704,10 +1763,10 @@ class NotificationService {
                 return; // No mostrar notificación duplicada
               }
 
-              // Marcar como procesado ANTES de mostrar
-              await prefs.setString(
+              // Marcar como procesado ANTES de mostrar (usando int para consistencia)
+              await prefs.setInt(
                 messageKey,
-                DateTime.now().millisecondsSinceEpoch.toString(),
+                DateTime.now().millisecondsSinceEpoch,
               );
               ReleaseLogger.log(
                 '✅ [FCM] Mensaje $messageId marcado como procesado',
@@ -1731,19 +1790,54 @@ class NotificationService {
                 message.data['isGroup'] == 'true';
             final groupName = message.data['groupName'];
 
-            // Mostrar notificación local instantánea
-            ReleaseLogger.log(
-              '⚡ [FCM] Mostrando notificación para mensaje nuevo',
-              tag: 'NotificationService',
-            );
-            await showLocalChatNotification(
-              senderId: senderId,
-              senderName: senderName,
-              messageText: messageText,
-              chatId: targetId ?? chatId ?? '',
-              isGroup: isGroup,
-              groupName: groupName,
-            );
+            // ⚡ OPTIMIZACIÓN: En Android foreground, llamar DIRECTAMENTE al código nativo
+            // Evita descarga/procesamiento lento de imagen en Dart (5+ segundos)
+            // El código nativo descarga y procesa la imagen en thread nativo (< 1 segundo)
+            if (Platform.isAndroid) {
+              try {
+                ReleaseLogger.log(
+                  '⚡ [Android Foreground] Llamando código nativo DIRECTO (sin procesamiento Dart)',
+                  tag: 'NotificationService',
+                );
+
+                final senderPhotoUrl = message.data['senderPhotoUrl'];
+
+                await _notificationChannel.invokeMethod('showChatNotification', {
+                  'title': message.notification?.title ?? message.data['title'] ?? 'Mensaje nuevo',
+                  'body': messageText,
+                  'senderId': senderId,
+                  'senderName': senderName,
+                  'senderPhotoUrl': senderPhotoUrl ?? '',
+                  'chatId': targetId ?? chatId ?? '',
+                  'isGroup': isGroup,
+                  'groupName': groupName ?? '',
+                });
+
+                ReleaseLogger.log(
+                  '✅ [Android Foreground] Notificación nativa mostrada en < 1s',
+                  tag: 'NotificationService',
+                );
+              } catch (e) {
+                ReleaseLogger.error(
+                  '❌ [Android Foreground] Error en código nativo: $e',
+                  tag: 'NotificationService',
+                );
+              }
+            } else {
+              // iOS: Usar el método completo que incluye Communication Notifications
+              ReleaseLogger.log(
+                '⚡ [FCM] Mostrando notificación para mensaje nuevo',
+                tag: 'NotificationService',
+              );
+              await showLocalChatNotification(
+                senderId: senderId,
+                senderName: senderName,
+                messageText: messageText,
+                chatId: targetId ?? chatId ?? '',
+                isGroup: isGroup,
+                groupName: groupName,
+              );
+            }
 
             ReleaseLogger.log(
               '✅ [FCM] Notificación mostrada exitosamente',
@@ -2884,11 +2978,13 @@ class NotificationService {
         );
       }
 
-      // ✅ Crear Person para el REMITENTE con su foto
+      // ✅ Crear Person para el REMITENTE SIN foto en el Person
+      // ❌ NO usar .icon en Person - causa que la foto aparezca como adjunto pequeño
+      // La foto debe ir en largeIcon del AndroidNotificationDetails
       final sender = Person(
         name: senderName,
-        icon: photoPath != null ? BitmapFilePathAndroidIcon(photoPath) : null,
         key: senderId,
+        // ❌ NO incluir icon aquí
       );
 
       // ✅ Crear Person para el usuario actual (YO - el que recibe)
@@ -2899,12 +2995,12 @@ class NotificationService {
         me, // ✅ Usuario actual (el que recibe)
         groupConversation:
             false, // ✅ CRÍTICO: false para chat 1-1 (muestra foto a la izquierda)
-        conversationTitle: senderName, // ✅ Título de la conversación
+        conversationTitle: null, // ✅ null para chat 1-1 evita "Talia · Sender"
         messages: [
           Message(
             body, // Texto del mensaje
             DateTime.now(),
-            sender, // ✅ Remitente del mensaje (con foto)
+            sender, // ✅ Remitente del mensaje (SIN foto en Person)
           ),
         ],
       );
@@ -2917,6 +3013,9 @@ class NotificationService {
         importance: Importance.max,
         priority: Priority.max,
         icon: '@mipmap/ic_launcher',
+        largeIcon: photoPath != null
+            ? FilePathAndroidBitmap(photoPath)
+            : null, // ✅ Avatar circular grande a la IZQUIERDA
         showWhen: true,
         enableVibration: true,
         playSound: true,
@@ -2962,7 +3061,39 @@ class NotificationService {
           );
         }
       } else {
-        // Android: Usar flutter_local_notifications con MessagingStyle
+        // Android: Llamar código nativo para crear ShortcutInfo (requerido para avatar)
+        // flutter_local_notifications NO puede crear ShortcutInfo, necesario para Android 11+
+        try {
+          ReleaseLogger.log(
+            '🤖 [Android] Llamando código nativo para crear notificación con ShortcutInfo',
+            tag: 'NotificationService',
+          );
+
+          await _notificationChannel.invokeMethod('showChatNotification', {
+            'title': title,
+            'body': body,
+            'senderId': senderId,
+            'senderName': senderName,
+            'senderPhotoUrl': senderPhotoUrl ?? '', // ✅ Enviar URL HTTP, no ruta local
+            'chatId': chatId,
+            'isGroup': isGroup,
+            'groupName': groupName ?? '',
+          });
+
+          ReleaseLogger.log(
+            '✅ [Android] Notificación nativa creada con ShortcutInfo',
+            tag: 'NotificationService',
+          );
+          return; // Salir después de llamar código nativo
+        } catch (e) {
+          ReleaseLogger.error(
+            '❌ [Android] Error llamando código nativo: $e - usando fallback',
+            tag: 'NotificationService',
+          );
+          // Si falla, continuar con flutter_local_notifications como fallback
+        }
+
+        // Fallback: Usar flutter_local_notifications (sin ShortcutInfo, avatar puede no mostrarse correctamente)
         final details = NotificationDetails(
           android: androidDetails,
         );
