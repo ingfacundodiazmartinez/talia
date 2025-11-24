@@ -780,7 +780,7 @@ class ChatStreamManager {
         }
 
         // ✅ FIX #7: Anti-duplicados usando servicio centralizado
-        if (await _deduplicationService.wasShown(messageId)) {
+        if (!_deduplicationService.tryAcquire(messageId)) {
           ReleaseLogger.log('⏭️ [GlobalListener] Mensaje ${messageId.substring(0, 8)}... ya procesado - SKIP');
           _processedMessageIds.add(messageId);
           continue; // Skip este mensaje
@@ -805,7 +805,6 @@ class ChatStreamManager {
 
           // ✅ FIX #7: Marcar como procesado SOLO después de mostrar exitosamente
           _processedMessageIds.add(messageId);
-          await _deduplicationService.markAsShown(messageId);
 
           ReleaseLogger.log('✅ [GlobalListener] Notificación instantánea mostrada para ${messageId.substring(0, 8)}...');
         } catch (e) {

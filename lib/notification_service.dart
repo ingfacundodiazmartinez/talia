@@ -1675,9 +1675,8 @@ class NotificationService {
           try {
             // ✅ FIX #7: Anti-duplicados usando servicio centralizado
             final dedup = NotificationDeduplicationService();
-            await dedup.initialize();
 
-            if (await dedup.wasShown(messageId)) {
+            if (!dedup.tryAcquire(messageId)) {
               ReleaseLogger.log(
                 '🚫 [iOS Foreground FCM] Notificación ya mostrada por Stream Detector - SKIP duplicado',
                 tag: 'NotificationService',
@@ -1893,8 +1892,7 @@ class NotificationService {
         if (messageId != null) {
           try {
             final dedup = NotificationDeduplicationService();
-            await dedup.initialize();
-            await dedup.markAsShown(messageId);
+            dedup.tryAcquire(messageId);
             ReleaseLogger.log(
               '✅ [Dedup] Mensaje $messageId marcado como ya mostrado (app abierta desde notificación)',
               tag: 'NotificationService',
