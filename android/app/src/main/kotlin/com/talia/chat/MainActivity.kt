@@ -1,6 +1,7 @@
 package com.talia.chat
 
 import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
@@ -10,6 +11,8 @@ import io.flutter.plugin.common.EventChannel
 
 class MainActivity : FlutterActivity() {
     private val arFiltersPlugin = ArFiltersPlugin()
+    private val CHANNEL = "com.talia.chat/notifications"
+    private var startIntent: Intent? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // Cambiar el tema ANTES de llamar a super.onCreate()
@@ -28,6 +31,15 @@ class MainActivity : FlutterActivity() {
         }
 
         super.onCreate(savedInstanceState)
+
+        // ✅ Guardar intent inicial para procesarlo cuando Flutter esté listo
+        startIntent = intent
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // ✅ Manejar intent cuando la app ya está abierta
+        handleIntent(intent)
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -54,5 +66,55 @@ class MainActivity : FlutterActivity() {
         arFiltersPlugin.activity = this
 
         Log.d("MainActivity", "✅ ArFiltersPlugin configurado")
+
+        // ✅ Configurar MethodChannel para notificaciones
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getInitialNotification" -> {
+                    val data = extractIntentData(startIntent)
+                    if (data != null) {
+                        Log.d("MainActivity", "📦 Enviando datos iniciales a Flutter: $data")
+                        result.success(data)
+                        // Limpiar para no enviar múltiples veces
+                        startIntent = null
+                    } else {
+                        Log.d("MainActivity", "ℹ️ No hay datos iniciales de notificación")
+                        result.success(null)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // ✅ Procesar intent inicial si existe
+        startIntent?.let { intent ->
+            handleIntent(intent)
+        }
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        if (intent == null) return
+
+        val data = extractIntentData(intent)
+        if (data != null) {
+            Log.d("MainActivity", "📨 Intent con datos de notificación recibido: $data")
+            // Los datos se enviarán cuando Flutter llame a getInitialNotification
+        }
+    }
+
+    private fun extractIntentData(intent: Intent?): Map<String, String>? {
+        if (intent == null || !intent.hasExtra("chatId")) {
+            return null
+        }
+
+        val data = mutableMapOf<String, String>()
+        intent.extras?.keySet()?.forEach { key ->
+            val value = intent.getStringExtra(key)
+            if (value != null) {
+                data[key] = value
+            }
+        }
+
+        return if (data.isNotEmpty()) data else null
     }
 }

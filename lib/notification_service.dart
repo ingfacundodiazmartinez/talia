@@ -1820,6 +1820,31 @@ class NotificationService {
       }
     });
 
+    // ✅ FIX: Handler para notificaciones de Android creadas por MyFirebaseMessagingService
+    // El servicio nativo de Android crea notificaciones con Intent extras, necesitamos leerlos
+    if (Platform.isAndroid) {
+      try {
+        final androidNotificationData = await _notificationChannel.invokeMethod<Map>('getInitialNotification');
+        if (androidNotificationData != null) {
+          final data = Map<String, dynamic>.from(androidNotificationData);
+          ReleaseLogger.log(
+            '🤖 [Android] App abierta desde notificación nativa - datos: $data',
+            tag: 'NotificationService',
+          );
+
+          // Delay para dar tiempo a que los shells se inicialicen
+          Future.delayed(Duration(milliseconds: 500), () {
+            _handleNotificationTap(data);
+          });
+        }
+      } catch (e) {
+        ReleaseLogger.error(
+          '⚠️ [Android] Error obteniendo notificación inicial: $e',
+          tag: 'NotificationService',
+        );
+      }
+    }
+
     // ✅ CRITICAL FIX: Handler para taps de Communication Notifications desde iOS
     // Las Communication Notifications pasan los datos via method channel en lugar de flutter_local_notifications
     _notificationChannel.setMethodCallHandler((call) async {
