@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import '../utils/release_logger.dart';
 
@@ -25,7 +26,13 @@ class ContactPhotoCacheService {
 
   factory ContactPhotoCacheService() => _instance;
 
-  ContactPhotoCacheService._internal();
+  ContactPhotoCacheService._internal() {
+    // Setup MethodChannel for native code to access photo cache
+    _setupMethodChannel();
+  }
+
+  // MethodChannel for native code (Android/iOS) to access cached photos
+  static const MethodChannel _channel = MethodChannel('com.talia.chat/photo_cache');
 
   // In-memory cache: userId -> photo bytes
   final Map<String, Uint8List> _photoCache = {};
@@ -227,5 +234,34 @@ class ContactPhotoCacheService {
       'trackedUsers': _trackedUserIds.length,
       'activeListeners': _userPhotoSubscriptions.length,
     };
+  }
+
+  /// Setup MethodChannel for native code to request cached photos
+  void _setupMethodChannel() {
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'getCachedPhoto') {
+        final userId = call.arguments as String?;
+
+        if (userId == null || userId.isEmpty) {
+          ReleaseLogger.error('❌ [PhotoCache MethodChannel] Invalid userId');
+          return null;
+        }
+
+        final photo = getCachedPhoto(userId);
+
+        if (photo != null) {
+          ReleaseLogger.log('✅ [PhotoCache MethodChannel] Returning cached photo for: $userId (${photo.length} bytes)');
+        } else {
+          ReleaseLogger.log('⚠️ [PhotoCache MethodChannel] No cached photo for: $userId');
+        }
+
+        return photo;
+      }
+
+      ReleaseLogger.error('❌ [PhotoCache MethodChannel] Unknown method: ${call.method}');
+      return null;
+    });
+
+    ReleaseLogger.log('✅ [PhotoCache] MethodChannel configured');
   }
 }
