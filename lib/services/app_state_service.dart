@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../utils/release_logger.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// Servicio para gestionar el estado de la aplicación (foreground/background)
 ///
@@ -25,7 +26,7 @@ class AppStateService {
   _AppLifecycleObserver? _observer;
 
   /// Inicializar el servicio de estado de la app
-  void initialize() {
+  void initialize() async {
     if (_observer != null) {
       ReleaseLogger.log('🔄 AppStateService ya estaba inicializado', tag: 'AppStateService');
       return;
@@ -33,6 +34,21 @@ class AppStateService {
 
     _observer = _AppLifecycleObserver._(_onAppLifecycleChanged);
     WidgetsBinding.instance.addObserver(_observer!);
+
+    // ✅ CRITICAL: Guardar estado inicial en SharedPreferences
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('app_in_foreground', isInForeground);
+      ReleaseLogger.log(
+        '💾 Estado inicial guardado: app_in_foreground = $isInForeground',
+        tag: 'AppStateService'
+      );
+    } catch (e) {
+      ReleaseLogger.error(
+        'Error guardando estado inicial: $e',
+        tag: 'AppStateService'
+      );
+    }
 
     ReleaseLogger.log('✅ AppStateService inicializado', tag: 'AppStateService');
     ReleaseLogger.log('📱 Estado inicial: ${_currentState.name} (foreground: $isInForeground)', tag: 'AppStateService');
@@ -49,7 +65,7 @@ class AppStateService {
   }
 
   /// Callback cuando cambia el estado del ciclo de vida de la app
-  void _onAppLifecycleChanged(AppLifecycleState state) {
+  void _onAppLifecycleChanged(AppLifecycleState state) async {
     final previousState = _currentState;
     _currentState = state;
 
@@ -61,6 +77,21 @@ class AppStateService {
     // Notificar el cambio de estado
     if (previousState != state) {
       _foregroundStateController.add(isInForeground);
+
+      // ✅ CRITICAL: Guardar estado en SharedPreferences para el background handler
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool('app_in_foreground', isInForeground);
+        ReleaseLogger.log(
+          '💾 Estado guardado en SharedPreferences: app_in_foreground = $isInForeground',
+          tag: 'AppStateService'
+        );
+      } catch (e) {
+        ReleaseLogger.error(
+          'Error guardando estado en SharedPreferences: $e',
+          tag: 'AppStateService'
+        );
+      }
 
       if (isInForeground) {
         ReleaseLogger.log('✅ App pasó a FOREGROUND', tag: 'AppStateService');

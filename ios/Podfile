@@ -47,6 +47,16 @@ target 'Runner' do
   end
 end
 
+# Notification Service Extension target
+target 'NotificationServiceExtension' do
+  use_frameworks!
+
+  # ✅ NSE descarga foto manualmente - no necesita Firebase
+  # Solo necesita UserNotifications framework (incluido por defecto)
+
+  # Inherit deployment target
+end
+
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)

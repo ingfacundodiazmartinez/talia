@@ -7,6 +7,7 @@ import DeepAR
 import PushKit
 import CallKit
 import flutter_callkit_incoming
+import Intents  // ✅ Necesario para INPerson e INImage
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, PKPushRegistryDelegate, CXProviderDelegate {
@@ -15,6 +16,10 @@ import flutter_callkit_incoming
   private var callUUIDToFirestoreID: [UUID: String] = [:] // Mapeo de UUID CallKit -> callId Firestore
   private var firestoreIDToCallUUID: [String: UUID] = [:] // ✅ PHASE 1B: Reverse mapping for duplicate prevention
   private var pendingVoIPToken: String? = nil // ✅ Guardar token VoIP temporalmente
+
+  // ✅ FIX #9: Health check for Stream Detector
+  private var lastStreamDetectorHeartbeat: Date? = nil
+  private let streamDetectorTimeout: TimeInterval = 30.0 // 30 seconds
 
   override func application(
     _ application: UIApplication,
@@ -231,6 +236,272 @@ import flutter_callkit_incoming
         result(FlutterMethodNotImplemented)
       }
     }
+
+    // ✅ Notification channel para mostrar notificaciones instantáneas
+    let notificationChannel = FlutterMethodChannel(name: "com.talia.chat/notifications", binaryMessenger: controller.binaryMessenger)
+
+    notificationChannel.setMethodCallHandler { [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) in
+      guard let self = self else { return }
+
+      if call.method == "showCommunicationNotification" {
+        NSLog("📬 [Notifications] Recibido showCommunicationNotification desde Flutter")
+
+        guard let args = call.arguments as? [String: Any],
+              let senderId = args["senderId"] as? String,
+              let senderName = args["senderName"] as? String,
+              let messageText = args["messageText"] as? String else {
+          NSLog("❌ [Notifications] Args inválidos")
+          result(FlutterError(code: "INVALID_ARGS", message: "Missing required args", details: nil))
+          return
+        }
+
+        let chatId = args["chatId"] as? String ?? senderId
+        let isGroup = args["isGroup"] as? Bool ?? false
+        let senderPhotoUrl = args["senderPhotoUrl"] as? String
+
+        NSLog("⚡ [Notifications] Mostrando notificación instantánea de: \(senderName)")
+        if let photoUrl = senderPhotoUrl, !photoUrl.isEmpty {
+          NSLog("📷 [Notifications] URL de foto recibida: \(photoUrl)")
+        }
+
+        // Mostrar notificación INMEDIATAMENTE (sin esperar foto)
+        self.showInstantNotification(
+          senderName: senderName,
+          messageText: messageText,
+          senderId: senderId,
+          chatId: chatId,
+          isGroup: isGroup,
+          senderPhotoUrl: senderPhotoUrl
+        ) { success in
+          result(success)
+        }
+      } else {
+        result(FlutterMethodNotImplemented)
+      }
+    }
+
+    // ✅ FIX #9: Stream Detector health check channel
+    let streamDetectorChannel = FlutterMethodChannel(name: "com.talia.chat/stream_detector", binaryMessenger: controller.binaryMessenger)
+
+    streamDetectorChannel.setMethodCallHandler { [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) in
+      guard let self = self else { return }
+
+      if call.method == "heartbeat" {
+        // Update last heartbeat timestamp
+        self.lastStreamDetectorHeartbeat = Date()
+        result(true)
+      } else {
+        result(FlutterMethodNotImplemented)
+      }
+    }
+  }
+
+  // MARK: - Instant Notifications
+
+  /// Cache en memoria para fotos de perfil (mantiene las últimas 50 fotos)
+  private static let photoCache: NSCache<NSString, UIImage> = {
+    let cache = NSCache<NSString, UIImage>()
+    cache.countLimit = 50  // Máximo 50 fotos en cache
+    cache.totalCostLimit = 50 * 1024 * 1024  // Máximo 50 MB
+    return cache
+  }()
+
+  /// Muestra una notificación local instantánea con foto circular usando Communication Notifications
+  /// ✅ NUEVA IMPLEMENTACIÓN: Usa INSendMessageIntent para mostrar foto circular del sender
+  private func showInstantNotification(
+    senderName: String,
+    messageText: String,
+    senderId: String,
+    chatId: String,
+    isGroup: Bool,
+    senderPhotoUrl: String?,
+    completion: @escaping (Bool) -> Void
+  ) {
+    let content = UNMutableNotificationContent()
+    content.title = senderName
+    content.body = messageText
+    content.sound = .default
+    content.badge = 1
+    content.threadIdentifier = chatId
+
+    // ✅ CRITICAL: Agregar TODOS los datos necesarios para la navegación
+    content.userInfo = [
+      "senderId": senderId,
+      "senderName": senderName,
+      "chatId": chatId,
+      "isGroup": isGroup,
+      "messagePreview": messageText,
+      "groupName": "",  // iOS no tiene este dato en foreground, pero necesitamos el key
+      "type": isGroup ? "group_message" : "chat_message",
+      "source": "stream_detector"  // ✅ Identificador para distinguir de FCM
+    ]
+
+    // ID único para la notificación
+    let requestId = UUID().uuidString
+
+    // Función helper para crear y mostrar la notificación
+    func createAndShowNotification(image: UIImage?) {
+      var finalContent = content
+
+      if let image = image {
+        // Crear INPerson con foto
+        let personHandle = INPersonHandle(value: senderId, type: .unknown)
+        let avatar = INImage(imageData: image.jpegData(compressionQuality: 0.8)!)
+        let sender = INPerson(
+          personHandle: personHandle,
+          nameComponents: nil,
+          displayName: senderName,
+          image: avatar,
+          contactIdentifier: nil,
+          customIdentifier: senderId
+        )
+
+        // Crear INSendMessageIntent
+        let intent = INSendMessageIntent(
+          recipients: nil,
+          outgoingMessageType: .outgoingMessageText,
+          content: messageText,
+          speakableGroupName: isGroup ? INSpeakableString(spokenPhrase: "Grupo") : nil,
+          conversationIdentifier: chatId,
+          serviceName: nil,
+          sender: sender,
+          attachments: nil
+        )
+
+        // Asignar imagen explícitamente
+        intent.setImage(avatar, forParameterNamed: \.sender)
+
+        // Donar interacción
+        let interaction = INInteraction(intent: intent, response: nil)
+        interaction.direction = .incoming
+        interaction.donate(completion: nil)
+
+        // Convertir el intent en notification content
+        do {
+          finalContent = try content.updating(from: intent) as! UNMutableNotificationContent
+
+          // ✅ CRITICAL FIX: Preservar userInfo después de updating(from:)
+          // El método updating(from:) crea un nuevo content que NO preserva el userInfo original
+          finalContent.userInfo = content.userInfo
+
+          NSLog("✅ [Notifications] Communication Notification creada con foto circular")
+          NSLog("✅ [Notifications] UserInfo preservado: \(finalContent.userInfo)")
+        } catch {
+          NSLog("⚠️ [Notifications] Error creando Communication Notification: \(error.localizedDescription)")
+        }
+      } else {
+        NSLog("ℹ️ [Notifications] Sin foto de sender, mostrando notificación simple")
+      }
+
+      // Mostrar notificación (en main thread)
+      DispatchQueue.main.async {
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 0.1, repeats: false)
+        let request = UNNotificationRequest(identifier: requestId, content: finalContent, trigger: trigger)
+
+        UNUserNotificationCenter.current().add(request) { error in
+          if let error = error {
+            NSLog("❌ [Notifications] Error agregando notificación: \(error.localizedDescription)")
+            completion(false)
+          } else {
+            NSLog("✅ [Notifications] Notificación mostrada exitosamente")
+            completion(true)
+          }
+        }
+      }
+    }
+
+    // ✅ SOLUCIÓN: Usar Communication Notifications con foto
+    if let photoUrl = senderPhotoUrl, !photoUrl.isEmpty {
+      // Caso 1: Archivo local (ya descargado por Flutter)
+      if photoUrl.hasPrefix("/") || photoUrl.hasPrefix("file://") {
+        NSLog("📂 [Notifications] Usando archivo local: \(photoUrl)")
+        let fileUrl = URL(fileURLWithPath: photoUrl)
+        
+        do {
+          let data = try Data(contentsOf: fileUrl)
+          if let image = UIImage(data: data) {
+            createAndShowNotification(image: image)
+            return
+          }
+        } catch {
+          NSLog("❌ [Notifications] Error leyendo archivo local: \(error)")
+        }
+        // Si falla, mostrar sin foto
+        createAndShowNotification(image: nil)
+      }
+      // Caso 2: URL remota (descargar)
+      else if let url = URL(string: photoUrl) {
+        NSLog("📥 [Notifications] Descargando foto para Communication Notification...")
+
+        // Timeout de 5 segundos para descarga rápida
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 5.0
+        let session = URLSession(configuration: config)
+
+        session.dataTask(with: url) { data, response, error in
+          if let data = data, let image = UIImage(data: data) {
+            NSLog("✅ [Notifications] Foto descargada")
+            createAndShowNotification(image: image)
+          } else {
+            NSLog("⚠️ [Notifications] No se pudo descargar foto, usando notificación simple")
+            createAndShowNotification(image: nil)
+          }
+        }.resume()
+      } else {
+        // URL inválida
+        createAndShowNotification(image: nil)
+      }
+    } else {
+      // Sin foto
+      createAndShowNotification(image: nil)
+    }
+  }
+
+  /// Crea un attachment desde UIImage para la notificación
+  private func createNotificationAttachment(from image: UIImage, identifier: String) -> UNNotificationAttachment? {
+    guard let imageData = image.jpegData(compressionQuality: 0.8) else { return nil }
+
+    let tempDir = NSTemporaryDirectory()
+    let tempFile = tempDir + identifier + ".jpg"
+    let tempUrl = URL(fileURLWithPath: tempFile)
+
+    do {
+      try imageData.write(to: tempUrl)
+      let attachment = try UNNotificationAttachment(identifier: identifier, url: tempUrl, options: nil)
+      return attachment
+    } catch {
+      NSLog("❌ [Notifications] Error creando attachment: \(error.localizedDescription)")
+      return nil
+    }
+  }
+
+  /// Descarga y cachea una foto en background (no bloquea la notificación)
+  private func downloadAndCachePhoto(from urlString: String, senderId: String) {
+    guard let url = URL(string: urlString) else { return }
+
+    DispatchQueue.global(qos: .background).async {
+      NSLog("📥 [Notifications] Descargando foto para cache: \(urlString)")
+
+      // Timeout de 3 segundos
+      let config = URLSessionConfiguration.default
+      config.timeoutIntervalForRequest = 3.0
+      let session = URLSession(configuration: config)
+
+      session.dataTask(with: url) { data, response, error in
+        guard let data = data,
+              let image = UIImage(data: data) else {
+          NSLog("⚠️ [Notifications] No se pudo descargar/procesar foto")
+          return
+        }
+
+        // Guardar en cache para próximas notificaciones
+        AppDelegate.photoCache.setObject(image, forKey: urlString as NSString)
+        NSLog("💾 [Notifications] Foto guardada en cache para próximas notificaciones")
+
+        // También guardar con senderId como key alternativa
+        AppDelegate.photoCache.setObject(image, forKey: senderId as NSString)
+      }.resume()
+    }
   }
 
   override func application(_ application: UIApplication,
@@ -285,11 +556,11 @@ import flutter_callkit_incoming
   }
 
   func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
-    NSLog("🚨🚨🚨 TALIA_DEBUG: VoIP Push received")
-    NSLog("🚨 TALIA_DEBUG: Payload: \(payload.dictionaryPayload)")
+    // ✅ FIX #18: Reduced excessive DEBUG logs
+    NSLog("📞 [VoIP] Push received")
 
     guard type == .voIP else {
-      NSLog("🚨 TALIA_DEBUG: ERROR - Wrong push type")
+      NSLog("❌ [VoIP] Wrong push type")
       completion()
       return
     }
@@ -299,7 +570,7 @@ import flutter_callkit_incoming
     guard let callId = payloadDict["callId"] as? String,
           let callerId = payloadDict["callerId"] as? String,
           let callerName = payloadDict["callerName"] as? String else {
-      NSLog("🚨 TALIA_DEBUG: ERROR - Missing required fields in payload")
+      NSLog("❌ [VoIP] Missing required fields")
       completion()
       return
     }
@@ -307,11 +578,7 @@ import flutter_callkit_incoming
     let callType = payloadDict["callType"] as? String ?? "UNKNOWN"
     let isVideo = (callType == "video")
 
-    NSLog("🚨 TALIA_DEBUG: Showing CallKit for caller: \(callerName)")
-    NSLog("🚨 TALIA_DEBUG: Firestore callId: \(callId)")
-    NSLog("🚨 TALIA_DEBUG: Call type from payload: '\(callType)'")
-    NSLog("🚨 TALIA_DEBUG: isVideo calculated as: \(isVideo)")
-    NSLog("🚨 TALIA_DEBUG: Raw payload callType value: \(payloadDict["callType"] ?? "NIL")")
+    NSLog("📞 [VoIP] CallKit for \(callerName), type: \(callType), callId: \(callId)")
 
     // ✅ PHASE 1B: Check for duplicates using reverse mapping and auto-end old ones
     if let existingUUID = self.firestoreIDToCallUUID[callId] {
@@ -338,24 +605,20 @@ import flutter_callkit_incoming
     let callUUID = UUID()
     callUUIDToFirestoreID[callUUID] = callId
     firestoreIDToCallUUID[callId] = callUUID // ✅ PHASE 1B: Reverse mapping
-    NSLog("🚨 TALIA_DEBUG: Created bidirectional mapping - CallKit UUID: \(callUUID.uuidString) <-> Firestore ID: \(callId)")
 
     // Report incoming call to CallKit
-    NSLog("🚨 TALIA_DEBUG: Reporting call to CallKit...")
     callProvider.reportNewIncomingCall(with: callUUID, update: update) { error in
       if let error = error {
-        NSLog("🚨 TALIA_DEBUG: ERROR reporting call to CallKit: \(error.localizedDescription)")
+        NSLog("❌ [VoIP] CallKit report error: \(error.localizedDescription)")
       } else {
-        NSLog("🚨 TALIA_DEBUG: Call reported to CallKit successfully ✅")
+        NSLog("✅ [VoIP] CallKit reported successfully")
 
         // Notify Flutter about the incoming call
         if let controller = self.window?.rootViewController as? FlutterViewController {
-          NSLog("🚨 TALIA_DEBUG: Notifying Flutter about incoming call...")
           let channel = FlutterMethodChannel(name: "com.talia.chat/voip", binaryMessenger: controller.binaryMessenger)
           channel.invokeMethod("onIncomingCall", arguments: payloadDict)
-          NSLog("🚨 TALIA_DEBUG: Flutter notified ✅")
         } else {
-          NSLog("🚨 TALIA_DEBUG: ERROR - No FlutterViewController to notify!")
+          NSLog("❌ [VoIP] No FlutterViewController")
         }
       }
       completion()
@@ -374,45 +637,30 @@ import flutter_callkit_incoming
   }
 
   func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
-    NSLog("🚨🚨🚨 TALIA_DEBUG: User answered call")
-    NSLog("🚨 TALIA_DEBUG: UUID: \(action.callUUID.uuidString)")
+    // ✅ FIX #18: Reduced excessive DEBUG logs
+    NSLog("✅ [CallKit] User answered call")
 
     // Get Firestore callId from mapping
     guard let firestoreCallId = callUUIDToFirestoreID[action.callUUID] else {
-      NSLog("🚨 TALIA_DEBUG: ERROR - No mapping found for UUID: \(action.callUUID.uuidString)")
-      NSLog("🚨 TALIA_DEBUG: Available mappings: \(callUUIDToFirestoreID)")
+      NSLog("❌ [CallKit] No mapping found for UUID")
       action.fulfill()
       return
     }
 
-    NSLog("🚨 TALIA_DEBUG: Mapped to Firestore callId: \(firestoreCallId)")
-
-    // Notify Flutter with Firestore callId - con delay para asegurar que Flutter esté listo
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-      if let controller = self.window?.rootViewController as? FlutterViewController {
-        NSLog("🚨 TALIA_DEBUG: Sending to Flutter...")
-        let channel = FlutterMethodChannel(name: "com.talia.chat/voip", binaryMessenger: controller.binaryMessenger)
-        channel.invokeMethod("onCallAccepted", arguments: ["callId": firestoreCallId])
-        NSLog("🚨 TALIA_DEBUG: Sent to Flutter successfully")
-      } else {
-        NSLog("🚨 TALIA_DEBUG: ERROR - No FlutterViewController found! Retrying...")
-        // Reintentar después de otro segundo
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-          if let controller = self.window?.rootViewController as? FlutterViewController {
-            NSLog("🚨 TALIA_DEBUG: Retry successful, sending to Flutter...")
-            let channel = FlutterMethodChannel(name: "com.talia.chat/voip", binaryMessenger: controller.binaryMessenger)
-            channel.invokeMethod("onCallAccepted", arguments: ["callId": firestoreCallId])
-            NSLog("🚨 TALIA_DEBUG: Sent to Flutter successfully on retry")
-          } else {
-            NSLog("🚨 TALIA_DEBUG: ERROR - Flutter still not available after retry")
-          }
-        }
+    // ✅ FIX #11: Eliminar delay artificial de 500ms
+    // Flutter ya está listo cuando CallKit se activa, delay innecesario
+    DispatchQueue.main.async {
+      guard let controller = self.window?.rootViewController as? FlutterViewController else {
+        NSLog("❌ [CallKit] No FlutterViewController")
+        return
       }
+
+      let channel = FlutterMethodChannel(name: "com.talia.chat/voip", binaryMessenger: controller.binaryMessenger)
+      channel.invokeMethod("onCallAccepted", arguments: ["callId": firestoreCallId])
+      NSLog("✅ [CallKit] Flutter notified of acceptance")
     }
 
-    NSLog("🚨 TALIA_DEBUG: Fulfilling action...")
     action.fulfill()
-    NSLog("🚨 TALIA_DEBUG: Action fulfilled ✅")
   }
 
   func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
@@ -457,8 +705,66 @@ import flutter_callkit_incoming
     NSLog("📱 [Notifications] Title: \(notification.request.content.title)")
     NSLog("📱 [Notifications] Body: \(notification.request.content.body)")
 
-    // IMPORTANTE: Llamar a super para que Flutter también reciba la notificación
-    super.userNotificationCenter(center, willPresent: notification, withCompletionHandler: completionHandler)
+    // ✅ ANTI-DUPLICADOS: Suprimir notificaciones FCM de chat en foreground
+    // Stream Detector ya las maneja (<100ms con foto del sender)
+    let userInfo = notification.request.content.userInfo
+    let notificationType = userInfo["type"] as? String
+    let notificationSource = userInfo["source"] as? String
+
+    NSLog("📱 [Notifications] Type: \(notificationType ?? "unknown"), Source: \(notificationSource ?? "fcm")")
+
+    // ✅ DEBUG: Notificar a Flutter para logging
+    DispatchQueue.main.async {
+      if let controller = self.window?.rootViewController as? FlutterViewController {
+        let channel = FlutterMethodChannel(name: "com.talia.chat/debug", binaryMessenger: controller.binaryMessenger)
+        channel.invokeMethod("onNotificationWillPresent", arguments: [
+          "type": notificationType ?? "unknown",
+          "source": notificationSource ?? "fcm",
+          "title": notification.request.content.title,
+          "body": notification.request.content.body
+        ])
+      }
+    }
+
+    // ✅ CRÍTICO: NO suprimir notificaciones locales del Stream Detector
+    if notificationSource == "stream_detector" {
+      NSLog("✅ [Notifications] Local notification from Stream Detector - showing")
+      if #available(iOS 14.0, *) {
+        completionHandler([.banner, .sound, .badge])
+      } else {
+        completionHandler([.alert, .sound, .badge])
+      }
+    } else if notificationType == "chat_message" || notificationType == "group_message" {
+      // Solo suprimir notificaciones FCM remotas (no tienen "source")
+      // ✅ FIX #9: Only suppress if Stream Detector is healthy (heartbeat recent)
+      if let lastHeartbeat = lastStreamDetectorHeartbeat {
+        let timeSinceHeartbeat = Date().timeIntervalSince(lastHeartbeat)
+        if timeSinceHeartbeat < streamDetectorTimeout {
+          NSLog("⏭️ [Notifications] Stream Detector healthy (\(Int(timeSinceHeartbeat))s ago) - suppressing FCM")
+          completionHandler([])  // NO mostrar nada (Stream Detector ya lo mostró)
+          return
+        } else {
+          NSLog("⚠️ [Notifications] Stream Detector unhealthy (last heartbeat \(Int(timeSinceHeartbeat))s ago) - showing notification")
+        }
+      } else {
+        NSLog("⚠️ [Notifications] No Stream Detector heartbeat received - showing notification")
+      }
+      // Mostrar notificación FCM porque Stream Detector no está saludable
+      if #available(iOS 14.0, *) {
+        completionHandler([.banner, .sound, .badge])
+      } else {
+        completionHandler([.alert, .sound, .badge])
+      }
+    } else {
+      // Para otros tipos (llamadas, etc): mostrar normalmente
+      if #available(iOS 14.0, *) {
+        completionHandler([.banner, .sound, .badge])
+        NSLog("✅ [Notifications] Mostrando con banner + sound + badge (iOS 14+)")
+      } else {
+        completionHandler([.alert, .sound, .badge])
+        NSLog("✅ [Notifications] Mostrando con alert + sound + badge (iOS <14)")
+      }
+    }
   }
 
   // Este método se llama cuando el usuario toca la notificación
@@ -466,9 +772,51 @@ import flutter_callkit_incoming
                                       didReceive response: UNNotificationResponse,
                                       withCompletionHandler completionHandler: @escaping () -> Void) {
     NSLog("📱 [Notifications] User tapped notification")
-    NSLog("📱 [Notifications] UserInfo: \(response.notification.request.content.userInfo)")
+    let userInfo = response.notification.request.content.userInfo
+    NSLog("📱 [Notifications] UserInfo: \(userInfo)")
 
-    // IMPORTANTE: Llamar a super para que Flutter maneje la navegación
+    // ✅ CRITICAL FIX: Manejar tap de Communication Notifications manualmente
+    // Las Communication Notifications no pasan correctamente el payload a flutter_local_notifications
+    // Por eso enviamos los datos directamente a Flutter via method channel
+
+    if let source = userInfo["source"] as? String, source == "stream_detector" {
+      NSLog("📱 [Notifications] Tap de Communication Notification detectado - pasando a Flutter manualmente")
+
+      // Extraer datos de navegación
+      if let chatId = userInfo["chatId"] as? String,
+         let senderId = userInfo["senderId"] as? String,
+         let senderName = userInfo["senderName"] as? String,
+         let type = userInfo["type"] as? String {
+
+        NSLog("📱 [Notifications] Navegando a chatId: \(chatId), senderId: \(senderId), type: \(type)")
+
+        // Pasar a Flutter via method channel
+        DispatchQueue.main.async {
+          if let controller = self.window?.rootViewController as? FlutterViewController {
+            let channel = FlutterMethodChannel(name: "com.talia.chat/notifications", binaryMessenger: controller.binaryMessenger)
+
+            let payload: [String: Any] = [
+              "chatId": chatId,
+              "senderId": senderId,
+              "senderName": senderName,
+              "type": type,
+              "isGroup": userInfo["isGroup"] as? Bool ?? false,
+              "messagePreview": userInfo["messagePreview"] as? String ?? "",
+              "groupName": userInfo["groupName"] as? String ?? ""
+            ]
+
+            channel.invokeMethod("onNotificationTapped", arguments: payload)
+            NSLog("✅ [Notifications] Datos de navegación enviados a Flutter")
+          }
+        }
+      }
+
+      completionHandler()
+      return
+    }
+
+    // Para otras notificaciones (FCM, etc), llamar a super normalmente
+    NSLog("📱 [Notifications] Notificación regular - usando super.userNotificationCenter")
     super.userNotificationCenter(center, didReceive: response, withCompletionHandler: completionHandler)
   }
 }
