@@ -452,11 +452,13 @@ exports.createChat = onCall(
       }
 
       // Crear documento del chat
+      const now = Timestamp.now();  // ✅ FIX: Timestamp inmediato para que aparezca en queries orderBy()
       await chatRef.set({
         participants: participants,
-        createdAt: FieldValue.serverTimestamp(),
+        createdAt: now,
         createdBy: currentUserId,
-        lastMessageTime: FieldValue.serverTimestamp(),
+        lastMessageTime: now,
+        lastMessageAt: now,  // ✅ FIX: Agregar campo que algunos listeners esperan
         lastMessage: "",
         lastMessageSender: "",
         deletedBy: [],
