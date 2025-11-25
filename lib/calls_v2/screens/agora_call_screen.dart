@@ -103,7 +103,17 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
       _callController.initialize();
       _agoraEngine = _callController.agoraEngine;
 
-      // Setup Agora event handlers first
+      // ✅ For creating mode: Initialize engine first to show camera preview immediately
+      final isCreatingMode = widget.callId == null && widget.participantIds != null;
+      final isVideo = widget.isVideo ?? false;
+
+      if (isCreatingMode && isVideo) {
+        // Initialize engine NOW to show camera preview while creating call
+        await _agoraEngine.initialize();
+        ReleaseLogger.log('✅ Engine initialized for camera preview', tag: _tag);
+      }
+
+      // Setup Agora event handlers (may be null in create mode until engine is ready)
       _setupAgoraEventHandlers();
 
       // ✅ WHATSAPP-STYLE: Show UI IMMEDIATELY (don't wait for camera)
@@ -113,20 +123,20 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
         _isVideoMuted = !_agoraEngine.isVideoEnabled;
       });
 
-      // ✅ Start camera in background (non-blocking)
-      if (widget.isVideo == true && _agoraEngine.engine != null) {
-        // Don't await - let camera start in background
+      // ✅ Start camera preview in background (non-blocking)
+      if (isVideo && _agoraEngine.engine != null) {
         _agoraEngine.engine!.enableVideo().then((_) {
           return _agoraEngine.engine!.startPreview();
         }).then((_) {
           ReleaseLogger.log('✅ Camera preview started in background', tag: _tag);
+          if (mounted) setState(() {}); // Refresh to show camera
         }).catchError((e) {
           ReleaseLogger.error('Failed to start camera', error: e, tag: _tag);
         });
       }
 
-      // ✅ NEW: Handle creating vs joining existing call
-      if (widget.callId == null && widget.participantIds != null) {
+      // ✅ Handle creating vs joining existing call
+      if (isCreatingMode) {
         // Creating mode: Camera already started, now create call in background
         await _createCallInBackground();
         return;
@@ -257,6 +267,10 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
       _localUid = result.data!['agoraUid'] as int?;
 
       ReleaseLogger.log('Call created: $_actualCallId, UID: $_localUid', tag: _tag);
+
+      // ✅ FIX: Register event handlers NOW that engine is initialized
+      // (They couldn't be registered earlier because engine was null)
+      _setupAgoraEventHandlers();
 
       setState(() {
         _isCreatingCall = false;
