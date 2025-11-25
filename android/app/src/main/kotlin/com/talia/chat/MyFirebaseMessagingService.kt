@@ -380,44 +380,6 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             return
         }
 
-        // ⚠️ TEMPORALMENTE DESACTIVADO: Anti-duplicados causa que NO se muestren notificaciones
-        // El Stream Detector marca mensajes como "ya mostrados" ANTES de que llegue FCM,
-        // causando que FCM las rechace como duplicadas.
-        /*
-        // ✅ FILTRO ANTI-DUPLICADO: Verificar si Stream Detector ya mostró esta notificación
-        val messageId = data["messageId"]
-        Log.e(TAG, "🔍 [ANTI-DUPLICADO] Message ID: $messageId")
-
-        if (messageId != null) {
-            val sharedPrefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
-
-            // Buscar con diferentes formatos de clave (igual que en Flutter)
-            val timestampKey1 = "flutter.instant_notification_$messageId"
-            val timestampKey2 = "instant_notification_$messageId"
-
-            // ✅ FIX: Usar getLong() en lugar de getString() porque Flutter guarda timestamps como Long
-            val existingTimestamp1 = if (sharedPrefs.contains(timestampKey1)) sharedPrefs.getLong(timestampKey1, 0) else null
-            val existingTimestamp2 = if (sharedPrefs.contains(timestampKey2)) sharedPrefs.getLong(timestampKey2, 0) else null
-
-            val existingTimestamp = existingTimestamp1 ?: existingTimestamp2
-
-            if (existingTimestamp != null && existingTimestamp > 0) {
-                val now = System.currentTimeMillis()
-                val age = now - existingTimestamp
-
-                // Si la notificación instantánea se mostró hace menos de 10 segundos, es duplicado
-                if (age < 10000) {
-                    Log.e(TAG, "🚫 [ANTI-DUPLICADO] Stream Detector ya mostró esta notificación hace ${age}ms - SKIP")
-                    return
-                } else {
-                    Log.e(TAG, "⏳ [ANTI-DUPLICADO] Notificación antigua (${age}ms) - permitiendo FCM push")
-                }
-            } else {
-                Log.e(TAG, "✅ [ANTI-DUPLICADO] Primera notificación para este mensaje - permitida")
-            }
-        }
-        */
-
         // ✅ FILTRO CHAT ACTUAL: Verificar si el usuario está viendo este chat
         Log.e(TAG, "🔍 [FILTRO] Iniciando verificación de chat actual...")
         val messageChatId = data["chatId"]

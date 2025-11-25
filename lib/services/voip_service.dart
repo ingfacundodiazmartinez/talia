@@ -5,7 +5,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 // V2 Architecture imports
 import '../calls_v2/controllers/call_controller.dart' as calls_v2;
-import '../calls_v2/services/incoming_calls_listener_service.dart';
 import '../calls_v2/services/call_state_cache_service.dart';
 import '../calls_v2/services/voip_token_service.dart';
 import '../utils/release_logger.dart';
@@ -156,9 +155,6 @@ class VoIPService {
           final controller = calls_v2.CallController();
           await controller.declineCall(callId);
           ReleaseLogger.log('✅ [VoIP] Llamada rechazada en Firestore via CallController V2', tag: 'VoIPService');
-
-          // NOTE: user_calls cleanup is now handled by Cloud Functions (deprecated client method)
-          await IncomingCallsListenerService().clearIncomingCall(callId);
         } catch (e) {
           ReleaseLogger.error('❌ [VoIP] Error rechazando llamada via CallController V2: $e', tag: 'VoIPService');
           rethrow; // Re-throw error since no fallback available
@@ -218,9 +214,6 @@ class VoIPService {
         // UI already showing call screen, will show error state there
         return;
       }
-
-      // NOTE: user_calls updates are now handled by Cloud Functions (deprecated client method)
-      await IncomingCallsListenerService().updateIncomingCallStatus(callId, 'accepted');
 
       // Clear from cache after successful processing
       _cache.clearCall(callId);
@@ -340,9 +333,6 @@ class VoIPService {
       }
       ReleaseLogger.log('✅ [CallKit] Llamada aceptada via CallController V2', tag: 'VoIPService');
 
-      // NOTE: user_calls updates are now handled by Cloud Functions (deprecated client method)
-      await IncomingCallsListenerService().updateIncomingCallStatus(callId, 'accepted');
-
       // Obtener token de Agora directamente (sin crear nueva llamada)
       ReleaseLogger.log('🎫 [CallKit] Generando token de Agora para unirse al canal: $channelName', tag: 'VoIPService');
       final functions = FirebaseFunctions.instance;
@@ -409,10 +399,6 @@ class VoIPService {
       final controller = calls_v2.CallController();
       await controller.declineCall(callId);
       ReleaseLogger.log('✅ [CallKit] Llamada rechazada via CallController V2', tag: 'VoIPService');
-
-      // NOTE: user_calls cleanup is now handled by Cloud Functions (deprecated client method)
-      await IncomingCallsListenerService().clearIncomingCall(callId);
-      ReleaseLogger.log('✅ [CallKit] Llamada rechazada en Firestore', tag: 'VoIPService');
 
       // ✅ FIX: Cerrar CallKit UI inmediatamente después del rechazo
       await notifyCallEnded(callId);
