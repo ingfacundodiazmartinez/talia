@@ -75,6 +75,7 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
   // UI state
   bool _isInitializing = true;
   bool _isCreatingCall = false; // New: track if we're creating the call
+  String? _createError; // Error message for retry UI
   bool _isAudioMuted = false;
   bool _isVideoMuted = false;
   bool _isSpeakerOn = true;
@@ -243,8 +244,11 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
       );
 
       if (!result.success || result.data == null) {
-        _showError(result.error ?? 'Failed to create call');
-        Navigator.of(context, rootNavigator: true).pop();
+        // Show error with retry button instead of closing
+        setState(() {
+          _isCreatingCall = false;
+          _createError = result.error ?? 'Error al conectar la llamada';
+        });
         return;
       }
 
@@ -611,6 +615,91 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
     );
   }
 
+  /// Build error UI with retry button
+  Widget _buildErrorWithRetry() {
+    final isVideo = widget.isVideo ?? false;
+
+    return Scaffold(
+      backgroundColor: isVideo ? Colors.black : Colors.grey[900],
+      body: SafeArea(
+        child: Stack(
+          children: [
+            // Show camera preview in background for video calls
+            if (isVideo && _agoraEngine.engine != null)
+              Center(
+                child: AgoraVideoView(
+                  controller: VideoViewController(
+                    rtcEngine: _agoraEngine.engine!,
+                    canvas: const VideoCanvas(uid: 0),
+                  ),
+                ),
+              ),
+            // Semi-transparent overlay
+            Container(
+              color: Colors.black.withOpacity(0.7),
+            ),
+            // Error message and retry button
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(32.0),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(
+                      Icons.error_outline,
+                      color: Colors.red,
+                      size: 64,
+                    ),
+                    const SizedBox(height: 24),
+                    Text(
+                      _createError ?? 'Error al conectar',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 32),
+                    ElevatedButton.icon(
+                      onPressed: _retryCreateCall,
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Reintentar'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 32,
+                          vertical: 16,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextButton(
+                      onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
+                      child: const Text(
+                        'Cancelar',
+                        style: TextStyle(color: Colors.white70),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Retry creating the call
+  void _retryCreateCall() {
+    setState(() {
+      _createError = null;
+      _isCreatingCall = true;
+    });
+    _createCallInBackground();
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isInitializing) {
@@ -632,7 +721,12 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
       );
     }
 
-    final isVideo = _callController.currentCall?.isVideo ?? false;
+    // Show error with retry button if call creation failed
+    if (_createError != null) {
+      return _buildErrorWithRetry();
+    }
+
+    final isVideo = _callController.currentCall?.isVideo ?? widget.isVideo ?? false;
 
     if (!isVideo) {
       // Audio-only call UI

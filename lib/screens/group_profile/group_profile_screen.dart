@@ -2,7 +2,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../controllers/group_profile_controller.dart';
-import '../../calls_v2/controllers/call_controller.dart' as calls_v2;
 import '../../calls_v2/screens/agora_call_screen.dart';
 import 'widgets/add_members_dialog.dart';
 
@@ -592,50 +591,19 @@ class _GroupProfileScreenState extends State<GroupProfileScreen> {
     await _controller.rejectRequest(requestId);
   }
 
-  Future<void> _startVideoCall(String userId, String userName) async {
-    try {
-      // ✅ MIGRADO: Usar CallController de calls_v2
-      final callController = calls_v2.CallController();
-      final result = await callController.createCall(
-        participantIds: [userId],
-        isVideo: true,
-        isGroup: false,
-      );
+  void _startVideoCall(String userId, String userName) {
+    if (!mounted) return;
 
-      if (result.success && result.data != null) {
-        final callId = result.data!['callId'];
-        final token = result.data!['token'];
-
-        // Navegar a AgoraCallScreen
-        if (mounted) {
-          Navigator.of(context, rootNavigator: true).push(
-            MaterialPageRoute(
-              builder: (context) => AgoraCallScreen(
-                callId: callId,
-                isIncoming: false,
-              ),
-            ),
-          );
-        }
-      } else {
-        // Manejar error de inicio de llamada
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Error al iniciar videollamada: ${result.error ?? "Unknown error"}',
-              ),
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error iniciando videollamada: $e')),
-        );
-      }
-    }
+    // ✅ Navegación inmediata - la llamada se crea en background
+    Navigator.of(context, rootNavigator: true).push(
+      MaterialPageRoute(
+        builder: (context) => AgoraCallScreen.create(
+          participantIds: [userId],
+          isVideo: true,
+          isGroup: false,
+        ),
+      ),
+    );
   }
 
   Future<void> _leaveGroup() async {

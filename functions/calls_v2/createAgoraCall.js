@@ -12,6 +12,7 @@ const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const admin = require('firebase-admin');
 const { v4: uuidv4 } = require('uuid');
 const { RtcTokenBuilder, RtcRole } = require('agora-token');
+const { sendVoIPPush } = require('../helpers');
 
 // Initialize admin if not already initialized
 if (!admin.apps.length) {
@@ -158,11 +159,12 @@ exports.createAgoraCall = onCall(
         console.log(`   - voipToken: ${voipToken ? `EXISTS (${voipToken.substring(0, 20)}...)` : 'NULL/UNDEFINED'}`);
         console.log(`   - fcmToken: ${fcmToken ? `EXISTS (${fcmToken.substring(0, 30)}...)` : 'NULL/UNDEFINED'}`);
 
-        // Validate VoIP token (iOS)
+        // ✅ FIX: Usar sendVoIPPush de helpers.js (APNs directo, no Firebase Messaging)
+        // Los tokens VoIP de iOS NO son tokens FCM, requieren APNs
         if (voipToken && typeof voipToken === 'string' && voipToken.length > 0) {
           console.log(`✅ Valid VoIP token found for ${participantId}: ${voipToken.substring(0, 20)}...`);
 
-          // Send VoIP push notification (iOS)
+          // Payload para VoIP push (iOS)
           const voipPayload = {
             callId: callId,
             channelName: channelName,
@@ -176,31 +178,18 @@ exports.createAgoraCall = onCall(
             timestamp: timestamp.toString()
           };
 
-          const voipMessage = {
-            data: voipPayload,
-            token: voipToken,
-            apns: {
-              headers: {
-                'apns-push-type': 'voip',
-                'apns-priority': '10',
-                'apns-topic': 'com.talia.chat.voip'
-              }
-            }
-          };
-
+          // Usar sendVoIPPush que usa APNs directamente
           notificationPromises.push(
-            admin.messaging().send(voipMessage)
-              .then(() => {
-                console.log(`✅ VoIP push sent to ${participantId}`);
+            sendVoIPPush(voipToken, voipPayload)
+              .then((success) => {
+                if (success) {
+                  console.log(`✅ VoIP push sent to ${participantId} via APNs`);
+                } else {
+                  console.warn(`⚠️ VoIP push failed for ${participantId} (APNs provider issue)`);
+                }
               })
               .catch(error => {
                 console.error(`❌ Failed to send VoIP push to ${participantId}:`, error);
-                // Mark token as potentially invalid for monitoring
-                if (error.code === 'messaging/invalid-registration-token' ||
-                    error.code === 'messaging/registration-token-not-registered') {
-                  console.error(`⚠️ VoIP token may be invalid for ${participantId}`);
-                  // Could optionally mark in Firestore for cleanup
-                }
               })
           );
         } else if (voipToken) {
@@ -327,8 +316,15 @@ exports.createAgoraCall = onCall(
         );
       }
 
-      // Wait for all operations to complete
-      await Promise.all([...notificationPromises, ...userCallPromises]);
+      // ✅ FIX UX: Solo esperar user_calls (necesario para que receptor detecte llamada)
+      // Las notificaciones se envían en background para no bloquear al caller
+      await Promise.all(userCallPromises);
+
+      // Enviar notificaciones en background (fire-and-forget)
+      // No esperamos - el caller puede ver la pantalla de llamada inmediatamente
+      Promise.all(notificationPromises)
+        .then(() => console.log(`✅ All notifications sent for call ${callId}`))
+        .catch(err => console.error(`⚠️ Some notifications failed for call ${callId}:`, err));
 
       console.log(`Call created successfully: ${callId}, channel: ${channelName}`);
 

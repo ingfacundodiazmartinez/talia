@@ -7,7 +7,6 @@ import 'package:path_provider/path_provider.dart';
 import '../controllers/chat_controller_cache_first.dart';
 import '../notification_service.dart';
 import '../services/reaction_service.dart';
-import '../calls_v2/controllers/call_controller.dart' as calls_v2;
 import '../calls_v2/screens/agora_call_screen.dart';
 import '../widgets/reaction_picker.dart';
 import 'chat/widgets/chat_app_bar.dart';
@@ -546,48 +545,16 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   Future<void> _handleCallBack(String callType) async {
     if (!mounted) return;
 
-    try {
-      // ✅ MIGRADO: Usar CallController de calls_v2
-      final callController = calls_v2.CallController();
-      final result = await callController.createCall(
-        participantIds: [widget.contactId],
-        isVideo: callType == 'video',
-        isGroup: false,
-      );
-
-      if (result.success && result.data != null) {
-        final callId = result.data!['callId'];
-        // Token is available in result.data!['token'] if needed
-
-        // Navegar a AgoraCallScreen para ambos tipos de llamada
-        if (mounted) {
-          Navigator.of(context, rootNavigator: true).push(
-            MaterialPageRoute(
-              builder: (context) => AgoraCallScreen(
-                callId: callId,
-                isIncoming: false,
-              ),
-            ),
-          );
-        }
-      } else {
-        // Manejar error de inicio de llamada
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Error al iniciar llamada ($callType): ${result.error ?? "Unknown error"}'),
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      // Manejar errores al iniciar la llamada
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error al devolver llamada ($callType): $e')),
-        );
-      }
-    }
+    // ✅ Navegación inmediata - la llamada se crea en background
+    Navigator.of(context, rootNavigator: true).push(
+      MaterialPageRoute(
+        builder: (context) => AgoraCallScreen.create(
+          participantIds: [widget.contactId],
+          isVideo: callType == 'video',
+          isGroup: false,
+        ),
+      ),
+    );
   }
 
   // Build Methods
