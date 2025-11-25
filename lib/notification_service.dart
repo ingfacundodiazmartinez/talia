@@ -367,8 +367,7 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     }
     _globalProcessedCallIds.add(callId);
 
-    // ✅ FIX DUPLICATE INCOMINGCALLSCREEN: Mark as VoIP handled IMMEDIATELY (background)
-    // This prevents IncomingCallsListenerService from showing duplicate screen
+    // ✅ Mark as VoIP handled to prevent duplicate processing
     VoIPService().markCallAsVoIPHandled(callId);
     ReleaseLogger.log(
       '✅ [Background] Call $callId marked as VoIP handled to prevent duplicate',
@@ -1484,7 +1483,7 @@ class NotificationService {
           tag: 'NotificationService',
         );
 
-        // ✅ V2 SYSTEM: Always show CallKit (IncomingCallsListenerService + VoIPService handle coordination)
+        // ✅ V2 SYSTEM: Always show CallKit (VoIP handles coordination)
         if (isV2Call) {
           ReleaseLogger.log(
             '📞 [V2] Incoming call detected - showing CallKit in foreground',
@@ -1515,8 +1514,7 @@ class NotificationService {
             return;
           }
 
-          // ✅ FIX DUPLICATE INCOMINGCALLSCREEN: Mark as VoIP handled IMMEDIATELY
-          // This prevents IncomingCallsListenerService from showing duplicate screen
+          // ✅ Mark as VoIP handled to prevent duplicate processing
           VoIPService().markCallAsVoIPHandled(callId);
           ReleaseLogger.log(
             '✅ [V2] Call $callId marked as VoIP handled to prevent duplicate',
