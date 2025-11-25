@@ -202,12 +202,17 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     // Si la app pierde el foco (ej: aparece diálogo de permisos) y estamos grabando,
     // detener la grabación para evitar que quede bloqueada
     if (state == AppLifecycleState.inactive && _isRecording) {
-
       _cancelRecording();
     }
 
-    // Marcar mensajes como leídos cuando la app vuelve al foreground
-    if (state == AppLifecycleState.resumed) {
+    // ✅ FIX: Limpiar current_chat_id cuando la app va a background
+    // para que las notificaciones nativas se muestren correctamente
+    if (state == AppLifecycleState.paused) {
+      NotificationService().clearCurrentChat();
+    } else if (state == AppLifecycleState.resumed) {
+      // Restaurar el chat actual cuando vuelve a foreground
+      NotificationService().setCurrentChat(widget.groupId);
+      // Marcar mensajes como leídos
       _markMessagesAsDeliveredAndSeen();
     }
   }

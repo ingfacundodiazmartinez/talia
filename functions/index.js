@@ -168,6 +168,7 @@ exports.convertExpiredStoriesToPermanent = scheduledTasks.convertExpiredStoriesT
 exports.cleanupOldMessages = scheduledTasks.cleanupOldMessages;
 exports.autoResolveEmergencies = scheduledTasks.autoResolveEmergencies;
 exports.cleanupOldRateLimits = scheduledTasks.cleanupOldRateLimits;
+exports.cleanupOldNotifications = scheduledTasks.cleanupOldNotifications;
 
 // Transformaciones de imágenes
 exports.transformCharacter = transformations.transformCharacter;

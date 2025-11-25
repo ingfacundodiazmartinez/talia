@@ -17,6 +17,31 @@ class NotificationPreferencesService {
 
   String? get _currentUserId => _auth.currentUser?.uid;
 
+  /// Obtener el rol del usuario actual (parent/child)
+  Future<String> getCurrentUserRole() async {
+    if (_currentUserId == null) return 'child';
+
+    try {
+      final doc = await _firestore
+          .collection('users')
+          .doc(_currentUserId)
+          .get();
+
+      if (doc.exists) {
+        return doc.data()?['role'] ?? 'child';
+      }
+      return 'child';
+    } catch (e) {
+      return 'child';
+    }
+  }
+
+  /// Verificar si el usuario actual es padre
+  Future<bool> isCurrentUserParent() async {
+    final role = await getCurrentUserRole();
+    return role == 'parent';
+  }
+
   // Obtener preferencias del usuario
   Future<Map<String, dynamic>> getPreferences() async {
     if (_currentUserId == null) return defaultPreferences();

@@ -36,8 +36,7 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         /**
          * ✅ UNIFIED: Mostrar notificación usando cache de fotos proactivo
          *
-         * Elimina 200+ líneas de código duplicado de descarga HTTP.
-         * Usa ContactPhotoCacheService vía MethodChannel (0ms latency).
+         * Intenta usar cache primero, si no hay descarga de URL.
          */
         fun showNotificationFromForeground(
             context: Context,
@@ -67,8 +66,29 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
-            // ✅ Try to get cached photo via MethodChannel (instant, no HTTP)
-            val cachedPhoto = getCachedPhoto(senderId)
+            // ✅ Try to get cached photo: Flutter cache first, then local file cache
+            var cachedPhoto = getCachedPhoto(senderId)
+            if (cachedPhoto == null) {
+                cachedPhoto = getFromLocalCacheStatic(context, senderId)
+            }
+
+            // Si no hay cache y hay URL, descargar la foto en background thread
+            if (cachedPhoto == null && !senderPhotoUrl.isNullOrEmpty()) {
+                Log.d(TAG, "📥 [Foreground] Descargando foto desde URL: ${senderPhotoUrl.take(50)}...")
+                thread {
+                    val downloadedBytes = downloadPhotoStatic(senderPhotoUrl, senderId, context)
+                    buildAndShowNotification(
+                        context = context,
+                        body = body,
+                        senderName = senderName,
+                        senderId = senderId,
+                        cachedPhotoBytes = downloadedBytes,
+                        intent = intent,
+                        pendingIntent = pendingIntent
+                    )
+                }
+                return // La notificación se mostrará cuando termine la descarga
+            }
 
             buildAndShowNotification(
                 context = context,
@@ -79,6 +99,75 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                 intent = intent,
                 pendingIntent = pendingIntent
             )
+        }
+
+        /**
+         * ✅ Download photo from URL and save to cache
+         */
+        private fun downloadPhotoStatic(photoUrl: String, senderId: String, context: Context): ByteArray? {
+            return try {
+                val url = java.net.URL(photoUrl)
+                val connection = url.openConnection() as java.net.HttpURLConnection
+                connection.connectTimeout = 5000
+                connection.readTimeout = 5000
+                connection.doInput = true
+                connection.connect()
+
+                if (connection.responseCode == java.net.HttpURLConnection.HTTP_OK) {
+                    val inputStream = connection.inputStream
+                    val bytes = inputStream.readBytes()
+                    inputStream.close()
+                    Log.d(TAG, "✅ [Foreground] Foto descargada: ${bytes.size} bytes")
+
+                    // ✅ Guardar en cache para próximas notificaciones
+                    saveToCacheStatic(context, senderId, bytes)
+
+                    bytes
+                } else {
+                    Log.e(TAG, "❌ [Foreground] Error HTTP: ${connection.responseCode}")
+                    null
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ [Foreground] Error descargando foto: ${e.message}", e)
+                null
+            }
+        }
+
+        /**
+         * ✅ Save photo to local cache (static version)
+         */
+        private fun saveToCacheStatic(context: Context, senderId: String, bytes: ByteArray) {
+            try {
+                val cacheDir = java.io.File(context.cacheDir, "photo_cache")
+                if (!cacheDir.exists()) {
+                    cacheDir.mkdirs()
+                }
+                val cacheFile = java.io.File(cacheDir, "$senderId.jpg")
+                cacheFile.writeBytes(bytes)
+                Log.d(TAG, "✅ [Cache] Foto guardada en cache: ${cacheFile.absolutePath}")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ [Cache] Error guardando en cache: ${e.message}", e)
+            }
+        }
+
+        /**
+         * ✅ Get photo from local cache (static version, for when FlutterEngine not available)
+         */
+        private fun getFromLocalCacheStatic(context: Context, senderId: String): ByteArray? {
+            return try {
+                val cacheFile = java.io.File(context.cacheDir, "photo_cache/$senderId.jpg")
+                if (cacheFile.exists()) {
+                    val bytes = cacheFile.readBytes()
+                    Log.d(TAG, "✅ [LocalCache] Cache HIT para $senderId (${bytes.size} bytes)")
+                    bytes
+                } else {
+                    Log.d(TAG, "⚠️ [LocalCache] Cache MISS para $senderId")
+                    null
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ [LocalCache] Error leyendo cache: ${e.message}", e)
+                null
+            }
         }
 
         /**
@@ -219,10 +308,37 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         Log.e(TAG, "🏗️ MyFirebaseMessagingService INICIALIZADO")
     }
 
+    /**
+     * ✅ Detectar si la app está en foreground
+     * Usa ActivityManager para verificar si la app está visible
+     */
+    private fun isAppInForeground(): Boolean {
+        val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        val appProcesses = activityManager.runningAppProcesses ?: return false
+        val packageName = packageName
+
+        for (appProcess in appProcesses) {
+            if (appProcess.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+                && appProcess.processName == packageName) {
+                Log.d(TAG, "✅ App detectada en FOREGROUND")
+                return true
+            }
+        }
+        Log.d(TAG, "✅ App detectada en BACKGROUND")
+        return false
+    }
+
     override fun onMessageReceived(remoteMessage: RemoteMessage) {
         Log.e(TAG, "═══════════════════════════════════════════════════")
         Log.e(TAG, "📩 SERVICIO NATIVO: Mensaje FCM recibido desde: ${remoteMessage.from}")
         Log.e(TAG, "═══════════════════════════════════════════════════")
+
+        // ✅ FILTRO FOREGROUND: Si la app está en foreground, Flutter ya maneja la notificación
+        // Evita duplicados cuando tanto Flutter como Native reciben el mismo FCM
+        if (isAppInForeground()) {
+            Log.e(TAG, "📱 App en FOREGROUND - Flutter manejará la notificación, SKIP nativo")
+            return
+        }
 
         // Extraer datos del payload
         val data = remoteMessage.data
@@ -376,18 +492,108 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         val senderName = data["senderName"] ?: "Usuario"
         val senderId = data["senderId"] ?: (data["chatId"] ?: "unknown")
 
-        // ✅ UNIFIED: Use the same logic as foreground - get cached photo
-        val cachedPhoto = getCachedPhoto(senderId)
+        // ✅ FIXED: Try Flutter cache first, then local file cache
+        var photoBytes = getCachedPhoto(senderId)
+        if (photoBytes == null) {
+            photoBytes = getFromLocalCache(senderId)
+        }
+
+        // Si no hay cache y hay URL, descargar la foto en background thread
+        if (photoBytes == null && !photoUrl.isNullOrEmpty()) {
+            Log.d(TAG, "📥 [Background] Descargando foto desde URL: ${photoUrl.take(50)}...")
+            thread {
+                val downloadedBytes = downloadPhoto(photoUrl, senderId)
+                buildAndShowNotification(
+                    context = this,
+                    body = body,
+                    senderName = senderName,
+                    senderId = senderId,
+                    cachedPhotoBytes = downloadedBytes,
+                    intent = intent,
+                    pendingIntent = pendingIntent
+                )
+            }
+            return // La notificación se mostrará cuando termine la descarga
+        }
 
         buildAndShowNotification(
             context = this,
             body = body,
             senderName = senderName,
             senderId = senderId,
-            cachedPhotoBytes = cachedPhoto,
+            cachedPhotoBytes = photoBytes,
             intent = intent,
             pendingIntent = pendingIntent
         )
+    }
+
+    /**
+     * ✅ Get photo from local file cache (instance method)
+     */
+    private fun getFromLocalCache(senderId: String): ByteArray? {
+        return try {
+            val cacheFile = java.io.File(cacheDir, "photo_cache/$senderId.jpg")
+            if (cacheFile.exists()) {
+                val bytes = cacheFile.readBytes()
+                Log.d(TAG, "✅ [LocalCache] Cache HIT para $senderId (${bytes.size} bytes)")
+                bytes
+            } else {
+                Log.d(TAG, "⚠️ [LocalCache] Cache MISS para $senderId")
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ [LocalCache] Error leyendo cache: ${e.message}", e)
+            null
+        }
+    }
+
+    /**
+     * ✅ Download photo from URL and save to cache (instance method)
+     */
+    private fun downloadPhoto(photoUrl: String, senderId: String): ByteArray? {
+        return try {
+            val url = java.net.URL(photoUrl)
+            val connection = url.openConnection() as java.net.HttpURLConnection
+            connection.connectTimeout = 5000
+            connection.readTimeout = 5000
+            connection.doInput = true
+            connection.connect()
+
+            if (connection.responseCode == java.net.HttpURLConnection.HTTP_OK) {
+                val inputStream = connection.inputStream
+                val bytes = inputStream.readBytes()
+                inputStream.close()
+                Log.d(TAG, "✅ [Background] Foto descargada: ${bytes.size} bytes")
+
+                // ✅ Guardar en cache para próximas notificaciones
+                saveToCache(senderId, bytes)
+
+                bytes
+            } else {
+                Log.e(TAG, "❌ [Background] Error HTTP: ${connection.responseCode}")
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ [Background] Error descargando foto: ${e.message}", e)
+            null
+        }
+    }
+
+    /**
+     * ✅ Save photo to local cache (instance method)
+     */
+    private fun saveToCache(senderId: String, bytes: ByteArray) {
+        try {
+            val cacheDir = java.io.File(cacheDir, "photo_cache")
+            if (!cacheDir.exists()) {
+                cacheDir.mkdirs()
+            }
+            val cacheFile = java.io.File(cacheDir, "$senderId.jpg")
+            cacheFile.writeBytes(bytes)
+            Log.d(TAG, "✅ [Cache] Foto guardada en cache: ${cacheFile.absolutePath}")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ [Cache] Error guardando en cache: ${e.message}", e)
+        }
     }
 
     private fun createNotificationChannel() {

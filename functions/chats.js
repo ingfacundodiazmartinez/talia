@@ -1,8 +1,7 @@
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
-const { sendInstantPushNotification } = require("./notifications");
-const { checkRateLimit, RATE_LIMITS } = require("./helpers");
+const { checkRateLimit, RATE_LIMITS, sendDirectPushNotification } = require("./helpers");
 
 // ═══════════════════════════════════════════════════════════════
 // CHATS
@@ -88,55 +87,20 @@ exports.incrementUnreadCount = onDocumentCreated(
 
       console.log(`✅ Security validations passed for sender ${senderId}`);
 
-      // ✅ CREAR NOTIFICACIÓN para que sendNotificationOnCreate envíe FCM
-      const messageId = event.params.messageId;
-      const messageText = messageData.text || "📷 Imagen";
-
       // Determinar quién es el receiver (el otro participante)
       const receiverId = participants.find((id) => id !== senderId);
 
       if (receiverId) {
         try {
-          // ✅ INCREMENTAR unreadCount del receptor
+          // ✅ SOLO incrementar unreadCount del receptor
+          // La notificación push es enviada por moderateMessage (que también escucha este evento)
           const unreadCountField = `unreadCount_${receiverId}`;
           await chatRef.update({
             [unreadCountField]: FieldValue.increment(1),
           });
           console.log(`✅ unreadCount incrementado para ${receiverId}`);
-
-          // ✅ Obtener datos del sender para incluir en notificación (igual que Stream Detector)
-          let senderName = "Usuario";
-          let senderPhotoUrl = null;
-
-          try {
-            const senderDoc = await getFirestore().collection("users").doc(senderId).get();
-            if (senderDoc.exists) {
-              const senderData = senderDoc.data();
-              senderName = senderData.name || "Usuario";
-              senderPhotoUrl = senderData.photoURL || null;
-            }
-          } catch (e) {
-            console.error(`⚠️ Error obteniendo datos del sender: ${e}`);
-          }
-
-          await getFirestore().collection("notifications").add({
-            userId: receiverId,
-            senderId: senderId,
-            senderName: senderName, // ✅ NUEVO: nombre del sender para mostrar en notificación
-            senderPhotoUrl: senderPhotoUrl, // ✅ NUEVO: foto del sender para mostrar circular
-            type: "chat_message",
-            chatId: chatId,
-            messageId: messageId, // ✅ CRÍTICO: para anti-duplicados con Stream Detector
-            title: "Nuevo mensaje",
-            body: messageText.substring(0, 100),
-            createdAt: Timestamp.now(),
-            isRead: false,
-            pushSent: false, // ✅ CRÍTICO: para que sendNotificationOnCreate procese este documento
-          });
-
-          console.log(`✅ Notificación creada para ${receiverId} (sender: ${senderName}, messageId: ${messageId})`);
         } catch (error) {
-          console.error(`❌ Error creando notificación: ${error}`);
+          console.error(`❌ Error incrementando unreadCount: ${error}`);
         }
       }
 
@@ -240,38 +204,42 @@ exports.incrementGroupUnreadCount = onDocumentCreated(
       const db = getFirestore();
       const unreadCountUpdates = {};
 
+      // ✅ OPTIMIZACIÓN: Enviar push directo SIN guardar en DB para cada miembro
+      // Esto evita el crecimiento ilimitado de la colección 'notifications'
+      const pushPromises = [];
+
       for (const memberId of members) {
         if (memberId !== senderId) {
-          try {
-            // ✅ Preparar incremento de unreadCount
-            const unreadCountField = `unreadCount_${memberId}`;
-            unreadCountUpdates[unreadCountField] = FieldValue.increment(1);
+          // ✅ Preparar incremento de unreadCount
+          const unreadCountField = `unreadCount_${memberId}`;
+          unreadCountUpdates[unreadCountField] = FieldValue.increment(1);
 
-            // ✅ CREAR DOCUMENTO EN FIRESTORE - sendNotificationOnCreate enviará FCM
-            await db.collection("notifications").add({
+          // ✅ Enviar push directo (en paralelo para mejor performance)
+          pushPromises.push(
+            sendDirectPushNotification({
               userId: memberId,
-              senderId: senderId,
               type: "group_message",
-              chatId: groupId,
-              messageId: messageId, // ✅ CRÍTICO: para anti-duplicados con Stream Detector
               title: `💬 ${groupName}`,
               body: `${senderName}: ${messagePreview}`,
-              groupName: groupName,
+              chatId: groupId,
+              messageId: messageId,
+              senderId: senderId,
               senderName: senderName,
               senderPhotoUrl: senderPhotoUrl,
+              groupName: groupName,
               isGroup: true,
-              createdAt: now,
-              isRead: false,
-              pushSent: false, // ✅ CRÍTICO: para que sendNotificationOnCreate procese este documento
-            });
-
-            console.log(`✅ Notificación creada para miembro ${memberId} (messageId: ${messageId})`);
-          } catch (error) {
-            console.error(`❌ Error creando notificación para ${memberId}:`, error);
-            // No fallar por error de notificación individual
-          }
+            }).then(() => {
+              console.log(`✅ Push enviado a miembro ${memberId} (messageId: ${messageId})`);
+            }).catch((error) => {
+              console.error(`❌ Error enviando push a ${memberId}:`, error);
+              // No fallar por error de notificación individual
+            })
+          );
         }
       }
+
+      // Esperar todos los pushes en paralelo
+      await Promise.allSettled(pushPromises);
 
       // ✅ ACTUALIZAR METADATA DEL GRUPO + unreadCount de cada miembro
       await groupRef.update({

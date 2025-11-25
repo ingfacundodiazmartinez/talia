@@ -1746,29 +1746,18 @@ class NotificationService {
               tag: 'NotificationService',
             );
 
-            // ✅ ANTI-DUPLICADOS MEJORADO: Usar messageId real (compatible con Stream Detector)
+            // ✅ ANTI-DUPLICADOS: Usar NotificationDeduplicationService (igual que ChatDocsListener)
             if (messageId != null && messageId.isNotEmpty) {
-              final prefs = await SharedPreferences.getInstance();
-              final messageKey = 'instant_notification_$messageId';
-
-              // ✅ FIX: Usar get() en lugar de getString() porque puede ser int o String
-              final existingValue = prefs.get(messageKey);
-
-              if (existingValue != null) {
+              final dedup = NotificationDeduplicationService();
+              if (!dedup.tryAcquire(messageId)) {
                 ReleaseLogger.log(
-                  '⏭️ [FCM] Mensaje $messageId ya procesado por Stream Detector - SKIP',
+                  '⏭️ [FCM] Mensaje $messageId ya mostrado por ChatDocsListener - SKIP',
                   tag: 'NotificationService',
                 );
                 return; // No mostrar notificación duplicada
               }
-
-              // Marcar como procesado ANTES de mostrar (usando int para consistencia)
-              await prefs.setInt(
-                messageKey,
-                DateTime.now().millisecondsSinceEpoch,
-              );
               ReleaseLogger.log(
-                '✅ [FCM] Mensaje $messageId marcado como procesado',
+                '✅ [FCM] Mensaje $messageId - primera vez, mostrando notificación',
                 tag: 'NotificationService',
               );
             } else {

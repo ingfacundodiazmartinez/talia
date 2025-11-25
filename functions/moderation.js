@@ -5,6 +5,7 @@ const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestor
 const { getMessaging } = require("firebase-admin/messaging");
 const { getStorage } = require("firebase-admin/storage");
 const { analyzeMessageWithGemini } = require("./groups");
+const { sendDirectPushNotification } = require("./helpers");
 
 // ═══════════════════════════════════════════════════════════════
 // MODERATION
@@ -217,6 +218,9 @@ exports.checkMessageBeforeSending = onCall(
       if (moderationLevel === "high") {
         // HIGH: Bloquear severity 'low', 'medium', 'high'
         shouldBlock = analysis.isInappropriate && ["low", "medium", "high"].includes(analysis.severity);
+      } else if (moderationLevel === "medium") {
+        // MEDIUM: Bloquear severity 'medium', 'high'
+        shouldBlock = analysis.isInappropriate && ["medium", "high"].includes(analysis.severity);
       } else {
         // LOW: Solo bloquear severity 'high'
         shouldBlock = analysis.isInappropriate && analysis.severity === "high";
@@ -620,6 +624,9 @@ exports.moderateMessage = onDocumentCreated(
           if (moderationLevel === "high") {
             // HIGH: Bloquear severity 'low', 'medium', 'high'
             shouldBlock = analysis.isInappropriate && ["low", "medium", "high"].includes(analysis.severity);
+          } else if (moderationLevel === "medium") {
+            // MEDIUM: Bloquear severity 'medium', 'high'
+            shouldBlock = analysis.isInappropriate && ["medium", "high"].includes(analysis.severity);
           } else {
             // LOW: Solo bloquear severity 'high'
             shouldBlock = analysis.isInappropriate && analysis.severity === "high";
@@ -699,38 +706,21 @@ exports.moderateMessage = onDocumentCreated(
           messagePreview = messageText.substring(0, 100) + "...";
         }
 
-        // ⚡ IMPORTANTE: Con moderación activa, dejamos que sendNotificationOnCreate envíe el push
-        // El mensaje fue aprobado DESPUÉS de la creación, por lo que necesita notificación
-        // pushSent: false hará que sendNotificationOnCreate se active automáticamente
-
-        // Crear notificación de chat con formato consistente (para historial)
-        await db.collection("notifications").add({
+        // ✅ OPTIMIZACIÓN: Enviar push directo SIN guardar en DB
+        // Esto evita el crecimiento ilimitado de la colección 'notifications'
+        await sendDirectPushNotification({
           userId: receiverId,
-          senderId: senderId,
-          senderName: senderName,  // ✅ CRÍTICO: Campo en nivel raíz para notifications.js
-          senderPhotoUrl: senderPhotoUrl,  // ✅ FIX: Cambiar imageUrl → senderPhotoUrl (debe coincidir con notifications.js:52)
           type: "chat_message",
-          chatId: chatId,  // ✅ CRÍTICO: Campo en nivel raíz para notifications.js
-          messageId: messageId,  // ✅ CRÍTICO: Para anti-duplicados
-          title: `💬 ${senderName}`,
+          title: senderName,
           body: messagePreview,
-          priority: "normal",
-          read: false,
-          pushSent: false, // FALSE para que sendNotificationOnCreate envíe el push
-          timestamp: FieldValue.serverTimestamp(),
-          data: {
-            type: "chat_message",
-            chatId: chatId,
-            messageId: messageId,
-            senderId: senderId,
-            senderName: senderName,
-            senderPhotoUrl: senderPhotoUrl || "",
-            messagePreview: messagePreview,
-            messageType: messageData.imageUrl ? "image" : messageData.videoUrl ? "video" : messageData.audioUrl ? "audio" : "text",
-          },
+          chatId: chatId,
+          messageId: messageId,
+          senderId: senderId,
+          senderName: senderName,
+          senderPhotoUrl: senderPhotoUrl || null,
         });
 
-        console.log(`✅ Notificación creada (mensaje aprobado) para ${receiverId}`);
+        console.log(`✅ Push enviado directamente a ${receiverId} (mensaje aprobado)`);
 
         // ✅ SINCRONIZACIÓN: Actualizar lastMessage inmediatamente después de notificación
         try {
@@ -745,46 +735,25 @@ exports.moderateMessage = onDocumentCreated(
         }
       }
 
-      // 7. Notificar al receptor si el mensaje fue BLOQUEADO
+      // 7. Notificar al receptor si el mensaje fue BLOQUEADO (push directo sin DB)
       if (receiverId && notificationTitle) {
-        // Obtener nombre del remitente
         const senderId = messageData.senderId;
-        let senderName = "Usuario";
-        try {
-          const senderDoc = await db.collection("users").doc(senderId).get();
-          if (senderDoc.exists) {
-            senderName = senderDoc.data().name || senderName;
-          }
-        } catch (e) {
-          console.error("Error obteniendo sender:", e);
-        }
 
-        // Crear notificación
-        await db.collection("notifications").add({
+        // ✅ Enviar push directo SIN guardar en DB
+        await sendDirectPushNotification({
           userId: receiverId,
           type: moderationStatus === "blocked" ? "message_blocked" : "message_flagged",
           title: notificationTitle,
           body: notificationBody,
-          priority: analysis.severity === "high" ? "high" : "normal",
-          read: false,
-          createdAt: new Date(),
-          data: {
-            chatId: chatId,
-            messageId: messageId,
-            senderId: senderId,
-            senderName: senderName,
-            severity: analysis.severity,
-            reason: analysis.reason,
-          },
+          chatId: chatId,
+          messageId: messageId,
+          senderId: senderId,
         });
 
-        console.log(`✅ Notificación creada (mensaje bloqueado) para ${receiverId}`);
+        console.log(`✅ Push directo enviado (mensaje bloqueado) para ${receiverId}`);
 
-        // ✅ SINCRONIZACIÓN: Actualizar unreadCount y lastMessage inmediatamente después de notificación
+        // ✅ SINCRONIZACIÓN: Actualizar lastMessage para indicar mensaje bloqueado
         try {
-          // Actualizar lastMessage a "🚫 Mensaje bloqueado" para que el receptor sepa que recibió un mensaje bloqueado
-          // (El contador se incrementará automáticamente en incrementUnreadCount)
-
           await db.collection("chats").doc(chatId).update({
             lastMessage: "🚫 Mensaje bloqueado",
             lastMessageTime: FieldValue.serverTimestamp(),

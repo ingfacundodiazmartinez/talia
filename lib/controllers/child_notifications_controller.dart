@@ -263,6 +263,10 @@ class ChildNotificationsController {
   }
 
   /// Marcar todas las notificaciones del hijo como leídas
+  ///
+  /// Optimizado para evitar N+1 queries:
+  /// - Procesa en batches de 500 (límite de Firestore)
+  /// - Limita queries para evitar timeouts
   Future<int> markAllAsRead() async {
     try {
       final userId = currentUserId;
@@ -271,40 +275,72 @@ class ChildNotificationsController {
         return 0;
       }
 
-      final batch = _firestore.batch();
+      int totalMarked = 0;
+      const int batchLimit = 500; // Límite de Firestore para batch writes
+      const int queryLimit = 200; // Límite por query para evitar timeouts
 
-      // Obtener todas las notificaciones no leídas del padre
-      final notificationsSnapshot = await _firestore
-          .collection('notifications')
-          .where('userId', isEqualTo: userId)
-          .where('read', isEqualTo: false)
-          .get();
+      // Procesar en múltiples iteraciones si hay muchas notificaciones
+      bool hasMore = true;
 
-      int markedCount = 0;
-      for (final doc in notificationsSnapshot.docs) {
-        final data = doc.data();
-        final notifData = data['data'] as Map<String, dynamic>?;
+      while (hasMore) {
+        // Obtener notificaciones no leídas en batches pequeños
+        final notificationsSnapshot = await _firestore
+            .collection('notifications')
+            .where('userId', isEqualTo: userId)
+            .where('read', isEqualTo: false)
+            .limit(queryLimit)
+            .get();
 
-        // Filtrar notificaciones de chat
-        if (data['type'] == 'chat_message') {
-          continue;
+        if (notificationsSnapshot.docs.isEmpty) {
+          hasMore = false;
+          break;
         }
 
-        // Verificar si la notificación está relacionada con este hijo
-        if (notifData?['childId'] == childId ||
-            notifData?['senderId'] == childId ||
-            data['senderId'] == childId) {
-          batch.update(doc.reference, {
-            'read': true,
-            'readAt': FieldValue.serverTimestamp(),
-          });
-          markedCount++;
+        final batch = _firestore.batch();
+        int batchCount = 0;
+
+        for (final doc in notificationsSnapshot.docs) {
+          final data = doc.data();
+          final notifData = data['data'] as Map<String, dynamic>?;
+
+          // Filtrar notificaciones de chat (ya no se guardan en DB, pero por compatibilidad)
+          if (data['type'] == 'chat_message' || data['type'] == 'group_message') {
+            continue;
+          }
+
+          // Verificar si la notificación está relacionada con este hijo
+          final isRelatedToChild = notifData?['childId'] == childId ||
+              notifData?['senderId'] == childId ||
+              data['senderId'] == childId;
+
+          if (isRelatedToChild) {
+            batch.update(doc.reference, {
+              'read': true,
+              'readAt': FieldValue.serverTimestamp(),
+            });
+            batchCount++;
+            totalMarked++;
+
+            // Si llegamos al límite del batch, hacer commit y crear nuevo
+            if (batchCount >= batchLimit) {
+              break;
+            }
+          }
+        }
+
+        if (batchCount > 0) {
+          await batch.commit();
+          ReleaseLogger.log('Batch commit: $batchCount notificaciones marcadas', tag: 'ChildNotifications');
+        }
+
+        // Si obtuvimos menos de queryLimit, no hay más
+        if (notificationsSnapshot.docs.length < queryLimit) {
+          hasMore = false;
         }
       }
 
-      await batch.commit();
-      ReleaseLogger.log('Marcadas $markedCount notificaciones como leídas para hijo: $childName', tag: 'ChildNotifications');
-      return markedCount;
+      ReleaseLogger.log('Total marcadas: $totalMarked notificaciones como leídas para hijo: $childName', tag: 'ChildNotifications');
+      return totalMarked;
     } catch (e) {
       ReleaseLogger.error('Error marcando todas las notificaciones como leídas: $e', tag: 'ChildNotifications');
       return 0;

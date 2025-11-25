@@ -561,10 +561,20 @@ class ChatMessagingService {
                   contactDoc.data()['moderationSettings'] as Map<String, dynamic>?;
 
               if (moderationSettings != null) {
-                final senderSettings =
-                    moderationSettings[currentUserId] as Map<String, dynamic>?;
-                if (senderSettings != null && senderSettings['enabled'] == true) {
+                // ✅ FIX: Buscar la configuración que el RECEPTOR (contactId) tiene activada
+                // Estructura: moderationSettings[receptorId] = {enabled: true, level: "high"}
+                // Cuando A activa moderación para B, se guarda en moderationSettings[A]
+                // Significa: "A quiere moderar los mensajes que RECIBE"
+                // Por lo tanto, cuando el sender (currentUserId) envía a contactId,
+                // debemos verificar si contactId tiene moderación activada
+                final receiverModerationSettings =
+                    moderationSettings[contactId] as Map<String, dynamic>?;
+                if (receiverModerationSettings != null && receiverModerationSettings['enabled'] == true) {
                   moderationEnabled = true;
+                  ReleaseLogger.log(
+                    '🔒 Moderación activada: receptor ($contactId) modera mensajes de sender ($currentUserId)',
+                    tag: 'Moderation',
+                  );
                 }
               }
             }

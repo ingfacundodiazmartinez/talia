@@ -152,6 +152,15 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     if (state == AppLifecycleState.inactive && _isRecording) {
       _cancelRecording();
     }
+
+    // ✅ FIX: Limpiar current_chat_id cuando la app va a background
+    // para que las notificaciones nativas se muestren correctamente
+    if (state == AppLifecycleState.paused) {
+      NotificationService().clearCurrentChat();
+    } else if (state == AppLifecycleState.resumed) {
+      // Restaurar el chat actual cuando vuelve a foreground
+      NotificationService().setCurrentChat(widget.chatId);
+    }
   }
 
   // Event Handlers

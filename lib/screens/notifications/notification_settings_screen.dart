@@ -1,6 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../services/notification_preferences_service.dart';
 import 'do_not_disturb_settings_screen.dart';
 
@@ -16,8 +14,6 @@ class _NotificationSettingsScreenState
     extends State<NotificationSettingsScreen> {
   final NotificationPreferencesService _prefsService =
       NotificationPreferencesService();
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   bool _isParent = false;
 
@@ -28,20 +24,11 @@ class _NotificationSettingsScreenState
   }
 
   Future<void> _checkUserRole() async {
-    try {
-      final doc = await _firestore
-          .collection('users')
-          .doc(_auth.currentUser?.uid)
-          .get();
-
-      if (doc.exists) {
-        final role = doc.data()?['role'] ?? 'child';
-        setState(() {
-          _isParent = role == 'parent';
-        });
-      }
-    } catch (e) {
-      // Error checking user role - silent
+    final isParent = await _prefsService.isCurrentUserParent();
+    if (mounted) {
+      setState(() {
+        _isParent = isParent;
+      });
     }
   }
 

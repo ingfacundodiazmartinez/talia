@@ -396,6 +396,140 @@ exports.cleanupOldRateLimits = onSchedule(
   }
 );
 
+/**
+ * Limpia notificaciones antiguas (>30 días y leídas)
+ * Ejecuta diariamente a las 4:00 AM
+ * Evita el crecimiento ilimitado de la colección 'notifications'
+ */
+
+exports.cleanupOldNotifications = onSchedule(
+  {
+    schedule: "0 4 * * *", // Todos los días a las 4:00 AM
+    timeZone: "America/Argentina/Buenos_Aires",
+    memory: "512MiB",
+    timeoutSeconds: 540,
+  },
+  async (event) => {
+    console.log("🧹 Iniciando limpieza de notificaciones antiguas...");
+
+    const db = getFirestore();
+    const now = new Date();
+
+    // Configuración de retención por tipo de notificación
+    const retentionDays = {
+      // Notificaciones de chat: ya no se guardan en DB (envío directo)
+      // pero limpiamos las antiguas que puedan existir
+      chat_message: 7,
+      group_message: 7,
+
+      // Notificaciones importantes: mantener más tiempo
+      emergency: 90,
+      emergency_auto_resolved: 90,
+      report_ready: 60,
+
+      // Notificaciones de moderación: importantes para historial
+      moderation_blocked: 60,
+      moderation_approved: 30,
+
+      // Vinculaciones y contactos
+      contact_request: 30,
+      contact_approved: 30,
+      group_invitation: 30,
+      group_permission_request: 30,
+      group_membership_approved: 30,
+
+      // Por defecto para tipos no especificados
+      default: 30,
+    };
+
+    let totalDeleted = 0;
+    let totalProcessed = 0;
+
+    try {
+      // Procesar cada tipo de notificación con su retención específica
+      for (const [notificationType, days] of Object.entries(retentionDays)) {
+        if (notificationType === "default") continue;
+
+        const cutoffDate = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+        const cutoffTimestamp = Timestamp.fromDate(cutoffDate);
+
+        try {
+          // Obtener notificaciones antiguas de este tipo que estén leídas
+          const oldNotifications = await db
+            .collection("notifications")
+            .where("type", "==", notificationType)
+            .where("read", "==", true)
+            .where("createdAt", "<=", cutoffTimestamp)
+            .limit(500)
+            .get();
+
+          if (!oldNotifications.empty) {
+            const batch = db.batch();
+            let batchCount = 0;
+
+            for (const doc of oldNotifications.docs) {
+              batch.delete(doc.ref);
+              batchCount++;
+              totalDeleted++;
+            }
+
+            await batch.commit();
+            console.log(`✅ Tipo '${notificationType}': ${batchCount} eliminadas (>${days} días)`);
+          }
+
+          totalProcessed++;
+        } catch (typeError) {
+          console.error(`❌ Error procesando tipo '${notificationType}':`, typeError.message);
+        }
+      }
+
+      // También limpiar notificaciones muy antiguas (>90 días) sin importar si están leídas
+      const veryOldCutoff = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+      const veryOldTimestamp = Timestamp.fromDate(veryOldCutoff);
+
+      try {
+        const veryOldNotifications = await db
+          .collection("notifications")
+          .where("createdAt", "<=", veryOldTimestamp)
+          .limit(500)
+          .get();
+
+        if (!veryOldNotifications.empty) {
+          const batch = db.batch();
+          let batchCount = 0;
+
+          for (const doc of veryOldNotifications.docs) {
+            batch.delete(doc.ref);
+            batchCount++;
+            totalDeleted++;
+          }
+
+          await batch.commit();
+          console.log(`✅ Notificaciones muy antiguas (>90 días): ${batchCount} eliminadas`);
+        }
+      } catch (veryOldError) {
+        console.error("❌ Error limpiando notificaciones muy antiguas:", veryOldError.message);
+      }
+
+      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+      console.log(`✅ Limpieza de notificaciones completada`);
+      console.log(`📊 Estadísticas:`);
+      console.log(`   - Tipos procesados: ${totalProcessed}`);
+      console.log(`   - Total eliminadas: ${totalDeleted}`);
+      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+      return {
+        success: true,
+        typesProcessed: totalProcessed,
+        notificationsDeleted: totalDeleted,
+      };
+    } catch (error) {
+      console.error("❌ Error en limpieza de notificaciones:", error);
+      throw error;
+    }
+  }
+);
+
 // ═══════════════════════════════════════════════════════════════
 // GESTIÓN SEGURA DE CONTACTOS
 // ═══════════════════════════════════════════════════════════════

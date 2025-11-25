@@ -387,24 +387,172 @@ const RATE_LIMITS = {
 // ⚠️ THROTTLING INTELIGENTE: Limita notificaciones de chat no leídas
 
 // ═══════════════════════════════════════════════════════════════
+// DIRECT PUSH NOTIFICATION (Sin guardar en DB)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Enviar push notification directamente sin guardar en Firestore
+ * Optimizado para notificaciones de mensajes de chat
+ *
+ * @param {Object} params - Parámetros de la notificación
+ * @param {string} params.userId - ID del usuario receptor
+ * @param {string} params.type - Tipo de notificación (chat_message, group_message)
+ * @param {string} params.title - Título de la notificación
+ * @param {string} params.body - Cuerpo de la notificación
+ * @param {string} params.chatId - ID del chat
+ * @param {string} params.messageId - ID del mensaje
+ * @param {string} params.senderId - ID del remitente
+ * @param {string} params.senderName - Nombre del remitente
+ * @param {string} [params.senderPhotoUrl] - URL de la foto del remitente
+ * @param {string} [params.groupName] - Nombre del grupo (si es grupo)
+ * @param {boolean} [params.isGroup] - Si es mensaje de grupo
+ * @returns {Promise<{success: boolean, error?: string}>}
+ */
+async function sendDirectPushNotification(params) {
+  const {
+    userId,
+    type,
+    title,
+    body,
+    chatId,
+    messageId,
+    senderId,
+    senderName,
+    senderPhotoUrl,
+    groupName,
+    isGroup,
+  } = params;
+
+  try {
+    console.log(`📱 [DirectPush] Enviando push a ${userId}, tipo: ${type}`);
+
+    // Obtener usuario para FCM token
+    const userDoc = await getFirestore().collection("users").doc(userId).get();
+
+    if (!userDoc.exists) {
+      console.log(`❌ [DirectPush] Usuario ${userId} no encontrado`);
+      return { success: false, error: "Usuario no encontrado" };
+    }
+
+    const userData = userDoc.data();
+    let fcmTokens = [];
+
+    // Normalizar tokens FCM
+    if (userData.fcmTokens && Array.isArray(userData.fcmTokens) && userData.fcmTokens.length > 0) {
+      fcmTokens = userData.fcmTokens.filter(token => token && typeof token === 'string' && token.trim().length > 0);
+    }
+
+    if (fcmTokens.length === 0 && userData.fcmToken) {
+      const tokenString = String(userData.fcmToken).trim();
+      if (tokenString && tokenString !== 'null' && tokenString !== 'undefined' && tokenString.length > 10) {
+        fcmTokens = [tokenString];
+      }
+    }
+
+    if (fcmTokens.length === 0) {
+      console.log(`❌ [DirectPush] No hay tokens FCM para ${userId}`);
+      return { success: false, error: "No hay tokens FCM" };
+    }
+
+    console.log(`📱 [DirectPush] Tokens FCM encontrados: ${fcmTokens.length}`);
+
+    // Preparar mensaje FCM con TODOS los datos del sender (igual que sendNotificationOnCreate)
+    const fcmData = {
+      title: title || "Talia",
+      body: body || "",
+      type: type || "chat_message",
+    };
+
+    // ✅ Agregar campos del sender para mostrar foto circular (igual que foreground)
+    if (senderId) fcmData.senderId = senderId;
+    if (senderName) fcmData.senderName = senderName;
+    if (senderPhotoUrl) fcmData.senderPhotoUrl = senderPhotoUrl;
+    if (chatId) fcmData.chatId = chatId;
+    if (messageId) fcmData.messageId = messageId;
+    if (groupName) fcmData.groupName = groupName;
+    if (isGroup !== undefined) fcmData.isGroup = String(isGroup);
+
+    // Detectar si es mensaje de chat para activar NSE
+    const isChatMessage = type === 'chat_message' || type === 'group_message';
+
+    // ✅ CRITICAL: mutable-content DEBE estar SIEMPRE presente para mensajes de chat
+    // para que el NSE pueda descargar la foto del sender
+    const apsPayload = {
+      alert: {
+        title: title || "Talia",
+        body: body || "",
+      },
+      sound: "default",
+      "content-available": 1,  // ✅ Despierta background handler
+      // ✅ SIEMPRE activar NSE para mensajes de chat (con o sin foto)
+      ...(isChatMessage ? { "mutable-content": 1 } : {}),
+    };
+
+    const apnsPayload = {
+      headers: {
+        "apns-priority": "10",
+        "apns-push-type": "alert",
+      },
+      payload: {
+        aps: apsPayload,
+      },
+    };
+
+    const message = {
+      // ✅ NO incluir notification en root ni en android para que onMessageReceived() se ejecute
+      // El Native Service (MyFirebaseMessagingService.kt) descargará la foto y mostrará la notificación
+      data: fcmData,
+      tokens: fcmTokens,
+      android: {
+        priority: "high",
+        // ❌ NO incluir android.notification - fuerza que onMessageReceived() se ejecute
+        // Nuestro código nativo descargará la foto del sender y mostrará la notificación
+      },
+      apns: apnsPayload,
+    };
+
+    // Enviar notificación
+    const response = await getMessaging().sendEachForMulticast(message);
+
+    console.log(`✅ [DirectPush] Push enviado: ${response.successCount} exitosos, ${response.failureCount} fallidos`);
+
+    if (response.failureCount > 0) {
+      response.responses.forEach((resp, idx) => {
+        if (!resp.success) {
+          console.error(`  - Token ${idx}: ${resp.error?.code} - ${resp.error?.message}`);
+        }
+      });
+    }
+
+    return { success: response.successCount > 0 };
+  } catch (error) {
+    console.error(`❌ [DirectPush] Error:`, error);
+    return { success: false, error: error.message };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // EXPORTS
 // ═══════════════════════════════════════════════════════════════
 
 module.exports = {
   // VoIP
   sendVoIPPush,
-  
+
+  // Direct Push (sin DB)
+  sendDirectPushNotification,
+
   // Validaciones
   isValidString,
   isValidNumber,
   validateAgoraTokenParams,
   validateReportParams,
   validateLinkParams,
-  
+
   // Rate Limiting
   checkRateLimit,
   RATE_LIMITS,
-  
+
   // Configuraciones
   AGORA_APP_ID,
   AGORA_APP_CERTIFICATE,
