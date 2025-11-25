@@ -300,16 +300,30 @@ class AgoraEngineService {
       final micStatus = await Permission.microphone.status;
 
       ReleaseLogger.log(
-        'AgoraEngineService: Permission status - Camera: ${cameraStatus.name}, Mic: ${micStatus.name}'
+        'AgoraEngineService: Permission status - Camera: ${cameraStatus.name} (isGranted: ${cameraStatus.isGranted}), Mic: ${micStatus.name} (isGranted: ${micStatus.isGranted})'
       );
 
       // If already granted, return immediately
       if (cameraStatus.isGranted && micStatus.isGranted) {
-        ReleaseLogger.log('AgoraEngineService: Permissions already granted');
+        ReleaseLogger.log('AgoraEngineService: ✅ Permissions already granted, skipping request');
         return true;
       }
 
-      // Request permissions
+      // ✅ iOS FIX: Check if permissions are permanently denied
+      // In iOS, once denied, we can't show the dialog again - user must go to Settings
+      final cameraPermanentlyDenied = cameraStatus.isPermanentlyDenied;
+      final micPermanentlyDenied = micStatus.isPermanentlyDenied;
+
+      if (cameraPermanentlyDenied || micPermanentlyDenied) {
+        ReleaseLogger.log(
+          'AgoraEngineService: Permissions permanently denied - redirecting to Settings'
+        );
+        // On iOS, this will be handled by showing a dialog to open Settings
+        // Return false so the error message guides user to Settings
+        return false;
+      }
+
+      // Request permissions - this WILL show iOS native dialog if not yet asked
       ReleaseLogger.log('AgoraEngineService: Requesting camera and microphone permissions');
       final permissions = [
         Permission.camera,

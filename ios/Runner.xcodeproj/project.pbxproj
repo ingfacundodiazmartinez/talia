@@ -8,6 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		0099E13B98E3F4B134A0D532 /* Pods_NotificationServiceExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A73B00BDBCA576C5F5247C36 /* Pods_NotificationServiceExtension.framework */; };
+		0C1A66B92ED526B3006DE364 /* TaliaPhotoCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C1A66B82ED526B3006DE364 /* TaliaPhotoCache.swift */; };
+		0C1A66BA2ED526B3006DE364 /* TaliaPhotoCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C1A66B82ED526B3006DE364 /* TaliaPhotoCache.swift */; };
 		0C1CF6192E92AC2F00A03DF8 /* NotificationServiceExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 0C1CF6122E92AC2F00A03DF8 /* NotificationServiceExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		0C884D072ED3912700BD9711 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 0C884D052ED3912700BD9711 /* README.md */; };
 		0C884D092ED3912700BD9711 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C884D032ED3912700BD9711 /* NotificationService.swift */; };
@@ -86,6 +88,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		0C1A66B82ED526B3006DE364 /* TaliaPhotoCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaliaPhotoCache.swift; sourceTree = "<group>"; };
 		0C1CF6122E92AC2F00A03DF8 /* NotificationServiceExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = NotificationServiceExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		0C6B61482E8843DA007D9BB2 /* Runner.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Runner.entitlements; sourceTree = "<group>"; };
 		0C884D022ED3912700BD9711 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -250,6 +253,7 @@
 				VENDETTA002CE8F7C9D4B601 /* Vendetta.deepar */,
 				BASEBEAUTY002CE8F7C9D4B601 /* baseBeauty.deepar */,
 				EIGHTBITHEARTS002CE8F7C9D4B601 /* 8bitHearts.deepar */,
+				0C1A66B82ED526B3006DE364 /* TaliaPhotoCache.swift */,
 				ELEPHANTTRUNK002CE8F7C9D4B601 /* Elephant_Trunk.deepar */,
 				EMOTIONMETER002CE8F7C9D4B601 /* Emotion_Meter.deepar */,
 				EMOTIONSEXAGGERATOR002CE8F7C9D4B601 /* Emotions_Exaggerator.deepar */,
@@ -587,6 +591,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				0C884D092ED3912700BD9711 /* NotificationService.swift in Sources */,
+				0C1A66BA2ED526B3006DE364 /* TaliaPhotoCache.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -603,6 +608,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
+				0C1A66B92ED526B3006DE364 /* TaliaPhotoCache.swift in Sources */,
 				7485AF001ED2DC5600515810 /* ArFiltersPlugin.swift in Sources */,
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
 			);
