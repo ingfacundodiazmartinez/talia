@@ -3,6 +3,8 @@
 /// This service manages the Agora RTC Engine singleton and provides
 /// methods for joining/leaving channels and controlling media streams.
 
+import 'dart:io';
+
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:flutter/foundation.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -49,11 +51,19 @@ class AgoraEngineService {
         );
       }
 
-      // Request permissions
+      // Request permissions (only check on Android, iOS handles it natively)
       final permissionsGranted = await _requestPermissions();
       if (!permissionsGranted) {
-        return ServiceResponse.error(
-          'Camera and microphone permissions are required for calls',
+        // On iOS, Agora SDK will trigger the native permission dialog automatically
+        // So we only fail on Android if permissions are explicitly denied
+        if (Platform.isAndroid) {
+          return ServiceResponse.error(
+            'Camera and microphone permissions are required for calls',
+          );
+        }
+        // On iOS, continue anyway - Agora will show native dialog
+        ReleaseLogger.log(
+          'AgoraEngineService: iOS detected - continuing initialization, Agora will handle permissions'
         );
       }
 
