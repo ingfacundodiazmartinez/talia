@@ -15,6 +15,7 @@ import '../../../services/message_cache_service.dart';
 import '../../../services/typing_indicator_service.dart';
 import '../../../services/message_status_helper.dart';
 import '../../../services/group_chat_service.dart';
+import '../../../services/local_unread_count_service.dart';
 import '../../../services/create_chat_service.dart';
 import '../../../models/chat_message.dart';
 import '../../../widgets/message_status_indicator.dart';
@@ -63,10 +64,20 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
     super.initState();
     _chatsController = ChildChatsController(userId: widget.childId);
     _chatsController.initialize();
+
+    // ✅ Escuchar cambios en contadores de no leídos para actualizar badges
+    LocalUnreadCountService().addListener(_onUnreadCountsChanged);
+  }
+
+  void _onUnreadCountsChanged() {
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   @override
   void dispose() {
+    LocalUnreadCountService().removeListener(_onUnreadCountsChanged);
     _chatsController.dispose();
     super.dispose();
   }
@@ -319,7 +330,8 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
     final groupId = groupDoc.id;
     final groupData = groupDoc.data() as Map<String, dynamic>;
     final groupName = groupData['name'] ?? 'Grupo';
-    final unreadCount = groupData['unreadCount_${widget.childId}'] ?? 0;
+    // ✅ Leer contador de mensajes no leídos desde cache local
+    final unreadCount = LocalUnreadCountService().getUnreadCount(groupId);
 
     return StreamBuilder<QuerySnapshot>(
       stream: _chatsController.getGroupLastMessageStream(groupId),
@@ -463,7 +475,8 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
             ? (chatSnapshot.data!.data() as Map<String, dynamic>?) ?? chatData
             : chatData;
 
-        final unreadCount = currentChatData['unreadCount_${widget.childId}'] ?? 0;
+        // ✅ Leer contador de mensajes no leídos desde cache local
+        final unreadCount = LocalUnreadCountService().getUnreadCount(chatId);
         final clearedAt = currentChatData['clearedAt_${widget.childId}'] as Timestamp?;
         final lastMessageTime = currentChatData['lastMessageTime'] as Timestamp?;
         final isChatCleared = clearedAt != null &&

@@ -6,12 +6,14 @@ class MessageTimestamp extends StatelessWidget {
   final String time;
   final bool isMe;
   final MessageStatus? status;
+  final bool isFavorite;  // ✅ NEW: Indicador de favorito
 
   const MessageTimestamp({
     super.key,
     required this.time,
     required this.isMe,
     this.status,
+    this.isFavorite = false,  // ✅ NEW: Default false
   });
 
   @override
@@ -23,6 +25,17 @@ class MessageTimestamp extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // ✅ NEW: Mostrar estrella de favorito antes del tiempo
+          if (isFavorite) ...[
+            Icon(
+              Icons.star_rounded,
+              size: 12,
+              color: isMe
+                  ? Colors.amber.shade300
+                  : Colors.amber.shade600,
+            ),
+            const SizedBox(width: 3),
+          ],
           Text(
             time,
             style: TextStyle(

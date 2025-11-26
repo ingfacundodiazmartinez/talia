@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import '../controllers/chat_controller_cache_first.dart';
 import '../notification_service.dart';
 import '../services/reaction_service.dart';
+import '../services/local_unread_count_service.dart';
 import '../calls_v2/screens/agora_call_screen.dart';
 import '../widgets/reaction_picker.dart';
 import 'chat/widgets/chat_app_bar.dart';
@@ -98,6 +99,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     // Esto previene que lleguen notificaciones push mientras el usuario ya está en el chat
     await NotificationService().setCurrentChat(widget.chatId);
 
+    // ✅ Marcar que el usuario entró al chat (resetea contador de no leídos)
+    await LocalUnreadCountService().enterChat(widget.chatId);
+
     // 🗑️ PASO 2: Limpiar notificaciones de este chat al abrirlo
     NotificationService().clearChatNotifications(widget.chatId);
 
@@ -135,6 +139,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     // 🔒 NOTA: clearCurrentChat() es async pero no necesitamos await en dispose
     // Es una operación de limpieza - fire-and-forget está bien aquí
     NotificationService().clearCurrentChat();
+    LocalUnreadCountService().exitChat();
     WidgetsBinding.instance.removeObserver(this);
     _controller?.dispose();
     _messageController.removeListener(_onTypingChanged);

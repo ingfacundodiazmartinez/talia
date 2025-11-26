@@ -192,7 +192,7 @@ class ChatOrchestrator {
     required String content,
     MessageType type = MessageType.text,
     String? mediaPath,
-    String? replyToId,
+    Map<String, dynamic>? replyTo,  // ✅ FIX: Cambiar de replyToId a replyTo completo
     Map<String, dynamic>? metadata,
     Function(String messageId, double progress)? onProgressUpdate,
   }) async {
@@ -201,7 +201,7 @@ class ChatOrchestrator {
       content: content,
       type: type,
       mediaPath: mediaPath,
-      replyToId: replyToId,
+      replyTo: replyTo,  // ✅ FIX: Pasar replyTo completo
       metadata: metadata,
       onProgressUpdate: onProgressUpdate,
     );

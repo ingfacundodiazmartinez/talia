@@ -76,21 +76,25 @@ class MessageRepository {
       final chatRef = _firestore.collection(collection).doc(chatId);
 
       // Extraer texto preview (máximo 100 caracteres)
+      // ✅ FIX: Usar type como criterio principal para media, URL como fallback
       String messagePreview = '';
+      final messageType = message.type ?? 'text';
+
       if (message.text != null && message.text!.isNotEmpty) {
         messagePreview = message.text!.length > 100
             ? '${message.text!.substring(0, 97)}...'
             : message.text!;
-      } else if (message.imageUrl != null) {
+      } else if (messageType == 'image' || message.imageUrl != null) {
         messagePreview = '📷 Imagen';
-      } else if (message.videoUrl != null) {
+      } else if (messageType == 'video' || message.videoUrl != null) {
         messagePreview = '🎥 Video';
-      } else if (message.audioUrl != null) {
+      } else if (messageType == 'audio' || message.audioUrl != null) {
         messagePreview = '🎤 Audio';
       }
 
       final chatUpdateData = {
         'lastMessage': messagePreview,
+        'lastMessageType': messageType, // ✅ NEW: Guardar tipo para notificaciones
         'lastMessageAt': now,
         'lastMessageTime': now, // Legacy compatibility
         'lastMessageSender': currentUserId,
@@ -313,7 +317,8 @@ class MessageRepository {
   }
 
   /// Obtener mensajes no leídos
-  Future<QuerySnapshot> getUnreadMessages({
+  /// ✅ FIX: Query simplificada + filtrado en cliente (Firestore no soporta whereNotIn con arrays)
+  Future<List<String>> getUnreadMessageIds({
     required String chatId,
     bool isGroup = false,
   }) async {
@@ -323,18 +328,49 @@ class MessageRepository {
 
       final collection = isGroup ? 'groups' : 'chats';
 
-      return await _firestore
+      // Obtener últimos 100 mensajes (optimización: no cargar todos)
+      final snapshot = await _firestore
           .collection(collection)
           .doc(chatId)
           .collection('messages')
-          .where('senderId', isNotEqualTo: currentUserId)
-          .where('readBy', whereNotIn: [currentUserId])
-          .orderBy('senderId')
-          .orderBy('createdAt', descending: true)
+          .orderBy('timestamp', descending: true)
+          .limit(100)
           .get();
+
+      // Filtrar en cliente: mensajes de otros usuarios que no me incluyen en readBy
+      final unreadIds = <String>[];
+      for (final doc in snapshot.docs) {
+        final data = doc.data();
+        final senderId = data['senderId'] as String?;
+        final readBy = List<String>.from(data['readBy'] ?? []);
+
+        // Solo mensajes de otros usuarios que no he leído
+        if (senderId != null &&
+            senderId != currentUserId &&
+            !readBy.contains(currentUserId)) {
+          unreadIds.add(doc.id);
+        }
+      }
+
+      return unreadIds;
     } catch (e) {
       throw Exception('Error obteniendo mensajes no leídos: $e');
     }
+  }
+
+  /// @deprecated Usar getUnreadMessageIds en su lugar
+  Future<QuerySnapshot> getUnreadMessages({
+    required String chatId,
+    bool isGroup = false,
+  }) async {
+    // Mantener por compatibilidad pero redirigir internamente
+    final collection = isGroup ? 'groups' : 'chats';
+    return await _firestore
+        .collection(collection)
+        .doc(chatId)
+        .collection('messages')
+        .limit(0) // Retornar vacío, usar getUnreadMessageIds
+        .get();
   }
 
   /// Reaccionar a mensaje

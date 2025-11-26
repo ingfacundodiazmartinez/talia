@@ -14,6 +14,7 @@ import '../services/typing_indicator_service.dart';
 import '../services/block_service.dart';
 import '../services/audio_processing_service.dart';
 import '../services/message_cache_service.dart';
+import '../services/favorite_service.dart';  // ✅ NEW: For favorite tracking
 import '../notification_service.dart';
 import '../utils/release_logger.dart';
 import 'package:uuid/uuid.dart';
@@ -42,12 +43,14 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   late final BlockService _blockService;
   late final AudioProcessingService _audioService;
   late final NotificationService _notificationService;
+  late final FavoriteService _favoriteService;  // ✅ NEW
 
   // Stream subscription management
   StreamSubscription<List<ChatMessage>>? _messagesSubscription;
   StreamSubscription<bool>? _isBlockedSubscription;
   StreamSubscription<bool>? _isBlockedBySubscription;
   StreamSubscription? _notificationSubscription;
+  StreamSubscription<Set<String>>? _favoritesSubscription;  // ✅ NEW
 
   // State
   List<ChatMessage> _messages = [];
@@ -65,6 +68,9 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   bool _isBlocked = false;
   bool _isBlockedBy = false;
 
+  // ✅ NEW: Favorite tracking
+  Set<String> _favoriteIds = {};
+
   // Current user
   String get currentUserId => FirebaseAuth.instance.currentUser?.uid ?? '';
 
@@ -80,6 +86,7 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   bool get isBlocked => _isBlocked;
   bool get isBlockedBy => _isBlockedBy;
   bool get hasMoreMessages => _messages.length >= 20; // Simple heuristic
+  Set<String> get favoriteIds => _favoriteIds;  // ✅ NEW
 
   ChatControllerCacheFirst({
     required this.chatId,
@@ -108,6 +115,7 @@ class ChatControllerCacheFirst extends ChangeNotifier {
     _blockService = blockService ?? BlockService();
     _audioService = audioService ?? AudioProcessingService();
     _notificationService = notificationService ?? NotificationService();
+    _favoriteService = FavoriteService();  // ✅ NEW
   }
 
   /// Initialize the controller and start listening to messages
@@ -131,6 +139,9 @@ class ChatControllerCacheFirst extends ChangeNotifier {
 
       // Setup notification listener
       _setupNotificationListener();
+
+      // ✅ NEW: Load favorites
+      await _loadFavorites();
 
       // Mark chat as read
       await markChatAsRead();
@@ -180,6 +191,43 @@ class ChatControllerCacheFirst extends ChangeNotifier {
         loadMoreMessages();
       }
     });
+  }
+
+  /// ✅ NEW: Load favorite message IDs for this chat
+  Future<void> _loadFavorites() async {
+    try {
+      // Load initial favorites
+      _favoriteIds = await _favoriteService.getFavoriteMessageIds(
+        chatId: chatId,
+        isGroupChat: isGroup,
+      );
+
+      // Subscribe to changes
+      _favoritesSubscription = _favoriteService.getFavoriteMessageIdsStream(
+        chatId: chatId,
+        isGroupChat: isGroup,
+      ).listen((ids) {
+        _favoriteIds = ids;
+        notifyListeners();
+      });
+
+      notifyListeners();
+    } catch (e) {
+      ReleaseLogger.error('Error loading favorites: $e');
+    }
+  }
+
+  /// ✅ NEW: Refresh favorites (call after toggling favorite)
+  Future<void> refreshFavorites() async {
+    try {
+      _favoriteIds = await _favoriteService.getFavoriteMessageIds(
+        chatId: chatId,
+        isGroupChat: isGroup,
+      );
+      notifyListeners();
+    } catch (e) {
+      ReleaseLogger.error('Error refreshing favorites: $e');
+    }
   }
 
   /// Start listening to messages stream (CACHE-FIRST)
@@ -250,7 +298,7 @@ class ChatControllerCacheFirst extends ChangeNotifier {
         chatId: chatId,
         content: text,
         type: MessageType.text,
-        replyToId: replyTo?['id'] as String?,
+        replyTo: replyTo,  // ✅ FIX: Pasar replyTo completo para preservar text, senderName, etc.
         metadata: {'localId': tempId},  // ✅ FIX: Pasar tempId para correlación
       );
 
@@ -807,6 +855,7 @@ class ChatControllerCacheFirst extends ChangeNotifier {
     _isBlockedSubscription?.cancel();
     _isBlockedBySubscription?.cancel();
     _notificationSubscription?.cancel();
+    _favoritesSubscription?.cancel();  // ✅ NEW
 
     // Clear state
     _messages.clear();

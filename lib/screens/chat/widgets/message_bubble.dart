@@ -84,6 +84,10 @@ class MessageBubble extends StatefulWidget {
   // Callback para ver información del mensaje (solo grupos)
   final VoidCallback? onViewMessageInfo;
 
+  // ✅ NEW: Indicador de mensaje favorito
+  final bool isFavorite;
+  final VoidCallback? onFavoriteToggled;  // ✅ Callback para refrescar favoritos
+
   const MessageBubble({
     super.key,
     required this.messageId,
@@ -123,6 +127,8 @@ class MessageBubble extends StatefulWidget {
     this.originalContactName,
     this.contactName,
     this.onViewMessageInfo,
+    this.isFavorite = false,  // ✅ NEW: Default false
+    this.onFavoriteToggled,  // ✅ Callback para refrescar favoritos
   });
 
   @override
@@ -303,6 +309,13 @@ class _MessageBubbleState extends State<MessageBubble>
                                                   ? const Radius.circular(4)
                                                   : const Radius.circular(16),
                                             ),
+                                            // ✅ Borde dorado sutil para mensajes favoritos
+                                            border: widget.isFavorite
+                                                ? Border.all(
+                                                    color: Colors.amber.shade400,
+                                                    width: 1.5,
+                                                  )
+                                                : null,
                                           ),
                                           child: Column(
                                             crossAxisAlignment:
@@ -470,6 +483,7 @@ class _MessageBubbleState extends State<MessageBubble>
                                                   time: widget.time,
                                                   isMe: widget.isMe,
                                                   status: widget.status,
+                                                  isFavorite: widget.isFavorite,  // ✅ NEW
                                                 ),
                                               ],
                                             ],
@@ -619,6 +633,9 @@ class _MessageBubbleState extends State<MessageBubble>
         isGroupChat: widget.isGroupChat,
       );
 
+      // ✅ Notificar al parent para refrescar favoritos
+      widget.onFavoriteToggled?.call();
+
       if (mounted) {
         // Verificar si ahora está marcado o desmarcado
         final isFavorite = await favoriteService.isFavorite(
@@ -634,7 +651,7 @@ class _MessageBubbleState extends State<MessageBubble>
                   ? 'Mensaje marcado como favorito'
                   : 'Mensaje eliminado de favoritos',
             ),
-            duration: Duration(seconds: 2),
+            duration: const Duration(seconds: 2),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -644,9 +661,9 @@ class _MessageBubbleState extends State<MessageBubble>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error al cambiar favorito'),
+            content: const Text('Error al cambiar favorito'),
             backgroundColor: Colors.red,
-            duration: Duration(seconds: 2),
+            duration: const Duration(seconds: 2),
             behavior: SnackBarBehavior.floating,
           ),
         );

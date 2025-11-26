@@ -283,23 +283,41 @@ class CallOrchestrator {
       );
 
       // Step 1: Leave Agora channel
-      if (_agoraEngineService.isInChannel && targetCallId == _currentCallId) {
+      // ✅ FIX: Remove the targetCallId == _currentCallId check
+      // When incoming call is accepted via VoIPService, that VoIPService's orchestrator
+      // has _currentCallId set, but AgoraCallScreen creates a NEW orchestrator with
+      // _currentCallId = null. This caused leaveChannel() to never execute.
+      // Since AgoraEngineService is a singleton, if we're in a channel, we should leave it.
+      ReleaseLogger.log(
+        '🔍 [EndCall] Step 1: Checking isInChannel=${_agoraEngineService.isInChannel}, engine=${_agoraEngineService.engine != null}',
+        tag: _tag,
+      );
+      if (_agoraEngineService.isInChannel) {
+        ReleaseLogger.log('📤 [EndCall] Calling leaveChannel()...', tag: _tag);
         await _agoraEngineService.leaveChannel();
+        ReleaseLogger.log('✅ [EndCall] leaveChannel() completed', tag: _tag);
+      } else {
+        ReleaseLogger.log('⏭️ [EndCall] Not in channel, skipping leaveChannel', tag: _tag);
       }
 
       // Step 2: Update Firestore
+      ReleaseLogger.log('📝 [EndCall] Step 2: Updating Firestore...', tag: _tag);
       final endResult = await _callStatusService.endCall(targetCallId);
       if (!endResult.success) {
+        ReleaseLogger.error('❌ [EndCall] Firestore update failed: ${endResult.error}', tag: _tag);
         return ServiceResponse.error(
           endResult.error ?? 'Failed to end call',
         );
       }
+      ReleaseLogger.log('✅ [EndCall] Firestore updated successfully', tag: _tag);
 
       // Step 3: Cleanup if this was the current call
       if (targetCallId == _currentCallId) {
+        ReleaseLogger.log('🧹 [EndCall] Step 3: Cleaning up...', tag: _tag);
         _cleanup();
       }
 
+      ReleaseLogger.log('✅ [EndCall] End call flow completed successfully', tag: _tag);
       return ServiceResponse.success(true);
     } catch (e) {
       ReleaseLogger.error('Error in end call flow: $e', tag: _tag);

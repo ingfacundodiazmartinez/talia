@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:app_badge_plus/app_badge_plus.dart';
+import 'local_unread_count_service.dart';
 
 class UnreadMessagesService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -135,13 +136,14 @@ class UnreadMessagesService {
 
   /// Actualizar badge icon con el total de mensajes sin leer y notificaciones relevantes
   /// ✅ SOLO cuenta: chats no leídos + historias pendientes + emergencias no resueltas + solicitudes de contacto
+  /// ✅ OPTIMIZADO: Usa LocalUnreadCountService para mensajes no leídos
   Future<void> updateBadgeCount() async {
     try {
       final user = _auth.currentUser;
       if (user == null) return;
 
-      // 1. Obtener total de mensajes no leídos
-      final totalUnreadMessages = await getTotalUnreadCount();
+      // 1. Obtener total de mensajes no leídos desde LocalUnreadCountService
+      final totalUnreadMessages = LocalUnreadCountService().getTotalUnreadCount();
 
       // 2. Obtener IDs de hijos vinculados (solo para padres)
       // ⚠️ CORREGIDO: Lee desde /users/{parentId}.linkedChildrenIds por seguridad
@@ -201,11 +203,13 @@ class UnreadMessagesService {
   }
 
   /// Configurar listener automático para actualizar badge
+  /// ✅ OPTIMIZADO: Usa LocalUnreadCountService en lugar de Firestore
   void startBadgeListener() {
     final user = _auth.currentUser;
     if (user == null) return;
 
-    watchTotalUnreadCount().listen((totalUnread) {
+    // Escuchar cambios en LocalUnreadCountService
+    LocalUnreadCountService().addListener(() {
       updateBadgeCount();
     });
   }

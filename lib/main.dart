@@ -32,6 +32,7 @@ import 'services/online_status_service.dart';
 import 'services/screenshot_protection_service.dart';
 import 'services/voip_service.dart';
 import 'services/call_service_wrapper.dart';
+import 'services/local_unread_count_service.dart';
 import 'services/app_state_service.dart';
 import 'services/analytics_service.dart';
 import 'services/performance_service.dart';
@@ -149,6 +150,17 @@ void main() async {
   } catch (e) {
     ReleaseLogger.error(
       '❌ Error inicializando DashboardCacheService: $e',
+      tag: 'MainApp',
+    );
+  }
+
+  // ✅ Inicializar LocalUnreadCountService para contadores de mensajes no leídos
+  try {
+    await LocalUnreadCountService().initialize();
+    ReleaseLogger.log('✅ LocalUnreadCountService inicializado', tag: 'MainApp');
+  } catch (e) {
+    ReleaseLogger.error(
+      '❌ Error inicializando LocalUnreadCountService: $e',
       tag: 'MainApp',
     );
   }

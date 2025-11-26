@@ -57,7 +57,7 @@ class ChatMessagingService {
   Future<String?> writeMessage({
     required String chatId,
     required String content,
-    String? replyToId,
+    Map<String, dynamic>? replyTo,  // ✅ FIX: Cambiar de replyToId a replyTo
     Map<String, dynamic>? metadata,
     bool isGroup = false,
   }) async {
@@ -65,7 +65,7 @@ class ChatMessagingService {
       chatId: chatId,
       content: content,
       type: MessageType.text,
-      replyToId: replyToId,
+      replyTo: replyTo,
       metadata: metadata,
       isGroup: isGroup,
     );
@@ -77,7 +77,7 @@ class ChatMessagingService {
     required String mediaPath,
     required String mediaType,
     String? caption,
-    String? replyToId,
+    Map<String, dynamic>? replyTo,  // ✅ FIX: Cambiar de replyToId a replyTo
     bool isGroup = false,
     Function(String messageId, double progress)? onProgressUpdate,
   }) async {
@@ -101,7 +101,7 @@ class ChatMessagingService {
       content: caption ?? '',
       type: type,
       mediaPath: mediaPath,
-      replyToId: replyToId,
+      replyTo: replyTo,
       isGroup: isGroup,
       onProgressUpdate: onProgressUpdate,
     );
@@ -113,7 +113,7 @@ class ChatMessagingService {
     required String content,
     MessageType type = MessageType.text,
     String? mediaPath,
-    String? replyToId,
+    Map<String, dynamic>? replyTo,  // ✅ FIX: Cambiar de replyToId a replyTo completo
     Map<String, dynamic>? metadata,
     bool isGroup = false,
     Function(String messageId, double progress)? onProgressUpdate,
@@ -148,7 +148,7 @@ class ChatMessagingService {
         content: content,
         type: type,
         mediaPath: mediaPath,
-        replyToId: replyToId,
+        replyTo: replyTo,  // ✅ FIX: Pasar replyTo completo
         metadata: metadata,
       );
 
@@ -290,10 +290,24 @@ class ChatMessagingService {
     required String content,
     required MessageType type,
     String? mediaPath,
-    String? replyToId,
+    Map<String, dynamic>? replyTo,  // ✅ FIX: Cambiar de replyToId a replyTo completo
     Map<String, dynamic>? metadata,
   }) async {
     final now = DateTime.now();
+
+    // ✅ FIX: Construir replyTo completo con messageId para compatibilidad
+    Map<String, dynamic>? finalReplyTo;
+    if (replyTo != null) {
+      finalReplyTo = {
+        'messageId': replyTo['id'],           // ID del mensaje original
+        'text': replyTo['text'],              // Texto del mensaje original
+        'senderId': replyTo['senderId'],      // Quien envió el mensaje original
+        'senderName': replyTo['senderName'],  // Nombre del remitente
+        if (replyTo['imageUrl'] != null) 'imageUrl': replyTo['imageUrl'],
+        if (replyTo['videoUrl'] != null) 'videoUrl': replyTo['videoUrl'],
+        if (replyTo['audioUrl'] != null) 'audioUrl': replyTo['audioUrl'],
+      };
+    }
 
     // Usar el constructor existente del modelo ChatMessage
     return ChatMessage(
@@ -305,7 +319,7 @@ class ChatMessagingService {
       audioUrl: type == MessageType.audio ? null : null, // Se establecerá después del upload
       timestamp: Timestamp.fromDate(now),
       isRead: false,
-      replyTo: replyToId != null ? {'messageId': replyToId} : null,
+      replyTo: finalReplyTo,  // ✅ FIX: Usar replyTo completo
       reactions: {},
       type: type.name, // Convertir enum a string
       status: MessageStatus.sending,

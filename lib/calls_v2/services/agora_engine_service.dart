@@ -155,6 +155,7 @@ class AgoraEngineService {
       }
 
       // Join the channel
+      ReleaseLogger.log('AgoraEngineService: 🔗 Joining channel $channelName with UID $uid on engine ${_engine.hashCode}');
       await _engine!.joinChannel(
         token: token,
         channelId: channelName,
@@ -172,8 +173,7 @@ class AgoraEngineService {
       _currentChannel = channelName;
       _currentUid = uid;
       _isVideoEnabled = isVideo;
-
-      ReleaseLogger.log('AgoraEngineService: Joined channel $channelName with UID $uid');
+      ReleaseLogger.log('AgoraEngineService: ✅ Joined channel $channelName with UID $uid');
       return ServiceResponse.success(null);
     } catch (e) {
       ReleaseLogger.error('AgoraEngineService: Failed to join channel', error: e);
@@ -186,12 +186,20 @@ class AgoraEngineService {
   /// Leave the current channel
   Future<ServiceResponse<void>> leaveChannel() async {
     try {
+      ReleaseLogger.log('AgoraEngineService: 🔍 leaveChannel() called - isInChannel=$_isInChannel, engine=${_engine != null}');
+
       if (!_isInChannel || _engine == null) {
+        ReleaseLogger.log('AgoraEngineService: ⏭️ Not in channel or engine is null, returning early');
         return ServiceResponse.success(null);
       }
 
+      ReleaseLogger.log('AgoraEngineService: 📤 Calling engine.leaveChannel()...');
       await _engine!.leaveChannel();
+      ReleaseLogger.log('AgoraEngineService: ✅ engine.leaveChannel() completed');
+
+      ReleaseLogger.log('AgoraEngineService: 📤 Calling engine.stopPreview()...');
       await _engine!.stopPreview();
+      ReleaseLogger.log('AgoraEngineService: ✅ engine.stopPreview() completed');
 
       _isInChannel = false;
       _currentChannel = null;
@@ -364,16 +372,17 @@ class AgoraEngineService {
 
   /// Setup event handlers for RTC Engine
   void _setupEventHandlers() {
+    ReleaseLogger.log('AgoraEngineService: 📝 Setting up event handlers on engine ${_engine.hashCode}');
     _engine?.registerEventHandler(
       RtcEngineEventHandler(
         onJoinChannelSuccess: (RtcConnection connection, int elapsed) {
-          ReleaseLogger.log('AgoraEngineService: Join channel success - ${connection.channelId}');
+          ReleaseLogger.log('AgoraEngineService: ✅ Join channel success - ${connection.channelId}');
         },
         onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
-          ReleaseLogger.log('AgoraEngineService: User joined - UID: $remoteUid');
+          ReleaseLogger.log('AgoraEngineService: 👤 User joined - UID: $remoteUid');
         },
         onUserOffline: (RtcConnection connection, int remoteUid, UserOfflineReasonType reason) {
-          ReleaseLogger.log('AgoraEngineService: User offline - UID: $remoteUid, Reason: ${reason.name}');
+          ReleaseLogger.log('AgoraEngineService: 👋 User offline - UID: $remoteUid, Reason: ${reason.name}');
         },
         onLeaveChannel: (RtcConnection connection, RtcStats stats) {
           ReleaseLogger.log('AgoraEngineService: Leave channel - ${connection.channelId}');

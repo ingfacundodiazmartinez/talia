@@ -275,6 +275,7 @@ exports.checkMessageBeforeSending = onCall(
 
       // 1. Guardar/Actualizar mensaje bloqueado en Firestore
       // IMPORTANTE: NO incluir la razón específica en el campo 'text' para que ambos usuarios vean el mismo mensaje genérico
+      // ✅ FIX: Si falla la creación del mensaje, NO continuar con lastMessage update
       try {
         const blockedMessageData = {
           text: "", // Texto vacío - el widget BlockedMessageContent mostrará el mensaje genérico
@@ -295,6 +296,7 @@ exports.checkMessageBeforeSending = onCall(
           blockedMessageData.senderId = userId;
           blockedMessageData.type = "text";
           blockedMessageData.isRead = false;
+          blockedMessageData.readBy = []; // ✅ FIX: Agregar readBy vacío para consistencia con mensajes aprobados
           blockedMessageData.localId = localId; // ✅ UUID local para rastrear desde creación optimista
 
           await db.collection("chats").doc(chatId).collection("messages").add(blockedMessageData);
@@ -302,9 +304,17 @@ exports.checkMessageBeforeSending = onCall(
         }
       } catch (e) {
         console.error("Error guardando mensaje bloqueado:", e);
+        // ✅ FIX: Si falla, retornar error en lugar de continuar
+        return {
+          approved: false,
+          reason: analysis.reason,
+          severity: analysis.severity,
+          error: "Failed to save blocked message",
+        };
       }
 
       // 2. Notificar al receptor (SIN incluir la razón específica - privacidad)
+      // ✅ FIX: Solo actualizar lastMessage si el mensaje fue creado exitosamente
       if (receiverId) {
         try {
           await db.collection("notifications").add({

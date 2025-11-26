@@ -19,6 +19,8 @@ class FavoriteService {
       }
 
       final collection = isGroupChat ? 'groups' : 'chats';
+
+      // Referencia en el mensaje (legacy)
       final favoriteRef = _firestore
           .collection(collection)
           .doc(chatId)
@@ -27,17 +29,36 @@ class FavoriteService {
           .collection('favorites')
           .doc(currentUserId);
 
+      // ✅ NEW: Referencia en el usuario para consultas eficientes
+      final userFavoriteRef = _firestore
+          .collection('users')
+          .doc(currentUserId)
+          .collection('favorites')
+          .doc('${chatId}_$messageId');
+
       final favoriteDoc = await favoriteRef.get();
 
       if (favoriteDoc.exists) {
         // Ya está marcado como favorito, desmarcarlo
-        await favoriteRef.delete();
+        await Future.wait([
+          favoriteRef.delete(),
+          userFavoriteRef.delete(),  // ✅ NEW: También borrar del índice del usuario
+        ]);
       } else {
         // No está marcado, agregarlo
-        await favoriteRef.set({
-          'userId': currentUserId,
-          'timestamp': FieldValue.serverTimestamp(),
-        });
+        await Future.wait([
+          favoriteRef.set({
+            'userId': currentUserId,
+            'timestamp': FieldValue.serverTimestamp(),
+          }),
+          // ✅ NEW: También guardar en el índice del usuario
+          userFavoriteRef.set({
+            'chatId': chatId,
+            'messageId': messageId,
+            'isGroupChat': isGroupChat,
+            'timestamp': FieldValue.serverTimestamp(),
+          }),
+        ]);
       }
     } catch (e) {
       rethrow;
@@ -118,6 +139,51 @@ class FavoriteService {
   }) {
     // Mantener por compatibilidad temporalmente, pero dirigir al nuevo método
     return Stream.empty();
+  }
+
+  /// ✅ NEW: Obtiene solo los IDs de mensajes favoritos (eficiente para UI)
+  /// Retorna un Stream de Set<String> con los IDs de mensajes favoritos
+  Stream<Set<String>> getFavoriteMessageIdsStream({
+    required String chatId,
+    required bool isGroupChat,
+  }) {
+    final currentUserId = _auth.currentUser?.uid;
+    if (currentUserId == null) {
+      return Stream.value({});
+    }
+
+    // Buscar en el índice de favoritos del usuario
+    return _firestore
+        .collection('users')
+        .doc(currentUserId)
+        .collection('favorites')
+        .where('chatId', isEqualTo: chatId)
+        .snapshots()
+        .map((snapshot) {
+      return snapshot.docs.map((doc) => doc['messageId'] as String).toSet();
+    });
+  }
+
+  /// ✅ NEW: Obtiene los IDs de mensajes favoritos una vez (Future)
+  Future<Set<String>> getFavoriteMessageIds({
+    required String chatId,
+    required bool isGroupChat,
+  }) async {
+    final currentUserId = _auth.currentUser?.uid;
+    if (currentUserId == null) return {};
+
+    try {
+      final snapshot = await _firestore
+          .collection('users')
+          .doc(currentUserId)
+          .collection('favorites')
+          .where('chatId', isEqualTo: chatId)
+          .get();
+
+      return snapshot.docs.map((doc) => doc['messageId'] as String).toSet();
+    } catch (e) {
+      return {};
+    }
   }
 
   /// Obtiene mensajes favoritos para mostrar en el perfil público

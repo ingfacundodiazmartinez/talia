@@ -7,6 +7,7 @@ import '../utils/chat_utils.dart';
 import '../controllers/child_home_controller.dart';
 import '../notification_service.dart';
 import '../services/chats/chat_orchestrator.dart';
+import '../services/local_unread_count_service.dart';
 
 /// Controller para el shell principal de niños
 ///
@@ -230,32 +231,9 @@ class ChildMainShellController {
   String get displayUserRole => _userRole ?? 'child';
 
   /// Stream de mensajes no leídos para badge
+  /// ✅ OPTIMIZADO: Usa LocalUnreadCountService en lugar de Firestore
   Stream<int> getUnreadMessagesStream() {
-    final currentUserId = _auth.currentUser?.uid;
-    if (currentUserId == null) {
-      return Stream.value(0);
-    }
-
-    try {
-      return _firestore
-          .collection('chats')
-          .where('participants', arrayContains: currentUserId)
-          .snapshots()
-          .map((snapshot) {
-        int totalUnreadMessages = 0;
-        for (var doc in snapshot.docs) {
-          final data = doc.data() as Map<String, dynamic>?;
-          if (data != null) {
-            final unreadCount = data['unreadCount_$currentUserId'] as int? ?? 0;
-            totalUnreadMessages += unreadCount;
-          }
-        }
-        return totalUnreadMessages;
-      });
-    } catch (e) {
-      ReleaseLogger.error('Error obteniendo stream de mensajes no leídos: $e', tag: 'ChildMainShell');
-      return Stream.value(0);
-    }
+    return LocalUnreadCountService().watchTotalUnreadCount();
   }
 
   /// Limpiar recursos

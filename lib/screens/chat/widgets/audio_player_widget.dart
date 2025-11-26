@@ -6,6 +6,8 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:audio_waveforms/audio_waveforms.dart' hide PlayerState;
 import 'package:path_provider/path_provider.dart';
 import 'package:http/http.dart' as http;
+import 'package:proximity_sensor/proximity_sensor.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import '../../../services/waveform_cache_service.dart';
 import '../../../utils/release_logger.dart';
 
@@ -41,6 +43,10 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
   Duration _position = Duration.zero;
   Ticker? _ticker;
   List<double>? _waveformData; // Datos reales del waveform
+
+  // Proximity sensor for earpiece switching
+  StreamSubscription<int>? _proximitySubscription;
+  bool _isNearEar = false;
 
   @override
   void initState() {
@@ -86,11 +92,15 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
           _isPlaying = true;
           _isLoading = false;
           _startProgressTimer();
+          _setupProximitySensor(); // ✅ Enable proximity sensor when playing
+          _enableWakeLock(); // ✅ Keep screen on during playback
           setState(() {});
         } else if (wasPlaying && !shouldPlay) {
           // Pausando/deteniendo reproducción
           _isPlaying = false;
           _stopProgressTimer();
+          _teardownProximitySensor(); // ✅ Disable proximity sensor when stopped
+          _disableWakeLock(); // ✅ Allow screen to sleep
           // Obtener posición real del player cuando se pausa
           _audioPlayer.getCurrentPosition().then((pos) {
             if (mounted && pos != null) {
@@ -110,15 +120,110 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
           _position = Duration.zero;
         });
         _stopProgressTimer();
+        _teardownProximitySensor(); // ✅ Cleanup when audio completes
+        _disableWakeLock();
       }
     });
+  }
+
+  /// Setup proximity sensor for earpiece switching (like WhatsApp)
+  void _setupProximitySensor() {
+    // Cancel any existing subscription
+    _proximitySubscription?.cancel();
+
+    // Listen to proximity sensor events
+    _proximitySubscription = ProximitySensor.events.listen((int event) {
+      final isNear = event > 0;
+      if (_isNearEar != isNear) {
+        _isNearEar = isNear;
+        ReleaseLogger.log(
+          isNear ? '📱 Phone near ear - switching to earpiece' : '📱 Phone away - switching to speaker',
+          tag: 'AudioPlayer',
+        );
+
+        // Switch audio route based on proximity
+        _setAudioRoute(useEarpiece: isNear);
+
+        if (mounted) setState(() {});
+      }
+    });
+
+    ReleaseLogger.log('✅ Proximity sensor enabled for audio playback', tag: 'AudioPlayer');
+  }
+
+  /// Teardown proximity sensor
+  void _teardownProximitySensor() {
+    _proximitySubscription?.cancel();
+    _proximitySubscription = null;
+    _isNearEar = false;
+
+    // Reset to speaker mode when done
+    _setAudioRoute(useEarpiece: false);
+
+    ReleaseLogger.log('🔇 Proximity sensor disabled', tag: 'AudioPlayer');
+  }
+
+  /// Set audio route to earpiece or speaker
+  /// Uses AudioContext to configure audio session for both iOS and Android
+  Future<void> _setAudioRoute({required bool useEarpiece}) async {
+    try {
+      // Use audioplayers' AudioContext which works on both platforms
+      await _audioPlayer.setAudioContext(AudioContext(
+        iOS: AudioContextIOS(
+          // For earpiece: use playAndRecord category (allows earpiece speaker)
+          // For speaker: use playback category
+          category: useEarpiece
+              ? AVAudioSessionCategory.playAndRecord
+              : AVAudioSessionCategory.playback,
+          options: useEarpiece
+              ? const {} // No options = use earpiece by default
+              : const {AVAudioSessionOptions.defaultToSpeaker},
+        ),
+        android: AudioContextAndroid(
+          isSpeakerphoneOn: !useEarpiece,
+          stayAwake: true,
+          contentType: AndroidContentType.speech,
+          usageType: useEarpiece
+              ? AndroidUsageType.voiceCommunication
+              : AndroidUsageType.media,
+          audioFocus: AndroidAudioFocus.gain,
+        ),
+      ));
+      ReleaseLogger.log(
+        'Audio route set to: ${useEarpiece ? 'earpiece' : 'speaker'}',
+        tag: 'AudioPlayer',
+      );
+    } catch (e) {
+      ReleaseLogger.error('Failed to set audio route', error: e, tag: 'AudioPlayer');
+    }
+  }
+
+  /// Enable WakeLock during playback
+  Future<void> _enableWakeLock() async {
+    try {
+      await WakelockPlus.enable();
+    } catch (e) {
+      ReleaseLogger.error('Failed to enable WakeLock', error: e, tag: 'AudioPlayer');
+    }
+  }
+
+  /// Disable WakeLock when playback stops
+  Future<void> _disableWakeLock() async {
+    try {
+      await WakelockPlus.disable();
+    } catch (e) {
+      ReleaseLogger.error('Failed to disable WakeLock', error: e, tag: 'AudioPlayer');
+    }
   }
 
   @override
   void dispose() {
     _ticker?.dispose();
+    _proximitySubscription?.cancel();
     _audioPlayer.dispose();
     _waveController?.dispose();
+    // Ensure WakeLock is disabled when widget is disposed
+    WakelockPlus.disable();
     super.dispose();
   }
 

@@ -102,18 +102,22 @@ class CallKitSyncService {
         tag: _tag,
       );
 
-      if (Platform.isIOS) {
-        // iOS: Use custom CallKit channel
-        await _callKitChannel.invokeMethod('endCallKit', {
-          'callId': callId,
-        });
-      } else if (Platform.isAndroid) {
-        // Android: Use flutter_callkit_incoming for ConnectionService
+      // ✅ FIX: Use flutter_callkit_incoming for BOTH platforms
+      // Calls are shown via FlutterCallkitIncoming.showCallkitIncoming()
+      // so they must be ended via FlutterCallkitIncoming.endCall()
+      try {
         await FlutterCallkitIncoming.endCall(callId);
+        ReleaseLogger.log('✅ endCall($callId) succeeded', tag: _tag);
+      } catch (e) {
+        ReleaseLogger.error('⚠️ endCall($callId) failed: $e', tag: _tag);
+        // Continue - try endAllCalls as fallback
       }
 
+      // ✅ REMOVED: Don't call endAllCalls() - it's too aggressive and can cause race conditions
+      // await FlutterCallkitIncoming.endAllCalls();
+
       ReleaseLogger.log(
-        'CallKit/ConnectionService UI ended for call $callId',
+        '✅ CallKit/ConnectionService UI ended for call $callId',
         tag: _tag,
       );
       return true;

@@ -7,10 +7,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:proximity_sensor/proximity_sensor.dart';
 import '../controllers/call_controller.dart';
 import '../models/call_v2.dart';
 import '../services/agora_engine_service.dart';
-import '../services/callkit_sync_service.dart';
+import '../services/call_state_cache_service.dart';
+import '../../services/voip_service.dart';
 import '../../utils/release_logger.dart';
 
 class AgoraCallScreen extends StatefulWidget {
@@ -79,8 +82,7 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
   bool _isAudioMuted = false;
   bool _isVideoMuted = false;
   bool _isSpeakerOn = true;
-  bool _showControls = true;
-  Timer? _hideControlsTimer;
+  final bool _showControls = true; // Always visible
   String? _actualCallId; // Actual callId after creation
 
   // Participants
@@ -89,11 +91,121 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
 
   // Stream subscriptions
   StreamSubscription<CallV2?>? _callSubscription;
+  StreamSubscription<int>? _proximitySubscription;
+  StreamSubscription<String>? _callKitEndedSubscription;
+
+  // Proximity state for audio calls
+  bool _isNearEar = false;
+
+  // ✅ FIX: Flags to prevent duplicate processing
+  bool _isEnding = false; // Prevent duplicate end call processing
+  bool _handlersRegistered = false; // Prevent duplicate handler registration
 
   @override
   void initState() {
     super.initState();
+    _enableWakeLock();
     _initializeCall();
+    _listenToCallKitEnded();
+  }
+
+  /// ✅ FIX: Listen to CallKit ended events (when user hangs up from iOS CallKit UI)
+  /// This fixes the issue where user B hangs up from CallKit but doesn't leave Agora channel,
+  /// causing user A to detect the disconnect 26 seconds later via Agora timeout.
+  void _listenToCallKitEnded() {
+    _callKitEndedSubscription = VoIPService().callKitEndedStream.listen((callId) {
+      final currentCallId = widget.callId ?? _actualCallId;
+      ReleaseLogger.log(
+        '📥 [AgoraCallScreen] CallKit ended event received for: $callId (current: $currentCallId)',
+        tag: _tag,
+      );
+
+      // Only handle if this event is for our current call
+      if (callId == currentCallId && !_isEnding) {
+        ReleaseLogger.log(
+          '🔚 [AgoraCallScreen] CallKit ended our call, terminating properly...',
+          tag: _tag,
+        );
+        _endCall();
+      }
+    });
+    ReleaseLogger.log('✅ [AgoraCallScreen] Subscribed to callKitEndedStream', tag: _tag);
+  }
+
+  /// Enable WakeLock to keep screen on during call
+  Future<void> _enableWakeLock() async {
+    try {
+      await WakelockPlus.enable();
+      ReleaseLogger.log('✅ WakeLock enabled - screen will stay on', tag: _tag);
+    } catch (e) {
+      ReleaseLogger.error('Failed to enable WakeLock', error: e, tag: _tag);
+    }
+  }
+
+  /// Disable WakeLock when call ends
+  Future<void> _disableWakeLock() async {
+    try {
+      await WakelockPlus.disable();
+      ReleaseLogger.log('✅ WakeLock disabled', tag: _tag);
+    } catch (e) {
+      ReleaseLogger.error('Failed to disable WakeLock', error: e, tag: _tag);
+    }
+  }
+
+  /// Setup proximity sensor for audio calls (switch to earpiece when near ear)
+  /// [isVideoCall] should be passed explicitly since currentCall may not be loaded yet
+  void _setupProximitySensor({bool? isVideoCall}) {
+    // ✅ FIX: Use explicitly passed value first, then check widget, then controller
+    // The order matters because currentCall may not be loaded when this is called
+    final isVideo = isVideoCall ?? widget.isVideo ?? _callController.currentCall?.isVideo ?? false;
+    if (isVideo) {
+      // No need for proximity sensor in video calls
+      ReleaseLogger.log('Video call - skipping proximity sensor setup', tag: _tag);
+      return;
+    }
+
+    // ✅ For audio calls: use earpiece by default (like a phone call)
+    _setAudioRouteToEarpiece();
+
+    // Listen to proximity sensor changes
+    _proximitySubscription = ProximitySensor.events.listen((int event) {
+      final isNear = event > 0;
+      if (_isNearEar != isNear) {
+        _isNearEar = isNear;
+        ReleaseLogger.log(
+          isNear ? '📱 Phone near ear - using earpiece' : '📱 Phone away from ear - using speaker',
+          tag: _tag,
+        );
+
+        // Switch audio route based on proximity
+        if (isNear) {
+          _setAudioRouteToEarpiece();
+        } else {
+          // When phone is away, use speaker if user had it on, otherwise keep earpiece
+          if (_isSpeakerOn) {
+            _agoraEngine.engine?.setEnableSpeakerphone(true);
+          }
+        }
+
+        if (mounted) setState(() {});
+      }
+    });
+
+    ReleaseLogger.log('✅ Proximity sensor setup for audio call', tag: _tag);
+  }
+
+  /// Set audio route to earpiece (for audio calls)
+  Future<void> _setAudioRouteToEarpiece() async {
+    try {
+      await _agoraEngine.engine?.setEnableSpeakerphone(false);
+      if (mounted) {
+        setState(() {
+          _isSpeakerOn = false;
+        });
+      }
+    } catch (e) {
+      ReleaseLogger.error('Failed to set earpiece', error: e, tag: _tag);
+    }
   }
 
   Future<void> _initializeCall() async {
@@ -151,24 +263,26 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
           );
 
           if (call?.endedAt != null) {
+            // ✅ FIX: Check if we're already ending to prevent double pop
+            // When user disconnects via onUserOffline, we already pop there.
+            // Without this check, the Firestore update also triggers a pop, causing double-pop.
+            if (_isEnding) {
+              ReleaseLogger.log(
+                '⚠️ [AgoraCallScreen] Already ending call, skipping duplicate pop from Firestore update',
+                tag: _tag,
+              );
+              return;
+            }
+            _isEnding = true;
+
             // Call ended by another participant, close screen
             ReleaseLogger.log(
               '📞 [AgoraCallScreen] Call ended remotely by ${call?.endedBy} at ${call?.endedAt}, closing screen',
               tag: _tag,
             );
 
-            // ✅ FIX: Clear CallKit notification when call ends remotely
-            final callIdToEnd = widget.callId ?? _actualCallId;
-            if (callIdToEnd != null) {
-              CallKitSyncService().endCallKitIfExists(callIdToEnd).then((success) {
-                ReleaseLogger.log(
-                  success
-                      ? '✅ CallKit notification cleared for $callIdToEnd'
-                      : '⚠️ Failed to clear CallKit notification for $callIdToEnd',
-                  tag: _tag,
-                );
-              });
-            }
+            // NOTE: We do NOT call CallKitSyncService().endCallKitIfExists() here
+            // It can cause native iOS crash. CallKit auto-cleans when audio session ends.
 
             if (mounted) {
               ReleaseLogger.log('📞 [AgoraCallScreen] Popping screen...', tag: _tag);
@@ -199,7 +313,32 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
       final userParticipant = callResult.data?.participants[currentUserId];
       final isAlreadyJoined = userParticipant?.status == CallStatus.joined;
 
-      if (widget.isIncoming && !_callController.isInCall && !isAlreadyJoined) {
+      // ✅ FIX: For incoming VIDEO calls, initialize engine and start camera preview early
+      // This gives WhatsApp-style instant camera feedback for the receiver too
+      final isVideoCall = callResult.data?.isVideo ?? false;
+      if (isVideoCall && _agoraEngine.engine == null) {
+        ReleaseLogger.log('📹 Initializing engine for incoming video call preview', tag: _tag);
+        await _agoraEngine.initialize();
+        _setupAgoraEventHandlers(); // Register handlers now that engine exists
+
+        // Start camera preview in background
+        _agoraEngine.engine!.enableVideo().then((_) {
+          return _agoraEngine.engine!.startPreview();
+        }).then((_) {
+          ReleaseLogger.log('✅ Camera preview started for incoming video call', tag: _tag);
+          if (mounted) setState(() {});
+        }).catchError((e) {
+          ReleaseLogger.error('Failed to start camera preview', error: e, tag: _tag);
+        });
+      }
+
+      // ✅ FIX iOS BACKGROUND: Check if call was already accepted via VoIPService
+      // On iOS, when accepting from CallKit while app is in background, VoIPService
+      // calls acceptCall() directly since AgoraCallScreen.initState may not run.
+      // We check this flag to avoid calling acceptCall() twice.
+      final wasAcceptedViaVoIP = CallStateCacheService().isCallAlreadyAccepted(widget.callId!);
+
+      if (widget.isIncoming && !_callController.isInCall && !isAlreadyJoined && !wasAcceptedViaVoIP) {
         // Accept and join the call (first time only)
         ReleaseLogger.log('Accepting incoming call for first time', tag: _tag);
         final result = await _callController.acceptCall(widget.callId!);
@@ -209,12 +348,27 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
           return;
         }
 
+        // ✅ FIX: Register event handlers AFTER engine is initialized
+        // For audio calls, engine is initialized inside acceptCall, not before
+        // Without this, onUserJoined events are never received and UI stays on "Connecting..."
+        _setupAgoraEventHandlers();
+
         // ✅ Get UID directly from accept result (no delay needed)
         _localUid = result.data?['agoraUid'] as int?;
         ReleaseLogger.log('Local UID from accept result: $_localUid', tag: _tag);
-      } else if (isAlreadyJoined) {
-        // Call already accepted (likely from CallKit), just get UID
-        ReleaseLogger.log('Call already accepted, getting UID from call data', tag: _tag);
+      } else if (isAlreadyJoined || wasAcceptedViaVoIP) {
+        // Call already accepted (from CallKit/VoIPService), just get UID
+        ReleaseLogger.log(
+          'Call already accepted (isAlreadyJoined: $isAlreadyJoined, wasAcceptedViaVoIP: $wasAcceptedViaVoIP), getting UID from call data',
+          tag: _tag,
+        );
+
+        // ✅ FIX: Ensure engine is initialized and handlers registered for CallKit flow
+        if (_agoraEngine.engine == null) {
+          await _agoraEngine.initialize();
+          _setupAgoraEventHandlers();
+        }
+
         _localUid = _callController.currentUserAgoraUid;
         ReleaseLogger.log('Local UID from existing call data: $_localUid', tag: _tag);
       } else {
@@ -229,6 +383,10 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
       }
 
       _startHideControlsTimer();
+
+      // ✅ Setup proximity sensor for audio calls (earpiece when near ear)
+      // Pass isVideoCall explicitly since currentCall may not be loaded yet
+      _setupProximitySensor(isVideoCall: isVideoCall);
     } catch (e) {
       ReleaseLogger.error('Failed to initialize call', error: e, tag: _tag);
       _showError('Failed to initialize call');
@@ -285,14 +443,23 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
           );
 
           if (call?.endedAt != null) {
-            // ✅ FIX: Clear CallKit/ConnectionService notification when call ends remotely
+            // ✅ FIX: Check if we're already ending to prevent double pop
+            if (_isEnding) {
+              ReleaseLogger.log(
+                '⚠️ [AgoraCallScreen] Already ending call, skipping duplicate pop from Firestore update (create mode)',
+                tag: _tag,
+              );
+              return;
+            }
+            _isEnding = true;
+
             ReleaseLogger.log(
               '📞 [AgoraCallScreen] Call ended remotely by ${call?.endedBy} at ${call?.endedAt}, closing screen',
               tag: _tag,
             );
 
-            // End CallKit UI for both iOS and Android
-            CallKitSyncService().endCallKitIfExists(_actualCallId!);
+            // NOTE: We do NOT call CallKitSyncService().endCallKitIfExists() here
+            // It can cause native iOS crash. CallKit auto-cleans when audio session ends.
 
             if (mounted) {
               ReleaseLogger.log('📞 [AgoraCallScreen] Popping screen...', tag: _tag);
@@ -313,6 +480,9 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
       );
 
       _startHideControlsTimer();
+
+      // ✅ Setup proximity sensor for audio calls (earpiece when near ear)
+      _setupProximitySensor(isVideoCall: widget.isVideo);
     } catch (e) {
       ReleaseLogger.error('Failed to create call', error: e, tag: _tag);
       _showError('Failed to create call');
@@ -321,26 +491,73 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
   }
 
   void _setupAgoraEventHandlers() {
-    _agoraEngine.engine?.registerEventHandler(
+    // ✅ FIX: Prevent duplicate handler registration
+    if (_handlersRegistered) {
+      ReleaseLogger.log('⚠️ Agora handlers already registered, skipping', tag: _tag);
+      return;
+    }
+
+    // ✅ FIX: Re-fetch engine reference from controller
+    // The engine might have been created after _agoraEngine was assigned
+    _agoraEngine = _callController.agoraEngine;
+
+    if (_agoraEngine.engine == null) {
+      ReleaseLogger.log('⚠️ Engine is null, cannot register handlers', tag: _tag);
+      return;
+    }
+
+    _handlersRegistered = true;
+    ReleaseLogger.log('📝 Registering Agora event handlers on engine: ${_agoraEngine.engine.hashCode}', tag: _tag);
+
+    _agoraEngine.engine!.registerEventHandler(
       RtcEngineEventHandler(
         onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
+          if (!mounted) return;
           setState(() {
             _remoteUsers.add(remoteUid);
           });
           ReleaseLogger.log('User joined: $remoteUid', tag: _tag);
         },
         onUserOffline: (RtcConnection connection, int remoteUid, UserOfflineReasonType reason) {
+          ReleaseLogger.log('User offline: $remoteUid, reason: ${reason.name}', tag: _tag);
+
+          // ✅ FIX: Prevent duplicate end call processing
+          if (_isEnding) {
+            ReleaseLogger.log('⚠️ Already ending call, ignoring duplicate onUserOffline', tag: _tag);
+            return;
+          }
+
+          if (!mounted) return;
+
           setState(() {
             _remoteUsers.remove(remoteUid);
           });
-          ReleaseLogger.log('User offline: $remoteUid', tag: _tag);
+
+          // ✅ FIX: For 1:1 calls, when the remote user leaves, close the screen
+          // Don't wait for Firestore update - provides immediate feedback
+          final isGroupCall = widget.isGroup ?? _callController.currentCall?.isGroup ?? false;
+          if (!isGroupCall && _remoteUsers.isEmpty) {
+            _isEnding = true; // Mark as ending to prevent duplicates
+            ReleaseLogger.log('📞 1:1 call - remote user left, ending call', tag: _tag);
+
+            // NOTE: We do NOT call CallKitSyncService().endCallKitIfExists() here
+            // It can cause native iOS crash. CallKit auto-cleans when audio session ends.
+
+            // End call in Firestore and leave channel
+            _callController.endCall();
+
+            if (mounted) {
+              Navigator.of(context, rootNavigator: true).pop();
+            }
+          }
         },
         onConnectionLost: (RtcConnection connection) {
+          if (!mounted || _isEnding) return;
           _showError('Connection lost');
         },
         onError: (ErrorCodeType code, String msg) {
           ReleaseLogger.error('Agora error: ${code.name}: $msg', tag: _tag);
-          if (code == ErrorCodeType.errTokenExpired) {
+          if (code == ErrorCodeType.errTokenExpired && !_isEnding) {
             _showError('Call session expired');
             _endCall();
           }
@@ -349,24 +566,13 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
     );
   }
 
+  // ✅ Controls always visible - no auto-hide timer needed
   void _startHideControlsTimer() {
-    _hideControlsTimer?.cancel();
-    _hideControlsTimer = Timer(const Duration(seconds: 3), () {
-      if (mounted) {
-        setState(() {
-          _showControls = false;
-        });
-      }
-    });
+    // No-op: Controls should always be visible for better UX
   }
 
   void _toggleControls() {
-    setState(() {
-      _showControls = !_showControls;
-    });
-    if (_showControls) {
-      _startHideControlsTimer();
-    }
+    // No-op: Controls always visible
   }
 
   Future<void> _toggleAudio() async {
@@ -401,6 +607,19 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
   Future<void> _endCall() async {
     ReleaseLogger.log('🔚 [AgoraCallScreen] User pressed End Call button', tag: _tag);
 
+    // ✅ FIX: Prevent duplicate end call processing
+    if (_isEnding) {
+      ReleaseLogger.log('⚠️ Already ending call, ignoring duplicate _endCall', tag: _tag);
+      return;
+    }
+    _isEnding = true;
+
+    // ✅ Clear accepted call cache
+    final callIdToClean = widget.callId ?? _actualCallId;
+    if (callIdToClean != null) {
+      CallStateCacheService().clearAcceptedCall(callIdToClean);
+    }
+
     // If we're still creating the call, just pop immediately
     if (_isCreatingCall) {
       ReleaseLogger.log('Call still creating, popping immediately', tag: _tag);
@@ -410,22 +629,36 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
       return;
     }
 
-    // ✅ FIX: Clear CallKit/ConnectionService notification when user ends call
+    // ✅ FIX: Mark as ending from app to prevent VoIPService from duplicate cleanup
     final callIdToEnd = widget.callId ?? _actualCallId;
     if (callIdToEnd != null) {
-      ReleaseLogger.log('📞 [AgoraCallScreen] Ending CallKit UI for $callIdToEnd', tag: _tag);
-
-      // End CallKit UI for both iOS and Android
-      CallKitSyncService().endCallKitIfExists(callIdToEnd);
-
-      ReleaseLogger.log('✅ [AgoraCallScreen] CallKit end command sent for $callIdToEnd', tag: _tag);
+      CallStateCacheService().markCallEndingFromApp(callIdToEnd);
+      ReleaseLogger.log('📞 [AgoraCallScreen] Marked call as ending from app: $callIdToEnd', tag: _tag);
     }
 
+    // ✅ Step 1: End Agora channel and update Firestore FIRST
+    ReleaseLogger.log('📞 [AgoraCallScreen] Proceeding with Agora cleanup...', tag: _tag);
     await _callController.endCall();
-    // ✅ DO NOT pop here - let the stream listener handle navigation
-    // The stream will detect endedAt != null and pop automatically
-    // This prevents double-pop error: "Bad state: No element"
-    ReleaseLogger.log('✅ [AgoraCallScreen] Call ended in Firestore, waiting for stream update...', tag: _tag);
+    ReleaseLogger.log('✅ [AgoraCallScreen] Agora cleanup completed', tag: _tag);
+
+    // ✅ Step 2: End CallKit UI AFTER Agora cleanup
+    // Using native VoIP channel instead of FlutterCallkitIncoming to avoid crashes
+    if (callIdToEnd != null) {
+      ReleaseLogger.log('📞 [AgoraCallScreen] Ending CallKit via native channel...', tag: _tag);
+      try {
+        await VoIPService().notifyCallEnded(callIdToEnd);
+        ReleaseLogger.log('✅ [AgoraCallScreen] CallKit ended via native channel', tag: _tag);
+      } catch (e) {
+        ReleaseLogger.error('⚠️ [AgoraCallScreen] Failed to end CallKit: $e', tag: _tag);
+      }
+    }
+
+    // ✅ FIX: Pop immediately instead of waiting for stream
+    // The stream may not receive the update in time, causing black screen
+    if (mounted) {
+      Navigator.of(context, rootNavigator: true).pop();
+    }
+    ReleaseLogger.log('✅ [AgoraCallScreen] Call ended and screen popped', tag: _tag);
   }
 
   void _showError(String message) {
@@ -437,7 +670,10 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
   }
 
   Widget _buildLocalView() {
-    if (_isVideoMuted || _localUid == null) {
+    // ✅ FIX: Show camera preview even before _localUid is set
+    // For local preview, we use uid=0 which always refers to local user
+    // Only hide if video is explicitly muted
+    if (_isVideoMuted) {
       return Container(
         color: Colors.grey[900],
         child: const Center(
@@ -849,15 +1085,23 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
   void dispose() {
     ReleaseLogger.log('🗑️ [AgoraCallScreen] Disposing screen...', tag: _tag);
 
-    _hideControlsTimer?.cancel();
     _callSubscription?.cancel();
+    _proximitySubscription?.cancel();
+    _callKitEndedSubscription?.cancel();
     _callController.dispose();
 
-    // ✅ CRITICAL: End CallKit/ConnectionService notification on dispose
+    // ✅ Disable WakeLock when call ends
+    _disableWakeLock();
+
+    // ✅ Clear caches on dispose
+    // NOTE: We do NOT call CallKitSyncService().endCallKitIfExists() here because
+    // it can cause a native iOS crash if the call was accepted via CallKit.
+    // CallKit will auto-clean when the audio session ends.
     final callIdToCleanup = widget.callId ?? _actualCallId;
     if (callIdToCleanup != null) {
-      ReleaseLogger.log('🧹 [AgoraCallScreen] Cleaning up CallKit for $callIdToCleanup', tag: _tag);
-      CallKitSyncService().endCallKitIfExists(callIdToCleanup);
+      ReleaseLogger.log('🧹 [AgoraCallScreen] Cleaning up caches for $callIdToCleanup', tag: _tag);
+      CallStateCacheService().clearAcceptedCall(callIdToCleanup);
+      CallStateCacheService().clearEndingFromApp(callIdToCleanup);
     }
 
     super.dispose();

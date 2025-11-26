@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../services/contact_alias_service.dart';
 import '../../../services/block_service.dart';
 import '../../../services/message_status_helper.dart';
+import '../../../services/local_unread_count_service.dart';
 import '../../../services/search_service.dart';
 import '../../../models/chat_message.dart';
 import '../../../widgets/stories_section.dart';
@@ -53,10 +54,20 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
     // Create temporary controller to get current user ID
     final tempController = ParentChatsController(userId: '');
     _controller = ParentChatsController(userId: tempController.currentUserId);
+
+    // ✅ Escuchar cambios en contadores de no leídos para actualizar badges
+    LocalUnreadCountService().addListener(_onUnreadCountsChanged);
+  }
+
+  void _onUnreadCountsChanged() {
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   @override
   void dispose() {
+    LocalUnreadCountService().removeListener(_onUnreadCountsChanged);
     _searchController.dispose();
     _searchQuery.dispose();
     super.dispose();
@@ -471,8 +482,8 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
           return SizedBox.shrink();
         }
 
-        // Leer contador de mensajes no leídos para este usuario
-        final unreadCount = groupData['unreadCount_$parentId'] ?? 0;
+        // ✅ Leer contador de mensajes no leídos desde cache local
+        final unreadCount = LocalUnreadCountService().getUnreadCount(groupId);
 
         // Obtener el último mensaje para mostrar su estado
         return StreamBuilder<QuerySnapshot>(
@@ -564,8 +575,8 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
             if (chatDoc != null) {
               // Chat con mensajes existentes
               final chatData = chatDoc.data() as Map<String, dynamic>;
-              // Leer contador de mensajes no leídos para este usuario
-              final unreadCount = chatData['unreadCount_$parentId'] ?? 0;
+              // ✅ Leer contador de mensajes no leídos desde cache local
+              final unreadCount = LocalUnreadCountService().getUnreadCount(chatDoc.id);
 
               // Obtener el último mensaje para mostrar su estado
               return StreamBuilder<QuerySnapshot>(

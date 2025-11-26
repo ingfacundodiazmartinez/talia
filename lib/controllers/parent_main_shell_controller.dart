@@ -8,6 +8,7 @@ import '../utils/chat_utils.dart';
 import '../utils/release_logger.dart';
 import '../constants/notification_types.dart';
 import '../services/chats/chat_orchestrator.dart';
+import '../services/local_unread_count_service.dart';
 
 /// Controller para el shell principal de padres
 ///
@@ -214,32 +215,9 @@ class ParentMainShellController {
   }
 
   /// Stream de chats no leídos
+  /// ✅ OPTIMIZADO: Usa LocalUnreadCountService en lugar de Firestore
   Stream<int> getUnreadChatsStream() {
-    return _firestore
-        .collection('chats')
-        .where('participants', arrayContains: parentId)
-        .snapshots(includeMetadataChanges: false)
-        .map((snapshot) {
-      int unreadCount = 0;
-      for (var doc in snapshot.docs) {
-        try {
-          final data = doc.data();
-
-          // ✅ USAR CONTADORES AUTOMÁTICOS DE FIRESTORE en lugar de calcular manualmente
-          // Los Firebase Functions incrementan automáticamente este campo
-          final chatUnreadCount = data['unreadCount_$parentId'] as int? ?? 0;
-          unreadCount += chatUnreadCount;
-
-
-        } catch (e) {
-          ReleaseLogger.error('Error procesando chat ${doc.id}: $e', tag: 'ParentMainShell');
-          // Continuar con el siguiente documento
-          continue;
-        }
-      }
-
-      return unreadCount;
-    });
+    return LocalUnreadCountService().watchTotalUnreadCount();
   }
 
   /// Stream de solicitudes de historia pendientes

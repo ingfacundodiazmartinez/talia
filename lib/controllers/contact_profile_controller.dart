@@ -411,34 +411,62 @@ class ContactProfileController {
   }
 
   /// Cargar mensajes favoritos
+  /// ✅ FIX: Consulta eficiente - primero obtener IDs de favoritos, luego obtener mensajes
   Future<void> loadFavoriteMessages() async {
     try {
       _isLoadingFavorites = true;
       _hasError = false;
 
-      final stream = _favoriteService.getFavoriteMessagesStream(
+      // 1. Obtener IDs de mensajes favoritos (consulta eficiente en users/{uid}/favorites)
+      final favoriteIds = await _favoriteService.getFavoriteMessageIds(
         chatId: chatId,
         isGroupChat: false,
       );
 
-      final snapshot = await stream.first;
+      if (favoriteIds.isEmpty) {
+        _favoriteMessages = [];
+        _isLoadingFavorites = false;
+        return;
+      }
 
-      // Convertir Timestamp a String para que la pantalla no dependa de Firestore
-      _favoriteMessages = snapshot.map((message) {
-        final Map<String, dynamic> processedMessage = Map.from(message);
+      // 2. Obtener los mensajes por ID (en lotes de 10 para evitar límite de Firestore)
+      final messages = <Map<String, dynamic>>[];
+      final idsList = favoriteIds.toList();
 
-        // Convertir Timestamp a String formateado
-        if (processedMessage['timestamp'] is Timestamp) {
-          final timestamp = processedMessage['timestamp'] as Timestamp;
-          processedMessage['formattedTime'] = DateFormat(
-            'dd/MM/yyyy HH:mm',
-          ).format(timestamp.toDate());
-          processedMessage.remove('timestamp'); // Remover el Timestamp original
+      for (var i = 0; i < idsList.length; i += 10) {
+        final batch = idsList.skip(i).take(10).toList();
+        final snapshot = await FirebaseFirestore.instance
+            .collection('chats')
+            .doc(chatId)
+            .collection('messages')
+            .where(FieldPath.documentId, whereIn: batch)
+            .get();
+
+        for (final doc in snapshot.docs) {
+          final data = doc.data();
+          data['id'] = doc.id;
+
+          // Convertir Timestamp a String formateado
+          if (data['timestamp'] is Timestamp) {
+            final timestamp = data['timestamp'] as Timestamp;
+            data['formattedTime'] = DateFormat(
+              'dd/MM/yyyy HH:mm',
+            ).format(timestamp.toDate());
+            data.remove('timestamp');
+          }
+
+          messages.add(data);
         }
+      }
 
-        return processedMessage;
-      }).toList();
+      // 3. Ordenar por fecha (más reciente primero)
+      messages.sort((a, b) {
+        final aTime = a['formattedTime'] ?? '';
+        final bTime = b['formattedTime'] ?? '';
+        return bTime.compareTo(aTime);
+      });
 
+      _favoriteMessages = messages;
       _isLoadingFavorites = false;
     } catch (e) {
       _hasError = true;

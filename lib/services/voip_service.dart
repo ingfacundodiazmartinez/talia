@@ -3,8 +3,10 @@ import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 // V2 Architecture imports
 import '../calls_v2/controllers/call_controller.dart' as calls_v2;
+import '../calls_v2/services/agora_engine_service.dart';
 import '../calls_v2/services/call_state_cache_service.dart';
 import '../calls_v2/services/voip_token_service.dart';
 import '../utils/release_logger.dart';
@@ -13,9 +15,10 @@ class VoIPService {
   static final VoIPService _instance = VoIPService._internal();
   factory VoIPService() => _instance;
   VoIPService._internal() {
-    // ✅ CRITICAL FIX: Inicializar stream controller INMEDIATAMENTE
+    // ✅ CRITICAL FIX: Inicializar stream controllers INMEDIATAMENTE
     _pendingCallNotifier = StreamController<Map<String, dynamic>>.broadcast();
-    ReleaseLogger.log('🔧 [VoIP] Stream controller inicializado en constructor', tag: 'VoIPService');
+    _callKitEndedNotifier = StreamController<String>.broadcast();
+    ReleaseLogger.log('🔧 [VoIP] Stream controllers inicializados en constructor', tag: 'VoIPService');
   }
 
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -33,8 +36,82 @@ class VoIPService {
     return _pendingCallNotifier.stream;
   }
 
+  // ✅ Stream para notificar cuando CallKit termina una llamada activa
+  // AgoraCallScreen escucha este stream para terminar la llamada correctamente
+  late StreamController<String> _callKitEndedNotifier;
+  Stream<String> get callKitEndedStream => _callKitEndedNotifier.stream;
+
   // ✅ V2 NAVIGATION: Callback para navegar a call screen después de aceptar desde CallKit
-  Function(String callId, {bool isIncoming})? onNavigateToCall;
+  Function(String callId, {bool isIncoming})? _onNavigateToCall;
+
+  // ✅ FIX: Store pending call when callback is not ready (app launching from killed state)
+  String? _pendingCallId;
+
+  /// Setter for onNavigateToCall that processes any pending calls
+  set onNavigateToCall(Function(String callId, {bool isIncoming})? callback) {
+    _onNavigateToCall = callback;
+    ReleaseLogger.log('✅ [VoIP] onNavigateToCall callback configurado', tag: 'VoIPService');
+
+    // Process pending call if any
+    if (callback != null && _pendingCallId != null) {
+      final callId = _pendingCallId!;
+      _pendingCallId = null;
+      ReleaseLogger.log('🔄 [VoIP] Procesando llamada pendiente: $callId', tag: 'VoIPService');
+      _processPendingCall(callId, callback);
+    }
+  }
+
+  /// Process a pending call - verify it's still active before navigating
+  Future<void> _processPendingCall(
+    String callId,
+    Function(String callId, {bool isIncoming}) callback,
+  ) async {
+    try {
+      // ✅ FIX: Verify call is still active before navigating
+      // This handles the case where caller hung up while receiver's app was initializing
+      final callDoc = await FirebaseFirestore.instance
+          .collection('calls_v2')
+          .doc(callId)
+          .get();
+
+      if (!callDoc.exists) {
+        ReleaseLogger.log('⚠️ [VoIP] Llamada pendiente $callId ya no existe', tag: 'VoIPService');
+        return;
+      }
+
+      final callData = callDoc.data()!;
+      final endedAt = callData['endedAt'];
+
+      if (endedAt != null) {
+        ReleaseLogger.log('⚠️ [VoIP] Llamada pendiente $callId ya terminó - no navegando', tag: 'VoIPService');
+        // Clean up CallKit UI since call is already ended
+        await _endCallKitUI(callId);
+        return;
+      }
+
+      // Call is still active, proceed with navigation
+      ReleaseLogger.log('✅ [VoIP] Llamada pendiente $callId sigue activa - navegando', tag: 'VoIPService');
+      callback(callId, isIncoming: true);
+    } catch (e) {
+      ReleaseLogger.error('❌ [VoIP] Error procesando llamada pendiente: $e', tag: 'VoIPService');
+      // On error, try to navigate anyway - AgoraCallScreen will handle if call doesn't exist
+      callback(callId, isIncoming: true);
+    }
+  }
+
+  /// End CallKit UI for a specific call
+  Future<void> _endCallKitUI(String callId) async {
+    try {
+      await FlutterCallkitIncoming.endCall(callId);
+      await FlutterCallkitIncoming.endAllCalls();
+      ReleaseLogger.log('✅ [VoIP] CallKit UI cerrado para $callId', tag: 'VoIPService');
+    } catch (e) {
+      ReleaseLogger.error('❌ [VoIP] Error cerrando CallKit UI: $e', tag: 'VoIPService');
+    }
+  }
+
+  /// Getter for onNavigateToCall
+  Function(String callId, {bool isIncoming})? get onNavigateToCall => _onNavigateToCall;
 
   // 🔄 COORDINACIÓN: Track de llamadas activas desde VoIP/CallKit
   final Set<String> _voipActiveCallIds = <String>{};
@@ -166,10 +243,13 @@ class VoIPService {
         final String callId = data['callId'] as String;
         ReleaseLogger.log('📵 [VoIP] Llamada terminada desde CallKit nativo: $callId', tag: 'VoIPService');
 
-        // NO llamar a endCall() - solo cerrar CallKit localmente
-        // Si la llamada fue cancelada por el caller, el listener ya cerró el CallKit
-        // Si el receptor presiona "rechazar", debe usar rejectCall() en lugar de endCall()
-        ReleaseLogger.log('ℹ️ [VoIP] CallKit cerrado localmente, sin modificar Firestore', tag: 'VoIPService');
+        // ✅ FIX: Terminar la llamada directamente via CallController
+        // Esto soluciona el problema donde B cuelga desde CallKit pero no deja el canal de Agora
+        // causando que A detecte la desconexión 26 segundos después por timeout
+        //
+        // NOTA: No podemos depender de que AgoraCallScreen escuche el stream porque en iOS
+        // cuando la app está en background, el initState() de AgoraCallScreen no se ejecuta correctamente
+        await _handleCallKitEnded(callId);
         break;
 
       default:
@@ -192,33 +272,40 @@ class VoIPService {
       // ✅ CRITICAL: Marcar como manejada por VoIP ANTES de procesar para evitar IncomingCallScreen
       markCallAsVoIPHandled(callId);
 
-      // ✅ OPTIMISTIC UI: Navigate IMMEDIATELY - don't wait for Firebase
-      // This gives instant response (WhatsApp-style UX)
-      ReleaseLogger.log('⚡ [VoIP OPTIMISTIC] Navegando INMEDIATAMENTE a call screen', tag: 'VoIPService');
-      if (onNavigateToCall != null) {
-        onNavigateToCall!(callId, isIncoming: true);
-        ReleaseLogger.log('✅ [VoIP OPTIMISTIC] Navegación ejecutada - usuario ve pantalla de llamada inmediatamente', tag: 'VoIPService');
-      } else {
-        ReleaseLogger.error('❌ [VoIP V2] onNavigateToCall callback NO configurado - no se puede navegar', tag: 'VoIPService');
-      }
-
-      // ✅ V2 Architecture: Accept call in BACKGROUND (non-blocking)
-      // Screen will update reactively when Firestore updates
-      ReleaseLogger.log('⚡ [VoIP V2] Aceptando llamada en background (no bloquea UI)...', tag: 'VoIPService');
+      // ✅ FIX iOS BACKGROUND: Accept call and join Agora HERE in VoIPService
+      // On iOS, when app is in background, the UI doesn't render and AgoraCallScreen.initState
+      // is never called. So we MUST accept and join Agora here.
+      // We mark the call as "already accepted" so AgoraCallScreen doesn't duplicate it.
+      ReleaseLogger.log('📞 [VoIP] Accepting call and joining Agora from VoIPService', tag: 'VoIPService');
 
       final controller = calls_v2.CallController();
-      final acceptResult = await controller.acceptCall(callId);
+      controller.initialize();
 
-      if (!acceptResult.success) {
-        ReleaseLogger.error('❌ [VoIP V2] AcceptCall falló: ${acceptResult.error}', tag: 'VoIPService');
-        // UI already showing call screen, will show error state there
-        return;
+      final acceptResult = await controller.acceptCall(callId);
+      if (acceptResult.success) {
+        ReleaseLogger.log('✅ [VoIP] Call accepted and joined Agora successfully', tag: 'VoIPService');
+        // Mark call as already accepted so AgoraCallScreen doesn't call acceptCall again
+        _cache.markCallAsAccepted(callId);
+      } else {
+        ReleaseLogger.error('❌ [VoIP] Failed to accept call: ${acceptResult.error}', tag: 'VoIPService');
+      }
+
+      // Now navigate to the call screen
+      ReleaseLogger.log('⚡ [VoIP] Navegando a call screen', tag: 'VoIPService');
+      if (_onNavigateToCall != null) {
+        _onNavigateToCall!(callId, isIncoming: true);
+        ReleaseLogger.log('✅ [VoIP] Navegación ejecutada', tag: 'VoIPService');
+      } else {
+        // ✅ FIX: App launching from killed state - callback not ready yet
+        // Store the pending call ID to be processed when callback is set
+        ReleaseLogger.log('⏳ [VoIP] Callback no listo - guardando llamada pendiente: $callId', tag: 'VoIPService');
+        _pendingCallId = callId;
       }
 
       // Clear from cache after successful processing
       _cache.clearCall(callId);
 
-      ReleaseLogger.log('✅ [VoIP V2] Llamada aceptada en background - UI ya visible para el usuario', tag: 'VoIPService');
+      ReleaseLogger.log('✅ [VoIP V2] Navegación completada - AgoraCallScreen manejará el resto', tag: 'VoIPService');
     } catch (e, stackTrace) {
       // Clear from cache on error
       _cache.clearCall(callId);
@@ -438,6 +525,83 @@ class VoIPService {
     }
   }
 
+  /// ✅ FIX: Handle CallKit ended event by directly ending the call
+  /// This is called when user hangs up from iOS CallKit native UI during an active call.
+  /// We must end the call properly (leave Agora + update Firestore) otherwise the other
+  /// party will only detect the disconnect after ~26 seconds via Agora timeout.
+  ///
+  /// CRITICAL: iOS gives very little time after CallKit ends. We must:
+  /// 1. Leave Agora channel FIRST (most important for other party to see disconnect)
+  /// 2. Update Firestore SECOND
+  /// 3. Emit to stream LAST (for UI cleanup)
+  Future<void> _handleCallKitEnded(String callId) async {
+    try {
+      ReleaseLogger.log('🔚 [VoIP] Handling CallKit ended for call: $callId', tag: 'VoIPService');
+
+      // ✅ CRITICAL FIX: Check if app initiated the end
+      // If AgoraCallScreen called endCall(), it will handle cleanup.
+      // We should NOT do duplicate cleanup here (especially dispose which causes crash)
+      if (_cache.isCallEndingFromApp(callId)) {
+        ReleaseLogger.log(
+          '⏭️ [VoIP] Call $callId is ending from app - skipping VoIP cleanup to avoid race condition',
+          tag: 'VoIPService',
+        );
+        // Just emit to stream for any listeners, but don't do Agora/Firestore cleanup
+        _callKitEndedNotifier.add(callId);
+        unmarkVoIPCall(callId);
+        return;
+      }
+
+      final currentUserId = _auth.currentUser?.uid;
+      if (currentUserId == null) {
+        ReleaseLogger.log('⚠️ [VoIP] No current user, cannot end call', tag: 'VoIPService');
+        return;
+      }
+
+      // ✅ STEP 1: Leave Agora channel IMMEDIATELY (most critical)
+      // This ensures the other party sees us disconnect right away
+      final agoraEngine = AgoraEngineService();
+      ReleaseLogger.log('📤 [VoIP] Attempting to leave Agora channel (isInChannel: ${agoraEngine.isInChannel})...', tag: 'VoIPService');
+
+      if (agoraEngine.engine != null && agoraEngine.isInChannel) {
+        try {
+          await agoraEngine.leaveChannel();
+          ReleaseLogger.log('✅ [VoIP] Left Agora channel successfully', tag: 'VoIPService');
+        } catch (e) {
+          ReleaseLogger.error('⚠️ [VoIP] Error leaving Agora channel: $e', tag: 'VoIPService');
+        }
+      } else {
+        ReleaseLogger.log('⚠️ [VoIP] Agora engine is null or not in channel, skipping leaveChannel', tag: 'VoIPService');
+      }
+
+      // ✅ STEP 2: Update Firestore to mark call as ended
+      ReleaseLogger.log('📝 [VoIP] Updating Firestore to end call $callId', tag: 'VoIPService');
+      try {
+        await _firestore.collection('calls_v2').doc(callId).update({
+          'endedAt': FieldValue.serverTimestamp(),
+          'endedBy': currentUserId,
+        });
+        ReleaseLogger.log('✅ [VoIP] Firestore updated successfully', tag: 'VoIPService');
+      } catch (e) {
+        ReleaseLogger.error('⚠️ [VoIP] Error updating Firestore: $e', tag: 'VoIPService');
+      }
+
+      // ✅ STEP 3: Emit to stream for UI cleanup (least critical)
+      _callKitEndedNotifier.add(callId);
+
+      // ✅ REMOVED: Don't dispose engine here!
+      // The engine cleanup is handled by AgoraCallScreen.dispose()
+      // Disposing here while AgoraCallScreen is still using it causes crash
+
+      unmarkVoIPCall(callId);
+      ReleaseLogger.log('✅ [VoIP] Call $callId ended successfully via VoIPService', tag: 'VoIPService');
+
+    } catch (e, stackTrace) {
+      ReleaseLogger.error('❌ [VoIP] Error handling CallKit ended: $e', tag: 'VoIPService');
+      ReleaseLogger.error('❌ [VoIP] Stack trace: $stackTrace', tag: 'VoIPService');
+    }
+  }
+
   // Datos de llamada pendiente para navegación
   Map<String, dynamic>? _pendingCallData;
 
@@ -472,6 +636,7 @@ class VoIPService {
     // _callEventSubscription = null;
 
     _pendingCallNotifier.close();
+    _callKitEndedNotifier.close();
 
     _isInitialized = false;
 

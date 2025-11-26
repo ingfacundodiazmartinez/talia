@@ -156,6 +156,8 @@ class MessageListWidget extends StatelessWidget {
       originalContactName: message.originalContactName,
       contactName: contactName,
       isGroupChat: false,
+      isFavorite: controller.favoriteIds.contains(message.id),  // ✅ NEW
+      onFavoriteToggled: () => controller.refreshFavorites(),  // ✅ Refresh tras toggle
       onReply: () {
         // Construir datos completos del mensaje incluyendo media
         final replyData = {

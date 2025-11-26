@@ -129,7 +129,101 @@ class CallStateCacheService {
   void clearAll() {
     final count = _cache.length;
     _cache.clear();
+    _acceptedCalls.clear();
     ReleaseLogger.log('🧹 Cleared all $count call state(s) from cache', tag: _tag);
+  }
+
+  // ✅ FIX iOS BACKGROUND: Track calls that have been accepted via VoIPService
+  // This prevents AgoraCallScreen from calling acceptCall() again when UI renders
+  final Set<String> _acceptedCalls = {};
+
+  /// Mark a call as already accepted (called from VoIPService after acceptCall succeeds)
+  void markCallAsAccepted(String callId) {
+    _acceptedCalls.add(callId);
+    ReleaseLogger.log(
+      '✅ Call $callId marked as already accepted (VoIPService)',
+      tag: _tag,
+    );
+
+    // Auto-cleanup after 5 minutes to prevent memory leak
+    Future.delayed(const Duration(minutes: 5), () {
+      _acceptedCalls.remove(callId);
+      ReleaseLogger.log(
+        '🧹 Call $callId removed from accepted cache (auto-cleanup)',
+        tag: _tag,
+      );
+    });
+  }
+
+  /// Check if a call was already accepted via VoIPService
+  /// AgoraCallScreen should check this before calling acceptCall()
+  bool isCallAlreadyAccepted(String callId) {
+    final isAccepted = _acceptedCalls.contains(callId);
+    if (isAccepted) {
+      ReleaseLogger.log(
+        '⏭️ Call $callId was already accepted via VoIPService',
+        tag: _tag,
+      );
+    }
+    return isAccepted;
+  }
+
+  /// Clear the accepted flag for a call (called when call ends)
+  void clearAcceptedCall(String callId) {
+    if (_acceptedCalls.remove(callId)) {
+      ReleaseLogger.log(
+        '🧹 Call $callId cleared from accepted cache',
+        tag: _tag,
+      );
+    }
+  }
+
+  // ✅ FIX: Track calls being ended by the app (vs. ended from CallKit native UI)
+  // When app initiates end (user taps End Call button), we mark it here.
+  // VoIPService checks this to avoid duplicate cleanup when CallKit sends onCallEnded.
+  final Set<String> _endingFromApp = {};
+
+  /// Mark a call as being ended from the app
+  /// Call this BEFORE sending endCallKit to native
+  void markCallEndingFromApp(String callId) {
+    _endingFromApp.add(callId);
+    ReleaseLogger.log(
+      '🔚 Call $callId marked as ending from app',
+      tag: _tag,
+    );
+
+    // Auto-cleanup after 30 seconds (in case something goes wrong)
+    Future.delayed(const Duration(seconds: 30), () {
+      if (_endingFromApp.remove(callId)) {
+        ReleaseLogger.log(
+          '🧹 Call $callId removed from ending-from-app cache (auto-cleanup)',
+          tag: _tag,
+        );
+      }
+    });
+  }
+
+  /// Check if a call is being ended from the app
+  /// VoIPService should check this in _handleCallKitEnded
+  bool isCallEndingFromApp(String callId) {
+    final isEnding = _endingFromApp.contains(callId);
+    if (isEnding) {
+      ReleaseLogger.log(
+        '⏭️ Call $callId is ending from app - VoIP should skip cleanup',
+        tag: _tag,
+      );
+    }
+    return isEnding;
+  }
+
+  /// Clear the ending-from-app flag
+  void clearEndingFromApp(String callId) {
+    if (_endingFromApp.remove(callId)) {
+      ReleaseLogger.log(
+        '🧹 Call $callId cleared from ending-from-app cache',
+        tag: _tag,
+      );
+    }
   }
 }
 

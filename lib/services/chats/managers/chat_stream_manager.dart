@@ -17,6 +17,7 @@ import '../../../notification_service.dart';
 import '../../contact_alias_service.dart';
 import '../../notification_deduplication_service.dart';
 import '../../app_state_service.dart';
+import '../../local_unread_count_service.dart';
 
 /// Manager para coordinación de streams de chats
 ///
@@ -572,6 +573,7 @@ class ChatStreamManager {
       final chatData = chatDoc.data() as Map<String, dynamic>;
       final senderId = chatData['lastMessageSender'] as String?;
       final messageText = chatData['lastMessage'] as String?;
+      final lastMessageType = chatData['lastMessageType'] as String?; // ✅ NEW: Tipo del mensaje
       final lastMessageId = chatData['lastMessageId'] as String?; // ✅ NUEVO: ID real del mensaje
 
       if (senderId == null) {
@@ -621,7 +623,26 @@ class ChatStreamManager {
             : null;
 
         // ⚡ MOSTRAR NOTIFICACIÓN INSTANTÁNEA
-        final displayText = messageText ?? '📷 Imagen';
+        // ✅ FIX: Usar lastMessageType para determinar el texto si lastMessage es null
+        String displayText;
+        if (messageText != null && messageText.isNotEmpty) {
+          displayText = messageText;
+        } else {
+          // Fallback basado en tipo de mensaje
+          switch (lastMessageType) {
+            case 'image':
+              displayText = '📷 Imagen';
+              break;
+            case 'video':
+              displayText = '🎥 Video';
+              break;
+            case 'audio':
+              displayText = '🎤 Audio';
+              break;
+            default:
+              displayText = 'Nuevo mensaje';
+          }
+        }
 
         ReleaseLogger.log('⚡ [ChatDocsListener] Mostrando notificación instantánea');
         ReleaseLogger.log('   - Chat: ${isGroup ? "Grupo" : "Individual"} ($chatId)');
@@ -664,6 +685,9 @@ class ChatStreamManager {
           groupName: groupName,
           senderPhotoUrl: senderPhotoUrl,
         );
+
+        // ✅ Incrementar contador de mensajes no leídos (solo si no está en el chat)
+        await LocalUnreadCountService().incrementUnreadCount(chatId);
 
         ReleaseLogger.log('✅ [ChatDocsListener] Notificación instantánea mostrada para chat $chatId');
       } finally {
@@ -787,7 +811,27 @@ class ChatStreamManager {
         }
 
         // ⚡ MOSTRAR NOTIFICACIÓN INSTANTÁNEA
-        final messageText = messageData['text'] as String? ?? '📷 Imagen';
+        // ✅ FIX: Usar type para determinar el texto si text es null
+        final rawText = messageData['text'] as String?;
+        final msgType = messageData['type'] as String?;
+        String messageText;
+        if (rawText != null && rawText.isNotEmpty) {
+          messageText = rawText;
+        } else {
+          switch (msgType) {
+            case 'image':
+              messageText = '📷 Imagen';
+              break;
+            case 'video':
+              messageText = '🎥 Video';
+              break;
+            case 'audio':
+              messageText = '🎤 Audio';
+              break;
+            default:
+              messageText = 'Nuevo mensaje';
+          }
+        }
 
         ReleaseLogger.log('⚡ [GlobalListener] Mostrando notificación instantánea para mensaje ${messageId.substring(0, 8)}...');
         ReleaseLogger.log('   - Chat: ${isGroup ? "Grupo" : "Individual"} ($chatId)');
@@ -802,6 +846,9 @@ class ChatStreamManager {
             isGroup: isGroup,
             groupName: groupName,
           );
+
+          // ✅ Incrementar contador de mensajes no leídos (solo si no está en el chat)
+          await LocalUnreadCountService().incrementUnreadCount(chatId);
 
           // ✅ FIX #7: Marcar como procesado SOLO después de mostrar exitosamente
           _processedMessageIds.add(messageId);
@@ -1122,20 +1169,43 @@ class ChatStreamManager {
             ReleaseLogger.log('⏭️ [StreamDetector] Otro listener ya mostró ${latestMessage.id.substring(0, 8)}... - SKIP');
           } else {
             // Mostrar notificación local instantánea
+            // ✅ FIX: Determinar texto de notificación basado en tipo de mensaje
+            String notificationText;
+            if (latestMessage.text != null && latestMessage.text!.isNotEmpty) {
+              notificationText = latestMessage.text!;
+            } else {
+              switch (latestMessage.type) {
+                case 'image':
+                  notificationText = '📷 Imagen';
+                  break;
+                case 'video':
+                  notificationText = '🎥 Video';
+                  break;
+                case 'audio':
+                  notificationText = '🎤 Audio';
+                  break;
+                default:
+                  notificationText = 'Nuevo mensaje';
+              }
+            }
+
             ReleaseLogger.log('⚡ [StreamDetector] Mostrando notificación instantánea...');
             ReleaseLogger.log('   - senderId=${latestMessage.senderId.substring(0, 8)}..., senderName=$senderName');
-            ReleaseLogger.log('   - messageText=${latestMessage.text ?? '📷 Imagen'}');
+            ReleaseLogger.log('   - messageText=$notificationText');
             ReleaseLogger.log('   - chatId=${chatId.substring(0, 8)}..., isGroup=$isGroup');
 
             await NotificationService().showLocalChatNotification(
               senderId: latestMessage.senderId,
               senderName: senderName,
-              messageText: latestMessage.text ?? '📷 Imagen',
+              messageText: notificationText,
               chatId: chatId,
               isGroup: isGroup,
               groupName: groupName,
               senderPhotoUrl: senderPhotoUrl,  // ✅ FIX: Pasar foto del sender
             );
+
+            // ✅ Incrementar contador de mensajes no leídos (solo si no está en el chat)
+            await LocalUnreadCountService().incrementUnreadCount(chatId);
 
             ReleaseLogger.log('✅ [StreamDetector] Notificación instantánea mostrada para ${latestMessage.id.substring(0, 8)}...');
           }

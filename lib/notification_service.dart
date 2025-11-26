@@ -1351,6 +1351,8 @@ class NotificationService {
 
             // ✅ OPTIMISTIC UI: Navigate IMMEDIATELY - don't wait for Firebase
             // This ensures WhatsApp-style instant screen appearance
+            // NOTE: AgoraCallScreen handles acceptCall internally - DO NOT call it here
+            // to prevent duplicate join channel attempts (error -17)
             if (onNavigateToCall != null) {
               ReleaseLogger.log(
                 '⚡ [OPTIMISTIC] Navegando INMEDIATAMENTE a call screen (Android CallKit)',
@@ -1358,7 +1360,7 @@ class NotificationService {
               );
               onNavigateToCall!(callId, isIncoming: true);
               ReleaseLogger.log(
-                '✅ [OPTIMISTIC] Navegación ejecutada - usuario ve pantalla inmediatamente',
+                '✅ [OPTIMISTIC] Navegación ejecutada - AgoraCallScreen manejará acceptCall',
                 tag: 'NotificationService',
               );
             } else {
@@ -1368,28 +1370,11 @@ class NotificationService {
               );
             }
 
-            // ✅ BACKGROUND: Accept call in background (non-blocking)
-            // V2 controller initialization
-            final controller = calls_v2.CallController();
-            controller.initialize();
-
-            ReleaseLogger.log(
-              '🚀 [BACKGROUND] Aceptando llamada $callId desde CallKit (V2)',
-              tag: 'NotificationService',
-            );
-            final result = await controller.acceptCall(callId);
-
-            if (result.success) {
-              ReleaseLogger.log(
-                '✅ [BACKGROUND] Llamada $callId aceptada desde CallKit (V2)',
-                tag: 'NotificationService',
-              );
-            } else {
-              ReleaseLogger.error(
-                '❌ [BACKGROUND] Error aceptando llamada: ${result.error}',
-                tag: 'NotificationService',
-              );
-            }
+            // ✅ FIX: DO NOT call acceptCall here - AgoraCallScreen handles it
+            // Calling acceptCall here AND in AgoraCallScreen causes:
+            // 1. Double join channel attempt
+            // 2. Error -17 (ERR_JOIN_CHANNEL_REJECTED)
+            // 3. Black screen for receiver
           } catch (e) {
             ReleaseLogger.error(
               '❌ Error en flujo CallKit (V2): $e',

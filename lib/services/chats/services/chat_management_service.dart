@@ -50,6 +50,29 @@ class ChatManagementService {
       // Determinar si es grupo
       final isGroup = chatId.startsWith('group_') || await _isGroupChat(chatId);
 
+      // ✅ FIX: Obtener mensajes no leídos y marcarlos como leídos
+      // Esto actualiza el campo readBy[] en cada mensaje para que el sender vea "visto"
+      try {
+        final unreadMessageIds = await _messageRepository.getUnreadMessageIds(
+          chatId: chatId,
+          isGroup: isGroup,
+        );
+
+        if (unreadMessageIds.isNotEmpty) {
+          ReleaseLogger.log('📖 Marcando ${unreadMessageIds.length} mensajes como leídos en chat $chatId');
+
+          await _messageRepository.markMessagesAsRead(
+            chatId: chatId,
+            messageIds: unreadMessageIds,
+            isGroup: isGroup,
+          );
+        }
+      } catch (e) {
+        // Si falla obtener/marcar mensajes, continuar con el unreadCounts
+        ReleaseLogger.warning('⚠️ Error marcando mensajes individuales como leídos: $e');
+      }
+
+      // Actualizar contador de no leídos del chat
       await _chatRepository.markAsRead(chatId, isGroup: isGroup);
 
       // Actualizar cache local
