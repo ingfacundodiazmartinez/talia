@@ -13,6 +13,7 @@ import '../controllers/call_controller.dart';
 import '../models/call_v2.dart';
 import '../services/agora_engine_service.dart';
 import '../services/call_state_cache_service.dart';
+import '../widgets/video_grid_widget.dart';
 import '../../services/voip_service.dart';
 import '../../utils/release_logger.dart';
 
@@ -88,6 +89,7 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
   // Participants
   final Set<int> _remoteUsers = {};
   int? _localUid;
+  int? _pinnedUid; // For pinning a specific video in group calls
 
   // Stream subscriptions
   StreamSubscription<CallV2?>? _callSubscription;
@@ -575,6 +577,21 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
     // No-op: Controls always visible
   }
 
+  /// Manejar tap en participante para pin/unpin video
+  void _handleParticipantTap(int uid) {
+    setState(() {
+      // Si ya está pinneado, desanclarlo
+      if (_pinnedUid == uid) {
+        _pinnedUid = null;
+      } else {
+        // Si hay más de 1 usuario remoto, permitir pinnear
+        if (_remoteUsers.length > 1) {
+          _pinnedUid = uid;
+        }
+      }
+    });
+  }
+
   Future<void> _toggleAudio() async {
     await _callController.toggleAudio();
     setState(() {
@@ -1022,48 +1039,15 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
         onTap: _toggleControls,
         child: Stack(
           children: [
-            // Main video view (remote user or local if alone)
-            if (_remoteUsers.isNotEmpty)
-              _buildRemoteView(_remoteUsers.first)
-            else
-              _buildLocalView(),
-
-            // Local preview (picture-in-picture)
-            if (_remoteUsers.isNotEmpty)
-              Positioned(
-                top: MediaQuery.of(context).padding.top + 80,
-                right: 20,
-                width: 100,
-                height: 150,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(10),
-                  child: _buildLocalView(),
-                ),
-              ),
-
-            // Additional remote users (if group call)
-            if (_remoteUsers.length > 1)
-              Positioned(
-                bottom: 100,
-                left: 0,
-                right: 0,
-                height: 120,
-                child: ListView.builder(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: _remoteUsers.length - 1,
-                  itemBuilder: (context, index) {
-                    final uid = _remoteUsers.toList()[index + 1];
-                    return Container(
-                      width: 100,
-                      margin: const EdgeInsets.symmetric(horizontal: 5),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(10),
-                        child: _buildRemoteView(uid),
-                      ),
-                    );
-                  },
-                ),
-              ),
+            // ✅ Video Grid Widget - Maneja layouts para 1-9+ participantes
+            VideoGridWidget(
+              remoteUids: _remoteUsers.toList(),
+              remoteViewBuilder: _buildRemoteView,
+              localView: _buildLocalView(),
+              showLocalPip: _remoteUsers.isNotEmpty,
+              pinnedUid: _pinnedUid,
+              onParticipantTap: _handleParticipantTap,
+            ),
 
             // Call controls
             Positioned(
