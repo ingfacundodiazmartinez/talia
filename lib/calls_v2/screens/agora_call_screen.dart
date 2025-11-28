@@ -9,11 +9,15 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:proximity_sensor/proximity_sensor.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../controllers/call_controller.dart';
+import '../controllers/participant_selector_controller.dart'; // Para SelectableContact
 import '../models/call_v2.dart';
 import '../services/agora_engine_service.dart';
 import '../services/call_state_cache_service.dart';
 import '../widgets/video_grid_widget.dart';
+import '../widgets/add_participant_sheet.dart';
+import '../services/add_participant_service.dart';
 import '../../services/voip_service.dart';
 import '../../utils/release_logger.dart';
 
@@ -89,7 +93,10 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
   // Participants
   final Set<int> _remoteUsers = {};
   int? _localUid;
-  int? _pinnedUid; // For pinning a specific video in group calls
+  String? _pinnedParticipantId; // For pinning a specific video in group calls
+
+  // ✅ Optimistic UI: Participants being added (shown immediately before Firestore updates)
+  final Map<String, GridParticipant> _optimisticPendingParticipants = {};
 
   // Stream subscriptions
   StreamSubscription<CallV2?>? _callSubscription;
@@ -283,8 +290,12 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
               tag: _tag,
             );
 
-            // NOTE: We do NOT call CallKitSyncService().endCallKitIfExists() here
-            // It can cause native iOS crash. CallKit auto-cleans when audio session ends.
+            // ✅ FIX: End CallKit UI when call ends remotely
+            // Without this, iOS shows the call as active in the VoIP notification
+            final callIdToEnd = widget.callId;
+            if (callIdToEnd != null) {
+              VoIPService().notifyCallEnded(callIdToEnd);
+            }
 
             if (mounted) {
               ReleaseLogger.log('📞 [AgoraCallScreen] Popping screen...', tag: _tag);
@@ -295,15 +306,17 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
             }
             return;
           }
-          // Update local UID when call data updates
+          // Update UI when call data updates (participants, local UID, etc.)
           if (mounted && call != null) {
             final newUid = _callController.currentUserAgoraUid;
-            if (newUid != _localUid) {
-              setState(() {
+            // ✅ FIX: Always setState to update UI when call changes
+            // This ensures pending participants (ringing) appear immediately
+            setState(() {
+              if (newUid != _localUid) {
                 _localUid = newUid;
-              });
-              ReleaseLogger.log('Local UID updated: $_localUid', tag: _tag);
-            }
+                ReleaseLogger.log('Local UID updated: $_localUid', tag: _tag);
+              }
+            });
           }
         },
       );
@@ -315,15 +328,20 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
       final userParticipant = callResult.data?.participants[currentUserId];
       final isAlreadyJoined = userParticipant?.status == CallStatus.joined;
 
-      // ✅ FIX: For incoming VIDEO calls, initialize engine and start camera preview early
+      // ✅ FIX: For incoming VIDEO calls, initialize engine and start camera preview
       // This gives WhatsApp-style instant camera feedback for the receiver too
       final isVideoCall = callResult.data?.isVideo ?? false;
-      if (isVideoCall && _agoraEngine.engine == null) {
-        ReleaseLogger.log('📹 Initializing engine for incoming video call preview', tag: _tag);
-        await _agoraEngine.initialize();
-        _setupAgoraEventHandlers(); // Register handlers now that engine exists
+      if (isVideoCall) {
+        // Initialize engine if not already done
+        if (_agoraEngine.engine == null) {
+          ReleaseLogger.log('📹 Initializing engine for incoming video call preview', tag: _tag);
+          await _agoraEngine.initialize();
+        }
+        _setupAgoraEventHandlers(); // Always register handlers for this screen
 
-        // Start camera preview in background
+        // ✅ FIX: ALWAYS enable video and start camera for video calls
+        // Even if engine was initialized by VoIPService in background (without video)
+        ReleaseLogger.log('📹 Enabling video for incoming video call', tag: _tag);
         _agoraEngine.engine!.enableVideo().then((_) {
           return _agoraEngine.engine!.startPreview();
         }).then((_) {
@@ -365,14 +383,79 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
           tag: _tag,
         );
 
-        // ✅ FIX: Ensure engine is initialized and handlers registered for CallKit flow
+        // ✅ FIX: Ensure engine is initialized for CallKit flow
         if (_agoraEngine.engine == null) {
           await _agoraEngine.initialize();
-          _setupAgoraEventHandlers();
+        }
+        // ✅ FIX: ALWAYS register handlers - the previous instance in VoIPService used different handlers
+        _setupAgoraEventHandlers();
+
+        // ✅ FIX SIMPLIFIED VoIP FLOW: Join Agora channel if not already in
+        // VoIPService now only accepts in Firestore (acceptCallWithoutJoining)
+        // AgoraCallScreen is responsible for joining Agora
+        final call = callResult.data;
+        if (!_agoraEngine.isInChannel && call != null && currentUserId != null) {
+          final myParticipant = call.participants[currentUserId];
+          if (myParticipant?.token != null && myParticipant?.agoraUid != null) {
+            ReleaseLogger.log(
+              '📹 [VoIP Flow] Joining Agora channel: ${call.channelName} with UID: ${myParticipant!.agoraUid}',
+              tag: _tag,
+            );
+            final joinResult = await _callController.joinCall(
+              channelName: call.channelName,
+              token: myParticipant.token!,
+              uid: myParticipant.agoraUid!,
+              isVideo: call.isVideo,
+            );
+            if (!joinResult.success) {
+              ReleaseLogger.error(
+                '❌ [VoIP Flow] Failed to join Agora: ${joinResult.error}',
+                tag: _tag,
+              );
+              _showError(joinResult.error ?? 'Failed to join call');
+              Navigator.of(context, rootNavigator: true).pop();
+              return;
+            }
+            ReleaseLogger.log('✅ [VoIP Flow] Successfully joined Agora channel', tag: _tag);
+          } else {
+            ReleaseLogger.error(
+              '❌ [VoIP Flow] Missing credentials - token: ${myParticipant?.token != null}, agoraUid: ${myParticipant?.agoraUid}',
+              tag: _tag,
+            );
+          }
+        } else {
+          ReleaseLogger.log(
+            '📹 Engine state - isInChannel: ${_agoraEngine.isInChannel} (already in channel, skipping join)',
+            tag: _tag,
+          );
         }
 
         _localUid = _callController.currentUserAgoraUid;
         ReleaseLogger.log('Local UID from existing call data: $_localUid', tag: _tag);
+
+        // ✅ FIX VIDEO FROM LOCK SCREEN: Populate _remoteUsers from Firestore
+        // When we join via VoIPService (background), the onUserJoined events already fired
+        // before this screen existed. We need to get remote users from call data.
+        // NOTE: This is still needed as a fallback in case we miss onUserJoined events
+        if (call != null) {
+          for (final entry in call.participants.entries) {
+            final odId = entry.key;
+            final participant = entry.value;
+
+            // Skip local user
+            if (odId == currentUserId) continue;
+
+            // Add users who are already joined and have an Agora UID
+            if (participant.status == CallStatus.joined && participant.agoraUid != null) {
+              _remoteUsers.add(participant.agoraUid!);
+              ReleaseLogger.log(
+                '📹 Added existing remote user from Firestore: $odId (agoraUid: ${participant.agoraUid})',
+                tag: _tag,
+              );
+            }
+          }
+          ReleaseLogger.log('📹 Remote users after Firestore sync: $_remoteUsers', tag: _tag);
+        }
       } else {
         // For caller, get UID from controller (already available)
         _localUid = _callController.currentUserAgoraUid;
@@ -460,8 +543,11 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
               tag: _tag,
             );
 
-            // NOTE: We do NOT call CallKitSyncService().endCallKitIfExists() here
-            // It can cause native iOS crash. CallKit auto-cleans when audio session ends.
+            // ✅ FIX: End CallKit UI when call ends remotely (create mode)
+            // Without this, iOS shows the call as active in the VoIP notification
+            if (_actualCallId != null) {
+              VoIPService().notifyCallEnded(_actualCallId!);
+            }
 
             if (mounted) {
               ReleaseLogger.log('📞 [AgoraCallScreen] Popping screen...', tag: _tag);
@@ -470,13 +556,16 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
             return;
           }
 
+          // ✅ FIX: Always setState to update UI when call changes
+          // This ensures pending participants (ringing) appear immediately
           if (mounted && call != null) {
             final newUid = _callController.currentUserAgoraUid;
-            if (newUid != _localUid) {
-              setState(() {
+            setState(() {
+              if (newUid != _localUid) {
                 _localUid = newUid;
-              });
-            }
+                ReleaseLogger.log('Local UID updated: $_localUid', tag: _tag);
+              }
+            });
           }
         },
       );
@@ -578,18 +667,252 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
   }
 
   /// Manejar tap en participante para pin/unpin video
-  void _handleParticipantTap(int uid) {
+  void _handleParticipantTap(GridParticipant participant) {
     setState(() {
       // Si ya está pinneado, desanclarlo
-      if (_pinnedUid == uid) {
-        _pinnedUid = null;
+      if (_pinnedParticipantId == participant.odId) {
+        _pinnedParticipantId = null;
       } else {
-        // Si hay más de 1 usuario remoto, permitir pinnear
-        if (_remoteUsers.length > 1) {
-          _pinnedUid = uid;
+        // Permitir pinnear si hay más de 2 participantes totales
+        final participants = _buildGridParticipants();
+        if (participants.length > 2) {
+          _pinnedParticipantId = participant.odId;
         }
       }
     });
+  }
+
+  /// Construir la lista de participantes para el grid
+  List<GridParticipant> _buildGridParticipants() {
+    final List<GridParticipant> participants = [];
+    final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+    final call = _callController.currentCall;
+
+    // 1. Agregar usuario local
+    if (currentUserId != null) {
+      participants.add(GridParticipant(
+        odId: currentUserId,
+        agoraUid: _localUid,
+        displayName: 'Tú',
+        state: ParticipantState.connected,
+        isLocal: true,
+      ));
+    }
+
+    // 2. Agregar participantes remotos conectados (tienen Agora UID en _remoteUsers)
+    for (final agoraUid in _remoteUsers) {
+      // Buscar el userId correspondiente a este agoraUid
+      String odId = '';
+      String displayName = 'Usuario';
+      String? photoUrl;
+
+      if (call != null) {
+        for (final entry in call.participants.entries) {
+          if (entry.value.agoraUid == agoraUid) {
+            odId = entry.key;
+            displayName = entry.value.displayName ?? 'Usuario';
+            photoUrl = entry.value.photoUrl;
+            break;
+          }
+        }
+      }
+
+      participants.add(GridParticipant(
+        odId: odId,
+        agoraUid: agoraUid,
+        displayName: displayName,
+        photoUrl: photoUrl,
+        state: ParticipantState.connected,
+        isLocal: false,
+      ));
+    }
+
+    // 3. Agregar participantes pendientes (ringing) que aún no están conectados
+    // Esto incluye tanto los de Firestore como los optimísticos
+    final Set<String> addedPendingIds = {};
+
+    if (call != null) {
+      for (final entry in call.participants.entries) {
+        final userId = entry.key;
+        final participant = entry.value;
+
+        // Saltar si es el usuario local
+        if (userId == currentUserId) continue;
+
+        // Saltar si ya está conectado (ya está en _remoteUsers)
+        final isAlreadyConnected = participants.any((p) => p.odId == userId && p.state == ParticipantState.connected);
+        if (isAlreadyConnected) {
+          // ✅ Limpiar de optimísticos si ya está conectado en Firestore
+          _optimisticPendingParticipants.remove(userId);
+          continue;
+        }
+
+        // Solo agregar si está en estado "ringing"
+        if (participant.status == CallStatus.ringing) {
+          participants.add(GridParticipant(
+            odId: userId,
+            agoraUid: participant.agoraUid,
+            displayName: participant.displayName ?? 'Usuario',
+            photoUrl: participant.photoUrl,
+            state: ParticipantState.ringing,
+            isLocal: false,
+          ));
+          addedPendingIds.add(userId);
+          // ✅ Limpiar de optimísticos si ya está en Firestore
+          _optimisticPendingParticipants.remove(userId);
+        }
+      }
+    }
+
+    // 4. Agregar participantes optimísticos que aún no están en Firestore
+    for (final entry in _optimisticPendingParticipants.entries) {
+      final userId = entry.key;
+      // Saltar si ya está en la lista (ya vino de Firestore)
+      if (addedPendingIds.contains(userId)) continue;
+      // Saltar si ya está conectado
+      final isAlreadyConnected = participants.any((p) => p.odId == userId && p.state == ParticipantState.connected);
+      if (isAlreadyConnected) continue;
+
+      participants.add(entry.value);
+    }
+
+    return participants;
+  }
+
+  /// Builder para crear el widget de cada participante
+  Widget _buildParticipantView(GridParticipant participant) {
+    // Si está llamando (ringing), mostrar tile pendiente
+    if (participant.state == ParticipantState.ringing) {
+      return PendingParticipantTile(participant: participant);
+    }
+
+    // Si es local, mostrar vista local
+    if (participant.isLocal) {
+      return _buildLocalView();
+    }
+
+    // Si está conectado y tiene agoraUid, mostrar video remoto
+    if (participant.agoraUid != null) {
+      return _buildRemoteView(participant.agoraUid!);
+    }
+
+    // Fallback: mostrar placeholder
+    return Container(
+      color: Colors.grey[900],
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircleAvatar(
+              radius: 30,
+              backgroundColor: Colors.white24,
+              child: Text(
+                participant.displayName.isNotEmpty
+                    ? participant.displayName[0].toUpperCase()
+                    : '?',
+                style: const TextStyle(color: Colors.white, fontSize: 24),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              participant.displayName,
+              style: const TextStyle(color: Colors.white),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Mostrar bottom sheet para agregar participante
+  void _showAddParticipantSheet() async {
+    final callId = _actualCallId ?? widget.callId;
+    if (callId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Error: No se puede agregar participantes')),
+      );
+      return;
+    }
+
+    // Obtener IDs de participantes actuales para filtrarlos
+    final currentParticipantIds = _callController.currentCall?.participants.keys.toSet() ?? <String>{};
+    // También excluir participantes pendientes optimísticos
+    final allExcludedIds = {...currentParticipantIds, ..._optimisticPendingParticipants.keys};
+
+    // Mostrar selector de participantes
+    final result = await showModalBottomSheet<SelectableContact>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => DraggableScrollableSheet(
+        initialChildSize: 0.7,
+        minChildSize: 0.5,
+        maxChildSize: 0.9,
+        builder: (sheetContext, scrollController) => Container(
+          decoration: BoxDecoration(
+            color: Theme.of(sheetContext).colorScheme.surface, // Adaptable a tema
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: AddParticipantSheet(
+            scrollController: scrollController,
+            excludeIds: allExcludedIds,
+            onSelect: (contact) => Navigator.pop(sheetContext, contact),
+          ),
+        ),
+      ),
+    );
+
+    if (result != null && mounted) {
+      // ✅ OPTIMISTIC UI: Agregar participante inmediatamente a la UI
+      _addOptimisticParticipant(result);
+      // Luego llamar a la Cloud Function en background
+      await _addParticipantToCall(callId, result.id);
+    }
+  }
+
+  /// Agregar participante optimísticamente a la UI (antes de que Firestore se actualice)
+  void _addOptimisticParticipant(SelectableContact contact) {
+    setState(() {
+      _optimisticPendingParticipants[contact.id] = GridParticipant(
+        odId: contact.id,
+        agoraUid: null, // Aún no tiene UID de Agora
+        displayName: contact.name,
+        photoUrl: contact.photoUrl,
+        state: ParticipantState.ringing,
+        isLocal: false,
+      );
+    });
+    ReleaseLogger.log(
+      '✅ [AgoraCallScreen] Added optimistic participant: ${contact.name} (${contact.id})',
+      tag: _tag,
+    );
+  }
+
+  /// Agregar participante a la llamada
+  Future<void> _addParticipantToCall(String callId, String participantId) async {
+    final service = AddParticipantService();
+    final response = await service.execute(
+      callId: callId,
+      newParticipantId: participantId,
+    );
+
+    if (!mounted) return;
+
+    if (response.success) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Invitando a ${response.data?.displayName ?? "participante"}...'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(response.error ?? 'Error al agregar participante'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   Future<void> _toggleAudio() async {
@@ -653,10 +976,22 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
       ReleaseLogger.log('📞 [AgoraCallScreen] Marked call as ending from app: $callIdToEnd', tag: _tag);
     }
 
-    // ✅ Step 1: End Agora channel and update Firestore FIRST
-    ReleaseLogger.log('📞 [AgoraCallScreen] Proceeding with Agora cleanup...', tag: _tag);
-    await _callController.endCall();
-    ReleaseLogger.log('✅ [AgoraCallScreen] Agora cleanup completed', tag: _tag);
+    // ✅ FIX: Check if it's a group call with more than 2 participants remaining
+    // Only leave (not end) if there will still be 2+ people after I leave
+    // If only 2 people (me + 1 other), ending should terminate the call like 1:1
+    final isGroupCall = _callController.currentCall?.isGroup ?? false;
+    final remainingRemoteParticipants = _remoteUsers.length;
+
+    if (isGroupCall && remainingRemoteParticipants > 1) {
+      // Group call with 3+ people: Only leave channel, call continues for others
+      ReleaseLogger.log('📞 [AgoraCallScreen] Group call with ${remainingRemoteParticipants + 1} people - leaving channel only (not ending for others)', tag: _tag);
+      await _callController.leaveCall();
+    } else {
+      // 1:1 call OR group call with only 2 remaining: End the whole call
+      ReleaseLogger.log('📞 [AgoraCallScreen] ${isGroupCall ? "Group call down to 2 people" : "1:1 call"} - ending call for all', tag: _tag);
+      await _callController.endCall();
+    }
+    ReleaseLogger.log('✅ [AgoraCallScreen] Call cleanup completed', tag: _tag);
 
     // ✅ Step 2: End CallKit UI AFTER Agora cleanup
     // Using native VoIP channel instead of FlutterCallkitIncoming to avoid crashes
@@ -797,6 +1132,14 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
               onPressed: _toggleSpeaker,
               backgroundColor: Colors.white24,
             ),
+
+            // Add participant button (only if not at max)
+            if (_remoteUsers.length < 7) // Max 8 total (7 remote + local)
+              _buildControlButton(
+                icon: Icons.person_add,
+                onPressed: _showAddParticipantSheet,
+                backgroundColor: Colors.white24,
+              ),
           ],
         ),
       ),
@@ -1033,6 +1376,8 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
     }
 
     // Video call UI
+    final gridParticipants = _buildGridParticipants();
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: GestureDetector(
@@ -1040,12 +1385,11 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
         child: Stack(
           children: [
             // ✅ Video Grid Widget - Maneja layouts para 1-9+ participantes
+            // Incluye participantes conectados Y pendientes (ringing)
             VideoGridWidget(
-              remoteUids: _remoteUsers.toList(),
-              remoteViewBuilder: _buildRemoteView,
-              localView: _buildLocalView(),
-              showLocalPip: _remoteUsers.isNotEmpty,
-              pinnedUid: _pinnedUid,
+              participants: gridParticipants,
+              participantViewBuilder: _buildParticipantView,
+              pinnedParticipantId: _pinnedParticipantId,
               onParticipantTap: _handleParticipantTap,
             ),
 

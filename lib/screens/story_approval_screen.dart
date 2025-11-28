@@ -19,6 +19,10 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen> with SingleTi
   final StoryService _storyService = StoryService();
   late TabController _tabController;
 
+  // Track which stories are currently being approved/rejected
+  final Set<String> _loadingApprovalIds = {};
+  final Set<String> _loadingRejectIds = {};
+
   @override
   void initState() {
     super.initState();
@@ -556,9 +560,20 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen> with SingleTi
                 if (status == 'pending' || status == 'approved')
                   Expanded(
                     child: OutlinedButton.icon(
-                      onPressed: () => _showRejectDialog(story),
-                      icon: Icon(Icons.close, size: 18),
-                      label: Text('Rechazar'),
+                      onPressed: _loadingRejectIds.contains(story.id)
+                          ? null
+                          : () => _showRejectDialog(story),
+                      icon: _loadingRejectIds.contains(story.id)
+                          ? SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(Colors.red),
+                              ),
+                            )
+                          : Icon(Icons.close, size: 18),
+                      label: Text(_loadingRejectIds.contains(story.id) ? 'Rechazando...' : 'Rechazar'),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: Colors.red,
                         side: BorderSide(color: Colors.red),
@@ -575,9 +590,20 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen> with SingleTi
                 if (status == 'pending' || status == 'rejected')
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed: () => _approveStory(story),
-                      icon: Icon(Icons.check, size: 18),
-                      label: Text('Aprobar'),
+                      onPressed: _loadingApprovalIds.contains(story.id)
+                          ? null
+                          : () => _approveStory(story),
+                      icon: _loadingApprovalIds.contains(story.id)
+                          ? SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                              ),
+                            )
+                          : Icon(Icons.check, size: 18),
+                      label: Text(_loadingApprovalIds.contains(story.id) ? 'Aprobando...' : 'Aprobar'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.green,
                         foregroundColor: Colors.white,
@@ -619,6 +645,11 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen> with SingleTi
   }
 
   Future<void> _approveStory(Story story) async {
+    // Set loading state
+    setState(() {
+      _loadingApprovalIds.add(story.id);
+    });
+
     try {
       await _storyService.approveStory(story.id);
       // Actualizar badge del ícono de la app
@@ -633,6 +664,13 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen> with SingleTi
             duration: Duration(seconds: 3),
           ),
         );
+      }
+    } finally {
+      // Clear loading state
+      if (mounted) {
+        setState(() {
+          _loadingApprovalIds.remove(story.id);
+        });
       }
     }
   }
@@ -701,6 +739,11 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen> with SingleTi
   }
 
   Future<void> _rejectStory(Story story, String reason) async {
+    // Set loading state
+    setState(() {
+      _loadingRejectIds.add(story.id);
+    });
+
     try {
       await _storyService.rejectStory(
         story.id,
@@ -719,6 +762,13 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen> with SingleTi
             backgroundColor: Colors.red,
           ),
         );
+      }
+    } finally {
+      // Clear loading state
+      if (mounted) {
+        setState(() {
+          _loadingRejectIds.remove(story.id);
+        });
       }
     }
   }

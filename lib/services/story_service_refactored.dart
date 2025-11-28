@@ -134,13 +134,7 @@ class StoryService {
 
   /// Obtener historias rechazadas para padre
   Stream<List<Story>> getRejectedStoriesForParent() {
-    // Delegar al orchestrator (método estará disponible cuando se implemente)
-    try {
-      return _orchestrator.getPendingStoriesForParent()
-          .map((stories) => stories.where((s) => s.status == StoryStatus.rejected).toList());
-    } catch (e) {
-      return Stream.value([]);
-    }
+    return _orchestrator.getRejectedStoriesForParent();
   }
 
   /// Obtener historias rechazadas para padre por hijo específico

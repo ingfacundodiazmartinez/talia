@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import '../../controllers/child_main_shell_controller.dart';
+import '../../notification_service.dart';
+import '../../utils/release_logger.dart';
 import 'chats/child_chats_screen.dart';
 import 'contacts/child_contacts_screen.dart';
 import 'profile/child_profile_screen.dart';
@@ -90,6 +92,9 @@ class _ChildMainShellState extends State<ChildMainShell> {
     // Delegar toda la lógica al controller
     await _mainController.handleChatNotificationTap(data);
 
+    // ✅ FIX: Verificar si el chat ya está abierto para evitar navegación duplicada
+    final currentOpenChatId = NotificationService().currentChatId;
+
     // Primero cambiar al tab de chats
     setState(() => _selectedIndex = 0);
 
@@ -102,6 +107,12 @@ class _ChildMainShellState extends State<ChildMainShell> {
       // Notificación de mensaje grupal
       final effectiveGroupId = groupId ?? chatId!;
       final groupName = data['groupName'] as String? ?? 'Grupo';
+
+      // ✅ FIX: Si el grupo ya está abierto, no navegar de nuevo
+      if (currentOpenChatId == effectiveGroupId) {
+        ReleaseLogger.log('⚠️ [ChildMainShell] Grupo $effectiveGroupId ya está abierto - SALTANDO navegación duplicada', tag: 'ChildMainShell');
+        return;
+      }
 
       if (mounted) {
         await Navigator.of(context).push(
@@ -117,6 +128,12 @@ class _ChildMainShellState extends State<ChildMainShell> {
       // Notificación de mensaje 1-on-1
       final senderId = data['senderId'] as String?;
       if (senderId != null) {
+        // ✅ FIX: Si el chat ya está abierto, no navegar de nuevo
+        if (currentOpenChatId == chatId) {
+          ReleaseLogger.log('⚠️ [ChildMainShell] Chat $chatId ya está abierto - SALTANDO navegación duplicada', tag: 'ChildMainShell');
+          return;
+        }
+
         if (mounted) {
           await Navigator.of(context).push(
             MaterialPageRoute(

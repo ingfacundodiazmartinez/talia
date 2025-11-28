@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../calls_v2/controllers/call_controller.dart' as calls_v2;
 import '../services/emergency_service.dart';
+import 'emergency_connecting_screen.dart';
 
 class EmergencyButton extends StatefulWidget {
   final VoidCallback? onEmergencyActivated;
@@ -98,67 +98,29 @@ class _EmergencyButtonState extends State<EmergencyButton>
     final confirmed = await _showConfirmationDialog();
 
     if (confirmed) {
-      // ✅ NUEVO: Activar emergencia PRIMERO para obtener el ID real
+      // ✅ TRULY OPTIMISTIC: Navegar a pantalla de conexión INMEDIATAMENTE
+      // La Cloud Function se ejecuta en background mientras el usuario ve la UI
       if (mounted) {
-        // Mostrar loading mientras se activa
+        widget.onEmergencyActivated?.call();
+
+        // Aplicar cooldown optimísticamente
         setState(() {
-          _isActivating = true;
+          _isInCooldown = true;
         });
 
-        // Activar emergencia y esperar resultado
-        final result = await _emergencyService.activateEmergency(context: context);
-
-        if (result != null && result['success'] == true) {
-          widget.onEmergencyActivated?.call();
-
-          final isReactivation = result['isReactivation'] ?? false;
-          final emergencyId = result['emergencyId'];
-          final channelName = result['channelName'];
-
-          if (isReactivation) {
-            print('📞 Emergencia reactivada: $emergencyId');
-          } else {
-            print('✅ Nueva emergencia creada: $emergencyId');
-
-            // Solo aplicar cooldown si es una NUEVA emergencia
-            if (mounted) {
-              setState(() {
-                _isInCooldown = true;
-              });
-
-              // Programar verificación de cooldown
-              Future.delayed(Duration(minutes: 2), () {
-                if (mounted) {
-                  _checkCooldownStatus();
-                }
-              });
-            }
-          }
-
-          // Ahora SÍ abrir la videollamada con el ID real
+        // Programar verificación de cooldown
+        Future.delayed(Duration(minutes: 2), () {
           if (mounted) {
-            await _joinEmergencyCall(
-              emergencyId: emergencyId,
-              channelName: channelName,
-            );
+            _checkCooldownStatus();
           }
-        } else {
-          print('❌ Error activando emergencia');
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Error al activar emergencia. Intenta de nuevo.'),
-                backgroundColor: Colors.red,
-              ),
-            );
-          }
-        }
+        });
 
-        if (mounted) {
-          setState(() {
-            _isActivating = false;
-          });
-        }
+        // ✅ NAVEGAR INMEDIATAMENTE - La pantalla maneja la Cloud Function en background
+        await Navigator.of(context, rootNavigator: true).push(
+          MaterialPageRoute(
+            builder: (context) => EmergencyConnectingScreen(),
+          ),
+        );
       }
     }
 
@@ -170,37 +132,6 @@ class _EmergencyButtonState extends State<EmergencyButton>
         _isPressed = false;
         _isActivating = false;
       });
-    }
-  }
-
-  Future<void> _joinEmergencyCall({
-    required String emergencyId,
-    required String channelName,
-  }) async {
-    try {
-      print('📞 Uniéndose a llamada de emergencia...');
-
-      // TODO: Implement emergency call with V2 architecture
-      // The legacy CallController.startCall static method was removed
-      // Need to implement emergency call flow with calls_v2.CallController
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Llamada de emergencia en desarrollo'),
-            backgroundColor: Colors.orange,
-          ),
-        );
-      }
-    } catch (e) {
-      print('❌ Error uniéndose a llamada de emergencia: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al iniciar videollamada de emergencia'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
     }
   }
 

@@ -8,6 +8,7 @@ import 'profile/parent_profile_screen.dart';
 import 'group_invitations_screen.dart';
 import '../chat_detail_screen.dart';
 import '../group_chat_screen.dart';
+import '../story_approval_screen.dart';
 import '../../controllers/parent_main_shell_controller.dart';
 import '../../utils/release_logger.dart';
 import '../../notification_service.dart';
@@ -125,8 +126,9 @@ class _ParentMainShellState extends State<ParentMainShell> {
     // ✅ CORRECTO: Solo inicializar controller
     _controller = ParentMainShellController();
 
-    // Configurar callback para navegación desde notificaciones
+    // Configurar callbacks para navegación desde notificaciones
     _controller.onChatNotificationTap = _handleChatNotificationTap;
+    _controller.onStoryApprovalNotificationTap = _handleStoryApprovalNotificationTap;
 
     _controller.initialize();
 
@@ -157,6 +159,9 @@ class _ParentMainShellState extends State<ParentMainShell> {
       final chatId = data['chatId'] as String?;
       final isGroup = data['isGroup'] == true || data['isGroup'] == 'true';
 
+      // ✅ FIX: Verificar si el chat ya está abierto para evitar navegación duplicada
+      final currentOpenChatId = NotificationService().currentChatId;
+
       // Primero cambiar al tab de chats
       setState(() => _selectedIndex = 1);
 
@@ -166,6 +171,13 @@ class _ParentMainShellState extends State<ParentMainShell> {
         // Notificación de mensaje grupal
         final effectiveGroupId = groupId ?? chatId!;
         final groupName = data['groupName'] as String? ?? 'Grupo';
+
+        // ✅ FIX: Si el grupo ya está abierto, no navegar de nuevo
+        if (currentOpenChatId == effectiveGroupId) {
+          ReleaseLogger.log('⚠️ [ParentMainShell] Grupo $effectiveGroupId ya está abierto - SALTANDO navegación duplicada', tag: 'ParentMainShell');
+          return;
+        }
+
         ReleaseLogger.log('Navigating to group chat: $groupName (groupId: $effectiveGroupId)', tag: 'ParentMainShell');
 
         await Navigator.of(context).push(
@@ -185,12 +197,17 @@ class _ParentMainShellState extends State<ParentMainShell> {
           return;
         }
 
-        ReleaseLogger.log('Fetching contact info for senderId: $senderId', tag: 'ParentMainShell');
-
         // ✅ CORRECTO: Usar controller para obtener datos
         final contactInfo = await _controller.getContactInfo(senderId);
         final correctChatId = _controller.getChatId(senderId);
 
+        // ✅ FIX: Si el chat ya está abierto, no navegar de nuevo
+        if (currentOpenChatId == correctChatId) {
+          ReleaseLogger.log('⚠️ [ParentMainShell] Chat $correctChatId ya está abierto - SALTANDO navegación duplicada', tag: 'ParentMainShell');
+          return;
+        }
+
+        ReleaseLogger.log('Fetching contact info for senderId: $senderId', tag: 'ParentMainShell');
         ReleaseLogger.log('Navigating to 1-on-1 chat with ${contactInfo.name}', tag: 'ParentMainShell');
         ReleaseLogger.log('Notification chatId: $chatId', tag: 'ParentMainShell');
         ReleaseLogger.log('Correct chatId: $correctChatId', tag: 'ParentMainShell');
@@ -209,6 +226,28 @@ class _ParentMainShellState extends State<ParentMainShell> {
       }
     } catch (e) {
       ReleaseLogger.error('Error handling chat notification tap: $e', tag: 'ParentMainShell');
+    }
+  }
+
+  /// Manejar tap en notificación de aprobación de historia
+  Future<void> _handleStoryApprovalNotificationTap(Map<String, dynamic> data) async {
+    try {
+      ReleaseLogger.log('Navigating to story approval screen from notification', tag: 'ParentMainShell');
+
+      // Extraer childId de la notificación si existe
+      final notifData = data['data'] as Map<String, dynamic>?;
+      final childId = notifData?['childId'] as String?;
+
+      // Navegar a la pantalla de aprobación de historias
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => StoryApprovalScreen(
+            childId: childId, // Filtrar por hijo específico si viene en la notificación
+          ),
+        ),
+      );
+    } catch (e) {
+      ReleaseLogger.error('Error handling story approval notification tap: $e', tag: 'ParentMainShell');
     }
   }
 

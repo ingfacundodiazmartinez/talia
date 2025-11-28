@@ -11,7 +11,6 @@ import '../../../models/chat_message.dart';
 import '../../../utils/release_logger.dart';
 import '../chat_orchestrator.dart';
 import '../../unread_messages_service.dart';
-import '../../read_receipts_service.dart';
 import '../../message_cache_service.dart';
 import '../../../notification_service.dart';
 import '../../contact_alias_service.dart';
@@ -670,6 +669,7 @@ class ChatStreamManager {
         }
 
         // ✅ ATOMIC: Try to acquire the right to show this notification
+        // El messageId ya está marcado en cache si el usuario tocó la notificación push (onMessageOpenedApp)
         // Only ONE listener (ChatDocsListener OR StreamDetector) will succeed
         if (!_deduplicationService.tryAcquire(lastMessageId)) {
           ReleaseLogger.log('⏭️ [ChatDocsListener] Otro listener ya mostró $lastMessageId - SKIP');
@@ -1084,20 +1084,16 @@ class ChatStreamManager {
       final currentChatId = await _getCurrentActiveChatId();
 
       if (currentChatId != null && currentChatId == chatId) {
-        ReleaseLogger.log('📱 [ChatStreamManager] Usuario está en chat $chatId - marcando como leído automáticamente (NO SE MOSTRARÁ NOTIFICACIÓN)');
+        ReleaseLogger.log('📱 [ChatStreamManager] Usuario está en chat $chatId - el ChatController se encarga de marcar como leído');
 
-        // Marcar mensajes como leídos automáticamente
-        await _markMessagesAsSeenIfActive(chatId, isGroup);
-
-        // ✅ FIX: Reset rate limit timer to allow immediate processing of updated readBy[] snapshot
-        // This ensures the UI updates immediately after messages are marked as read
+        // ✅ SIMPLIFICADO: El ChatController maneja los read receipts
+        // Aquí solo reseteamos el rate limit y actualizamos el contador
         _lastUpdateTimes.remove(chatId);
-        ReleaseLogger.log('🔄 [ChatStreamManager] Rate limit reset para permitir actualización de read receipts');
 
         // Poner contador en 0 automáticamente
         await _updateUnreadCountInFirestore(chatId, currentUserId, 0, isGroup: isGroup);
         await _unreadService.updateBadgeCount();
-        return; // No necesitamos calcular contador
+        return; // No necesitamos calcular contador ni mostrar notificación
       }
 
       // ✅ PASO 2: Contar cuántos de los mensajes recibidos NO están leídos
@@ -1242,20 +1238,8 @@ class ChatStreamManager {
     }
   }
 
-  /// Marcar mensajes como leídos si el usuario está activo en el chat
-  Future<void> _markMessagesAsSeenIfActive(String chatId, bool isGroup) async {
-    try {
-      final readReceiptsService = ReadReceiptsService();
-      await readReceiptsService.markMessagesAsSeen(
-        chatId: chatId,
-        isGroupChat: isGroup
-      );
-
-      ReleaseLogger.log('✅ [ChatStreamManager] Mensajes marcados como leídos en ${isGroup ? 'grupo' : 'chat'} $chatId');
-    } catch (e) {
-      ReleaseLogger.error('❌ Error marcando mensajes como leídos: $e');
-    }
-  }
+  // ✅ SIMPLIFICADO: El ChatController ahora es el único responsable de marcar mensajes como leídos
+  // Esto evita duplicación y respeta correctamente la configuración de privacidad del usuario
 
   // ✅ FUNCIÓN ELIMINADA: Ya no necesitamos consultar Firestore por cada mensaje
   // El conteo de no leídos ahora se hace directamente sobre el cache usando readBy[]

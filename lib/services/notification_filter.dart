@@ -100,19 +100,16 @@ class NotificationFilter {
       // Manejo seguro de valores que pueden ser null
       final soundValue = prefs['soundEnabled'];
       final vibrationValue = prefs['vibrationEnabled'];
-      final inAppValue = prefs['inAppSoundEnabled'];
 
       return NotificationSoundConfig(
         soundEnabled: soundValue is bool ? soundValue : true,
         vibrationEnabled: vibrationValue is bool ? vibrationValue : true,
-        inAppSoundEnabled: inAppValue is bool ? inAppValue : true,
       );
     } catch (e) {
       // Valores por defecto en caso de error
       return NotificationSoundConfig(
         soundEnabled: true,
         vibrationEnabled: true,
-        inAppSoundEnabled: true,
       );
     }
   }
@@ -156,15 +153,13 @@ class NotificationDecision {
 class NotificationSoundConfig {
   final bool soundEnabled;
   final bool vibrationEnabled;
-  final bool inAppSoundEnabled;
 
   NotificationSoundConfig({
     required this.soundEnabled,
     required this.vibrationEnabled,
-    required this.inAppSoundEnabled,
   });
 
   @override
   String toString() =>
-      'NotificationSoundConfig(sound: $soundEnabled, vibration: $vibrationEnabled, inApp: $inAppSoundEnabled)';
+      'NotificationSoundConfig(sound: $soundEnabled, vibration: $vibrationEnabled)';
 }

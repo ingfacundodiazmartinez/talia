@@ -82,6 +82,18 @@ class AppStateService {
       try {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setBool('app_in_foreground', isInForeground);
+
+        if (isInForeground) {
+          ReleaseLogger.log('✅ App pasó a FOREGROUND', tag: 'AppStateService');
+          // ✅ Guardar timestamp de cuando la app volvió a foreground
+          await prefs.setInt('app_resumed_foreground_at', DateTime.now().millisecondsSinceEpoch);
+        } else {
+          ReleaseLogger.log('⬇️ App pasó a BACKGROUND/PAUSED', tag: 'AppStateService');
+          // ✅ Guardar timestamp de cuando la app entró en background
+          // Esto se usa para deduplicar notificaciones en iOS (sin depender de NSE)
+          await prefs.setInt('app_went_background_at', DateTime.now().millisecondsSinceEpoch);
+        }
+
         ReleaseLogger.log(
           '💾 Estado guardado en SharedPreferences: app_in_foreground = $isInForeground',
           tag: 'AppStateService'
@@ -92,12 +104,41 @@ class AppStateService {
           tag: 'AppStateService'
         );
       }
+    }
+  }
 
-      if (isInForeground) {
-        ReleaseLogger.log('✅ App pasó a FOREGROUND', tag: 'AppStateService');
-      } else {
-        ReleaseLogger.log('⬇️ App pasó a BACKGROUND/PAUSED', tag: 'AppStateService');
+  /// Verificar si un mensaje llegó mientras la app estaba en background (iOS dedup sin NSE)
+  /// Retorna true si el mensaje probablemente ya fue mostrado por iOS como push notification
+  Future<bool> wasMessageReceivedInBackground(DateTime messageCreatedAt) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final backgroundAt = prefs.getInt('app_went_background_at');
+      final resumedAt = prefs.getInt('app_resumed_foreground_at');
+
+      if (backgroundAt == null) return false;
+
+      final backgroundTime = DateTime.fromMillisecondsSinceEpoch(backgroundAt);
+      final messageTime = messageCreatedAt;
+
+      // El mensaje llegó después de que la app entró en background
+      final arrivedInBackground = messageTime.isAfter(backgroundTime);
+
+      // La app acaba de volver del background (menos de 10 segundos)
+      final justResumed = resumedAt != null &&
+          (DateTime.now().millisecondsSinceEpoch - resumedAt) < 10000;
+
+      if (arrivedInBackground && justResumed) {
+        ReleaseLogger.log(
+          '📱 [AppState] Mensaje llegó en background (${messageTime.toIso8601String()}) - iOS ya lo mostró',
+          tag: 'AppStateService'
+        );
+        return true;
       }
+
+      return false;
+    } catch (e) {
+      ReleaseLogger.error('Error en wasMessageReceivedInBackground: $e', tag: 'AppStateService');
+      return false;
     }
   }
 

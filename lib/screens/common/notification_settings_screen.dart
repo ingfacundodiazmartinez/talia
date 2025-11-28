@@ -176,15 +176,6 @@ class _NotificationSettingsScreenState
                 _updatePreference('activityAlertsEnabled', value),
           ),
 
-          SwitchListTile(
-            secondary: const Icon(Icons.location_on),
-            title: const Text('Alertas de Ubicación'),
-            subtitle: const Text('Cambios en ubicación compartida'),
-            value: _preferences['locationAlertsEnabled'] ?? false,
-            onChanged: (value) =>
-                _updatePreference('locationAlertsEnabled', value),
-          ),
-
           const Divider(),
 
           // Sonido y Vibración
@@ -210,16 +201,6 @@ class _NotificationSettingsScreenState
             subtitle: const Text('Vibrar al recibir notificaciones'),
             value: _preferences['vibrationEnabled'] ?? true,
             onChanged: (value) => _updatePreference('vibrationEnabled', value),
-          ),
-
-          SwitchListTile(
-            secondary: const Icon(Icons.music_note),
-            title: const Text('Sonido en la App'),
-            subtitle:
-                const Text('Reproducir sonidos mientras usas la aplicación'),
-            value: _preferences['inAppSoundEnabled'] ?? true,
-            onChanged: (value) =>
-                _updatePreference('inAppSoundEnabled', value),
           ),
 
           const Divider(),

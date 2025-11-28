@@ -30,6 +30,7 @@ class ParentMainShellController {
 
   // Subscripciones privadas
   StreamSubscription? _chatNotificationSubscription;
+  StreamSubscription? _storyApprovalNotificationSubscription;
   StreamSubscription? _roleChangeSubscription;
 
   // ✅ OPTIMIZACIÓN: Stream centralizado para evitar duplicar listeners al mismo documento
@@ -37,6 +38,7 @@ class ParentMainShellController {
 
   // Callback para navegación (configurado por el screen)
   Function(Map<String, dynamic>)? onChatNotificationTap;
+  Function(Map<String, dynamic>)? onStoryApprovalNotificationTap;
 
   // Constructor
   ParentMainShellController({
@@ -91,6 +93,15 @@ class ParentMainShellController {
       ReleaseLogger.log('Chat notification tapped: $data', tag: 'ParentMainShell');
       // Llamar al callback configurado por el screen para manejar navegación
       onChatNotificationTap?.call(data);
+    });
+
+    // Listener para notificaciones de aprobación de historias
+    _storyApprovalNotificationSubscription = _notificationService
+        .storyApprovalNotificationTapStream
+        .listen((data) {
+      ReleaseLogger.log('Story approval notification tapped: $data', tag: 'ParentMainShell');
+      // Llamar al callback configurado por el screen para navegar a aprobación
+      onStoryApprovalNotificationTap?.call(data);
     });
   }
 
@@ -247,6 +258,7 @@ class ParentMainShellController {
   void dispose() {
     ReleaseLogger.log('Disposing controller', tag: 'ParentMainShell');
     _chatNotificationSubscription?.cancel();
+    _storyApprovalNotificationSubscription?.cancel();
     _roleChangeSubscription?.cancel();
 
     // ✅ OPTIMIZACIÓN: Limpiar stream cacheado

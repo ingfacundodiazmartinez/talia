@@ -21,6 +21,7 @@ class CallParticipant {
   final DateTime? joinedAt;
   final DateTime? leftAt;
   final String? displayName; // Display name for the participant
+  final String? photoUrl; // ✅ Photo URL for displaying avatar
 
   CallParticipant({
     required this.uid,
@@ -30,6 +31,7 @@ class CallParticipant {
     this.joinedAt,
     this.leftAt,
     this.displayName,
+    this.photoUrl,
   });
 
   factory CallParticipant.fromMap(Map<String, dynamic> data) {
@@ -41,6 +43,7 @@ class CallParticipant {
       joinedAt: data['joinedAt']?.toDate(),
       leftAt: data['leftAt']?.toDate(),
       displayName: data['displayName'],
+      photoUrl: data['photoUrl'],
     );
   }
 
@@ -53,6 +56,7 @@ class CallParticipant {
       if (joinedAt != null) 'joinedAt': Timestamp.fromDate(joinedAt!),
       if (leftAt != null) 'leftAt': Timestamp.fromDate(leftAt!),
       if (displayName != null) 'displayName': displayName,
+      if (photoUrl != null) 'photoUrl': photoUrl,
     };
   }
 

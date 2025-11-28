@@ -117,6 +117,7 @@ exports.createAgoraCall = onCall(
         token: callerToken,
         status: 'calling',
         displayName: callerName,
+        photoUrl: callerData.photoURL || null,
         joinedAt: admin.firestore.FieldValue.serverTimestamp()
       };
 
@@ -146,7 +147,8 @@ exports.createAgoraCall = onCall(
           agoraUid: participantUid,
           token: participantToken,
           status: 'ringing',
-          displayName: participantName
+          displayName: participantName,
+          photoUrl: participantData.photoURL || null
         };
 
         // ✅ PHASE 1: VoIP Token Validation

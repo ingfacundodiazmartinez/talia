@@ -7,6 +7,7 @@ import '../repositories/message_repository.dart';
 import '../managers/chat_cache_manager.dart';
 import '../utils/chat_exceptions.dart';
 import '../../../utils/release_logger.dart';
+import '../../user_settings_service.dart';
 
 /// Servicio especializado para gestión y administración de chats
 ///
@@ -50,26 +51,34 @@ class ChatManagementService {
       // Determinar si es grupo
       final isGroup = chatId.startsWith('group_') || await _isGroupChat(chatId);
 
-      // ✅ FIX: Obtener mensajes no leídos y marcarlos como leídos
-      // Esto actualiza el campo readBy[] en cada mensaje para que el sender vea "visto"
-      try {
-        final unreadMessageIds = await _messageRepository.getUnreadMessageIds(
-          chatId: chatId,
-          isGroup: isGroup,
-        );
+      // ✅ FIX: Verificar si el usuario tiene activadas las confirmaciones de lectura
+      // Si está deshabilitado, no marcamos los mensajes como leídos (readBy)
+      final showReceipts = await UserSettingsService().showReadReceipts();
 
-        if (unreadMessageIds.isNotEmpty) {
-          ReleaseLogger.log('📖 Marcando ${unreadMessageIds.length} mensajes como leídos en chat $chatId');
-
-          await _messageRepository.markMessagesAsRead(
+      if (showReceipts) {
+        // Obtener mensajes no leídos y marcarlos como leídos
+        // Esto actualiza el campo readBy[] en cada mensaje para que el sender vea "visto"
+        try {
+          final unreadMessageIds = await _messageRepository.getUnreadMessageIds(
             chatId: chatId,
-            messageIds: unreadMessageIds,
             isGroup: isGroup,
           );
+
+          if (unreadMessageIds.isNotEmpty) {
+            ReleaseLogger.log('📖 Marcando ${unreadMessageIds.length} mensajes como leídos en chat $chatId');
+
+            await _messageRepository.markMessagesAsRead(
+              chatId: chatId,
+              messageIds: unreadMessageIds,
+              isGroup: isGroup,
+            );
+          }
+        } catch (e) {
+          // Si falla obtener/marcar mensajes, continuar con el unreadCounts
+          ReleaseLogger.warning('⚠️ Error marcando mensajes individuales como leídos: $e');
         }
-      } catch (e) {
-        // Si falla obtener/marcar mensajes, continuar con el unreadCounts
-        ReleaseLogger.warning('⚠️ Error marcando mensajes individuales como leídos: $e');
+      } else {
+        ReleaseLogger.log('🔒 Confirmaciones de lectura desactivadas - no se marca readBy en chat $chatId');
       }
 
       // Actualizar contador de no leídos del chat
@@ -346,10 +355,20 @@ class ChatManagementService {
   }
 
   /// Verificar si es chat de grupo
+  ///
+  /// ✅ FIX: Primero verifica si existe en 'chats' (donde el usuario tiene permisos),
+  /// evitando PERMISSION_DENIED al consultar 'groups' con un chatId de 1-on-1
   Future<bool> _isGroupChat(String chatId) async {
     if (chatId.startsWith('group_')) return true;
 
     try {
+      // Primero verificar si existe como chat 1-on-1 (usuario siempre tiene acceso a sus chats)
+      final chatDoc = await _chatRepository.getChatById(chatId);
+      if (chatDoc != null) {
+        return false; // Existe en 'chats', no es grupo
+      }
+
+      // Solo si no existe en 'chats', verificar en 'groups'
       final groupDoc = await _chatRepository.getGroupById(chatId);
       return groupDoc != null;
     } catch (e) {

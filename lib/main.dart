@@ -47,6 +47,8 @@ import 'services/story_service_refactored.dart';
 import 'services/contact_photo_cache_service.dart';
 import 'dart:async';
 import 'utils/release_logger.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert';
 
 // IMPORTANTE: Después de ejecutar 'flutterfire configure',
 // descomenta la siguiente línea:
@@ -479,6 +481,49 @@ void main() async {
     tag: 'MainApp',
   );
 
+  // ✅ FIX iOS DUPLICATE: Check if app was opened from killed state via notification tap
+  // This MUST run BEFORE runApp() so the messageId is saved BEFORE ChatDocsListener activates
+  // When app is killed and user taps notification:
+  // 1. iOS shows push notification
+  // 2. App starts fresh (memory empty)
+  // 3. This code saves messageId + full data to SharedPreferences (persistent)
+  // 4. runApp() -> ChatDocsListener activates -> checks SharedPreferences -> SKIP duplicate
+  // 5. NotificationService.initialize() -> reads pending navigation -> navigates to chat
+  try {
+    final initialMessage = await FirebaseMessaging.instance.getInitialMessage();
+    if (initialMessage != null) {
+      final prefs = await SharedPreferences.getInstance();
+      final messageId = initialMessage.data['messageId'] ?? initialMessage.data['id'];
+
+      // Save messageId for deduplication
+      if (messageId != null) {
+        await prefs.setString('tapped_notification_message_id', messageId);
+        await prefs.setInt('tapped_notification_timestamp', DateTime.now().millisecondsSinceEpoch);
+        ReleaseLogger.log(
+          '✅ [Dedup] App abierta desde notificación (killed) - messageId guardado: $messageId',
+          tag: 'MainApp',
+        );
+      }
+
+      // ✅ Save full notification data for navigation (NotificationService will process this)
+      await prefs.setString('pending_notification_data', jsonEncode(initialMessage.data));
+      ReleaseLogger.log(
+        '✅ [Navigation] Datos de notificación guardados para navegación pendiente',
+        tag: 'MainApp',
+      );
+    }
+  } catch (e) {
+    ReleaseLogger.error('Error checking getInitialMessage: $e', tag: 'MainApp');
+  }
+
+  // ✅ FIX iOS DUPLICATE: Initialize deduplication service BEFORE runApp
+  // This loads the messageId from SharedPreferences so tryAcquire() can check it
+  await NotificationDeduplicationService().initialize();
+  ReleaseLogger.log(
+    '✅ NotificationDeduplicationService inicializado ANTES de runApp',
+    tag: 'MainApp',
+  );
+
   runApp(
     ChangeNotifierProvider.value(value: themeService, child: const TaliaApp()),
   );
@@ -738,6 +783,17 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
     _userRoleSubscription?.cancel();
     _authSubscription?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+
+    // ✅ FIX: Notificar a NotificationService cuando la app vuelve a foreground
+    // Esto evita que las notificaciones de background se muestren como foreground
+    if (state == AppLifecycleState.resumed) {
+      NotificationService().notifyAppResumed();
+    }
   }
 
   void _setupRoleListener() {

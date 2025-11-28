@@ -47,9 +47,10 @@ exports.approveStory = onCall({
     }
 
     const storyData = storyDoc.data();
-    if (storyData.status !== 'pending') {
-      console.error('❌ [ApproveStory] Historia no está pendiente:', storyData.status);
-      throw new HttpsError('failed-precondition', 'Historia no está pendiente de aprobación');
+    // Permitir aprobar historias pendientes o rechazadas
+    if (storyData.status !== 'pending' && storyData.status !== 'rejected') {
+      console.error('❌ [ApproveStory] Historia no puede ser aprobada, status actual:', storyData.status);
+      throw new HttpsError('failed-precondition', 'Esta historia ya fue aprobada');
     }
 
     // 4. Verificar permisos usando approval_requests
@@ -66,7 +67,7 @@ exports.approveStory = onCall({
 
       if (message) {
         // SEGURIDAD: Sanitizar mensaje de aprobación server-side
-        updateData.approvalMessage = sanitizeText(message, 200);
+        updateData.approvalMessage = sanitizeTextWithDOMPurify(message, 200);
       }
 
       // Actualizar historia
@@ -162,9 +163,10 @@ exports.rejectStory = onCall({
     }
 
     const storyData = storyDoc.data();
-    if (storyData.status !== 'pending') {
-      console.error('❌ [RejectStory] Historia no está pendiente:', storyData.status);
-      throw new HttpsError('failed-precondition', 'Historia no está pendiente de aprobación');
+    // Permitir rechazar historias pendientes o aprobadas
+    if (storyData.status !== 'pending' && storyData.status !== 'approved') {
+      console.error('❌ [RejectStory] Historia no puede ser rechazada, status actual:', storyData.status);
+      throw new HttpsError('failed-precondition', 'Esta historia ya fue rechazada');
     }
 
     // 4. Verificar permisos usando approval_requests
@@ -181,7 +183,7 @@ exports.rejectStory = onCall({
 
       if (reason) {
         // SEGURIDAD: Sanitizar razón de rechazo server-side
-        updateData.rejectionReason = sanitizeText(reason, 300);
+        updateData.rejectionReason = sanitizeTextWithDOMPurify(reason, 300);
       }
 
       // Actualizar historia
@@ -253,37 +255,40 @@ exports.rejectStory = onCall({
 async function validateApprovalPermissions(storyId, parentId, childId) {
   console.log(`🔍 [ValidatePermissions] Validando: story=${storyId}, parent=${parentId}, child=${childId}`);
 
-  // 1. Verificar que existe approval_request válida
+  // 1. Verificar que existe approval_request (pendiente o ya resuelta)
+  // Esto permite cambiar el estado de historias ya procesadas
   const approvalRequestQuery = await db
     .collection('story_approval_requests')
     .where('storyId', '==', storyId)
     .where('parentId', '==', parentId)
     .where('childId', '==', childId)
-    .where('status', '==', 'pending')
     .limit(1)
     .get();
 
   if (approvalRequestQuery.empty) {
-    console.error('❌ [ValidatePermissions] No hay approval_request válida');
-    throw new HttpsError('permission-denied', 'No tienes permisos para aprobar esta historia');
-  }
+    console.log('⚠️ [ValidatePermissions] No hay approval_request, verificando solo relación padre-hijo');
+    // Si no hay approval_request pero el padre tiene relación con el hijo, permitir
+    // Esto puede pasar con historias antiguas o si el hijo no tiene parent approval habilitado
+  } else {
+    const requestData = approvalRequestQuery.docs[0].data();
 
-  const requestData = approvalRequestQuery.docs[0].data();
+    // 2. Solo verificar expiración para solicitudes pendientes
+    if (requestData.status === 'pending') {
+      const createdAt = requestData.createdAt;
+      if (createdAt) {
+        const now = new Date();
+        const requestTime = createdAt.toDate();
+        const hoursSinceRequest = (now - requestTime) / (1000 * 60 * 60);
 
-  // 2. Verificar que la solicitud no ha expirado (24 horas)
-  const createdAt = requestData.createdAt;
-  if (createdAt) {
-    const now = new Date();
-    const requestTime = createdAt.toDate();
-    const hoursSinceRequest = (now - requestTime) / (1000 * 60 * 60);
-
-    if (hoursSinceRequest > 24) {
-      console.error('❌ [ValidatePermissions] Solicitud expirada:', hoursSinceRequest, 'horas');
-      throw new HttpsError('deadline-exceeded', 'La solicitud de aprobación ha expirado');
+        if (hoursSinceRequest > 24) {
+          console.error('❌ [ValidatePermissions] Solicitud expirada:', hoursSinceRequest, 'horas');
+          throw new HttpsError('deadline-exceeded', 'La solicitud de aprobación ha expirado');
+        }
+      }
     }
   }
 
-  // 3. Verificar relación padre-hijo en users collection
+  // 3. Verificar relación padre-hijo en users collection (siempre requerido)
   await validateParentChildRelationship(parentId, childId);
 
   console.log('✅ [ValidatePermissions] Permisos validados correctamente');

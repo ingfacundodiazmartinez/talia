@@ -272,6 +272,45 @@ class CallStatusService {
     }
   }
 
+  /// Leave a group call (don't end the call for others)
+  /// Only updates own participant status, does NOT set endedAt
+  Future<ServiceResponse<void>> leaveCall(String callId) async {
+    try {
+      final currentUser = _auth.currentUser;
+      if (currentUser == null) {
+        return ServiceResponse.error('User not authenticated');
+      }
+
+      final callDoc = await _firestore
+          .collection('calls_v2')
+          .doc(callId)
+          .get();
+
+      if (!callDoc.exists) {
+        return ServiceResponse.error('Call not found');
+      }
+
+      final call = CallV2.fromFirestore(callDoc);
+
+      // Check if user is a participant
+      if (!call.participants.containsKey(currentUser.uid)) {
+        return ServiceResponse.error('You are not a participant in this call');
+      }
+
+      // Only update own participant status, NOT endedAt
+      await _firestore.collection('calls_v2').doc(callId).update({
+        'participants.${currentUser.uid}.status': CallStatus.ended.name,
+        'participants.${currentUser.uid}.leftAt': FieldValue.serverTimestamp(),
+      });
+
+      ReleaseLogger.log('CallStatusService: User ${currentUser.uid} left call $callId (call continues for others)');
+      return ServiceResponse.success(null);
+    } catch (e) {
+      ReleaseLogger.error('CallStatusService: Failed to leave call', error: e);
+      return ServiceResponse.error('Failed to leave call: $e');
+    }
+  }
+
   /// Update participant status
   Future<ServiceResponse<void>> updateParticipantStatus({
     required String callId,

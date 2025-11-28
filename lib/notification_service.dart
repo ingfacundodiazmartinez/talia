@@ -595,12 +595,20 @@ class NotificationService {
     'com.talia.chat/notifications',
   );
 
+  // ✅ FIX iOS: Channel para verificar si el NSE ya procesó un messageId
+  static const _nseDeduplicationChannel = MethodChannel(
+    'com.talia.chat/nse_deduplication',
+  );
+
   String? _fcmToken;
   bool _isInitialized = false;
   GlobalKey<NavigatorState>? _navigatorKey;
 
   // Trackear el chat actual para suprimir notificaciones solo cuando estás dentro de él
   String? _currentChatId;
+
+  // ✅ FIX: Timestamp de cuando la app volvió a foreground (para filtrar notificaciones viejas)
+  DateTime? _lastResumedTime;
 
   // ✅ FIX: Pending navigation for calls accepted from background
   String? _pendingCallNavigation;
@@ -638,10 +646,19 @@ class NotificationService {
   Stream<Map<String, dynamic>> get contactRequestNotificationTapStream =>
       _contactRequestNotificationTapController.stream;
 
+  // Stream para notificar cuando se toca una notificación de aprobación de historia
+  final _storyApprovalNotificationTapController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get storyApprovalNotificationTapStream =>
+      _storyApprovalNotificationTapController.stream;
+
   // Método público para emitir llamadas entrantes al stream
   void emitIncomingCall(Map<String, dynamic> callData) {
     _incomingCallController.add(callData);
   }
+
+  /// ✅ Getter para el chat actualmente abierto (usado para evitar navegación duplicada)
+  String? get currentChatId => _currentChatId;
 
   // Establecer el chat actual (para suprimir notificaciones solo de ese chat)
   // 🔒 CRITICAL FIX: Cambiar de void async a Future<void> para prevenir race conditions
@@ -709,6 +726,106 @@ class NotificationService {
         tag: 'NotificationService',
       );
     });
+  }
+
+  /// ✅ FIX: Notificar cuando la app vuelve a foreground
+  /// Usado para filtrar notificaciones que llegaron durante background
+  /// y evitar mostrarlas de nuevo como foreground
+  void notifyAppResumed() {
+    _lastResumedTime = DateTime.now();
+    ReleaseLogger.log(
+      '📱 [AppLifecycle] App resumed at $_lastResumedTime',
+      tag: 'NotificationService',
+    );
+  }
+
+  /// ✅ FIX iOS: Verificar si el NSE ya procesó un messageId
+  /// El NSE guarda los messageIds en App Group UserDefaults
+  /// Esta verificación evita mostrar notificaciones duplicadas
+  /// PUBLIC: Usado por ChatStreamManager para evitar duplicados al reanudar la app
+  Future<bool> wasMessageProcessedByNSE(String messageId) async {
+    if (!Platform.isIOS) return false;
+
+    try {
+      final result = await _nseDeduplicationChannel.invokeMethod<bool>(
+        'wasProcessedByNSE',
+        messageId,
+      );
+      final wasProcessed = result ?? false;
+      ReleaseLogger.log(
+        '🔍 [NSE Dedup] Check messageId=${messageId.substring(0, 8)}... result=$wasProcessed',
+        tag: 'NotificationService',
+      );
+      return wasProcessed;
+    } catch (e) {
+      ReleaseLogger.error(
+        '⚠️ [NSE Dedup] Error verificando messageId: $e',
+        tag: 'NotificationService',
+      );
+      return false;
+    }
+  }
+
+  /// Obtener todos los IDs procesados por NSE (para diagnóstico)
+  Future<List<String>> getProcessedByNSE() async {
+    if (!Platform.isIOS) return [];
+
+    try {
+      final result = await _nseDeduplicationChannel.invokeMethod<List<dynamic>>(
+        'getProcessedByNSE',
+      );
+      final ids = result?.cast<String>() ?? [];
+      ReleaseLogger.log(
+        '📋 [NSE Dedup] IDs procesados por NSE: ${ids.length} items',
+        tag: 'NotificationService',
+      );
+      if (ids.isNotEmpty) {
+        ReleaseLogger.log(
+          '📋 [NSE Dedup] Últimos 5: ${ids.take(5).map((id) => id.length > 8 ? id.substring(0, 8) : id).join(", ")}...',
+          tag: 'NotificationService',
+        );
+      }
+      return ids;
+    } catch (e) {
+      ReleaseLogger.error(
+        '⚠️ [NSE Dedup] Error obteniendo IDs: $e',
+        tag: 'NotificationService',
+      );
+      return [];
+    }
+  }
+
+  /// Obtener logs de debug del NSE (para diagnóstico)
+  Future<List<String>> getNSEDebugLogs() async {
+    if (!Platform.isIOS) return [];
+
+    try {
+      final result = await _nseDeduplicationChannel.invokeMethod<List<dynamic>>(
+        'getNSEDebugLogs',
+      );
+      final logs = result?.cast<String>() ?? [];
+      ReleaseLogger.log(
+        '🔍 [NSE Debug] === LOGS DEL NSE (${logs.length} entries) ===',
+        tag: 'NotificationService',
+      );
+      for (final log in logs) {
+        ReleaseLogger.log(
+          '🔍 [NSE Debug] $log',
+          tag: 'NotificationService',
+        );
+      }
+      ReleaseLogger.log(
+        '🔍 [NSE Debug] === FIN LOGS NSE ===',
+        tag: 'NotificationService',
+      );
+      return logs;
+    } catch (e) {
+      ReleaseLogger.error(
+        '⚠️ [NSE Debug] Error obteniendo logs: $e',
+        tag: 'NotificationService',
+      );
+      return [];
+    }
   }
 
   // Helper para upsert de datos de usuario
@@ -1003,6 +1120,26 @@ class NotificationService {
     if (_isInitialized) return;
 
     try {
+      // ✅ FIX: Limpiar current_chat_id stale de SharedPreferences
+      // Si la app fue killed mientras un chat estaba abierto, dispose() nunca se llamó
+      // y SharedPreferences quedó con un valor viejo que causaría filtrado incorrecto
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final staleChatId = prefs.getString('current_chat_id');
+        if (staleChatId != null) {
+          ReleaseLogger.log(
+            '🧹 [Initialize] Limpiando current_chat_id stale: $staleChatId',
+            tag: 'NotificationService',
+          );
+          await prefs.remove('current_chat_id');
+        }
+      } catch (e) {
+        ReleaseLogger.error(
+          '⚠️ [Initialize] Error limpiando current_chat_id stale: $e',
+          tag: 'NotificationService',
+        );
+      }
+
       // 1. Background handler registration moved to main.dart
       // IMPORTANTE: El background handler ahora se registra en main.dart después de Firebase.initializeApp
       ReleaseLogger.log(
@@ -1037,6 +1174,12 @@ class NotificationService {
       // 6. Configurar listeners
       await _setupListeners();
 
+      // 6.1. ✅ FIX KILLED STATE: Procesar navegación pendiente de main.dart
+      // Cuando la app está killed y el user toca notificación:
+      // - main.dart guarda los datos en SharedPreferences (porque getInitialMessage solo funciona una vez)
+      // - Aquí los procesamos para navegar al chat
+      await _processPendingNavigation();
+
       // 6.5. ✅ FIX: Suscribirse a cambios de estado de app para navegación pendiente
       _appStateSubscription = AppStateService().foregroundStateStream.listen((
         isInForeground,
@@ -1058,6 +1201,12 @@ class NotificationService {
         '✅ Servicio de notificaciones inicializado',
         tag: 'NotificationService',
       );
+
+      // ✅ DIAGNÓSTICO: Ver qué messageIds tiene el NSE guardados y logs de debug
+      if (Platform.isIOS) {
+        await getProcessedByNSE();
+        await getNSEDebugLogs();
+      }
     } catch (e) {
       ReleaseLogger.error(
         'Error inicializando notificaciones: $e',
@@ -1440,13 +1589,28 @@ class NotificationService {
         tag: 'NotificationService',
       );
 
-      // ✅ FIX DUPLICADOS AL ABRIR APP: Verificar timestamp
-      // Si el mensaje tiene más de 60 segundos, asumir que ya fue notificado en background
+      // ✅ FIX DUPLICADOS iOS: Verificar si el NSE ya mostró esta notificación
+      // El NSE guarda los messageIds procesados en App Group UserDefaults
+      // La app Dart verifica antes de mostrar para evitar duplicados
+      final messageId = message.data['messageId'] as String?;
       final sentTime = message.sentTime;
-      if (sentTime != null &&
-          DateTime.now().difference(sentTime).inSeconds > 60) {
+      final now = DateTime.now();
+
+      if (Platform.isIOS && messageId != null && messageId.isNotEmpty) {
+        final wasProcessedByNSE = await wasMessageProcessedByNSE(messageId);
+        if (wasProcessedByNSE) {
+          ReleaseLogger.log(
+            '⏭️ [iOS Foreground] messageId=$messageId ya fue procesado por NSE - SALTANDO duplicado',
+            tag: 'NotificationService',
+          );
+          return;
+        }
+      }
+
+      // Filtrar mensajes muy viejos (>60s) para evitar notificaciones obsoletas
+      if (sentTime != null && now.difference(sentTime).inSeconds > 60) {
         ReleaseLogger.log(
-          '⚠️ [Foreground] Notificación antigua (${DateTime.now().difference(sentTime).inSeconds}s) - SALTANDO para evitar duplicados al abrir app',
+          '⚠️ [Foreground] Notificación antigua (${now.difference(sentTime).inSeconds}s) - SALTANDO',
           tag: 'NotificationService',
         );
         return;
@@ -1847,6 +2011,26 @@ class NotificationService {
         '🔔 Notificación tocada: ${message.notification?.title}',
         tag: 'NotificationService',
       );
+
+      // ✅ FIX iOS DUPLICATE: Marcar mensaje como ya mostrado para evitar duplicados con ChatDocsListener
+      // Cuando el usuario toca una notificación push, ChatDocsListener NO debe mostrar otra
+      final messageId = message.data['messageId'] ?? message.data['id'];
+      if (messageId != null) {
+        try {
+          final dedup = NotificationDeduplicationService();
+          dedup.tryAcquire(messageId);
+          ReleaseLogger.log(
+            '✅ [Dedup] Mensaje $messageId marcado (notificación tocada desde background)',
+            tag: 'NotificationService',
+          );
+        } catch (e) {
+          ReleaseLogger.error(
+            '⚠️ [Dedup] Error marcando mensaje: $e',
+            tag: 'NotificationService',
+          );
+        }
+      }
+
       _handleNotificationTap(message.data);
     });
 
@@ -2155,6 +2339,50 @@ class NotificationService {
     }
   }
 
+  /// ✅ FIX KILLED STATE: Process pending navigation from main.dart
+  /// When app is killed and user taps notification, main.dart saves the data
+  /// because getInitialMessage() only works once. We process it here.
+  Future<void> _processPendingNavigation() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final pendingData = prefs.getString('pending_notification_data');
+
+      if (pendingData != null) {
+        ReleaseLogger.log(
+          '📱 [PendingNav] Encontrada navegación pendiente de killed state',
+          tag: 'NotificationService',
+        );
+
+        // Decode JSON data
+        final data = Map<String, dynamic>.from(jsonDecode(pendingData));
+
+        // Clear pending data immediately to avoid re-processing
+        await prefs.remove('pending_notification_data');
+
+        ReleaseLogger.log(
+          '📱 [PendingNav] Procesando navegación: type=${data['type']}, chatId=${data['chatId']}',
+          tag: 'NotificationService',
+        );
+
+        // Small delay to ensure UI is ready for navigation
+        await Future.delayed(const Duration(milliseconds: 500));
+
+        // Navigate using existing handler
+        _handleNotificationTap(data);
+
+        ReleaseLogger.log(
+          '✅ [PendingNav] Navegación desde killed state completada',
+          tag: 'NotificationService',
+        );
+      }
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [PendingNav] Error procesando navegación pendiente: $e',
+        tag: 'NotificationService',
+      );
+    }
+  }
+
   // Manejar tap en notificación
   void _handleNotificationTap(Map<String, dynamic> data) {
     ReleaseLogger.log(
@@ -2191,6 +2419,12 @@ class NotificationService {
         tag: 'NotificationService',
       );
       _emergencyNotificationTapController.add(data);
+    } else if (data['type'] == 'story_approval_request') {
+      ReleaseLogger.log(
+        '📸 Notificación de historia pendiente tocada, navegando a aprobación',
+        tag: 'NotificationService',
+      );
+      _storyApprovalNotificationTapController.add(data);
     }
   }
 

@@ -133,16 +133,6 @@ class _NotificationSettingsScreenState
                 colorScheme: colorScheme,
               ),
 
-              _buildSwitchOption(
-                icon: Icons.music_note,
-                title: 'Sonido en la App',
-                subtitle:
-                    'Reproducir sonido cuando recibes mensaje dentro de la app',
-                value: prefs['inAppSoundEnabled'] ?? true,
-                onChanged: (value) => _updatePref('inAppSoundEnabled', value),
-                colorScheme: colorScheme,
-              ),
-
               SizedBox(height: 32),
 
               // Sección: No Molestar

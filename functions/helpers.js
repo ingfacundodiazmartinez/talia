@@ -475,17 +475,23 @@ async function sendDirectPushNotification(params) {
     // Detectar si es mensaje de chat para activar NSE
     const isChatMessage = type === 'chat_message' || type === 'group_message';
 
-    // ✅ CRITICAL: mutable-content DEBE estar SIEMPRE presente para mensajes de chat
-    // para que el NSE pueda descargar la foto del sender
+    // ✅ CRITICAL: Para que NSE se invoque, NO debe incluirse content-available
+    // Apple docs: "content-available must be set to 0 (or left un-set) for mutable-content to work"
+    // - Chat messages: mutable-content=true para NSE (sin content-available)
+    // - Other notifications: content-available=1 para background handler (sin mutable-content)
     const apsPayload = {
       alert: {
         title: title || "Talia",
         body: body || "",
       },
       sound: "default",
-      "content-available": 1,  // ✅ Despierta background handler
-      // ✅ SIEMPRE activar NSE para mensajes de chat (con o sin foto)
-      ...(isChatMessage ? { "mutable-content": 1 } : {}),
+      // ⚠️ IMPORTANTE: content-available y mutable-content son MUTUAMENTE EXCLUYENTES
+      // Si ambos están presentes, iOS no invoca el NSE
+      // Usando 'true' (boolean) en lugar de 1 (integer) según documentación FCM Admin SDK
+      ...(isChatMessage
+        ? { "mutable-content": true }  // Para NSE (no content-available)
+        : { "content-available": 1 }  // Para background handler (no mutable-content)
+      ),
     };
 
     const apnsPayload = {
@@ -510,6 +516,10 @@ async function sendDirectPushNotification(params) {
       },
       apns: apnsPayload,
     };
+
+    // 🔍 DEBUG: Log payload para verificar que NSE se invoque
+    console.log(`📱 [DirectPush] isChatMessage: ${isChatMessage}`);
+    console.log(`📱 [DirectPush] apsPayload:`, JSON.stringify(apsPayload));
 
     // Enviar notificación
     const response = await getMessaging().sendEachForMulticast(message);

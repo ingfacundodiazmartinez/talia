@@ -265,6 +265,39 @@ class CallController extends ChangeNotifier {
     }
   }
 
+  /// Leave a group call without ending it for others
+  /// UI calls this when user leaves a group call (call continues for others)
+  Future<ServiceResponse<bool>> leaveCall() async {
+    try {
+      _clearError();
+
+      if (_currentCallId == null) {
+        return ServiceResponse.error('No active call to leave');
+      }
+
+      ReleaseLogger.log(
+        'Leaving group call via controller: $_currentCallId',
+        tag: _tag,
+      );
+
+      // Leave Agora channel and update own participant status (don't end whole call)
+      final result = await _orchestrator.leaveCall(callId: _currentCallId);
+
+      if (result.success) {
+        _cleanup();
+      } else {
+        _setError(result.error ?? 'Failed to leave call');
+      }
+
+      return result;
+    } catch (e) {
+      final error = 'Error leaving call: ${e.toString()}';
+      ReleaseLogger.error(error, tag: _tag);
+      _setError(error);
+      return ServiceResponse.error(error);
+    }
+  }
+
   /// Get call information by ID
   /// UI calls this to fetch call details
   Future<ServiceResponse<CallV2>> getCall(String callId) async {

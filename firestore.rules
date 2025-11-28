@@ -342,9 +342,34 @@ service cloud.firestore {
 
     // Contactos
     match /contacts/{contactId} {
-      // Permitir leer si está autenticado
-      // La app filtra por relaciones padre-hijo
-      allow read: if request.auth != null;
+      // 🔒 FUNCIÓN DE SEGURIDAD: Verificar si el usuario es padre de alguno de los usuarios en el contacto
+      function isParentOfContactUser() {
+        let users = resource.data.users;
+        let parentDoc = get(/databases/$(database)/documents/users/$(request.auth.uid));
+        // Verificar si el padre tiene linkedChildrenIds y si alguno de los usuarios del contacto está en esa lista
+        // ✅ Verificar primero que el campo existe para evitar errores
+        return parentDoc.data.keys().hasAny(['linkedChildrenIds']) &&
+               parentDoc.data.linkedChildrenIds != null && (
+          (users.size() >= 1 && users[0] in parentDoc.data.linkedChildrenIds) ||
+          (users.size() >= 2 && users[1] in parentDoc.data.linkedChildrenIds)
+        );
+      }
+
+      // 🔒 SEGURIDAD: Solo puedes leer contactos donde:
+      // 1. TÚ estés en el array 'users', O
+      // 2. Eres PADRE de alguno de los usuarios del contacto
+      allow get: if request.auth != null && (
+        request.auth.uid in resource.data.users ||
+        isParentOfContactUser()
+      );
+
+      // 🔒 SEGURIDAD: Solo puedes listar contactos donde:
+      // 1. TÚ estés en el array 'users', O
+      // 2. Eres PADRE de alguno de los usuarios del contacto
+      allow list: if request.auth != null && (
+        request.auth.uid in resource.data.users ||
+        isParentOfContactUser()
+      );
 
       // Permitir crear contactos si:
       // 1. El usuario autenticado está en el array 'users' del contacto
@@ -368,11 +393,10 @@ service cloud.firestore {
       allow get: if request.auth != null &&
         resource.data.userId == request.auth.uid;
 
-      // ⚠️ IMPORTANTE: allow list no puede validar filtros de query
-      // Confiamos en que la app SIEMPRE filtrará: .where('userId', isEqualTo: user.uid)
-      // Cualquier usuario autenticado puede hacer queries, pero solo verá sus notificaciones
-      // si la app filtra correctamente
-      allow list: if request.auth != null;
+      // 🔒 SEGURIDAD: Solo puedes listar TUS PROPIAS notificaciones
+      // Cada documento se evalúa individualmente para verificar que userId == auth.uid
+      allow list: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
 
       // ⚠️ Solo Cloud Functions pueden crear notificaciones (con permisos admin)
       // El cliente NO debe crear notificaciones directamente por seguridad
@@ -480,9 +504,10 @@ service cloud.firestore {
         (resource.data.parentId == request.auth.uid ||
          resource.data.childId == request.auth.uid);
 
-      // Permitir queries/list si estás autenticado
-      // La app debe filtrar por parentId o childId en el query
-      allow list: if request.auth != null;
+      // 🔒 SEGURIDAD: Solo puedes listar solicitudes donde eres parent o child
+      allow list: if request.auth != null &&
+        (resource.data.parentId == request.auth.uid ||
+         resource.data.childId == request.auth.uid);
 
       // ⚠️ CORREGIDO: Solo el child puede crear solicitudes de aprobación
       allow create: if request.auth != null &&
@@ -525,6 +550,14 @@ service cloud.firestore {
                storyUserId in get(/databases/$(database)/documents/users/$(viewerId)).data.linkedChildrenIds;
       }
 
+      // 🔒 FUNCIÓN: Verificar si el usuario puede ver esta historia específica
+      function canViewThisStory() {
+        return request.auth.uid == resource.data.userId ||
+               (resource.data.status == 'approved' && isApprovedContactForStory(resource.data.userId, request.auth.uid)) ||
+               isParentChildRelationForStory(resource.data.userId, request.auth.uid) ||
+               hasStoryApprovalAccess(resource.data.userId, request.auth.uid);
+      }
+
       // Función auxiliar para verificar si solo se está actualizando viewedBy
       function isOnlyUpdatingViewedBy() {
         let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
@@ -564,32 +597,16 @@ service cloud.firestore {
       // 2. Eres contacto aprobado del creador Y la historia está aprobada, O
       // 3. Eres padre/hijo del creador (relación verificada), O
       // 4. Tienes acceso via story_approval_requests como padre
-      allow get: if request.auth != null && (
-        request.auth.uid == resource.data.userId ||
-        (resource.data.status == 'approved' && isApprovedContactForStory(resource.data.userId, request.auth.uid)) ||
-        isParentChildRelationForStory(resource.data.userId, request.auth.uid) ||
-        hasStoryApprovalAccess(resource.data.userId, request.auth.uid)
-      );
+      allow get: if request.auth != null && canViewThisStory();
 
-      // 🔒 PREVENIR ENUMERACIÓN: Las queries requieren filtros específicos
-      // La app DEBE usar uno de estos filtros obligatorios:
-      // - .where('userId', isEqualTo, currentUserId) para propias stories
-      // - Acceso via story_approval_requests para stories pendientes
-      // NOTA: Esta regla evalúa cada documento, NO puede forzar filtros en queries
-      // pero sí previene acceso no autorizado documento por documento
-      allow list: if request.auth != null;
+      // 🔒 SEGURIDAD: Para queries (list), evaluar cada documento individualmente
+      // Esto previene que usuarios vean historias de usuarios con los que no tienen relación
+      // La app DEBE filtrar por userId o via story_approval_requests
+      allow list: if request.auth != null && canViewThisStory();
 
       // Solo el creador puede crear su propia historia
       allow create: if request.auth != null &&
         request.auth.uid == request.resource.data.userId;
-
-      // Función auxiliar para verificar si el usuario puede ver la historia (misma lógica que 'get')
-      function canViewStory() {
-        return request.auth.uid == resource.data.userId ||
-               (resource.data.status == 'approved' && isApprovedContactForStory(resource.data.userId, request.auth.uid)) ||
-               isParentChildRelationForStory(resource.data.userId, request.auth.uid) ||
-               hasStoryApprovalAccess(resource.data.userId, request.auth.uid);
-      }
 
       // 🔒 ACTUALIZACIÓN SEGURA: Permitir actualizar SOLO si:
       // 1. Eres el creador de la historia, O
@@ -598,7 +615,7 @@ service cloud.firestore {
       // 4. Eres el creador Y solo actualizas campos de visibilidad
       allow update: if request.auth != null && (
         request.auth.uid == resource.data.userId ||
-        (canViewStory() && (isOnlyUpdatingViewedBy() || isOnlyUpdatingReplies())) ||
+        (canViewThisStory() && (isOnlyUpdatingViewedBy() || isOnlyUpdatingReplies())) ||
         (hasStoryApprovalAccess(resource.data.userId, request.auth.uid) && isOnlyUpdatingApprovalFields()) ||
         (request.auth.uid == resource.data.userId && isOnlyUpdatingVisibilityFields())
       );
@@ -694,9 +711,11 @@ service cloud.firestore {
          resource.data.newParentId == request.auth.uid ||
          resource.data.childId == request.auth.uid);
 
-      // Permitir queries (list) si el usuario está autenticado
-      // Se asume que la app filtra correctamente por existingParentId, newParentId o childId
-      allow list: if request.auth != null;
+      // 🔒 SEGURIDAD: Solo puedes listar solicitudes donde estés involucrado
+      allow list: if request.auth != null &&
+        (resource.data.existingParentId == request.auth.uid ||
+         resource.data.newParentId == request.auth.uid ||
+         resource.data.childId == request.auth.uid);
 
       // ⚠️ CORREGIDO: Solo puedes crear solicitud si TÚ eres el newParentId
       allow create: if request.auth != null &&
@@ -720,9 +739,9 @@ service cloud.firestore {
       allow get: if request.auth != null &&
         request.auth.uid == resource.data.createdBy;
 
-      // Permitir queries (list) a usuarios autenticados
-      // La seguridad se mantiene porque solo pueden filtrar por sus propios códigos
-      allow list: if request.auth != null;
+      // 🔒 SEGURIDAD: Solo puedes listar códigos que TÚ creaste
+      allow list: if request.auth != null &&
+        resource.data.createdBy == request.auth.uid;
 
       // Permitir crear código si el usuario es el createdBy
       allow create: if request.auth != null &&
@@ -1041,7 +1060,19 @@ service cloud.firestore {
 
     // Contact requests
     match /contact_requests/{requestId} {
-      allow read: if request.auth != null;
+      // 🔒 SEGURIDAD: Solo puedes leer solicitudes donde eres childId o parentId o el contacto
+      // NOTA: Se usa 'contactId' porque ese es el campo que se usa en las queries del cliente
+      allow get: if request.auth != null &&
+        (resource.data.childId == request.auth.uid ||
+         resource.data.parentId == request.auth.uid ||
+         resource.data.contactId == request.auth.uid);
+
+      // 🔒 SEGURIDAD: Solo puedes listar solicitudes donde estés involucrado
+      // NOTA: Se usa 'contactId' porque ese es el campo que se usa en las queries del cliente
+      allow list: if request.auth != null &&
+        (resource.data.childId == request.auth.uid ||
+         resource.data.parentId == request.auth.uid ||
+         resource.data.contactId == request.auth.uid);
 
       // Solo Cloud Functions pueden crear
       allow create: if false;
@@ -1068,10 +1099,12 @@ service cloud.firestore {
     // Emergencies
     match /emergencies/{emergencyId} {
       // Función auxiliar para verificar si el usuario es padre del niño de la emergencia
+      // Usa linkedChildrenIds del documento de usuario (más confiable que parent_children IDs)
       function isParentOfEmergencyChild() {
         let childId = resource.data.childId;
-        return exists(/databases/$(database)/documents/parent_children/$(request.auth.uid + '_' + childId)) ||
-               exists(/databases/$(database)/documents/parent_children/$(childId + '_' + request.auth.uid));
+        let parentDoc = get(/databases/$(database)/documents/users/$(request.auth.uid));
+        return parentDoc.data.linkedChildrenIds != null &&
+               childId in parentDoc.data.linkedChildrenIds;
       }
 
       // Permitir leer documento individual si eres el niño O eres padre del niño
@@ -1080,9 +1113,11 @@ service cloud.firestore {
         isParentOfEmergencyChild()
       );
 
-      // Permitir queries/list - Se confía en que la app filtre correctamente por childId
-      // Las reglas de parent_children ya protegen el vínculo padre-hijo
-      allow list: if request.auth != null;
+      // 🔒 SEGURIDAD: Solo puedes listar emergencias donde eres el niño o padre vinculado
+      allow list: if request.auth != null && (
+        request.auth.uid == resource.data.childId ||
+        isParentOfEmergencyChild()
+      );
 
       // Permitir crear/actualizar si eres el niño o un padre con status approved
       allow write: if request.auth != null && (
@@ -1092,26 +1127,31 @@ service cloud.firestore {
 
       // Location tracking subcollection
       match /location_tracking/{trackingId} {
-        // Heredar permisos del documento padre
-        function isAuthorizedForEmergency() {
+        // Heredar permisos del documento padre usando linkedChildrenIds
+        function isAuthorizedForEmergencyTracking() {
           let emergencyDoc = get(/databases/$(database)/documents/emergencies/$(emergencyId));
           let childId = emergencyDoc.data.childId;
-          return request.auth.uid == childId ||
-                 exists(/databases/$(database)/documents/parent_children/$(request.auth.uid + '_' + childId)) ||
-                 exists(/databases/$(database)/documents/parent_children/$(childId + '_' + request.auth.uid));
+          // Si eres el niño, tienes acceso
+          return request.auth.uid == childId;
         }
 
-        // Permitir leer si estás autorizado
-        allow read: if request.auth != null && isAuthorizedForEmergency();
+        function isParentAuthorizedForTracking() {
+          let emergencyDoc = get(/databases/$(database)/documents/emergencies/$(emergencyId));
+          let childId = emergencyDoc.data.childId;
+          let userDoc = get(/databases/$(database)/documents/users/$(request.auth.uid));
+          // Verificar que el usuario tenga linkedChildrenIds y que el childId esté en la lista
+          return userDoc.data.keys().hasAny(['linkedChildrenIds']) &&
+                 childId in userDoc.data.linkedChildrenIds;
+        }
 
-        // Permitir escribir si:
-        // 1. Estás autorizado para la emergencia (niño o padre), Y
-        // 2. Si estás creando, eres el userId del tracking
-        allow write: if request.auth != null && isAuthorizedForEmergency() && (
-          request.resource == null ||
-          request.resource.data.userId == request.auth.uid ||
-          request.auth.uid == get(/databases/$(database)/documents/emergencies/$(emergencyId)).data.childId
-        );
+        // Permitir leer si estás autorizado (niño o padre)
+        allow read: if request.auth != null &&
+          (isAuthorizedForEmergencyTracking() || isParentAuthorizedForTracking());
+
+        // Permitir escribir si estás autorizado (niño o padre)
+        // El niño puede agregar puntos de ubicación a su propia emergencia
+        allow write: if request.auth != null &&
+          (isAuthorizedForEmergencyTracking() || isParentAuthorizedForTracking());
       }
     }
 
@@ -1138,8 +1178,17 @@ service cloud.firestore {
 
     // Group invitations (con aprobación en cascada)
     match /groupInvitations/{invitationId} {
-      // Permitir leer si estás autenticado (filtrado en queries)
-      allow read: if request.auth != null;
+      // 🔒 SEGURIDAD: Solo puedes leer invitaciones donde estés involucrado
+      allow get: if request.auth != null &&
+        (resource.data.invitedUserId == request.auth.uid ||
+         resource.data.invitedBy == request.auth.uid ||
+         resource.data.parentId == request.auth.uid);
+
+      // 🔒 SEGURIDAD: Solo puedes listar invitaciones donde estés involucrado
+      allow list: if request.auth != null &&
+        (resource.data.invitedUserId == request.auth.uid ||
+         resource.data.invitedBy == request.auth.uid ||
+         resource.data.parentId == request.auth.uid);
 
       // Permitir crear invitaciones (usando invitedBy en lugar de inviterId)
       allow create: if request.auth != null &&

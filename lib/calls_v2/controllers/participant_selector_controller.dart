@@ -28,6 +28,7 @@ class SelectableContact {
 /// - Manejar selección múltiple
 /// - Filtrar por búsqueda (local)
 /// - Validar límites de participantes
+/// - Excluir IDs específicos (ej: participantes ya en llamada)
 class ParticipantSelectorController extends ChangeNotifier {
   final ContactRepository _contactRepository;
   final FirebaseAuth _auth;
@@ -36,6 +37,7 @@ class ParticipantSelectorController extends ChangeNotifier {
   List<SelectableContact> _allContacts = [];
   List<SelectableContact> _filteredContacts = [];
   final Set<String> _selectedIds = {};
+  Set<String> _excludedIds = {}; // IDs a excluir de la lista (ej: ya en llamada)
   String _searchQuery = '';
   bool _isLoading = true;
   String? _error;
@@ -120,21 +122,32 @@ class ParticipantSelectorController extends ChangeNotifier {
     }
   }
 
+  /// Establecer IDs a excluir de la lista (ej: participantes ya en llamada)
+  void setExcludedIds(Set<String> excludedIds) {
+    _excludedIds = excludedIds;
+    _applyFilters();
+    notifyListeners();
+  }
+
   /// Actualizar búsqueda (filtrado local)
   void updateSearch(String query) {
     _searchQuery = query.toLowerCase().trim();
-
-    if (_searchQuery.isEmpty) {
-      _filteredContacts = List.from(_allContacts);
-    } else {
-      _filteredContacts = _allContacts.where((contact) {
-        final nameMatch = contact.name.toLowerCase().contains(_searchQuery);
-        final phoneMatch = contact.phoneNumber?.contains(_searchQuery) ?? false;
-        return nameMatch || phoneMatch;
-      }).toList();
-    }
-
+    _applyFilters();
     notifyListeners();
+  }
+
+  /// Aplicar todos los filtros (excluidos + búsqueda)
+  void _applyFilters() {
+    _filteredContacts = _allContacts.where((contact) {
+      // Excluir IDs específicos (ya en llamada)
+      if (_excludedIds.contains(contact.id)) return false;
+
+      // Aplicar filtro de búsqueda
+      if (_searchQuery.isEmpty) return true;
+      final nameMatch = contact.name.toLowerCase().contains(_searchQuery);
+      final phoneMatch = contact.phoneNumber?.contains(_searchQuery) ?? false;
+      return nameMatch || phoneMatch;
+    }).toList();
   }
 
   /// Toggle selección de contacto

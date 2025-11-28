@@ -120,17 +120,23 @@ exports.sendNotificationOnCreate = onDocumentCreated(
       // NSE descargará la foto manualmente (sin usar Firebase Messaging roto)
       // Silent notifications son poco confiables en iOS (Apple las throttlea)
 
-      // ✅ CRITICAL: mutable-content DEBE estar SIEMPRE presente para mensajes de chat
-      // para que el NSE pueda descargar la foto del sender
+      // ✅ CRITICAL: Para que NSE se invoque, NO debe incluirse content-available
+      // Apple docs: "content-available must be set to 0 (or left un-set) for mutable-content to work"
+      // - Chat messages: mutable-content=true para NSE (sin content-available)
+      // - Other notifications: content-available=1 para background handler (sin mutable-content)
       const apsPayload = {
         alert: {
           title: title || "Talia",
           body: body || "",
         },
         sound: "default",
-        "content-available": 1,  // ✅ Despierta background handler
-        // ✅ SIEMPRE activar NSE para mensajes de chat (con o sin foto)
-        ...(isChatMessage ? { "mutable-content": 1 } : {}),
+        // ⚠️ IMPORTANTE: content-available y mutable-content son MUTUAMENTE EXCLUYENTES
+        // Si ambos están presentes, iOS no invoca el NSE
+        // Usando 'true' (boolean) en lugar de 1 (integer) según documentación FCM Admin SDK
+        ...(isChatMessage
+          ? { "mutable-content": true }  // Para NSE (no content-available)
+          : { "content-available": 1 }  // Para background handler (no mutable-content)
+        ),
       };
 
       const apnsPayload = {

@@ -64,7 +64,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   // Estado local de UI SOLAMENTE
   bool _showEmojiPicker = false;
   bool _isRecording = false;
-  bool _isSendingMessage = false;
   String? _audioPath;
   Map<String, dynamic>? _replyingTo;
   OverlayEntry? _reactionOverlay;
@@ -281,40 +280,23 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
 
   Future<void> _handleSendMessage() async {
     final text = _messageController.text.trim();
-    if (text.isEmpty || _isSendingMessage) return;
+    if (text.isEmpty) return;
 
-    // Prevenir envíos duplicados
-    setState(() => _isSendingMessage = true);
+    // Capturar replyTo antes de limpiarlo
+    final replyToCapture = _replyingTo;
 
-    try {
-      // Capturar replyTo antes de limpiarlo (para el envío)
-      final replyToCapture = _replyingTo;
-
-      _messageController.clear();
-
-      // Limpiar el reply optimísticamente (ANTES de enviar)
-      if (mounted) {
-        setState(() => _replyingTo = null);
-      }
-
-      final success = await _controller.sendTextMessage(
-        text: text,
-        replyTo: replyToCapture,
-      );
-
-      if (!success && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Error al enviar mensaje'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isSendingMessage = false);
-      }
+    // Limpiar input inmediatamente (UX optimista)
+    _messageController.clear();
+    if (mounted) {
+      setState(() => _replyingTo = null);
     }
+
+    // Envío fire-and-forget (permite encolar mensajes)
+    // El controller maneja errores internamente y muestra mensaje optimista
+    _controller.sendTextMessage(
+      text: text,
+      replyTo: replyToCapture,
+    );
   }
 
   Future<void> _handleSendImage(ImageSource source) async {

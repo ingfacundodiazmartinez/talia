@@ -212,29 +212,70 @@ class StoryRepository {
   }
 
   /// Obtener historias aprobadas por un padre específico
+  /// ✅ FIX: Solo retorna historias de hijos vinculados (linkedChildrenIds)
   Stream<List<Story>> getApprovedByParent(String parentId) {
+    // Primero obtener linkedChildrenIds del padre, luego filtrar stories
     return _firestore
-        .collection('stories')
-        .where('status', isEqualTo: 'approved')
-        .where('createdAt', isGreaterThan: _get24HoursAgo())
-        .orderBy('createdAt', descending: true)
+        .collection('users')
+        .doc(parentId)
         .snapshots()
-        .map((snapshot) => snapshot.docs
-            .map((doc) => Story.fromFirestore(doc))
-            .toList());
+        .asyncMap((parentDoc) async {
+      if (!parentDoc.exists) return <Story>[];
+
+      final parentData = parentDoc.data();
+      final linkedChildrenIds = List<String>.from(
+        parentData?['linkedChildrenIds'] ?? [],
+      );
+
+      if (linkedChildrenIds.isEmpty) return <Story>[];
+
+      // Query stories de los hijos vinculados (max 10 por limitación de Firestore)
+      final childrenChunk = linkedChildrenIds.take(10).toList();
+      final twentyFourHoursAgo = _get24HoursAgo();
+
+      final snapshot = await _firestore
+          .collection('stories')
+          .where('userId', whereIn: childrenChunk)
+          .where('status', isEqualTo: 'approved')
+          .where('createdAt', isGreaterThan: twentyFourHoursAgo)
+          .orderBy('createdAt', descending: true)
+          .get();
+
+      return snapshot.docs.map((doc) => Story.fromFirestore(doc)).toList();
+    });
   }
 
   /// Obtener historias rechazadas por un padre específico
+  /// ✅ FIX: Solo retorna historias de hijos vinculados (linkedChildrenIds)
   Stream<List<Story>> getRejectedByParent(String parentId) {
+    // Primero obtener linkedChildrenIds del padre, luego filtrar stories
     return _firestore
-        .collection('stories')
-        .where('status', isEqualTo: 'rejected')
-        .orderBy('createdAt', descending: true)
-        .limit(50) // Limitar historias rechazadas para performance
+        .collection('users')
+        .doc(parentId)
         .snapshots()
-        .map((snapshot) => snapshot.docs
-            .map((doc) => Story.fromFirestore(doc))
-            .toList());
+        .asyncMap((parentDoc) async {
+      if (!parentDoc.exists) return <Story>[];
+
+      final parentData = parentDoc.data();
+      final linkedChildrenIds = List<String>.from(
+        parentData?['linkedChildrenIds'] ?? [],
+      );
+
+      if (linkedChildrenIds.isEmpty) return <Story>[];
+
+      // Query stories de los hijos vinculados (max 10 por limitación de Firestore)
+      final childrenChunk = linkedChildrenIds.take(10).toList();
+
+      final snapshot = await _firestore
+          .collection('stories')
+          .where('userId', whereIn: childrenChunk)
+          .where('status', isEqualTo: 'rejected')
+          .orderBy('createdAt', descending: true)
+          .limit(50)
+          .get();
+
+      return snapshot.docs.map((doc) => Story.fromFirestore(doc)).toList();
+    });
   }
 
   // ═══════════════════════════════════════════════════════════════

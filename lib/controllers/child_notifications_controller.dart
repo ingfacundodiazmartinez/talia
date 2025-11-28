@@ -140,7 +140,6 @@ class ChildNotificationsController {
       final childNotifications = allDocs.where((doc) {
         final data = doc.data() as Map<String, dynamic>;
         final notifData = data['data'] as Map<String, dynamic>?;
-        final senderId = data['senderId'] as String?;
         final type = data['type'] as String?;
 
         // Excluir notificaciones de chat
@@ -148,10 +147,13 @@ class ChildNotificationsController {
           return false;
         }
 
-        // Verificar si la notificación está relacionada con este hijo
+        // ✅ FIX: Verificar si la notificación está relacionada con este hijo
+        // SOLO usar campos que realmente identifican al hijo:
+        // - notifData['childId']: La notificación es SOBRE este hijo
+        // - notifData['senderId']: La notificación fue ENVIADA por este hijo
+        // NO usar data['senderId'] ya que puede ser cualquier remitente (causa falsos positivos)
         final isRelated = notifData?['childId'] == childId ||
-               notifData?['senderId'] == childId ||
-               senderId == childId;
+               notifData?['senderId'] == childId;
 
         return isRelated;
       }).toList();
@@ -235,10 +237,10 @@ class ChildNotificationsController {
           continue;
         }
 
-        // Verificar si está relacionada con este hijo
+        // ✅ FIX: Verificar si está relacionada con este hijo
+        // SOLO usar campos que realmente identifican al hijo
         final isRelatedToChild = notifData?['childId'] == childId ||
-            notifData?['senderId'] == childId ||
-            data['senderId'] == childId;
+            notifData?['senderId'] == childId;
 
         if (isRelatedToChild && !_markedAsRead.contains(doc.id)) {
           batch.update(doc.reference, {
@@ -308,10 +310,10 @@ class ChildNotificationsController {
             continue;
           }
 
-          // Verificar si la notificación está relacionada con este hijo
+          // ✅ FIX: Verificar si la notificación está relacionada con este hijo
+          // SOLO usar campos que realmente identifican al hijo
           final isRelatedToChild = notifData?['childId'] == childId ||
-              notifData?['senderId'] == childId ||
-              data['senderId'] == childId;
+              notifData?['senderId'] == childId;
 
           if (isRelatedToChild) {
             batch.update(doc.reference, {

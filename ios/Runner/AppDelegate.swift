@@ -17,6 +17,9 @@ import Intents  // ✅ Necesario para INPerson e INImage
   private var firestoreIDToCallUUID: [String: UUID] = [:] // ✅ PHASE 1B: Reverse mapping for duplicate prevention
   private var pendingVoIPToken: String? = nil // ✅ Guardar token VoIP temporalmente
 
+  // ✅ FIX VIDEO CALL FROM LOCK SCREEN: Store callId that needs navigation after audio activates
+  private var pendingVideoCallNavigation: String? = nil
+
   // ✅ FIX #9: Health check for Stream Detector
   private var lastStreamDetectorHeartbeat: Date? = nil
   private let streamDetectorTimeout: TimeInterval = 30.0 // 30 seconds
@@ -84,6 +87,80 @@ import Intents  // ✅ Necesario para INPerson e INImage
         TaliaPhotoCache.savePhotoData(userId: userId, data: data)
         NSLog("✅ [PhotoCache] Saved photo to App Group for: \(userId) (\(data.count) bytes)")
         result(true)
+      } else {
+        result(FlutterMethodNotImplemented)
+      }
+    }
+
+    // ✅ NSE Deduplication channel para verificar si messageId ya fue procesado por NSE
+    let nseDeduplicationChannel = FlutterMethodChannel(name: "com.talia.chat/nse_deduplication", binaryMessenger: controller.binaryMessenger)
+    nseDeduplicationChannel.setMethodCallHandler { (call: FlutterMethodCall, result: @escaping FlutterResult) in
+      let appGroupId = "group.com.talia.chat"
+      let processedMessagesKey = "nse_processed_message_ids"
+
+      if call.method == "wasProcessedByNSE" {
+        // Verificar si un messageId ya fue procesado por el NSE
+        guard let messageId = call.arguments as? String else {
+          result(false)
+          return
+        }
+
+        guard let userDefaults = UserDefaults(suiteName: appGroupId) else {
+          NSLog("⚠️ [NSE Dedup] No se pudo acceder a App Group UserDefaults")
+          result(false)
+          return
+        }
+
+        let processedIds = userDefaults.stringArray(forKey: processedMessagesKey) ?? []
+        let wasProcessed = processedIds.contains(messageId)
+        NSLog("🔍 [NSE Dedup] messageId=\(messageId.prefix(8))... wasProcessedByNSE=\(wasProcessed)")
+        result(wasProcessed)
+
+      } else if call.method == "getProcessedByNSE" {
+        // Obtener todos los IDs procesados por NSE
+        guard let userDefaults = UserDefaults(suiteName: appGroupId) else {
+          result([String]())
+          return
+        }
+
+        let processedIds = userDefaults.stringArray(forKey: processedMessagesKey) ?? []
+        result(processedIds)
+
+      } else if call.method == "clearProcessedByNSE" {
+        // Limpiar lista de IDs procesados (llamar al iniciar sesión o cuando sea necesario)
+        guard let userDefaults = UserDefaults(suiteName: appGroupId) else {
+          result(false)
+          return
+        }
+
+        userDefaults.removeObject(forKey: processedMessagesKey)
+        userDefaults.synchronize()
+        NSLog("🧹 [NSE Dedup] Lista de IDs procesados limpiada")
+        result(true)
+
+      } else if call.method == "getNSEDebugLogs" {
+        // Obtener logs de debug del NSE para diagnóstico
+        guard let userDefaults = UserDefaults(suiteName: appGroupId) else {
+          result([String]())
+          return
+        }
+
+        let debugLogs = userDefaults.stringArray(forKey: "nse_debug_log") ?? []
+        NSLog("📋 [NSE Debug] Returning \(debugLogs.count) debug logs")
+        result(debugLogs)
+
+      } else if call.method == "clearNSEDebugLogs" {
+        // Limpiar logs de debug
+        guard let userDefaults = UserDefaults(suiteName: appGroupId) else {
+          result(false)
+          return
+        }
+
+        userDefaults.removeObject(forKey: "nse_debug_log")
+        userDefaults.synchronize()
+        NSLog("🧹 [NSE Debug] Logs limpiados")
+        result(true)
+
       } else {
         result(FlutterMethodNotImplemented)
       }
@@ -670,8 +747,12 @@ import Intents  // ✅ Necesario para INPerson e INImage
       return
     }
 
-    // ✅ FIX #11: Eliminar delay artificial de 500ms
-    // Flutter ya está listo cuando CallKit se activa, delay innecesario
+    // ✅ FIX VIDEO FROM LOCK SCREEN: Store callId for navigation when audio activates
+    // This ensures video calls navigate to the app even when answered from lock screen
+    self.pendingVideoCallNavigation = firestoreCallId
+    NSLog("📹 [CallKit] Stored pending video call navigation: \(firestoreCallId)")
+
+    // Notify Flutter immediately to start accepting the call
     DispatchQueue.main.async {
       guard let controller = self.window?.rootViewController as? FlutterViewController else {
         NSLog("❌ [CallKit] No FlutterViewController")
@@ -712,6 +793,26 @@ import Intents  // ✅ Necesario para INPerson e INImage
 
   func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
     NSLog("📱 [CallKit] Audio session activated")
+
+    // ✅ FIX VIDEO FROM LOCK SCREEN: When audio activates, force navigation to video call screen
+    // This is the moment when iOS allows the app to take over from CallKit UI
+    if let callId = self.pendingVideoCallNavigation {
+      NSLog("📹 [CallKit] Audio active - triggering video navigation for: \(callId)")
+      self.pendingVideoCallNavigation = nil // Clear to prevent duplicate navigation
+
+      // Small delay to ensure Flutter engine is ready and app is fully active
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+        guard let controller = self.window?.rootViewController as? FlutterViewController else {
+          NSLog("❌ [CallKit] No FlutterViewController for video navigation")
+          return
+        }
+
+        let channel = FlutterMethodChannel(name: "com.talia.chat/voip", binaryMessenger: controller.binaryMessenger)
+        // Send a specific event to force navigation to the video screen
+        channel.invokeMethod("onVideoCallReady", arguments: ["callId": callId])
+        NSLog("✅ [CallKit] Flutter notified to show video UI for: \(callId)")
+      }
+    }
   }
 
   func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {

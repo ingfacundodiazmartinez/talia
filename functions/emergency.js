@@ -5,6 +5,7 @@ const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestor
 const { getMessaging } = require("firebase-admin/messaging");
 const { getStorage } = require("firebase-admin/storage");
 const { checkRateLimit, RATE_LIMITS } = require("./helpers");
+const { RtcTokenBuilder, RtcRole } = require('agora-token');
 
 // ═══════════════════════════════════════════════════════════════
 // EMERGENCY
@@ -99,70 +100,121 @@ exports.createEmergency = onCall(
       const emergencyRef = await db.collection("emergencies").add(emergencyData);
       console.log(`✅ Emergencia creada: ${emergencyRef.id}`);
 
-      // Obtener IDs y nombres de padres
+      // Obtener IDs, nombres y fotos de padres
       const parentIds = parentLinks.docs.map((doc) => doc.data().parentId);
       const parentNames = {};
+      const parentPhotos = {};
       for (const parentLink of parentLinks.docs) {
         const parentId = parentLink.data().parentId;
         const parentDoc = await db.collection("users").doc(parentId).get();
         if (parentDoc.exists) {
-          parentNames[parentId] = parentDoc.data().name || "Padre";
+          const parentData = parentDoc.data();
+          parentNames[parentId] = parentData.name || "Padre";
+          parentPhotos[parentId] = parentData.photoURL || null;
         }
       }
 
-      // Crear videollamada de emergencia grupal
-      const participants = [];
+      // ✅ Obtener foto del niño
+      const childPhotoURL = childData.photoURL || null;
 
-      // CRÍTICO: NO podemos usar FieldValue.serverTimestamp() dentro de arrays
+      // ✅ Generar tokens de Agora para todos los participantes
+      const appId = process.env.AGORA_APP_ID;
+      const appCertificate = process.env.AGORA_APP_CERTIFICATE;
+
+      if (!appId || !appCertificate) {
+        console.error("❌ Agora credentials not configured");
+        throw new HttpsError("failed-precondition", "Agora service not properly configured");
+      }
+
+      const channelName = `emergency_${emergencyRef.id}`;
+      const expirationTimeInSeconds = 3600 * 24; // 24 hours
+      const currentTimestamp = Math.floor(Date.now() / 1000);
+      const privilegeExpiredTs = currentTimestamp + expirationTimeInSeconds;
+
+      // Crear videollamada de emergencia grupal
+      const participants = {};
+      let uidCounter = 1;
+
+      // CRÍTICO: NO podemos usar FieldValue.serverTimestamp() dentro de maps/arrays
       // Usamos Timestamp.now() en su lugar
       const now = Timestamp.now();
 
-      // Agregar niño como caller (ya unido)
-      participants.push({
-        userId: userId,
-        userName: childName,
-        status: "joined",
-        joinedAt: now,  // Usar Timestamp.now() en lugar de FieldValue.serverTimestamp()
-        leftAt: null,
-      });
+      // ✅ Generar token para el niño (caller)
+      const childAgoraUid = uidCounter++;
+      const childToken = RtcTokenBuilder.buildTokenWithUid(
+        appId,
+        appCertificate,
+        channelName,
+        childAgoraUid,
+        RtcRole.PUBLISHER,
+        privilegeExpiredTs
+      );
 
-      // Agregar padres (en estado ringing)
+      // Agregar niño como caller (ya unido) CON TOKEN Y FOTO
+      participants[userId] = {
+        uid: userId,
+        agoraUid: childAgoraUid,
+        token: childToken,
+        displayName: childName,
+        photoUrl: childPhotoURL,
+        status: "joined",
+        joinedAt: now,
+        leftAt: null,
+      };
+
+      // Agregar padres (en estado ringing) CON TOKENS Y FOTOS
       for (const parentId of parentIds) {
-        participants.push({
-          userId: parentId,
-          userName: parentNames[parentId] || "Padre",
+        const parentAgoraUid = uidCounter++;
+        const parentToken = RtcTokenBuilder.buildTokenWithUid(
+          appId,
+          appCertificate,
+          channelName,
+          parentAgoraUid,
+          RtcRole.PUBLISHER,
+          privilegeExpiredTs
+        );
+
+        participants[parentId] = {
+          uid: parentId,
+          agoraUid: parentAgoraUid,
+          token: parentToken,
+          displayName: parentNames[parentId] || "Padre",
+          photoUrl: parentPhotos[parentId] || null,
           status: "ringing",
           joinedAt: null,
           leftAt: null,
-        });
+        };
       }
 
       // Crear documento de llamada grupal de emergencia con ID específico (emergencyId)
+      // ✅ Usar estructura compatible con calls_v2/models/call_v2.dart
       const videoCallData = {
-        callId: emergencyRef.id,
-        callerId: userId,
-        callerName: childName,
-        channelName: `emergency_${emergencyRef.id}`,
-        isGroupCall: true,
-        isEmergency: true,
-        groupId: null,
-        participants: participants,
-        participantIds: parentIds, // ✅ Array simple de IDs para queries
-        status: "ringing",
+        // Campos requeridos por CallV2.fromFirestore()
+        channelName: channelName,
+        createdBy: userId, // ✅ Campo correcto para CallV2
         createdAt: FieldValue.serverTimestamp(),
-        endedAt: null,
-        token: "",
+        isVideo: true, // ✅ Campo correcto
+        isGroup: true, // ✅ Campo correcto (no isGroupCall)
+        participants: participants, // ✅ Map con uid como key
         callType: "video",
+        // Campos adicionales para contexto
+        isEmergency: true,
+        callerName: childName,
+        // Campos opcionales que no existen en CallV2 model pero pueden ser útiles
+        participantIds: [userId, ...parentIds],
       };
 
-      console.log(`🔍 [createEmergency] Creando video_calls/${emergencyRef.id} con datos:`);
-      console.log(`   - status: ${videoCallData.status}`);
-      console.log(`   - participants: ${JSON.stringify(participants)}`);
-      console.log(`   - participantIds: ${JSON.stringify(parentIds)}`);
+      console.log(`🔍 [createEmergency] Creando calls_v2/${emergencyRef.id} con datos:`);
+      console.log(`   - channelName: ${videoCallData.channelName}`);
+      console.log(`   - createdBy: ${videoCallData.createdBy}`);
+      console.log(`   - isVideo: ${videoCallData.isVideo}`);
+      console.log(`   - isGroup: ${videoCallData.isGroup}`);
+      console.log(`   - participants keys: ${Object.keys(participants).join(', ')}`);
 
-      await db.collection("video_calls").doc(emergencyRef.id).set(videoCallData);
+      // ✅ IMPORTANTE: Usar colección calls_v2 (compatible con la arquitectura calls_v2)
+      await db.collection("calls_v2").doc(emergencyRef.id).set(videoCallData);
 
-      console.log(`✅ Videollamada de emergencia creada con ID: ${emergencyRef.id}`);
+      console.log(`✅ Videollamada de emergencia creada en calls_v2/${emergencyRef.id}`);
 
       // ⚡ OPTIMIZACIÓN: Enviar notificaciones VoIP usando helpers directamente
       // Con fallback a FCM si VoIP falla (igual que llamadas normales)
@@ -187,14 +239,22 @@ exports.createEmergency = onCall(
 
           // 🎯 INTENTAR VoIP PRIMERO (si tiene token)
           if (voipToken) {
+            // Obtener el token y agoraUid del padre
+            const parentParticipant = participants[parentId];
+
             const voipPayload = {
               callId: emergencyRef.id,
               callerId: userId,
               callerName: childName,
-              channelName: `emergency_${emergencyRef.id}`,
+              channelName: channelName,
               callType: "video",
+              isVideo: "true",
               isEmergency: "true",
+              isGroup: "true",
               callerPhotoURL: childPhotoURL,
+              // ✅ Incluir token y agoraUid para unirse directamente
+              token: parentParticipant.token,
+              agoraUid: parentParticipant.agoraUid.toString(),
             };
 
             console.log(`📱 [EMERGENCY VoIP] Enviando a ${parentNames[parentId]}...`);
@@ -219,6 +279,9 @@ exports.createEmergency = onCall(
           if (!voipSent && fcmToken) {
             console.log(`📲 [EMERGENCY FCM] Enviando fallback a ${parentNames[parentId]}...`);
 
+            // Obtener el token y agoraUid del padre
+            const parentParticipantFcm = participants[parentId];
+
             const messaging = getMessaging();
             const message = {
               token: fcmToken,
@@ -226,12 +289,17 @@ exports.createEmergency = onCall(
                 callId: emergencyRef.id,
                 callerId: userId,
                 callerName: childName,
-                channelName: `emergency_${emergencyRef.id}`,
+                channelName: channelName,
                 callType: "video",
+                isVideo: "true",
                 isEmergency: "true",
+                isGroup: "true",
                 type: "emergency_call",
                 title: `🆘 EMERGENCIA - ${childName}`,
                 body: customMessage || `${childName} ha activado el botón de emergencia y necesita ayuda urgente`,
+                // ✅ Incluir token y agoraUid para unirse directamente
+                agoraToken: parentParticipantFcm.token,
+                agoraUid: parentParticipantFcm.agoraUid.toString(),
               },
               apns: {
                 headers: {

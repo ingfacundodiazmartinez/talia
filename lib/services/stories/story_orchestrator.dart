@@ -180,6 +180,11 @@ class StoryOrchestrator {
     return _approvalService.getApprovedStoriesForParent();
   }
 
+  /// Obtener historias rechazadas para padre
+  Stream<List<Story>> getRejectedStoriesForParent() {
+    return _approvalService.getRejectedStoriesForParent();
+  }
+
   /// Responder a historia
   Future<void> replyToStory({
     required String storyId,

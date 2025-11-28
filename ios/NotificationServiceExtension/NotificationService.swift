@@ -14,6 +14,12 @@ class NotificationService: UNNotificationServiceExtension {
     var contentHandler: ((UNNotificationContent) -> Void)?
     var bestAttemptContent: UNMutableNotificationContent?
 
+    // ✅ App Group para compartir datos con la app principal
+    private let appGroupId = "group.com.talia.chat"
+    private let processedMessagesKey = "nse_processed_message_ids"
+    private let maxStoredIds = 100 // Limitar para no consumir mucha memoria
+    private let nseDebugLogKey = "nse_debug_log" // Para diagnóstico desde Dart
+
     override func didReceive(_ request: UNNotificationRequest, withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void) {
         self.contentHandler = contentHandler
         bestAttemptContent = (request.content.mutableCopy() as? UNMutableNotificationContent)
@@ -23,8 +29,53 @@ class NotificationService: UNNotificationServiceExtension {
             return
         }
 
-        print("📥 [NotificationService] Recibiendo notificación")
-        print("📦 [NotificationService] UserInfo: \(bestAttemptContent.userInfo)")
+        NSLog("📥 [NSE] Recibiendo notificación")
+        appendDebugLog("NSE TRIGGERED")
+
+        // Log todas las keys del userInfo para diagnóstico
+        let keys = bestAttemptContent.userInfo.keys.map { String(describing: $0) }.joined(separator: ", ")
+        NSLog("📦 [NSE] UserInfo keys: \(keys)")
+        appendDebugLog("KEYS: \(keys)")
+
+        // ✅ Guardar messageId en App Group para que la app Dart sepa que NSE ya lo procesó
+        // Intentar múltiples paths ya que FCM puede estructurar los datos de diferentes formas
+        var messageId: String? = nil
+
+        // Path 1: Directamente en userInfo
+        if let id = bestAttemptContent.userInfo["messageId"] as? String {
+            messageId = id
+            NSLog("📍 [NSE] messageId encontrado directo: \(id)")
+            appendDebugLog("FOUND DIRECT: \(id)")
+        }
+        // Path 2: Dentro de "data" si existe
+        else if let data = bestAttemptContent.userInfo["data"] as? [String: Any],
+                let id = data["messageId"] as? String {
+            messageId = id
+            NSLog("📍 [NSE] messageId encontrado en data: \(id)")
+            appendDebugLog("FOUND IN DATA: \(id)")
+        }
+        // Path 3: Dentro de "aps.alert.data" (alternativo)
+        else if let aps = bestAttemptContent.userInfo["aps"] as? [String: Any],
+                let alert = aps["alert"] as? [String: Any],
+                let id = alert["messageId"] as? String {
+            messageId = id
+            NSLog("📍 [NSE] messageId encontrado en aps.alert: \(id)")
+            appendDebugLog("FOUND IN APS.ALERT: \(id)")
+        }
+
+        if let messageId = messageId {
+            saveProcessedMessageId(messageId)
+            NSLog("💾 [NSE] MessageId guardado en App Group: \(messageId)")
+        } else {
+            NSLog("⚠️ [NSE] No se encontró messageId en userInfo")
+            appendDebugLog("NOT FOUND - checking all values:")
+            // Log de todas las keys para diagnóstico
+            for (key, value) in bestAttemptContent.userInfo {
+                let valueStr = String(describing: value).prefix(100)
+                NSLog("📋 [NSE] userInfo[\(key)] = \(valueStr)")
+                appendDebugLog("  \(key): \(valueStr)")
+            }
+        }
 
         // Obtener información del sender del payload
         let senderPhotoUrl = bestAttemptContent.userInfo["senderPhotoUrl"] as? String
@@ -35,14 +86,14 @@ class NotificationService: UNNotificationServiceExtension {
         if let photoUrlString = senderPhotoUrl,
            let photoUrl = URL(string: photoUrlString) {
 
-            print("📥 [NotificationService] Descargando foto del remitente: \(photoUrlString)")
+            NSLog("📥 [NSE] Descargando foto del remitente")
 
             // Descargar la imagen de forma asíncrona
             downloadImage(from: photoUrl) { [weak self] imageData in
                 guard let self = self else { return }
 
                 if let imageData = imageData {
-                    print("✅ [NotificationService] Foto descargada")
+                    NSLog("✅ [NSE] Foto descargada")
 
                     // Crear Communication Notification
                     self.createCommunicationNotification(
@@ -52,19 +103,19 @@ class NotificationService: UNNotificationServiceExtension {
                         avatarData: imageData
                     )
                 } else {
-                    print("⚠️ [NotificationService] No se pudo descargar la foto, usando notificación estándar")
+                    NSLog("⚠️ [NSE] No se pudo descargar la foto, usando notificación estándar")
                     contentHandler(bestAttemptContent)
                 }
             }
         } else {
-            print("ℹ️ [NotificationService] No hay senderPhotoUrl, usando notificación estándar")
+            NSLog("ℹ️ [NSE] No hay senderPhotoUrl, usando notificación estándar")
             contentHandler(bestAttemptContent)
         }
     }
 
     override func serviceExtensionTimeWillExpire() {
         // Called just before the extension will be terminated by the system.
-        print("⏰ [NotificationService] Tiempo expirado, entregando notificación")
+        NSLog("⏰ [NSE] Tiempo expirado, entregando notificación")
         if let contentHandler = contentHandler, let bestAttemptContent = bestAttemptContent {
             contentHandler(bestAttemptContent)
         }
@@ -116,14 +167,14 @@ class NotificationService: UNNotificationServiceExtension {
 
             // Convertir el intent en notification content
             if let updatedContent = try? content.updating(from: intent) as? UNMutableNotificationContent {
-                print("✅ [NotificationService] Communication Notification creada exitosamente")
+                NSLog("✅ [NSE] Communication Notification creada exitosamente")
                 self.contentHandler?(updatedContent)
             } else {
-                print("⚠️ [NotificationService] No se pudo actualizar el content con el intent")
+                NSLog("⚠️ [NSE] No se pudo actualizar el content con el intent")
                 self.contentHandler?(content)
             }
         } catch {
-            print("❌ [NotificationService] Error creando Communication Notification: \(error.localizedDescription)")
+            NSLog("❌ [NSE] Error creando Communication Notification: \(error.localizedDescription)")
             self.contentHandler?(content)
         }
     }
@@ -131,21 +182,72 @@ class NotificationService: UNNotificationServiceExtension {
     private func downloadImage(from url: URL, completion: @escaping (Data?) -> Void) {
         let task = URLSession.shared.dataTask(with: url) { data, response, error in
             if let error = error {
-                print("❌ [NotificationService] Error descargando imagen: \(error.localizedDescription)")
+                NSLog("❌ [NSE] Error descargando imagen: \(error.localizedDescription)")
                 completion(nil)
                 return
             }
 
             guard let data = data else {
-                print("❌ [NotificationService] No se recibieron datos de imagen")
+                NSLog("❌ [NSE] No se recibieron datos de imagen")
                 completion(nil)
                 return
             }
 
-            print("✅ [NotificationService] Imagen descargada: \(data.count) bytes")
+            NSLog("✅ [NSE] Imagen descargada: \(data.count) bytes")
             completion(data)
         }
 
         task.resume()
+    }
+
+    // MARK: - App Group Storage (para evitar duplicados con app Dart)
+
+    /// Guarda el messageId en App Group UserDefaults para que la app Dart sepa que NSE ya lo procesó
+    private func saveProcessedMessageId(_ messageId: String) {
+        guard let userDefaults = UserDefaults(suiteName: appGroupId) else {
+            NSLog("⚠️ [NSE] No se pudo acceder a App Group UserDefaults")
+            appendDebugLog("ERROR: No se pudo acceder a App Group UserDefaults")
+            return
+        }
+
+        var processedIds = userDefaults.stringArray(forKey: processedMessagesKey) ?? []
+        NSLog("📋 [NSE] IDs previos en App Group: \(processedIds.count)")
+
+        // Evitar duplicados
+        if !processedIds.contains(messageId) {
+            processedIds.append(messageId)
+
+            // Limitar tamaño del array (mantener solo los últimos N)
+            if processedIds.count > maxStoredIds {
+                processedIds = Array(processedIds.suffix(maxStoredIds))
+            }
+
+            userDefaults.set(processedIds, forKey: processedMessagesKey)
+            userDefaults.synchronize() // Forzar escritura inmediata
+            NSLog("✅ [NSE] MessageId guardado. Total IDs: \(processedIds.count)")
+            appendDebugLog("SAVED: \(messageId) (total: \(processedIds.count))")
+        } else {
+            NSLog("ℹ️ [NSE] MessageId ya existe en App Group")
+            appendDebugLog("DUPLICATE: \(messageId)")
+        }
+    }
+
+    /// Agrega un mensaje de debug al App Group para que Dart pueda leerlo
+    private func appendDebugLog(_ message: String) {
+        guard let userDefaults = UserDefaults(suiteName: appGroupId) else { return }
+
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let logEntry = "[\(timestamp)] \(message)"
+
+        var logs = userDefaults.stringArray(forKey: nseDebugLogKey) ?? []
+        logs.append(logEntry)
+
+        // Mantener solo los últimos 20 logs
+        if logs.count > 20 {
+            logs = Array(logs.suffix(20))
+        }
+
+        userDefaults.set(logs, forKey: nseDebugLogKey)
+        userDefaults.synchronize()
     }
 }

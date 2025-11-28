@@ -11,6 +11,7 @@ import '../services/media_compression_service.dart';
 import '../services/chats/repositories/user_repository.dart';
 import '../services/chats/repositories/message_repository.dart';
 import '../services/chats/repositories/chat_repository.dart';
+import '../services/user_settings_service.dart';
 import '../utils/release_logger.dart';
 
 /// Controller que maneja la lógica de un chat grupal
@@ -118,10 +119,19 @@ class GroupChatController {
     try {
       if (currentUserId.isEmpty) return;
 
-      // 1. Resetear contador de no leídos
+      // 1. Resetear contador de no leídos (siempre se hace para la UI local)
       await _firestore.collection('groups').doc(groupId).update({
         'unreadCount_$currentUserId': 0,
       });
+
+      // ✅ FIX: Verificar si el usuario tiene activadas las confirmaciones de lectura
+      // Si está deshabilitado, no marcamos los mensajes como leídos (readBy)
+      final showReceipts = await UserSettingsService().showReadReceipts();
+
+      if (!showReceipts) {
+        ReleaseLogger.log('🔒 Confirmaciones de lectura desactivadas - no se marca readBy en grupo $groupId', tag: 'GroupChatController');
+        return;
+      }
 
       // 2. Marcar mensajes individuales como leídos (actualizar array readBy[])
       // NO usar where() para evitar problemas de índices - leer todos y filtrar

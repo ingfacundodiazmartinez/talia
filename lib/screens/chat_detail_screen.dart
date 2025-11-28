@@ -64,7 +64,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   // Local UI state
   bool _showEmojiPicker = false;
   bool _isRecording = false;
-  bool _isSendingMessage = false;
   Map<String, dynamic>? _replyingTo;
   OverlayEntry? _reactionOverlay;
   bool _isSelectionMode = false;
@@ -241,39 +240,34 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     }
 
     final text = _messageController.text.trim();
-    if (text.isEmpty || _isSendingMessage) return;
+    if (text.isEmpty) return;
 
-    // Prevenir envíos duplicados
-    setState(() => _isSendingMessage = true);
+    final replyToCapture = _replyingTo;
+    final editingMessageId = _editingBlockedMessage?['id'];
 
-    try {
-      final replyToCapture = _replyingTo;
-      final editingMessageId = _editingBlockedMessage?['id'];
+    // Limpiar input inmediatamente (UX optimista)
+    _messageController.clear();
+    if (mounted) {
+      setState(() {
+        _replyingTo = null;
+        _editingBlockedMessage = null;
+      });
+    }
 
-      _messageController.clear();
-
-      if (mounted) {
-        setState(() {
-          _replyingTo = null;
-          _editingBlockedMessage = null;
-        });
-      }
-
-      if (editingMessageId != null) {
-        // Edit blocked message flow (re-sends with moderation check)
+    if (editingMessageId != null) {
+      // Edit blocked message - esperar resultado
+      try {
         await _controller!.editBlockedMessage(
           messageId: editingMessageId,
           newText: text,
         );
-      } else {
-        await _controller!.sendTextMessage(text: text, replyTo: replyToCapture);
+      } catch (e) {
+        _handleSendError(e, text);
       }
-    } catch (e) {
-      _handleSendError(e, text);
-    } finally {
-      if (mounted) {
-        setState(() => _isSendingMessage = false);
-      }
+    } else {
+      // Envío normal - fire-and-forget (permite encolar mensajes)
+      // El controller maneja errores internamente y muestra mensaje optimista
+      _controller!.sendTextMessage(text: text, replyTo: replyToCapture);
     }
   }
 

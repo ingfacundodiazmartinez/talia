@@ -328,6 +328,62 @@ class CallOrchestrator {
     }
   }
 
+  /// Leave a group call without ending it for others
+  /// Only leaves Agora channel and updates own participant status
+  Future<ServiceResponse<bool>> leaveCall({String? callId}) async {
+    try {
+      final targetCallId = callId ?? _currentCallId;
+      if (targetCallId == null) {
+        return ServiceResponse.error(
+          'No call to leave',
+          errorCode: 'NO_ACTIVE_CALL',
+        );
+      }
+
+      ReleaseLogger.log(
+        'Orchestrating leave call flow for $targetCallId',
+        tag: _tag,
+      );
+
+      // Step 1: Leave Agora channel
+      ReleaseLogger.log(
+        '🔍 [LeaveCall] Step 1: Checking isInChannel=${_agoraEngineService.isInChannel}',
+        tag: _tag,
+      );
+      if (_agoraEngineService.isInChannel) {
+        ReleaseLogger.log('📤 [LeaveCall] Calling leaveChannel()...', tag: _tag);
+        await _agoraEngineService.leaveChannel();
+        ReleaseLogger.log('✅ [LeaveCall] leaveChannel() completed', tag: _tag);
+      }
+
+      // Step 2: Update only own participant status (NOT endedAt)
+      ReleaseLogger.log('📝 [LeaveCall] Step 2: Updating own participant status...', tag: _tag);
+      final leaveResult = await _callStatusService.leaveCall(targetCallId);
+      if (!leaveResult.success) {
+        ReleaseLogger.error('❌ [LeaveCall] Firestore update failed: ${leaveResult.error}', tag: _tag);
+        return ServiceResponse.error(
+          leaveResult.error ?? 'Failed to leave call',
+        );
+      }
+      ReleaseLogger.log('✅ [LeaveCall] Firestore updated successfully', tag: _tag);
+
+      // Step 3: Cleanup if this was the current call
+      if (targetCallId == _currentCallId) {
+        ReleaseLogger.log('🧹 [LeaveCall] Step 3: Cleaning up...', tag: _tag);
+        _cleanup();
+      }
+
+      ReleaseLogger.log('✅ [LeaveCall] Leave call flow completed (call continues for others)', tag: _tag);
+      return ServiceResponse.success(true);
+    } catch (e) {
+      ReleaseLogger.error('Error in leave call flow: $e', tag: _tag);
+      return ServiceResponse.error(
+        'Failed to leave call: ${e.toString()}',
+        errorCode: 'ORCHESTRATION_ERROR',
+      );
+    }
+  }
+
   /// Join an existing call with provided credentials
   Future<ServiceResponse<bool>> joinCallWithCredentials({
     required String channelName,

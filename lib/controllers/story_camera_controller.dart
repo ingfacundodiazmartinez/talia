@@ -27,21 +27,17 @@ import '../utils/release_logger.dart';
 /// - Gestión de límites de uso y suscripciones
 /// - Coordinación entre servicios
 ///
-/// ## 🔒 CONFIGURACIÓN SEGURA:
-/// Para usar filtros DeepAR, configure la license key usando --dart-define:
-/// ```bash
-/// flutter run --dart-define=DEEPAR_LICENSE_KEY="tu_license_key_aqui"
-/// flutter build --dart-define=DEEPAR_LICENSE_KEY="tu_license_key_aqui"
-/// ```
-/// Para CI/CD, configure como variable de entorno en el pipeline.
+/// ## DeepAR License Keys:
+/// Las keys están configuradas por plataforma (iOS/Android).
+/// Para producción, actualizar las keys desde https://developer.deepar.ai/
 class StoryCameraController {
   final String userId;
 
-  // 🔒 SECURE CONFIGURATION
-  static const String _deepArLicenseKey = String.fromEnvironment(
-    'DEEPAR_LICENSE_KEY',
-    defaultValue: '',
-  );
+  // DeepAR License Keys por plataforma
+  static const String _iosLicenseKey =
+      'bc5821fe04221f7349429783cced44ddbe6006d0287c4397dc97fc5dd993a843429712eda6fe98c9';
+  static const String _androidLicenseKey =
+      'e54c25aaa8b14776f4837d0c406f91bebb6f9652716847c37004a458645242ccce15c78ea3f1084b';
 
   // Servicios privados
   final DeepARService _deepARService;
@@ -75,6 +71,15 @@ class StoryCameraController {
   String? _recordedVideoPath;
   Timer? _recordingTimer;
   int _recordingSecondsRemaining = 10;
+
+  // Estado de controles de cámara (flash, zoom, exposure)
+  FlashMode _flashMode = FlashMode.off;
+  double _currentZoom = 1.0;
+  double _minZoom = 1.0;
+  double _maxZoom = 1.0;
+  double _currentExposure = 0.0;
+  double _minExposure = 0.0;
+  double _maxExposure = 0.0;
 
   // Estado de carga y procesamiento
   bool _isLoading = false;
@@ -135,6 +140,18 @@ class StoryCameraController {
   bool get isLoading => _isLoading;
   bool get isLoadingStickers => _isLoadingStickers;
   List<StickerMetadata> get stickerMetadata => _stickerMetadata;
+
+  // Getters para controles de cámara
+  FlashMode get flashMode => _flashMode;
+  double get currentZoom => _currentZoom;
+  double get minZoom => _minZoom;
+  double get maxZoom => _maxZoom;
+  double get currentExposure => _currentExposure;
+  double get minExposure => _minExposure;
+  double get maxExposure => _maxExposure;
+  bool get isBackCamera => _cameras != null &&
+                           _selectedCameraIndex < _cameras!.length &&
+                           _cameras![_selectedCameraIndex].lensDirection == CameraLensDirection.back;
 
   /// Inicializa el controller
   Future<void> initialize({BuildContext? context}) async {
@@ -239,9 +256,22 @@ class StoryCameraController {
 
   /// Inicializar controller de cámara específico
   Future<void> _initializeCameraController() async {
-    if (_cameras == null || _cameras!.isEmpty) return;
+    if (_cameras == null || _cameras!.isEmpty) {
+      ReleaseLogger.error('❌ No hay cámaras disponibles', tag: 'StoryCameraController');
+      return;
+    }
 
-    _cameraController?.dispose();
+    // Dispose controller anterior si existe
+    if (_cameraController != null) {
+      ReleaseLogger.log('🧹 Disposing controller anterior...', tag: 'StoryCameraController');
+      await _cameraController!.dispose();
+      _cameraController = null;
+    }
+
+    ReleaseLogger.log(
+      '🤳 Creando CameraController para índice $_selectedCameraIndex (${_cameras![_selectedCameraIndex].lensDirection})',
+      tag: 'StoryCameraController',
+    );
 
     _cameraController = CameraController(
       _cameras![_selectedCameraIndex],
@@ -251,6 +281,40 @@ class StoryCameraController {
 
     await _cameraController!.initialize();
     _isCameraInitialized = true;
+
+    ReleaseLogger.log(
+      '🤳 Camera inicializada en índice $_selectedCameraIndex (${_cameras![_selectedCameraIndex].lensDirection})',
+      tag: 'StoryCameraController',
+    );
+
+    // Obtener límites de zoom y exposure
+    await _initializeCameraLimits();
+  }
+
+  /// Inicializar límites de zoom y exposure después de que la cámara esté lista
+  Future<void> _initializeCameraLimits() async {
+    if (_cameraController == null || !_cameraController!.value.isInitialized) return;
+
+    try {
+      _minZoom = await _cameraController!.getMinZoomLevel();
+      _maxZoom = await _cameraController!.getMaxZoomLevel();
+      _currentZoom = _minZoom;
+
+      _minExposure = await _cameraController!.getMinExposureOffset();
+      _maxExposure = await _cameraController!.getMaxExposureOffset();
+      _currentExposure = 0.0;
+
+      // Reset flash mode (off por defecto, especialmente para cámara frontal)
+      _flashMode = FlashMode.off;
+      await _cameraController!.setFlashMode(_flashMode);
+
+      ReleaseLogger.log(
+        '📸 Camera limits - Zoom: $_minZoom-$_maxZoom, Exposure: $_minExposure-$_maxExposure',
+        tag: 'StoryCameraController',
+      );
+    } catch (e) {
+      ReleaseLogger.error('Error getting camera limits: $e', tag: 'StoryCameraController');
+    }
   }
 
   /// Cambiar cámara (frontal/trasera)
@@ -258,7 +322,103 @@ class StoryCameraController {
     if (_cameras == null || _cameras!.length <= 1) return;
 
     _selectedCameraIndex = (_selectedCameraIndex + 1) % _cameras!.length;
+    ReleaseLogger.log(
+      '🔄 Switching to camera index $_selectedCameraIndex',
+      tag: 'StoryCameraController',
+    );
     await _initializeCameraController();
+
+    // Notificar a la UI para que se actualice
+    onCameraInitialized?.call();
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // CONTROLES DE CÁMARA: FLASH, ZOOM, EXPOSURE
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Ciclar entre modos de flash: off → auto → always → torch → off
+  Future<void> toggleFlashMode() async {
+    if (_cameraController == null || !_isCameraInitialized) return;
+
+    try {
+      // Determinar siguiente modo de flash
+      FlashMode nextMode;
+      switch (_flashMode) {
+        case FlashMode.off:
+          nextMode = FlashMode.auto;
+          break;
+        case FlashMode.auto:
+          nextMode = FlashMode.always;
+          break;
+        case FlashMode.always:
+          nextMode = FlashMode.torch;
+          break;
+        case FlashMode.torch:
+          nextMode = FlashMode.off;
+          break;
+      }
+
+      await _cameraController!.setFlashMode(nextMode);
+      _flashMode = nextMode;
+      ReleaseLogger.log('🔦 Flash mode: ${_flashMode.name}', tag: 'StoryCameraController');
+    } catch (e) {
+      ReleaseLogger.error('Error setting flash mode: $e', tag: 'StoryCameraController');
+      onError?.call('Error cambiando modo de flash');
+    }
+  }
+
+  /// Establecer modo de flash específico
+  Future<void> setFlashMode(FlashMode mode) async {
+    if (_cameraController == null || !_isCameraInitialized) return;
+
+    try {
+      await _cameraController!.setFlashMode(mode);
+      _flashMode = mode;
+      ReleaseLogger.log('🔦 Flash mode set to: ${_flashMode.name}', tag: 'StoryCameraController');
+    } catch (e) {
+      ReleaseLogger.error('Error setting flash mode: $e', tag: 'StoryCameraController');
+    }
+  }
+
+  /// Establecer nivel de zoom
+  Future<void> setZoomLevel(double zoom) async {
+    if (_cameraController == null || !_isCameraInitialized) return;
+
+    try {
+      // Clampear el valor entre min y max
+      final clampedZoom = zoom.clamp(_minZoom, _maxZoom);
+      await _cameraController!.setZoomLevel(clampedZoom);
+      _currentZoom = clampedZoom;
+    } catch (e) {
+      ReleaseLogger.error('Error setting zoom level: $e', tag: 'StoryCameraController');
+    }
+  }
+
+  /// Ajustar zoom con gesto de pinch (scale factor relativo)
+  Future<void> handlePinchZoom(double scale, double baseZoom) async {
+    final newZoom = (baseZoom * scale).clamp(_minZoom, _maxZoom);
+    await setZoomLevel(newZoom);
+  }
+
+  /// Establecer offset de exposición
+  Future<void> setExposureOffset(double offset) async {
+    if (_cameraController == null || !_isCameraInitialized) return;
+
+    try {
+      // Clampear el valor entre min y max
+      final clampedOffset = offset.clamp(_minExposure, _maxExposure);
+      await _cameraController!.setExposureOffset(clampedOffset);
+      _currentExposure = clampedOffset;
+    } catch (e) {
+      ReleaseLogger.error('Error setting exposure offset: $e', tag: 'StoryCameraController');
+    }
+  }
+
+  /// Reset de controles de cámara a valores por defecto
+  Future<void> resetCameraControls() async {
+    await setFlashMode(FlashMode.off);
+    await setZoomLevel(_minZoom);
+    await setExposureOffset(0.0);
   }
 
   /// Aplicar filtro DeepAR
@@ -279,23 +439,86 @@ class StoryCameraController {
       }
 
       _selectedARFilter = filterName;
-      _filterType = filterName == DeepARFilters.none ? 'color' : 'deepar';
+
+      // ✅ CASO 0: Si se selecciona "Normal" (DeepARFilters.none), volver a cámara Flutter
+      if (filterName == DeepARFilters.none || filterName.isEmpty) {
+        ReleaseLogger.log(
+          '🔄 Volviendo a modo normal desde DeepAR',
+          tag: 'StoryCameraController',
+        );
+        // Delegamos a applyColorFilter que maneja el cleanup y reinicio de Flutter camera
+        await applyColorFilter('none');
+        return;
+      }
+
+      _filterType = 'deepar';
 
       if (_filterType == 'deepar') {
-        // ✅ SECURE LICENSE KEY HANDLING
-        if (_deepArLicenseKey.isEmpty) {
-          ReleaseLogger.error('❌ DeepAR license key not configured. Set DEEPAR_LICENSE_KEY environment variable.',
-                             tag: 'StoryCameraController');
-          onError?.call('DeepAR no está configurado correctamente');
-          return;
-        }
+        // ✅ CASO 1: DeepAR ya está inicializado - solo cambiar el filtro
+        if (_isDeepARInitialized) {
+          ReleaseLogger.log(
+            '🔄 DeepAR ya inicializado, cambiando filtro a: $filterName',
+            tag: 'StoryCameraController',
+          );
 
-        // DeepARService maneja el cambio de efectos internamente
-        await _deepARService.initialize(licenseKey: _deepArLicenseKey);
-        if (!_isDeepARInitialized) {
+          if (filterName.isNotEmpty) {
+            final filterApplied = await _deepARService.switchFilter(filterName);
+            if (filterApplied) {
+              ReleaseLogger.log('✅ Filtro cambiado exitosamente', tag: 'StoryCameraController');
+            } else {
+              ReleaseLogger.error('❌ Error cambiando filtro', tag: 'StoryCameraController');
+            }
+          }
+        } else {
+          // ✅ CASO 2: Primera vez inicializando DeepAR
+
+          // Liberar la cámara Flutter ANTES de inicializar DeepAR
+          if (_cameraController != null) {
+            ReleaseLogger.log(
+              '📷 Liberando cámara Flutter antes de DeepAR...',
+              tag: 'StoryCameraController',
+            );
+            await _cameraController!.dispose();
+            _cameraController = null;
+            _isCameraInitialized = false;
+            await Future.delayed(const Duration(milliseconds: 100));
+          }
+
+          // Seleccionar license key según plataforma
+          final licenseKey = Platform.isIOS ? _iosLicenseKey : _androidLicenseKey;
+
+          ReleaseLogger.log(
+            '🎭 Inicializando DeepAR con license key de ${Platform.isIOS ? "iOS" : "Android"}',
+            tag: 'StoryCameraController',
+          );
+
+          // Inicializar DeepAR
+          await _deepARService.initialize(licenseKey: licenseKey);
           _deepARReinitCounter++;
           _isDeepARInitialized = true;
+          _hasCleanedUpDeepAR = false; // ✅ Resetear flag para permitir cleanup futuro
           ReleaseLogger.log('✅ DeepAR initialized successfully', tag: 'StoryCameraController');
+
+          // Notificar UI para que se actualice con DeepAR view
+          onCameraInitialized?.call();
+
+          // Esperar a que el platform view esté completamente configurado
+          ReleaseLogger.log('⏳ Esperando a que platform view esté listo...', tag: 'StoryCameraController');
+          await Future.delayed(const Duration(milliseconds: 500));
+
+          // Aplicar el filtro seleccionado
+          if (filterName.isNotEmpty) {
+            ReleaseLogger.log(
+              '🎭 Aplicando filtro DeepAR: $filterName',
+              tag: 'StoryCameraController',
+            );
+            final filterApplied = await _deepARService.switchFilter(filterName);
+            if (filterApplied) {
+              ReleaseLogger.log('✅ Filtro aplicado exitosamente', tag: 'StoryCameraController');
+            } else {
+              ReleaseLogger.error('❌ Error aplicando filtro', tag: 'StoryCameraController');
+            }
+          }
         }
 
         // 🔄 INCREMENTAR CONTADOR PARA FACE SWAP después de aplicar exitosamente
@@ -312,24 +535,90 @@ class StoryCameraController {
   }
 
   /// Aplicar filtro de color
-  void applyColorFilter(String filterName) {
+  Future<void> applyColorFilter(String filterName) async {
+    final wasDeepAR = _filterType == 'deepar';
+
     _selectedFilter = filterName;
     _filterType = 'color';
+    _selectedARFilter = DeepARFilters.none; // ✅ Limpiar selección de filtro AR
+
+    // Si estábamos en DeepAR, necesitamos reinicializar la cámara Flutter
+    if (wasDeepAR) {
+      ReleaseLogger.log(
+        '📷 Cambiando de DeepAR a cámara Flutter...',
+        tag: 'StoryCameraController',
+      );
+
+      // Notificar UI inmediatamente para mostrar loading
+      onCameraInitialized?.call();
+
+      // Limpiar DeepAR primero (esto toma ~500ms en nativo)
+      ReleaseLogger.log('🧹 Limpiando DeepAR...', tag: 'StoryCameraController');
+      await cleanupDeepAR();
+
+      // Esperar suficiente para que DeepAR libere la cámara completamente
+      ReleaseLogger.log('⏳ Esperando liberación de recursos...', tag: 'StoryCameraController');
+      await Future.delayed(const Duration(milliseconds: 600));
+
+      // Reinicializar cámara Flutter
+      ReleaseLogger.log('📷 Reinicializando cámara Flutter...', tag: 'StoryCameraController');
+
+      // Asegurar que tenemos la lista de cámaras disponibles
+      if (_cameras == null || _cameras!.isEmpty) {
+        ReleaseLogger.log('📷 Obteniendo lista de cámaras...', tag: 'StoryCameraController');
+        _cameras = await availableCameras();
+
+        // Buscar cámara frontal por defecto
+        for (int i = 0; i < _cameras!.length; i++) {
+          if (_cameras![i].lensDirection == CameraLensDirection.front) {
+            _selectedCameraIndex = i;
+            break;
+          }
+        }
+      }
+
+      await _initializeCameraController();
+
+      // Notificar UI que la cámara está lista
+      onCameraInitialized?.call();
+      ReleaseLogger.log('✅ Cámara Flutter lista', tag: 'StoryCameraController');
+    }
   }
 
   /// Tomar foto
   Future<String?> takePhoto() async {
     try {
+      _setLoading(true);
+
+      // ✅ CASO 1: Modo DeepAR - usar screenshot de DeepAR
+      if (_filterType == 'deepar' && _isDeepARInitialized) {
+        ReleaseLogger.log('📸 Tomando screenshot con DeepAR...', tag: 'StoryCameraController');
+
+        final imageData = await _deepARService.takeScreenshot();
+        if (imageData == null) {
+          throw Exception('No se pudo capturar screenshot de DeepAR');
+        }
+
+        // Guardar screenshot a archivo temporal
+        final tempDir = await getTemporaryDirectory();
+        final timestamp = DateTime.now().millisecondsSinceEpoch;
+        final filePath = '${tempDir.path}/deepar_photo_$timestamp.jpg';
+        final file = File(filePath);
+        await file.writeAsBytes(imageData);
+
+        ReleaseLogger.log('✅ Screenshot DeepAR guardado: $filePath', tag: 'StoryCameraController');
+        return filePath;
+      }
+
+      // ✅ CASO 2: Modo Flutter Camera normal
       if (!_isCameraInitialized || _cameraController == null) {
         throw Exception('Cámara no inicializada');
       }
 
-      _setLoading(true);
-
       final image = await _cameraController!.takePicture();
       return image.path;
     } catch (e) {
-      
+      ReleaseLogger.error('❌ Error tomando foto: $e', tag: 'StoryCameraController');
       onError?.call('Error tomando foto: $e');
       return null;
     } finally {
@@ -340,13 +629,30 @@ class StoryCameraController {
   /// Iniciar grabación de video
   Future<void> startVideoRecording() async {
     try {
-      if (!_isCameraInitialized || _cameraController == null) {
-        throw Exception('Cámara no inicializada');
-      }
-
       if (_isRecordingVideo) return;
 
-      await _cameraController!.startVideoRecording();
+      // ✅ CASO 1: Modo DeepAR - usar grabación de DeepAR
+      if (_filterType == 'deepar' && _isDeepARInitialized) {
+        ReleaseLogger.log('🎬 Iniciando grabación con DeepAR...', tag: 'StoryCameraController');
+
+        final tempDir = await getTemporaryDirectory();
+        final timestamp = DateTime.now().millisecondsSinceEpoch;
+        _recordedVideoPath = '${tempDir.path}/deepar_video_$timestamp.mp4';
+
+        await _deepARService.startRecording(
+          outputPath: _recordedVideoPath!,
+          width: 720,
+          height: 1280,
+        );
+      } else {
+        // ✅ CASO 2: Modo Flutter Camera normal
+        if (!_isCameraInitialized || _cameraController == null) {
+          throw Exception('Cámara no inicializada');
+        }
+
+        await _cameraController!.startVideoRecording();
+      }
+
       _isRecordingVideo = true;
       _recordingSecondsRemaining = 10;
 
@@ -360,7 +666,7 @@ class StoryCameraController {
         }
       });
     } catch (e) {
-      
+      ReleaseLogger.error('❌ Error iniciando grabación: $e', tag: 'StoryCameraController');
       onError?.call('Error iniciando grabación: $e');
     }
   }
@@ -368,18 +674,34 @@ class StoryCameraController {
   /// Parar grabación de video
   Future<String?> stopVideoRecording() async {
     try {
-      if (!_isRecordingVideo || _cameraController == null) return null;
+      if (!_isRecordingVideo) return null;
 
       _recordingTimer?.cancel();
       _recordingTimer = null;
       _isRecordingVideo = false;
+
+      // ✅ CASO 1: Modo DeepAR
+      if (_filterType == 'deepar' && _isDeepARInitialized) {
+        ReleaseLogger.log('⏹️ Deteniendo grabación DeepAR...', tag: 'StoryCameraController');
+        await _deepARService.stopRecording();
+
+        // DeepAR guarda en el path que le pasamos
+        if (_recordedVideoPath != null) {
+          ReleaseLogger.log('✅ Video DeepAR guardado: $_recordedVideoPath', tag: 'StoryCameraController');
+          return _recordedVideoPath;
+        }
+        return null;
+      }
+
+      // ✅ CASO 2: Modo Flutter Camera normal
+      if (_cameraController == null) return null;
 
       final videoFile = await _cameraController!.stopVideoRecording();
       _recordedVideoPath = videoFile.path;
 
       return videoFile.path;
     } catch (e) {
-      
+      ReleaseLogger.error('❌ Error parando grabación: $e', tag: 'StoryCameraController');
       onError?.call('Error parando grabación: $e');
       return null;
     }

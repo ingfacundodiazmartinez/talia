@@ -165,6 +165,132 @@ class EmergencyService {
     }
   }
 
+  /// ✅ OPTIMISTIC: Activar emergencia de forma inmediata
+  /// NO espera ubicación - la obtiene en background después de crear la emergencia
+  Future<Map<String, dynamic>?> activateEmergencyOptimistic({
+    String? customMessage,
+    BuildContext? context,
+  }) async {
+    try {
+      ReleaseLogger.log('🆘 [OPTIMISTIC] Activando emergencia inmediatamente...', tag: 'EmergencyService');
+
+      final user = _auth.currentUser;
+      if (user == null) {
+        ReleaseLogger.error('❌ Usuario no autenticado', tag: 'EmergencyService');
+        return null;
+      }
+
+      // ✅ PASO 1: Verificar si ya existe una emergencia activa (rápido)
+      final existingEmergency = await _getActiveEmergency(user.uid);
+
+      if (existingEmergency != null) {
+        final emergencyId = existingEmergency['id'] as String;
+        ReleaseLogger.log('⚠️ Ya existe emergencia activa: $emergencyId', tag: 'EmergencyService');
+
+        // Vibración de emergencia
+        await _triggerEmergencyVibration();
+
+        if (context != null) {
+          _showEmergencyConfirmation(context);
+        }
+
+        // Retornar información de la emergencia existente para unirse a la llamada
+        return {
+          'emergencyId': emergencyId,
+          'channelName': 'emergency_$emergencyId',
+          'success': true,
+          'isReactivation': true,
+        };
+      }
+
+      // ✅ PASO 2: Verificar cooldown (rápido)
+      if (await isInCooldown()) {
+        ReleaseLogger.log('⏰ Emergencia en cooldown', tag: 'EmergencyService');
+        if (context != null) {
+          _showCooldownMessage(context);
+        }
+        return null;
+      }
+
+      // ✅ PASO 3: Vibración de emergencia (inmediato)
+      await _triggerEmergencyVibration();
+
+      // ✅ PASO 4: Llamar Cloud Function INMEDIATAMENTE (sin ubicación)
+      ReleaseLogger.log('🚀 [OPTIMISTIC] Llamando Cloud Function sin esperar ubicación...', tag: 'EmergencyService');
+
+      final emergencyId = await _createEmergencyRecord(
+        childId: user.uid,
+        childName: '', // Cloud Function obtiene el nombre del usuario
+        position: null, // ✅ NO esperamos ubicación
+        customMessage: customMessage,
+      );
+
+      if (emergencyId == null) {
+        ReleaseLogger.error('❌ Error creando registro de emergencia', tag: 'EmergencyService');
+        return null;
+      }
+
+      // ✅ PASO 5: Guardar timestamp (rápido)
+      await _saveLastEmergencyTime();
+
+      ReleaseLogger.log('✅ [OPTIMISTIC] Emergencia creada: $emergencyId', tag: 'EmergencyService');
+
+      if (context != null) {
+        _showEmergencyConfirmation(context);
+      }
+
+      // ✅ PASO 6: Obtener ubicación y actualizar en BACKGROUND (no bloqueante)
+      _updateLocationInBackground(emergencyId);
+
+      // ✅ PASO 7: Iniciar tracking continuo de ubicación en background
+      _startLocationTracking(emergencyId);
+
+      // Retornar inmediatamente para que la UI pueda navegar a la llamada
+      return {
+        'emergencyId': emergencyId,
+        'channelName': 'emergency_$emergencyId',
+        'success': true,
+        'isReactivation': false,
+      };
+    } catch (e) {
+      ReleaseLogger.error('❌ Error activando emergencia optimística: $e', tag: 'EmergencyService');
+      if (context != null) {
+        _showErrorMessage(context, e.toString());
+      }
+      return null;
+    }
+  }
+
+  /// Actualizar ubicación en background (no bloquea la UI)
+  void _updateLocationInBackground(String emergencyId) {
+    // Ejecutar sin await para no bloquear
+    Future(() async {
+      try {
+        ReleaseLogger.log('📍 [BACKGROUND] Obteniendo ubicación para emergencia $emergencyId...', tag: 'EmergencyService');
+
+        final position = await _getCurrentLocation();
+
+        if (position != null) {
+          // Actualizar el documento de emergencia con la ubicación
+          await _firestore.collection('emergencies').doc(emergencyId).update({
+            'location': {
+              'latitude': position.latitude,
+              'longitude': position.longitude,
+              'accuracy': position.accuracy,
+              'timestamp': DateTime.now().toIso8601String(),
+            },
+          });
+
+          ReleaseLogger.log('✅ [BACKGROUND] Ubicación actualizada para emergencia $emergencyId', tag: 'EmergencyService');
+        } else {
+          ReleaseLogger.log('⚠️ [BACKGROUND] No se pudo obtener ubicación para emergencia $emergencyId', tag: 'EmergencyService');
+        }
+      } catch (e) {
+        ReleaseLogger.error('❌ [BACKGROUND] Error actualizando ubicación: $e', tag: 'EmergencyService');
+      }
+    });
+  }
+
   // Obtener emergencia activa (sin resolver) del niño
   Future<Map<String, dynamic>?> _getActiveEmergency(String childId) async {
     try {
@@ -203,18 +329,57 @@ class EmergencyService {
         return null;
       }
 
-      // Obtener ubicación actual con alta precisión
+      // ✅ OPTIMIZACIÓN: Intentar obtener última ubicación conocida primero (instantáneo)
+      Position? lastKnown = await Geolocator.getLastKnownPosition();
+      if (lastKnown != null) {
+        ReleaseLogger.log('📍 Usando última ubicación conocida: ${lastKnown.latitude}, ${lastKnown.longitude}', tag: 'EmergencyService');
+
+        // Intentar obtener ubicación más precisa en paralelo (sin bloquear)
+        _tryGetPreciseLocationInBackground();
+
+        return lastKnown;
+      }
+
+      // Si no hay ubicación conocida, obtener una nueva con precisión media (más rápido)
       final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-        timeLimit: Duration(seconds: 10),
+        desiredAccuracy: LocationAccuracy.medium,
+        timeLimit: Duration(seconds: 5),
       );
 
       ReleaseLogger.log('✅ Ubicación de emergencia obtenida: ${position.latitude}, ${position.longitude}', tag: 'EmergencyService');
       return position;
     } catch (e) {
-      ReleaseLogger.error('❌ Error obteniendo ubicación de emergencia: $e', tag: 'EmergencyService');
+      ReleaseLogger.log('⚠️ No se pudo obtener ubicación (no crítico): $e', tag: 'EmergencyService');
       return null;
     }
+  }
+
+  // Intentar obtener ubicación precisa en background (no bloquea nada)
+  void _tryGetPreciseLocationInBackground() {
+    Future(() async {
+      try {
+        final position = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 15),
+        );
+
+        // Actualizar la emergencia actual si existe
+        if (_currentEmergencyId != null) {
+          await _firestore.collection('emergencies').doc(_currentEmergencyId).update({
+            'location': {
+              'latitude': position.latitude,
+              'longitude': position.longitude,
+              'accuracy': position.accuracy,
+              'timestamp': DateTime.now().toIso8601String(),
+              'isPrecise': true,
+            },
+          });
+          ReleaseLogger.log('✅ Ubicación precisa actualizada: ${position.latitude}, ${position.longitude}', tag: 'EmergencyService');
+        }
+      } catch (e) {
+        // Silencioso - ya tenemos una ubicación aproximada
+      }
+    });
   }
 
   // Obtener datos del niño

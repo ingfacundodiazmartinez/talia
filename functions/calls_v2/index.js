@@ -4,7 +4,9 @@
  */
 
 const { createAgoraCall } = require('./createAgoraCall');
+const { addParticipantToCall } = require('./addParticipantToCall');
 
 module.exports = {
   createAgoraCall,
+  addParticipantToCall,
 };

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -252,16 +253,28 @@ class VoIPService {
         await _handleCallKitEnded(callId);
         break;
 
+      case 'onVideoCallReady':
+        // ✅ FIX VIDEO FROM LOCK SCREEN: iOS tells us audio is ready and we should show video UI
+        // This happens after user answers from lock screen and audio session activates
+        final Map<dynamic, dynamic> data = call.arguments as Map<dynamic, dynamic>;
+        final String callId = data['callId'] as String;
+        ReleaseLogger.log('📹 [VoIP] Video call ready notification from iOS: $callId', tag: 'VoIPService');
+        await _handleVideoCallReady(callId);
+        break;
+
       default:
         ReleaseLogger.log('⚠️ [VoIP] Método desconocido: ${call.method}', tag: 'VoIPService');
     }
   }
 
-  /// ✅ OPTIMIZED: Manejar aceptación de llamada con navegación optimista (UX improvement)
-  /// OPTIMISTIC UI: Navigate IMMEDIATELY, accept call in background
+  /// ✅ SIMPLIFIED: Only accept in Firestore, let AgoraCallScreen handle Agora join
+  /// This is cleaner because:
+  /// - Single point of entry to Agora (AgoraCallScreen)
+  /// - All Agora events are received correctly
+  /// - No state synchronization needed
   Future<void> _handleNativeCallAccepted(String callId) async {
     try {
-      ReleaseLogger.log('🚀 [VoIP OPTIMISTIC] Aceptación con navegación inmediata: $callId', tag: 'VoIPService');
+      ReleaseLogger.log('📞 [VoIP] Call accepted from CallKit: $callId', tag: 'VoIPService');
 
       // Check cache for duplicate processing
       if (!_cache.markAsProcessing(callId, CallProcessingSource.voipPush)) {
@@ -269,61 +282,64 @@ class VoIPService {
         return;
       }
 
-      // ✅ CRITICAL: Marcar como manejada por VoIP ANTES de procesar para evitar IncomingCallScreen
+      // ✅ Mark as handled by VoIP to prevent IncomingCallScreen
       markCallAsVoIPHandled(callId);
 
-      // ✅ FIX iOS BACKGROUND: Accept call and join Agora HERE in VoIPService
-      // On iOS, when app is in background, the UI doesn't render and AgoraCallScreen.initState
-      // is never called. So we MUST accept and join Agora here.
-      // We mark the call as "already accepted" so AgoraCallScreen doesn't duplicate it.
-      ReleaseLogger.log('📞 [VoIP] Accepting call and joining Agora from VoIPService', tag: 'VoIPService');
+      // ✅ SIMPLIFIED: Only accept in Firestore - do NOT join Agora here
+      // AgoraCallScreen will handle the Agora join when it opens
+      // This ensures all Agora events (onUserJoined, etc.) are received correctly
+      ReleaseLogger.log('📞 [VoIP] Accepting call in Firestore only (Agora join deferred to AgoraCallScreen)', tag: 'VoIPService');
 
       final controller = calls_v2.CallController();
       controller.initialize();
 
-      final acceptResult = await controller.acceptCall(callId);
+      // Use acceptCallWithoutJoining - only updates Firestore, no Agora
+      final acceptResult = await controller.acceptCallWithoutJoining(callId);
       if (acceptResult.success) {
-        ReleaseLogger.log('✅ [VoIP] Call accepted and joined Agora successfully', tag: 'VoIPService');
-        // Mark call as already accepted so AgoraCallScreen doesn't call acceptCall again
+        ReleaseLogger.log('✅ [VoIP] Call accepted in Firestore', tag: 'VoIPService');
+        // Mark as accepted so AgoraCallScreen knows to join (not accept again)
         _cache.markCallAsAccepted(callId);
       } else {
         ReleaseLogger.error('❌ [VoIP] Failed to accept call: ${acceptResult.error}', tag: 'VoIPService');
       }
 
-      // Now navigate to the call screen
-      ReleaseLogger.log('⚡ [VoIP] Navegando a call screen', tag: 'VoIPService');
-      if (_onNavigateToCall != null) {
-        _onNavigateToCall!(callId, isIncoming: true);
-        ReleaseLogger.log('✅ [VoIP] Navegación ejecutada', tag: 'VoIPService');
-      } else {
-        // ✅ FIX: App launching from killed state - callback not ready yet
-        // Store the pending call ID to be processed when callback is set
-        ReleaseLogger.log('⏳ [VoIP] Callback no listo - guardando llamada pendiente: $callId', tag: 'VoIPService');
-        _pendingCallId = callId;
-      }
+      // ✅ Navigation will happen via onVideoCallReady when audio session activates
+      // This ensures the app is in foreground and ready to render video
+      ReleaseLogger.log('✅ [VoIP] Waiting for onVideoCallReady to navigate', tag: 'VoIPService');
 
-      // Clear from cache after successful processing
+      // Clear from cache
       _cache.clearCall(callId);
-
-      ReleaseLogger.log('✅ [VoIP V2] Navegación completada - AgoraCallScreen manejará el resto', tag: 'VoIPService');
     } catch (e, stackTrace) {
-      // Clear from cache on error
       _cache.clearCall(callId);
-
-      ReleaseLogger.error('❌ [VoIP] Error manejando aceptación nativa: $e', tag: 'VoIPService');
+      ReleaseLogger.error('❌ [VoIP] Error accepting call: $e', tag: 'VoIPService');
       ReleaseLogger.error('❌ [VoIP] Stack trace: $stackTrace', tag: 'VoIPService');
-
-      // ✅ CRITICAL DEBUG: Mostrar exactamente donde falló
-      if (e.toString().contains('Null check operator')) {
-        ReleaseLogger.error('❌ [VoIP] NULL POINTER EXCEPTION - verificar campos de callData', tag: 'VoIPService');
-      }
-      if (e.toString().contains('type \'Null\' is not a subtype')) {
-        ReleaseLogger.error('❌ [VoIP] TYPE CAST EXCEPTION - verificar tipos de datos', tag: 'VoIPService');
-      }
     }
   }
 
   // REMOVED: _processLegacyCallAcceptance - no longer needed after video_calls deletion
+
+  /// ✅ FIX VIDEO FROM LOCK SCREEN: Handle video call ready notification from iOS
+  /// This is called when audio session activates after user answers from lock screen
+  /// At this point, the call is already connected via Agora, we just need to show the UI
+  Future<void> _handleVideoCallReady(String callId) async {
+    try {
+      ReleaseLogger.log('📹 [VoIP] Handling video call ready: $callId', tag: 'VoIPService');
+
+      // Force navigation to call screen - the call is already accepted and connected
+      // We just need to show the video UI now that iOS allows it
+      if (_onNavigateToCall != null) {
+        ReleaseLogger.log('📹 [VoIP] Forcing navigation to video call screen', tag: 'VoIPService');
+        _onNavigateToCall!(callId, isIncoming: true);
+        ReleaseLogger.log('✅ [VoIP] Video call navigation executed', tag: 'VoIPService');
+      } else {
+        ReleaseLogger.error('❌ [VoIP] No navigation callback for video call', tag: 'VoIPService');
+        // Store as pending for when callback is ready
+        _pendingCallId = callId;
+      }
+    } catch (e) {
+      ReleaseLogger.error('❌ [VoIP] Error handling video call ready: $e', tag: 'VoIPService');
+    }
+  }
 
   /// Verificar y procesar token VoIP pendiente después del login exitoso
   /// En iOS, el token VoIP se recibe automáticamente pero solo se puede guardar cuando el usuario está autenticado
@@ -613,13 +629,19 @@ class VoIPService {
   }
 
   /// Notificar a iOS nativo que la llamada terminó (para cerrar CallKit UI)
+  /// ✅ Solo ejecuta en iOS - Android no tiene este method channel
   Future<void> notifyCallEnded(String callId) async {
+    // 🔄 CLEANUP: Desmarcar llamada del tracking VoIP (ambas plataformas)
+    unmarkVoIPCall(callId);
+
+    // Solo iOS tiene el method channel endCallKit
+    if (!Platform.isIOS) {
+      ReleaseLogger.log('ℹ️ [VoIP] Android - skipping endCallKit (not needed)', tag: 'VoIPService');
+      return;
+    }
+
     try {
       await _voipChannel.invokeMethod('endCallKit', {'callId': callId});
-
-      // 🔄 CLEANUP: Desmarcar llamada del tracking VoIP
-      unmarkVoIPCall(callId);
-
       ReleaseLogger.log('✅ [VoIP] Notificado a iOS que la llamada terminó: $callId', tag: 'VoIPService');
     } catch (e) {
       ReleaseLogger.error('❌ [VoIP] Error notificando fin de llamada a iOS: $e', tag: 'VoIPService');

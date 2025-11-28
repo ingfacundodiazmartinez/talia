@@ -193,5 +193,6 @@ exports.rejectStory = storyApproval.rejectStory;
 // ═══════════════════════════════════════════════════════════════
 
 exports.createAgoraCall = callsV2.createAgoraCall;
+exports.addParticipantToCall = callsV2.addParticipantToCall;
 
 console.log("✅ Todas las funciones exportadas correctamente (incluye Agora V2)");

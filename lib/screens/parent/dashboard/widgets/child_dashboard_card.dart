@@ -310,6 +310,7 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
       builder: (context, snapshot) {
         // Contar notificaciones no leídas relacionadas a este hijo
         // EXCLUYENDO las notificaciones de mensajes de chat
+        // ✅ FIX: Usar la MISMA lógica que ChildNotificationsController.filterNotificationsForChild
         int unreadCount = 0;
         if (snapshot.hasData) {
           final notifications = snapshot.data!.docs;
@@ -317,16 +318,20 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
           for (final doc in notifications) {
             final data = doc.data() as Map<String, dynamic>;
             final notifData = data['data'] as Map<String, dynamic>?;
+            final type = data['type'] as String?;
 
-            // Filtrar notificaciones de chat
-            if (data['type'] == 'chat_message') {
+            // Filtrar notificaciones de chat (misma lógica que controller)
+            if (type == 'chat_message') {
               continue; // Skip chat notifications
             }
 
-            // Verificar si la notificación está relacionada con este hijo
+            // ✅ FIX: Verificar si la notificación está relacionada con este hijo
+            // SOLO usar campos que realmente identifican al hijo:
+            // - notifData['childId']: La notificación es SOBRE este hijo
+            // - notifData['senderId']: La notificación fue ENVIADA por este hijo
+            // NO usar data['senderId'] ya que puede ser cualquier remitente
             final isRelated = notifData?['childId'] == child.id ||
-                notifData?['senderId'] == child.id ||
-                data['senderId'] == child.id;
+                notifData?['senderId'] == child.id;
 
             if (isRelated) {
               unreadCount++;

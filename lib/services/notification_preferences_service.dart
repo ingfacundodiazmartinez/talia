@@ -70,14 +70,11 @@ class NotificationPreferencesService {
       'contactRequestsEnabled': true,
       'activityAlertsEnabled': true,
       'missedCallsEnabled': true,
-      'locationAlertsEnabled': false,
       'whitelistChangesEnabled': true,
 
       // Sonido y Vibración
       'soundEnabled': true,
       'vibrationEnabled': true,
-      'inAppSoundEnabled': true,
-      'notificationTone': 'default',
 
       // No Molestar
       'doNotDisturbEnabled': false,

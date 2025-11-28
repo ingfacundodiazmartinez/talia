@@ -84,7 +84,7 @@ class ChatInputBar extends StatelessWidget {
                         onPressed: onToggleEmojiPicker,
                         tooltip: 'Emojis',
                       ),
-                      // TextField de mensaje
+                      // TextField de mensaje (expandible hasta 5 líneas)
                       Expanded(
                         child: TextField(
                           controller: messageController,
@@ -108,9 +108,9 @@ class ChatInputBar extends StatelessWidget {
                               vertical: 10,
                             ),
                           ),
-                          maxLines: 1,
-                          textInputAction: TextInputAction.send,
-                          onSubmitted: (_) => onSubmitMessage(),
+                          minLines: 1,
+                          maxLines: 5,
+                          textInputAction: TextInputAction.newline,
                         ),
                       ),
                       // Botón adjuntar

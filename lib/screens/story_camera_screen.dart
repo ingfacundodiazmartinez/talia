@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:camera/camera.dart' show FlashMode;
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import '../controllers/story_camera_controller.dart';
 import '../services/deepar_service.dart';
@@ -31,6 +32,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   // Estado UI únicamente
   bool _isVideoMode = false; // Estado para modo foto/video
+  double _baseZoom = 1.0; // Para pinch-to-zoom
+  bool _showZoomIndicator = false; // Mostrar indicador de zoom temporalmente
 
   @override
   void initState() {
@@ -188,11 +191,17 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   Future<void> _switchCamera() async {
     await _controller.switchCamera();
+    // Forzar rebuild para que FlutterCameraView reciba el nuevo selectedCameraIndex
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   Future<void> _applyColorFilter(String filterName) async {
-    _controller.applyColorFilter(filterName);
-    setState(() {}); // Rebuild UI
+    await _controller.applyColorFilter(filterName);
+    if (mounted) {
+      setState(() {}); // Rebuild UI
+    }
   }
 
   Future<void> _applyARFilter(String filterName) async {
@@ -246,12 +255,16 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             selectedFiles: [file],
             controller: storyController,
             captionController: captionController,
-            onSaveClickListener: (editedFiles) {
+            onSaveClickListener: (editedFiles) async {
               ReleaseLogger.log('💾 Story editor completado con ${editedFiles.length} archivos', tag: 'StoryCameraScreen');
               if (editedFiles.isNotEmpty) {
-                _publishStory(editedFiles.first.path, mediaType);
+                // Cerrar el editor primero
+                Navigator.pop(context);
+                // Luego publicar la historia (esto cerrará la cámara al terminar)
+                await _publishStory(editedFiles.first.path, mediaType);
+              } else {
+                Navigator.pop(context);
               }
-              Navigator.pop(context);
             },
             onFaceSwapClickListener: (currentFile, currentIndex) async {
               return await _handleFaceSwap(currentFile, currentIndex);
@@ -323,22 +336,28 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       return _buildErrorUI();
     }
 
-    if (!_controller.isCameraInitialized) {
-      return _buildLoadingUI();
-    }
+    // Widget de cámara base
+    Widget cameraWidget;
 
-    // Usar DeepAR o Flutter Camera según el tipo de filtro
-    if (_controller.filterType == 'deepar' && _controller.isDeepARInitialized) {
-      return DeepARCameraView(
-        key: ValueKey(_controller.deepARReinitCounter),
-        onInitialized: () {
-          // DeepAR initialized callback
-        },
-        deepARService: DeepARService(),
-        isDeepARInitialized: _controller.isDeepARInitialized,
-      );
+    // ✅ FIX: Verificar DeepAR PRIMERO, antes de verificar Flutter camera
+    // Cuando se activa DeepAR, Flutter camera se dispone (isCameraInitialized = false)
+    // por lo que debemos verificar DeepAR antes de mostrar loading
+    if (_controller.filterType == 'deepar') {
+      if (_controller.isDeepARInitialized) {
+        cameraWidget = DeepARCameraView(
+          key: ValueKey(_controller.deepARReinitCounter),
+          onInitialized: () {
+            // DeepAR initialized callback
+          },
+          deepARService: DeepARService(),
+          isDeepARInitialized: _controller.isDeepARInitialized,
+        );
+      } else {
+        // DeepAR está inicializando
+        return _buildLoadingUI();
+      }
     } else if (_controller.cameraController != null && _controller.isCameraInitialized) {
-      return FlutterCameraView(
+      cameraWidget = FlutterCameraView(
         cameras: _controller.cameras,
         selectedCameraIndex: _controller.selectedCameraIndex,
         onCameraInitialized: (controller) {
@@ -348,9 +367,69 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           // Camera disposed callback
         },
       );
+    } else if (!_controller.isCameraInitialized) {
+      // Flutter camera está inicializando
+      return _buildLoadingUI();
+    } else {
+      return Container(color: Colors.black);
     }
 
-    return Container(color: Colors.black);
+    // Envolver con GestureDetector para pinch-to-zoom
+    return Stack(
+      children: [
+        GestureDetector(
+          onScaleStart: (details) {
+            _baseZoom = _controller.currentZoom;
+          },
+          onScaleUpdate: (details) async {
+            await _controller.handlePinchZoom(details.scale, _baseZoom);
+            setState(() {
+              _showZoomIndicator = true;
+            });
+          },
+          onScaleEnd: (details) {
+            // Ocultar indicador después de un momento
+            Future.delayed(Duration(milliseconds: 500), () {
+              if (mounted) {
+                setState(() {
+                  _showZoomIndicator = false;
+                });
+              }
+            });
+          },
+          child: cameraWidget,
+        ),
+        // Indicador de zoom
+        if (_showZoomIndicator && _controller.maxZoom > 1.0)
+          _buildZoomIndicator(),
+      ],
+    );
+  }
+
+  /// Indicador visual de nivel de zoom
+  Widget _buildZoomIndicator() {
+    return Positioned(
+      bottom: 200,
+      left: 0,
+      right: 0,
+      child: Center(
+        child: Container(
+          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.black54,
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Text(
+            '${_controller.currentZoom.toStringAsFixed(1)}x',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildPermissionDeniedUI() {
@@ -441,16 +520,61 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
+          // Botón cerrar
           IconButton(
             onPressed: _closeScreen,
             icon: Icon(Icons.close, color: Colors.white, size: 28),
           ),
-          IconButton(
-            onPressed: _switchCamera,
-            icon: Icon(Icons.flip_camera_ios, color: Colors.white, size: 28),
+          // Controles de cámara (flash, switch)
+          Row(
+            children: [
+              // Flash button - solo visible con cámara trasera
+              if (_controller.isBackCamera)
+                _buildFlashButton(),
+              SizedBox(width: 8),
+              // Switch camera button
+              IconButton(
+                onPressed: _switchCamera,
+                icon: Icon(Icons.flip_camera_ios, color: Colors.white, size: 28),
+              ),
+            ],
           ),
         ],
       ),
+    );
+  }
+
+  /// Botón de flash con icono según el modo actual
+  Widget _buildFlashButton() {
+    IconData flashIcon;
+    String tooltip;
+
+    switch (_controller.flashMode) {
+      case FlashMode.off:
+        flashIcon = Icons.flash_off;
+        tooltip = 'Flash apagado';
+        break;
+      case FlashMode.auto:
+        flashIcon = Icons.flash_auto;
+        tooltip = 'Flash automático';
+        break;
+      case FlashMode.always:
+        flashIcon = Icons.flash_on;
+        tooltip = 'Flash encendido';
+        break;
+      case FlashMode.torch:
+        flashIcon = Icons.highlight;
+        tooltip = 'Linterna';
+        break;
+    }
+
+    return IconButton(
+      onPressed: () async {
+        await _controller.toggleFlashMode();
+        setState(() {});
+      },
+      icon: Icon(flashIcon, color: Colors.white, size: 28),
+      tooltip: tooltip,
     );
   }
 

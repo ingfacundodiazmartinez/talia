@@ -20,9 +20,25 @@ exports.onStoryApprovalRequestCreated = onDocumentCreated(
     region: "us-central1",
   },
   async (event) => {
+    console.log("📋 [Story] Trigger activado - onStoryApprovalRequestCreated");
+
+    // Validar que el evento tiene data
+    if (!event.data) {
+      console.error("❌ [Story] event.data es null - documento posiblemente eliminado");
+      return;
+    }
+
     const requestData = event.data.data();
     const requestId = event.params.requestId;
 
+    console.log(`📋 [Story] Procesando approval request: ${requestId}`);
+    console.log(`📋 [Story] Data: childId=${requestData?.childId}, parentId=${requestData?.parentId}, storyId=${requestData?.storyId}`);
+
+    // Validar datos requeridos
+    if (!requestData?.childId || !requestData?.parentId || !requestData?.storyId) {
+      console.error("❌ [Story] Datos incompletos en approval request:", JSON.stringify(requestData));
+      return;
+    }
 
     try {
       // Obtener información del hijo
@@ -36,6 +52,8 @@ exports.onStoryApprovalRequestCreated = onDocumentCreated(
       const childName = childDoc.data().name || "Tu hijo";
 
       // Crear notificación para el padre
+      console.log(`📋 [Story] Creando notificación para padre: ${requestData.parentId}`);
+
       const notificationRef = await db.collection("notifications").add({
         userId: requestData.parentId,
         type: "story_approval_request",
@@ -45,6 +63,7 @@ exports.onStoryApprovalRequestCreated = onDocumentCreated(
         timestamp: FieldValue.serverTimestamp(),
         read: false,
         priority: "normal",
+        pushSent: false, // ✅ CRITICAL: Requerido para que sendNotificationOnCreate envíe push
         data: {
           childId: requestData.childId,
           childName: childName,
@@ -53,7 +72,7 @@ exports.onStoryApprovalRequestCreated = onDocumentCreated(
         },
       });
 
-
+      console.log(`✅ [Story] Notificación creada exitosamente: ${notificationRef.id}`);
       return { success: true, notificationId: notificationRef.id };
     } catch (error) {
       console.error("❌ [Story] Error creando notificación:", error);
