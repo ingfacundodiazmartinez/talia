@@ -302,31 +302,30 @@ class ChatPermissionService {
   }
 
   /// Stream de contactos aprobados bidireccionales
+  /// ✅ OPTIMIZADO: Usa snapshots() en lugar de polling cada 2 segundos
+  /// Esto reduce lecturas de Firestore ~99% (solo actualiza cuando hay cambios reales)
   Stream<List<String>> watchBidirectionallyApprovedContacts(String userId) {
-    // Combinar cambios de contacts aprobados
-    return Stream.periodic(Duration(seconds: 2)).asyncMap((_) async {
-      final bidirectionalContacts = <String>{};
+    return _firestore
+        .collection('contacts')
+        .where('users', arrayContains: userId)
+        .where('status', isEqualTo: 'approved')
+        .snapshots()
+        .map((snapshot) {
+          final bidirectionalContacts = <String>{};
 
-      // Obtener todos los contacts aprobados donde el usuario participa
-      final contactsSnapshot = await _firestore
-          .collection('contacts')
-          .where('users', arrayContains: userId)
-          .where('status', isEqualTo: 'approved')
-          .get();
-
-      for (final doc in contactsSnapshot.docs) {
-        final data = doc.data();
-        final users = List<String>.from(data['users'] ?? []);
-        // Agregar el otro usuario
-        for (final otherUserId in users) {
-          if (otherUserId != userId) {
-            bidirectionalContacts.add(otherUserId);
+          for (final doc in snapshot.docs) {
+            final data = doc.data();
+            final users = List<String>.from(data['users'] ?? []);
+            // Agregar el otro usuario
+            for (final otherUserId in users) {
+              if (otherUserId != userId) {
+                bidirectionalContacts.add(otherUserId);
+              }
+            }
           }
-        }
-      }
 
-      return bidirectionalContacts.toList();
-    });
+          return bidirectionalContacts.toList();
+        });
   }
 
   /// Verificar si un chat específico es válido (ambos usuarios pueden chatear)
