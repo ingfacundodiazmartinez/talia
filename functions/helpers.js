@@ -43,7 +43,7 @@ try {
   apnProvider = new apn.Provider({
     cert: pemData,
     key: pemData,
-    production: false, // TestFlight/Debug mode - cambia a true para App Store release
+    production: true, // TRUE para TestFlight y App Store, FALSE solo para Xcode Debug
   });
   console.log("✅ APNs VoIP provider inicializado");
 } catch (error) {
@@ -424,6 +424,13 @@ async function sendDirectPushNotification(params) {
   } = params;
 
   try {
+    // ✅ SAFEGUARD: NUNCA enviar notificación al sender del mensaje
+    // Esto evita que el usuario que da like/responde reciba su propia notificación
+    if (senderId && userId === senderId) {
+      console.log(`🚫 [DirectPush] BLOCKED - No enviar notificación al sender (userId=${userId} === senderId=${senderId})`);
+      return { success: false, error: "Cannot notify message sender" };
+    }
+
     console.log(`📱 [DirectPush] Enviando push a ${userId}, tipo: ${type}`);
 
     // Obtener usuario para FCM token

@@ -34,7 +34,7 @@ class ImageMessageContent extends StatelessWidget {
           child: Stack(
             alignment: Alignment.center,
             children: [
-              // Si está enviando y tiene localPath, mostrar imagen local
+              // Si está enviando y tiene localPath, mostrar imagen local inmediatamente
               if (status == MessageStatus.sending && imageUrl == null && localPath != null)
                 ClipRRect(
                   borderRadius: BorderRadius.circular(8),
@@ -46,6 +46,39 @@ class ImageMessageContent extends StatelessWidget {
                     child: Image.file(
                       File(localPath!),
                       fit: BoxFit.contain,
+                      // ✅ Cargar imagen inmediatamente con máxima prioridad
+                      cacheWidth: (MediaQuery.of(context).size.width * 0.6 *
+                              MediaQuery.of(context).devicePixelRatio)
+                          .round(),
+                      errorBuilder: (context, error, stackTrace) {
+                        // Placeholder si el archivo no se puede cargar
+                        return Container(
+                          width: MediaQuery.of(context).size.width * 0.6,
+                          height: 180,
+                          decoration: BoxDecoration(
+                            color: colorScheme.surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.image_outlined,
+                                size: 48,
+                                color: colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Cargando...',
+                                style: TextStyle(
+                                  color: colorScheme.onSurfaceVariant,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
                     ),
                   ),
                 )
@@ -148,33 +181,8 @@ class ImageMessageContent extends StatelessWidget {
                   ),
                 ),
 
-              // Overlay de "Subiendo..." si está enviando
-              if (status == MessageStatus.sending)
-                Positioned.fill(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.4),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        CircularProgressIndicator(
-                          color: Colors.white,
-                          strokeWidth: 2,
-                        ),
-                        SizedBox(height: 8),
-                        Text(
-                          'Subiendo...',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
+              // ✅ REMOVED: El overlay "Subiendo..." fue eliminado
+              // El indicador de estado en MessageTimestamp es suficiente
             ],
           ),
         ),

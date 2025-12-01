@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:cloud_functions/cloud_functions.dart';
 
 import '../repositories/story_repository.dart';
@@ -7,6 +8,7 @@ import '../managers/story_cache_manager.dart';
 import '../managers/story_upload_manager.dart';
 import '../utils/media_validation_helper.dart';
 import '../../../models/story.dart';
+import '../../../services/media_compression_service.dart';
 import '../../../utils/release_logger.dart';
 
 /// Servicio especializado para creación y eliminación de historias
@@ -180,9 +182,19 @@ class StoryCreationService {
     Function(String storyId, double progress)? onProgressUpdate,
   }) async {
       try {
-        // 1. Upload archivo a Storage
+        // 1. ✅ OPTIMIZACIÓN: Comprimir imagen antes de subir
+        String finalMediaPath = mediaPath;
+        if (optimisticStory.mediaType == 'image') {
+          final imageFile = File(mediaPath);
+          final compressedFile = await MediaCompressionService().compressImage(imageFile);
+          if (compressedFile != null) {
+            finalMediaPath = compressedFile.path;
+          }
+        }
+
+        // 2. Upload archivo a Storage
         final mediaUrl = await _uploadManager.uploadWithRetry(
-          filePath: mediaPath,
+          filePath: finalMediaPath,
           storyId: tempStoryId,
           userId: optimisticStory.userId,
           onProgressUpdate: onProgressUpdate != null
@@ -190,7 +202,7 @@ class StoryCreationService {
               : null,
         );
 
-        // 2. SEGURIDAD: Usar Cloud Function con rate limiting
+        // 3. SEGURIDAD: Usar Cloud Function con rate limiting
         final functions = FirebaseFunctions.instance;
         final createStoryFunction = functions.httpsCallable('createStory');
 
@@ -202,7 +214,7 @@ class StoryCreationService {
           'tempStoryId': tempStoryId,
         });
 
-        // 3. Validar respuesta de la Cloud Function
+        // 4. Validar respuesta de la Cloud Function
         if (!result.data['success']) {
           throw Exception(
             result.data['message'] ?? 'Error creando historia en servidor',
@@ -214,21 +226,21 @@ class StoryCreationService {
             ? StoryStatus.approved
             : StoryStatus.pending;
 
-        // 4. Crear story actualizada con datos del servidor
+        // 5. Crear story actualizada con datos del servidor
         final realStory = optimisticStory.copyWith(
           mediaUrl: mediaUrl,
           localMediaPath: null,
           status: storyStatus,
         );
 
-        // 5. Actualizar cache optimista con URL real
+        // 6. Actualizar cache optimista con URL real
         _cacheManager.updateOptimisticStory(
           optimisticStory.userId,
           tempStoryId,
           realStory,
         );
 
-        // 6. NOTA: Los approval requests ahora se crean en la Cloud Function
+        // 7. NOTA: Los approval requests ahora se crean en la Cloud Function
         // No necesitamos crearlos aquí ya que la función server-side lo maneja
       } catch (e) {
         // En caso de error, remover historia optimista

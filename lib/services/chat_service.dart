@@ -123,8 +123,9 @@ class ChatService {
     }
   }
 
-  /// Filtrar chats eliminados de un snapshot
-  /// Si un chat fue eliminado por CUALQUIER participante, no es visible para NADIE
+  /// Filtrar chats eliminados y ocultos de un snapshot
+  /// - Si un chat fue eliminado por CUALQUIER participante, no es visible para NADIE
+  /// - Si visible == false, el chat está oculto (no tiene mensajes aún)
   List<QueryDocumentSnapshot> filterDeletedChats(QuerySnapshot snapshot) {
     final user = _auth.currentUser;
     if (user == null) return [];
@@ -132,9 +133,15 @@ class ChatService {
     return snapshot.docs.where((doc) {
       final chatData = doc.data() as Map<String, dynamic>;
       final deletedBy = List<String>.from(chatData['deletedBy'] ?? []);
+
       // Si deletedBy NO está vacío, significa que el chat fue eliminado
       // y NO debe ser visible para ningún participante
-      return deletedBy.isEmpty;
+      if (deletedBy.isNotEmpty) return false;
+
+      // ✅ Filtrar chats ocultos (visible == false significa sin mensajes aún)
+      // Si visible no existe (chats antiguos), mostrar normalmente (default true)
+      final isVisible = chatData['visible'] ?? true;
+      return isVisible == true;
     }).toList();
   }
 

@@ -114,6 +114,17 @@ class StoryService {
     );
   }
 
+  /// Dar like a una historia
+  /// Envía un mensaje al chat del owner diciendo "❤️ Le gustó tu historia"
+  Future<void> likeStory(String storyId) async {
+    await _orchestrator.likeStory(storyId);
+  }
+
+  /// Quitar like de una historia
+  Future<void> unlikeStory(String storyId) async {
+    await _orchestrator.unlikeStory(storyId);
+  }
+
   // ═══════════════════════════════════════════════════════════════
   // MÉTODOS ADICIONALES de la API anterior (para total compatibilidad)
   // ═══════════════════════════════════════════════════════════════

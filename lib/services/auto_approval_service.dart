@@ -3,6 +3,7 @@ import 'package:cloud_functions/cloud_functions.dart';
 import '../notification_service.dart';
 import 'user_role_service.dart';
 import 'group_chat_service.dart';
+import '../utils/release_logger.dart';
 
 class AutoApprovalService {
   static final AutoApprovalService _instance = AutoApprovalService._internal();
@@ -31,19 +32,27 @@ class AutoApprovalService {
           .where('childId', isEqualTo: childId)
           .where('status', isEqualTo: 'pending')
           .snapshots()
-          .listen((snapshot) async {
-            for (final change in snapshot.docChanges) {
-              if (change.type == DocumentChangeType.added) {
-                final requestData = change.doc.data() as Map<String, dynamic>;
+          .listen(
+            (snapshot) async {
+              for (final change in snapshot.docChanges) {
+                if (change.type == DocumentChangeType.added) {
+                  final requestData = change.doc.data() as Map<String, dynamic>;
 
-                await _processAutoApproval(
-                  requestId: change.doc.id,
-                  requestData: requestData,
-                  parentId: parentId,
-                );
+                  await _processAutoApproval(
+                    requestId: change.doc.id,
+                    requestData: requestData,
+                    parentId: parentId,
+                  );
+                }
               }
-            }
-          });
+            },
+            onError: (error) {
+              ReleaseLogger.error(
+                '❌ [AutoApproval] Contact requests stream error for child $childId: $error',
+              );
+            },
+            cancelOnError: false,
+          );
     }
 
     // Escuchar nuevas solicitudes de permiso de grupo
@@ -52,19 +61,27 @@ class AutoApprovalService {
         .where('parentId', isEqualTo: parentId)
         .where('status', isEqualTo: 'pending')
         .snapshots()
-        .listen((snapshot) async {
-          for (final change in snapshot.docChanges) {
-            if (change.type == DocumentChangeType.added) {
-              final requestData = change.doc.data() as Map<String, dynamic>;
+        .listen(
+          (snapshot) async {
+            for (final change in snapshot.docChanges) {
+              if (change.type == DocumentChangeType.added) {
+                final requestData = change.doc.data() as Map<String, dynamic>;
 
-              await _processGroupPermissionAutoApproval(
-                requestId: change.doc.id,
-                requestData: requestData,
-                parentId: parentId,
-              );
+                await _processGroupPermissionAutoApproval(
+                  requestId: change.doc.id,
+                  requestData: requestData,
+                  parentId: parentId,
+                );
+              }
             }
-          }
-        });
+          },
+          onError: (error) {
+            ReleaseLogger.error(
+              '❌ [AutoApproval] Permission requests stream error: $error',
+            );
+          },
+          cancelOnError: false,
+        );
   }
 
   /// Procesar aprobación automática si está habilitada
@@ -191,58 +208,13 @@ class AutoApprovalService {
         return;
       }
 
-      // Crear o actualizar entrada en contacts
-      final participants = [childId, contactId]..sort();
-
-      // Verificar si ya existe el contacto
-      final existingContacts = await _firestore
-          .collection('contacts')
-          .where('users', arrayContains: childId)
-          .get();
-
-      bool contactExists = false;
-      String? contactDocId;
-
-      for (final doc in existingContacts.docs) {
-        final data = doc.data();
-        final users = List<String>.from(data['users'] ?? []);
-        if (users.contains(contactId)) {
-          contactExists = true;
-          contactDocId = doc.id;
-          break;
-        }
-      }
-
-      if (!contactExists) {
-        // Crear nuevo contacto
-        final newContact = await _firestore.collection('contacts').add({
-          'users': participants,
-          'user1Name': '',
-          'user2Name': '',
-          'user1Email': '',
-          'user2Email': '',
-          'status': 'approved',
-          'autoApproved': true,
-          'addedAt': FieldValue.serverTimestamp(),
-          'addedBy': parentId,
-          'addedVia': 'group_approval',
-          'approvedForGroup': true,
-        });
-        contactDocId = newContact.id;
-      } else {
-        // Actualizar existente a approved
-        await _firestore.collection('contacts').doc(contactDocId).update({
-          'status': 'approved',
-          'approvedForGroup': true,
-          'autoApproved': true,
-        });
-      }
-
-      // Actualizar solicitud a aprobada
-      await _firestore.collection('permission_requests').doc(requestId).update({
-        'status': 'approved',
-        'approvedAt': FieldValue.serverTimestamp(),
-        'autoApproved': true,
+      // Llamar a Cloud Function para crear/actualizar contacto de forma segura
+      final callable = FirebaseFunctions.instance.httpsCallable('autoApproveContact');
+      await callable.call({
+        'childId': childId,
+        'contactId': contactId,
+        'parentId': parentId,
+        'requestId': requestId,
       });
 
 

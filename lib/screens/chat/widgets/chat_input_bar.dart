@@ -91,7 +91,7 @@ class ChatInputBar extends StatelessWidget {
                           textCapitalization: TextCapitalization.sentences,
                           style: TextStyle(color: colorScheme.onSurface),
                           decoration: InputDecoration(
-                            hintText: 'Escribe un mensaje...',
+                            hintText: 'Mensaje...',
                             hintStyle: TextStyle(
                               color: colorScheme.onSurfaceVariant,
                             ),
@@ -127,11 +127,12 @@ class ChatInputBar extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              // Botón enviar o micrófono con presión continua
+              // Botones de acción: Enviar o Micrófono
               ValueListenableBuilder<TextEditingValue>(
                 valueListenable: messageController,
                 builder: (context, value, child) {
-                  final isEmpty = value.text.trim().isEmpty;
+                  final text = value.text.trim();
+                  final isEmpty = text.isEmpty;
 
                   // Si hay texto, mostrar botón de enviar
                   if (!isEmpty) {

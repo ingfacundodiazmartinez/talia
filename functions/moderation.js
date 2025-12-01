@@ -8,6 +8,37 @@ const { analyzeMessageWithGemini } = require("./groups");
 const { sendDirectPushNotification } = require("./helpers");
 
 // ═══════════════════════════════════════════════════════════════
+// CONTEXT CACHE - Reduce Firestore reads for moderation
+// ═══════════════════════════════════════════════════════════════
+
+// ✅ OPTIMIZACIÓN: Cache de contexto con TTL de 60 segundos
+// Reduce ~30 lecturas por mensaje moderado
+const contextCache = new Map();
+const CONTEXT_CACHE_TTL_MS = 60000; // 1 minuto
+
+function getCachedContext(chatId) {
+  const cached = contextCache.get(chatId);
+  if (cached && Date.now() - cached.timestamp < CONTEXT_CACHE_TTL_MS) {
+    return cached;
+  }
+  return null;
+}
+
+function setCachedContext(chatId, conversationContext, reportedMessagesContext) {
+  contextCache.set(chatId, {
+    conversationContext,
+    reportedMessagesContext,
+    timestamp: Date.now()
+  });
+
+  // Limpiar cache si crece demasiado (max 100 chats)
+  if (contextCache.size > 100) {
+    const oldestKey = contextCache.keys().next().value;
+    contextCache.delete(oldestKey);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // MODERATION
 // ═══════════════════════════════════════════════════════════════
 
@@ -157,49 +188,62 @@ exports.checkMessageBeforeSending = onCall(
         return { approved: true };
       }
 
-      // 5. Obtener contexto (últimos 20 mensajes)
-      console.log(`📚 [Pre-moderación] Obteniendo contexto de conversación...`);
-      const contextMessages = await db
-        .collection("chats")
-        .doc(chatId)
-        .collection("messages")
-        .orderBy("timestamp", "desc")
-        .limit(20)
-        .get();
-
-      // Construir contexto en orden cronológico
-      const conversationContext = contextMessages.docs
-        .reverse()
-        .map((doc) => {
-          const data = doc.data();
-          const sender = data.senderId === userId ? "USUARIO" : "OTRO";
-          const content = data.text || "[media]";
-          return `${sender}: ${content}`;
-        })
-        .join("\n");
-
-      console.log(`📝 [Pre-moderación] Contexto: ${contextMessages.size} mensajes`);
-
-      // 5.5. Obtener mensajes reportados por el usuario (para aprendizaje contextual)
+      // 5. Obtener contexto (últimos 20 mensajes) - CON CACHE
+      let conversationContext = "";
       let reportedMessagesContext = "";
-      try {
-        const reportedMessages = await db
+
+      // ✅ OPTIMIZACIÓN: Usar cache de contexto para reducir lecturas
+      const cachedContext = getCachedContext(chatId);
+      if (cachedContext) {
+        console.log(`📚 [Pre-moderación] Usando contexto cacheado para ${chatId}`);
+        conversationContext = cachedContext.conversationContext;
+        reportedMessagesContext = cachedContext.reportedMessagesContext;
+      } else {
+        console.log(`📚 [Pre-moderación] Obteniendo contexto de conversación...`);
+        const contextMessages = await db
           .collection("chats")
           .doc(chatId)
-          .collection("reported_messages")
-          .orderBy("reportedAt", "desc")
-          .limit(10) // Últimos 10 mensajes reportados
+          .collection("messages")
+          .orderBy("timestamp", "desc")
+          .limit(20)
           .get();
 
-        if (!reportedMessages.empty) {
-          const reportedTexts = reportedMessages.docs
-            .map((doc) => `"${doc.data().messageText || "[sin texto]"}"`)
-            .join(", ");
-          reportedMessagesContext = `\n\nMENSAJES PREVIAMENTE REPORTADOS POR EL USUARIO COMO OFENSIVOS:\nEl usuario marcó estos mensajes como inapropiados: ${reportedTexts}\nUsa estos ejemplos para entender mejor las preferencias del usuario sobre qué considera ofensivo.\n`;
-          console.log(`🚩 [Pre-moderación] ${reportedMessages.size} mensajes reportados encontrados`);
+        // Construir contexto en orden cronológico
+        conversationContext = contextMessages.docs
+          .reverse()
+          .map((doc) => {
+            const data = doc.data();
+            const sender = data.senderId === userId ? "USUARIO" : "OTRO";
+            const content = data.text || "[media]";
+            return `${sender}: ${content}`;
+          })
+          .join("\n");
+
+        console.log(`📝 [Pre-moderación] Contexto: ${contextMessages.size} mensajes`);
+
+        // 5.5. Obtener mensajes reportados por el usuario (para aprendizaje contextual)
+        try {
+          const reportedMessages = await db
+            .collection("chats")
+            .doc(chatId)
+            .collection("reported_messages")
+            .orderBy("reportedAt", "desc")
+            .limit(10)
+            .get();
+
+          if (!reportedMessages.empty) {
+            const reportedTexts = reportedMessages.docs
+              .map((doc) => `"${doc.data().messageText || "[sin texto]"}"`)
+              .join(", ");
+            reportedMessagesContext = `\n\nMENSAJES PREVIAMENTE REPORTADOS POR EL USUARIO COMO OFENSIVOS:\nEl usuario marcó estos mensajes como inapropiados: ${reportedTexts}\nUsa estos ejemplos para entender mejor las preferencias del usuario sobre qué considera ofensivo.\n`;
+            console.log(`🚩 [Pre-moderación] ${reportedMessages.size} mensajes reportados encontrados`);
+          }
+        } catch (e) {
+          console.error("Error obteniendo mensajes reportados:", e);
         }
-      } catch (e) {
-        console.error("Error obteniendo mensajes reportados:", e);
+
+        // Guardar en cache
+        setCachedContext(chatId, conversationContext, reportedMessagesContext);
       }
 
       // 6. Analizar mensaje con Gemini (con nuevos parámetros + mensajes reportados)
@@ -277,6 +321,10 @@ exports.checkMessageBeforeSending = onCall(
       // IMPORTANTE: NO incluir la razón específica en el campo 'text' para que ambos usuarios vean el mismo mensaje genérico
       // ✅ FIX: Si falla la creación del mensaje, NO continuar con lastMessage update
       try {
+        // ✅ TTL: deleteAt = now + 7 días (para auto-eliminación via Firestore TTL Policy)
+        const now = new Date();
+        const deleteAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+
         const blockedMessageData = {
           text: "", // Texto vacío - el widget BlockedMessageContent mostrará el mensaje genérico
           originalText: text, // ✅ Guardar texto original para poder editarlo después
@@ -285,6 +333,7 @@ exports.checkMessageBeforeSending = onCall(
           moderationReason: analysis.reason, // Razón guardada en campo separado
           moderationSeverity: analysis.severity,
           timestamp: FieldValue.serverTimestamp(),
+          deleteAt: Timestamp.fromDate(deleteAt), // ✅ TTL: Firestore eliminará automáticamente
         };
 
         if (isUpdate) {
@@ -374,8 +423,9 @@ exports.moderateMessage = onDocumentCreated(
   {
     document: "chats/{chatId}/messages/{messageId}",
     region: "us-central1",
-    // ⚡ OPTIMIZACIÓN: Mantener instancia caliente para reducir latencia de moderación
-    minInstances: 1,
+    // ✅ OPTIMIZACIÓN: minInstances: 0 para ahorrar costos (~$15-30/mes)
+    // El cold start de ~2-3s es aceptable para moderación asíncrona
+    minInstances: 0,
     maxInstances: 100,
   },
   async (event) => {
@@ -788,6 +838,25 @@ exports.moderateMessage = onDocumentCreated(
           moderationReason: "Error en análisis",
           moderationError: error.message,
         });
+
+        // ✅ FIX: Actualizar lastMessage también en caso de error
+        // para que el receptor pueda ver el mensaje en su lista de chats
+        const messageText = messageData?.text || "";
+        const senderId = messageData?.senderId;
+        if (chatId && senderId) {
+          let messagePreview = messageText;
+          if (messageData?.imageUrl) messagePreview = "📷 Foto";
+          else if (messageData?.videoUrl) messagePreview = "🎥 Video";
+          else if (messageData?.audioUrl) messagePreview = "🎤 Audio";
+          else if (messageText.length > 100) messagePreview = messageText.substring(0, 100) + "...";
+
+          await db.collection("chats").doc(chatId).update({
+            lastMessage: messagePreview,
+            lastMessageTime: FieldValue.serverTimestamp(),
+            lastMessageSender: senderId,
+          });
+          console.log(`📝 Chat ${chatId} actualizado con lastMessage (después de error en moderación)`);
+        }
       } catch (updateError) {
         console.error(`❌ Error actualizando mensaje después de fallo:`, updateError);
       }
@@ -830,11 +899,16 @@ exports.createApprovedMessage = onCall(
     const db = getFirestore();
 
     try {
+      // ✅ TTL: deleteAt = now + 7 días (para auto-eliminación via Firestore TTL Policy)
+      const now = new Date();
+      const deleteAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+
       // ✅ FIX: Preparar datos del mensaje con localId si está disponible
       const messageData = {
         senderId: senderId,
         text: text,
         timestamp: FieldValue.serverTimestamp(),
+        deleteAt: Timestamp.fromDate(deleteAt), // ✅ TTL: Firestore eliminará automáticamente
         isRead: false,
         readBy: [],
         moderationStatus: "approved",

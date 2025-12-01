@@ -85,8 +85,11 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
       await FirebaseFirestore.instance.clearPersistence();
       print('✅ Cache de Firestore limpiado exitosamente');
     } catch (e) {
-      print('⚠️ No se pudo limpiar cache de Firestore (puede ser normal si hay conexiones activas): $e');
-      // Este error es normal si hay listeners activos, no es crítico
+      // ✅ Este error es NORMAL cuando hay listeners activos de Firestore
+      // El mensaje de error "failed-precondition" con "ensure it has been indexed"
+      // es confuso pero NO significa que falten índices - es un mensaje genérico
+      // de Firestore cuando clearPersistence() no puede ejecutarse.
+      print('ℹ️ Cache de Firestore no limpiado (normal si hay streams activos)');
     }
   }
 

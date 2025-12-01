@@ -5,6 +5,8 @@ import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import '../services/contact_alias_service.dart';
+import '../services/favorite_service.dart';
+import '../models/chat_message.dart';
 import '../utils/release_logger.dart';
 
 /// Controller para manejar la lógica del perfil de grupo
@@ -20,6 +22,7 @@ class GroupProfileController {
 
   // Servicios privados
   final ContactAliasService _aliasService;
+  final FavoriteService _favoriteService;
   final FirebaseFirestore _firestore;
   final firebase_auth.FirebaseAuth _auth;
   final FirebaseStorage _storage;
@@ -28,7 +31,10 @@ class GroupProfileController {
   // Estado del controlador
   Map<String, dynamic>? _groupData;
   List<Map<String, dynamic>> _members = [];
+  List<Map<String, dynamic>> _pendingMembers = []; // Usuarios pendientes de aprobación de permisos
   List<Map<String, dynamic>> _pendingRequests = [];
+  List<ChatMessage> _favoriteMessages = [];
+  bool _isLoadingFavorites = false;
   bool _isAdmin = false;
   bool _isLoading = true;
   bool _hasError = false;
@@ -41,7 +47,9 @@ class GroupProfileController {
   // Callbacks para comunicación con el screen
   Function(Map<String, dynamic>?)? onGroupDataChanged;
   Function(List<Map<String, dynamic>>)? onMembersChanged;
+  Function(List<Map<String, dynamic>>)? onPendingMembersChanged;
   Function(List<Map<String, dynamic>>)? onPendingRequestsChanged;
+  Function(List<ChatMessage>)? onFavoritesChanged;
   Function(bool)? onAdminStatusChanged;
   Function(bool)? onLoadingChanged;
   Function(String)? onError;
@@ -51,11 +59,13 @@ class GroupProfileController {
   GroupProfileController({
     required this.groupId,
     ContactAliasService? aliasService,
+    FavoriteService? favoriteService,
     FirebaseFirestore? firestore,
     firebase_auth.FirebaseAuth? auth,
     FirebaseStorage? storage,
     FirebaseFunctions? functions,
   }) : _aliasService = aliasService ?? ContactAliasService(),
+       _favoriteService = favoriteService ?? FavoriteService(),
        _firestore = firestore ?? FirebaseFirestore.instance,
        _auth = auth ?? firebase_auth.FirebaseAuth.instance,
        _storage = storage ?? FirebaseStorage.instance,
@@ -64,7 +74,10 @@ class GroupProfileController {
   // Getters para el estado
   Map<String, dynamic>? get groupData => _groupData;
   List<Map<String, dynamic>> get members => _members;
+  List<Map<String, dynamic>> get pendingMembers => _pendingMembers;
   List<Map<String, dynamic>> get pendingRequests => _pendingRequests;
+  List<ChatMessage> get favoriteMessages => _favoriteMessages;
+  bool get isLoadingFavorites => _isLoadingFavorites;
   bool get isAdmin => _isAdmin;
   bool get isLoading => _isLoading;
   bool get hasError => _hasError;
@@ -78,9 +91,10 @@ class GroupProfileController {
       _clearError();
 
       // Cargar datos iniciales
+      await _loadGroupData();
       await Future.wait([
-        _loadGroupData(),
         _loadMembers(),
+        _loadPendingMembers(),
         _loadPendingRequests(),
       ]);
 
@@ -166,6 +180,50 @@ class GroupProfileController {
     }
   }
 
+  /// Cargar miembros pendientes de aprobación de permisos
+  Future<void> _loadPendingMembers() async {
+    try {
+      final pendingMemberIds = List<String>.from(_groupData?['pendingMembers'] ?? []);
+      final List<Map<String, dynamic>> loadedPendingMembers = [];
+
+      for (final userId in pendingMemberIds) {
+        try {
+          final userDoc = await _firestore
+              .collection('users')
+              .doc(userId)
+              .get();
+
+          if (userDoc.exists) {
+            final userData = userDoc.data()!;
+
+            // Obtener alias personalizado si existe
+            final displayName = await _aliasService.getDisplayName(
+              userId,
+              userData['name'] ?? 'Usuario',
+            );
+
+            loadedPendingMembers.add({
+              'id': userId,
+              'name': userData['name'] ?? 'Usuario',
+              'displayName': displayName,
+              'photoURL': userData['photoURL'],
+              'role': userData['role'],
+            });
+          }
+        } catch (e) {
+          ReleaseLogger.error('Error cargando pending member $userId: $e', tag: 'GroupProfile');
+        }
+      }
+
+      _pendingMembers = loadedPendingMembers;
+      onPendingMembersChanged?.call(_pendingMembers);
+      ReleaseLogger.log('Cargados ${_pendingMembers.length} miembros pendientes', tag: 'GroupProfile');
+    } catch (e) {
+      ReleaseLogger.error('Error cargando miembros pendientes: $e', tag: 'GroupProfile');
+      // No rethrow - es información opcional
+    }
+  }
+
   /// Cargar solicitudes pendientes
   Future<void> _loadPendingRequests() async {
     try {
@@ -211,6 +269,39 @@ class GroupProfileController {
     }
   }
 
+  /// Cargar mensajes favoritos del grupo
+  Future<void> loadFavorites() async {
+    try {
+      _isLoadingFavorites = true;
+      onFavoritesChanged?.call(_favoriteMessages);
+
+      final favoriteMaps = await _favoriteService.getFavoriteMessagesForProfile(
+        chatId: groupId,
+        isGroupChat: true,
+      );
+
+      // Convertir a ChatMessage
+      _favoriteMessages = favoriteMaps.map((map) {
+        return ChatMessage.fromMap(map['id'] ?? '', map);
+      }).toList();
+
+      // Ordenar por timestamp (más reciente primero)
+      _favoriteMessages.sort((a, b) {
+        if (a.timestamp == null && b.timestamp == null) return 0;
+        if (a.timestamp == null) return 1;
+        if (b.timestamp == null) return -1;
+        return b.timestamp!.compareTo(a.timestamp!);
+      });
+
+      _isLoadingFavorites = false;
+      onFavoritesChanged?.call(_favoriteMessages);
+    } catch (e) {
+      ReleaseLogger.error('Error cargando favoritos: $e', tag: 'GroupProfile');
+      _isLoadingFavorites = false;
+      // No rethrow - los favoritos son opcionales
+    }
+  }
+
   /// Verificar si el usuario actual es admin
   void _checkAdminStatus() {
     final currentUserId = _auth.currentUser?.uid;
@@ -235,8 +326,9 @@ class GroupProfileController {
               };
               onGroupDataChanged?.call(_groupData);
 
-              // Recargar miembros si la lista cambió
+              // Recargar miembros y pending members si la lista cambió
               _loadMembers();
+              _loadPendingMembers();
               _checkAdminStatus();
             }
           },
@@ -273,7 +365,7 @@ class GroupProfileController {
       // Subir avatar si se proporcionó
       if (avatarFile != null) {
         final avatarUrl = await _uploadGroupAvatar(avatarFile);
-        updates['photoURL'] = avatarUrl;
+        updates['avatar'] = avatarUrl;
       }
 
       if (updates.isNotEmpty) {

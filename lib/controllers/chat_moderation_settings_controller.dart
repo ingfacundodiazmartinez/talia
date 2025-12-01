@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import '../utils/release_logger.dart';
 
@@ -23,6 +24,7 @@ class ChatModerationSettingsController {
   bool _isInitialized = false;
   String? _currentUserId;
   String? _contactId;
+  String? _childId; // El hijo cuyo chat estamos moderando
   String? _contactDocumentId;
 
   /// Constructor
@@ -61,21 +63,44 @@ class ChatModerationSettingsController {
   }
 
   /// Cargar información del contacto desde el chat
+  /// Identifica quién es el hijo (de los linkedChildrenIds del padre) y quién es el contacto
   Future<void> _loadContactInfo() async {
     try {
-      final chatDoc = await _firestore.collection('chats').doc(chatId).get();
-      if (!chatDoc.exists) {
-        throw Exception('Chat no encontrado');
+      // El chatId tiene formato "userId1_userId2" (ordenados alfabéticamente)
+      final participants = chatId.split('_');
+      if (participants.length != 2) {
+        throw Exception('Formato de chatId inválido');
       }
 
-      final participants = List<String>.from(chatDoc.data()?['participants'] ?? []);
-      _contactId = participants.firstWhere((id) => id != _currentUserId, orElse: () => '');
+      // Obtener los hijos vinculados del padre actual
+      final parentDoc = await _firestore.collection('users').doc(_currentUserId).get();
+      final linkedChildrenIds = List<String>.from(parentDoc.data()?['linkedChildrenIds'] ?? []);
 
-      if (_contactId!.isEmpty) {
-        throw Exception('Contacto no encontrado en el chat');
+      ReleaseLogger.log('Padre $_currentUserId tiene hijos vinculados: $linkedChildrenIds', tag: 'ChatModeration');
+      ReleaseLogger.log('Participantes del chat: $participants', tag: 'ChatModeration');
+
+      // Determinar quién es el hijo y quién es el contacto
+      // El hijo es uno de los participantes que está en linkedChildrenIds
+      for (final participantId in participants) {
+        if (linkedChildrenIds.contains(participantId)) {
+          _childId = participantId;
+          _contactId = participants.firstWhere((id) => id != participantId);
+          break;
+        }
       }
 
-      ReleaseLogger.log('ContactId encontrado: $_contactId', tag: 'ChatModeration');
+      // Si no encontramos un hijo vinculado, podría ser que el padre está viendo su propio chat
+      if (_childId == null) {
+        // Verificar si el padre es uno de los participantes
+        if (participants.contains(_currentUserId)) {
+          _childId = _currentUserId; // En este caso, "el hijo" es el padre mismo
+          _contactId = participants.firstWhere((id) => id != _currentUserId);
+        } else {
+          throw Exception('No tienes permiso para moderar este chat');
+        }
+      }
+
+      ReleaseLogger.log('ChildId: $_childId, ContactId: $_contactId', tag: 'ChatModeration');
     } catch (e) {
       ReleaseLogger.error('Error cargando información del contacto: $e', tag: 'ChatModeration');
       rethrow;
@@ -85,40 +110,30 @@ class ChatModerationSettingsController {
   /// Cargar configuración actual de moderación
   Future<Map<String, dynamic>> loadModerationSettings() async {
     try {
-      if (_currentUserId == null || _contactId == null) {
+      if (_currentUserId == null || _contactId == null || _childId == null) {
         await initialize();
       }
 
-      if (_currentUserId == null || _contactId == null) {
-        throw Exception('Usuario o contacto no encontrado');
+      if (_currentUserId == null || _contactId == null || _childId == null) {
+        throw Exception('Usuario, contacto o hijo no encontrado');
       }
 
-      // Buscar el documento de contacto
-      final sortedUsers = [_currentUserId!, _contactId!]..sort();
-      final contactsQuery = await _firestore
-          .collection('contacts')
-          .where('users', isEqualTo: sortedUsers)
-          .limit(1)
-          .get();
+      // Leer la configuración del chat directamente
+      final chatDoc = await _firestore.collection('chats').doc(chatId).get();
 
-      if (contactsQuery.docs.isEmpty) {
-        ReleaseLogger.warning('Documento de contacto no encontrado, creando configuración por defecto', tag: 'ChatModeration');
+      if (!chatDoc.exists) {
+        ReleaseLogger.log('Chat no existe aún, usando configuración por defecto', tag: 'ChatModeration');
         return {
           'enabled': false,
           'level': 'high',
         };
       }
 
-      final contactDoc = contactsQuery.docs.first;
-      _contactDocumentId = contactDoc.id;
-
-      final contactData = contactDoc.data();
-      final moderationSettings = contactData['moderationSettings'] as Map<String, dynamic>? ?? {};
-      final userSettings = moderationSettings[_currentUserId!] as Map<String, dynamic>? ?? {};
+      final chatData = chatDoc.data() ?? {};
 
       return {
-        'enabled': userSettings['enabled'] ?? false,
-        'level': userSettings['level'] ?? 'high',
+        'enabled': chatData['moderationEnabled'] ?? false,
+        'level': chatData['moderationLevel'] ?? 'high',
       };
     } catch (e) {
       ReleaseLogger.error('Error cargando configuración de moderación: $e', tag: 'ChatModeration');
@@ -126,35 +141,30 @@ class ChatModerationSettingsController {
     }
   }
 
-  /// Activar o desactivar moderación
+  /// Activar o desactivar moderación usando Cloud Function
   Future<void> toggleModeration(bool enabled, String moderationLevel) async {
     try {
-      if (_currentUserId == null || _contactId == null) {
-        throw Exception('Usuario o contacto no encontrado');
+      if (_childId == null || _contactId == null) {
+        throw Exception('Hijo o contacto no encontrado');
       }
 
-      // Buscar el documento de contacto si no está cacheado
-      if (_contactDocumentId == null) {
-        final sortedUsers = [_currentUserId!, _contactId!]..sort();
-        final contactsQuery = await _firestore
-            .collection('contacts')
-            .where('users', isEqualTo: sortedUsers)
-            .limit(1)
-            .get();
+      ReleaseLogger.log('Llamando Cloud Function para ${enabled ? "activar" : "desactivar"} moderación', tag: 'ChatModeration');
+      ReleaseLogger.log('childId: $_childId, contactId: $_contactId, chatId: $chatId', tag: 'ChatModeration');
 
-        if (contactsQuery.docs.isEmpty) {
-          throw Exception('Documento de contacto no encontrado');
-        }
-
-        _contactDocumentId = contactsQuery.docs.first.id;
-      }
-
-      // Actualizar configuración de moderación
-      await _firestore.collection('contacts').doc(_contactDocumentId!).update({
-        'moderationSettings.$_currentUserId.enabled': enabled,
-        'moderationSettings.$_currentUserId.level': moderationLevel,
-        'moderationSettings.$_currentUserId.${enabled ? 'enabledAt' : 'disabledAt'}': FieldValue.serverTimestamp(),
+      // Usar Cloud Function para evitar problemas de permisos
+      final callable = FirebaseFunctions.instance.httpsCallable('updateChildContactModeration');
+      final result = await callable.call({
+        'childId': _childId,
+        'contactId': _contactId,
+        'chatId': chatId,
+        'enabled': enabled,
+        'level': moderationLevel,
       });
+
+      final data = Map<String, dynamic>.from(result.data as Map);
+      if (data['success'] != true) {
+        throw Exception('Error al actualizar moderación: ${data['message'] ?? 'Unknown error'}');
+      }
 
       ReleaseLogger.log('Moderación ${enabled ? 'activada' : 'desactivada'} para contacto $_contactId', tag: 'ChatModeration');
     } catch (e) {
@@ -163,33 +173,29 @@ class ChatModerationSettingsController {
     }
   }
 
-  /// Cambiar nivel de moderación
+  /// Cambiar nivel de moderación usando Cloud Function
   Future<void> changeModerationLevel(String newLevel) async {
     try {
-      if (_currentUserId == null || _contactId == null) {
-        throw Exception('Usuario o contacto no encontrado');
+      if (_childId == null || _contactId == null) {
+        throw Exception('Hijo o contacto no encontrado');
       }
 
-      // Buscar el documento de contacto si no está cacheado
-      if (_contactDocumentId == null) {
-        final sortedUsers = [_currentUserId!, _contactId!]..sort();
-        final contactsQuery = await _firestore
-            .collection('contacts')
-            .where('users', isEqualTo: sortedUsers)
-            .limit(1)
-            .get();
+      ReleaseLogger.log('Cambiando nivel de moderación a: $newLevel', tag: 'ChatModeration');
 
-        if (contactsQuery.docs.isEmpty) {
-          throw Exception('Documento de contacto no encontrado');
-        }
-
-        _contactDocumentId = contactsQuery.docs.first.id;
-      }
-
-      // Actualizar nivel de moderación
-      await _firestore.collection('contacts').doc(_contactDocumentId!).update({
-        'moderationSettings.$_currentUserId.level': newLevel,
+      // Usar Cloud Function para evitar problemas de permisos
+      final callable = FirebaseFunctions.instance.httpsCallable('updateChildContactModeration');
+      final result = await callable.call({
+        'childId': _childId,
+        'contactId': _contactId,
+        'chatId': chatId,
+        'enabled': true, // Mantenemos activado al cambiar nivel
+        'level': newLevel,
       });
+
+      final data = Map<String, dynamic>.from(result.data as Map);
+      if (data['success'] != true) {
+        throw Exception('Error al cambiar nivel: ${data['message'] ?? 'Unknown error'}');
+      }
 
       ReleaseLogger.log('Nivel de moderación cambiado a: $newLevel', tag: 'ChatModeration');
     } catch (e) {
@@ -216,10 +222,10 @@ class ChatModerationSettingsController {
     }
   }
 
-  /// Verificar si un mensaje es del contacto o del usuario actual
+  /// Verificar si un mensaje es del contacto o del hijo
   bool isMessageFromContact(Map<String, dynamic> messageData) {
     final senderId = messageData['senderId'] as String?;
-    return senderId != _currentUserId;
+    return senderId != _childId;
   }
 
   /// Formatear timestamp para mostrar

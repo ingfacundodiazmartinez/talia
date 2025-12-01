@@ -1,16 +1,20 @@
 import 'package:flutter/material.dart';
 
-/// Widget para responder a una historia
+/// Widget para responder a una historia (con botón de like)
 class StoryReplyInput extends StatelessWidget {
   final TextEditingController controller;
   final FocusNode focusNode;
   final VoidCallback onSend;
+  final bool isLiked;
+  final VoidCallback onLikeToggle;
 
   const StoryReplyInput({
     super.key,
     required this.controller,
     required this.focusNode,
     required this.onSend,
+    required this.isLiked,
+    required this.onLikeToggle,
   });
 
   @override
@@ -84,6 +88,33 @@ class StoryReplyInput extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
+              // Botón de like
+              GestureDetector(
+                onTap: onLikeToggle,
+                child: Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: isLiked
+                        ? Colors.red.withOpacity(0.2)
+                        : Colors.white.withOpacity(0.1),
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: isLiked
+                          ? Colors.red.withOpacity(0.5)
+                          : Colors.white.withOpacity(0.3),
+                      width: 1,
+                    ),
+                  ),
+                  child: Icon(
+                    isLiked ? Icons.favorite : Icons.favorite_border,
+                    color: isLiked ? Colors.red : Colors.white,
+                    size: 24,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              // Botón de enviar
               Container(
                 decoration: BoxDecoration(
                   color: colorScheme.primary,

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../models/story.dart';
 import '../../../controllers/story_viewer_controller.dart';
 import 'story_progress_indicators.dart';
@@ -14,6 +15,8 @@ class StoryReplySection extends StatelessWidget {
   final TextEditingController replyController;
   final FocusNode replyFocusNode;
   final VoidCallback onSendReply;
+  final bool isLiked;
+  final VoidCallback onLikeToggle;
 
   const StoryReplySection({
     super.key,
@@ -22,6 +25,8 @@ class StoryReplySection extends StatelessWidget {
     required this.replyController,
     required this.replyFocusNode,
     required this.onSendReply,
+    required this.isLiked,
+    required this.onLikeToggle,
   });
 
   @override
@@ -39,6 +44,8 @@ class StoryReplySection extends StatelessWidget {
         controller: replyController,
         focusNode: replyFocusNode,
         onSend: onSendReply,
+        isLiked: isLiked,
+        onLikeToggle: onLikeToggle,
       ),
     );
   }
@@ -90,43 +97,112 @@ class StoryOverlayWidget extends StatelessWidget {
     final currentStory = stories[currentStoryIndex];
     final isCurrentUser = currentUserStories.userId == controller.currentUserId;
 
-    return SafeArea(
-      child: Column(
-        children: [
-          // Indicadores de progreso
-          StoryProgressIndicators(
-            storyCount: stories.length,
-            currentStoryIndex: currentStoryIndex,
-            progressAnimation: progressController,
-          ),
-
-          // Header con información del usuario
-          StoryUserHeader(
-            userName: currentUserStories.userName,
-            userPhotoURL: currentUserStories.userPhotoURL,
-            timeAgo: formatStoryTime(currentStory.createdAt),
-            isCurrentUser: isCurrentUser,
-            onDelete: onDelete,
-            onClose: onClose,
-          ),
-
-          Spacer(),
-
-          // Caption si existe
-          if (currentStory.caption != null)
-            StoryCaptionWidget(
-              caption: currentStory.caption!,
-              isCurrentUser: isCurrentUser,
+    return Stack(
+      children: [
+        // ✅ Gradiente superior para que los controles sean visibles en fondos claros
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: Container(
+            height: 180,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Colors.black.withValues(alpha: 0.7),
+                  Colors.black.withValues(alpha: 0.3),
+                  Colors.transparent,
+                ],
+                stops: const [0.0, 0.6, 1.0],
+              ),
             ),
+          ),
+        ),
 
-          // Mostrar respuestas si es la historia del usuario actual y tiene respuestas
-          _buildResponsesSection(context, currentStory, isCurrentUser),
+        // Contenido del overlay
+        SafeArea(
+          child: Column(
+            children: [
+              // Indicadores de progreso
+              StoryProgressIndicators(
+                storyCount: stories.length,
+                currentStoryIndex: currentStoryIndex,
+                progressAnimation: progressController,
+              ),
 
-          // Indicador de estado para historias del usuario actual
-          _buildStatusIndicator(context, currentStory, isCurrentUser),
+              // Header con información del usuario
+              StoryUserHeader(
+                userName: currentUserStories.userName,
+                userPhotoURL: currentUserStories.userPhotoURL,
+                timeAgo: formatStoryTime(currentStory.createdAt),
+                isCurrentUser: isCurrentUser,
+                onDelete: onDelete,
+                onClose: onClose,
+              ),
 
-          SizedBox(height: 20),
-        ],
+              Spacer(),
+
+              // Caption si existe
+              if (currentStory.caption != null)
+                StoryCaptionWidget(
+                  caption: currentStory.caption!,
+                  isCurrentUser: isCurrentUser,
+                ),
+
+              // Mostrar likes si es la historia del usuario actual y tiene likes
+              _buildLikesSection(context, currentStory, isCurrentUser),
+
+              // Mostrar respuestas si es la historia del usuario actual y tiene respuestas
+              _buildResponsesSection(context, currentStory, isCurrentUser),
+
+              // Indicador de estado para historias del usuario actual
+              _buildStatusIndicator(context, currentStory, isCurrentUser),
+
+              SizedBox(height: 20),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLikesSection(BuildContext context, Story currentStory, bool isCurrentUser) {
+    if (!isCurrentUser || currentStory.likedBy.isEmpty) {
+      return SizedBox.shrink();
+    }
+
+    // Instagram-style likes section: stacked avatars + count
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 16),
+      margin: EdgeInsets.only(bottom: 8),
+      child: GestureDetector(
+        onTap: () => _showLikesBottomSheet(context, currentStory),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.start,
+          children: [
+            // Stacked avatars (up to 3)
+            _StackedAvatarsWidget(
+              userIds: currentStory.likedBy.take(3).toList(),
+              size: 24,
+            ),
+            SizedBox(width: 8),
+            // Like count text
+            Flexible(
+              child: Text(
+                currentStory.likesCount == 1
+                    ? 'Le gustó a 1 persona'
+                    : 'Les gustó a ${currentStory.likesCount} personas',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -350,5 +426,298 @@ class StoryOverlayWidget extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  Future<void> _showLikesBottomSheet(BuildContext context, Story currentStory) async {
+    await showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => Container(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.6,
+        ),
+        decoration: BoxDecoration(
+          color: Color(0xFF262626), // Instagram dark gray
+          borderRadius: BorderRadius.only(
+            topLeft: Radius.circular(12),
+            topRight: Radius.circular(12),
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Instagram-style drag handle
+            Container(
+              margin: EdgeInsets.only(top: 8),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade600,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            // Clean header
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Text(
+                'Likes',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            Divider(color: Colors.grey.shade800, height: 1),
+            Flexible(
+              child: currentStory.likedBy.isEmpty
+                  ? Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(32),
+                        child: Text(
+                          'Aún no hay likes',
+                          style: TextStyle(
+                            color: Colors.grey.shade500,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                    )
+                  : _LikesListWidget(likedByIds: currentStory.likedBy),
+            ),
+            SizedBox(height: MediaQuery.of(context).padding.bottom + 8),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Widget para mostrar avatares apilados estilo Instagram
+class _StackedAvatarsWidget extends StatelessWidget {
+  final List<String> userIds;
+  final double size;
+
+  const _StackedAvatarsWidget({
+    required this.userIds,
+    this.size = 24,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (userIds.isEmpty) return SizedBox.shrink();
+
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _fetchUsers(),
+      builder: (context, snapshot) {
+        final users = snapshot.data ?? [];
+
+        // Show placeholders while loading
+        final displayUsers = users.isEmpty
+            ? List.generate(userIds.length.clamp(0, 3), (i) => <String, dynamic>{})
+            : users;
+
+        return SizedBox(
+          width: size + (displayUsers.length - 1) * (size * 0.6),
+          height: size,
+          child: Stack(
+            children: [
+              for (int i = displayUsers.length - 1; i >= 0; i--)
+                Positioned(
+                  left: i * (size * 0.6),
+                  child: Container(
+                    width: size,
+                    height: size,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.black, width: 1.5),
+                    ),
+                    child: CircleAvatar(
+                      radius: size / 2,
+                      backgroundColor: Colors.grey.shade800,
+                      backgroundImage: displayUsers[i]['photoURL'] != null
+                          ? CachedNetworkImageProvider(displayUsers[i]['photoURL'] as String)
+                          : null,
+                      child: displayUsers[i]['photoURL'] == null
+                          ? Text(
+                              (displayUsers[i]['name'] as String?)?.isNotEmpty == true
+                                  ? (displayUsers[i]['name'] as String)[0].toUpperCase()
+                                  : '?',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: size * 0.4,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            )
+                          : null,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchUsers() async {
+    try {
+      final firestore = FirebaseFirestore.instance;
+      final users = <Map<String, dynamic>>[];
+
+      for (final userId in userIds.take(3)) {
+        final doc = await firestore.collection('users').doc(userId).get();
+        if (doc.exists) {
+          users.add({'id': doc.id, ...doc.data() ?? {}});
+        }
+      }
+
+      return users;
+    } catch (e) {
+      return [];
+    }
+  }
+}
+
+/// Widget separado para mostrar la lista de likes con fetch de usuarios (Instagram style)
+class _LikesListWidget extends StatelessWidget {
+  final List<String> likedByIds;
+
+  const _LikesListWidget({required this.likedByIds});
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _fetchUsers(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return Center(
+            child: Padding(
+              padding: EdgeInsets.all(32),
+              child: CircularProgressIndicator(
+                color: Colors.white,
+                strokeWidth: 2,
+              ),
+            ),
+          );
+        }
+
+        final users = snapshot.data ?? [];
+        if (users.isEmpty) {
+          return Center(
+            child: Padding(
+              padding: EdgeInsets.all(32),
+              child: Text(
+                'No se pudieron cargar los usuarios',
+                style: TextStyle(
+                  color: Colors.grey.shade500,
+                  fontSize: 14,
+                ),
+              ),
+            ),
+          );
+        }
+
+        return ListView.builder(
+          shrinkWrap: true,
+          padding: EdgeInsets.symmetric(vertical: 8),
+          itemCount: users.length,
+          itemBuilder: (context, index) {
+            final user = users[index];
+            final userName = user['displayName'] ?? user['name'] ?? 'Usuario';
+            final userPhotoURL = user['photoURL'] as String?;
+
+            // Instagram-style clean list item
+            return Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                children: [
+                  // Avatar with gradient ring (Instagram style)
+                  Container(
+                    padding: EdgeInsets.all(2),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(
+                        colors: [
+                          Color(0xFFE040FB), // Purple
+                          Color(0xFFFF5252), // Red
+                          Color(0xFFFFAB40), // Orange
+                        ],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                    ),
+                    child: Container(
+                      padding: EdgeInsets.all(2),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Color(0xFF262626),
+                      ),
+                      child: CircleAvatar(
+                        radius: 20,
+                        backgroundColor: Colors.grey.shade800,
+                        backgroundImage: userPhotoURL != null
+                            ? CachedNetworkImageProvider(userPhotoURL)
+                            : null,
+                        child: userPhotoURL == null
+                            ? Text(
+                                userName.isNotEmpty ? userName[0].toUpperCase() : '?',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              )
+                            : null,
+                      ),
+                    ),
+                  ),
+                  SizedBox(width: 12),
+                  // Username
+                  Expanded(
+                    child: Text(
+                      userName,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w500,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchUsers() async {
+    try {
+      final firestore = FirebaseFirestore.instance;
+      final users = <Map<String, dynamic>>[];
+
+      // Fetch users in chunks of 10 (Firestore whereIn limit)
+      for (int i = 0; i < likedByIds.length; i += 10) {
+        final chunk = likedByIds.skip(i).take(10).toList();
+        final snapshot = await firestore
+            .collection('users')
+            .where(FieldPath.documentId, whereIn: chunk)
+            .get();
+
+        for (final doc in snapshot.docs) {
+          users.add({
+            'id': doc.id,
+            ...doc.data(),
+          });
+        }
+      }
+
+      return users;
+    } catch (e) {
+      return [];
+    }
   }
 }

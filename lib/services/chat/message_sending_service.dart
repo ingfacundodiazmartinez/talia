@@ -57,6 +57,10 @@ class MessageSendingService {
     }
 
     // 2. Verificar moderación a nivel de CONTACTO (del receptor)
+    // ✅ FIX: Cuando A activa moderación para B, se guarda en moderationSettings[A]
+    // Significa: "A quiere moderar los mensajes que RECIBE"
+    // Por lo tanto, cuando el sender (currentUserId) envía a contactId,
+    // debemos verificar si contactId tiene moderación activada
     if (!moderationEnabled) {
       try {
         final sortedUsers = [currentUserId, contactId]..sort();
@@ -72,9 +76,10 @@ class MessageSendingService {
               contactDoc.data()['moderationSettings'] as Map<String, dynamic>?;
 
           if (moderationSettings != null) {
-            final senderSettings =
-                moderationSettings[currentUserId] as Map<String, dynamic>?;
-            if (senderSettings != null && senderSettings['enabled'] == true) {
+            // ✅ FIX: Verificar settings del RECEPTOR (contactId), no del sender
+            final receiverSettings =
+                moderationSettings[contactId] as Map<String, dynamic>?;
+            if (receiverSettings != null && receiverSettings['enabled'] == true) {
               moderationEnabled = true;
             }
           }
@@ -238,6 +243,7 @@ class MessageSendingService {
     required String chatId,
     required String currentUserId,
     required String audioPath,
+    bool isAiGenerated = false,
   }) async {
     // 1. Validar tamaño del audio
     final MediaCompressionService compressionService = MediaCompressionService();
@@ -278,6 +284,7 @@ class MessageSendingService {
       'chatId': chatId,
       'audioUrl': audioUrl,
       'waveformData': waveformData,
+      'isAiGenerated': isAiGenerated,
     }).timeout(_sendTimeout);
 
     final success = result.data['success'] as bool;

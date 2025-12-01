@@ -187,16 +187,20 @@ class FavoriteService {
   }
 
   /// Obtiene mensajes favoritos para mostrar en el perfil público
+  /// ✅ UPDATED: Ahora soporta grupos con el parámetro isGroupChat
   Future<List<Map<String, dynamic>>> getFavoriteMessagesForProfile({
     required String chatId,
+    bool isGroupChat = false,  // ✅ NEW
   }) async {
     try {
       final currentUserId = _auth.currentUser?.uid;
       if (currentUserId == null) return [];
 
+      final collection = isGroupChat ? 'groups' : 'chats';  // ✅ FIX
+
       // Obtener todos los mensajes del chat
       final messagesSnapshot = await _firestore
-          .collection('chats')
+          .collection(collection)
           .doc(chatId)
           .collection('messages')
           .orderBy('timestamp', descending: true)
@@ -207,7 +211,7 @@ class FavoriteService {
 
       for (final messageDoc in messagesSnapshot.docs) {
         final favoriteDoc = await _firestore
-            .collection('chats')
+            .collection(collection)
             .doc(chatId)
             .collection('messages')
             .doc(messageDoc.id)

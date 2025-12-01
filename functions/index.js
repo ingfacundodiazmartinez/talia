@@ -23,7 +23,7 @@
  * - transformations.js: Transformaciones de imágenes con IA
  * - sticker-functions.js: Sincronización de stickers
  *
- * Última actualización: 2025-10-28
+ * Última actualización: 2025-11-30
  * ═══════════════════════════════════════════════════════════════
  */
 
@@ -96,6 +96,9 @@ const stories = require("./stories");
 // Story Approval (Cloud Functions for secure approval)
 const storyApproval = require("./story-approval");
 
+// ❌ Voice Changer (ElevenLabs) - ELIMINADO
+// ❌ Replicate Voice (TTS) - ELIMINADO
+
 // ═══════════════════════════════════════════════════════════════
 // RE-EXPORTS
 // ═══════════════════════════════════════════════════════════════
@@ -122,6 +125,7 @@ exports.createParentChildLink = parentChild.createParentChildLink;
 exports.unlinkChild = parentChild.unlinkChild;
 exports.onParentChildLinkCreated = parentChild.onParentChildLinkCreated;
 exports.onParentChildLinkDeleted = parentChild.onParentChildLinkDeleted;
+exports.requestChildLocation = parentChild.requestChildLocation;
 
 // Contactos y bloqueos
 exports.createContactRequest = contacts.createContactRequest;
@@ -129,6 +133,13 @@ exports.updateContactRequestStatus = contacts.updateContactRequestStatus;
 exports.blockChat = contacts.blockChat;
 exports.unblockChat = contacts.unblockChat;
 exports.invalidateChatOnContactDelete = contacts.invalidateChatOnContactDelete;
+exports.syncDeviceContacts = contacts.syncDeviceContacts;
+exports.approveContactFromRequest = contacts.approveContactFromRequest;
+exports.autoApproveContact = contacts.autoApproveContact;
+exports.createContactFromGroupInvitation = contacts.createContactFromGroupInvitation;
+exports.getChildContactsForModeration = contacts.getChildContactsForModeration;
+exports.updateChildContactModeration = contacts.updateChildContactModeration;
+exports.updateContactStatus = contacts.updateContactStatus;
 
 // Grupos
 exports.createGroup = groups.createGroup;
@@ -154,6 +165,7 @@ exports.createEmergency = emergency.createEmergency;
 // Perfiles de usuario
 exports.updateUserProfile = userProfile.updateUserProfile;
 exports.onUserRegistered = userProfile.onUserRegistered;
+exports.onPresenceChanged = userProfile.onPresenceChanged;
 
 // Pagos y suscripciones
 exports.checkPremiumStatus = payments.checkPremiumStatus;
@@ -165,7 +177,7 @@ exports.handleMercadoPagoWebhook = payments.handleMercadoPagoWebhook;
 
 // Tareas programadas
 exports.convertExpiredStoriesToPermanent = scheduledTasks.convertExpiredStoriesToPermanent;
-exports.cleanupOldMessages = scheduledTasks.cleanupOldMessages;
+// cleanupOldMessages ELIMINADO - Reemplazado por Firestore TTL Policy (campo deleteAt)
 exports.autoResolveEmergencies = scheduledTasks.autoResolveEmergencies;
 exports.cleanupOldRateLimits = scheduledTasks.cleanupOldRateLimits;
 exports.cleanupOldNotifications = scheduledTasks.cleanupOldNotifications;
@@ -182,11 +194,19 @@ exports.cleanupOldStickers = stickerFunctions.cleanupOldStickers;
 // Stories
 exports.onStoryApprovalRequestCreated = stories.onStoryApprovalRequestCreated;
 exports.replyToStory = stories.replyToStory;
+exports.likeStory = stories.likeStory;
 
 // Story Approval (Secure Cloud Functions)
 exports.createStory = storyApproval.createStory;
 exports.approveStory = storyApproval.approveStory;
 exports.rejectStory = storyApproval.rejectStory;
+
+// Story availableFor Sync Triggers (mantener sincronizado con contactos/bloqueos)
+exports.onBlockCreated = storyApproval.onBlockCreated;
+exports.onBlockDeleted = storyApproval.onBlockDeleted;
+exports.onContactCreated = storyApproval.onContactCreated;
+exports.onContactUpdated = storyApproval.onContactUpdated;
+exports.onContactDeleted = storyApproval.onContactDeleted;
 
 // ═══════════════════════════════════════════════════════════════
 // VIDEOLLAMADAS V2 (Agora) - NUEVA ARQUITECTURA
@@ -194,5 +214,9 @@ exports.rejectStory = storyApproval.rejectStory;
 
 exports.createAgoraCall = callsV2.createAgoraCall;
 exports.addParticipantToCall = callsV2.addParticipantToCall;
+
+// ═══════════════════════════════════════════════════════════════
+// ❌ VOICE CHANGER y TTS - ELIMINADOS
+// ═══════════════════════════════════════════════════════════════
 
 console.log("✅ Todas las funciones exportadas correctamente (incluye Agora V2)");

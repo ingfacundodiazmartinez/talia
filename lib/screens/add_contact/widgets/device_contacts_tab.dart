@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../../../services/device_contacts_service.dart';
 import '../../../services/permission_service.dart';
+import '../../../services/contact_request_service.dart';
 
 /// Tab para importar contactos del dispositivo
 class DeviceContactsTab extends StatefulWidget {
@@ -14,12 +16,17 @@ class DeviceContactsTab extends StatefulWidget {
 class _DeviceContactsTabState extends State<DeviceContactsTab> {
   final DeviceContactsService _deviceContacts = DeviceContactsService();
   final PermissionService _permissionService = PermissionService();
+  final ContactRequestService _contactRequestService = ContactRequestService();
 
   bool _isLoading = false;
   bool _hasPermission = false;
   List<RegisteredContact> _registeredContacts = [];
   String? _errorMessage;
   ContactsImportResult? _result;
+
+  // Track contacts with pending/sent requests
+  final Set<String> _pendingRequests = {};
+  final Set<String> _sentRequests = {};
 
   @override
   void initState() {
@@ -267,7 +274,60 @@ class _DeviceContactsTabState extends State<DeviceContactsTab> {
     );
   }
 
+  Future<void> _sendContactRequest(RegisteredContact contact) async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return;
+
+    // Prevent double-tap
+    if (_pendingRequests.contains(contact.userId)) return;
+
+    setState(() {
+      _pendingRequests.add(contact.userId);
+    });
+
+    try {
+      await _contactRequestService.sendContactRequest(
+        contactUserId: contact.userId,
+        currentUserId: currentUser.uid,
+        currentUserName: currentUser.displayName ?? 'Usuario',
+        currentUserEmail: currentUser.email ?? '',
+        contactName: contact.name,
+        contactEmail: '', // Contact may not have email visible
+      );
+
+      if (mounted) {
+        setState(() {
+          _pendingRequests.remove(contact.userId);
+          _sentRequests.add(contact.userId);
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Solicitud enviada a ${contact.displayName}'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _pendingRequests.remove(contact.userId);
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: ${e.toString().replaceAll('Exception: ', '')}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   Widget _buildContactItem(RegisteredContact contact, ColorScheme colorScheme) {
+    final isSending = _pendingRequests.contains(contact.userId);
+    final wasSent = _sentRequests.contains(contact.userId);
+
     return Card(
       margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: ListTile(
@@ -305,10 +365,22 @@ class _DeviceContactsTabState extends State<DeviceContactsTab> {
             ),
           ],
         ),
-        trailing: Icon(
-          Icons.check_circle,
-          color: Colors.green,
-        ),
+        trailing: wasSent
+            ? Icon(Icons.check_circle, color: Colors.green)
+            : isSending
+                ? SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : ElevatedButton(
+                    onPressed: () => _sendContactRequest(contact),
+                    style: ElevatedButton.styleFrom(
+                      padding: EdgeInsets.symmetric(horizontal: 12),
+                      minimumSize: Size(0, 36),
+                    ),
+                    child: Text('Agregar'),
+                  ),
         isThreeLine: true,
       ),
     );

@@ -356,11 +356,33 @@ exports.createContactRequest = onCall(
         }
       }
 
+      // 12. Si el contacto fue auto-aprobado, crear chat inmediatamente (visible: false)
+      const isAutoApproved = !user1NeedsApproval && !user2NeedsApproval;
+      if (isAutoApproved) {
+        const chatId = participants.join("_"); // Ya están ordenados
+        console.log(`✅ Contacto auto-aprobado, creando chat invisible: ${chatId}`);
+
+        await db.collection("chats").doc(chatId).set({
+          participants: participants,
+          isValidChat: true,
+          visible: false, // ✅ Chat oculto hasta que se envíe el primer mensaje
+          createdAt: FieldValue.serverTimestamp(),
+          lastMessageTime: null,
+          lastMessageAt: null,
+          lastMessage: "",
+          lastMessageSender: null,
+          deletedBy: [],
+        }, { merge: true });
+
+        console.log(`✅ Chat ${chatId} creado con visible: false`);
+      }
+
       return {
         success: true,
         contactId: contactDoc.id,
-        status: (user1NeedsApproval || user2NeedsApproval) ? "pending" : "approved",
+        status: isAutoApproved ? "approved" : "pending",
         pendingCount: (user1NeedsApproval ? 1 : 0) + (user2NeedsApproval ? 1 : 0),
+        chatId: isAutoApproved ? participants.join("_") : null,
       };
     } catch (error) {
       console.error("❌ Error creando solicitud de contacto:", error);
@@ -720,7 +742,7 @@ exports.invalidateChatOnContactDelete = onDocumentUpdated(
       const isInvalidStatus = newStatus === "deleted" || newStatus === "blocked";
 
       if (!isInvalidStatus) {
-        // Si el status cambió a 'approved', asegurar que isValidChat = true
+        // Si el status cambió a 'approved', crear chat con visible: false
         if (newStatus === "approved") {
           const users = afterData.users || [];
           if (users.length !== 2) {
@@ -728,16 +750,26 @@ exports.invalidateChatOnContactDelete = onDocumentUpdated(
             return null;
           }
 
-          const chatId = users.sort().join("_");
+          const sortedUsers = [...users].sort();
+          const chatId = sortedUsers.join("_");
           const db = getFirestore();
 
-          console.log(`✅ Contacto aprobado - validando chat ${chatId}`);
+          console.log(`✅ Contacto aprobado - creando chat invisible ${chatId}`);
 
+          // ✅ Crear chat con visible: false (se hará visible al enviar primer mensaje)
           await db.collection("chats").doc(chatId).set({
+            participants: sortedUsers,
             isValidChat: true,
+            visible: false, // ✅ Chat oculto hasta primer mensaje
+            createdAt: FieldValue.serverTimestamp(),
+            lastMessageTime: null,
+            lastMessageAt: null,
+            lastMessage: "",
+            lastMessageSender: null,
+            deletedBy: [],
           }, { merge: true });
 
-          console.log(`✅ Chat ${chatId} marcado como válido (isValidChat: true)`);
+          console.log(`✅ Chat ${chatId} creado con visible: false`);
         }
 
         return null;
@@ -750,7 +782,8 @@ exports.invalidateChatOnContactDelete = onDocumentUpdated(
         return null;
       }
 
-      const chatId = users.sort().join("_");
+      const sortedUsers = [...users].sort();
+      const chatId = sortedUsers.join("_");
       const db = getFirestore();
 
       console.log(`🚫 Contacto ${newStatus} - invalidando chat ${chatId}`);
@@ -768,6 +801,936 @@ exports.invalidateChatOnContactDelete = onDocumentUpdated(
       return null;
     }
   },
+);
+
+// ═══════════════════════════════════════════════════════════════
+// SINCRONIZACIÓN AUTOMÁTICA DE CONTACTOS DEL DISPOSITIVO
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Cloud Function: Sincronizar contactos del dispositivo
+ *
+ * Recibe números de teléfono del dispositivo del usuario y:
+ * 1. Actualiza devicePhoneNumbers en el documento del usuario
+ * 2. Busca usuarios registrados con esos números (excluyendo children)
+ * 3. Verifica bidireccionalidad (si el otro usuario me tiene en sus contactos)
+ * 4. Crea contactos automáticamente con status 'approved'
+ * 5. Crea chats con visible: false
+ *
+ * @param {string[]} phoneNumbers - Lista de números normalizados del dispositivo
+ * @returns {Object} - { success, created, matches }
+ */
+exports.syncDeviceContacts = onCall(
+  { cors: true, consumeAppCheckToken: true },
+  async (request) => {
+    const db = getFirestore();
+    const auth = request.auth;
+
+    if (!auth) {
+      throw new HttpsError("unauthenticated", "Usuario no autenticado");
+    }
+
+    const { phoneNumbers } = request.data;
+    const currentUserId = auth.uid;
+
+    if (!phoneNumbers || !Array.isArray(phoneNumbers)) {
+      throw new HttpsError("invalid-argument", "phoneNumbers debe ser un array");
+    }
+
+    console.log(`📱 Sync contactos para ${currentUserId}: ${phoneNumbers.length} números`);
+
+    try {
+      // 1. Obtener datos del usuario actual
+      const currentUserDoc = await db.collection("users").doc(currentUserId).get();
+      const currentUserData = currentUserDoc.data();
+
+      if (!currentUserData) {
+        throw new HttpsError("not-found", "Usuario no encontrado");
+      }
+
+      const currentUserRole = currentUserData.role || "child";
+      const currentUserPhone = currentUserData.phone;
+      const currentUserName = currentUserData.name || "Usuario";
+
+      // Solo parent/adult pueden sincronizar contactos
+      if (currentUserRole === "child") {
+        console.log(`⚠️ Usuario ${currentUserId} es child, no puede sincronizar contactos`);
+        return { success: true, created: 0, matches: 0, reason: "child_not_allowed" };
+      }
+
+      // 2. Actualizar devicePhoneNumbers del usuario actual
+      await db.collection("users").doc(currentUserId).update({
+        devicePhoneNumbers: phoneNumbers,
+        lastContactsSync: FieldValue.serverTimestamp(),
+      });
+
+      console.log(`✅ devicePhoneNumbers actualizado para ${currentUserId}`);
+
+      if (phoneNumbers.length === 0) {
+        return { success: true, created: 0, matches: 0 };
+      }
+
+      // 3. Buscar usuarios registrados con esos números (batches de 10)
+      const registeredUsers = [];
+
+      for (let i = 0; i < phoneNumbers.length; i += 10) {
+        const batch = phoneNumbers.slice(i, i + 10);
+
+        const usersQuery = await db
+          .collection("users")
+          .where("phone", "in", batch)
+          .get();
+
+        for (const userDoc of usersQuery.docs) {
+          const userData = userDoc.data();
+
+          // Excluir: el mismo usuario, children, usuarios sin phone
+          if (userDoc.id === currentUserId) continue;
+          if (userData.role === "child") continue;
+          if (!userData.phone) continue;
+
+          registeredUsers.push({
+            userId: userDoc.id,
+            phone: userData.phone,
+            name: userData.name || "Usuario",
+            devicePhoneNumbers: userData.devicePhoneNumbers || [],
+          });
+        }
+      }
+
+      console.log(`🔍 Encontrados ${registeredUsers.length} usuarios registrados`);
+
+      if (registeredUsers.length === 0) {
+        return { success: true, created: 0, matches: registeredUsers.length };
+      }
+
+      // 4. Obtener contactos existentes del usuario actual (para no duplicar)
+      const existingContactsSnapshot = await db
+        .collection("contacts")
+        .where("users", "array-contains", currentUserId)
+        .get();
+
+      const existingContactUserIds = new Set();
+      for (const doc of existingContactsSnapshot.docs) {
+        const users = doc.data().users || [];
+        for (const userId of users) {
+          if (userId !== currentUserId) {
+            existingContactUserIds.add(userId);
+          }
+        }
+      }
+
+      console.log(`📋 Contactos existentes: ${existingContactUserIds.size}`);
+
+      // 5. Generar variaciones del número del usuario actual para matching bidireccional
+      const currentPhoneVariations = generatePhoneVariations(currentUserPhone);
+
+      // 6. Crear contactos bidireccionales
+      let createdCount = 0;
+      const batch = db.batch();
+      let batchCount = 0;
+
+      for (const contact of registeredUsers) {
+        // Ya existe contacto?
+        if (existingContactUserIds.has(contact.userId)) {
+          continue;
+        }
+
+        // Verificar bidireccionalidad: ¿el otro usuario me tiene en sus contactos?
+        const isBidirectional = currentPhoneVariations.some(
+          (variation) => contact.devicePhoneNumbers.includes(variation)
+        );
+
+        if (!isBidirectional) {
+          console.log(`⏭️ ${contact.name} no es bidireccional, saltando`);
+          continue;
+        }
+
+        console.log(`✅ Match bidireccional con ${contact.name}`);
+
+        // Crear contacto
+        const users = [currentUserId, contact.userId].sort();
+        const contactId = `${users[0]}_${users[1]}`;
+
+        const contactRef = db.collection("contacts").doc(contactId);
+        batch.set(contactRef, {
+          users: users,
+          status: "approved",
+          createdAt: FieldValue.serverTimestamp(),
+          autoCreated: true,
+          source: "auto_device_sync",
+          user1Name: users[0] === currentUserId ? currentUserName : contact.name,
+          user2Name: users[1] === currentUserId ? currentUserName : contact.name,
+        });
+
+        // Crear chat invisible
+        const chatRef = db.collection("chats").doc(contactId);
+        batch.set(chatRef, {
+          participants: users,
+          isValidChat: true,
+          visible: false,
+          createdAt: FieldValue.serverTimestamp(),
+          lastMessageTime: null,
+          lastMessageAt: null,
+          lastMessage: "",
+          lastMessageSender: null,
+          deletedBy: [],
+        }, { merge: true });
+
+        createdCount++;
+        batchCount += 2;
+
+        // Firestore batch limit is 500
+        if (batchCount >= 498) {
+          await batch.commit();
+          batchCount = 0;
+        }
+      }
+
+      // Commit remaining
+      if (batchCount > 0) {
+        await batch.commit();
+      }
+
+      console.log(`✅ Sync completado: ${createdCount} contactos creados`);
+
+      return {
+        success: true,
+        created: createdCount,
+        matches: registeredUsers.length,
+      };
+    } catch (error) {
+      console.error("❌ Error sincronizando contactos:", error);
+      throw new HttpsError("internal", `Error sincronizando contactos: ${error.message}`);
+    }
+  }
+);
+
+/**
+ * Helper: Generar variaciones de un número de teléfono para matching
+ * Maneja diferentes formatos: +54XXXXXXXXXX, +549XXXXXXXXXX, etc.
+ */
+function generatePhoneVariations(phone) {
+  if (!phone) return [];
+
+  const variations = new Set();
+
+  // Limpiar el número
+  const cleaned = phone.replace(/[\s\-\(\)]/g, "");
+  variations.add(cleaned);
+
+  // Sin el + inicial
+  if (cleaned.startsWith("+")) {
+    variations.add(cleaned.substring(1));
+  }
+
+  // Argentina específico: +54 vs +549
+  if (cleaned.startsWith("+54")) {
+    const withoutCountry = cleaned.substring(3);
+
+    // Si tiene 9 después del código de país, agregar sin el 9
+    if (withoutCountry.startsWith("9")) {
+      variations.add("+54" + withoutCountry.substring(1));
+      variations.add("54" + withoutCountry.substring(1));
+    } else {
+      // Si no tiene 9, agregar con el 9
+      variations.add("+549" + withoutCountry);
+      variations.add("549" + withoutCountry);
+    }
+
+    // Solo el número local
+    if (withoutCountry.startsWith("9")) {
+      variations.add(withoutCountry.substring(1));
+    } else {
+      variations.add(withoutCountry);
+    }
+  }
+
+  return Array.from(variations);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CREACIÓN SEGURA DE CONTACTOS (Solo via Cloud Functions)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Cloud Function: Aprobar contacto desde una solicitud existente
+ * Usado cuando un padre aprueba una contact_request
+ * Reemplaza firebase_service.dart:approveContact()
+ *
+ * @param {string} requestId - ID de la contact_request
+ * @param {string} childId - ID del hijo
+ * @param {string} contactId - ID del contacto
+ */
+exports.approveContactFromRequest = onCall(
+  { cors: true, consumeAppCheckToken: true },
+  async (request) => {
+    const db = getFirestore();
+    const auth = request.auth;
+
+    if (!auth) {
+      throw new HttpsError("unauthenticated", "Usuario no autenticado");
+    }
+
+    const { requestId, childId, contactId } = request.data;
+
+    if (!requestId || !childId || !contactId) {
+      throw new HttpsError("invalid-argument", "requestId, childId y contactId son requeridos");
+    }
+
+    console.log(`✅ [approveContactFromRequest] Aprobando contacto: ${childId} <-> ${contactId}`);
+
+    try {
+      // 1. Verificar que el usuario es padre del hijo
+      const parentChildLink = await db
+        .collection("parent_children")
+        .where("parentId", "==", auth.uid)
+        .where("childId", "==", childId)
+        .where("status", "==", "approved")
+        .get();
+
+      if (parentChildLink.empty) {
+        throw new HttpsError("permission-denied", "No tienes permiso para aprobar contactos de este hijo");
+      }
+
+      // 2. Verificar que la solicitud existe
+      const requestDoc = await db.collection("contact_requests").doc(requestId).get();
+      if (!requestDoc.exists) {
+        throw new HttpsError("not-found", "Solicitud no encontrada");
+      }
+
+      // 3. Actualizar el estado de la solicitud
+      await db.collection("contact_requests").doc(requestId).update({
+        status: "approved",
+        approvedAt: FieldValue.serverTimestamp(),
+        approvedBy: auth.uid,
+      });
+
+      // 4. Verificar si ya existe un contacto entre ellos
+      const participants = [childId, contactId].sort();
+      const existingContact = await db
+        .collection("contacts")
+        .where("users", "==", participants)
+        .get();
+
+      let contactDocId;
+      if (existingContact.empty) {
+        // Crear nuevo contacto
+        const newContact = await db.collection("contacts").add({
+          users: participants,
+          status: "approved",
+          createdAt: FieldValue.serverTimestamp(),
+          type: "contact",
+          approvedBy: auth.uid,
+        });
+        contactDocId = newContact.id;
+        console.log(`✅ Contacto creado: ${contactDocId}`);
+      } else {
+        // Actualizar existente
+        contactDocId = existingContact.docs[0].id;
+        await db.collection("contacts").doc(contactDocId).update({
+          status: "approved",
+          approvedAt: FieldValue.serverTimestamp(),
+          approvedBy: auth.uid,
+        });
+        console.log(`✅ Contacto actualizado: ${contactDocId}`);
+      }
+
+      // 5. Crear chat invisible
+      const chatId = participants.join("_");
+      await db.collection("chats").doc(chatId).set({
+        participants: participants,
+        isValidChat: true,
+        visible: false,
+        createdAt: FieldValue.serverTimestamp(),
+        lastMessageTime: null,
+        lastMessageAt: null,
+        lastMessage: "",
+        lastMessageSender: null,
+        deletedBy: [],
+      }, { merge: true });
+
+      return {
+        success: true,
+        contactId: contactDocId,
+        chatId: chatId,
+      };
+    } catch (error) {
+      console.error("❌ [approveContactFromRequest] Error:", error);
+      throw error;
+    }
+  }
+);
+
+/**
+ * Cloud Function: Auto-aprobar contacto (cuando ya existe contacto aprobado con otro padre)
+ * Usado por auto_approval_service.dart
+ *
+ * @param {string} childId - ID del hijo
+ * @param {string} contactId - ID del contacto
+ * @param {string} parentId - ID del padre que auto-aprueba
+ * @param {string} requestId - ID de la permission_request a actualizar
+ */
+exports.autoApproveContact = onCall(
+  { cors: true, consumeAppCheckToken: true },
+  async (request) => {
+    const db = getFirestore();
+    const auth = request.auth;
+
+    if (!auth) {
+      throw new HttpsError("unauthenticated", "Usuario no autenticado");
+    }
+
+    const { childId, contactId, parentId, requestId } = request.data;
+
+    if (!childId || !contactId || !parentId) {
+      throw new HttpsError("invalid-argument", "childId, contactId y parentId son requeridos");
+    }
+
+    console.log(`✅ [autoApproveContact] Auto-aprobando: ${childId} <-> ${contactId}`);
+
+    try {
+      // 1. Verificar que el usuario es el padre indicado
+      if (auth.uid !== parentId) {
+        throw new HttpsError("permission-denied", "Solo el padre puede auto-aprobar");
+      }
+
+      // 2. Verificar que es padre del hijo
+      const parentChildLink = await db
+        .collection("parent_children")
+        .where("parentId", "==", parentId)
+        .where("childId", "==", childId)
+        .where("status", "==", "approved")
+        .get();
+
+      if (parentChildLink.empty) {
+        throw new HttpsError("permission-denied", "No eres padre de este hijo");
+      }
+
+      // 3. Verificar/crear contacto
+      const participants = [childId, contactId].sort();
+      const existingContact = await db
+        .collection("contacts")
+        .where("users", "==", participants)
+        .get();
+
+      let contactDocId;
+      if (existingContact.empty) {
+        // Crear nuevo contacto
+        const newContact = await db.collection("contacts").add({
+          users: participants,
+          user1Name: "",
+          user2Name: "",
+          user1Email: "",
+          user2Email: "",
+          status: "approved",
+          autoApproved: true,
+          addedAt: FieldValue.serverTimestamp(),
+          addedBy: parentId,
+          addedVia: "group_approval",
+          approvedForGroup: true,
+        });
+        contactDocId = newContact.id;
+      } else {
+        // Actualizar existente
+        contactDocId = existingContact.docs[0].id;
+        await db.collection("contacts").doc(contactDocId).update({
+          status: "approved",
+          approvedForGroup: true,
+          autoApproved: true,
+        });
+      }
+
+      // 4. Actualizar permission_request si existe
+      if (requestId) {
+        await db.collection("permission_requests").doc(requestId).update({
+          status: "approved",
+          approvedAt: FieldValue.serverTimestamp(),
+          autoApproved: true,
+        });
+      }
+
+      // 5. Crear chat invisible
+      const chatId = participants.join("_");
+      await db.collection("chats").doc(chatId).set({
+        participants: participants,
+        isValidChat: true,
+        visible: false,
+        createdAt: FieldValue.serverTimestamp(),
+        lastMessageTime: null,
+        lastMessageAt: null,
+        lastMessage: "",
+        lastMessageSender: null,
+        deletedBy: [],
+      }, { merge: true });
+
+      return {
+        success: true,
+        contactId: contactDocId,
+        chatId: chatId,
+      };
+    } catch (error) {
+      console.error("❌ [autoApproveContact] Error:", error);
+      throw error;
+    }
+  }
+);
+
+/**
+ * Cloud Function: Crear contacto desde invitación de grupo
+ * Usado por group_invitation_service.dart
+ *
+ * @param {string} invitedChildId - ID del hijo invitado
+ * @param {string} memberId - ID del miembro del grupo
+ */
+exports.createContactFromGroupInvitation = onCall(
+  { cors: true, consumeAppCheckToken: true },
+  async (request) => {
+    const db = getFirestore();
+    const auth = request.auth;
+
+    if (!auth) {
+      throw new HttpsError("unauthenticated", "Usuario no autenticado");
+    }
+
+    const { invitedChildId, memberId } = request.data;
+
+    if (!invitedChildId || !memberId) {
+      throw new HttpsError("invalid-argument", "invitedChildId y memberId son requeridos");
+    }
+
+    console.log(`✅ [createContactFromGroupInvitation] Creando: ${invitedChildId} <-> ${memberId}`);
+
+    try {
+      // 1. Verificar que el usuario es padre del hijo invitado
+      const parentChildLink = await db
+        .collection("parent_children")
+        .where("parentId", "==", auth.uid)
+        .where("childId", "==", invitedChildId)
+        .where("status", "==", "approved")
+        .get();
+
+      if (parentChildLink.empty) {
+        throw new HttpsError("permission-denied", "No eres padre del hijo invitado");
+      }
+
+      // 2. Verificar/crear contacto
+      const participants = [invitedChildId, memberId].sort();
+      const existingContact = await db
+        .collection("contacts")
+        .where("users", "==", participants)
+        .get();
+
+      let contactDocId;
+      if (existingContact.empty) {
+        // Crear nuevo contacto
+        const newContact = await db.collection("contacts").add({
+          users: participants,
+          status: "approved",
+          createdAt: FieldValue.serverTimestamp(),
+          type: "contact",
+          approvedViaGroupInvitation: true,
+          approvedBy: auth.uid,
+        });
+        contactDocId = newContact.id;
+      } else {
+        // Actualizar existente
+        contactDocId = existingContact.docs[0].id;
+        await db.collection("contacts").doc(contactDocId).update({
+          status: "approved",
+          approvedViaGroupInvitation: true,
+        });
+      }
+
+      // 3. Crear chat invisible
+      const chatId = participants.join("_");
+      await db.collection("chats").doc(chatId).set({
+        participants: participants,
+        isValidChat: true,
+        visible: false,
+        createdAt: FieldValue.serverTimestamp(),
+        lastMessageTime: null,
+        lastMessageAt: null,
+        lastMessage: "",
+        lastMessageSender: null,
+        deletedBy: [],
+      }, { merge: true });
+
+      return {
+        success: true,
+        contactId: contactDocId,
+        chatId: chatId,
+      };
+    } catch (error) {
+      console.error("❌ [createContactFromGroupInvitation] Error:", error);
+      throw error;
+    }
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
+// OBTENER CONTACTOS DEL HIJO PARA MODERACIÓN
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Obtener contactos aprobados de un hijo para la pantalla de moderación
+ * Solo padres vinculados pueden llamar esta función
+ */
+exports.getChildContactsForModeration = onCall(
+  { cors: true, consumeAppCheckToken: true },
+  async (request) => {
+    const db = getFirestore();
+    const auth = request.auth;
+
+    // Verificar autenticación
+    if (!auth) {
+      throw new HttpsError("unauthenticated", "Usuario no autenticado");
+    }
+
+    const { childId } = request.data;
+    const parentId = auth.uid;
+
+    if (!childId) {
+      throw new HttpsError("invalid-argument", "childId es requerido");
+    }
+
+    console.log(`📋 [getChildContactsForModeration] Padre ${parentId} solicitando contactos de hijo ${childId}`);
+
+    try {
+      // 1. Verificar que el solicitante es padre del hijo
+      const parentDoc = await db.collection("users").doc(parentId).get();
+      if (!parentDoc.exists) {
+        throw new HttpsError("not-found", "Usuario padre no encontrado");
+      }
+
+      const parentData = parentDoc.data();
+      const linkedChildrenIds = parentData.linkedChildrenIds || [];
+
+      if (!linkedChildrenIds.includes(childId)) {
+        throw new HttpsError("permission-denied", "No tienes permiso para ver los contactos de este hijo");
+      }
+
+      // 2. Obtener contactos aprobados del hijo desde contacts (array-contains)
+      const contactsSnapshot = await db
+        .collection("contacts")
+        .where("users", "array-contains", childId)
+        .where("status", "==", "approved")
+        .get();
+
+      if (contactsSnapshot.empty) {
+        console.log(`ℹ️ No se encontraron contactos aprobados para ${childId}`);
+        return { success: true, contacts: [] };
+      }
+
+      // 3. Obtener datos de cada contacto
+      const contacts = [];
+      const userIdsToFetch = new Set();
+
+      // Recolectar IDs de usuarios a buscar
+      for (const contactDoc of contactsSnapshot.docs) {
+        const contactData = contactDoc.data();
+        const users = contactData.users || [];
+        const otherUserId = users.find(u => u !== childId);
+        if (otherUserId) {
+          userIdsToFetch.add(otherUserId);
+        }
+      }
+
+      // Batch read de usuarios
+      const userDataMap = {};
+      const userIdsArray = Array.from(userIdsToFetch);
+
+      for (let i = 0; i < userIdsArray.length; i += 30) {
+        const batchIds = userIdsArray.slice(i, i + 30);
+        const usersSnapshot = await db
+          .collection("users")
+          .where("__name__", "in", batchIds)
+          .get();
+
+        for (const userDoc of usersSnapshot.docs) {
+          userDataMap[userDoc.id] = userDoc.data();
+        }
+      }
+
+      // 4. Construir lista de contactos con datos de moderación
+      for (const contactDoc of contactsSnapshot.docs) {
+        const contactData = contactDoc.data();
+        const users = contactData.users || [];
+        const otherUserId = users.find(u => u !== childId);
+
+        if (!otherUserId) continue;
+
+        const userData = userDataMap[otherUserId] || {};
+
+        // Generar chatId
+        const chatId = [childId, otherUserId].sort().join("_");
+
+        // Obtener datos del chat
+        let chatData = null;
+        try {
+          const chatDoc = await db.collection("chats").doc(chatId).get();
+          if (chatDoc.exists) {
+            chatData = chatDoc.data();
+          }
+        } catch (e) {
+          console.log(`⚠️ No se pudo obtener chat ${chatId}: ${e.message}`);
+        }
+
+        // Contar mensajes bloqueados (opcional)
+        let blockedCount = 0;
+        try {
+          const blockedSnapshot = await db
+            .collection("chats")
+            .doc(chatId)
+            .collection("messages")
+            .where("moderationStatus", "==", "blocked")
+            .count()
+            .get();
+          blockedCount = blockedSnapshot.data().count || 0;
+        } catch (e) {
+          // Ignorar errores de conteo
+        }
+
+        contacts.push({
+          contactId: otherUserId,
+          childId: childId,
+          chatId: chatId,
+          name: userData.name || "Usuario",
+          photoURL: userData.photoURL || null,
+          moderationEnabled: chatData?.moderationEnabled || false,
+          moderationLevel: chatData?.moderationLevel || "high",
+          blockedCount: blockedCount,
+        });
+      }
+
+      // Ordenar por nombre
+      contacts.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+
+      console.log(`✅ [getChildContactsForModeration] Retornando ${contacts.length} contactos para hijo ${childId}`);
+
+      return {
+        success: true,
+        contacts: contacts,
+      };
+    } catch (error) {
+      console.error("❌ [getChildContactsForModeration] Error:", error);
+      if (error instanceof HttpsError) {
+        throw error;
+      }
+      throw new HttpsError("internal", `Error obteniendo contactos: ${error.message}`);
+    }
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
+// ACTUALIZAR MODERACIÓN DE CONTACTO DEL HIJO
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Actualizar configuración de moderación para un contacto del hijo
+ * Solo padres vinculados pueden llamar esta función
+ */
+exports.updateChildContactModeration = onCall(
+  { cors: true, consumeAppCheckToken: true },
+  async (request) => {
+    const db = getFirestore();
+    const auth = request.auth;
+
+    // Verificar autenticación
+    if (!auth) {
+      throw new HttpsError("unauthenticated", "Usuario no autenticado");
+    }
+
+    const { childId, contactId, chatId, enabled, level } = request.data;
+    const parentId = auth.uid;
+
+    if (!childId || !contactId || !chatId) {
+      throw new HttpsError("invalid-argument", "childId, contactId y chatId son requeridos");
+    }
+
+    if (typeof enabled !== "boolean") {
+      throw new HttpsError("invalid-argument", "enabled debe ser un booleano");
+    }
+
+    console.log(`🔧 [updateChildContactModeration] Padre ${parentId} actualizando moderación para ${contactId} de hijo ${childId}`);
+
+    try {
+      // 1. Verificar que el solicitante es padre del hijo
+      const parentDoc = await db.collection("users").doc(parentId).get();
+      if (!parentDoc.exists) {
+        throw new HttpsError("not-found", "Usuario padre no encontrado");
+      }
+
+      const parentData = parentDoc.data();
+      const linkedChildrenIds = parentData.linkedChildrenIds || [];
+
+      if (!linkedChildrenIds.includes(childId)) {
+        throw new HttpsError("permission-denied", "No tienes permiso para modificar la moderación de este hijo");
+      }
+
+      // 2. Verificar que el chatId corresponde al hijo y contacto
+      const expectedChatId = [childId, contactId].sort().join("_");
+      if (chatId !== expectedChatId) {
+        throw new HttpsError("invalid-argument", "El chatId no corresponde al hijo y contacto especificados");
+      }
+
+      const batch = db.batch();
+      const moderationLevel = level || "high";
+
+      // 3. Actualizar documento del chat
+      const chatRef = db.collection("chats").doc(chatId);
+      const chatDoc = await chatRef.get();
+
+      if (chatDoc.exists) {
+        batch.update(chatRef, {
+          moderationEnabled: enabled,
+          moderationLevel: moderationLevel,
+          moderationParentId: enabled ? parentId : null,
+          moderationEnabledAt: enabled ? FieldValue.serverTimestamp() : null,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      } else {
+        // Crear documento de chat si no existe
+        batch.set(chatRef, {
+          participants: [childId, contactId],
+          moderationEnabled: enabled,
+          moderationLevel: moderationLevel,
+          moderationParentId: enabled ? parentId : null,
+          moderationEnabledAt: enabled ? FieldValue.serverTimestamp() : null,
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
+
+      // 4. Actualizar documento del hijo
+      const childRef = db.collection("users").doc(childId);
+      if (enabled) {
+        batch.update(childRef, {
+          moderatingUserIds: FieldValue.arrayUnion(contactId),
+          [`moderationLevels.${contactId}`]: moderationLevel,
+        });
+      } else {
+        batch.update(childRef, {
+          moderatingUserIds: FieldValue.arrayRemove(contactId),
+          [`moderationLevels.${contactId}`]: FieldValue.delete(),
+        });
+      }
+
+      await batch.commit();
+
+      console.log(`✅ [updateChildContactModeration] Moderación ${enabled ? "activada" : "desactivada"} para ${contactId} de hijo ${childId}`);
+
+      return {
+        success: true,
+        message: enabled ? "Moderación activada" : "Moderación desactivada",
+      };
+    } catch (error) {
+      console.error("❌ [updateChildContactModeration] Error:", error);
+      if (error instanceof HttpsError) {
+        throw error;
+      }
+      throw new HttpsError("internal", `Error actualizando moderación: ${error.message}`);
+    }
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
+// ACTUALIZAR STATUS DE CONTACTO DIRECTAMENTE
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Cloud Function: Actualizar status de un contacto directamente
+ *
+ * Usado cuando:
+ * - El padre quiere aprobar/eliminar un contacto de su hijo
+ * - No hay contact_request asociado (contacto auto-aprobado, migrado, etc.)
+ *
+ * Valida que:
+ * 1. El usuario es padre de alguno de los usuarios del contacto
+ * 2. Solo permite transiciones válidas de status
+ *
+ * @param {string} contactDocId - ID del documento en la colección contacts
+ * @param {string} status - Nuevo status ('approved' | 'deleted')
+ * @returns {Object} - { success, contactDocId }
+ */
+exports.updateContactStatus = onCall(
+  { cors: true, consumeAppCheckToken: true },
+  async (request) => {
+    const db = getFirestore();
+    const auth = request.auth;
+
+    if (!auth) {
+      throw new HttpsError("unauthenticated", "Usuario no autenticado");
+    }
+
+    const { contactDocId, status } = request.data;
+    const parentId = auth.uid;
+
+    if (!contactDocId || !status) {
+      throw new HttpsError("invalid-argument", "contactDocId y status son requeridos");
+    }
+
+    if (!["approved", "deleted"].includes(status)) {
+      throw new HttpsError("invalid-argument", "status debe ser 'approved' o 'deleted'");
+    }
+
+    console.log(`📝 [updateContactStatus] Padre ${parentId} actualizando contacto ${contactDocId} a ${status}`);
+
+    try {
+      // 1. Obtener el contacto
+      const contactDoc = await db.collection("contacts").doc(contactDocId).get();
+
+      if (!contactDoc.exists) {
+        throw new HttpsError("not-found", "Contacto no encontrado");
+      }
+
+      const contactData = contactDoc.data();
+      const contactUsers = contactData.users || [];
+
+      // 2. Verificar que el padre tiene algún hijo vinculado que esté en este contacto
+      const parentDoc = await db.collection("users").doc(parentId).get();
+      if (!parentDoc.exists) {
+        throw new HttpsError("not-found", "Usuario padre no encontrado");
+      }
+
+      const parentData = parentDoc.data();
+      const linkedChildrenIds = parentData.linkedChildrenIds || [];
+
+      const hasLinkedChild = contactUsers.some(userId => linkedChildrenIds.includes(userId));
+      if (!hasLinkedChild) {
+        throw new HttpsError("permission-denied", "No tienes permiso para modificar este contacto");
+      }
+
+      // 3. Actualizar el contacto
+      const updateData = {
+        status: status,
+        updatedAt: FieldValue.serverTimestamp(),
+        updatedBy: parentId,
+      };
+
+      if (status === "approved") {
+        updateData.approvedAt = FieldValue.serverTimestamp();
+      } else if (status === "deleted") {
+        updateData.deletedAt = FieldValue.serverTimestamp();
+      }
+
+      await contactDoc.ref.update(updateData);
+
+      console.log(`✅ [updateContactStatus] Contacto ${contactDocId} actualizado a ${status}`);
+
+      return {
+        success: true,
+        contactDocId: contactDocId,
+        status: status,
+      };
+    } catch (error) {
+      console.error("❌ [updateContactStatus] Error:", error);
+      if (error instanceof HttpsError) {
+        throw error;
+      }
+      throw new HttpsError("internal", `Error actualizando contacto: ${error.message}`);
+    }
+  }
 );
 
 // ═══════════════════════════════════════════════════════════════

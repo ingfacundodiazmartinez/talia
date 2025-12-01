@@ -14,6 +14,7 @@ import '../services/character_service.dart';
 import '../services/usage_limits_service.dart';
 import '../services/subscription_service.dart';
 import '../services/story_upload_progress_service.dart';
+import '../services/face_detection_service.dart';
 import '../models/character.dart';
 import '../widgets/character_selector_dialog.dart';
 import '../utils/release_logger.dart';
@@ -57,6 +58,7 @@ class StoryCameraController {
   bool _hasCameraPermissions = false;
   bool _hasInitializationFailed = false;
   int _selectedCameraIndex = 0; // Will be set to front camera in initialization
+  bool _isInitializingCamera = false; // 🔒 Mutex para prevenir race conditions
 
   // Estado de filtros
   String? _selectedFilter;
@@ -186,16 +188,27 @@ class StoryCameraController {
         ReleaseLogger.log('🤖 Android: Verificando permisos de cámara...', tag: 'StoryCameraController');
 
         final currentStatus = await _permissionService.checkStatus(AppPermission.camera);
+        final wasAlreadyGranted = currentStatus == PermissionResult.granted || currentStatus == PermissionResult.limited;
 
         PermissionResult permissionResult;
-        if (currentStatus == PermissionResult.granted || currentStatus == PermissionResult.limited) {
+        if (wasAlreadyGranted) {
           permissionResult = currentStatus;
         } else if (context != null && context.mounted) {
+          // Solicitar permiso de cámara
           permissionResult = await _permissionService.request(
             AppPermission.camera,
             context: context,
             showRationale: true, // En Android sí mostrar rationale
           );
+
+          // También solicitar permiso de micrófono para video
+          if (permissionResult == PermissionResult.granted && context.mounted) {
+            await _permissionService.request(
+              AppPermission.microphone,
+              context: context,
+              showRationale: true,
+            );
+          }
         } else {
           permissionResult = currentStatus;
         }
@@ -205,6 +218,14 @@ class StoryCameraController {
           case PermissionResult.limited:
             _hasCameraPermissions = true;
             ReleaseLogger.log('✅ Permisos de cámara concedidos', tag: 'StoryCameraController');
+
+            // ✅ FIX ANDROID: Esperar a que el sistema propague los permisos antes de inicializar cámara
+            // Esto evita el problema de pantalla negra la primera vez que se conceden permisos
+            if (!wasAlreadyGranted) {
+              ReleaseLogger.log('⏳ Android: Esperando propagación de permisos...', tag: 'StoryCameraController');
+              await Future.delayed(const Duration(milliseconds: 500));
+            }
+
             onPermissionGranted?.call();
             break;
 
@@ -256,39 +277,66 @@ class StoryCameraController {
 
   /// Inicializar controller de cámara específico
   Future<void> _initializeCameraController() async {
+    // 🔒 Prevenir inicializaciones concurrentes (race condition fix)
+    if (_isInitializingCamera) {
+      ReleaseLogger.log('⚠️ Inicialización de cámara ya en progreso, ignorando...', tag: 'StoryCameraController');
+      return;
+    }
+
     if (_cameras == null || _cameras!.isEmpty) {
       ReleaseLogger.error('❌ No hay cámaras disponibles', tag: 'StoryCameraController');
       return;
     }
 
-    // Dispose controller anterior si existe
-    if (_cameraController != null) {
-      ReleaseLogger.log('🧹 Disposing controller anterior...', tag: 'StoryCameraController');
-      await _cameraController!.dispose();
+    _isInitializingCamera = true;
+
+    try {
+      // Dispose controller anterior si existe
+      final oldController = _cameraController;
       _cameraController = null;
+      _isCameraInitialized = false;
+
+      if (oldController != null) {
+        ReleaseLogger.log('🧹 Disposing controller anterior...', tag: 'StoryCameraController');
+        await oldController.dispose();
+      }
+
+      ReleaseLogger.log(
+        '🤳 Creando CameraController para índice $_selectedCameraIndex (${_cameras![_selectedCameraIndex].lensDirection})',
+        tag: 'StoryCameraController',
+      );
+
+      final newController = CameraController(
+        _cameras![_selectedCameraIndex],
+        ResolutionPreset.high,
+        enableAudio: true,
+      );
+
+      await newController.initialize();
+
+      // ✅ Verificar que no se disparó otra inicialización mientras esperábamos
+      if (!_isInitializingCamera) {
+        ReleaseLogger.log('⚠️ Inicialización cancelada por otra operación', tag: 'StoryCameraController');
+        await newController.dispose();
+        return;
+      }
+
+      _cameraController = newController;
+      _isCameraInitialized = true;
+
+      ReleaseLogger.log(
+        '🤳 Camera inicializada en índice $_selectedCameraIndex (${_cameras![_selectedCameraIndex].lensDirection})',
+        tag: 'StoryCameraController',
+      );
+
+      // Obtener límites de zoom y exposure
+      await _initializeCameraLimits();
+    } catch (e) {
+      ReleaseLogger.error('❌ Error en _initializeCameraController: $e', tag: 'StoryCameraController');
+      rethrow;
+    } finally {
+      _isInitializingCamera = false;
     }
-
-    ReleaseLogger.log(
-      '🤳 Creando CameraController para índice $_selectedCameraIndex (${_cameras![_selectedCameraIndex].lensDirection})',
-      tag: 'StoryCameraController',
-    );
-
-    _cameraController = CameraController(
-      _cameras![_selectedCameraIndex],
-      ResolutionPreset.high,
-      enableAudio: true,
-    );
-
-    await _cameraController!.initialize();
-    _isCameraInitialized = true;
-
-    ReleaseLogger.log(
-      '🤳 Camera inicializada en índice $_selectedCameraIndex (${_cameras![_selectedCameraIndex].lensDirection})',
-      tag: 'StoryCameraController',
-    );
-
-    // Obtener límites de zoom y exposure
-    await _initializeCameraLimits();
   }
 
   /// Inicializar límites de zoom y exposure después de que la cámara esté lista
@@ -318,14 +366,30 @@ class StoryCameraController {
   }
 
   /// Cambiar cámara (frontal/trasera)
+  /// Solo alterna entre cámara frontal y trasera, ignorando otras cámaras (telephoto, ultra-wide, etc.)
   Future<void> switchCamera() async {
     if (_cameras == null || _cameras!.length <= 1) return;
 
-    _selectedCameraIndex = (_selectedCameraIndex + 1) % _cameras!.length;
-    ReleaseLogger.log(
-      '🔄 Switching to camera index $_selectedCameraIndex',
-      tag: 'StoryCameraController',
-    );
+    // Determinar la dirección actual
+    final currentDirection = _cameras![_selectedCameraIndex].lensDirection;
+
+    // Buscar la dirección opuesta
+    final targetDirection = currentDirection == CameraLensDirection.front
+        ? CameraLensDirection.back
+        : CameraLensDirection.front;
+
+    // Buscar la primera cámara con la dirección opuesta
+    for (int i = 0; i < _cameras!.length; i++) {
+      if (_cameras![i].lensDirection == targetDirection) {
+        _selectedCameraIndex = i;
+        ReleaseLogger.log(
+          '🔄 Switching camera: $currentDirection → $targetDirection (index $_selectedCameraIndex)',
+          tag: 'StoryCameraController',
+        );
+        break;
+      }
+    }
+
     await _initializeCameraController();
 
     // Notificar a la UI para que se actualice
@@ -337,12 +401,31 @@ class StoryCameraController {
   // ═══════════════════════════════════════════════════════════════
 
   /// Ciclar entre modos de flash: off → auto → always → torch → off
+  /// Para cámara frontal, solo cambia entre off y always (screen flash)
   Future<void> toggleFlashMode() async {
     if (_cameraController == null || !_isCameraInitialized) return;
 
+    FlashMode nextMode;
+
+    // Para cámara frontal: solo off ↔ always (screen flash)
+    if (!isBackCamera) {
+      nextMode = _flashMode == FlashMode.off ? FlashMode.always : FlashMode.off;
+      _flashMode = nextMode;
+
+      // Intentar configurar en el plugin, pero ignorar errores silenciosamente
+      // iOS maneja el screen flash automáticamente si el plugin lo soporta
+      try {
+        await _cameraController!.setFlashMode(nextMode);
+        ReleaseLogger.log('🔦 Screen flash: ${nextMode == FlashMode.always ? "ON" : "OFF"}', tag: 'StoryCameraController');
+      } catch (e) {
+        // Ignorar error silenciosamente - algunos dispositivos no soportan flash en cámara frontal
+        ReleaseLogger.log('🔦 Screen flash (local): ${nextMode == FlashMode.always ? "ON" : "OFF"} - hardware no soportado', tag: 'StoryCameraController');
+      }
+      return;
+    }
+
+    // Para cámara trasera: ciclar todos los modos
     try {
-      // Determinar siguiente modo de flash
-      FlashMode nextMode;
       switch (_flashMode) {
         case FlashMode.off:
           nextMode = FlashMode.auto;
@@ -366,6 +449,9 @@ class StoryCameraController {
       onError?.call('Error cambiando modo de flash');
     }
   }
+
+  /// Indica si se debe usar screen flash (cámara frontal con flash activado)
+  bool get shouldUseScreenFlash => !isBackCamera && _flashMode != FlashMode.off;
 
   /// Establecer modo de flash específico
   Future<void> setFlashMode(FlashMode mode) async {
@@ -525,7 +611,11 @@ class StoryCameraController {
         if (filterName == DeepARFilters.faceSwap) {
           await _usageLimitsService.incrementFaceSwapUsage();
           final usage = await _usageLimitsService.getFaceSwapUsage();
-          onSuccess?.call('Face swap aplicado. Te quedan ${usage['remaining']} usos gratuitos este mes.');
+          final isUnlimited = usage['unlimited'] == true;
+          final successMessage = isUnlimited
+              ? 'Face swap aplicado exitosamente!'
+              : 'Face swap aplicado. Te quedan ${usage['remaining']} usos gratuitos este mes.';
+          onSuccess?.call(successMessage);
         }
       }
     } catch (e) {
@@ -893,6 +983,14 @@ class StoryCameraController {
         return null;
       }
 
+      // Verificar que hay una cara visible en la imagen ANTES de mostrar el selector
+      final faceDetectionService = FaceDetectionService();
+      final hasFace = await faceDetectionService.hasFace(file.path);
+      if (!hasFace) {
+        onError?.call('No se detectó una cara en la imagen. Para mejores resultados, asegúrate de que tu rostro sea claramente visible.');
+        return null;
+      }
+
       // Capturar context antes de operaciones async
       if (!context.mounted) return null;
 
@@ -991,9 +1089,11 @@ class StoryCameraController {
 
       // Mostrar pantalla de éxito en la modal en lugar de cerrarla
       if (_isProgressDialogOpen && progressKey.currentState != null) {
-        progressKey.currentState!.showSuccess(
-          'Face swap aplicado exitosamente!\nTe quedan ${usage['remaining']} usos gratuitos este mes.'
-        );
+        final isUnlimited = usage['unlimited'] == true;
+        final successMessage = isUnlimited
+            ? 'Face swap aplicado exitosamente!'
+            : 'Face swap aplicado exitosamente!\nTe quedan ${usage['remaining']} usos gratuitos este mes.';
+        progressKey.currentState!.showSuccess(successMessage);
       }
 
       // NO retornar aquí - esperar hasta que el usuario presione continuar

@@ -20,6 +20,7 @@ import 'services/callkit_service.dart';
 import 'services/voip_service.dart';
 import 'services/app_state_service.dart';
 import 'services/notification_deduplication_service.dart';
+import 'services/location_service.dart';
 import 'utils/release_logger.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 // V2 Call System imports
@@ -460,6 +461,31 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // LOCATION REQUEST: Actualizar ubicación en background
+  // ═══════════════════════════════════════════════════════════════
+  if (message.data['type'] == 'location_request') {
+    ReleaseLogger.log(
+      '📍 [Background] Solicitud de ubicación recibida de padre',
+      tag: 'NotificationService',
+    );
+    try {
+      // Actualizar ubicación silenciosamente
+      final locationService = LocationService();
+      await locationService.updateLocationNow();
+      ReleaseLogger.log(
+        '✅ [Background] Ubicación actualizada por solicitud de padre',
+        tag: 'NotificationService',
+      );
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [Background] Error actualizando ubicación: $e',
+        tag: 'NotificationService',
+      );
+    }
+    return; // ✅ No mostrar notificación - es silenciosa
+  }
+
   // ✅ Para iOS con senderPhotoUrl, el NSE descargará la foto y agregará attachment
   // NO procesar aquí - dejar que el NSE lo maneje completamente
   if (Platform.isIOS && message.data['senderPhotoUrl'] != null) {
@@ -680,11 +706,6 @@ class NotificationService {
       // 🔒 TIMESTAMP FILTER: Guardar cuándo el usuario empezó a ver este chat
       // Esto permite filtrar notificaciones de mensajes que llegaron mientras veía el chat
       await prefs.setInt('chat_last_viewed_$chatId', currentTime);
-
-      ReleaseLogger.log(
-        '💾 Chat actual guardado: $chatId (timestamp: $currentTime)',
-        tag: 'NotificationService',
-      );
     } catch (e) {
       ReleaseLogger.error(
         '❌ Error guardando chat actual: $e',
@@ -829,13 +850,26 @@ class NotificationService {
   }
 
   // Helper para upsert de datos de usuario
+  /// Actualizar datos del usuario en Firestore
+  /// ✅ FIX: Solo actualiza si el documento ya existe (no crear documento prematuro)
+  /// Esto evita interferir con el flujo de ProfileCompletionScreen
   Future<void> _upsertUserData(Map<String, dynamic> data) async {
     final userId = _auth.currentUser?.uid;
     if (userId != null) {
-      await _firestore
-          .collection('users')
-          .doc(userId)
-          .set(data, SetOptions(merge: true));
+      // Verificar si el usuario existe antes de actualizar
+      final userDoc = await _firestore.collection('users').doc(userId).get();
+
+      if (!userDoc.exists) {
+        // Usuario nuevo - no guardar FCM token aún, esperar a ProfileCompletionScreen
+        ReleaseLogger.log(
+          '📱 Usuario nuevo, FCM token se guardará después de completar perfil',
+          tag: 'NotificationService',
+        );
+        return;
+      }
+
+      // Usuario existente - actualizar datos
+      await _firestore.collection('users').doc(userId).update(data);
     }
   }
 
@@ -3340,11 +3374,6 @@ class NotificationService {
       final user = _auth.currentUser;
       if (user == null) return;
 
-      ReleaseLogger.log(
-        '🗑️ Limpiando notificaciones para chat: $chatId (isGroup: $isGroup)',
-        tag: 'NotificationService',
-      );
-
       // Buscar todas las notificaciones del usuario para este chat
       final query = await _firestore
           .collection('notifications')
@@ -3352,13 +3381,7 @@ class NotificationService {
           .where('chatId', isEqualTo: chatId)
           .get();
 
-      if (query.docs.isEmpty) {
-        ReleaseLogger.log(
-          'ℹ️ No hay notificaciones para limpiar en chat: $chatId',
-          tag: 'NotificationService',
-        );
-        return;
-      }
+      if (query.docs.isEmpty) return;
 
       // Borrar todas las notificaciones encontradas
       final batch = _firestore.batch();
@@ -3367,10 +3390,6 @@ class NotificationService {
       }
 
       await batch.commit();
-      ReleaseLogger.log(
-        '✅ Limpiadas ${query.docs.length} notificaciones para chat: $chatId',
-        tag: 'NotificationService',
-      );
 
       // Opcional: También limpiar notificaciones locales del sistema
       if (Platform.isAndroid || Platform.isIOS) {

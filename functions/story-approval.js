@@ -1,4 +1,5 @@
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
+const { onDocumentCreated, onDocumentDeleted, onDocumentUpdated } = require('firebase-functions/v2/firestore');
 const { initializeApp, getApps } = require('firebase-admin/app');
 const { getFirestore, FieldValue, Timestamp } = require('firebase-admin/firestore');
 const { getStorage } = require('firebase-admin/storage');
@@ -443,7 +444,58 @@ exports.createStory = onCall({
     // 6. Sanitizar caption si existe
     const sanitizedCaption = caption ? sanitizeTextWithDOMPurify(caption, 500) : null;
 
-    // 7. Crear la historia
+    // 7. Obtener contactos aprobados para availableFor
+    // Esto permite que la query de historias sea O(1) en lugar de O(N contactos)
+    const contactsSnapshot = await db
+      .collection('contacts')
+      .where('users', 'array-contains', auth.uid)
+      .where('status', '==', 'approved')
+      .get();
+
+    const availableFor = [auth.uid]; // El creador siempre puede ver su propia historia
+    for (const contactDoc of contactsSnapshot.docs) {
+      const contactUsers = contactDoc.data().users || [];
+      for (const userId of contactUsers) {
+        if (userId !== auth.uid && !availableFor.includes(userId)) {
+          availableFor.push(userId);
+        }
+      }
+    }
+
+    // 7.1 Obtener padres vinculados para parentViewers (queries optimizadas)
+    // ✅ PERFORMANCE: Permite queries directas por padre sin nested queries
+    const parentViewers = [];
+    if (userData.role === 'child') {
+      const parentsSnapshot = await db
+        .collection('users')
+        .where('linkedChildrenIds', 'array-contains', auth.uid)
+        .get();
+
+      for (const parentDoc of parentsSnapshot.docs) {
+        parentViewers.push(parentDoc.id);
+        // También incluir en availableFor para que padres vean historias
+        if (!availableFor.includes(parentDoc.id)) {
+          availableFor.push(parentDoc.id);
+        }
+      }
+    }
+
+    // 7.2 Si es padre, agregar hijos vinculados a availableFor
+    // ✅ FIX: Permite que hijos vean historias de sus padres
+    const childViewers = [];
+    if (userData.role === 'parent' && userData.linkedChildrenIds && userData.linkedChildrenIds.length > 0) {
+      for (const childId of userData.linkedChildrenIds) {
+        childViewers.push(childId);
+        if (!availableFor.includes(childId)) {
+          availableFor.push(childId);
+        }
+      }
+      console.log(`👶 [CreateStory] Agregados ${childViewers.length} hijos vinculados a availableFor`);
+    }
+
+    console.log(`👥 [CreateStory] availableFor: ${availableFor.length} usuarios, parentViewers: ${parentViewers.length} padres, childViewers: ${childViewers.length} hijos`);
+
+    // 8. Crear la historia
     const storyData = {
       userId: auth.uid,
       userName: userData.name || 'Usuario',
@@ -459,6 +511,9 @@ exports.createStory = onCall({
       viewedBy: {},
       visibility: 'temporary',
       replies: [],
+      availableFor: availableFor, // IDs de usuarios que pueden ver esta historia
+      parentViewers: parentViewers, // ✅ PERFORMANCE: IDs de padres para queries optimizadas
+      childViewers: childViewers, // ✅ FIX: IDs de hijos para queries optimizadas
       updatedAt: FieldValue.serverTimestamp(),
     };
 
@@ -612,3 +667,557 @@ function sanitizeTextWithDOMPurify(input, maxLength = 500) {
 
   return clean;
 }
+
+// ═══════════════════════════════════════════════════════════════
+// TRIGGERS PARA SINCRONIZAR availableFor EN HISTORIAS
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Trigger: Cuando se crea un bloqueo, remover el usuario bloqueado de las historias
+ * Colección: blocked_contacts
+ * NOTA: Los campos en Firestore son 'userId' (quien bloquea) y 'blockedUserId' (quien es bloqueado)
+ *
+ * SEGURIDAD: Solo procesa si los usuarios son/fueron contactos aprobados
+ * Esto previene ataques donde alguien intenta manipular availableFor de usuarios aleatorios
+ */
+exports.onBlockCreated = onDocumentCreated(
+  'blocked_contacts/{blockId}',
+  async (event) => {
+    const blockData = event.data.data();
+    // Usar nombres de campo correctos de Firestore
+    const blockerId = blockData.userId;
+    const blockedId = blockData.blockedUserId;
+
+    if (!blockerId || !blockedId) {
+      console.error('❌ [onBlockCreated] Campos faltantes: userId o blockedUserId');
+      return;
+    }
+
+    console.log(`🚫 [onBlockCreated] ${blockerId} bloqueó a ${blockedId}`);
+
+    try {
+      // SEGURIDAD: Verificar que existe/existió una relación de contacto entre ellos
+      // Buscar cualquier contacto (approved, pending, rejected, deleted) entre estos usuarios
+      const contactSnapshot = await db
+        .collection('contacts')
+        .where('users', 'array-contains', blockerId)
+        .get();
+
+      let wereContacts = false;
+      for (const doc of contactSnapshot.docs) {
+        const users = doc.data().users || [];
+        if (users.includes(blockedId)) {
+          wereContacts = true;
+          break;
+        }
+      }
+
+      if (!wereContacts) {
+        console.warn(`⚠️ [onBlockCreated] ${blockerId} y ${blockedId} nunca fueron contactos. Ignorando.`);
+        return;
+      }
+
+      // Remover blockedId de las historias del bloqueador
+      await removeUserFromStories(blockerId, blockedId);
+
+      // Remover blockerId de las historias del bloqueado
+      await removeUserFromStories(blockedId, blockerId);
+
+      console.log(`✅ [onBlockCreated] availableFor actualizado para bloqueo ${blockerId} <-> ${blockedId}`);
+    } catch (error) {
+      console.error('❌ [onBlockCreated] Error:', error);
+    }
+  }
+);
+
+/**
+ * Trigger: Cuando se elimina un bloqueo, agregar el usuario de vuelta a las historias
+ * (Solo si siguen siendo contactos aprobados)
+ * NOTA: Los campos en Firestore son 'userId' (quien bloquea) y 'blockedUserId' (quien es bloqueado)
+ */
+exports.onBlockDeleted = onDocumentDeleted(
+  'blocked_contacts/{blockId}',
+  async (event) => {
+    const blockData = event.data.data();
+    // Usar nombres de campo correctos de Firestore
+    const blockerId = blockData.userId;
+    const blockedId = blockData.blockedUserId;
+
+    if (!blockerId || !blockedId) {
+      console.error('❌ [onBlockDeleted] Campos faltantes: userId o blockedUserId');
+      return;
+    }
+
+    console.log(`✅ [onBlockDeleted] ${blockerId} desbloqueó a ${blockedId}`);
+
+    try {
+      // Verificar si aún son contactos aprobados
+      const areContacts = await checkApprovedContact(blockerId, blockedId);
+
+      if (areContacts) {
+        // Agregar blockedId de vuelta a las historias del bloqueador
+        await addUserToStories(blockerId, blockedId);
+
+        // Agregar blockerId de vuelta a las historias del bloqueado
+        await addUserToStories(blockedId, blockerId);
+
+        console.log(`✅ [onBlockDeleted] availableFor restaurado para ${blockerId} <-> ${blockedId}`);
+      }
+    } catch (error) {
+      console.error('❌ [onBlockDeleted] Error:', error);
+    }
+  }
+);
+
+/**
+ * Trigger: Cuando se CREA un contacto (auto-aprobado, aprobado por padre, o via device sync)
+ * IMPORTANTE: onDocumentUpdated no se dispara para documentos nuevos,
+ * solo para actualizaciones. Este trigger maneja el caso de contactos
+ * creados directamente con status 'approved'.
+ *
+ * Requisitos:
+ * - Solo procesa contactos con status 'approved'
+ * - Verifica que el contacto sea bidireccional antes de agregar a availableFor
+ * - Actualiza historias de últimas 24h con status 'approved'
+ */
+exports.onContactCreated = onDocumentCreated(
+  'contacts/{contactId}',
+  async (event) => {
+    const contactData = event.data.data();
+    const status = contactData.status;
+    const users = contactData.users || [];
+
+    if (users.length !== 2) return;
+
+    const [user1, user2] = users;
+
+    // Solo procesar si el contacto fue creado con status 'approved'
+    if (status === 'approved') {
+      console.log(`✅ [onContactCreated] Contacto creado con status approved: ${user1} <-> ${user2}`);
+
+      // Verificar que el contacto sea bidireccional
+      const isBidirectional = await checkBidirectionalContact(user1, user2);
+
+      if (!isBidirectional) {
+        console.log(`⚠️ [onContactCreated] Contacto no es bidireccional, no se actualiza availableFor`);
+        return;
+      }
+
+      console.log(`✅ [onContactCreated] Contacto bidireccional confirmado, actualizando historias...`);
+
+      // Agregar cada usuario a las historias del otro
+      await addUserToStories(user1, user2);
+      await addUserToStories(user2, user1);
+    }
+  }
+);
+
+/**
+ * Trigger: Cuando cambia el status de un contacto
+ * Este trigger se dispara cuando un contacto existente es actualizado
+ * (ej: cuando un padre aprueba una solicitud pendiente)
+ */
+exports.onContactUpdated = onDocumentUpdated(
+  'contacts/{contactId}',
+  async (event) => {
+    const beforeData = event.data.before.data();
+    const afterData = event.data.after.data();
+
+    const beforeStatus = beforeData.status;
+    const afterStatus = afterData.status;
+    const users = afterData.users || [];
+
+    if (users.length !== 2) return;
+
+    const [user1, user2] = users;
+
+    // Si el contacto fue aprobado
+    if (beforeStatus !== 'approved' && afterStatus === 'approved') {
+      console.log(`✅ [onContactUpdated] Contacto aprobado: ${user1} <-> ${user2}`);
+
+      // Verificar que el contacto sea bidireccional antes de actualizar historias
+      const isBidirectional = await checkBidirectionalContact(user1, user2);
+
+      if (!isBidirectional) {
+        console.log(`⚠️ [onContactUpdated] Contacto no es bidireccional, no se actualiza availableFor`);
+        return;
+      }
+
+      console.log(`✅ [onContactUpdated] Contacto bidireccional confirmado, actualizando historias...`);
+
+      // Agregar cada usuario a las historias del otro
+      await addUserToStories(user1, user2);
+      await addUserToStories(user2, user1);
+    }
+
+    // Si el contacto dejó de estar aprobado (rechazado, eliminado, etc.)
+    if (beforeStatus === 'approved' && afterStatus !== 'approved') {
+      console.log(`🚫 [onContactUpdated] Contacto ya no aprobado: ${user1} <-> ${user2}`);
+
+      // Remover cada usuario de las historias del otro
+      await removeUserFromStories(user1, user2);
+      await removeUserFromStories(user2, user1);
+    }
+  }
+);
+
+/**
+ * Trigger: Cuando se elimina un contacto
+ */
+exports.onContactDeleted = onDocumentDeleted(
+  'contacts/{contactId}',
+  async (event) => {
+    const contactData = event.data.data();
+    const users = contactData.users || [];
+    const status = contactData.status;
+
+    if (users.length !== 2 || status !== 'approved') return;
+
+    const [user1, user2] = users;
+
+    console.log(`🗑️ [onContactDeleted] Contacto eliminado: ${user1} <-> ${user2}`);
+
+    // Remover cada usuario de las historias del otro
+    await removeUserFromStories(user1, user2);
+    await removeUserFromStories(user2, user1);
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
+// HELPER FUNCTIONS PARA SINCRONIZACIÓN DE availableFor
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Remover un usuario del campo availableFor de todas las historias de otro usuario
+ * @param {string} storyOwnerId - ID del dueño de las historias
+ * @param {string} userToRemove - ID del usuario a remover
+ */
+async function removeUserFromStories(storyOwnerId, userToRemove) {
+  const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+  // Solo actualizar historias no expiradas
+  const storiesSnapshot = await db
+    .collection('stories')
+    .where('userId', '==', storyOwnerId)
+    .where('createdAt', '>', twentyFourHoursAgo)
+    .get();
+
+  if (storiesSnapshot.empty) return;
+
+  const batch = db.batch();
+  let updateCount = 0;
+
+  for (const doc of storiesSnapshot.docs) {
+    const storyData = doc.data();
+    const availableFor = storyData.availableFor || [];
+
+    if (availableFor.includes(userToRemove)) {
+      batch.update(doc.ref, {
+        availableFor: FieldValue.arrayRemove(userToRemove)
+      });
+      updateCount++;
+    }
+  }
+
+  if (updateCount > 0) {
+    await batch.commit();
+    console.log(`📝 Removido ${userToRemove} de ${updateCount} historias de ${storyOwnerId}`);
+  }
+}
+
+/**
+ * Agregar un usuario al campo availableFor de todas las historias de otro usuario
+ * @param {string} storyOwnerId - ID del dueño de las historias
+ * @param {string} userToAdd - ID del usuario a agregar
+ */
+async function addUserToStories(storyOwnerId, userToAdd) {
+  const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+  // Solo actualizar historias no expiradas y aprobadas
+  const storiesSnapshot = await db
+    .collection('stories')
+    .where('userId', '==', storyOwnerId)
+    .where('status', '==', 'approved')
+    .where('createdAt', '>', twentyFourHoursAgo)
+    .get();
+
+  if (storiesSnapshot.empty) return;
+
+  const batch = db.batch();
+  let updateCount = 0;
+
+  for (const doc of storiesSnapshot.docs) {
+    const storyData = doc.data();
+    const availableFor = storyData.availableFor || [];
+
+    if (!availableFor.includes(userToAdd)) {
+      batch.update(doc.ref, {
+        availableFor: FieldValue.arrayUnion(userToAdd)
+      });
+      updateCount++;
+    }
+  }
+
+  if (updateCount > 0) {
+    await batch.commit();
+    console.log(`📝 Agregado ${userToAdd} a ${updateCount} historias de ${storyOwnerId}`);
+  }
+}
+
+/**
+ * Verificar si dos usuarios son contactos aprobados
+ */
+async function checkApprovedContact(user1, user2) {
+  const contactSnapshot = await db
+    .collection('contacts')
+    .where('users', 'array-contains', user1)
+    .where('status', '==', 'approved')
+    .get();
+
+  for (const doc of contactSnapshot.docs) {
+    const users = doc.data().users || [];
+    if (users.includes(user2)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Verificar si dos usuarios tienen un contacto bidireccional aprobado
+ * Requisitos:
+ * 1. El contacto debe existir con status 'approved'
+ * 2. No debe haber bloqueos activos entre los usuarios
+ * 3. Todas las contact_requests relacionadas deben estar aprobadas
+ */
+async function checkBidirectionalContact(user1, user2) {
+  try {
+    // 1. Verificar que el contacto está aprobado
+    const isApproved = await checkApprovedContact(user1, user2);
+    if (!isApproved) {
+      console.log(`[checkBidirectional] Contacto no aprobado entre ${user1} y ${user2}`);
+      return false;
+    }
+
+    // 2. Verificar que no hay bloqueos activos
+    const blockChecks = await Promise.all([
+      db.collection('blocked_contacts').doc(`${user1}_${user2}`).get(),
+      db.collection('blocked_contacts').doc(`${user2}_${user1}`).get(),
+    ]);
+
+    const hasBlock = blockChecks.some(doc => doc.exists);
+    if (hasBlock) {
+      console.log(`[checkBidirectional] Existe bloqueo entre ${user1} y ${user2}`);
+      return false;
+    }
+
+    // 3. Verificar que todas las contact_requests están aprobadas (no hay pendientes)
+    // Buscar el contacto para obtener el contactDocId
+    const contactSnapshot = await db
+      .collection('contacts')
+      .where('users', 'array-contains', user1)
+      .where('status', '==', 'approved')
+      .get();
+
+    let contactDocId = null;
+    for (const doc of contactSnapshot.docs) {
+      const users = doc.data().users || [];
+      if (users.includes(user2)) {
+        contactDocId = doc.id;
+        break;
+      }
+    }
+
+    if (contactDocId) {
+      const pendingRequests = await db
+        .collection('contact_requests')
+        .where('contactDocId', '==', contactDocId)
+        .where('status', '==', 'pending')
+        .get();
+
+      if (!pendingRequests.empty) {
+        console.log(`[checkBidirectional] Hay solicitudes pendientes para el contacto`);
+        return false;
+      }
+    }
+
+    console.log(`[checkBidirectional] Contacto bidireccional confirmado: ${user1} <-> ${user2}`);
+    return true;
+  } catch (error) {
+    console.error(`[checkBidirectional] Error verificando contacto: ${error}`);
+    return false;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TRIGGER: NOTIFICAR CONTACTOS CUANDO HISTORIA ES APROBADA
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * ✅ Issue 3: Trigger que envía notificaciones cuando una historia es aprobada
+ *
+ * IMPORTANTE: Las notificaciones de historias están DESHABILITADAS por defecto
+ * y se habilitan POR CONTACTO en el documento de contacts.
+ *
+ * Estructura en contacts:
+ * {
+ *   users: ['userA', 'userB'],
+ *   storyNotifications: {
+ *     userA: true,  // A quiere notificaciones cuando B sube historia
+ *     userB: false  // B NO quiere notificaciones de A
+ *   }
+ * }
+ *
+ * Flujo:
+ * 1. Detectar cuando story.status cambia a 'approved'
+ * 2. Obtener contactos del owner
+ * 3. Para cada contacto, verificar si tiene storyNotifications[contactUserId] === true
+ * 4. Aplicar throttling (max 1 notificación por hora por sender)
+ * 5. Crear notificaciones para usuarios que lo habilitaron
+ */
+exports.onStoryApproved = onDocumentUpdated(
+  {
+    document: 'stories/{storyId}',
+    region: 'us-central1',
+  },
+  async (event) => {
+    const beforeData = event.data.before.data();
+    const afterData = event.data.after.data();
+    const storyId = event.params.storyId;
+
+    // Solo procesar si el status cambió a 'approved'
+    if (beforeData.status === afterData.status || afterData.status !== 'approved') {
+      return null;
+    }
+
+    // No notificar si ya fue notificado (idempotencia)
+    if (afterData.contactsNotified) {
+      console.log(`📩 [StoryNotify] Historia ${storyId} ya fue notificada - skipping`);
+      return null;
+    }
+
+    console.log(`📩 [StoryNotify] Historia aprobada: ${storyId} por ${afterData.userId}`);
+
+    try {
+      const storyOwnerId = afterData.userId;
+      const storyOwnerName = afterData.userName || 'Un contacto';
+      const storyOwnerPhoto = afterData.userPhotoURL || null;
+
+      // Obtener todos los contactos aprobados del story owner
+      const contactsSnapshot = await db
+        .collection('contacts')
+        .where('users', 'array-contains', storyOwnerId)
+        .where('status', '==', 'approved')
+        .get();
+
+      if (contactsSnapshot.empty) {
+        console.log(`📩 [StoryNotify] No hay contactos para notificar`);
+        await event.data.after.ref.update({ contactsNotified: true });
+        return null;
+      }
+
+      // Filtrar contactos que tienen storyNotifications habilitado para este owner
+      // Estructura: storyNotifications: { [recipientUserId]: true }
+      // Si recipient tiene true, significa que QUIERE recibir notificaciones del owner
+      const usersToNotify = [];
+
+      for (const contactDoc of contactsSnapshot.docs) {
+        const contactData = contactDoc.data();
+        const users = contactData.users || [];
+        const storyNotifications = contactData.storyNotifications || {};
+
+        // Encontrar el otro usuario (no el owner)
+        const recipientId = users.find(id => id !== storyOwnerId);
+        if (!recipientId) continue;
+
+        // Verificar si el recipient tiene habilitadas las notificaciones de historias
+        // IMPORTANTE: Por defecto está DESHABILITADO (false)
+        const hasNotificationsEnabled = storyNotifications[recipientId] === true;
+
+        if (hasNotificationsEnabled) {
+          usersToNotify.push(recipientId);
+          console.log(`📩 [StoryNotify] ${recipientId} tiene notificaciones habilitadas para ${storyOwnerId}`);
+        }
+      }
+
+      console.log(`📩 [StoryNotify] Usuarios con notificaciones habilitadas: ${usersToNotify.length}`);
+
+      if (usersToNotify.length === 0) {
+        await event.data.after.ref.update({ contactsNotified: true });
+        return null;
+      }
+
+      // Aplicar throttling: verificar notificaciones recientes del mismo sender
+      const oneHourAgo = new Date();
+      oneHourAgo.setHours(oneHourAgo.getHours() - 1);
+
+      // Filtrar usuarios que ya recibieron notificación de este sender en la última hora
+      const filteredUsers = [];
+      for (const userId of usersToNotify) {
+        const recentNotification = await db
+          .collection('notifications')
+          .where('userId', '==', userId)
+          .where('type', '==', 'new_story')
+          .where('senderId', '==', storyOwnerId)
+          .where('createdAt', '>', oneHourAgo)
+          .limit(1)
+          .get();
+
+        if (recentNotification.empty) {
+          filteredUsers.push(userId);
+        } else {
+          console.log(`⏭️ [StoryNotify] Throttled: ${userId} ya recibió notificación de ${storyOwnerId}`);
+        }
+      }
+
+      console.log(`📩 [StoryNotify] Usuarios después de throttling: ${filteredUsers.length}`);
+
+      if (filteredUsers.length === 0) {
+        await event.data.after.ref.update({ contactsNotified: true });
+        return null;
+      }
+
+      // Crear notificaciones en batch
+      const batch = db.batch();
+
+      for (const userId of filteredUsers) {
+        const notificationRef = db.collection('notifications').doc();
+        const notificationData = {
+          userId: userId,
+          type: 'new_story',
+          title: `${storyOwnerName} tiene una nueva historia`,
+          body: afterData.caption
+            ? `"${afterData.caption.substring(0, 50)}${afterData.caption.length > 50 ? '...' : ''}"`
+            : 'Toca para verla antes de que desaparezca',
+          senderId: storyOwnerId,
+          senderName: storyOwnerName,
+          senderPhotoUrl: storyOwnerPhoto,
+          data: {
+            storyId: storyId,
+            storyOwnerId: storyOwnerId,
+            mediaType: afterData.mediaType || 'image',
+          },
+          read: false,
+          pushSent: false, // ✅ CRITICAL: Para que sendNotificationOnCreate envíe push
+          createdAt: FieldValue.serverTimestamp(),
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24h
+        };
+
+        batch.set(notificationRef, notificationData);
+      }
+
+      await batch.commit();
+
+      // Marcar historia como notificada
+      await event.data.after.ref.update({ contactsNotified: true });
+
+      console.log(`✅ [StoryNotify] ${filteredUsers.length} notificaciones creadas para historia ${storyId}`);
+
+      return null;
+    } catch (error) {
+      console.error(`❌ [StoryNotify] Error:`, error);
+      return null;
+    }
+  }
+);

@@ -12,11 +12,20 @@ import '../utils/release_logger.dart';
 /// - Comprimir imágenes manteniendo calidad aceptable
 /// - Validar tamaño de archivos (max 10MB)
 /// - Comprimir videos (resize si es necesario)
+///
+/// ✅ OPTIMIZACIÓN: Compresión agresiva para reducir costos de storage y mejorar tiempos de carga
 class MediaCompressionService {
   static const int maxFileSizeBytes = 10 * 1024 * 1024; // 10 MB
-  static const int targetImageWidth = 1920;
-  static const int targetImageHeight = 1920;
-  static const int imageQuality = 85;
+
+  // Configuración de compresión AGRESIVA (optimizada para balance calidad/tamaño)
+  static const int targetImageWidth = 1280; // Reducido de 1920
+  static const int targetImageHeight = 1280; // Reducido de 1920
+  static const int imageQuality = 70; // Reducido de 85
+
+  // Configuración para profile photos (más pequeñas)
+  static const int profilePhotoWidth = 512;
+  static const int profilePhotoHeight = 512;
+  static const int profilePhotoQuality = 75;
 
   /// Valida que un archivo no exceda el tamaño máximo
   Future<bool> validateFileSize(File file) async {
@@ -232,6 +241,51 @@ class MediaCompressionService {
       await VideoCompress.deleteAllCache();
     } catch (e) {
       ReleaseLogger.log('⚠️ Error limpiando cache de videos: $e', tag: 'MediaCompressionService');
+    }
+  }
+
+  /// Comprime una imagen para foto de perfil (más agresiva)
+  ///
+  /// Las fotos de perfil son pequeñas y se muestran en thumbnails,
+  /// por lo que pueden ser más comprimidas sin pérdida perceptible.
+  Future<File?> compressProfilePhoto(File imageFile) async {
+    try {
+      final bytes = await imageFile.readAsBytes();
+      img.Image? image = img.decodeImage(bytes);
+
+      if (image == null) {
+        ReleaseLogger.error('No se pudo decodificar imagen de perfil', tag: 'MediaCompressionService');
+        return null;
+      }
+
+      ReleaseLogger.log('📸 Foto de perfil original: ${image.width}x${image.height}', tag: 'MediaCompressionService');
+
+      // Redimensionar a tamaño de perfil
+      image = img.copyResize(
+        image,
+        width: profilePhotoWidth,
+        height: profilePhotoHeight,
+      );
+
+      // Comprimir con calidad de perfil
+      final compressedBytes = Uint8List.fromList(
+        img.encodeJpg(image, quality: profilePhotoQuality),
+      );
+
+      final tempDir = await getTemporaryDirectory();
+      final tempPath = path.join(
+        tempDir.path,
+        'profile_${DateTime.now().millisecondsSinceEpoch}.jpg',
+      );
+      final compressedFile = await File(tempPath).writeAsBytes(compressedBytes);
+
+      final sizeMB = await getFileSizeMB(compressedFile);
+      ReleaseLogger.log('✅ Foto de perfil comprimida: ${sizeMB.toStringAsFixed(2)} MB (${profilePhotoWidth}x$profilePhotoHeight)', tag: 'MediaCompressionService');
+
+      return compressedFile;
+    } catch (e) {
+      ReleaseLogger.error('Error comprimiendo foto de perfil: $e', tag: 'MediaCompressionService');
+      return null;
     }
   }
 

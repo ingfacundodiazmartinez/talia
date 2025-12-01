@@ -13,7 +13,6 @@ import '../../../controllers/child_profile_controller.dart';
 import '../../../services/child_profile_service.dart';
 import 'widgets/profile_header_widget.dart';
 import 'widgets/link_status_widget.dart';
-import 'widgets/activity_stats_widget.dart';
 import 'widgets/profile_option_item.dart';
 import 'widgets/theme_setting_widget.dart';
 import 'widgets/image_picker_dialog.dart';
@@ -85,11 +84,6 @@ class _ChildProfileScreenState extends State<ChildProfileScreen> {
                 userId: user.uid,
                 role: role,
               ),
-
-              const SizedBox(height: 24),
-
-              // Estadísticas
-              ActivityStatsWidget(userId: user.uid),
 
               const SizedBox(height: 32),
 

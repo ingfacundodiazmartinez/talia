@@ -200,6 +200,18 @@ class StoryOrchestrator {
     );
   }
 
+  /// Dar like a una historia
+  /// Agrega el userId a likedBy y envía mensaje al chat del owner
+  Future<void> likeStory(String storyId) async {
+    await _viewingService.likeStory(storyId);
+  }
+
+  /// Quitar like de una historia
+  /// Remueve el userId de likedBy (no borra el mensaje del chat)
+  Future<void> unlikeStory(String storyId) async {
+    await _viewingService.unlikeStory(storyId);
+  }
+
   // ═══════════════════════════════════════════════════════════════
   // LIFECYCLE MANAGEMENT
   // ═══════════════════════════════════════════════════════════════

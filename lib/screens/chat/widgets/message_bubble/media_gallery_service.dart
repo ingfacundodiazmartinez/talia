@@ -12,12 +12,18 @@ class MediaGalleryService {
   }) {
     final List<MediaItem> allMedia = [];
 
+    // Si no hay URL actual (imagen optimista local), retornar lista vacía
+    // Esto previene el crash con null check operator
+    if (currentMediaUrl == null) {
+      return (mediaItems: <MediaItem>[], initialIndex: 0);
+    }
+
     // Si no hay mensajes, retornar solo el medio actual
     if (allMessages == null || allMessages.isEmpty) {
       return (
         mediaItems: [
           MediaItem(
-            url: currentMediaUrl!,
+            url: currentMediaUrl,
             type: currentMediaType,
             caption: caption,
           ),

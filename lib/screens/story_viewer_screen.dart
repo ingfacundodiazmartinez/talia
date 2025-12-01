@@ -51,6 +51,9 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
   final FocusNode _replyFocusNode = FocusNode();
   bool _isSendingReply = false;
 
+  // Estado local de likes (para UI optimista)
+  final Set<String> _localLikedStories = {};
+
   // Obtener las historias apropiadas para cada usuario
   List<Story> _getStoriesForUser(UserStories userStories) {
     return _controller.getStoriesForUser(userStories);
@@ -72,12 +75,13 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     );
     _controller.initialize();
 
-    _currentUserIndex = widget.initialUserIndex;
+    // Validate and clamp initial user index
+    _currentUserIndex = widget.initialUserIndex.clamp(0, widget.allUserStories.length - 1);
 
     // Calcular el índice de la primera historia NO vista del grupo actual
     final currentUserStories = widget.allUserStories[_currentUserIndex];
     final stories = _getStoriesForUser(currentUserStories);
-    final initialStoryIndex = _getInitialStoryIndex(stories);
+    final initialStoryIndex = stories.isNotEmpty ? _getInitialStoryIndex(stories) : 0;
 
     _currentStoryIndex = initialStoryIndex;
     _userPageController = PageController(initialPage: _currentUserIndex);
@@ -152,10 +156,18 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       return;
     }
 
+    // Cancelar timer anterior si existe
+    _storyTimer?.cancel();
+
+    // ✅ FIX: Resetear el progress controller ANTES de iniciar
+    // Esto asegura que siempre empiece desde 0
+    _progressController.reset();
+
     // Esperar un frame para asegurar que el reset visual se complete
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && _isCurrentStoryLoaded) {
-        _progressController.forward();
+        // Iniciar animación desde 0
+        _progressController.forward(from: 0.0);
 
         _storyTimer?.cancel();
         _storyTimer = Timer(_storyDuration, () {
@@ -259,6 +271,10 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       _controller.logVideoPaused(currentStory.id);
     }
 
+    // ✅ FIX: Cancelar timer y resetear progreso inmediatamente
+    _storyTimer?.cancel();
+    _progressController.reset();
+
     if (_currentStoryIndex < stories.length - 1) {
       // Siguiente historia del mismo usuario
       setState(() {
@@ -278,6 +294,10 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
   }
 
   void _previousStory() {
+    // ✅ FIX: Cancelar timer y resetear progreso inmediatamente
+    _storyTimer?.cancel();
+    _progressController.reset();
+
     if (_currentStoryIndex > 0) {
       // Historia anterior del mismo usuario
       setState(() {
@@ -297,6 +317,10 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
   }
 
   void _nextUser() async {
+    // ✅ FIX: Cancelar timer y resetear progreso inmediatamente
+    _storyTimer?.cancel();
+    _progressController.reset();
+
     if (_currentUserIndex < widget.allUserStories.length - 1) {
       // Incrementar contador de grupos de historias visualizados
       _controller.nextUser();
@@ -356,6 +380,10 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
   }
 
   void _previousUser() {
+    // ✅ FIX: Cancelar timer y resetear progreso inmediatamente
+    _storyTimer?.cancel();
+    _progressController.reset();
+
     if (_currentUserIndex > 0) {
       setState(() {
         _currentUserIndex--;
@@ -523,6 +551,88 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     }
   }
 
+  /// Verificar si una historia está liked (combina estado local y del modelo)
+  bool _isStoryLiked(Story story) {
+    // Primero verificar estado local (para UI optimista)
+    if (_localLikedStories.contains(story.id)) {
+      return true;
+    }
+    // Luego verificar del modelo (estado persistido)
+    return _controller.hasLikedStory(story);
+  }
+
+  /// Toggle like de una historia
+  Future<void> _toggleLike() async {
+    final currentUserStories = widget.allUserStories[_currentUserIndex];
+    final stories = _getStoriesForUser(currentUserStories);
+    final currentStory = stories[_currentStoryIndex];
+
+    final isCurrentlyLiked = _isStoryLiked(currentStory);
+
+    // UI optimista - actualizar inmediatamente
+    setState(() {
+      if (isCurrentlyLiked) {
+        _localLikedStories.remove(currentStory.id);
+      } else {
+        _localLikedStories.add(currentStory.id);
+      }
+    });
+
+    try {
+      if (isCurrentlyLiked) {
+        await _controller.unlikeStory(currentStory.id);
+      } else {
+        await _controller.likeStory(currentStory.id);
+        // Mostrar feedback solo cuando se da like (no al quitar)
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  Icon(Icons.favorite, color: Colors.white, size: 18),
+                  SizedBox(width: 8),
+                  Text('Le diste like a la historia'),
+                ],
+              ),
+              backgroundColor: Colors.red.shade400,
+              duration: Duration(milliseconds: 1200),
+              behavior: SnackBarBehavior.floating,
+              margin: EdgeInsets.only(
+                bottom: MediaQuery.of(context).size.height - 150,
+                left: 20,
+                right: 20,
+              ),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      // Revertir cambio optimista en caso de error
+      if (mounted) {
+        setState(() {
+          if (isCurrentlyLiked) {
+            _localLikedStories.add(currentStory.id);
+          } else {
+            _localLikedStories.remove(currentStory.id);
+          }
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al dar like'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+            margin: EdgeInsets.only(
+              bottom: MediaQuery.of(context).size.height - 150,
+              left: 20,
+              right: 20,
+            ),
+          ),
+        );
+      }
+    }
+  }
+
   Widget _buildVideoPlayer(Story story) {
     // Si el video controller no existe para esta historia, crear uno nuevo
     if (!_videoControllers.containsKey(story.id)) {
@@ -563,35 +673,13 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       );
     }
 
-    // Preservar aspect ratio con cover fit
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final screenWidth = constraints.maxWidth;
-        final screenHeight = constraints.maxHeight;
-        final screenAspectRatio = screenWidth / screenHeight;
-        final videoAspectRatio = controller.value.aspectRatio;
-
-        double videoWidth;
-        double videoHeight;
-
-        if (screenAspectRatio > videoAspectRatio) {
-          // Pantalla más ancha que video - ajustar por ancho
-          videoWidth = screenWidth;
-          videoHeight = screenWidth / videoAspectRatio;
-        } else {
-          // Pantalla más alta que video - ajustar por alto
-          videoHeight = screenHeight;
-          videoWidth = screenHeight * videoAspectRatio;
-        }
-
-        return Center(
-          child: SizedBox(
-            width: videoWidth,
-            height: videoHeight,
-            child: VideoPlayer(controller),
-          ),
-        );
-      },
+    // Usar FittedBox con BoxFit.contain para preservar aspect ratio correctamente
+    // Esto maneja automáticamente videos de iOS que tienen rotación en metadatos
+    return Center(
+      child: AspectRatio(
+        aspectRatio: controller.value.aspectRatio,
+        child: VideoPlayer(controller),
+      ),
     );
   }
 
@@ -621,6 +709,40 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
 
   @override
   Widget build(BuildContext context) {
+    // Bounds check: ensure indices are valid
+    if (widget.allUserStories.isEmpty) {
+      // No stories to show, close viewer
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) Navigator.pop(context);
+      });
+      return const Scaffold(backgroundColor: Colors.black);
+    }
+
+    // Clamp _currentUserIndex to valid range
+    if (_currentUserIndex >= widget.allUserStories.length) {
+      _currentUserIndex = widget.allUserStories.length - 1;
+    }
+    if (_currentUserIndex < 0) {
+      _currentUserIndex = 0;
+    }
+
+    // Validate _currentStoryIndex for current user
+    final currentUserStories = widget.allUserStories[_currentUserIndex];
+    final stories = _getStoriesForUser(currentUserStories);
+    if (stories.isEmpty) {
+      // User has no viewable stories, close viewer
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) Navigator.pop(context);
+      });
+      return const Scaffold(backgroundColor: Colors.black);
+    }
+    if (_currentStoryIndex >= stories.length) {
+      _currentStoryIndex = stories.length - 1;
+    }
+    if (_currentStoryIndex < 0) {
+      _currentStoryIndex = 0;
+    }
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: GestureDetector(
@@ -693,13 +815,15 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
               formatStoryTime: _formatStoryTime,
             ),
 
-            // Campo de respuesta
+            // Campo de respuesta (con botón de like)
             StoryReplySection(
               currentUserId: _controller.currentUserId ?? '',
               storyUserId: widget.allUserStories[_currentUserIndex].userId,
               replyController: _replyController,
               replyFocusNode: _replyFocusNode,
               onSendReply: _sendReply,
+              isLiked: _isStoryLiked(_getStoriesForUser(widget.allUserStories[_currentUserIndex])[_currentStoryIndex]),
+              onLikeToggle: _toggleLike,
             ),
           ],
         ),

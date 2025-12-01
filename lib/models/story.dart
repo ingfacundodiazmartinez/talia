@@ -72,6 +72,9 @@ class Story {
   final String? localMediaPath; // Path local del media (para subida optimista)
   final double uploadProgress; // Progreso de subida (0.0 - 1.0)
   final String? uploadError; // Error durante la subida (si lo hay)
+  final List<String> availableFor; // IDs de usuarios que pueden ver esta historia (contactos al momento de crear)
+  final List<String> parentViewers; // IDs de padres que pueden ver/aprobar esta historia (para queries optimizadas)
+  final List<String> likedBy; // IDs de usuarios que dieron like a esta historia
 
   Story({
     required this.id,
@@ -95,6 +98,9 @@ class Story {
     this.localMediaPath,
     this.uploadProgress = 0.0,
     this.uploadError,
+    this.availableFor = const [],
+    this.parentViewers = const [],
+    this.likedBy = const [],
   });
 
   // Factory constructor para crear desde Firestore
@@ -130,6 +136,45 @@ class Story {
         viewedBy = [];
       }
 
+      // Parse availableFor with robust error handling
+      List<String> availableFor = [];
+      try {
+        final availableForData = data['availableFor'];
+        if (availableForData != null) {
+          if (availableForData is List<dynamic>) {
+            availableFor = availableForData.whereType<String>().toList();
+          }
+        }
+      } catch (e) {
+        availableFor = [];
+      }
+
+      // Parse parentViewers with robust error handling
+      List<String> parentViewers = [];
+      try {
+        final parentViewersData = data['parentViewers'];
+        if (parentViewersData != null) {
+          if (parentViewersData is List<dynamic>) {
+            parentViewers = parentViewersData.whereType<String>().toList();
+          }
+        }
+      } catch (e) {
+        parentViewers = [];
+      }
+
+      // Parse likedBy with robust error handling
+      List<String> likedBy = [];
+      try {
+        final likedByData = data['likedBy'];
+        if (likedByData != null) {
+          if (likedByData is List<dynamic>) {
+            likedBy = likedByData.whereType<String>().toList();
+          }
+        }
+      } catch (e) {
+        likedBy = [];
+      }
+
     return Story(
       id: doc.id,
       userId: data['userId'] ?? '',
@@ -149,6 +194,9 @@ class Story {
       rejectionReason: data['rejectionReason'],
       visibility: _parseStoryVisibility(data['visibility']),
       savedToPermanentAt: data['savedToPermanentAt'] != null ? (data['savedToPermanentAt'] as Timestamp).toDate() : null,
+      availableFor: availableFor,
+      parentViewers: parentViewers,
+      likedBy: likedBy,
     );
     } catch (e) {
       throw Exception('Error parsing story ${doc.id}: $e. Data keys: ${(doc.data() as Map<String, dynamic>?)?.keys.toList()}');
@@ -207,6 +255,9 @@ class Story {
       'rejectionReason': rejectionReason,
       'visibility': visibility.toString().split('.').last,
       'savedToPermanentAt': savedToPermanentAt != null ? Timestamp.fromDate(savedToPermanentAt!) : null,
+      'availableFor': availableFor,
+      'parentViewers': parentViewers,
+      'likedBy': likedBy,
     };
   }
 
@@ -288,6 +339,9 @@ class Story {
     String? localMediaPath,
     double? uploadProgress,
     String? uploadError,
+    List<String>? availableFor,
+    List<String>? parentViewers,
+    List<String>? likedBy,
   }) {
     return Story(
       id: id ?? this.id,
@@ -311,8 +365,17 @@ class Story {
       localMediaPath: localMediaPath ?? this.localMediaPath,
       uploadProgress: uploadProgress ?? this.uploadProgress,
       uploadError: uploadError ?? this.uploadError,
+      availableFor: availableFor ?? this.availableFor,
+      parentViewers: parentViewers ?? this.parentViewers,
+      likedBy: likedBy ?? this.likedBy,
     );
   }
+
+  // Verificar si un usuario dio like a esta historia
+  bool isLikedBy(String userId) => likedBy.contains(userId);
+
+  // Obtener cantidad de likes
+  int get likesCount => likedBy.length;
 }
 
 // Clase para agrupar historias por usuario

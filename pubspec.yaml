@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.29+74
+version: 1.0.43+88
 
 environment:
   sdk: ^3.9.2
@@ -60,9 +60,11 @@ dependencies:
   permission_handler: ^12.0.1  # Actualizado para compatibilidad con hms_room_kit
   device_info_plus: ^12.1.0
   path_provider: ^2.1.1
+  gal: ^2.3.0  # Save images and videos to gallery
   share_plus: ^12.0.1  # Actualizado para compatibilidad con hms_room_kit
   camera: ^0.10.5+5
   image: ^4.0.17
+  google_mlkit_face_detection: ^0.13.1  # Face detection for AI transformations
   geolocator: ^9.0.2
   hive: ^2.2.3
   hive_flutter: ^1.1.0
@@ -81,6 +83,7 @@ dependencies:
   file_picker: ^8.1.4
   video_player: ^2.10.0
   audioplayers: ^6.1.0
+  just_audio: ^0.9.40
   emoji_picker_flutter: ^3.1.0
   record: ^6.1.2
   audio_waveforms: ^1.1.0
@@ -140,26 +143,17 @@ flutter_launcher_icons:
   adaptive_icon_foreground: "assets/images/icon.png"
 
 flutter_native_splash:
+  # Solo color de fondo, sin imagen custom
+  # Android 12+ usará automáticamente el launcher icon
   color: "#FFFFFF"
-
-  # Imagen específica para Android
   android: true
-  android_gravity: center
-  image: assets/images/android-logo.png
+  ios: true
 
   android_12:
     color: "#FFFFFF"
-    image: assets/images/android-logo.png
-    icon_background_color: "#FFFFFF"
-
-  # Imagen específica para iOS
-  ios: true
-  ios_content_mode: center
-  image_ios: assets/images/logo.png
+    # Sin image = usa el launcher icon por defecto
 
   web: false
-
-  fullscreen: true
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -176,7 +170,6 @@ flutter:
   assets:
     - assets/images/
     - assets/sounds/
-    - .env
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

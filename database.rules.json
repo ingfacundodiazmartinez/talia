@@ -5,6 +5,12 @@
         ".read": true,
         ".write": "$uid === auth.uid"
       }
+    },
+    "status": {
+      "$uid": {
+        ".read": true,
+        ".write": "$uid === auth.uid"
+      }
     }
   }
 }

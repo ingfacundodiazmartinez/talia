@@ -5,6 +5,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import '../controllers/chat_controller_cache_first.dart';
+import '../utils/release_logger.dart';
 import '../notification_service.dart';
 import '../services/reaction_service.dart';
 import '../services/local_unread_count_service.dart';
@@ -94,40 +95,43 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
 
   /// Inicializar chat de forma asíncrona para evitar race condition con notificaciones
   Future<void> _initializeChat() async {
-    // 🔒 PASO 1: Establecer chat actual SÍNCRONAMENTE antes de inicializar controller
-    // Esto previene que lleguen notificaciones push mientras el usuario ya está en el chat
-    await NotificationService().setCurrentChat(widget.chatId);
+    try {
+      // 🔒 PASO 1: Establecer chat actual SÍNCRONAMENTE antes de inicializar controller
+      await NotificationService().setCurrentChat(widget.chatId);
 
-    // ✅ Marcar que el usuario entró al chat (resetea contador de no leídos)
-    await LocalUnreadCountService().enterChat(widget.chatId);
+      // ✅ Marcar que el usuario entró al chat (resetea contador de no leídos)
+      await LocalUnreadCountService().enterChat(widget.chatId);
 
-    // 🗑️ PASO 2: Limpiar notificaciones de este chat al abrirlo
-    NotificationService().clearChatNotifications(widget.chatId);
+      // 🗑️ PASO 2: Limpiar notificaciones de este chat al abrirlo
+      NotificationService().clearChatNotifications(widget.chatId);
 
-    // 🔒 PASO 3: Ahora inicializar controller con CACHE-FIRST architecture
-    _controller = ChatControllerCacheFirst(
-      chatId: widget.chatId,
-      contactId: widget.contactId,
-      contactName: widget.contactName,
-      isGroup: false,  // This is a 1-on-1 chat screen
-    );
-    await _controller!.initialize();
-    _messageController.addListener(_onTypingChanged);
-    _scrollController.addListener(_onScroll);
+      // 🔒 PASO 3: Inicializar controller (la verificación de auth está en el controller)
+      _controller = ChatControllerCacheFirst(
+        chatId: widget.chatId,
+        contactId: widget.contactId,
+        contactName: widget.contactName,
+        isGroup: false,
+      );
+      await _controller!.initialize();
+      _messageController.addListener(_onTypingChanged);
+      _scrollController.addListener(_onScroll);
+    } catch (e) {
+      ReleaseLogger.error('Error inicializando chat: $e', tag: 'ChatDetailScreen');
+    } finally {
+      // ✅ SIEMPRE marcar como inicializado para evitar spinner infinito
+      if (mounted) {
+        setState(() {
+          _isControllerInitialized = true;
+        });
 
-    // 🔒 CRITICAL FIX: Marcar controller como inicializado y triggear rebuild
-    if (mounted) {
-      setState(() {
-        _isControllerInitialized = true;
-      });
-
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (widget.scrollToMessageId != null) {
-          _scrollToSpecificMessage(widget.scrollToMessageId!);
-        } else {
-          _scrollToBottom(animate: false);
-        }
-      });
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (widget.scrollToMessageId != null) {
+            _scrollToSpecificMessage(widget.scrollToMessageId!);
+          } else {
+            _scrollToBottom(animate: false);
+          }
+        });
+      }
     }
   }
 
@@ -390,7 +394,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
 
         // 2. Subir en background
         _controller!.processAndUploadAudio(path).catchError((e) {
-          // ReleaseLogger.error('Error subiendo audio en background: $e', tag: 'ChatDetail');
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
@@ -402,7 +405,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
         });
       }
     } catch (e) {
-      // ReleaseLogger.error('Error deteniendo grabación: $e', tag: 'ChatDetail');
+      // Error al detener grabación
     }
   }
 
@@ -680,8 +683,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
 
   Widget _buildReplyBar() {
     return ReplyBar(
-      senderName: _replyingTo!['senderName'] ?? 'Usuario',
-      text: _replyingTo!['text'] ?? '',
+      messageData: _replyingTo!,
       onClose: () => setState(() => _replyingTo = null),
     );
   }

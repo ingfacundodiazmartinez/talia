@@ -1,6 +1,7 @@
 const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/firestore");
 const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
+const { onValueWritten } = require("firebase-functions/v2/database");
 const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
 const { getMessaging } = require("firebase-admin/messaging");
 const { getStorage } = require("firebase-admin/storage");
@@ -217,6 +218,61 @@ exports.onUserRegistered = onDocumentCreated(
   },
 );
 
+
+// ═══════════════════════════════════════════════════════════════
+// PRESENCE SYSTEM - RTDB → FIRESTORE SYNC
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Sincroniza el estado online de RTDB a Firestore
+ * Se dispara cuando cambia /status/{userId} en Realtime Database
+ *
+ * Este sistema permite detección automática de desconexiones incluso
+ * cuando la app se cierra abruptamente (force kill), porque RTDB
+ * ejecuta onDisconnect() automáticamente.
+ */
+exports.onPresenceChanged = onValueWritten(
+  {
+    ref: "/status/{userId}",
+    region: "us-central1",
+  },
+  async (event) => {
+    const db = getFirestore();
+    const userId = event.params.userId;
+
+    // Obtener el nuevo valor
+    const afterData = event.data.after.val();
+
+    if (!afterData) {
+      console.log(`🔴 [Presence] Nodo eliminado para usuario ${userId}`);
+      return;
+    }
+
+    const isOnline = afterData.isOnline === true;
+    const lastSeen = afterData.lastSeen;
+
+    console.log(`${isOnline ? '🟢' : '🔴'} [Presence] Usuario ${userId}: isOnline=${isOnline}`);
+
+    try {
+      // Sincronizar a Firestore
+      const updateData = {
+        isOnline: isOnline,
+        lastSeen: FieldValue.serverTimestamp(),
+      };
+
+      await db.collection('users').doc(userId).update(updateData);
+
+      console.log(`✅ [Presence] Firestore sincronizado para ${userId}`);
+    } catch (error) {
+      // Si el usuario no existe en Firestore, ignorar
+      if (error.code === 5) { // NOT_FOUND
+        console.log(`⚠️ [Presence] Usuario ${userId} no existe en Firestore, ignorando`);
+        return;
+      }
+      console.error(`❌ [Presence] Error sincronizando ${userId}:`, error);
+    }
+  }
+);
 
 // ═══════════════════════════════════════════════════════════════
 // STICKER SYNC SERVICE

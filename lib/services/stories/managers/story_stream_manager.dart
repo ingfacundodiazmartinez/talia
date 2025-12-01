@@ -150,24 +150,23 @@ class StoryStreamManager {
 
   /// Stream principal de historias desde whitelist
   ///
-  /// DIFERENCIAS con implementación anterior:
+  /// ✅ OPTIMIZADO: Usa availableFor para query simple sin límite de contactos
   /// - NO escucha cache optimista aquí (eso es responsabilidad del cache)
   /// - NO hace yield inmediato de cache (evita flicker)
   /// - Stream limpio que solo reacciona a cambios reales de Firestore
+  /// - Sin chunking ni límite de 10 contactos
   Stream<List<UserStories>> getStoriesFromWhitelist() async* {
     _activeStreamCount++;
 
     try {
-      // 1. Obtener contactos
-      final contactIds = await _contactRepository.getContactIds();
-
-      if (contactIds.isEmpty) {
+      final currentUserId = _storyRepository.currentUserId;
+      if (currentUserId == null) {
         yield [];
         return;
       }
 
-      // 2. Crear stream limpio de Firestore (SIN cache optimista)
-      yield* _createCleanFirestoreStream(contactIds.toList());
+      // ✅ Query optimizada: usa availableFor en lugar de whereIn con chunks
+      yield* _createOptimizedFirestoreStream(currentUserId);
     } catch (e) {
       throw Exception('Error en stream de historias: $e');
     } finally {
@@ -202,13 +201,18 @@ class StoryStreamManager {
             _lastRefresh = DateTime.now();
           }
         },
-        onError: (error) {
+        onError: (error, stackTrace) {
+          // Log para identificar la fuente del error
+          ReleaseLogger.error(
+            '❌ [StoryStreamManager] Background stream error: $error',
+          );
           // Auto-retry en errores
           Future.delayed(Duration(seconds: 30), () {
             if (!_isBackgroundStreamActive) return;
             startBackgroundStreams();
           });
         },
+        cancelOnError: false, // No cancelar el stream en errores
       );
 
       _isBackgroundStreamActive = true;
@@ -241,57 +245,24 @@ class StoryStreamManager {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // CLEAN FIRESTORE STREAM - Sin contaminación de cache
+  // OPTIMIZED FIRESTORE STREAM - Usa availableFor
   // ═══════════════════════════════════════════════════════════════
 
-  /// Crear stream limpio que SOLO reacciona a cambios de Firestore
+  /// ✅ Stream optimizado usando availableFor
   ///
-  /// CORRIGE el problema anterior donde el stream "FromFirestore"
-  /// también escuchaba cambios del cache optimista
-  Stream<List<UserStories>> _createCleanFirestoreStream(
-    List<String> contactIds,
+  /// VENTAJAS sobre implementación anterior:
+  /// - Sin límite de 10 contactos (soporta cualquier cantidad)
+  /// - Una sola query en lugar de múltiples chunks
+  /// - Mejor performance y menos lecturas de Firestore
+  Stream<List<UserStories>> _createOptimizedFirestoreStream(
+    String currentUserId,
   ) async* {
-    if (contactIds.isEmpty) {
-      yield [];
-      return;
-    }
-
-    // Stream puro de Firestore (chunked para limits)
-    yield* _createChunkedFirestoreStream(contactIds);
-  }
-
-  /// Crear stream chunked para manejar límites de Firestore
-  Stream<List<UserStories>> _createChunkedFirestoreStream(
-    List<String> contactIds,
-  ) async* {
-    // Dividir en chunks de 10 para whereIn limits
-    final chunks = <List<String>>[];
-    for (var i = 0; i < contactIds.length; i += 10) {
-      final end = (i + 10 < contactIds.length) ? i + 10 : contactIds.length;
-      chunks.add(contactIds.sublist(i, end));
-    }
-
-    if (chunks.isEmpty) {
-      yield [];
-      return;
-    }
-
-    // Crear streams para cada chunk
-    final chunkStreams = chunks.map((chunk) =>
-      _storyRepository.getByUserIdsStream(chunk)
-    ).toList();
-
-    if (chunkStreams.isEmpty) {
-      yield [];
-      return;
-    }
-
-    // Stream directo del primer chunk (simplificado para evitar deadlocks)
-    await for (final chunkStories in chunkStreams[0]) {
+    // Query simple: historias donde currentUserId está en availableFor
+    await for (final stories in _storyRepository.getStoriesAvailableForUser(currentUserId)) {
       // Procesar y agrupar historias
       final userStoriesList = await _processAndGroupStories(
-        chunkStories,
-        contactIds,
+        stories,
+        [], // Ya no necesitamos contactIds para filtrar
       );
 
       yield userStoriesList;

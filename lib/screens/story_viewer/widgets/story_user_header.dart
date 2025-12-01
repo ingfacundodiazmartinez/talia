@@ -19,25 +19,48 @@ class StoryUserHeader extends StatelessWidget {
     required this.onClose,
   });
 
+  // ✅ Sombras para texto e iconos (visibilidad en fondos claros)
+  static const List<Shadow> _textShadows = [
+    Shadow(
+      offset: Offset(0, 1),
+      blurRadius: 3,
+      color: Colors.black54,
+    ),
+  ];
+
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         children: [
-          CircleAvatar(
-            radius: 20,
-            backgroundColor: Colors.white.withOpacity(0.3),
-            backgroundImage: userPhotoURL != null ? NetworkImage(userPhotoURL!) : null,
-            child: userPhotoURL == null
-                ? Text(
-                    userName[0].toUpperCase(),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  )
-                : null,
+          // Avatar con borde para mejor visibilidad
+          Container(
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.3),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: CircleAvatar(
+              radius: 20,
+              backgroundColor: Colors.white.withOpacity(0.3),
+              backgroundImage: userPhotoURL != null ? NetworkImage(userPhotoURL!) : null,
+              child: userPhotoURL == null
+                  ? Text(
+                      userName[0].toUpperCase(),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        shadows: _textShadows,
+                      ),
+                    )
+                  : null,
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -49,13 +72,15 @@ class StoryUserHeader extends StatelessWidget {
                   style: const TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.w600,
+                    shadows: _textShadows,
                   ),
                 ),
                 Text(
                   timeAgo,
                   style: TextStyle(
-                    color: Colors.white.withOpacity(0.8),
+                    color: Colors.white.withOpacity(0.9),
                     fontSize: 12,
+                    shadows: _textShadows,
                   ),
                 ),
               ],
@@ -64,7 +89,11 @@ class StoryUserHeader extends StatelessWidget {
           // Menú de opciones si es la historia del usuario actual
           if (isCurrentUser && onDelete != null)
             PopupMenuButton<String>(
-              icon: const Icon(Icons.more_vert, color: Colors.white),
+              icon: Icon(
+                Icons.more_vert,
+                color: Colors.white,
+                shadows: _textShadows,
+              ),
               color: Colors.black87,
               onSelected: (value) async {
                 if (value == 'delete') {
@@ -89,7 +118,11 @@ class StoryUserHeader extends StatelessWidget {
             ),
           IconButton(
             onPressed: onClose,
-            icon: const Icon(Icons.close, color: Colors.white),
+            icon: Icon(
+              Icons.close,
+              color: Colors.white,
+              shadows: _textShadows,
+            ),
           ),
         ],
       ),

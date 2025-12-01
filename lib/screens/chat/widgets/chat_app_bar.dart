@@ -126,7 +126,7 @@ class _ChatAppBarState extends State<ChatAppBar> {
       foregroundColor:
           isDarkMode ? colorScheme.onSurface : colorScheme.onPrimary,
       actions: [
-        // ✅ Botón de llamada de audio - Navegación inmediata
+        // Botón de llamada de audio - Navegación inmediata
         IconButton(
           icon: const Icon(Icons.call),
           onPressed: () {
@@ -144,7 +144,7 @@ class _ChatAppBarState extends State<ChatAppBar> {
           tooltip: 'Llamada de audio',
         ),
 
-        // ✅ Botón de videollamada - Navegación inmediata
+        // Botón de videollamada - Navegación inmediata
         IconButton(
           icon: const Icon(Icons.videocam),
           onPressed: () {

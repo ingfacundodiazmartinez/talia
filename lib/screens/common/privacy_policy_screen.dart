@@ -145,7 +145,7 @@ Como usuario, tienes derecho a:
 • Retirar el consentimiento en cualquier momento
 • Presentar una queja ante autoridades de protección de datos
 
-Puedes ejercer estos derechos desde la configuración de tu cuenta o contactando a soporte@smartconvo.com
+Puedes ejercer estos derechos desde la configuración de tu cuenta o contactando a support@taliachat.com
             ''',
           ),
 
@@ -184,7 +184,7 @@ El uso continuado de Talia después de los cambios constituye la aceptación de 
             content: '''
 Para preguntas sobre esta política o el manejo de tus datos:
 
-📧 Email: privacidad@smartconvo.com
+📧 Email: privacidad@taliachat.com
 📱 Teléfono: +54 9 387 555-1234
 📍 Dirección: Av. Ejemplo 123, Salta, Argentina
 

@@ -54,7 +54,7 @@ class CreateGroupController {
   Function(bool)? onCreatingChanged;
   Function(String)? onError;
   Function(String)? onSuccess;
-  Function()? onGroupCreated;
+  Function(String groupId, String groupName)? onGroupCreated;
 
   // Constructor
   CreateGroupController({
@@ -196,14 +196,14 @@ class CreateGroupController {
         avatar: imageUrl,
       );
 
-      if (result.isSuccess) {
+      if (result.isSuccess || result.isPartialSuccess) {
         ReleaseLogger.log('Grupo creado exitosamente: ${result.groupId}', tag: 'CreateGroup');
         if (result.isPartialSuccess) {
           onSuccess?.call('Grupo "$groupName" creado. ${result.pendingCount} invitaciones pendientes.');
         } else {
           onSuccess?.call('Grupo "$groupName" creado exitosamente');
         }
-        onGroupCreated?.call();
+        onGroupCreated?.call(result.groupId!, groupName.trim());
         return true;
       } else {
         ReleaseLogger.error('Error en creación de grupo: ${result.error}', tag: 'CreateGroup');

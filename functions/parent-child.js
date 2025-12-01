@@ -541,3 +541,142 @@ exports.onParentChildLinkDeleted = onDocumentDeleted(
  * - Cambia el rol del padre si no le quedan hijos vinculados
  */
 
+// ═══════════════════════════════════════════════════════════════
+// REQUEST CHILD LOCATION
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Solicita la ubicación actual del hijo
+ *
+ * Envía una notificación push al dispositivo del hijo para que actualice
+ * su ubicación en background. El hijo debe tener la app instalada y
+ * permisos de ubicación concedidos.
+ *
+ * @param {string} childId - ID del hijo cuya ubicación se solicita
+ * @returns {Object} - { success: boolean, message: string }
+ */
+exports.requestChildLocation = onCall(
+  {
+    region: "us-central1",
+    consumeAppCheckToken: true,
+  },
+  async (request) => {
+    const db = getFirestore();
+    const parentId = request.auth?.uid;
+
+    // Validar autenticación
+    if (!parentId) {
+      throw new HttpsError("unauthenticated", "Usuario no autenticado");
+    }
+
+    const { childId } = request.data;
+
+    if (!childId) {
+      throw new HttpsError("invalid-argument", "childId es requerido");
+    }
+
+    console.log(`📍 [requestChildLocation] Padre ${parentId} solicita ubicación de hijo ${childId}`);
+
+    try {
+      // 1. Verificar que el padre tiene vínculo aprobado con el hijo
+      const linkQuery = await db.collection("parent_children")
+        .where("parentId", "==", parentId)
+        .where("childId", "==", childId)
+        .where("status", "==", "approved")
+        .limit(1)
+        .get();
+
+      if (linkQuery.empty) {
+        console.error(`❌ [requestChildLocation] No hay vínculo aprobado entre ${parentId} y ${childId}`);
+        throw new HttpsError("permission-denied", "No tienes permiso para ver la ubicación de este hijo");
+      }
+
+      // 2. Obtener datos del hijo (incluyendo FCM token)
+      const childDoc = await db.collection("users").doc(childId).get();
+
+      if (!childDoc.exists) {
+        throw new HttpsError("not-found", "Hijo no encontrado");
+      }
+
+      const childData = childDoc.data();
+      const fcmToken = childData.fcmToken;
+      const childName = childData.name || "Tu hijo";
+
+      if (!fcmToken) {
+        console.warn(`⚠️ [requestChildLocation] Hijo ${childId} no tiene FCM token`);
+        throw new HttpsError(
+          "failed-precondition",
+          `${childName} no tiene la app activa. Pídele que abra Talia para actualizar su ubicación.`
+        );
+      }
+
+      // 3. Obtener nombre del padre para el mensaje
+      const parentDoc = await db.collection("users").doc(parentId).get();
+      const parentName = parentDoc.exists ? parentDoc.data().name || "Tu padre" : "Tu padre";
+
+      // 4. Enviar notificación FCM silenciosa para solicitar ubicación
+      const messaging = getMessaging();
+
+      const message = {
+        token: fcmToken,
+        data: {
+          type: "location_request",
+          requesterId: parentId,
+          requesterName: parentName,
+          timestamp: new Date().toISOString(),
+        },
+        // Android: notificación silenciosa de alta prioridad
+        android: {
+          priority: "high",
+          // Sin notification para que sea silenciosa
+        },
+        // iOS: content-available para background fetch
+        apns: {
+          headers: {
+            "apns-priority": "10",
+            "apns-push-type": "background",
+          },
+          payload: {
+            aps: {
+              "content-available": 1,
+            },
+          },
+        },
+      };
+
+      await messaging.send(message);
+      console.log(`✅ [requestChildLocation] Notificación enviada a ${childId}`);
+
+      // 5. Crear registro de solicitud para tracking (opcional)
+      await db.collection("location_requests").add({
+        parentId: parentId,
+        childId: childId,
+        requestedAt: FieldValue.serverTimestamp(),
+        status: "sent",
+      });
+
+      return {
+        success: true,
+        message: `Solicitud enviada a ${childName}. La ubicación se actualizará en unos segundos.`,
+      };
+
+    } catch (error) {
+      console.error(`❌ [requestChildLocation] Error:`, error);
+
+      if (error instanceof HttpsError) {
+        throw error;
+      }
+
+      // Manejar errores específicos de FCM
+      if (error.code === "messaging/registration-token-not-registered") {
+        throw new HttpsError(
+          "failed-precondition",
+          "El dispositivo del hijo ya no está registrado. Pídele que abra la app Talia."
+        );
+      }
+
+      throw new HttpsError("internal", `Error solicitando ubicación: ${error.message}`);
+    }
+  }
+);
+

@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../services/location_service.dart';
 import '../notification_service.dart';
 import '../services/user_role_service.dart';
 import '../screens/group_chat_screen.dart';
 import '../screens/chat_detail_screen.dart';
+import '../widgets/location_permission_dialog.dart';
 import '../utils/release_logger.dart';
 
 /// Controller que maneja la lógica de negocio del home de niños
@@ -79,6 +81,10 @@ class ChildHomeController {
 
     ReleaseLogger.log('Usuario child con padres vinculados - iniciando tracking de ubicación', tag: 'ChildHomeController');
 
+    // ✅ PLAY STORE COMPLIANCE: Mostrar dialog explicativo ANTES de solicitar permisos
+    // Esto es requerido por las políticas de Play Store para permisos de ubicación en background
+    await _requestLocationPermissionWithExplanation();
+
     // Habilitar tracking en background
     await _locationService.enableBackgroundTracking();
 
@@ -86,6 +92,34 @@ class ChildHomeController {
     await _locationService.startLocationTracking();
 
     ReleaseLogger.log('Tracking de ubicación inicializado (foreground + background)', tag: 'ChildHomeController');
+  }
+
+  /// Solicitar permisos de ubicación mostrando dialog explicativo primero
+  ///
+  /// - Android: Requerido por políticas de Play Store para permisos de ubicación en background
+  /// - iOS: Buena práctica para mejor UX aunque no es estrictamente requerido
+  Future<void> _requestLocationPermissionWithExplanation() async {
+    // Verificar estado actual de permisos
+    final locationAlwaysStatus = await Permission.locationAlways.status;
+
+    ReleaseLogger.log(
+      'Estado de permiso locationAlways: $locationAlwaysStatus',
+      tag: 'ChildHomeController',
+    );
+
+    // Si ya tiene permisos de background, no hacer nada
+    if (locationAlwaysStatus.isGranted) {
+      ReleaseLogger.log('Permisos de ubicación en background ya concedidos', tag: 'ChildHomeController');
+      return;
+    }
+
+    // Mostrar dialog explicativo ANTES de solicitar permisos en ambas plataformas
+    // - Android: Requerido por Play Store
+    // - iOS: Buena práctica para UX
+    if (context.mounted) {
+      ReleaseLogger.log('Mostrando dialog explicativo de ubicación', tag: 'ChildHomeController');
+      await LocationPermissionDialog.show(context);
+    }
   }
 
   /// Verificar si el usuario tiene padres vinculados

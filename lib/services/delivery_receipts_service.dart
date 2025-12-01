@@ -37,11 +37,7 @@ class DeliveryReceiptsService {
 
       // Verificar si el usuario tiene activadas las confirmaciones de lectura
       final showReceipts = await _settingsService.showReadReceipts();
-
-      if (!showReceipts) {
-        appLogger.log('🔒 Confirmaciones de lectura desactivadas para usuario ${currentUser.uid}', level: 'INFO');
-        return;
-      }
+      if (!showReceipts) return;
 
       // Obtener mensajes "sent" del otro usuario (que aún no están delivered)
       final messagesRef = _firestore
@@ -83,7 +79,6 @@ class DeliveryReceiptsService {
 
       if (count > 0) {
         await batch.commit();
-        appLogger.log('✅ $count mensajes marcados como delivered en chat $chatId', level: 'INFO');
       }
     } catch (e) {
       appLogger.log('❌ Error marcando mensajes como delivered: $e', level: 'ERROR');

@@ -85,20 +85,34 @@ class DeviceSessionService {
   }
 
   /// Registrar sesión del dispositivo actual en Firestore
+  /// IMPORTANTE: Solo actualiza si el documento ya existe para no interferir
+  /// con el flujo de ProfileCompletionScreen
   Future<void> registerDeviceSession(String userId) async {
     try {
       final deviceId = await getDeviceId();
       final deviceInfo = await getDeviceInfo();
 
-      await _firestore.collection('users').doc(userId).set({
+      // Primero verificar si el usuario existe en Firestore
+      final userDoc = await _firestore.collection('users').doc(userId).get();
+
+      if (!userDoc.exists) {
+        // Usuario nuevo - no registrar sesión aún, esperar a que complete perfil
+        ReleaseLogger.log('📱 Usuario nuevo, esperando completar perfil antes de registrar sesión', tag: 'DeviceSessionService');
+        return;
+      }
+
+      // Usuario existente - actualizar datos de sesión
+      await _firestore.collection('users').doc(userId).update({
         'activeDeviceId': deviceId,
         'activeDeviceInfo': deviceInfo,
         'lastLoginAt': FieldValue.serverTimestamp(),
         'lastLoginDeviceId': deviceId,
-      }, SetOptions(merge: true));
+      });
 
     } catch (e) {
-      rethrow;
+      // Si falla porque el documento no existe, simplemente ignorar
+      // El usuario necesita completar su perfil primero
+      ReleaseLogger.log('⚠️ Error registrando sesión (puede ser usuario nuevo): $e', tag: 'DeviceSessionService');
     }
   }
 
@@ -146,10 +160,10 @@ class DeviceSessionService {
 
         _isCheckingSession = false;
 
-        // Navegar a login
-        if (context.mounted) {
-          Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
-        }
+        // ✅ FIX: No navegar manualmente - Firebase Auth ya maneja el logout
+        // El AuthWrapper detectará el cambio de estado y mostrará la pantalla de login
+        // Navegar a una ruta nombrada que no existe causa "Null check operator" error
+        ReleaseLogger.log('🔒 Sesión cerrada - AuthWrapper redirigirá a login', tag: 'DeviceSessionService');
       }
     }, onError: (error) {
       ReleaseLogger.error('❌ Error en session listener: $error', tag: 'DeviceSessionService');

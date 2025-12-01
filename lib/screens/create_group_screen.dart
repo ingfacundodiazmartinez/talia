@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 import '../controllers/create_group_controller.dart';
+import 'group_chat_screen.dart';
 
 class CreateGroupScreen extends StatefulWidget {
   const CreateGroupScreen({super.key});
@@ -24,6 +25,11 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
   final List<ContactInfo> _selectedContacts = [];
   File? _groupImageFile;
   final ImagePicker _imagePicker = ImagePicker();
+  bool _isUploadingImage = false;
+
+  // Para navegación después de crear grupo
+  String? _createdGroupId;
+  String? _createdGroupName;
 
   @override
   void initState() {
@@ -51,6 +57,12 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
       }
     };
 
+    _controller.onCreatingChanged = (isCreating) {
+      if (mounted) {
+        setState(() {});
+      }
+    };
+
     _controller.onError = (message) {
       if (mounted) {
         _showSnackbar(message, isError: true);
@@ -63,10 +75,12 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
       }
     };
 
-    _controller.onGroupCreated = () {
-      if (mounted) {
-        Navigator.of(context).pop(true);
-      }
+    // onGroupCreated se usa para capturar el groupId para la navegación
+    // La navegación real se hace en _createGroup después de que todo termine
+    _controller.onGroupCreated = (groupId, groupName) {
+      // Guardar para navegar después
+      _createdGroupId = groupId;
+      _createdGroupName = groupName;
     };
   }
 
@@ -79,7 +93,13 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
 
 
   Future<void> _pickGroupImage() async {
+    if (_isUploadingImage) return;
+
     try {
+      setState(() {
+        _isUploadingImage = true;
+      });
+
       final XFile? image = await _imagePicker.pickImage(
         source: ImageSource.gallery,
         maxWidth: 512,
@@ -94,17 +114,37 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
       }
     } catch (e) {
       _showSnackbar('Error al seleccionar la imagen', isError: true);
+    } finally {
+      setState(() {
+        _isUploadingImage = false;
+      });
     }
   }
 
   Future<void> _createGroup() async {
     final groupName = _groupNameController.text.trim();
 
-    await _controller.createGroup(
+    // Limpiar variables de navegación
+    _createdGroupId = null;
+    _createdGroupName = null;
+
+    final success = await _controller.createGroup(
       groupName: groupName,
       selectedContacts: _selectedContacts,
       groupImageFile: _groupImageFile,
     );
+
+    // Navegar al grupo si se creó exitosamente
+    if (success && mounted && _createdGroupId != null) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (context) => GroupChatScreen(
+            groupId: _createdGroupId!,
+            groupName: _createdGroupName ?? groupName,
+          ),
+        ),
+      );
+    }
   }
 
 
@@ -161,17 +201,21 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
           SizedBox(width: 8),
         ],
       ),
+      resizeToAvoidBottomInset: true,
       body: Column(
         children: [
-          // Sección superior: Avatar y nombre (fija)
-          Container(
-            color: colorScheme.surface,
-            padding: EdgeInsets.all(16),
-            child: Column(
-              children: [
+          // Sección superior: Avatar y nombre (scrollable para evitar keyboard)
+          Flexible(
+            flex: 0,
+            child: SingleChildScrollView(
+              child: Container(
+                color: colorScheme.surface,
+                padding: EdgeInsets.all(16),
+                child: Column(
+                  children: [
                 // Avatar
                 GestureDetector(
-                  onTap: _pickGroupImage,
+                  onTap: _isUploadingImage ? null : _pickGroupImage,
                   child: Container(
                     width: 80,
                     height: 80,
@@ -183,31 +227,44 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                         width: 2,
                       ),
                     ),
-                    child: _groupImageFile != null
-                        ? ClipOval(
-                            child: Image.file(
-                              _groupImageFile!,
-                              fit: BoxFit.cover,
+                    child: _isUploadingImage
+                        ? Center(
+                            child: SizedBox(
+                              width: 30,
+                              height: 30,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 3,
+                                valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
+                              ),
                             ),
                           )
-                        : Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.add_a_photo,
-                                size: 28,
-                                color: colorScheme.primary,
-                              ),
-                              SizedBox(height: 4),
-                              Text(
-                                'Agregar foto',
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  color: colorScheme.primary,
+                        : _groupImageFile != null
+                            ? ClipOval(
+                                child: Image.file(
+                                  _groupImageFile!,
+                                  fit: BoxFit.cover,
+                                  width: 80,
+                                  height: 80,
                                 ),
+                              )
+                            : Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    Icons.add_a_photo,
+                                    size: 28,
+                                    color: colorScheme.primary,
+                                  ),
+                                  SizedBox(height: 4),
+                                  Text(
+                                    'Agregar foto',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      color: colorScheme.primary,
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ],
-                          ),
                   ),
                 ),
                 SizedBox(height: 16),
@@ -232,6 +289,8 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                   onChanged: (value) => setState(() {}),
                 ),
               ],
+                ),
+              ),
             ),
           ),
 
@@ -395,12 +454,14 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
           ),
           onTap: isDisabled
               ? () {
+                  FocusManager.instance.primaryFocus?.unfocus();
                   _showSnackbar(
                     'Has alcanzado el límite de ${CreateGroupController.maxMembers} miembros',
                     isError: true,
                   );
                 }
               : () {
+                  FocusManager.instance.primaryFocus?.unfocus();
                   setState(() {
                     if (isSelected) {
                       _selectedContacts.remove(contact);

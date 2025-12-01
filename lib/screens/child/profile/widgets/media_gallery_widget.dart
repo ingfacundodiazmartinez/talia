@@ -5,7 +5,7 @@ import '../../../../services/message_cache_service.dart';
 import '../../../chat/widgets/media_viewer_screen.dart' as viewer;
 
 /// Widget que muestra la galería de medios compartidos (imágenes y videos)
-/// desde el cache local
+/// desde el cache local (Hive)
 /// Excluye audios grabados desde la app
 ///
 /// Si se proporciona chatId, muestra solo los medios de ese chat.
@@ -49,67 +49,18 @@ class MediaGalleryWidget extends StatelessWidget {
           return _buildEmptyState(context, colorScheme);
         }
 
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.photo_library,
-                    size: 20,
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Fotos y Videos',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: colorScheme.onSurface,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 2,
-                    ),
-                    decoration: BoxDecoration(
-                      color: colorScheme.primary.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      '${mediaMessages.length}',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: colorScheme.primary,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: GridView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 3,
-                  crossAxisSpacing: 4,
-                  mainAxisSpacing: 4,
-                ),
-                itemCount: mediaMessages.length,
-                itemBuilder: (context, index) {
-                  return _buildMediaThumbnail(context, mediaMessages[index]);
-                },
-              ),
-            ),
-            const SizedBox(height: 16),
-          ],
+        // ✅ GridView con scroll independiente
+        return GridView.builder(
+          padding: const EdgeInsets.all(12),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 3,
+            crossAxisSpacing: 4,
+            mainAxisSpacing: 4,
+          ),
+          itemCount: mediaMessages.length,
+          itemBuilder: (context, index) {
+            return _buildMediaThumbnail(context, mediaMessages[index]);
+          },
         );
       },
     );
@@ -140,44 +91,32 @@ class MediaGalleryWidget extends StatelessWidget {
   }
 
   Widget _buildEmptyState(BuildContext context, ColorScheme colorScheme) {
-    if (!isOwnProfile) {
-      return const SizedBox.shrink();
-    }
-
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerHighest.withOpacity(0.3),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: colorScheme.outlineVariant,
-          width: 1,
-        ),
-      ),
+    return Center(
       child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(
             Icons.photo_library_outlined,
             size: 48,
-            color: colorScheme.onSurfaceVariant,
+            color: colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
           ),
           const SizedBox(height: 12),
           Text(
             'Sin fotos o videos',
             style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: colorScheme.onSurface,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Las fotos y videos que compartas aparecerán aquí',
-            textAlign: TextAlign.center,
-            style: TextStyle(
               fontSize: 14,
               color: colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            isOwnProfile
+                ? 'Las fotos y videos que compartas aparecerán aquí'
+                : 'No hay archivos multimedia compartidos',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 12,
+              color: colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
             ),
           ),
         ],

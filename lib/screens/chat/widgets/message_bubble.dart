@@ -78,6 +78,9 @@ class MessageBubble extends StatefulWidget {
   final bool isForwarded;
   final String? originalContactName;
 
+  // Campo para audio generado con IA
+  final bool isAiGenerated;
+
   // Nombre del contacto del chat actual (para reenvíos)
   final String? contactName;
 
@@ -125,6 +128,7 @@ class MessageBubble extends StatefulWidget {
     this.onCallBack,
     this.isForwarded = false,
     this.originalContactName,
+    this.isAiGenerated = false,
     this.contactName,
     this.onViewMessageInfo,
     this.isFavorite = false,  // ✅ NEW: Default false
@@ -540,33 +544,33 @@ class _MessageBubbleState extends State<MessageBubble>
 
   /// Determina si debe mostrar la imagen
   bool _shouldShowImage() {
-    // NO mostrar imagen si es un mensaje de video (el thumbnail se muestra dentro del video)
+    // NO mostrar imagen si es un mensaje de video
     if (widget.type == 'video') return false;
 
+    // ✅ FIX: Usar widget.type en vez de extensiones de archivo
+    // Los paths de iOS pueden no tener extensión o tener casing diferente
     return widget.imageUrl != null ||
-        (widget.status == MessageStatus.sending &&
-            widget.localPath != null &&
-            (widget.localPath!.contains('.jpg') ||
-                widget.localPath!.contains('.png') ||
-                widget.localPath!.contains('.jpeg')));
+        (widget.type == 'image' &&
+            widget.status == MessageStatus.sending &&
+            widget.localPath != null);
   }
 
   /// Determina si debe mostrar el video
   bool _shouldShowVideo() {
+    // ✅ FIX: Usar widget.type en vez de extensiones de archivo
     return widget.videoUrl != null ||
-        (widget.status == MessageStatus.sending &&
-            widget.localPath != null &&
-            (widget.localPath!.contains('.mp4') ||
-                widget.localPath!.contains('.mov')));
+        (widget.type == 'video' &&
+            widget.status == MessageStatus.sending &&
+            widget.localPath != null);
   }
 
   /// Determina si debe mostrar el audio
   bool _shouldShowAudio() {
+    // ✅ FIX: Usar widget.type en vez de extensiones de archivo
     return widget.audioUrl != null ||
-        (widget.status == MessageStatus.sending &&
-            widget.localPath != null &&
-            (widget.localPath!.contains('.m4a') ||
-                widget.localPath!.contains('.mp3')));
+        (widget.type == 'audio' &&
+            widget.status == MessageStatus.sending &&
+            widget.localPath != null);
   }
 
   /// Construye la galería de medios

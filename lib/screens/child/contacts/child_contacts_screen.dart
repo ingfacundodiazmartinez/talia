@@ -4,7 +4,6 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../../../controllers/child_home_controller.dart';
 import '../../../controllers/child_contacts_controller.dart';
 import '../../../screens/add_contact_screen.dart';
-import '../../chat_detail_screen.dart';
 import '../../../services/create_chat_service.dart';
 
 /// Pantalla de contactos para niños con funcionalidad completa
@@ -358,7 +357,7 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
     );
   }
 
-  /// Card de solicitud pendiente con información de aprobación
+  /// Card compacta de solicitud pendiente - click para ver detalles
   Widget _buildPendingRequestCard(
     List<QueryDocumentSnapshot> requests,
     ColorScheme colorScheme,
@@ -378,13 +377,7 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
         ? (firstRequest['contactName'] ?? 'Usuario')
         : (firstRequest['childName'] ?? 'Usuario');
 
-    // Obtener todos los parent IDs que deben aprobar
-    final parentIds = requests
-        .map((r) => (r.data() as Map<String, dynamic>)['parentId'] as String)
-        .toList();
-
     return FutureBuilder<DocumentSnapshot>(
-      // Obtener datos actualizados del otro usuario
       future: _contactsController.getUserDocument(otherUserId),
       builder: (context, otherUserSnapshot) {
         String displayName = otherUserName;
@@ -393,168 +386,306 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
           displayName = userData?['name'] ?? otherUserName;
         }
 
-        return FutureBuilder<List<DocumentSnapshot>>(
-          future: _contactsController.getMultipleUserDocuments(parentIds),
-          builder: (context, parentsSnapshot) {
-            // Agrupar solicitudes por tipo (mis padres vs padres del otro)
-            final myParentRequests = <Map<String, dynamic>>[];
-            final otherParentRequests = <Map<String, dynamic>>[];
-
-            for (var request in requests) {
-              final data = request.data() as Map<String, dynamic>;
-              final requestChildId = data['childId'] as String;
-
-              if (requestChildId == currentUserId) {
-                myParentRequests.add(data);
-              } else {
-                otherParentRequests.add(data);
-              }
-            }
-
-            final hasMyParents = myParentRequests.isNotEmpty;
-            final hasOtherParents = otherParentRequests.isNotEmpty;
-
-            // Obtener nombres de padres
-            final parentNamesMap = <String, String>{};
-            if (parentsSnapshot.hasData) {
-              for (var i = 0; i < parentIds.length; i++) {
-                final doc = parentsSnapshot.data![i];
-                final name = (doc.data() as Map<String, dynamic>?)?['name'] ?? 'Padre/Madre';
-                parentNamesMap[parentIds[i]] = name;
-              }
-            }
-
-            return Container(
-              margin: EdgeInsets.only(bottom: 12),
-              padding: EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: colorScheme.tertiaryContainer.withValues(alpha: 0.3),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                  color: colorScheme.tertiary.withValues(alpha: 0.5),
-                  width: 1,
+        return GestureDetector(
+          onTap: () => _showPendingDetailsDialog(requests, displayName, colorScheme),
+          child: Container(
+            margin: EdgeInsets.only(bottom: 12),
+            padding: EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: colorScheme.surface,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: Colors.amber.shade600,
+                width: 2,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.05),
+                  blurRadius: 10,
+                  offset: Offset(0, 4),
                 ),
-              ),
-              child: Row(
-                children: [
-                  CircleAvatar(
-                    radius: 24,
-                    backgroundColor: colorScheme.tertiaryContainer,
-                    child: Icon(
-                      Icons.schedule,
-                      color: colorScheme.tertiary,
+              ],
+            ),
+            child: Row(
+              children: [
+                // Avatar con icono de persona (sin foto porque no está aprobado)
+                CircleAvatar(
+                  radius: 28,
+                  backgroundColor: Colors.amber.shade100,
+                  child: Text(
+                    displayName.isNotEmpty ? displayName[0].toUpperCase() : 'U',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.amber.shade800,
                     ),
                   ),
-                  SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          displayName,
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: colorScheme.onSurface,
-                          ),
+                ),
+                SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        displayName,
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: colorScheme.onSurface,
                         ),
-                        SizedBox(height: 8),
-                        Text(
-                          'Esperando aprobación de:',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
-                            fontWeight: FontWeight.w500,
-                          ),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        'Pendiente de aprobación',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.amber.shade700,
                         ),
-                        SizedBox(height: 6),
-                        // Mostrar estado de aprobaciones
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // Mis padres
-                            if (hasMyParents)
-                              ...myParentRequests.map((req) {
-                                final parentId = req['parentId'] as String;
-                                final parentName = parentNamesMap[parentId] ?? 'Padre/Madre';
-                                final status = req['status'] as String?;
-                                final isApproved = status == 'approved';
-
-                                return Padding(
-                                  padding: EdgeInsets.only(bottom: 4),
-                                  child: Row(
-                                    children: [
-                                      Icon(
-                                        isApproved ? Icons.check_circle : Icons.schedule,
-                                        size: 16,
-                                        color: isApproved
-                                          ? Colors.green
-                                          : colorScheme.tertiary,
-                                      ),
-                                      SizedBox(width: 6),
-                                      Expanded(
-                                        child: Text(
-                                          'Mi padre/madre ($parentName)',
-                                          style: TextStyle(
-                                            fontSize: 13,
-                                            color: colorScheme.onSurfaceVariant,
-                                            decoration: isApproved
-                                              ? TextDecoration.lineThrough
-                                              : null,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              }),
-                            // Padres del otro usuario
-                            if (hasOtherParents)
-                              ...otherParentRequests.map((req) {
-                                final parentId = req['parentId'] as String;
-                                final parentName = parentNamesMap[parentId] ?? 'Padre/Madre';
-                                final status = req['status'] as String?;
-                                final isApproved = status == 'approved';
-
-                                return Padding(
-                                  padding: EdgeInsets.only(bottom: 4),
-                                  child: Row(
-                                    children: [
-                                      Icon(
-                                        isApproved ? Icons.check_circle : Icons.schedule,
-                                        size: 16,
-                                        color: isApproved
-                                          ? Colors.green
-                                          : colorScheme.tertiary,
-                                      ),
-                                      SizedBox(width: 6),
-                                      Expanded(
-                                        child: Text(
-                                          'Su padre/madre ($parentName)',
-                                          style: TextStyle(
-                                            fontSize: 13,
-                                            color: colorScheme.onSurfaceVariant,
-                                            decoration: isApproved
-                                              ? TextDecoration.lineThrough
-                                              : null,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              }),
-                          ],
-                        ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-            );
-          },
+                ),
+                IconButton(
+                  onPressed: () => _showPendingDetailsDialog(requests, displayName, colorScheme),
+                  icon: Icon(
+                    Icons.info_outline,
+                    color: Colors.amber.shade600,
+                  ),
+                  tooltip: 'Ver detalles',
+                ),
+                IconButton(
+                  onPressed: () => _cancelPendingRequest(requests, displayName),
+                  icon: Icon(
+                    Icons.close,
+                    color: colorScheme.error,
+                  ),
+                  tooltip: 'Cancelar solicitud',
+                ),
+              ],
+            ),
+          ),
         );
       },
+    );
+  }
+
+  /// Cancelar/rechazar una solicitud pendiente
+  Future<void> _cancelPendingRequest(
+    List<QueryDocumentSnapshot> requests,
+    String contactName,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Cancelar solicitud'),
+        content: Text(
+          '¿Estás seguro de cancelar la solicitud de contacto con $contactName?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text('No'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: Text('Sí, cancelar'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    try {
+      // Obtener el contactDocId de la primera solicitud
+      final firstRequest = requests.first.data() as Map<String, dynamic>;
+      final contactDocId = firstRequest['contactDocId'] as String?;
+
+      final firestore = FirebaseFirestore.instance;
+      final batch = firestore.batch();
+
+      // Eliminar todas las solicitudes pendientes
+      for (final request in requests) {
+        batch.delete(request.reference);
+      }
+
+      // Marcar el contacto como rejected si existe
+      if (contactDocId != null) {
+        batch.update(
+          firestore.collection('contacts').doc(contactDocId),
+          {
+            'status': 'rejected',
+            'rejectedAt': FieldValue.serverTimestamp(),
+          },
+        );
+      }
+
+      await batch.commit();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Solicitud con $contactName cancelada'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al cancelar solicitud: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  /// Dialog con detalles de aprobaciones pendientes
+  void _showPendingDetailsDialog(
+    List<QueryDocumentSnapshot> requests,
+    String contactName,
+    ColorScheme colorScheme,
+  ) {
+    final currentUserId = _contactsController.currentUserId;
+    if (currentUserId == null) return;
+
+    final parentIds = requests
+        .map((r) => (r.data() as Map<String, dynamic>)['parentId'] as String)
+        .toList();
+
+    showDialog(
+      context: context,
+      builder: (context) => FutureBuilder<List<DocumentSnapshot>>(
+        future: _contactsController.getMultipleUserDocuments(parentIds),
+        builder: (context, parentsSnapshot) {
+          final myParentRequests = <Map<String, dynamic>>[];
+          final otherParentRequests = <Map<String, dynamic>>[];
+
+          for (var request in requests) {
+            final data = request.data() as Map<String, dynamic>;
+            final requestChildId = data['childId'] as String;
+
+            if (requestChildId == currentUserId) {
+              myParentRequests.add(data);
+            } else {
+              otherParentRequests.add(data);
+            }
+          }
+
+          final parentNamesMap = <String, String>{};
+          if (parentsSnapshot.hasData) {
+            for (var i = 0; i < parentIds.length; i++) {
+              final doc = parentsSnapshot.data![i];
+              final name = (doc.data() as Map<String, dynamic>?)?['name'] ?? 'Padre/Madre';
+              parentNamesMap[parentIds[i]] = name;
+            }
+          }
+
+          return AlertDialog(
+            title: Row(
+              children: [
+                Icon(Icons.schedule, color: Colors.amber.shade600),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    contactName,
+                    style: TextStyle(fontSize: 18),
+                  ),
+                ),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Esperando aprobación de:',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w500,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                SizedBox(height: 12),
+                // Mis padres
+                if (myParentRequests.isNotEmpty)
+                  ...myParentRequests.map((req) {
+                    final parentId = req['parentId'] as String;
+                    final parentName = parentNamesMap[parentId] ?? 'Padre/Madre';
+                    final status = req['status'] as String?;
+                    final isApproved = status == 'approved';
+
+                    return Padding(
+                      padding: EdgeInsets.only(bottom: 8),
+                      child: Row(
+                        children: [
+                          Icon(
+                            isApproved ? Icons.check_circle : Icons.schedule,
+                            size: 20,
+                            color: isApproved ? Colors.green : Colors.amber.shade600,
+                          ),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Mi padre/madre ($parentName)',
+                              style: TextStyle(
+                                decoration: isApproved ? TextDecoration.lineThrough : null,
+                                color: isApproved
+                                    ? colorScheme.onSurfaceVariant.withValues(alpha: 0.6)
+                                    : colorScheme.onSurface,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+                // Padres del otro usuario
+                if (otherParentRequests.isNotEmpty)
+                  ...otherParentRequests.map((req) {
+                    final parentId = req['parentId'] as String;
+                    final parentName = parentNamesMap[parentId] ?? 'Padre/Madre';
+                    final status = req['status'] as String?;
+                    final isApproved = status == 'approved';
+
+                    return Padding(
+                      padding: EdgeInsets.only(bottom: 8),
+                      child: Row(
+                        children: [
+                          Icon(
+                            isApproved ? Icons.check_circle : Icons.schedule,
+                            size: 20,
+                            color: isApproved ? Colors.green : Colors.amber.shade600,
+                          ),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Su padre/madre ($parentName)',
+                              style: TextStyle(
+                                decoration: isApproved ? TextDecoration.lineThrough : null,
+                                color: isApproved
+                                    ? colorScheme.onSurfaceVariant.withValues(alpha: 0.6)
+                                    : colorScheme.onSurface,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text('Entendido'),
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 

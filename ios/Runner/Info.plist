@@ -144,7 +144,7 @@
 			</dict>
 		</dict>
 		<key>UIStatusBarHidden</key>
-		<true/>
+		<false/>
 		<key>UIViewControllerBasedStatusBarAppearance</key>
 		<false/>
 		<key>GADApplicationIdentifier</key>

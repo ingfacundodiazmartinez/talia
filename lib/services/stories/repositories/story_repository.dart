@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../../../models/story.dart';
+import '../../../utils/release_logger.dart';
 
 /// Repository para acceso a datos de historias en Firestore
 ///
@@ -130,7 +131,29 @@ class StoryRepository {
     }
   }
 
-  /// Stream de historias de múltiples usuarios
+  /// Stream de historias disponibles para un usuario específico
+  /// ✅ OPTIMIZADO: Usa availableFor en lugar de whereIn con chunks
+  /// Esto permite soportar usuarios con cualquier cantidad de contactos
+  Stream<List<Story>> getStoriesAvailableForUser(String userId) {
+    final twentyFourHoursAgo = _get24HoursAgo();
+
+    return _firestore
+        .collection('stories')
+        .where('availableFor', arrayContains: userId)
+        .where('status', isEqualTo: 'approved')
+        .where('createdAt', isGreaterThan: twentyFourHoursAgo)
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .handleError((error) {
+          ReleaseLogger.error('Error en getStoriesAvailableForUser: $error');
+          return <Story>[];
+        })
+        .map((snapshot) =>
+            snapshot.docs.map((doc) => Story.fromFirestore(doc)).toList());
+  }
+
+  /// Stream de historias de múltiples usuarios (LEGACY - mantener por compatibilidad)
+  /// @deprecated Usar getStoriesAvailableForUser en su lugar
   Stream<List<Story>> getByUserIdsStream(List<String> userIds) async* {
     if (userIds.isEmpty) {
       yield [];
@@ -179,103 +202,62 @@ class StoryRepository {
   // ═══════════════════════════════════════════════════════════════
 
   /// Obtener historias pendientes de aprobación para un padre
+  /// ✅ OPTIMIZADO: Usa parentViewers para query directa O(1) sin nested queries
   Stream<List<Story>> getPendingForParent(String parentId) {
+    final twentyFourHoursAgo = _get24HoursAgo();
+
     return _firestore
-        .collection('story_approval_requests')
-        .where('parentId', isEqualTo: parentId)
+        .collection('stories')
+        .where('parentViewers', arrayContains: parentId)
         .where('status', isEqualTo: 'pending')
+        .where('createdAt', isGreaterThan: twentyFourHoursAgo)
+        .orderBy('createdAt', descending: true)
+        .limit(50)
         .snapshots()
-        .asyncMap((snapshot) async {
-      final List<Story> pendingStories = [];
-
-      for (final doc in snapshot.docs) {
-        try {
-          final data = doc.data();
-          final storyId = data['storyId'] as String;
-
-          // Obtener la historia completa
-          final storyDoc = await _firestore.collection('stories').doc(storyId).get();
-          if (storyDoc.exists) {
-            final story = Story.fromFirestore(storyDoc);
-            if (story.isPending) {
-              pendingStories.add(story);
-            }
-          }
-        } catch (e) {
-          // Log error pero continuar con otras historias
-          continue;
-        }
-      }
-
-      return pendingStories;
-    });
+        .handleError((error) {
+          ReleaseLogger.error('Error en getPendingForParent: $error');
+          return <Story>[];
+        })
+        .map((snapshot) =>
+            snapshot.docs.map((doc) => Story.fromFirestore(doc)).toList());
   }
 
   /// Obtener historias aprobadas por un padre específico
-  /// ✅ FIX: Solo retorna historias de hijos vinculados (linkedChildrenIds)
+  /// ✅ OPTIMIZADO: Usa parentViewers para query directa O(1) sin nested queries
   Stream<List<Story>> getApprovedByParent(String parentId) {
-    // Primero obtener linkedChildrenIds del padre, luego filtrar stories
+    final twentyFourHoursAgo = _get24HoursAgo();
+
     return _firestore
-        .collection('users')
-        .doc(parentId)
+        .collection('stories')
+        .where('parentViewers', arrayContains: parentId)
+        .where('status', isEqualTo: 'approved')
+        .where('createdAt', isGreaterThan: twentyFourHoursAgo)
+        .orderBy('createdAt', descending: true)
         .snapshots()
-        .asyncMap((parentDoc) async {
-      if (!parentDoc.exists) return <Story>[];
-
-      final parentData = parentDoc.data();
-      final linkedChildrenIds = List<String>.from(
-        parentData?['linkedChildrenIds'] ?? [],
-      );
-
-      if (linkedChildrenIds.isEmpty) return <Story>[];
-
-      // Query stories de los hijos vinculados (max 10 por limitación de Firestore)
-      final childrenChunk = linkedChildrenIds.take(10).toList();
-      final twentyFourHoursAgo = _get24HoursAgo();
-
-      final snapshot = await _firestore
-          .collection('stories')
-          .where('userId', whereIn: childrenChunk)
-          .where('status', isEqualTo: 'approved')
-          .where('createdAt', isGreaterThan: twentyFourHoursAgo)
-          .orderBy('createdAt', descending: true)
-          .get();
-
-      return snapshot.docs.map((doc) => Story.fromFirestore(doc)).toList();
-    });
+        .handleError((error) {
+          ReleaseLogger.error('Error en getApprovedByParent: $error');
+          return <Story>[];
+        })
+        .map((snapshot) =>
+            snapshot.docs.map((doc) => Story.fromFirestore(doc)).toList());
   }
 
   /// Obtener historias rechazadas por un padre específico
-  /// ✅ FIX: Solo retorna historias de hijos vinculados (linkedChildrenIds)
+  /// ✅ OPTIMIZADO: Usa parentViewers para query directa O(1) sin nested queries
   Stream<List<Story>> getRejectedByParent(String parentId) {
-    // Primero obtener linkedChildrenIds del padre, luego filtrar stories
     return _firestore
-        .collection('users')
-        .doc(parentId)
+        .collection('stories')
+        .where('parentViewers', arrayContains: parentId)
+        .where('status', isEqualTo: 'rejected')
+        .orderBy('createdAt', descending: true)
+        .limit(50)
         .snapshots()
-        .asyncMap((parentDoc) async {
-      if (!parentDoc.exists) return <Story>[];
-
-      final parentData = parentDoc.data();
-      final linkedChildrenIds = List<String>.from(
-        parentData?['linkedChildrenIds'] ?? [],
-      );
-
-      if (linkedChildrenIds.isEmpty) return <Story>[];
-
-      // Query stories de los hijos vinculados (max 10 por limitación de Firestore)
-      final childrenChunk = linkedChildrenIds.take(10).toList();
-
-      final snapshot = await _firestore
-          .collection('stories')
-          .where('userId', whereIn: childrenChunk)
-          .where('status', isEqualTo: 'rejected')
-          .orderBy('createdAt', descending: true)
-          .limit(50)
-          .get();
-
-      return snapshot.docs.map((doc) => Story.fromFirestore(doc)).toList();
-    });
+        .handleError((error) {
+          ReleaseLogger.error('Error en getRejectedByParent: $error');
+          return <Story>[];
+        })
+        .map((snapshot) =>
+            snapshot.docs.map((doc) => Story.fromFirestore(doc)).toList());
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -391,6 +373,55 @@ class StoryRepository {
       });
     } catch (e) {
       throw Exception('Error marcando historia como vista: $e');
+    }
+  }
+
+  /// Agregar like a historia
+  Future<void> addLike(String storyId, String userId) async {
+    try {
+      await _firestore.collection('stories').doc(storyId).update({
+        'likedBy': FieldValue.arrayUnion([userId]),
+      });
+    } catch (e) {
+      throw Exception('Error agregando like a historia: $e');
+    }
+  }
+
+  /// Remover like de historia
+  Future<void> removeLike(String storyId, String userId) async {
+    try {
+      await _firestore.collection('stories').doc(storyId).update({
+        'likedBy': FieldValue.arrayRemove([userId]),
+      });
+    } catch (e) {
+      throw Exception('Error removiendo like de historia: $e');
+    }
+  }
+
+  /// Agregar respuesta a historia
+  /// ✅ FIX Issue 2: Ahora las respuestas también se guardan en el documento de la historia
+  /// para que el owner pueda verlas en el visor
+  Future<void> addReply({
+    required String storyId,
+    required String userId,
+    required String userName,
+    String? userPhotoURL,
+    required String text,
+  }) async {
+    try {
+      final replyData = {
+        'userId': userId,
+        'userName': userName,
+        'userPhotoURL': userPhotoURL,
+        'text': text,
+        'timestamp': Timestamp.now(),
+      };
+
+      await _firestore.collection('stories').doc(storyId).update({
+        'replies': FieldValue.arrayUnion([replyData]),
+      });
+    } catch (e) {
+      throw Exception('Error agregando respuesta a historia: $e');
     }
   }
 

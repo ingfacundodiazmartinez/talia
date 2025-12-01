@@ -49,6 +49,7 @@ exports.incrementUnreadCount = onDocumentCreated(
         await chatRef.set({
           participants: participants,
           isValidChat: true, // ✅ NUEVO CAMPO: indica si el chat es válido para mensajes
+          visible: true, // ✅ FIX: Chat visible porque tiene mensajes
           createdAt: now,
           lastMessageTime: now,
           lastMessageAt: now,  // ✅ FIX: Agregar campo que el listener espera
@@ -60,24 +61,22 @@ exports.incrementUnreadCount = onDocumentCreated(
         console.log(`✅ Chat ${chatId} creado con isValidChat: true`);
       }
 
-      // ✅ FIX #2: VALIDACIÓN DE SEGURIDAD CRÍTICA
+      // ✅ FIX #2: VALIDACIÓN DE SEGURIDAD
       const senderId = messageData.senderId;
       const authenticatedUserId = event.auth?.uid;
 
-      // Validación 1: Verificar que senderId coincide con usuario autenticado
-      if (!authenticatedUserId) {
-        console.error(`❌ SECURITY: No authenticated user for message in chat ${chatId}`);
-        return null; // Bloquear procesamiento
-      }
-
-      if (senderId !== authenticatedUserId) {
+      // Validación: Verificar que sender es participante del chat
+      // NOTA: event.auth puede ser undefined cuando el mensaje se escribe directamente
+      // desde Flutter usando Firestore rules (no via Cloud Function callable)
+      // En ese caso, confiamos en las Firestore Security Rules que ya validaron el acceso
+      if (authenticatedUserId && senderId !== authenticatedUserId) {
         console.error(`❌ SECURITY: senderId spoofing attempt detected!`);
         console.error(`   - Claimed senderId: ${senderId}`);
         console.error(`   - Authenticated userId: ${authenticatedUserId}`);
         return null; // Bloquear procesamiento
       }
 
-      // Validación 2: Verificar que sender es participante del chat
+      // Validación: Verificar que sender es participante del chat
       if (!participants.includes(senderId)) {
         console.error(`❌ SECURITY: Non-participant trying to send message to chat ${chatId}`);
         console.error(`   - SenderId: ${senderId}`);
@@ -90,19 +89,16 @@ exports.incrementUnreadCount = onDocumentCreated(
       // Determinar quién es el receiver (el otro participante)
       const receiverId = participants.find((id) => id !== senderId);
 
-      if (receiverId) {
-        try {
-          // ✅ SOLO incrementar unreadCount del receptor
-          // La notificación push es enviada por moderateMessage (que también escucha este evento)
-          const unreadCountField = `unreadCount_${receiverId}`;
-          await chatRef.update({
-            [unreadCountField]: FieldValue.increment(1),
-          });
-          console.log(`✅ unreadCount incrementado para ${receiverId}`);
-        } catch (error) {
-          console.error(`❌ Error incrementando unreadCount: ${error}`);
-        }
-      }
+      // ✅ FIX: Asegurar que el chat sea visible cuando tiene mensajes
+      // Esto cubre el caso de chats creados con visible: false
+      await chatRef.update({
+        visible: true,
+        lastMessageAt: Timestamp.now(),
+        lastMessage: messageData.text || "",
+        lastMessageSender: senderId,
+      });
+
+      console.log(`✅ Mensaje procesado para ${receiverId}, chat visible: true`);
 
       return null;
     } catch (error) {
@@ -146,23 +142,20 @@ exports.incrementGroupUnreadCount = onDocumentCreated(
 
       console.log(`📊 DEBUG - Grupo: ${groupName}, Miembros: [${members.join(", ")}]`);
 
-      // ✅ FIX #2: VALIDACIÓN DE SEGURIDAD CRÍTICA
+      // ✅ FIX #2: VALIDACIÓN DE SEGURIDAD
       const authenticatedUserId = event.auth?.uid;
 
-      // Validación 1: Verificar que senderId coincide con usuario autenticado
-      if (!authenticatedUserId) {
-        console.error(`❌ SECURITY: No authenticated user for group message in ${groupId}`);
-        return null;
-      }
-
-      if (senderId !== authenticatedUserId) {
+      // Validación: Verificar que sender es miembro del grupo
+      // NOTA: event.auth puede ser undefined cuando el mensaje se escribe directamente
+      // desde Flutter usando Firestore rules (no via Cloud Function callable)
+      if (authenticatedUserId && senderId !== authenticatedUserId) {
         console.error(`❌ SECURITY: senderId spoofing attempt in group ${groupId}!`);
         console.error(`   - Claimed senderId: ${senderId}`);
         console.error(`   - Authenticated userId: ${authenticatedUserId}`);
         return null;
       }
 
-      // Validación 2: Verificar que el sender es miembro del grupo
+      // Validación: Verificar que el sender es miembro del grupo
       if (!members.includes(senderId)) {
         console.error(`❌ SECURITY: Non-member trying to send message to group ${groupId}`);
         console.error(`   - SenderId: ${senderId}`);
@@ -199,10 +192,9 @@ exports.incrementGroupUnreadCount = onDocumentCreated(
         lastMessageSender: senderId,
       };
 
-      // 🔔 CREAR NOTIFICACIONES EN FIRESTORE para cada miembro (excepto el sender)
-      // ✅ INCREMENTAR unreadCount para cada miembro (excepto el sender)
+      // 🔔 ENVIAR NOTIFICACIONES PUSH para cada miembro (excepto el sender)
+      // ✅ OPTIMIZACIÓN: unreadCount eliminado - la app usa LocalUnreadCountService (cache local)
       const db = getFirestore();
-      const unreadCountUpdates = {};
 
       // ✅ OPTIMIZACIÓN: Enviar push directo SIN guardar en DB para cada miembro
       // Esto evita el crecimiento ilimitado de la colección 'notifications'
@@ -210,10 +202,6 @@ exports.incrementGroupUnreadCount = onDocumentCreated(
 
       for (const memberId of members) {
         if (memberId !== senderId) {
-          // ✅ Preparar incremento de unreadCount
-          const unreadCountField = `unreadCount_${memberId}`;
-          unreadCountUpdates[unreadCountField] = FieldValue.increment(1);
-
           // ✅ Enviar push directo (en paralelo para mejor performance)
           pushPromises.push(
             sendDirectPushNotification({
@@ -241,15 +229,12 @@ exports.incrementGroupUnreadCount = onDocumentCreated(
       // Esperar todos los pushes en paralelo
       await Promise.allSettled(pushPromises);
 
-      // ✅ ACTUALIZAR METADATA DEL GRUPO + unreadCount de cada miembro
+      // ✅ ACTUALIZAR METADATA DEL GRUPO (unreadCount eliminado - manejado localmente)
       await groupRef.update({
         lastMessage: groupUpdateData.lastMessage,
         lastMessageTime: groupUpdateData.lastMessageTime,
         lastMessageSender: groupUpdateData.lastMessageSender,
-        ...unreadCountUpdates, // ✅ Incrementar unreadCount de cada miembro (excepto sender)
       });
-
-      console.log(`✅ unreadCount incrementado para ${Object.keys(unreadCountUpdates).length} miembros`);
 
       console.log(`✅ Grupo ${groupId} actualizado con ${members.length - 1} notificaciones enviadas`);
 
@@ -430,6 +415,8 @@ exports.createChat = onCall(
         lastMessage: "",
         lastMessageSender: "",
         deletedBy: [],
+        visible: false, // ✅ Chat oculto hasta primer mensaje (consistente con createContactRequest)
+        isValidChat: true,
         [`unreadCount_${participants[0]}`]: 0,
         [`unreadCount_${participants[1]}`]: 0,
       });
@@ -475,7 +462,7 @@ exports.sendChatMessage = onCall(
         throw new HttpsError("unauthenticated", "Usuario no autenticado");
       }
 
-      const { chatId, text, imageUrl, videoUrl, audioUrl, waveformData, replyTo, localId } = request.data;
+      const { chatId, text, imageUrl, videoUrl, audioUrl, waveformData, replyTo, localId, isAiGenerated } = request.data;
       const senderId = request.auth.uid;
 
       if (!chatId) {
@@ -546,11 +533,16 @@ exports.sendChatMessage = onCall(
         }
 
         // Crear mensaje
+        // ✅ TTL: deleteAt = timestamp + 7 días (para auto-eliminación via Firestore TTL Policy)
+        const now = new Date();
+        const deleteAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); // 7 días
+
         const messageData = {
           senderId,
           receiverId,
           text: text || "",
           timestamp: FieldValue.serverTimestamp(),
+          deleteAt: Timestamp.fromDate(deleteAt), // ✅ TTL: Firestore eliminará automáticamente
           type: messageType,
           status: "sent",
           deliveredTo: [],
@@ -570,6 +562,7 @@ exports.sendChatMessage = onCall(
           if (messageType === "audio") {
             messageData.audioUrl = contentUrl;
             if (waveformData) messageData.waveformData = waveformData;
+            if (isAiGenerated) messageData.isAiGenerated = true; // ✅ Flag para audio generado con IA (TTS)
           }
         }
 
@@ -617,13 +610,14 @@ exports.sendChatMessage = onCall(
         const messageRef = await chatRef.collection("messages").add(messageData);
 
         // Actualizar lastMessage y timestamp del chat
-        const now = Timestamp.now();  // ✅ FIX: Timestamp inmediato para evitar NULL en listeners
+        const lastMessageNow = Timestamp.now();  // ✅ FIX: Timestamp inmediato para evitar NULL en listeners
         const lastMessageData = {
           lastMessage: text || (messageType === "image" ? "📷 Imagen" : messageType === "video" ? "🎥 Video" : messageType === "audio" ? "🎤 Audio" : ""),
-          lastMessageAt: now,  // ✅ FIX: Timestamp inmediato (no serverTimestamp que es NULL inicialmente)
-          lastMessageTime: now, // Legacy (mantener por compatibilidad)
+          lastMessageAt: lastMessageNow,  // ✅ FIX: Timestamp inmediato (no serverTimestamp que es NULL inicialmente)
+          lastMessageTime: lastMessageNow, // Legacy (mantener por compatibilidad)
           lastMessageSender: senderId,
-          updatedAt: now,
+          updatedAt: lastMessageNow,
+          visible: true, // ✅ Hacer chat visible al enviar primer mensaje
         };
 
         await chatRef.update(lastMessageData);
@@ -653,7 +647,7 @@ exports.sendGroupMessage = onCall(
         throw new HttpsError("unauthenticated", "Usuario no autenticado");
       }
 
-      const { groupId, text, imageUrl, videoUrl, audioUrl, waveformData, replyTo } = request.data;
+      const { groupId, text, imageUrl, videoUrl, audioUrl, waveformData, replyTo, localId } = request.data;
       const senderId = request.auth.uid;
 
       if (!groupId) {
@@ -694,11 +688,68 @@ exports.sendGroupMessage = onCall(
           contentUrl = audioUrl;
         }
 
+        // ═══════════════════════════════════════════════════════════════
+        // MODERACIÓN SELECTIVA: Bloquear según severidad vs nivel de cada moderador
+        // ✅ OPTIMIZADO: 1 query usuarios que moderan al sender + 1 Gemini
+        // ═══════════════════════════════════════════════════════════════
+        let blockedFor = [];
+
+        if (text && text.trim().length > 0 && members.length > 1) {
+          // 1. Query: usuarios que tienen moderación activa con el sender
+          const moderatorsQuery = await db
+            .collection("users")
+            .where("moderatingUserIds", "array-contains", senderId)
+            .get();
+
+          // 2. Intersectar con miembros del grupo (en memoria)
+          const membersSet = new Set(members);
+          const moderatorsInGroup = [];
+          for (const doc of moderatorsQuery.docs) {
+            if (membersSet.has(doc.id) && doc.id !== senderId) {
+              const data = doc.data();
+              const level = (data.moderationLevels || {})[senderId] || "high";
+              moderatorsInGroup.push({ id: doc.id, level });
+            }
+          }
+
+          // 3. Si hay moderadores en el grupo, analizar mensaje UNA vez
+          if (moderatorsInGroup.length > 0) {
+            try {
+              const { analyzeMessageWithGemini } = require("./groups");
+              const analysis = await analyzeMessageWithGemini(text, messageType, "", "high", [], []);
+              const severity = analysis.severity || "none";
+
+              // 4. Comparar severidad vs nivel de cada moderador
+              // level="high" (estricto) → bloquear low+ | level="low" (permisivo) → solo high
+              const severityValue = { none: 0, low: 1, medium: 2, high: 3 };
+              const levelThreshold = { high: 1, medium: 2, low: 3 };
+
+              for (const mod of moderatorsInGroup) {
+                const threshold = levelThreshold[mod.level] || 1;
+                if (severityValue[severity] >= threshold) {
+                  blockedFor.push(mod.id);
+                }
+              }
+
+              if (blockedFor.length > 0) {
+                console.log(`⚠️ [sendGroupMessage] severity=${severity}, bloqueando para: ${blockedFor.join(", ")}`);
+              }
+            } catch (e) {
+              console.error(`⚠️ [sendGroupMessage] Error moderación:`, e);
+            }
+          }
+        }
+
         // Crear mensaje
+        // ✅ TTL: deleteAt = timestamp + 7 días (para auto-eliminación via Firestore TTL Policy)
+        const now = new Date();
+        const deleteAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); // 7 días
+
         const messageData = {
           senderId,
           text: text || "",
           timestamp: FieldValue.serverTimestamp(),
+          deleteAt: Timestamp.fromDate(deleteAt), // ✅ TTL: Firestore eliminará automáticamente
           type: messageType,
           status: "sent",
           deliveredTo: [],
@@ -706,6 +757,16 @@ exports.sendGroupMessage = onCall(
           reactions: {},
           edited: false,
         };
+
+        // ✅ Agregar localId si existe (para deduplicación con mensaje optimista)
+        if (localId) {
+          messageData.localId = localId;
+        }
+
+        // Agregar blockedFor si hay usuarios para bloquear
+        if (blockedFor.length > 0) {
+          messageData.blockedFor = blockedFor;
+        }
 
         if (contentUrl) {
           if (messageType === "image") messageData.imageUrl = contentUrl;
@@ -726,31 +787,23 @@ exports.sendGroupMessage = onCall(
         // Actualizar lastMessage del grupo
         const lastMessagePreview = text || (messageType === "image" ? "📷 Imagen" : messageType === "video" ? "🎥 Video" : messageType === "audio" ? "🎤 Audio" : "");
 
-        const now = Timestamp.now();  // ✅ FIX: Timestamp inmediato para evitar NULL en listeners
+        const lastMessageNow = Timestamp.now();  // ✅ FIX: Timestamp inmediato para evitar NULL en listeners
         const groupUpdateData = {
           lastMessage: lastMessagePreview,
-          lastMessageAt: now,  // ✅ FIX: Timestamp inmediato (no serverTimestamp que es NULL inicialmente)
-          lastMessageTime: now, // Legacy (mantener por compatibilidad)
+          lastMessageAt: lastMessageNow,  // ✅ FIX: Timestamp inmediato (no serverTimestamp que es NULL inicialmente)
+          lastMessageTime: lastMessageNow, // Legacy (mantener por compatibilidad)
           lastMessageSender: senderId,
-          updatedAt: now,
+          updatedAt: lastMessageNow,
         };
-
-        // ❌ INCREMENTO ELIMINADO - El cliente ahora es responsable de actualizar contadores
-        // La lógica de unread count se maneja completamente en el stream detector de mensajes
-        // members.forEach((memberId) => {
-        //   if (memberId !== senderId) {
-        //     groupUpdateData[`unreadCount_${memberId}`] = FieldValue.increment(1);
-        //   }
-        // });
 
         await groupRef.update(groupUpdateData);
 
-        // ✅ Contadores y notificaciones manejados por el cliente via stream detector
-        console.log(`✅ [sendGroupMessage] Mensaje enviado exitosamente: ${messageRef.id}`);
+        console.log(`✅ [sendGroupMessage] Mensaje enviado: ${messageRef.id}${blockedFor.length > 0 ? ` (bloqueado para ${blockedFor.length} usuarios)` : ""}`);
 
         return {
           success: true,
           messageId: messageRef.id,
+          blockedFor: blockedFor.length > 0 ? blockedFor : undefined,
         };
       } catch (error) {
         console.error("❌ [sendGroupMessage] Error:", error);

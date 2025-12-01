@@ -12,7 +12,6 @@ import '../../../models/parent.dart';
 import '../../../services/subscription_service.dart';
 import '../../../widgets/profile/profile_header_widget.dart';
 import '../../../widgets/profile/children_list_widget.dart';
-import '../../../widgets/profile/profile_statistics_widget.dart';
 import '../../../utils/release_logger.dart';
 
 class ParentProfileScreen extends StatefulWidget {
@@ -88,12 +87,6 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
               _buildSectionTitle('Mis Hijos'),
               SizedBox(height: 12),
               ChildrenListWidget(parentId: currentUser.uid),
-              SizedBox(height: 32),
-
-              // Estadísticas
-              _buildSectionTitle('Estadísticas'),
-              SizedBox(height: 12),
-              ProfileStatisticsWidget(parentId: currentUser.uid),
               SizedBox(height: 32),
 
               // Configuración

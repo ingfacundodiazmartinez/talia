@@ -157,7 +157,9 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
 
                         // Refrescar si se creó el grupo
                         if (result == true && mounted) {
-                          setState(() {});
+                          // Forzar refresh de grupos desde servidor para actualizar cache
+                          await _controller.refreshGroupsFromServer();
+                          if (mounted) setState(() {});
                         }
                       },
                       padding: EdgeInsets.all(8),

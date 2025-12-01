@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import '../utils/release_logger.dart';
 
 /// Servicio para manejar invitaciones a grupos con aprobación en cascada
 ///
@@ -326,34 +328,38 @@ class GroupInvitationService {
   }
 
   /// Crear aprobación de contacto unilateral (desde el invitado hacia el miembro)
+  /// 🔒 SEGURIDAD: Usa Cloud Function para validación server-side
   Future<void> _createContactApproval(String invitedChildId, String memberId) async {
     try {
-      // Verificar si ya existe el contacto
-      final existingContact = await _firestore
-          .collection('contacts')
-          .where('users', arrayContainsAny: [[invitedChildId, memberId], [memberId, invitedChildId]])
-          .get();
+      // Obtener parentId del invitado para verificación
+      final invitedDoc = await _firestore.collection('users').doc(invitedChildId).get();
+      final parentId = invitedDoc.data()?['parentId'] as String?;
 
-      if (existingContact.docs.isEmpty) {
-        // Crear nuevo contacto aprobado
-        await _firestore.collection('contacts').add({
-          'users': [invitedChildId, memberId],
-          'status': 'approved',
-          'createdAt': FieldValue.serverTimestamp(),
-          'type': 'contact',
-          'approvedViaGroupInvitation': true,
-        });
-      } else {
-        // Actualizar existente si estaba rechazado
-        await _firestore
-            .collection('contacts')
-            .doc(existingContact.docs.first.id)
-            .update({
-          'status': 'approved',
-          'approvedViaGroupInvitation': true,
-        });
+      if (parentId == null) {
+        ReleaseLogger.error(
+          '❌ [GroupInvitation] No parentId found for child $invitedChildId',
+          tag: 'GroupInvitationService',
+        );
+        return;
       }
+
+      // Llamar a Cloud Function para crear contacto de forma segura
+      final callable = FirebaseFunctions.instance.httpsCallable('createContactFromGroupInvitation');
+      await callable.call({
+        'invitedChildId': invitedChildId,
+        'memberId': memberId,
+        'parentId': parentId,
+      });
+
+      ReleaseLogger.log(
+        '✅ [GroupInvitation] Contact created via CF: $invitedChildId <-> $memberId',
+        tag: 'GroupInvitationService',
+      );
     } catch (e) {
+      ReleaseLogger.error(
+        '❌ [GroupInvitation] Error creating contact via CF: $e',
+        tag: 'GroupInvitationService',
+      );
     }
   }
 

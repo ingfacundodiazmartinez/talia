@@ -366,7 +366,7 @@ class _ChatModerationSettingsScreenState
                       icon: Icons.psychology,
                       title: 'Análisis con IA',
                       description:
-                          'Cada mensaje se analiza con inteligencia artificial de Google Gemini para detectar contenido inapropiado.',
+                          'Cada mensaje se analiza con inteligencia artificial para detectar contenido inapropiado.',
                       colorScheme: colorScheme,
                     ),
                     const SizedBox(height: 8),

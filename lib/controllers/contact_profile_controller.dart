@@ -41,6 +41,10 @@ class ContactProfileController {
   bool _isLoadingFavorites = true;
   bool _hasError = false;
 
+  // ✅ Issue 3: Story notifications per contact
+  bool _storyNotificationsEnabled = false;
+  bool _isLoadingStoryNotifications = true;
+
   // Subscripciones
   StreamSubscription? _contactDataSubscription;
   StreamSubscription? _blockStatusSubscription;
@@ -52,6 +56,7 @@ class ContactProfileController {
   Function(ContactUser?)? onContactDataChanged;
   Function(String)? onError;
   Function(String)? onSuccess;
+  Function(bool)? onStoryNotificationsChanged;
 
   // Constructor
   ContactProfileController({
@@ -82,6 +87,10 @@ class ContactProfileController {
   bool get hasError => _hasError;
   String get currentUserId => _auth.currentUser?.uid ?? '';
 
+  // ✅ Issue 3: Story notifications getters
+  bool get storyNotificationsEnabled => _storyNotificationsEnabled;
+  bool get isLoadingStoryNotifications => _isLoadingStoryNotifications;
+
   /// Inicializar el controller
   Future<void> initialize() async {
     // Cargar estados iniciales en paralelo
@@ -90,6 +99,7 @@ class ContactProfileController {
       _loadFavoriteStatus(),
       _loadContactAlias(),
       _loadContactData(),
+      _loadStoryNotificationsStatus(),
     ]);
 
     // Cargar datos adicionales después de cargar los datos del contacto
@@ -135,6 +145,95 @@ class ContactProfileController {
       onAliasChanged?.call(_contactAlias);
     } catch (e) {
       onError?.call('Error cargando alias del contacto');
+    }
+  }
+
+  /// ✅ Issue 3: Cargar estado de notificaciones de historias para este contacto
+  /// Estructura en Firestore: contacts.storyNotifications[currentUserId] = true/false
+  Future<void> _loadStoryNotificationsStatus() async {
+    try {
+      final currentUserId = _auth.currentUser?.uid;
+      if (currentUserId == null) {
+        _isLoadingStoryNotifications = false;
+        return;
+      }
+
+      // Buscar el documento de contacto
+      final sortedUsers = [currentUserId, contactId]..sort();
+      final contactQuery = await _firestore
+          .collection('contacts')
+          .where('users', isEqualTo: sortedUsers)
+          .limit(1)
+          .get();
+
+      if (contactQuery.docs.isNotEmpty) {
+        // Caso 1: Es un contacto normal - leer del documento de contacto
+        final contactData = contactQuery.docs.first.data();
+        final storyNotifications = contactData['storyNotifications'] as Map<String, dynamic>? ?? {};
+        _storyNotificationsEnabled = storyNotifications[currentUserId] == true;
+      } else {
+        // Caso 2: No es un contacto normal (puede ser relación padre-hijo)
+        // Leer preferencia del documento del usuario actual
+        final userDoc = await _firestore.collection('users').doc(currentUserId).get();
+        if (userDoc.exists) {
+          final userData = userDoc.data() ?? {};
+          final storyNotificationPrefs = userData['storyNotificationPrefs'] as Map<String, dynamic>? ?? {};
+          _storyNotificationsEnabled = storyNotificationPrefs[contactId] == true;
+        } else {
+          _storyNotificationsEnabled = false;
+        }
+      }
+
+      _isLoadingStoryNotifications = false;
+      onStoryNotificationsChanged?.call(_storyNotificationsEnabled);
+    } catch (e) {
+      _isLoadingStoryNotifications = false;
+      // No mostrar error, simplemente dejar en false
+    }
+  }
+
+  /// ✅ Issue 3: Toggle notificaciones de historias para este contacto
+  Future<bool> toggleStoryNotifications() async {
+    try {
+      final currentUserId = _auth.currentUser?.uid;
+      if (currentUserId == null) {
+        onError?.call('Usuario no autenticado');
+        return false;
+      }
+
+      final newValue = !_storyNotificationsEnabled;
+
+      // Buscar el documento de contacto
+      final sortedUsers = [currentUserId, contactId]..sort();
+      final contactQuery = await _firestore
+          .collection('contacts')
+          .where('users', isEqualTo: sortedUsers)
+          .limit(1)
+          .get();
+
+      if (contactQuery.docs.isNotEmpty) {
+        // Caso 1: Es un contacto normal - actualizar en el documento de contacto
+        final contactDoc = contactQuery.docs.first;
+        await contactDoc.reference.update({
+          'storyNotifications.$currentUserId': newValue,
+        });
+      } else {
+        // Caso 2: No es un contacto normal (puede ser relación padre-hijo)
+        // Guardar preferencia en el documento del usuario actual
+        await _firestore.collection('users').doc(currentUserId).update({
+          'storyNotificationPrefs.$contactId': newValue,
+        });
+      }
+
+      _storyNotificationsEnabled = newValue;
+      onStoryNotificationsChanged?.call(_storyNotificationsEnabled);
+      onSuccess?.call(newValue
+          ? 'Notificaciones de historias activadas'
+          : 'Notificaciones de historias desactivadas');
+      return true;
+    } catch (e) {
+      onError?.call('Error actualizando notificaciones de historias');
+      return false;
     }
   }
 

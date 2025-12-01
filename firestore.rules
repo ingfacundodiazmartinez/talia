@@ -31,6 +31,19 @@ service cloud.firestore {
         ]);
       }
 
+      // Función auxiliar para verificar si el usuario autenticado es padre del userId
+      function isParentOfUser() {
+        let parentDoc = get(/databases/$(database)/documents/users/$(request.auth.uid));
+        return parentDoc.data.linkedChildrenIds != null &&
+               userId in parentDoc.data.linkedChildrenIds;
+      }
+
+      // Función auxiliar para verificar si solo se actualizan campos de moderación
+      function isUpdatingOnlyModerationFields() {
+        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+        return changedKeys.hasOnly(['moderatingUserIds', 'moderationLevels']);
+      }
+
       // ACTUALIZAR: Solo puede actualizar SU PROPIO usuario Y sin tocar campos sensibles
       // NOTA: Los campos premium (isPremium, subscriptionTier, etc.) están protegidos
       allow update: if request.auth.uid == userId &&
@@ -44,6 +57,9 @@ service cloud.firestore {
           'subscriptionId',
           'subscriptionAutoRenew'
         ]);
+
+      // Padres pueden actualizar campos de moderación en sus hijos vinculados
+      allow update: if isParentOfUser() && isUpdatingOnlyModerationFields();
 
       // Solo ADMINS pueden modificar isAdmin
       allow update: if isAdmin() &&
@@ -115,8 +131,16 @@ service cloud.firestore {
 
     // Chats
     match /chats/{chatId} {
-      // Función auxiliar para verificar si el usuario es padre de alguno de los participantes
-      function isParentOfParticipant() {
+      // ✅ OPTIMIZADO: Verificar padres usando campo desnormalizado (0 lecturas extra)
+      // El campo approvedParentViewers se mantiene actualizado via Cloud Functions
+      function isParentOfParticipantOptimized() {
+        return resource.data.approvedParentViewers != null &&
+               request.auth.uid in resource.data.approvedParentViewers;
+      }
+
+      // Fallback para documentos sin desnormalización (4 lecturas extra)
+      // TODO: Migrar todos los chats y eliminar este fallback
+      function isParentOfParticipantLegacy() {
         let participants = resource.data.participants;
         return exists(/databases/$(database)/documents/parent_children/$(request.auth.uid + '_' + participants[0])) ||
                exists(/databases/$(database)/documents/parent_children/$(request.auth.uid + '_' + participants[1])) ||
@@ -124,12 +148,19 @@ service cloud.firestore {
                exists(/databases/$(database)/documents/parent_children/$(participants[1] + '_' + request.auth.uid));
       }
 
+      // Función combinada para verificar si es padre de participante
+      function isParentOfParticipant() {
+        return isParentOfParticipantOptimized() ||
+               (resource.data.approvedParentViewers == null && isParentOfParticipantLegacy());
+      }
+
       // Permitir leer si:
       // 1. Eres participante del chat, O
-      // 2. Eres padre de alguno de los participantes
+      // 2. Eres padre de alguno de los participantes (optimizado o legacy)
       allow read: if request.auth != null && (
         request.auth.uid in resource.data.participants ||
-        isParentOfParticipant()
+        isParentOfParticipantOptimized() ||
+        (resource.data.approvedParentViewers == null && isParentOfParticipantLegacy())
       );
 
       // 🔒 SEGURIDAD CRÍTICA: Solo Cloud Functions pueden crear chats
@@ -187,14 +218,20 @@ service cloud.firestore {
       );
 
       match /messages/{messageId} {
-        // Función auxiliar optimizada para verificar si eres participante del chat
-        function isParticipant() {
+        // ✅ OPTIMIZADO: Verificar permisos en UNA sola lectura del chat
+        // Combina verificación de participante y padre en una función
+        function canReadMessages() {
           let chatDoc = get(/databases/$(database)/documents/chats/$(chatId));
-          return request.auth.uid in chatDoc.data.participants;
+          // Es participante directo?
+          let isParticipant = request.auth.uid in chatDoc.data.participants;
+          // Es padre aprobado? (usa campo desnormalizado)
+          let isApprovedParent = chatDoc.data.approvedParentViewers != null &&
+                                 request.auth.uid in chatDoc.data.approvedParentViewers;
+          return isParticipant || isApprovedParent;
         }
 
-        // Función auxiliar para verificar si eres padre de algún participante
-        function isParentOfParticipant() {
+        // Fallback legacy para chats sin approvedParentViewers (más costoso)
+        function canReadMessagesLegacy() {
           let chatDoc = get(/databases/$(database)/documents/chats/$(chatId));
           let participants = chatDoc.data.participants;
           return exists(/databases/$(database)/documents/parent_children/$(request.auth.uid + '_' + participants[0])) ||
@@ -203,11 +240,23 @@ service cloud.firestore {
                  exists(/databases/$(database)/documents/parent_children/$(participants[1] + '_' + request.auth.uid));
         }
 
-        // Permitir leer mensaje individual si eres participante del chat o padre
-        allow get: if request.auth != null && (isParticipant() || isParentOfParticipant());
+        // Función auxiliar: es participante? (para writes)
+        function isParticipant() {
+          let chatDoc = get(/databases/$(database)/documents/chats/$(chatId));
+          return request.auth.uid in chatDoc.data.participants;
+        }
 
-        // Permitir listar mensajes si eres participante o padre
-        allow list: if request.auth != null && (isParticipant() || isParentOfParticipant());
+        // Permitir leer mensaje: primero intenta optimizado, luego legacy
+        allow get: if request.auth != null && (
+          canReadMessages() ||
+          canReadMessagesLegacy()
+        );
+
+        // Permitir listar mensajes: primero intenta optimizado, luego legacy
+        allow list: if request.auth != null && (
+          canReadMessages() ||
+          canReadMessagesLegacy()
+        );
 
         // Función auxiliar para verificar si es un mensaje de llamada
         function isCallMessage() {
@@ -343,21 +392,16 @@ service cloud.firestore {
     // Contactos
     match /contacts/{contactId} {
       // 🔒 FUNCIÓN DE SEGURIDAD: Verificar si el usuario es padre de alguno de los usuarios en el contacto
+      // Usa hasAny() para verificar si algún hijo del padre está en el array users del contacto
       function isParentOfContactUser() {
-        let users = resource.data.users;
         let parentDoc = get(/databases/$(database)/documents/users/$(request.auth.uid));
-        // Verificar si el padre tiene linkedChildrenIds y si alguno de los usuarios del contacto está en esa lista
-        // ✅ Verificar primero que el campo existe para evitar errores
-        return parentDoc.data.keys().hasAny(['linkedChildrenIds']) &&
-               parentDoc.data.linkedChildrenIds != null && (
-          (users.size() >= 1 && users[0] in parentDoc.data.linkedChildrenIds) ||
-          (users.size() >= 2 && users[1] in parentDoc.data.linkedChildrenIds)
-        );
+        return parentDoc.data.linkedChildrenIds != null &&
+               resource.data.users.hasAny(parentDoc.data.linkedChildrenIds);
       }
 
       // 🔒 SEGURIDAD: Solo puedes leer contactos donde:
       // 1. TÚ estés en el array 'users', O
-      // 2. Eres PADRE de alguno de los usuarios del contacto
+      // 2. Alguno de tus hijos vinculados está en el array 'users'
       allow get: if request.auth != null && (
         request.auth.uid in resource.data.users ||
         isParentOfContactUser()
@@ -365,24 +409,36 @@ service cloud.firestore {
 
       // 🔒 SEGURIDAD: Solo puedes listar contactos donde:
       // 1. TÚ estés en el array 'users', O
-      // 2. Eres PADRE de alguno de los usuarios del contacto
+      // 2. Alguno de tus hijos vinculados está en el array 'users'
       allow list: if request.auth != null && (
         request.auth.uid in resource.data.users ||
         isParentOfContactUser()
       );
 
-      // Permitir crear contactos si:
-      // 1. El usuario autenticado está en el array 'users' del contacto
-      // 2. El array 'users' tiene exactamente 2 elementos
-      allow create: if request.auth != null &&
-        request.resource.data.users is list &&
-        request.resource.data.users.size() == 2 &&
-        request.auth.uid in request.resource.data.users;
+      // 🔒 SEGURIDAD CRÍTICA: Solo Cloud Functions pueden crear contactos
+      // Los clientes DEBEN usar las Cloud Functions:
+      // - approveContactFromRequest (aprobación de padre)
+      // - autoApproveContact (auto-aprobación)
+      // - createContactFromGroupInvitation (invitación de grupo)
+      // Esto previene bypass de validación de padres/contactos
+      allow create: if false;
 
-      // Permitir actualizar si eres uno de los usuarios del contacto
-      // (para marcar como deleted o actualizar status)
+      // 🔒 FUNCIÓN DE SEGURIDAD: Verificar que no se modifiquen campos críticos
+      // Solo Cloud Functions pueden modificar status y approvedViaGroupInvitation
+      function isUpdatingCriticalContactFields() {
+        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+        return changedKeys.hasAny(['status', 'approvedViaGroupInvitation', 'createdAt', 'users']);
+      }
+
+      // Permitir actualizar si:
+      // 1. NO está tocando campos críticos (status, approvedViaGroupInvitation, users, createdAt) Y
+      // 2. (Eres uno de los usuarios del contacto O eres padre de alguno de los usuarios)
+      // Campos permitidos: alias, nickname, isFavorite, metadata, etc.
       allow update: if request.auth != null &&
-        request.auth.uid in resource.data.users;
+        !isUpdatingCriticalContactFields() && (
+        request.auth.uid in resource.data.users ||
+        isParentOfContactUser()
+      );
 
       // No permitir delete directo, solo update de status
       allow delete: if false;
@@ -551,8 +607,17 @@ service cloud.firestore {
       }
 
       // 🔒 FUNCIÓN: Verificar si el usuario puede ver esta historia específica
+      // ✅ OPTIMIZADO: Usa availableFor y parentViewers para queries eficientes
       function canViewThisStory() {
         return request.auth.uid == resource.data.userId ||
+               // ✅ Check optimizado usando availableFor (historias aprobadas para contactos)
+               (resource.data.status == 'approved' &&
+                resource.data.availableFor != null &&
+                request.auth.uid in resource.data.availableFor) ||
+               // ✅ NUEVO: Check usando parentViewers (historias de hijos para padres)
+               (resource.data.parentViewers != null &&
+                request.auth.uid in resource.data.parentViewers) ||
+               // FALLBACK: Lógica antigua para historias sin availableFor o pending/rejected
                (resource.data.status == 'approved' && isApprovedContactForStory(resource.data.userId, request.auth.uid)) ||
                isParentChildRelationForStory(resource.data.userId, request.auth.uid) ||
                hasStoryApprovalAccess(resource.data.userId, request.auth.uid);
@@ -570,6 +635,12 @@ service cloud.firestore {
         return changedKeys.hasOnly(['replies']);
       }
 
+      // Función auxiliar para verificar si solo se está actualizando likedBy
+      function isOnlyUpdatingLikedBy() {
+        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+        return changedKeys.hasOnly(['likedBy']);
+      }
+
       // 🔒 SEGURIDAD CRÍTICA: Campos de aprobación BLOQUEADOS para clientes
       // Solo Cloud Functions pueden modificar status, approvedBy, approvedAt, rejectionReason
       function isOnlyUpdatingApprovalFields() {
@@ -585,10 +656,16 @@ service cloud.firestore {
       function isOnlyUpdatingVisibilityFields() {
         let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
         // Permitir actualizar visibility y savedToPermanentAt (para guardar/archivar historias)
-        // 🔒 IMPORTANTE: NO permitir cambiar status desde cliente
+        // 🔒 IMPORTANTE: NO permitir cambiar status o availableFor desde cliente
         return changedKeys.size() > 0 &&
                changedKeys.hasOnly(['visibility', 'savedToPermanentAt']) &&
-               !changedKeys.hasAny(['status']);
+               !changedKeys.hasAny(['status', 'availableFor']);
+      }
+
+      // 🔒 SEGURIDAD: Verificar que no se modifique availableFor desde cliente
+      function isNotModifyingAvailableFor() {
+        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+        return !changedKeys.hasAny(['availableFor']);
       }
 
       // 🔒 SEGURIDAD CRÍTICA: Reglas extremadamente restrictivas para historias
@@ -609,13 +686,14 @@ service cloud.firestore {
         request.auth.uid == request.resource.data.userId;
 
       // 🔒 ACTUALIZACIÓN SEGURA: Permitir actualizar SOLO si:
-      // 1. Eres el creador de la historia, O
-      // 2. Puedes ver la historia Y solo agregando a viewedBy/replies (permite marcar como vista), O
+      // 1. Eres el creador de la historia Y NO modificas availableFor, O
+      // 2. Puedes ver la historia Y solo agregando a viewedBy/replies/likes (permite interacciones), O
       // 3. Tienes acceso de aprobación Y solo actualizas campos de aprobación, O
       // 4. Eres el creador Y solo actualizas campos de visibilidad
+      // 🔒 NOTA: availableFor solo puede ser modificado por Cloud Functions
       allow update: if request.auth != null && (
-        request.auth.uid == resource.data.userId ||
-        (canViewThisStory() && (isOnlyUpdatingViewedBy() || isOnlyUpdatingReplies())) ||
+        (request.auth.uid == resource.data.userId && isNotModifyingAvailableFor()) ||
+        (canViewThisStory() && (isOnlyUpdatingViewedBy() || isOnlyUpdatingReplies() || isOnlyUpdatingLikedBy())) ||
         (hasStoryApprovalAccess(resource.data.userId, request.auth.uid) && isOnlyUpdatingApprovalFields()) ||
         (request.auth.uid == resource.data.userId && isOnlyUpdatingVisibilityFields())
       );
@@ -735,13 +813,21 @@ service cloud.firestore {
 
     // Link codes
     match /link_codes/{codeId} {
-      // Permitir leer documento individual si es el creador
-      allow get: if request.auth != null &&
-        request.auth.uid == resource.data.createdBy;
+      // Permitir leer documento individual si:
+      // 1. Eres el creador (padre), O
+      // 2. El código está activo y no usado (para que el hijo pueda buscarlo y usarlo)
+      allow get: if request.auth != null && (
+        request.auth.uid == resource.data.createdBy ||
+        (resource.data.isActive == true && resource.data.used == false)
+      );
 
-      // 🔒 SEGURIDAD: Solo puedes listar códigos que TÚ creaste
-      allow list: if request.auth != null &&
-        resource.data.createdBy == request.auth.uid;
+      // 🔒 SEGURIDAD: Permitir listar códigos si:
+      // 1. TÚ los creaste, O
+      // 2. El código está activo y no usado (para queries por código)
+      allow list: if request.auth != null && (
+        resource.data.createdBy == request.auth.uid ||
+        (resource.data.isActive == true && resource.data.used == false)
+      );
 
       // Permitir crear código si el usuario es el createdBy
       allow create: if request.auth != null &&
@@ -1060,19 +1146,28 @@ service cloud.firestore {
 
     // Contact requests
     match /contact_requests/{requestId} {
+      // 🔒 FUNCIÓN: Verificar si el usuario es padre del childId en la solicitud
+      function isParentOfRequestChild() {
+        let parentDoc = get(/databases/$(database)/documents/users/$(request.auth.uid));
+        return parentDoc.data.linkedChildrenIds != null &&
+               resource.data.childId in parentDoc.data.linkedChildrenIds;
+      }
+
       // 🔒 SEGURIDAD: Solo puedes leer solicitudes donde eres childId o parentId o el contacto
-      // NOTA: Se usa 'contactId' porque ese es el campo que se usa en las queries del cliente
+      // ✅ NUEVO: O si eres padre de algún hijo en la solicitud (para AutoApprovalService)
       allow get: if request.auth != null &&
         (resource.data.childId == request.auth.uid ||
          resource.data.parentId == request.auth.uid ||
-         resource.data.contactId == request.auth.uid);
+         resource.data.contactId == request.auth.uid ||
+         isParentOfRequestChild());
 
       // 🔒 SEGURIDAD: Solo puedes listar solicitudes donde estés involucrado
-      // NOTA: Se usa 'contactId' porque ese es el campo que se usa en las queries del cliente
+      // ✅ NUEVO: O si eres padre del childId (para AutoApprovalService)
       allow list: if request.auth != null &&
         (resource.data.childId == request.auth.uid ||
          resource.data.parentId == request.auth.uid ||
-         resource.data.contactId == request.auth.uid);
+         resource.data.contactId == request.auth.uid ||
+         isParentOfRequestChild());
 
       // Solo Cloud Functions pueden crear
       allow create: if false;
@@ -1081,10 +1176,11 @@ service cloud.firestore {
       allow update: if false;
 
       // Permitir eliminar si:
-      // 1. Eres el childId (quien inició la solicitud), Y
+      // 1. Eres el childId o contactId (cualquiera de los dos usuarios), Y
       // 2. La solicitud está pendiente
       allow delete: if request.auth != null &&
-        request.auth.uid == resource.data.childId &&
+        (request.auth.uid == resource.data.childId ||
+         request.auth.uid == resource.data.contactId) &&
         resource.data.status == 'pending';
     }
 
@@ -1176,6 +1272,38 @@ service cloud.firestore {
          resource.data.childId == request.auth.uid);
     }
 
+    // Group requests (solicitudes para unirse a grupos)
+    match /group_requests/{requestId} {
+      // Función auxiliar para verificar si eres miembro del grupo
+      function isGroupMember() {
+        let groupDoc = get(/databases/$(database)/documents/groups/$(resource.data.groupId));
+        return request.auth.uid in groupDoc.data.members;
+      }
+
+      // Función auxiliar para verificar si eres admin del grupo
+      function isGroupAdmin() {
+        let groupDoc = get(/databases/$(database)/documents/groups/$(resource.data.groupId));
+        return groupDoc.data.admins != null &&
+               request.auth.uid in groupDoc.data.admins;
+      }
+
+      // Permitir leer si eres miembro del grupo o eres quien hizo la solicitud
+      allow read: if request.auth != null && (
+        isGroupMember() ||
+        resource.data.userId == request.auth.uid
+      );
+
+      // Solo Cloud Functions pueden crear solicitudes
+      allow create: if false;
+
+      // Solo admins del grupo pueden actualizar (aprobar/rechazar)
+      allow update: if request.auth != null && isGroupAdmin();
+
+      // Solo el usuario que hizo la solicitud puede eliminarla (cancelar)
+      allow delete: if request.auth != null &&
+        resource.data.userId == request.auth.uid;
+    }
+
     // Group invitations (con aprobación en cascada)
     match /groupInvitations/{invitationId} {
       // 🔒 SEGURIDAD: Solo puedes leer invitaciones donde estés involucrado
@@ -1221,6 +1349,15 @@ service cloud.firestore {
 
       // Solo el usuario puede actualizar/crear sus propios límites
       allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // App config - Configuración global de la aplicación (feature flags)
+    match /app_config/{configId} {
+      // Todos los usuarios autenticados pueden leer la configuración
+      allow read: if request.auth != null;
+
+      // Solo admins pueden escribir configuración
+      allow write: if isAdmin();
     }
 
     // Characters - Personajes para transformación con IA

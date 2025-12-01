@@ -47,35 +47,41 @@ class StoryContentWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return PageView.builder(
-      controller: userPageController,
-      itemCount: allUserStories.length,
-      onPageChanged: onUserChanged,
-      itemBuilder: (context, userIndex) {
-        final userStories = allUserStories[userIndex];
-        final stories = _getStoriesForUser(userStories);
+    // ✅ Fondo negro para que no se vean márgenes blancos con BoxFit.contain
+    return Container(
+      color: Colors.black,
+      child: PageView.builder(
+        controller: userPageController,
+        itemCount: allUserStories.length,
+        onPageChanged: onUserChanged,
+        itemBuilder: (context, userIndex) {
+          final userStories = allUserStories[userIndex];
+          final stories = _getStoriesForUser(userStories);
 
-        return PageView.builder(
-          controller: userIndex == currentUserIndex ? storyPageController : null,
-          itemCount: stories.length,
-          onPageChanged: (storyIndex) {
-            if (userIndex == currentUserIndex) {
-              onStoryChanged(storyIndex);
-            }
-          },
-          itemBuilder: (context, storyIndex) {
-            final story = stories[storyIndex];
+          return PageView.builder(
+            controller: userIndex == currentUserIndex ? storyPageController : null,
+            itemCount: stories.length,
+            onPageChanged: (storyIndex) {
+              if (userIndex == currentUserIndex) {
+                onStoryChanged(storyIndex);
+              }
+            },
+            itemBuilder: (context, storyIndex) {
+              final story = stories[storyIndex];
 
-            return SizedBox(
-              width: double.infinity,
-              height: double.infinity,
-              child: story.mediaType == 'image'
-                  ? _buildImageContent(context, story, userIndex, storyIndex)
-                  : buildVideoPlayer(story),
-            );
-          },
-        );
-      },
+              // ✅ Contenedor negro para cada historia individual
+              return Container(
+                color: Colors.black,
+                width: double.infinity,
+                height: double.infinity,
+                child: story.mediaType == 'image'
+                    ? _buildImageContent(context, story, userIndex, storyIndex)
+                    : buildVideoPlayer(story),
+              );
+            },
+          );
+        },
+      ),
     );
   }
 

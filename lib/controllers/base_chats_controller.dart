@@ -44,12 +44,44 @@ abstract class BaseChatsController {
 
   /// Stream de grupos donde el usuario es miembro
   Stream<QuerySnapshot> getGroupsStream() {
+    ReleaseLogger.log('🔍 [getGroupsStream] Iniciando stream para userId: $userId', tag: 'BaseChats');
+
     return _firestore
         .collection('groups')
         .where('members', arrayContains: userId)
         .where('isActive', isEqualTo: true)
         .orderBy('lastActivity', descending: true)
-        .snapshots(includeMetadataChanges: false);
+        .snapshots(includeMetadataChanges: false)
+        .handleError((error, stackTrace) {
+          ReleaseLogger.error(
+            '❌ [getGroupsStream] ERROR en stream: $error',
+            tag: 'BaseChats',
+          );
+          ReleaseLogger.error(
+            '   Stack: $stackTrace',
+            tag: 'BaseChats',
+          );
+        })
+        .map((snapshot) {
+          ReleaseLogger.log(
+            '📊 [getGroupsStream] Recibidos ${snapshot.docs.length} grupos para userId: $userId',
+            tag: 'BaseChats',
+          );
+          if (snapshot.docs.isEmpty) {
+            ReleaseLogger.log(
+              '⚠️ [getGroupsStream] No se encontraron grupos - verificar query o permisos',
+              tag: 'BaseChats',
+            );
+          }
+          for (final doc in snapshot.docs) {
+            final data = doc.data() as Map<String, dynamic>;
+            ReleaseLogger.log(
+              '  → Grupo: ${doc.id}, nombre: ${data['name']}, members: ${(data['members'] as List?)?.length ?? 0}',
+              tag: 'BaseChats',
+            );
+          }
+          return snapshot;
+        });
   }
 
   /// Stream de datos de un usuario específico
@@ -86,6 +118,50 @@ abstract class BaseChatsController {
       ReleaseLogger.log('Lista de chats actualizada', tag: 'BaseChats');
     } catch (e) {
       ReleaseLogger.error('Error actualizando lista: $e', tag: 'BaseChats');
+    }
+  }
+
+  /// 🔄 Forzar actualización de grupos desde el servidor
+  ///
+  /// Útil después de crear un grupo para asegurar que el cache local
+  /// tenga los datos más recientes del servidor.
+  Future<void> refreshGroupsFromServer() async {
+    try {
+      ReleaseLogger.log('🔄 Forzando refresh de grupos desde servidor para userId: $userId', tag: 'BaseChats');
+
+      // Hacer una query explícita al servidor para actualizar el cache
+      // Con timeout para evitar que se cuelgue
+      final snapshot = await _firestore
+          .collection('groups')
+          .where('members', arrayContains: userId)
+          .where('isActive', isEqualTo: true)
+          .orderBy('lastActivity', descending: true)
+          .get(GetOptions(source: Source.server))
+          .timeout(
+            Duration(seconds: 10),
+            onTimeout: () {
+              ReleaseLogger.log('⏱️ Timeout en refresh de grupos, usando cache', tag: 'BaseChats');
+              return _firestore
+                  .collection('groups')
+                  .where('members', arrayContains: userId)
+                  .where('isActive', isEqualTo: true)
+                  .orderBy('lastActivity', descending: true)
+                  .get();
+            },
+          );
+
+      ReleaseLogger.log('✅ Grupos actualizados desde servidor: ${snapshot.docs.length} grupos encontrados', tag: 'BaseChats');
+
+      for (final doc in snapshot.docs) {
+        final data = doc.data();
+        ReleaseLogger.log('  → Grupo: ${doc.id}, nombre: ${data['name']}', tag: 'BaseChats');
+      }
+
+      // Delay para dar tiempo al cache de actualizarse y a los listeners de recibir el update
+      await Future.delayed(Duration(milliseconds: 500));
+    } catch (e, stack) {
+      ReleaseLogger.error('❌ Error refrescando grupos: $e', tag: 'BaseChats');
+      ReleaseLogger.error('   Stack: $stack', tag: 'BaseChats');
     }
   }
 

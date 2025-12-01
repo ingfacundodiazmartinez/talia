@@ -894,7 +894,12 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
                   _currentUserRole = newRole;
                 }
               }
-            });
+            },
+            onError: (error) {
+              ReleaseLogger.error('❌ [Main] User role stream error: $error');
+            },
+            cancelOnError: false,
+          );
       } else {
         // Usuario deslogueado - cancelar listener de Firestore
         _userRoleSubscription?.cancel();
@@ -1036,16 +1041,6 @@ class _AuthWrapperState extends State<AuthWrapper> {
     return StreamBuilder<firebase_auth.User?>(
       stream: firebase_auth.FirebaseAuth.instance.authStateChanges(),
       builder: (context, snapshot) {
-        // ✅ SPINNER DEBUG: Logs detallados para identificar el problema
-        print('🔄 [SPINNER_DEBUG] ═══════════════════════════════════════════');
-        print(
-          '🔄 [SPINNER_DEBUG] AuthWrapper ConnectionState: ${snapshot.connectionState}',
-        );
-        print('🔄 [SPINNER_DEBUG] AuthWrapper HasData: ${snapshot.hasData}');
-        print('🔄 [SPINNER_DEBUG] AuthWrapper HasError: ${snapshot.hasError}');
-        print('🔄 [SPINNER_DEBUG] User: ${snapshot.data?.email}');
-        print('🔄 [SPINNER_DEBUG] ═══════════════════════════════════════════');
-
         ReleaseLogger.log(
           '🔄AuthWrapper - Connection state: ${snapshot.connectionState}',
         );
@@ -1079,44 +1074,10 @@ class _AuthWrapperState extends State<AuthWrapper> {
                 .doc(snapshot.data!.uid)
                 .snapshots(),
             builder: (context, userSnapshot) {
-              // ✅ SPINNER DEBUG: Logs detallados para el StreamBuilder de usuario
-              print(
-                '📄 [SPINNER_DEBUG] ═══════════════════════════════════════════',
-              );
-              print(
-                '📄 [SPINNER_DEBUG] UserSnapshot ConnectionState: ${userSnapshot.connectionState}',
-              );
-              print(
-                '📄 [SPINNER_DEBUG] UserSnapshot HasData: ${userSnapshot.hasData}',
-              );
-              print(
-                '📄 [SPINNER_DEBUG] UserSnapshot HasError: ${userSnapshot.hasError}',
-              );
-              print(
-                '📄 [SPINNER_DEBUG] UserSnapshot Data Exists: ${userSnapshot.data?.exists}',
-              );
-              if (userSnapshot.hasError) {
-                print(
-                  '📄 [SPINNER_DEBUG] UserSnapshot Error: ${userSnapshot.error}',
-                );
-              }
-              final showingSpinner =
-                  userSnapshot.connectionState == ConnectionState.waiting &&
-                  !userSnapshot.hasData;
-              print(
-                '📄 [SPINNER_DEBUG] Showing "Verificando tipo de usuario" spinner: $showingSpinner',
-              );
-              print(
-                '📄 [SPINNER_DEBUG] ═══════════════════════════════════════════',
-              );
-
               // Si estamos esperando Y no tenemos datos cacheados, mostrar loading
               // Si tenemos datos cacheados (hasData), usar esos datos aunque estemos waiting
               if (userSnapshot.connectionState == ConnectionState.waiting &&
                   !userSnapshot.hasData) {
-                print(
-                  '📄 [SPINNER_DEBUG] 🔄 MOSTRANDO SPINNER: "Verificando tipo de usuario..."',
-                );
                 return Scaffold(
                   body: Center(
                     child: Column(
@@ -1203,34 +1164,8 @@ class _AuthWrapperState extends State<AuthWrapper> {
                 return FutureBuilder<bool>(
                   future: TwoFactorSessionService().isVerified(userId),
                   builder: (context, verificationSnapshot) {
-                    // ✅ SPINNER DEBUG: Logs detallados para 2FA verification
-                    print(
-                      '🔐 [SPINNER_DEBUG] ═══════════════════════════════════════════',
-                    );
-                    print(
-                      '🔐 [SPINNER_DEBUG] 2FA ConnectionState: ${verificationSnapshot.connectionState}',
-                    );
-                    print(
-                      '🔐 [SPINNER_DEBUG] 2FA HasData: ${verificationSnapshot.hasData}',
-                    );
-                    print(
-                      '🔐 [SPINNER_DEBUG] 2FA Data: ${verificationSnapshot.data}',
-                    );
-                    final showing2FASpinner =
-                        verificationSnapshot.connectionState ==
-                        ConnectionState.waiting;
-                    print(
-                      '🔐 [SPINNER_DEBUG] Showing "Verificando sesión" spinner: $showing2FASpinner',
-                    );
-                    print(
-                      '🔐 [SPINNER_DEBUG] ═══════════════════════════════════════════',
-                    );
-
                     if (verificationSnapshot.connectionState ==
                         ConnectionState.waiting) {
-                      print(
-                        '🔐 [SPINNER_DEBUG] 🔄 MOSTRANDO SPINNER: "Verificando sesión..."',
-                      );
                       return Scaffold(
                         body: Center(
                           child: Column(

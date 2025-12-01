@@ -14,13 +14,14 @@ class LocationService {
   final BackgroundLocationService _backgroundService = BackgroundLocationService();
 
   StreamSubscription<Position>? _positionStream;
-  Timer? _locationUpdateTimer;
   bool _isTracking = false;
 
   // Configuración de ubicación
+  // ✅ OPTIMIZADO: Solo actualizar cuando el usuario se mueve 50+ metros
+  // Esto reduce significativamente los writes a Firestore
   final LocationSettings _locationSettings = LocationSettings(
     accuracy: LocationAccuracy.high,
-    distanceFilter: 10, // Actualizar cada 10 metros
+    distanceFilter: 50, // Actualizar cada 50 metros (antes: 10m)
   );
 
   // Verificar y solicitar permisos de ubicación
@@ -86,20 +87,9 @@ class LocationService {
       await _updateLocationInFirestore(initialPosition);
     }
 
-    // Configurar actualizaciones periódicas cada 30 segundos
-    _locationUpdateTimer = Timer.periodic(Duration(seconds: 30), (timer) async {
-      if (!_isTracking) {
-        timer.cancel();
-        return;
-      }
-
-      final position = await getCurrentLocation();
-      if (position != null) {
-        await _updateLocationInFirestore(position);
-      }
-    });
-
-    // También escuchar cambios de posición basados en distancia
+    // ✅ OPTIMIZADO: Solo usar stream basado en distancia (eliminado Timer de 30 seg)
+    // El Timer causaba writes innecesarios incluso cuando el usuario estaba quieto
+    // Ahora solo se escribe cuando el usuario se mueve 50+ metros
     _positionStream = Geolocator.getPositionStream(
       locationSettings: _locationSettings,
     ).listen(
@@ -107,6 +97,7 @@ class LocationService {
         _updateLocationInFirestore(position);
       },
       onError: (error) {
+        // Error silencioso - el stream se recuperará automáticamente
       },
     );
   }
@@ -115,7 +106,24 @@ class LocationService {
   void stopLocationTracking() {
     _isTracking = false;
     _positionStream?.cancel();
-    _locationUpdateTimer?.cancel();
+  }
+
+  /// Actualizar ubicación inmediatamente (para solicitudes de padres)
+  ///
+  /// Este método puede ser llamado desde background handlers cuando un padre
+  /// solicita la ubicación actual del hijo. No requiere que el tracking
+  /// esté activo - obtiene una ubicación puntual y la guarda en Firestore.
+  Future<bool> updateLocationNow() async {
+    try {
+      final position = await getCurrentLocation();
+      if (position != null) {
+        await _updateLocationInFirestore(position);
+        return true;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
   }
 
   // Actualizar ubicación en Firestore

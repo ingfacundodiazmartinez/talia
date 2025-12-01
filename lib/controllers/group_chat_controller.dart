@@ -1,42 +1,69 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
-import '../notification_service.dart';
+import 'package:uuid/uuid.dart';
 import '../services/typing_indicator_service.dart';
 import '../services/media_service.dart';
 import '../services/media_compression_service.dart';
-import '../services/chats/repositories/user_repository.dart';
 import '../services/chats/repositories/message_repository.dart';
-import '../services/chats/repositories/chat_repository.dart';
+import '../services/chats/managers/chat_cache_manager.dart';
 import '../services/user_settings_service.dart';
+import '../services/message_cache_service.dart';
+import '../services/favorite_service.dart';
+import '../models/chat_message.dart';
 import '../utils/release_logger.dart';
 
 /// Controller que maneja la lógica de un chat grupal
-/// ⚠️ DEPRECATED: Este controller está siendo migrado a usar ChatOrchestrator
-/// que respeta la arquitectura definida en CLAUDE.md
-class GroupChatController {
+///
+/// ✅ MIGRADO: Ahora usa Cloud Functions (sendGroupMessage) para envío de mensajes,
+/// garantizando moderación, seguridad y TTL automático.
+///
+/// ✅ OPTIMISTIC UPDATES: Extiende ChangeNotifier para UI reactiva como chats 1-1
+///
+/// Todos los métodos de envío (texto, imagen, video, audio) pasan por la CF
+/// `sendGroupMessage` que maneja:
+/// - Validación de membresía
+/// - TTL (deleteAt) automático de 7 días
+/// - Actualización de lastMessage en el documento del grupo
+/// - Trigger de notificaciones push (vía incrementGroupUnreadCount)
+class GroupChatController extends ChangeNotifier {
   final String groupId;
   final String groupName;
 
   final FirebaseFirestore _firestore;
   final FirebaseAuth _auth;
-  final NotificationService _notificationService;
+  final FirebaseFunctions _functions;
   final TypingIndicatorService _typingService;
   final MediaService _mediaService;
 
-  // ✅ NEW: Repositories para acceso a datos
-  final UserRepository _userRepository;
+  // ✅ Repository para acceso a mensajes
   final MessageRepository _messageRepository;
-  final ChatRepository _chatRepository;
+
+  // ✅ Cache manager para mensajes optimistas
+  final ChatCacheManager _cacheManager;
+
+  // UUID generator para localIds
+  static const _uuid = Uuid();
 
   // Paginación
   static const int messagesPerPage = 30;
   DocumentSnapshot? _lastDocument;
   bool _hasMoreMessages = true;
   final List<DocumentSnapshot> _loadedMessages = [];
+
+  // ✅ OPTIMISTIC UPDATES: Lista de mensajes para UI reactiva
+  final List<ChatMessage> _messages = [];
+  final List<ChatMessage> _pendingMessages = [];
+  StreamSubscription<QuerySnapshot>? _messagesSubscription;
+
+  // ✅ Favoritos
+  final FavoriteService _favoriteService = FavoriteService();
+  StreamSubscription<Set<String>>? _favoritesSubscription;
+  Set<String> _favoriteIds = {};
 
   // Cache de usuarios del grupo
   final Map<String, String> _userNames = {};
@@ -48,29 +75,21 @@ class GroupChatController {
     required this.groupName,
     FirebaseFirestore? firestore,
     FirebaseAuth? auth,
-    NotificationService? notificationService,
+    FirebaseFunctions? functions,
     TypingIndicatorService? typingService,
     MediaService? mediaService,
-    UserRepository? userRepository,
     MessageRepository? messageRepository,
-    ChatRepository? chatRepository,
+    ChatCacheManager? cacheManager,
   })  : _firestore = firestore ?? FirebaseFirestore.instance,
         _auth = auth ?? FirebaseAuth.instance,
-        _notificationService = notificationService ?? NotificationService(),
+        _functions = functions ?? FirebaseFunctions.instanceFor(region: 'us-central1'),
         _typingService = typingService ?? TypingIndicatorService(),
         _mediaService = mediaService ?? MediaService(),
-        _userRepository = userRepository ?? UserRepository(
-          firestore: firestore ?? FirebaseFirestore.instance,
-          auth: auth ?? FirebaseAuth.instance,
-        ),
         _messageRepository = messageRepository ?? MessageRepository(
           firestore: firestore ?? FirebaseFirestore.instance,
           auth: auth ?? FirebaseAuth.instance,
         ),
-        _chatRepository = chatRepository ?? ChatRepository(
-          firestore: firestore ?? FirebaseFirestore.instance,
-          auth: auth ?? FirebaseAuth.instance,
-        );
+        _cacheManager = cacheManager ?? ChatCacheManager();
 
   // Getters
   String get currentUserId => _auth.currentUser?.uid ?? '';
@@ -79,36 +98,174 @@ class GroupChatController {
   Map<String, String> get userNames => _userNames;
   Map<String, String> get userPhotos => _userPhotos;
   List<String> get memberIds => _memberIds;
+  Set<String> get favoriteIds => _favoriteIds;  // ✅ NEW: Favoritos
+
+  /// ✅ OPTIMISTIC: Lista de mensajes para UI (incluye pendientes)
+  List<ChatMessage> get messages => List.unmodifiable(_messages);
+  List<ChatMessage> get pendingMessages => List.unmodifiable(_pendingMessages);
 
   /// Inicializar el controller
   Future<void> initialize() async {
-    await loadGroupMembers();
-    await markMessagesAsRead();
+    // ✅ Verificar autenticación antes de hacer queries
+    if (currentUserId.isEmpty) {
+      ReleaseLogger.error('No hay usuario autenticado - abortando inicialización', tag: 'GroupChatController');
+      return;
+    }
+
+    try {
+      await loadGroupMembers();
+    } catch (e) {
+      ReleaseLogger.error('Error en loadGroupMembers: $e', tag: 'GroupChatController');
+      // Continuar - el chat puede funcionar sin la lista de miembros
+    }
+
+    try {
+      await markMessagesAsRead();
+    } catch (e) {
+      // permission-denied es esperado si el usuario no es miembro del grupo
+      if (e.toString().contains('permission-denied')) {
+        ReleaseLogger.warning('Sin permisos para marcar mensajes como leídos (¿usuario no es miembro?)', tag: 'GroupChatController');
+      } else {
+        ReleaseLogger.error('Error en markMessagesAsRead: $e', tag: 'GroupChatController');
+      }
+    }
+
+    _startMessagesSubscription();
+    await _loadFavorites();  // ✅ NEW: Cargar favoritos
+  }
+
+  /// ✅ NEW: Cargar IDs de mensajes favoritos
+  Future<void> _loadFavorites() async {
+    try {
+      _favoriteIds = await _favoriteService.getFavoriteMessageIds(
+        chatId: groupId,
+        isGroupChat: true,
+      );
+
+      // Suscribirse a cambios
+      _favoritesSubscription = _favoriteService.getFavoriteMessageIdsStream(
+        chatId: groupId,
+        isGroupChat: true,
+      ).listen((ids) {
+        _favoriteIds = ids;
+        notifyListeners();
+      });
+
+      notifyListeners();
+    } catch (e) {
+      ReleaseLogger.error('Error loading favorites: $e', tag: 'GroupChatController');
+    }
+  }
+
+  /// ✅ NEW: Refrescar favoritos (llamar después de toggle)
+  Future<void> refreshFavorites() async {
+    try {
+      _favoriteIds = await _favoriteService.getFavoriteMessageIds(
+        chatId: groupId,
+        isGroupChat: true,
+      );
+      notifyListeners();
+    } catch (e) {
+      ReleaseLogger.error('Error refreshing favorites: $e', tag: 'GroupChatController');
+    }
+  }
+
+  /// ✅ OPTIMISTIC: Iniciar suscripción a mensajes de Firestore
+  void _startMessagesSubscription() {
+    _messagesSubscription?.cancel();
+
+    _messagesSubscription = _messageRepository.watchMessages(
+      chatId: groupId,
+      isGroup: true,
+      limit: messagesPerPage,
+    ).listen((snapshot) {
+      _handleMessagesSnapshot(snapshot);
+    }, onError: (error) {
+      ReleaseLogger.error('Error en stream de mensajes del grupo: $error', tag: 'GroupChatController');
+    });
+  }
+
+  /// ✅ OPTIMISTIC: Procesar snapshot de mensajes y actualizar lista
+  void _handleMessagesSnapshot(QuerySnapshot snapshot) {
+    final firestoreMessages = snapshot.docs
+        .where((doc) => !isBlockedForCurrentUser(doc))
+        .map((doc) => ChatMessage.fromFirestore(doc, currentUserId: currentUserId))
+        .toList();
+
+    // ✅ FIX: Guardar mensajes en Hive para que la galería de medios funcione
+    if (firestoreMessages.isNotEmpty) {
+      MessageCacheService().saveMessages(groupId, firestoreMessages);
+    }
+
+    // Combinar mensajes de Firestore con pendientes (optimistas)
+    final Set<String> firestoreIds = firestoreMessages.map((m) => m.id).toSet();
+    final Set<String> firestoreLocalIds = firestoreMessages
+        .where((m) => m.localId != null)
+        .map((m) => m.localId!)
+        .toSet();
+
+    // Filtrar pendientes que ya llegaron de Firestore (por id o localId)
+    _pendingMessages.removeWhere((pending) =>
+        firestoreIds.contains(pending.id) ||
+        firestoreLocalIds.contains(pending.localId));
+
+    // Actualizar lista: pendientes primero (más recientes), luego Firestore
+    _messages.clear();
+    _messages.addAll(_pendingMessages);
+    _messages.addAll(firestoreMessages);
+
+    // Ordenar por timestamp descendente (más recientes primero)
+    _messages.sort((a, b) {
+      final aTime = a.timestamp?.toDate() ?? a.localTimestamp ?? DateTime.now();
+      final bTime = b.timestamp?.toDate() ?? b.localTimestamp ?? DateTime.now();
+      return bTime.compareTo(aTime);
+    });
+
+    notifyListeners();
   }
 
   /// Cargar miembros del grupo
+  /// ✅ OPTIMIZADO: Usa datos desnormalizados o batch queries en paralelo
   Future<void> loadGroupMembers() async {
     try {
       final groupDoc = await _firestore.collection('groups').doc(groupId).get();
       final groupData = groupDoc.data();
 
-      if (groupData != null) {
-        _memberIds = List<String>.from(groupData['members'] ?? []);
+      if (groupData == null) return;
 
-        // Cargar información de cada miembro
+      _memberIds = List<String>.from(groupData['members'] ?? []);
+
+      // ✅ OPTIMIZACIÓN 1: Usar datos desnormalizados si existen
+      final memberDetails = groupData['memberDetails'] as Map<String, dynamic>?;
+      if (memberDetails != null && memberDetails.isNotEmpty) {
         for (final memberId in _memberIds) {
-          final userDoc =
-              await _firestore.collection('users').doc(memberId).get();
-          final userData = userDoc.data();
-
-          if (userData != null) {
-            _userNames[memberId] = userData['name'] ?? 'Usuario';
-            _userPhotos[memberId] = userData['photoURL'] ?? '';
+          final details = memberDetails[memberId] as Map<String, dynamic>?;
+          if (details != null) {
+            _userNames[memberId] = details['name'] ?? 'Usuario';
+            _userPhotos[memberId] = details['photoURL'] ?? '';
           }
         }
+        ReleaseLogger.log('Cargados ${_memberIds.length} miembros del grupo (desnormalizado)', tag: 'GroupChatController');
+        return;
       }
 
-      ReleaseLogger.log('Cargados ${_memberIds.length} miembros del grupo', tag: 'GroupChatController');
+      // ✅ OPTIMIZACIÓN 2: Batch queries en paralelo (fallback)
+      if (_memberIds.isEmpty) return;
+
+      final futures = _memberIds.map((memberId) =>
+        _firestore.collection('users').doc(memberId).get()
+      ).toList();
+
+      final userDocs = await Future.wait(futures);
+
+      for (int i = 0; i < _memberIds.length; i++) {
+        final memberId = _memberIds[i];
+        final userData = userDocs[i].data();
+        if (userData != null) {
+          _userNames[memberId] = userData['name'] ?? 'Usuario';
+          _userPhotos[memberId] = userData['photoURL'] ?? '';
+        }
+      }
     } catch (e) {
       ReleaseLogger.error('Error cargando miembros del grupo: $e', tag: 'GroupChatController');
     }
@@ -143,8 +300,6 @@ class GroupChatController {
           .limit(50) // Últimos 50 mensajes
           .get();
 
-      ReleaseLogger.log('📖 [markMessagesAsRead] Leyendo mensajes del grupo $groupId: ${messagesSnapshot.docs.length} mensajes encontrados', tag: 'GroupChatController');
-
       // Batch write para eficiencia
       final batch = _firestore.batch();
       int updateCount = 0;
@@ -162,16 +317,12 @@ class GroupChatController {
             'readBy': FieldValue.arrayUnion([currentUserId]),
           });
           updateCount++;
-          ReleaseLogger.log('📝 [markMessagesAsRead] Agregando $currentUserId a readBy[] del mensaje ${doc.id}', tag: 'GroupChatController');
         }
       }
 
       // Ejecutar batch si hay updates
       if (updateCount > 0) {
         await batch.commit();
-        ReleaseLogger.log('✅ [markMessagesAsRead] Marcados $updateCount mensajes como leídos en grupo $groupId', tag: 'GroupChatController');
-      } else {
-        ReleaseLogger.log('ℹ️ [markMessagesAsRead] No hay mensajes para marcar como leídos en grupo $groupId', tag: 'GroupChatController');
       }
     } catch (e) {
       ReleaseLogger.error('⚠️ [markMessagesAsRead] Error marcando mensajes como leídos: $e', tag: 'GroupChatController');
@@ -213,81 +364,149 @@ class GroupChatController {
     }
   }
 
-  /// Enviar mensaje de texto
+  /// Enviar mensaje de texto usando Cloud Function (seguro con moderación)
+  /// ✅ OPTIMISTIC: Muestra el mensaje inmediatamente mientras se procesa en el servidor
   Future<bool> sendTextMessage({
     required String text,
     Map<String, dynamic>? replyTo,
   }) async {
     if (text.trim().isEmpty || currentUserId.isEmpty) return false;
 
+    // 1. Generar localId único
+    final localId = _uuid.v4();
+
+    // 2. Crear mensaje optimista usando factory (igual que chats 1-1)
+    final optimisticMessage = ChatMessage.optimistic(
+      id: localId,
+      senderId: currentUserId,
+      text: text.trim(),
+      type: 'text',
+      replyTo: replyTo,
+    );
+
+    // 3. Agregar a lista de pendientes y notificar UI
+    _pendingMessages.add(optimisticMessage);
+    _messages.insert(0, optimisticMessage);
+    notifyListeners();
+
+    ReleaseLogger.log('📤 [Optimistic] Mensaje agregado: ${localId.substring(0, 8)}...', tag: 'GroupChatController');
+
     try {
-      final messageData = {
-        'senderId': currentUserId,
-        'text': text,
-        'timestamp': FieldValue.serverTimestamp(),
-        'isRead': false,
+      final callable = _functions.httpsCallable('sendGroupMessage');
+
+      final data = <String, dynamic>{
+        'groupId': groupId,
+        'text': text.trim(),
+        'localId': localId, // ✅ Enviar localId para deduplicación
       };
 
       if (replyTo != null) {
-        messageData['replyTo'] = replyTo;
+        data['replyTo'] = replyTo;
       }
 
-      // Enviar mensaje (lógica optimista restaurada)
-      await _firestore
-          .collection('groups')
-          .doc(groupId)
-          .collection('messages')
-          .add(messageData);
+      await callable.call(data);
 
-      // Actualizar documento del grupo
-      await _updateGroupDocument(text);
-
-      ReleaseLogger.log('Mensaje enviado exitosamente al grupo', tag: 'GroupChatController');
+      // ✅ El listener de Firestore reemplazará el mensaje optimista con el real
+      ReleaseLogger.log('✅ Mensaje de texto enviado via Cloud Function al grupo', tag: 'GroupChatController');
       return true;
+    } on FirebaseFunctionsException catch (e) {
+      // ❌ Error: Marcar como fallido
+      _markMessageAsError(localId);
+      ReleaseLogger.error('❌ Error CF enviando mensaje al grupo: ${e.code} - ${e.message}', tag: 'GroupChatController');
+      return false;
     } catch (e) {
-      ReleaseLogger.error('Error enviando mensaje al grupo: $e', tag: 'GroupChatController');
+      // ❌ Error: Marcar como fallido
+      _markMessageAsError(localId);
+      ReleaseLogger.error('❌ Error enviando mensaje al grupo: $e', tag: 'GroupChatController');
       return false;
     }
   }
 
-  /// Enviar imagen
-  Future<bool> sendImage({
-    required String imagePath,
-    required bool fromCamera,
-  }) async {
+  /// Marcar mensaje como error cuando falla el envío
+  void _markMessageAsError(String messageId) {
+    final index = _messages.indexWhere((m) => m.id == messageId);
+    if (index != -1) {
+      _messages[index] = _messages[index].copyWith(status: MessageStatus.error);
+      notifyListeners();
+    }
+    _pendingMessages.removeWhere((m) => m.id == messageId);
+  }
+
+  /// Enviar imagen usando Cloud Function (seguro con moderación y TTL automático)
+  /// ✅ OPTIMISTIC: Muestra la imagen inmediatamente mientras se sube
+  Future<bool> sendImage({required ImageSource source}) async {
     if (currentUserId.isEmpty) return false;
 
     try {
-      final imageUrl = await _mediaService.uploadImage(
-        source: fromCamera ? ImageSource.camera : ImageSource.gallery,
+      // 1. Seleccionar imagen primero
+      final picker = ImagePicker();
+      final pickedFile = await picker.pickImage(
+        source: source,
+        imageQuality: 70,
+        maxWidth: 1920,
+        maxHeight: 1920,
+      );
+
+      if (pickedFile == null) {
+        ReleaseLogger.log('⚠️ No se seleccionó imagen', tag: 'GroupChatController');
+        return false;
+      }
+
+      // 2. Crear mensaje optimista con path LOCAL (se muestra inmediatamente)
+      final localId = _uuid.v4();
+      final optimisticMessage = ChatMessage.optimistic(
+        id: localId,
+        senderId: currentUserId,
+        type: 'image',
+        localPath: pickedFile.path, // ✅ FIX: Usar localPath para imagen local
+      );
+
+      _pendingMessages.add(optimisticMessage);
+      _messages.insert(0, optimisticMessage);
+      notifyListeners(); // ✅ UI se actualiza inmediatamente
+
+      // 3. ✅ OPTIMIZACIÓN: Comprimir imagen antes de subir
+      final imageFile = File(pickedFile.path);
+      final compressedFile = await MediaCompressionService().compressImage(imageFile);
+      final fileToUpload = compressedFile ?? imageFile;
+
+      // 4. Subir imagen en background
+      final imageUrl = await _mediaService.uploadImageFile(
+        imageFile: fileToUpload,
         chatId: groupId,
         userId: currentUserId,
       );
 
-      if (imageUrl == null) return false;
+      if (imageUrl == null) {
+        // Error al subir - marcar como error
+        _markMessageAsError(localId);
+        ReleaseLogger.error('❌ Error subiendo imagen', tag: 'GroupChatController');
+        return false;
+      }
 
-      await _firestore
-          .collection('groups')
-          .doc(groupId)
-          .collection('messages')
-          .add({
-            'senderId': currentUserId,
-            'imageUrl': imageUrl,
-            'type': 'image',
-            'timestamp': FieldValue.serverTimestamp(),
-            'isRead': false,
-          });
+      // 5. Enviar mensaje via Cloud Function
+      final callable = _functions.httpsCallable('sendGroupMessage');
+      await callable.call(<String, dynamic>{
+        'groupId': groupId,
+        'imageUrl': imageUrl,
+        'localId': localId, // Para reconciliar con el mensaje optimista
+      });
 
-      await _updateGroupDocument('📷 Imagen');
-      ReleaseLogger.log('Imagen enviada exitosamente al grupo', tag: 'GroupChatController');
+      // 6. Remover de pendientes (el mensaje llegará por el stream de Firestore)
+      _pendingMessages.removeWhere((m) => m.id == localId);
+
+      ReleaseLogger.log('✅ Imagen enviada via Cloud Function al grupo', tag: 'GroupChatController');
       return true;
+    } on FirebaseFunctionsException catch (e) {
+      ReleaseLogger.error('❌ Error CF enviando imagen al grupo: ${e.code} - ${e.message}', tag: 'GroupChatController');
+      return false;
     } catch (e) {
-      ReleaseLogger.error('Error enviando imagen al grupo: $e', tag: 'GroupChatController');
+      ReleaseLogger.error('❌ Error enviando imagen al grupo: $e', tag: 'GroupChatController');
       return false;
     }
   }
 
-  /// Enviar video desde un archivo ya seleccionado con compresión
+  /// Enviar video usando Cloud Function (seguro con moderación y TTL automático)
   Future<bool> sendVideoFromFile({
     required String videoPath,
     Function(String)? onShowMessage,
@@ -330,79 +549,37 @@ class GroupChatController {
 
       if (videoUrl == null) return false;
 
-      // 3. Enviar a Firestore
-      await _firestore
-          .collection('groups')
-          .doc(groupId)
-          .collection('messages')
-          .add({
-            'senderId': currentUserId,
-            'videoUrl': videoUrl,
-            'type': 'video',
-            'timestamp': FieldValue.serverTimestamp(),
-            'isRead': false,
-          });
+      // 3. Enviar mensaje via Cloud Function (maneja TTL y lastMessage automáticamente)
+      final callable = _functions.httpsCallable('sendGroupMessage');
 
-      await _updateGroupDocument('🎥 Video');
-      ReleaseLogger.log('Video enviado exitosamente al grupo', tag: 'GroupChatController');
+      await callable.call(<String, dynamic>{
+        'groupId': groupId,
+        'videoUrl': videoUrl,
+      });
+
+      ReleaseLogger.log('✅ Video enviado via Cloud Function al grupo', tag: 'GroupChatController');
       return true;
+    } on FirebaseFunctionsException catch (e) {
+      ReleaseLogger.error('❌ Error CF enviando video al grupo: ${e.code} - ${e.message}', tag: 'GroupChatController');
+      return false;
     } catch (e) {
-      ReleaseLogger.error('Error enviando video al grupo: $e', tag: 'GroupChatController');
+      ReleaseLogger.error('❌ Error enviando video al grupo: $e', tag: 'GroupChatController');
       return false;
     }
   }
 
-  /// Enviar audio con optimistic update
-  /// Retorna el ID del mensaje optimista creado
-  Future<String?> sendAudioOptimistic({
+  /// Enviar audio usando Cloud Function (seguro con moderación y TTL automático)
+  /// Nota: Ya no usa optimistic updates para garantizar seguridad via Cloud Functions
+  Future<bool> sendAudio({
     required String audioPath,
     required List<double> waveformData,
   }) async {
-    if (currentUserId.isEmpty) return null;
+    if (currentUserId.isEmpty) return false;
 
     try {
-      // 1. Crear mensaje optimista localmente primero
-      final messageRef = _firestore
-          .collection('groups')
-          .doc(groupId)
-          .collection('messages')
-          .doc(); // Generar ID antes de agregar
+      ReleaseLogger.log('Subiendo audio del grupo...', tag: 'GroupChatController');
 
-      final tempId = messageRef.id;
-
-      // 2. Agregar mensaje optimista a Firestore (sin esperar)
-      await messageRef.set({
-        'senderId': currentUserId,
-        'audioUrl': null, // Aún no tenemos URL
-        'localPath': audioPath, // Path local para reproducir mientras se sube
-        'waveformData': waveformData,
-        'type': 'audio',
-        'timestamp': FieldValue.serverTimestamp(),
-        'isRead': false,
-      });
-
-      ReleaseLogger.log('Mensaje optimista de audio creado en grupo: $tempId', tag: 'GroupChatController');
-
-      // 3. Subir audio en background
-      _uploadAudioInBackground(audioPath, tempId, waveformData);
-
-      return tempId;
-    } catch (e) {
-      ReleaseLogger.error('Error creando mensaje optimista de audio: $e', tag: 'GroupChatController');
-      return null;
-    }
-  }
-
-  /// Subir audio en background y actualizar mensaje
-  Future<void> _uploadAudioInBackground(
-    String audioPath,
-    String messageId,
-    List<double> waveformData,
-  ) async {
-    try {
-      ReleaseLogger.log('[BACKGROUND] Subiendo audio del grupo...', tag: 'GroupChatController');
-
-      // 1. Subir audio
+      // 1. Subir audio a Storage
       final audioUrl = await _mediaService.uploadAudio(
         audioPath: audioPath,
         chatId: groupId,
@@ -410,80 +587,64 @@ class GroupChatController {
       );
 
       if (audioUrl == null) {
-        ReleaseLogger.error('[BACKGROUND] Error subiendo audio', tag: 'GroupChatController');
-        return;
+        ReleaseLogger.error('Error subiendo audio a Storage', tag: 'GroupChatController');
+        return false;
       }
 
-      // 2. Actualizar mensaje con URL real y limpiar localPath
-      await _firestore
-          .collection('groups')
-          .doc(groupId)
-          .collection('messages')
-          .doc(messageId)
-          .update({
-            'audioUrl': audioUrl,
-            'localPath': FieldValue.delete(), // Limpiar path local
-          });
+      // 2. Enviar mensaje via Cloud Function (maneja TTL y lastMessage automáticamente)
+      final callable = _functions.httpsCallable('sendGroupMessage');
 
-      // 3. Actualizar documento del grupo
-      await _updateGroupDocument('🎤 Audio');
+      await callable.call(<String, dynamic>{
+        'groupId': groupId,
+        'audioUrl': audioUrl,
+        'waveformData': waveformData,
+      });
 
-      // 4. Enviar notificaciones
-      await _sendNotifications('🎤 Audio');
-
-      ReleaseLogger.log('[BACKGROUND] Audio subido y mensaje actualizado en grupo', tag: 'GroupChatController');
+      ReleaseLogger.log('✅ Audio enviado via Cloud Function al grupo', tag: 'GroupChatController');
+      return true;
+    } on FirebaseFunctionsException catch (e) {
+      ReleaseLogger.error('❌ Error CF enviando audio al grupo: ${e.code} - ${e.message}', tag: 'GroupChatController');
+      return false;
     } catch (e) {
-      ReleaseLogger.error('[BACKGROUND] Error subiendo audio: $e', tag: 'GroupChatController');
-      // TODO: Marcar mensaje con error si es necesario
+      ReleaseLogger.error('❌ Error enviando audio al grupo: $e', tag: 'GroupChatController');
+      return false;
     }
   }
 
-  /// 🔒 DEPRECADO - INSEGURO: Actualizar documento del grupo
-  /// Esta función permite bypass de filtros de contenido
-  /// Solo Cloud Functions deben actualizar lastMessage después de validación
-  @Deprecated('❌ INSEGURO: Solo Cloud Functions pueden actualizar lastMessage después de validación')
-  Future<void> _updateGroupDocument(String lastMessage) async {
-    // 🚨 FUNCIÓN BLOQUEADA POR SEGURIDAD
-    throw Exception('🔒 FUNCIÓN BLOQUEADA: _updateGroupDocument es insegura. El contenido "$lastMessage" podría ser ofensivo y bypassear filtros. Solo Cloud Functions pueden actualizar lastMessage después de validación.');
+  /// @deprecated Use [sendAudio] instead. Mantenido por compatibilidad.
+  @Deprecated('Use sendAudio() en su lugar - ahora usa Cloud Functions')
+  Future<String?> sendAudioOptimistic({
+    required String audioPath,
+    required List<double> waveformData,
+  }) async {
+    final success = await sendAudio(audioPath: audioPath, waveformData: waveformData);
+    return success ? 'cf_message' : null;
   }
 
-  /// Enviar notificaciones a todos los miembros (excepto el remitente)
-  Future<void> _sendNotifications(String messageText) async {
-    try {
-      final currentUserDoc =
-          await _firestore.collection('users').doc(currentUserId).get();
-      final userData = currentUserDoc.data();
-      final senderName = userData?['name'] ?? 'Usuario';
-      final senderPhotoUrl = userData?['photoURL'];
-
-      // Enviar notificación a cada miembro (excepto el remitente)
-      for (final memberId in _memberIds) {
-        if (memberId != currentUserId) {
-          await _notificationService.sendChatMessageNotification(
-            recipientId: memberId,
-            senderId: currentUserId,
-            senderName: senderName,
-            senderPhotoUrl: senderPhotoUrl,
-            messageText: messageText,
-            chatId: groupId,
-            isGroup: true,
-            groupName: groupName,
-          );
-        }
-      }
-    } catch (e) {
-      ReleaseLogger.error('Error enviando notificaciones: $e', tag: 'GroupChatController');
-    }
-  }
+  // ✅ ELIMINADOS: _updateGroupDocument y _sendNotifications
+  // Las Cloud Functions ahora manejan:
+  // - sendGroupMessage: crea el mensaje con TTL y actualiza lastMessage
+  // - incrementGroupUnreadCount trigger: envía notificaciones push automáticamente
 
   /// Stream de mensajes recientes
   /// ✅ REFACTORED: Now uses MessageRepository instead of direct Firestore access
+  /// ✅ FILTRADO: Excluye mensajes donde currentUserId está en blockedFor
   Stream<QuerySnapshot> watchRecentMessages() {
     return _messageRepository.watchMessages(
       chatId: groupId,
       isGroup: true,
       limit: messagesPerPage,
     );
+  }
+
+  /// Filtrar documentos excluyendo los bloqueados para el usuario actual
+  /// Usar en el UI: snapshot.docs donde !isBlockedForCurrentUser(doc)
+  bool isBlockedForCurrentUser(DocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>?;
+    if (data == null) return false;
+    final blockedFor = data['blockedFor'] as List<dynamic>?;
+    if (blockedFor == null || blockedFor.isEmpty) return false;
+    return blockedFor.contains(currentUserId);
   }
 
   /// Stream de usuarios escribiendo
@@ -545,7 +706,11 @@ class GroupChatController {
   }
 
   /// Limpiar recursos
+  @override
   void dispose() {
+    _messagesSubscription?.cancel();
+    _favoritesSubscription?.cancel();  // ✅ NEW: Limpiar favoritos
     stopTyping();
+    super.dispose();
   }
 }

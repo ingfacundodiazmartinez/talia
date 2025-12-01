@@ -6,6 +6,41 @@ const { getMessaging } = require("firebase-admin/messaging");
 const { getStorage } = require("firebase-admin/storage");
 
 // ═══════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════
+const CONSTANTS = {
+  // Batch limits
+  FIRESTORE_BATCH_LIMIT: 500,
+  FIRESTORE_WHERE_IN_LIMIT: 30,
+
+  // Time constants (in milliseconds)
+  MS_PER_HOUR: 60 * 60 * 1000,
+  MS_PER_DAY: 24 * 60 * 60 * 1000,
+
+  // Retention periods (in days)
+  RATE_LIMITS_RETENTION_DAYS: 30,
+  VERY_OLD_NOTIFICATIONS_DAYS: 90,
+  EMERGENCY_AUTO_RESOLVE_HOURS: 24,
+
+  // Notification retention by type
+  NOTIFICATION_RETENTION: {
+    chat_message: 7,
+    group_message: 7,
+    emergency: 90,
+    emergency_auto_resolved: 90,
+    report_ready: 60,
+    moderation_blocked: 60,
+    moderation_approved: 30,
+    contact_request: 30,
+    contact_approved: 30,
+    group_invitation: 30,
+    group_permission_request: 30,
+    group_membership_approved: 30,
+    default: 30,
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════
 // SCHEDULED TASKS
 // ═══════════════════════════════════════════════════════════════
 
@@ -61,8 +96,8 @@ exports.convertExpiredStoriesToPermanent = onSchedule(
           batchCount++;
           convertedCount++;
 
-          // Si llegamos a 500, commitear y crear nuevo batch
-          if (batchCount >= 500) {
+          // Si llegamos al límite, commitear y crear nuevo batch
+          if (batchCount >= CONSTANTS.FIRESTORE_BATCH_LIMIT) {
             batches.push(currentBatch);
             currentBatch = db.batch();
             batchCount = 0;
@@ -96,139 +131,25 @@ exports.convertExpiredStoriesToPermanent = onSchedule(
   }
 );
 
-/**
- * Limpia mensajes antiguos (>7 días) automáticamente
- * Ejecuta diariamente a las 3:00 AM
- * Mantiene los costos de Firestore bajos eliminando mensajes viejos
- */
-
-exports.cleanupOldMessages = onSchedule(
-  {
-    schedule: "0 3 * * *", // Todos los días a las 3:00 AM
-    timeZone: "America/Argentina/Buenos_Aires",
-    memory: "512MiB", // Más memoria porque puede procesar muchos chats
-    timeoutSeconds: 540, // 9 minutos (máximo para scheduled functions)
-  },
-  async (event) => {
-    console.log("🧹 Iniciando limpieza de mensajes antiguos (>7 días)...");
-
-    const db = getFirestore();
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    const cutoffTimestamp = Timestamp.fromDate(sevenDaysAgo);
-
-    console.log(`📅 Eliminando mensajes anteriores a: ${sevenDaysAgo.toISOString()}`);
-
-    let totalDeleted = 0;
-    let totalChatsProcessed = 0;
-    let totalGroupsProcessed = 0;
-
-    try {
-      // ==========================================
-      // PARTE 1: Limpiar mensajes de chats individuales
-      // ==========================================
-      console.log("📱 Procesando chats individuales...");
-
-      const chats = await db.collection("chats").get();
-      console.log(`📊 Chats encontrados: ${chats.size}`);
-
-      for (const chatDoc of chats.docs) {
-        try {
-          const chatId = chatDoc.id;
-
-          // Buscar mensajes antiguos en este chat (procesar en batches pequeños)
-          const oldMessages = await db
-            .collection("chats")
-            .doc(chatId)
-            .collection("messages")
-            .where("timestamp", "<=", cutoffTimestamp)
-            .limit(500) // Limitar para no agotar memoria
-            .get();
-
-          if (!oldMessages.empty) {
-            const batch = db.batch();
-            let batchCount = 0;
-
-            for (const msgDoc of oldMessages.docs) {
-              batch.delete(msgDoc.ref);
-              batchCount++;
-              totalDeleted++;
-            }
-
-            await batch.commit();
-            console.log(`✅ Chat ${chatId}: ${batchCount} mensajes eliminados`);
-          }
-
-          totalChatsProcessed++;
-        } catch (chatError) {
-          console.error(`❌ Error procesando chat ${chatDoc.id}:`, chatError.message);
-          // Continuar con el siguiente chat
-        }
-      }
-
-      // ==========================================
-      // PARTE 2: Limpiar mensajes de grupos
-      // ==========================================
-      console.log("👥 Procesando grupos...");
-
-      const groups = await db.collection("groups").get();
-      console.log(`📊 Grupos encontrados: ${groups.size}`);
-
-      for (const groupDoc of groups.docs) {
-        try {
-          const groupId = groupDoc.id;
-
-          // Buscar mensajes antiguos en este grupo
-          const oldMessages = await db
-            .collection("groups")
-            .doc(groupId)
-            .collection("messages")
-            .where("timestamp", "<=", cutoffTimestamp)
-            .limit(500)
-            .get();
-
-          if (!oldMessages.empty) {
-            const batch = db.batch();
-            let batchCount = 0;
-
-            for (const msgDoc of oldMessages.docs) {
-              batch.delete(msgDoc.ref);
-              batchCount++;
-              totalDeleted++;
-            }
-
-            await batch.commit();
-            console.log(`✅ Grupo ${groupId}: ${batchCount} mensajes eliminados`);
-          }
-
-          totalGroupsProcessed++;
-        } catch (groupError) {
-          console.error(`❌ Error procesando grupo ${groupDoc.id}:`, groupError.message);
-          // Continuar con el siguiente grupo
-        }
-      }
-
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.log(`✅ Limpieza completada exitosamente`);
-      console.log(`📊 Estadísticas:`);
-      console.log(`   - Chats procesados: ${totalChatsProcessed}`);
-      console.log(`   - Grupos procesados: ${totalGroupsProcessed}`);
-      console.log(`   - Total mensajes eliminados: ${totalDeleted}`);
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
-      return {
-        success: true,
-        chatsProcessed: totalChatsProcessed,
-        groupsProcessed: totalGroupsProcessed,
-        messagesDeleted: totalDeleted,
-        cutoffDate: sevenDaysAgo.toISOString(),
-      };
-    } catch (error) {
-      console.error("❌ Error en limpieza de mensajes:", error);
-      throw error;
-    }
-  }
-);
+// ═══════════════════════════════════════════════════════════════
+// cleanupOldMessages - ELIMINADO
+// ═══════════════════════════════════════════════════════════════
+//
+// Esta función fue reemplazada por Firestore TTL Policy.
+// Los mensajes ahora tienen un campo 'deleteAt' que Firestore
+// usa para eliminarlos automáticamente después de 7 días.
+//
+// BENEFICIOS:
+// - Cero costo de Cloud Functions
+// - Cero costo de lecturas de Firestore
+// - Eliminación automática sin mantenimiento
+//
+// Para configurar TTL Policy en Firebase Console:
+// 1. Ir a Firestore > Indexes > TTL Policies
+// 2. Crear política para collection group "messages"
+// 3. Campo: "deleteAt"
+// 4. Firestore eliminará documentos automáticamente cuando deleteAt < now
+// ═══════════════════════════════════════════════════════════════
 
 /**
  * Auto-resuelve emergencias antiguas (>24 horas sin respuesta)
@@ -246,7 +167,7 @@ exports.autoResolveEmergencies = onSchedule(
 
     const db = getFirestore();
     const now = new Date();
-    const threshold = new Date(now.getTime() - 24 * 60 * 60 * 1000); // 24 horas atrás
+    const threshold = new Date(now.getTime() - CONSTANTS.EMERGENCY_AUTO_RESOLVE_HOURS * CONSTANTS.MS_PER_HOUR);
 
     try {
       // Obtener emergencias sin resolver de más de 24 horas
@@ -263,8 +184,30 @@ exports.autoResolveEmergencies = onSchedule(
         return;
       }
 
+      // ✅ OPTIMIZACIÓN: Obtener todos los childIds únicos primero
+      const childIds = [...new Set(oldEmergencies.docs.map(doc => doc.data().childId))];
+
+      // ✅ OPTIMIZACIÓN: Batch query de parent_children (max N por whereIn)
+      const parentLinksMap = {};
+      for (let i = 0; i < childIds.length; i += CONSTANTS.FIRESTORE_WHERE_IN_LIMIT) {
+        const batchChildIds = childIds.slice(i, i + CONSTANTS.FIRESTORE_WHERE_IN_LIMIT);
+        const linksSnap = await db
+          .collection("parent_children")
+          .where("childId", "in", batchChildIds)
+          .get();
+
+        linksSnap.docs.forEach(doc => {
+          const data = doc.data();
+          if (!parentLinksMap[data.childId]) {
+            parentLinksMap[data.childId] = [];
+          }
+          parentLinksMap[data.childId].push(data.parentId);
+        });
+      }
+
       const batch = db.batch();
       let resolvedCount = 0;
+      const notificationPromises = [];
 
       for (const emergencyDoc of oldEmergencies.docs) {
         const emergencyData = emergencyDoc.data();
@@ -280,38 +223,34 @@ exports.autoResolveEmergencies = onSchedule(
 
         resolvedCount++;
 
-        // Notificar a los padres
+        // Notificar a los padres (usando el mapa pre-cargado)
         const childId = emergencyData.childId;
+        const parentIds = parentLinksMap[childId] || [];
 
-        // Obtener padres vinculados
-        const parentLinks = await db
-          .collection("parent_children")
-          .where("childId", "==", childId)
-          .get();
-
-        for (const linkDoc of parentLinks.docs) {
-          const parentId = linkDoc.data().parentId;
-
-          // Crear notificación
-          await db.collection("notifications").add({
-            userId: parentId,
-            title: "Emergencia Auto-Resuelta",
-            body: "Una emergencia de tu hijo fue auto-resuelta después de 24h sin respuesta",
-            type: "emergency_auto_resolved",
-            priority: "normal",
-            read: false,
-            createdAt: now,
-            data: {
-              emergencyId: emergencyDoc.id,
-              childId: childId,
-            },
-          });
+        for (const parentId of parentIds) {
+          // Usar batch para notificaciones también
+          notificationPromises.push(
+            db.collection("notifications").add({
+              userId: parentId,
+              title: "Emergencia Auto-Resuelta",
+              body: "Una emergencia de tu hijo fue auto-resuelta después de 24h sin respuesta",
+              type: "emergency_auto_resolved",
+              priority: "normal",
+              read: false,
+              createdAt: now,
+              data: {
+                emergencyId: emergencyDoc.id,
+                childId: childId,
+              },
+            })
+          );
         }
 
         console.log(`✅ Emergencia ${emergencyDoc.id} auto-resuelta`);
       }
 
-      await batch.commit();
+      // Ejecutar todo en paralelo
+      await Promise.all([batch.commit(), ...notificationPromises]);
 
       console.log(`✅ Auto-resolución completada: ${resolvedCount} emergencias`);
 
@@ -342,7 +281,7 @@ exports.cleanupOldRateLimits = onSchedule(
 
     const db = getFirestore();
     const now = Date.now();
-    const threshold = now - (30 * 24 * 60 * 60 * 1000); // 30 días atrás
+    const threshold = now - (CONSTANTS.RATE_LIMITS_RETENTION_DAYS * CONSTANTS.MS_PER_DAY);
 
     try {
       // Obtener rate limits de más de 30 días
@@ -369,7 +308,7 @@ exports.cleanupOldRateLimits = onSchedule(
         batchCount++;
         deletedCount++;
 
-        if (batchCount >= 500) {
+        if (batchCount >= CONSTANTS.FIRESTORE_BATCH_LIMIT) {
           batches.push(currentBatch);
           currentBatch = db.batch();
           batchCount = 0;
@@ -415,32 +354,8 @@ exports.cleanupOldNotifications = onSchedule(
     const db = getFirestore();
     const now = new Date();
 
-    // Configuración de retención por tipo de notificación
-    const retentionDays = {
-      // Notificaciones de chat: ya no se guardan en DB (envío directo)
-      // pero limpiamos las antiguas que puedan existir
-      chat_message: 7,
-      group_message: 7,
-
-      // Notificaciones importantes: mantener más tiempo
-      emergency: 90,
-      emergency_auto_resolved: 90,
-      report_ready: 60,
-
-      // Notificaciones de moderación: importantes para historial
-      moderation_blocked: 60,
-      moderation_approved: 30,
-
-      // Vinculaciones y contactos
-      contact_request: 30,
-      contact_approved: 30,
-      group_invitation: 30,
-      group_permission_request: 30,
-      group_membership_approved: 30,
-
-      // Por defecto para tipos no especificados
-      default: 30,
-    };
+    // Configuración de retención por tipo de notificación (usando constantes)
+    const retentionDays = CONSTANTS.NOTIFICATION_RETENTION;
 
     let totalDeleted = 0;
     let totalProcessed = 0;
@@ -484,7 +399,7 @@ exports.cleanupOldNotifications = onSchedule(
       }
 
       // También limpiar notificaciones muy antiguas (>90 días) sin importar si están leídas
-      const veryOldCutoff = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+      const veryOldCutoff = new Date(now.getTime() - CONSTANTS.VERY_OLD_NOTIFICATIONS_DAYS * CONSTANTS.MS_PER_DAY);
       const veryOldTimestamp = Timestamp.fromDate(veryOldCutoff);
 
       try {

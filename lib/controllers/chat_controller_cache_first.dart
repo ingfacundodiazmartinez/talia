@@ -15,6 +15,7 @@ import '../services/block_service.dart';
 import '../services/audio_processing_service.dart';
 import '../services/message_cache_service.dart';
 import '../services/favorite_service.dart';  // ✅ NEW: For favorite tracking
+import '../services/media_compression_service.dart';
 import '../notification_service.dart';
 import '../utils/release_logger.dart';
 import 'package:uuid/uuid.dart';
@@ -56,7 +57,7 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   List<ChatMessage> _messages = [];
   final List<ChatMessage> _pendingMessages = [];
   bool _isInitialized = false;
-  final bool _isLoading = false;  // Currently unused, but may be needed for loading states
+  bool _isLoading = true;  // ✅ FIX: Start as true, set to false when first messages arrive
   bool _hasLoadedInitialMessages = false;
   bool _isLoadingMore = false;
 
@@ -125,34 +126,66 @@ class ChatControllerCacheFirst extends ChangeNotifier {
       return;
     }
 
-    try {
-      ReleaseLogger.log('Initializing ChatController for chat $chatId');
+    // ✅ Reset loading state for fresh initialization
+    _isLoading = true;
 
-      // Load contact info
-      await _loadContactInfo();
-
-      // Start listening to messages (CACHE-FIRST)
-      await _startListeningToMessages();
-
-      // Setup block listeners
-      _setupBlockListeners();
-
-      // Setup notification listener
-      _setupNotificationListener();
-
-      // ✅ NEW: Load favorites
-      await _loadFavorites();
-
-      // Mark chat as read
-      await markChatAsRead();
-
-      _isInitialized = true;
-      _hasLoadedInitialMessages = true;
-      ReleaseLogger.log('ChatController initialized successfully for chat $chatId');
-    } catch (e) {
-      ReleaseLogger.error('Failed to initialize ChatController for chat $chatId: $e');
-      rethrow;
+    // ✅ Verificar autenticación antes de hacer queries
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) {
+      ReleaseLogger.error('No hay usuario autenticado - abortando inicialización', tag: 'ChatController');
+      _isInitialized = true; // Marcar para evitar spinner infinito
+      _isLoading = false; // ✅ FIX: Stop loading on auth error
+      return;
     }
+
+    ReleaseLogger.log('Initializing ChatController for chat $chatId');
+
+    try {
+      await _loadContactInfo();
+    } catch (e) {
+      ReleaseLogger.error('Error en _loadContactInfo: $e', tag: 'ChatController');
+    }
+
+    try {
+      await _startListeningToMessages();
+    } catch (e) {
+      ReleaseLogger.error('Error en _startListeningToMessages: $e', tag: 'ChatController');
+      _isLoading = false; // ✅ FIX: Stop loading on error
+    }
+
+    _setupBlockListeners();
+    _setupNotificationListener();
+
+    try {
+      await _loadFavorites();
+    } catch (e) {
+      ReleaseLogger.error('Error en _loadFavorites: $e', tag: 'ChatController');
+    }
+
+    try {
+      await markChatAsRead();
+    } catch (e) {
+      if (e.toString().contains('permission-denied')) {
+        ReleaseLogger.warning('Sin permisos para marcar chat como leído (¿usuario no es participante?)', tag: 'ChatController');
+      } else {
+        ReleaseLogger.error('Error en markChatAsRead: $e', tag: 'ChatController');
+      }
+    }
+
+    _isInitialized = true;
+    _hasLoadedInitialMessages = true;
+
+    // ✅ FIX: Safety timeout - if stream hasn't emitted after 5 seconds, stop loading
+    // This prevents infinite spinner if cache is empty and Firestore fails
+    Future.delayed(const Duration(seconds: 5), () {
+      if (_isLoading && _messages.isEmpty) {
+        ReleaseLogger.warning('⏱️ Loading timeout - stopping spinner for chat $chatId', tag: 'ChatController');
+        _isLoading = false;
+        notifyListeners();
+      }
+    });
+
+    ReleaseLogger.log('ChatController initialized for chat $chatId');
   }
 
   /// Load contact information
@@ -240,10 +273,19 @@ class ChatControllerCacheFirst extends ChangeNotifier {
       (messages) {
         ReleaseLogger.log('Received ${messages.length} messages from cache for chat $chatId');
         _messages = messages;
+        // ✅ FIX: Mark loading as done when first messages arrive
+        if (_isLoading) {
+          _isLoading = false;
+        }
         notifyListeners();
       },
       onError: (error) {
         ReleaseLogger.error('Error in messages stream for chat $chatId: $error');
+        // ✅ FIX: Also stop loading on error to prevent infinite spinner
+        if (_isLoading) {
+          _isLoading = false;
+          notifyListeners();
+        }
       },
     );
   }
@@ -512,13 +554,14 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   }
 
   /// Process and upload audio in background
-  Future<void> processAndUploadAudio(String audioPath) async {
+  Future<void> processAndUploadAudio(String audioPath, {bool isAiGenerated = false}) async {
     try {
       await _orchestrator.sendMessage(
         chatId: chatId,
         content: '', // Audio messages don't need text content
         type: MessageType.audio,
         mediaPath: audioPath,
+        metadata: isAiGenerated ? {'isAiGenerated': true} : null,
       );
 
       // Remove from pending messages
@@ -542,7 +585,12 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   Future<void> sendImage({required ImageSource source}) async {
     try {
       final picker = ImagePicker();
-      final pickedFile = await picker.pickImage(source: source);
+      final pickedFile = await picker.pickImage(
+        source: source,
+        imageQuality: 70,
+        maxWidth: 1920,
+        maxHeight: 1920,
+      );
 
       if (pickedFile == null) return;
 
@@ -552,19 +600,24 @@ class ChatControllerCacheFirst extends ChangeNotifier {
         id: tempId,
         senderId: currentUserId,
         type: 'image',
-        imageUrl: pickedFile.path, // Local path temporarily
+        localPath: pickedFile.path, // ✅ FIX: Usar localPath para imagen local
       );
 
       _pendingMessages.add(optimisticMessage);
       _messages.insert(0, optimisticMessage);
       notifyListeners();
 
+      // ✅ OPTIMIZACIÓN: Comprimir imagen antes de subir
+      final imageFile = File(pickedFile.path);
+      final compressedFile = await MediaCompressionService().compressImage(imageFile);
+      final fileToUpload = compressedFile ?? imageFile;
+
       // Upload in background via orchestrator
       await _orchestrator.sendMessage(
         chatId: chatId,
         content: '', // Image messages don't need text content
         type: MessageType.image,
-        mediaPath: pickedFile.path,
+        mediaPath: fileToUpload.path,
       );
 
       // Remove from pending

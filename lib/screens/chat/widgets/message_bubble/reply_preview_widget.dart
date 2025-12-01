@@ -18,10 +18,12 @@ class ReplyPreviewWidget extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
 
-    // ✅ FIX: Detectar respuesta a historia
+    // ✅ FIX: Detectar respuesta o like a historia
     final isStoryReply = replyTo['type'] == 'story_reply';
+    final isStoryLike = replyTo['type'] == 'story_like';
+    final isStoryInteraction = isStoryReply || isStoryLike;
     final storyMediaUrl = replyTo['storyMediaUrl'] as String?;
-    final hasStoryMedia = isStoryReply && storyMediaUrl != null && storyMediaUrl.isNotEmpty;
+    final hasStoryMedia = isStoryInteraction && storyMediaUrl != null && storyMediaUrl.isNotEmpty;
 
     final hasImage = replyTo['imageUrl'] != null;
     final hasVideo = replyTo['videoUrl'] != null;
@@ -118,8 +120,8 @@ class ReplyPreviewWidget extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  // ✅ FIX: Usar storyUserName para respuestas a historia
-                  isStoryReply
+                  // ✅ FIX: Usar storyUserName para respuestas/likes a historia
+                  isStoryInteraction
                       ? (replyTo['storyUserName'] ?? 'Usuario')
                       : (replyTo['senderName'] ?? 'Usuario'),
                   style: TextStyle(
@@ -130,24 +132,26 @@ class ReplyPreviewWidget extends StatelessWidget {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  // ✅ FIX: Mostrar caption de historia o indicador
-                  isStoryReply
-                      ? (replyTo['storyCaption']?.toString().isNotEmpty == true
-                          ? '📖 ${replyTo['storyCaption']}'
-                          : '📖 Historia')
-                      : hasText
-                          ? replyTo['text']
-                          : hasImage
-                              ? '📷 Foto'
-                              : hasVideo
-                                  ? '🎥 Video'
-                                  : '🎤 Audio',
+                  // ✅ FIX: Mostrar caption de historia o indicador (diferenciando reply de like)
+                  isStoryLike
+                      ? '❤️ Tu historia'
+                      : isStoryReply
+                          ? (replyTo['storyCaption']?.toString().isNotEmpty == true
+                              ? '📖 ${replyTo['storyCaption']}'
+                              : '📖 Historia')
+                          : hasText
+                              ? replyTo['text']
+                              : hasImage
+                                  ? '📷 Foto'
+                                  : hasVideo
+                                      ? '🎥 Video'
+                                      : '🎤 Audio',
                   style: TextStyle(
                     fontSize: 12,
                     color: isMe
                         ? Colors.white.withValues(alpha: 0.8)
                         : colorScheme.onSurface.withValues(alpha: 0.8),
-                    fontStyle: (hasText || isStoryReply) ? FontStyle.normal : FontStyle.italic,
+                    fontStyle: (hasText || isStoryInteraction) ? FontStyle.normal : FontStyle.italic,
                   ),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,

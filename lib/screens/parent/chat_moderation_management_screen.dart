@@ -1,14 +1,37 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import '../../controllers/chat_moderation_management_controller.dart';
+import '../../utils/release_logger.dart';
+
+/// Modelo local para contacto con moderación
+class _ContactWithModeration {
+  final String contactId;
+  final String childId;
+  final String chatId;
+  final String name;
+  final String? photoURL;
+  bool moderationEnabled;
+  String moderationLevel;
+  int blockedCount;
+
+  _ContactWithModeration({
+    required this.contactId,
+    required this.childId,
+    required this.chatId,
+    required this.name,
+    this.photoURL,
+    this.moderationEnabled = false,
+    this.moderationLevel = 'high',
+    this.blockedCount = 0,
+  });
+}
 
 /// Pantalla para gestionar moderación con IA de los contactos del hijo
 ///
-/// Permite al padre:
-/// - Ver lista de contactos aprobados del hijo
-/// - Activar/desactivar moderación por contacto
-/// - Ver resumen de mensajes bloqueados
+/// OPTIMIZADO: Trae todos los datos una vez y filtra localmente
+/// En lugar de 3 StreamBuilders por contacto (1200+ listeners para 400 contactos)
+/// ahora usa batch reads + cache local
 class ChatModerationManagementScreen extends StatefulWidget {
   const ChatModerationManagementScreen({super.key});
 
@@ -21,14 +44,35 @@ class _ChatModerationManagementScreenState
     extends State<ChatModerationManagementScreen> {
   late ChatModerationManagementController _controller;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+
   bool _isLoading = true;
   List<String> _childrenIds = [];
+
+  // Cache local de contactos por hijo
+  final Map<String, List<_ContactWithModeration>> _contactsByChild = {};
+  final Map<String, bool> _loadingByChild = {};
+
+  // Filtros
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+  String _filterStatus = 'all'; // 'all', 'active', 'inactive'
 
   @override
   void initState() {
     super.initState();
     _controller = ChatModerationManagementController();
     _loadLinkedChildren();
+    _searchController.addListener(() {
+      setState(() {
+        _searchQuery = _searchController.text.toLowerCase();
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadLinkedChildren() async {
@@ -41,6 +85,11 @@ class _ChatModerationManagementScreenState
           _isLoading = false;
         });
       }
+
+      // Cargar contactos de cada hijo en paralelo
+      for (final childId in linkedChildrenIds) {
+        _loadContactsForChild(childId);
+      }
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -52,6 +101,101 @@ class _ChatModerationManagementScreenState
         );
       }
     }
+  }
+
+  /// Cargar todos los contactos de un hijo usando Cloud Function
+  /// Esto evita problemas de permisos con Firestore Rules
+  Future<void> _loadContactsForChild(String childId) async {
+    if (_loadingByChild[childId] == true) return;
+
+    setState(() {
+      _loadingByChild[childId] = true;
+    });
+
+    try {
+      ReleaseLogger.log('Cargando contactos para hijo $childId via Cloud Function', tag: 'ChatModerationScreen');
+
+      // Llamar a la Cloud Function que tiene permisos de Admin
+      final callable = FirebaseFunctions.instance.httpsCallable('getChildContactsForModeration');
+      final result = await callable.call({'childId': childId});
+
+      // Convertir el resultado a Map<String, dynamic> de forma segura
+      final data = Map<String, dynamic>.from(result.data as Map);
+      final success = data['success'] as bool? ?? false;
+
+      if (!success) {
+        throw Exception('La función retornó error');
+      }
+
+      final contactsList = (data['contacts'] as List<dynamic>?) ?? [];
+      final List<_ContactWithModeration> contacts = [];
+
+      for (final contactData in contactsList) {
+        // Convertir cada contacto a Map<String, dynamic>
+        final map = Map<String, dynamic>.from(contactData as Map);
+        contacts.add(_ContactWithModeration(
+          contactId: map['contactId'] as String,
+          childId: map['childId'] as String,
+          chatId: map['chatId'] as String,
+          name: map['name'] as String? ?? 'Usuario',
+          photoURL: map['photoURL'] as String?,
+          moderationEnabled: map['moderationEnabled'] as bool? ?? false,
+          moderationLevel: map['moderationLevel'] as String? ?? 'high',
+          blockedCount: (map['blockedCount'] as num?)?.toInt() ?? 0,
+        ));
+      }
+
+      ReleaseLogger.log('Cargados ${contacts.length} contactos para hijo $childId', tag: 'ChatModerationScreen');
+
+      if (mounted) {
+        setState(() {
+          _contactsByChild[childId] = contacts;
+          _loadingByChild[childId] = false;
+        });
+      }
+    } catch (e) {
+      ReleaseLogger.error('Error cargando contactos para hijo $childId: $e', tag: 'ChatModerationScreen');
+      if (mounted) {
+        setState(() {
+          _loadingByChild[childId] = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error cargando contactos: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  String _generateChatId(String userId1, String userId2) {
+    final sortedIds = [userId1, userId2]..sort();
+    return '${sortedIds[0]}_${sortedIds[1]}';
+  }
+
+  /// Filtrar contactos localmente
+  List<_ContactWithModeration> _getFilteredContacts(String childId) {
+    final contacts = _contactsByChild[childId] ?? [];
+
+    return contacts.where((contact) {
+      // Filtro por nombre
+      if (_searchQuery.isNotEmpty) {
+        if (!contact.name.toLowerCase().contains(_searchQuery)) {
+          return false;
+        }
+      }
+
+      // Filtro por estado
+      if (_filterStatus == 'active' && !contact.moderationEnabled) {
+        return false;
+      }
+      if (_filterStatus == 'inactive' && contact.moderationEnabled) {
+        return false;
+      }
+
+      return true;
+    }).toList();
   }
 
   @override
@@ -111,86 +255,11 @@ class _ChatModerationManagementScreenState
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        // Barra de búsqueda y filtros
+        _buildSearchAndFilters(colorScheme, isDarkMode),
+        const SizedBox(height: 16),
         // Card informativo sobre la moderación con IA
-        Card(
-          color: colorScheme.primaryContainer.withValues(alpha: 0.3),
-          margin: const EdgeInsets.only(bottom: 20),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                      Icons.info_outline,
-                      color: colorScheme.primary,
-                      size: 24,
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        '¿Qué es la Moderación con IA?',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: colorScheme.onSurface,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  'La moderación con IA analiza automáticamente los mensajes usando Google Gemini para detectar:',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: colorScheme.onSurface.withValues(alpha: 0.8),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                _buildBulletPoint('Bullying y acoso', colorScheme),
-                _buildBulletPoint('Contenido sexual o inapropiado', colorScheme),
-                _buildBulletPoint('Grooming y manipulación', colorScheme),
-                _buildBulletPoint('Violencia o amenazas', colorScheme),
-                _buildBulletPoint('Lenguaje ofensivo', colorScheme),
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.orange.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                      color: Colors.orange.withValues(alpha: 0.3),
-                      width: 1,
-                    ),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(
-                        Icons.warning_amber_rounded,
-                        color: Colors.orange[700],
-                        size: 20,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Importante: La IA no es 100% precisa. Puede bloquear mensajes seguros o no detectar todo el contenido inapropiado. Se recomienda mantener comunicación abierta con tus hijos.',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: colorScheme.onSurface.withValues(alpha: 0.9),
-                            height: 1.4,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
+        _buildInfoCard(colorScheme),
         // Lista de hijos
         ...List.generate(
           _childrenIds.length,
@@ -200,27 +269,166 @@ class _ChatModerationManagementScreenState
     );
   }
 
+  Widget _buildInfoCard(ColorScheme colorScheme) {
+    return Card(
+      color: colorScheme.primaryContainer.withValues(alpha: 0.3),
+      margin: const EdgeInsets.only(bottom: 20),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.info_outline, color: colorScheme.primary, size: 24),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    '¿Qué es la Moderación con IA?',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: colorScheme.onSurface,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'La moderación con IA analiza automáticamente los mensajes para detectar:',
+              style: TextStyle(
+                fontSize: 14,
+                color: colorScheme.onSurface.withValues(alpha: 0.8),
+              ),
+            ),
+            const SizedBox(height: 8),
+            _buildBulletPoint('Bullying y acoso', colorScheme),
+            _buildBulletPoint('Contenido sexual o inapropiado', colorScheme),
+            _buildBulletPoint('Grooming y manipulación', colorScheme),
+            _buildBulletPoint('Violencia o amenazas', colorScheme),
+            _buildBulletPoint('Lenguaje ofensivo', colorScheme),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.orange.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: Colors.orange.withValues(alpha: 0.3),
+                  width: 1,
+                ),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.warning_amber_rounded, color: Colors.orange[700], size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Importante: La IA no es 100% precisa. Puede bloquear mensajes seguros o no detectar todo el contenido inapropiado.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: colorScheme.onSurface.withValues(alpha: 0.9),
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSearchAndFilters(ColorScheme colorScheme, bool isDarkMode) {
+    return Column(
+      children: [
+        TextField(
+          controller: _searchController,
+          decoration: InputDecoration(
+            hintText: 'Buscar contacto por nombre...',
+            prefixIcon: Icon(Icons.search, color: colorScheme.onSurfaceVariant),
+            suffixIcon: _searchQuery.isNotEmpty
+                ? IconButton(
+                    icon: Icon(Icons.clear, color: colorScheme.onSurfaceVariant),
+                    onPressed: () => _searchController.clear(),
+                  )
+                : null,
+            filled: true,
+            fillColor: isDarkMode
+                ? colorScheme.surfaceContainerHighest
+                : Colors.grey[100],
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide.none,
+            ),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          ),
+        ),
+        const SizedBox(height: 12),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              _buildFilterChip(label: 'Todos', value: 'all', colorScheme: colorScheme),
+              const SizedBox(width: 8),
+              _buildFilterChip(label: 'Activos', value: 'active', colorScheme: colorScheme, icon: Icons.shield),
+              const SizedBox(width: 8),
+              _buildFilterChip(label: 'Inactivos', value: 'inactive', colorScheme: colorScheme, icon: Icons.shield_outlined),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFilterChip({
+    required String label,
+    required String value,
+    required ColorScheme colorScheme,
+    IconData? icon,
+  }) {
+    final isSelected = _filterStatus == value;
+    return FilterChip(
+      label: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 16, color: isSelected ? colorScheme.onPrimary : colorScheme.onSurfaceVariant),
+            const SizedBox(width: 4),
+          ],
+          Text(label),
+        ],
+      ),
+      selected: isSelected,
+      onSelected: (selected) {
+        setState(() {
+          _filterStatus = selected ? value : 'all';
+        });
+      },
+      selectedColor: colorScheme.primary,
+      checkmarkColor: colorScheme.onPrimary,
+      labelStyle: TextStyle(
+        color: isSelected ? colorScheme.onPrimary : colorScheme.onSurfaceVariant,
+        fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+      ),
+    );
+  }
+
   Widget _buildBulletPoint(String text, ColorScheme colorScheme) {
     return Padding(
       padding: const EdgeInsets.only(left: 8, top: 4),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            '• ',
-            style: TextStyle(
-              fontSize: 14,
-              color: colorScheme.primary,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
+          Text('• ', style: TextStyle(fontSize: 14, color: colorScheme.primary, fontWeight: FontWeight.bold)),
           Expanded(
             child: Text(
               text,
-              style: TextStyle(
-                fontSize: 13,
-                color: colorScheme.onSurface.withValues(alpha: 0.8),
-              ),
+              style: TextStyle(fontSize: 13, color: colorScheme.onSurface.withValues(alpha: 0.8)),
             ),
           ),
         ],
@@ -251,22 +459,18 @@ class _ChatModerationManagementScreenState
             leading: CircleAvatar(
               radius: 24,
               backgroundColor: colorScheme.primaryContainer,
-              backgroundImage:
-                  childPhotoURL != null ? NetworkImage(childPhotoURL) : null,
+              backgroundImage: childPhotoURL != null ? NetworkImage(childPhotoURL) : null,
               child: childPhotoURL == null
                   ? Icon(Icons.child_care, color: colorScheme.onPrimaryContainer)
                   : null,
             ),
             title: Text(
               childName,
-              style: const TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
-              ),
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
             ),
             subtitle: const Text('Toca para ver sus contactos'),
             children: [
-              _buildApprovedContactsList(childId, colorScheme, isDarkMode),
+              _buildContactsList(childId, colorScheme, isDarkMode),
             ],
           ),
         );
@@ -274,398 +478,274 @@ class _ChatModerationManagementScreenState
     );
   }
 
-  Widget _buildApprovedContactsList(
-    String childId,
-    ColorScheme colorScheme,
-    bool isDarkMode,
-  ) {
-    return StreamBuilder<QuerySnapshot>(
-      stream: _firestore
-          .collection('contact_requests')
-          .where('childId', isEqualTo: childId)
-          .where('status', isEqualTo: 'approved')
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (snapshot.hasError) {
-          return Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(
-              'Error cargando contactos: ${snapshot.error}',
-              style: TextStyle(color: colorScheme.error),
-            ),
-          );
-        }
+  Widget _buildContactsList(String childId, ColorScheme colorScheme, bool isDarkMode) {
+    final isLoading = _loadingByChild[childId] ?? true;
 
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Padding(
-            padding: EdgeInsets.all(16),
-            child: Center(child: CircularProgressIndicator()),
-          );
-        }
+    if (isLoading) {
+      return const Padding(
+        padding: EdgeInsets.all(16),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
 
-        final approvedContacts = snapshot.data?.docs ?? [];
+    final allContacts = _contactsByChild[childId] ?? [];
+    final filteredContacts = _getFilteredContacts(childId);
 
-        if (approvedContacts.isEmpty) {
-          return Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(
-              'No tiene contactos aprobados aún',
-              style: TextStyle(
-                color: colorScheme.onSurfaceVariant,
-                fontSize: 14,
+    if (allContacts.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.all(16),
+        child: Text(
+          'No tiene contactos aprobados aún',
+          style: TextStyle(color: colorScheme.onSurfaceVariant, fontSize: 14),
+          textAlign: TextAlign.center,
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Row(
+            children: [
+              Text(
+                '${filteredContacts.length} de ${allContacts.length} contactos',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
+              const Spacer(),
+              IconButton(
+                icon: Icon(Icons.refresh, size: 20, color: colorScheme.primary),
+                onPressed: () => _loadContactsForChild(childId),
+                tooltip: 'Actualizar lista',
+              ),
+            ],
+          ),
+        ),
+        if (filteredContacts.isEmpty)
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              'No hay contactos que coincidan con los filtros',
+              style: TextStyle(color: colorScheme.onSurfaceVariant, fontSize: 14),
               textAlign: TextAlign.center,
             ),
-          );
-        }
-
-        return ListView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: approvedContacts.length,
-          itemBuilder: (context, index) {
-            final contactDoc = approvedContacts[index];
-            final contactData = contactDoc.data() as Map<String, dynamic>;
-            final contactId = contactData['contactId'] as String;
-
-            return _buildContactTile(
-              childId: childId,
-              contactId: contactId,
-              colorScheme: colorScheme,
-              isDarkMode: isDarkMode,
-            );
-          },
-        );
-      },
+          )
+        else
+          ListView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: filteredContacts.length,
+            itemBuilder: (context, index) {
+              return _buildContactTile(filteredContacts[index], colorScheme);
+            },
+          ),
+      ],
     );
   }
 
-  Widget _buildContactTile({
-    required String childId,
-    required String contactId,
-    required ColorScheme colorScheme,
-    required bool isDarkMode,
-  }) {
-    // Generar chatId (mismo formato que en la app)
-    final chatId = _ContactTileWidgetState._generateChatId(childId, contactId);
-
-    return _ContactTileWidget(
-      key: ValueKey(chatId), // Usar chatId como key para evitar reconstrucciones
-      chatId: chatId,
-      contactId: contactId,
-      colorScheme: colorScheme,
-      firestore: _firestore,
-    );
-  }
-}
-
-/// Widget separado para evitar reconstrucciones innecesarias del StreamBuilder
-class _ContactTileWidget extends StatefulWidget {
-  final String chatId;
-  final String contactId;
-  final ColorScheme colorScheme;
-  final FirebaseFirestore firestore;
-
-  const _ContactTileWidget({
-    super.key,
-    required this.chatId,
-    required this.contactId,
-    required this.colorScheme,
-    required this.firestore,
-  });
-
-  @override
-  State<_ContactTileWidget> createState() => _ContactTileWidgetState();
-}
-
-class _ContactTileWidgetState extends State<_ContactTileWidget> with AutomaticKeepAliveClientMixin {
-  @override
-  bool get wantKeepAlive => true;
-
-  bool? _pendingModerationState; // Estado temporal mientras se actualiza
-
-  static String _generateChatId(String userId1, String userId2) {
-    final sortedIds = [userId1, userId2]..sort();
-    return '${sortedIds[0]}_${sortedIds[1]}';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    super.build(context); // Importante: llamar a super.build cuando usas AutomaticKeepAliveClientMixin
-    // Primero obtenemos los datos del usuario (contacto)
-    return StreamBuilder<DocumentSnapshot>(
-      stream: widget.firestore.collection('users').doc(widget.contactId).snapshots(),
-      builder: (context, userSnapshot) {
-        final userData = userSnapshot.data?.data() as Map<String, dynamic>?;
-        final contactName = userData?['name'] ?? 'Usuario';
-        final contactPhotoURL = userData?['photoURL'] as String?;
-
-        // Luego obtenemos los datos del chat
-        return StreamBuilder<DocumentSnapshot>(
-          stream: widget.firestore.collection('chats').doc(widget.chatId).snapshots(),
-          builder: (context, chatSnapshot) {
-            final chatData = chatSnapshot.data?.data() as Map<String, dynamic>?;
-            final serverModerationEnabled = chatData?['moderationEnabled'] ?? false;
-            final serverModerationLevel = chatData?['moderationLevel'] ?? 'high';
-
-            // Usar el estado pendiente si existe (durante actualización),
-            // de lo contrario usar el valor del servidor
-            // Solo usar serverModerationEnabled si tenemos datos válidos del snapshot
-            final bool displayValue;
-            if (_pendingModerationState != null) {
-              // Hay una actualización pendiente, mostrar el estado pendiente
-              displayValue = _pendingModerationState!;
-            } else if (chatSnapshot.hasData && chatSnapshot.data != null && chatSnapshot.data!.exists) {
-              // Tenemos datos válidos del servidor, usarlos
-              displayValue = serverModerationEnabled;
-
-              // Si el servidor confirmó el cambio, limpiar el estado pendiente
-              if (_pendingModerationState != null && _pendingModerationState == serverModerationEnabled) {
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (mounted) {
-                    setState(() {
-                      _pendingModerationState = null;
-                    });
-                  }
-                });
-              }
-            } else {
-              // No hay datos válidos, mantener el estado pendiente o usar false por defecto
-              displayValue = _pendingModerationState ?? false;
-            }
-
-            // Contar mensajes bloqueados
-            return StreamBuilder<QuerySnapshot>(
-              stream: widget.firestore
-                  .collection('chats')
-                  .doc(widget.chatId)
-                  .collection('messages')
-                  .where('moderationStatus', isEqualTo: 'blocked')
-                  .snapshots(),
-              builder: (context, blockedSnapshot) {
-                final blockedCount = blockedSnapshot.data?.docs.length ?? 0;
-
-                return Card(
-                  margin: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  child: Column(
-                    children: [
-                      ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: widget.colorScheme.secondaryContainer,
-                          backgroundImage: contactPhotoURL != null ? NetworkImage(contactPhotoURL) : null,
-                          child: contactPhotoURL == null
-                              ? Icon(
-                                  Icons.person,
-                                  color: widget.colorScheme.onSecondaryContainer,
-                                )
-                              : null,
-                        ),
-                        title: Text(contactName),
-                        subtitle: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              displayValue
-                                  ? 'Moderación activa - Nivel: ${_getLevelLabel(serverModerationLevel)}'
-                                  : 'Moderación desactivada',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: displayValue ? Colors.green : widget.colorScheme.onSurfaceVariant,
-                              ),
-                            ),
-                            if (blockedCount > 0)
-                              Text(
-                                '$blockedCount mensaje${blockedCount > 1 ? 's' : ''} bloqueado${blockedCount > 1 ? 's' : ''}',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: Colors.orange,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                          ],
-                        ),
-                        trailing: Switch(
-                          value: displayValue,
-                          onChanged: (value) {
-                            // Actualizar estado pendiente inmediatamente para feedback visual
-                            setState(() {
-                              _pendingModerationState = value;
-                            });
-
-                            // Luego actualizar en el servidor
-                            _toggleModeration(
-                              context: context,
-                              chatId: widget.chatId,
-                              contactName: contactName,
-                              enabled: value,
-                              level: serverModerationLevel,
-                              firestore: widget.firestore,
-                            );
-                          },
-                        ),
-                        onTap: () {
-                          // Navegar a pantalla de detalles de moderación
-                          Navigator.pushNamed(
-                            context,
-                            '/chat_moderation_settings',
-                            arguments: {
-                              'chatId': widget.chatId,
-                              'contactName': contactName,
-                            },
-                          );
-                        },
-                      ),
-                      // Selector de nivel (solo visible cuando moderación está activa)
-                      if (displayValue)
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Nivel de moderación',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: widget.colorScheme.onSurface,
-                                ),
-                              ),
-                              SizedBox(height: 8),
-                              SegmentedButton<String>(
-                                segments: [
-                                  ButtonSegment(
-                                    value: 'high',
-                                    label: Text('Alto', style: TextStyle(fontSize: 12)),
-                                    icon: Icon(Icons.shield, size: 16),
-                                  ),
-                                  ButtonSegment(
-                                    value: 'medium',
-                                    label: Text('Medio', style: TextStyle(fontSize: 12)),
-                                    icon: Icon(Icons.shield_moon, size: 16),
-                                  ),
-                                  ButtonSegment(
-                                    value: 'low',
-                                    label: Text('Bajo', style: TextStyle(fontSize: 12)),
-                                    icon: Icon(Icons.shield_outlined, size: 16),
-                                  ),
-                                ],
-                                selected: {serverModerationLevel},
-                                onSelectionChanged: (Set<String> newSelection) {
-                                  _changeModerationLevel(
-                                    context: context,
-                                    chatId: widget.chatId,
-                                    level: newSelection.first,
-                                    firestore: widget.firestore,
-                                  );
-                                },
-                              ),
-                            ],
-                          ),
-                        ),
-                    ],
+  Widget _buildContactTile(_ContactWithModeration contact, ColorScheme colorScheme) {
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: Column(
+        children: [
+          ListTile(
+            leading: CircleAvatar(
+              backgroundColor: colorScheme.secondaryContainer,
+              backgroundImage: contact.photoURL != null ? NetworkImage(contact.photoURL!) : null,
+              child: contact.photoURL == null
+                  ? Icon(Icons.person, color: colorScheme.onSecondaryContainer)
+                  : null,
+            ),
+            title: Text(contact.name),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  contact.moderationEnabled
+                      ? 'Moderación activa - Nivel: ${_getLevelLabel(contact.moderationLevel)}'
+                      : 'Moderación desactivada',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: contact.moderationEnabled ? Colors.green : colorScheme.onSurfaceVariant,
                   ),
-                );
-              },
-            );
-          },
-        );
-      },
+                ),
+                if (contact.blockedCount > 0)
+                  Text(
+                    '${contact.blockedCount} mensaje${contact.blockedCount > 1 ? 's' : ''} bloqueado${contact.blockedCount > 1 ? 's' : ''}',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Colors.orange,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+              ],
+            ),
+            trailing: Switch(
+              value: contact.moderationEnabled,
+              onChanged: (value) => _toggleModeration(contact, value),
+            ),
+            onTap: () {
+              Navigator.pushNamed(
+                context,
+                '/chat_moderation_settings',
+                arguments: {
+                  'chatId': contact.chatId,
+                  'contactName': contact.name,
+                },
+              );
+            },
+          ),
+          if (contact.moderationEnabled)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Nivel de moderación',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: colorScheme.onSurface,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment(
+                        value: 'high',
+                        label: Text('Alto', style: TextStyle(fontSize: 12)),
+                        icon: Icon(Icons.shield, size: 16),
+                      ),
+                      ButtonSegment(
+                        value: 'medium',
+                        label: Text('Medio', style: TextStyle(fontSize: 12)),
+                        icon: Icon(Icons.shield_moon, size: 16),
+                      ),
+                      ButtonSegment(
+                        value: 'low',
+                        label: Text('Bajo', style: TextStyle(fontSize: 12)),
+                        icon: Icon(Icons.shield_outlined, size: 16),
+                      ),
+                    ],
+                    selected: {contact.moderationLevel},
+                    onSelectionChanged: (Set<String> newSelection) {
+                      _changeModerationLevel(contact, newSelection.first);
+                    },
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
     );
   }
 
   String _getLevelLabel(String level) {
     switch (level) {
-      case 'high':
-        return 'Alto';
-      case 'medium':
-        return 'Medio';
-      case 'low':
-        return 'Bajo';
-      default:
-        return 'Alto';
+      case 'high': return 'Alto';
+      case 'medium': return 'Medio';
+      case 'low': return 'Bajo';
+      default: return 'Alto';
     }
   }
 
-  static Future<void> _toggleModeration({
-    required BuildContext context,
-    required String chatId,
-    required String contactName,
-    required bool enabled,
-    required String level,
-    required FirebaseFirestore firestore,
-  }) async {
+  Future<void> _toggleModeration(_ContactWithModeration contact, bool enabled) async {
+    // Actualizar UI inmediatamente (optimistic update)
+    setState(() {
+      contact.moderationEnabled = enabled;
+    });
+
     try {
-      final currentUserId = FirebaseAuth.instance.currentUser!.uid;
+      // Usar Cloud Function para evitar problemas de permisos
+      final callable = FirebaseFunctions.instance.httpsCallable('updateChildContactModeration');
+      final result = await callable.call({
+        'childId': contact.childId,
+        'contactId': contact.contactId,
+        'chatId': contact.chatId,
+        'enabled': enabled,
+        'level': contact.moderationLevel,
+      });
 
-      // Extraer los IDs de los participantes del chatId
-      final participantIds = chatId.split('_');
+      final data = Map<String, dynamic>.from(result.data as Map);
+      if (data['success'] != true) {
+        throw Exception('Error al actualizar moderación');
+      }
 
-      // Asegurar que el documento del chat existe con los campos necesarios
-      final updateData = {
-        'participants': participantIds, // Necesario para las reglas de seguridad
-        'moderationEnabled': enabled,
-        'moderationLevel': level, // Guardar nivel
-        'moderationParentId': enabled ? currentUserId : null,
-        'moderationEnabledAt': enabled ? FieldValue.serverTimestamp() : null,
-        'updatedAt': FieldValue.serverTimestamp(),
-      };
-
-      await firestore.collection('chats').doc(chatId).set(
-        updateData,
-        SetOptions(merge: true),
-      );
-
-      if (context.mounted) {
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
               enabled
-                  ? 'Moderación activada para $contactName'
-                  : 'Moderación desactivada para $contactName',
+                  ? 'Moderación activada para ${contact.name}'
+                  : 'Moderación desactivada para ${contact.name}',
             ),
             backgroundColor: enabled ? Colors.green : Colors.orange,
           ),
         );
       }
     } catch (e) {
-      if (context.mounted) {
+      // Revertir cambio en caso de error
+      setState(() {
+        contact.moderationEnabled = !enabled;
+      });
+
+      ReleaseLogger.error('Error toggling moderation: $e', tag: 'ChatModerationScreen');
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error: $e'),
-            backgroundColor: Colors.red,
-          ),
+          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
         );
       }
     }
   }
 
-  static Future<void> _changeModerationLevel({
-    required BuildContext context,
-    required String chatId,
-    required String level,
-    required FirebaseFirestore firestore,
-  }) async {
+  Future<void> _changeModerationLevel(_ContactWithModeration contact, String level) async {
+    final oldLevel = contact.moderationLevel;
+
+    // Actualizar UI inmediatamente
+    setState(() {
+      contact.moderationLevel = level;
+    });
+
     try {
-      await firestore.collection('chats').doc(chatId).update({
-        'moderationLevel': level,
-        'updatedAt': FieldValue.serverTimestamp(),
+      // Usar Cloud Function para evitar problemas de permisos
+      final callable = FirebaseFunctions.instance.httpsCallable('updateChildContactModeration');
+      final result = await callable.call({
+        'childId': contact.childId,
+        'contactId': contact.contactId,
+        'chatId': contact.chatId,
+        'enabled': contact.moderationEnabled,
+        'level': level,
       });
 
-      if (context.mounted) {
+      final data = Map<String, dynamic>.from(result.data as Map);
+      if (data['success'] != true) {
+        throw Exception('Error al actualizar nivel de moderación');
+      }
+
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
+          const SnackBar(
             content: Text('Nivel de moderación actualizado'),
             backgroundColor: Colors.green,
           ),
         );
       }
     } catch (e) {
-      if (context.mounted) {
+      // Revertir cambio en caso de error
+      setState(() {
+        contact.moderationLevel = oldLevel;
+      });
+
+      ReleaseLogger.error('Error changing moderation level: $e', tag: 'ChatModerationScreen');
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error: $e'),
-            backgroundColor: Colors.red,
-          ),
+          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
         );
       }
     }

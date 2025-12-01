@@ -19,6 +19,9 @@ class AudioPlayerWidget extends StatefulWidget {
   final List<double>? waveformData; // Waveform ya procesado (optimistic)
   final bool isLocal; // Si el audio es local (aún no subido)
 
+  // AI-generated audio indicator
+  final bool isAiGenerated;
+
   const AudioPlayerWidget({
     super.key,
     required this.audioUrl,
@@ -26,6 +29,7 @@ class AudioPlayerWidget extends StatefulWidget {
     required this.colorScheme,
     this.waveformData,
     this.isLocal = false,
+    this.isAiGenerated = false,
   });
 
   @override
@@ -373,7 +377,7 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
       });
 
       try {
-        // Si es archivo local, usar DeviceFileSource, sino UrlSource
+        // Si es archivo local, usar DeviceFileSource
         if (widget.isLocal) {
           await _audioPlayer.play(DeviceFileSource(widget.audioUrl));
         } else {
@@ -427,90 +431,126 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
       padding: const EdgeInsets.all(8),
       child: Row(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-                // Botón play/pause o spinner
-                _isLoading
-                    ? Padding(
-                        padding: const EdgeInsets.all(8.0),
-                        child: SizedBox(
-                          width: 24,
-                          height: 24,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              widget.isMe ? Colors.white : widget.colorScheme.primary,
-                            ),
-                          ),
-                        ),
-                      )
-                    : IconButton(
-                        icon: Icon(
-                          _isPlaying ? Icons.pause : Icons.play_arrow,
-                          color: widget.isMe ? Colors.white : widget.colorScheme.primary,
-                        ),
-                        onPressed: _togglePlayPause,
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
+          // Botón play/pause o spinner
+          _isLoading
+              ? Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        widget.isMe ? Colors.white : widget.colorScheme.primary,
                       ),
-                const SizedBox(width: 8),
-                // Barra de progreso con waveform
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      GestureDetector(
-                        onTapDown: (details) async {
-                          if (_duration.inSeconds > 0) {
-                            final box = context.findRenderObject() as RenderBox?;
-                            if (box != null) {
-                              final localPosition = box.globalToLocal(details.globalPosition);
-                              final width = box.size.width - 80; // Restar espacio del botón y padding
-                              final relativePosition = (localPosition.dx - 40) / width;
-                              final clampedPosition = relativePosition.clamp(0.0, 1.0);
-                              final seekPosition = Duration(
-                                seconds: (_duration.inSeconds * clampedPosition).round(),
-                              );
-                              await _audioPlayer.seek(seekPosition);
-                            }
-                          }
-                        },
-                        child: _AudioWaveform(
-                          progress: _duration.inMilliseconds > 0
-                              ? _position.inMilliseconds / _duration.inMilliseconds
-                              : 0.0,
-                          activeColor: widget.isMe
-                              ? Colors.white
-                              : widget.colorScheme.primary,
-                          inactiveColor: widget.isMe
-                              ? Colors.white.withValues(alpha: 0.3)
-                              : widget.colorScheme.primary.withValues(alpha: 0.3),
-                          waveformData: _waveformData, // Pasar datos reales
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                        child: Text(
-                          '${_formatDuration(_position)} / ${_formatDuration(_duration)}',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: widget.isMe
-                                ? Colors.white.withValues(alpha: 0.7)
-                                : widget.colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ),
-                    ],
+                    ),
+                  ),
+                )
+              : IconButton(
+                  icon: Icon(
+                    _isPlaying ? Icons.pause : Icons.play_arrow,
+                    color: widget.isMe ? Colors.white : widget.colorScheme.primary,
+                  ),
+                  onPressed: _togglePlayPause,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                ),
+          const SizedBox(width: 8),
+          // Barra de progreso con waveform
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                GestureDetector(
+                  onTapDown: (details) async {
+                    if (_duration.inSeconds > 0) {
+                      final box = context.findRenderObject() as RenderBox?;
+                      if (box != null) {
+                        final localPosition = box.globalToLocal(details.globalPosition);
+                        final width = box.size.width - 80; // Restar espacio del botón y padding
+                        final relativePosition = (localPosition.dx - 40) / width;
+                        final clampedPosition = relativePosition.clamp(0.0, 1.0);
+                        final seekPosition = Duration(
+                          seconds: (_duration.inSeconds * clampedPosition).round(),
+                        );
+                        await _audioPlayer.seek(seekPosition);
+                      }
+                    }
+                  },
+                  child: _AudioWaveform(
+                    progress: _duration.inMilliseconds > 0
+                        ? _position.inMilliseconds / _duration.inMilliseconds
+                        : 0.0,
+                    activeColor: widget.isMe
+                        ? Colors.white
+                        : widget.colorScheme.primary,
+                    inactiveColor: widget.isMe
+                        ? Colors.white.withValues(alpha: 0.3)
+                        : widget.colorScheme.primary.withValues(alpha: 0.3),
+                    waveformData: _waveformData, // Pasar datos reales
                   ),
                 ),
-                // Icono de audio
-                Icon(
-                  Icons.mic,
-                  size: 20,
-                  color: widget.isMe
-                      ? Colors.white.withValues(alpha: 0.7)
-                      : widget.colorScheme.primary.withValues(alpha: 0.7),
+                const SizedBox(height: 4),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Text(
+                    '${_formatDuration(_position)} / ${_formatDuration(_duration)}',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: widget.isMe
+                          ? Colors.white.withValues(alpha: 0.7)
+                          : widget.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
                 ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          // AI badge or mic icon
+          if (widget.isAiGenerated)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: widget.isMe
+                    ? Colors.white.withValues(alpha: 0.2)
+                    : widget.colorScheme.primary.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.auto_awesome,
+                    size: 12,
+                    color: widget.isMe
+                        ? Colors.white.withValues(alpha: 0.9)
+                        : widget.colorScheme.primary,
+                  ),
+                  const SizedBox(width: 2),
+                  Text(
+                    'IA',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: widget.isMe
+                          ? Colors.white.withValues(alpha: 0.9)
+                          : widget.colorScheme.primary,
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else
+            Icon(
+              Icons.mic,
+              size: 20,
+              color: widget.isMe
+                  ? Colors.white.withValues(alpha: 0.7)
+                  : widget.colorScheme.primary.withValues(alpha: 0.7),
+            ),
         ],
       ),
     );

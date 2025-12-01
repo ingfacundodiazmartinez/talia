@@ -7,6 +7,7 @@ import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import '../controllers/group_chat_controller.dart';
+import '../utils/release_logger.dart';
 import '../notification_service.dart';
 import '../services/reaction_service.dart';
 import '../services/message_status_helper.dart';
@@ -89,37 +90,45 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
 
   /// Inicializar grupo de forma asíncrona para evitar race condition con notificaciones
   Future<void> _initializeGroupChat() async {
-    // 🔒 PASO 1: Establecer chat actual SÍNCRONAMENTE antes de inicializar controller
-    // Esto previene que lleguen notificaciones push mientras el usuario ya está en el grupo
-    await NotificationService().setCurrentChat(widget.groupId);
+    try {
+      // 🔒 PASO 1: Establecer chat actual antes de inicializar controller
+      await NotificationService().setCurrentChat(widget.groupId);
 
-    // 🗑️ PASO 2: Limpiar notificaciones de este grupo al abrirlo
-    NotificationService().clearGroupNotifications(widget.groupId);
+      // 🗑️ PASO 2: Limpiar notificaciones de este grupo al abrirlo
+      NotificationService().clearGroupNotifications(widget.groupId);
 
-    // 🔒 PASO 3: Ahora inicializar controller sabiendo que SharedPreferences ya está actualizado
-    _controller = GroupChatController(
-      groupId: widget.groupId,
-      groupName: widget.groupName,
-    );
-    await _controller.initialize();
-    _scrollController.addListener(_onScroll);
-    _messageController.addListener(_onTypingChanged);
+      // 🔒 PASO 3: Inicializar controller (la verificación de auth está en el controller)
+      _controller = GroupChatController(
+        groupId: widget.groupId,
+        groupName: widget.groupName,
+      );
+      await _controller.initialize();
+      _scrollController.addListener(_onScroll);
+      _messageController.addListener(_onTypingChanged);
 
-    // Marcar mensajes como entregados y leídos al abrir el grupo
-    _markMessagesAsDeliveredAndSeen();
+      // Marcar mensajes como entregados y leídos al abrir el grupo
+      _markMessagesAsDeliveredAndSeen();
 
-    // Scroll a mensaje específico si se proporciona
-    if (widget.scrollToMessageId != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _scrollToSpecificMessage(widget.scrollToMessageId!);
-      });
-    }
-
-    // ✅ CRITICAL FIX: Marcar controller como inicializado y actualizar UI
-    if (mounted) {
-      setState(() {
-        _controllerInitialized = true;
-      });
+      // Scroll a mensaje específico si se proporciona
+      if (widget.scrollToMessageId != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _scrollToSpecificMessage(widget.scrollToMessageId!);
+        });
+      }
+    } catch (e) {
+      ReleaseLogger.error('Error inicializando grupo: $e', tag: 'GroupChatScreen');
+      // En caso de error, crear un controller básico
+      _controller = GroupChatController(
+        groupId: widget.groupId,
+        groupName: widget.groupName,
+      );
+    } finally {
+      // ✅ SIEMPRE marcar como inicializado para evitar spinner infinito
+      if (mounted) {
+        setState(() {
+          _controllerInitialized = true;
+        });
+      }
     }
   }
 
@@ -302,10 +311,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   Future<void> _handleSendImage(ImageSource source) async {
     Navigator.pop(context); // Cerrar bottom sheet
 
-    final success = await _controller.sendImage(
-      imagePath: '',
-      fromCamera: source == ImageSource.camera,
-    );
+    final success = await _controller.sendImage(source: source);
 
     if (!success && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -423,19 +429,17 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
 
       if (path != null && path.isNotEmpty) {
         // 1. Procesar waveform inmediatamente
-
         final AudioProcessingService audioProcessing = AudioProcessingService();
         final File audioFile = File(path);
         final waveformData = await audioProcessing.extractWaveform(audioFile);
 
-
-        // 2. Enviar con optimistic update (muestra inmediatamente)
-        final messageId = await _controller.sendAudioOptimistic(
+        // 2. Enviar via Cloud Function (seguro con TTL automático)
+        final success = await _controller.sendAudio(
           audioPath: path,
           waveformData: waveformData,
         );
 
-        if (messageId == null && mounted) {
+        if (!success && mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text('Error al enviar audio'),
@@ -445,7 +449,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
         }
       }
     } catch (e) {
-
+      // Error al detener grabación
     }
   }
 
@@ -634,44 +638,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
       );
     }
 
-    return StreamBuilder<QuerySnapshot>(
-      stream: _controller.watchRecentMessages(),
-      builder: (context, snapshot) {
-        if (snapshot.hasError) {
-          // Si es un error de permisos (usuario ya no es miembro), cerrar la pantalla
-          final error = snapshot.error.toString();
-          if (error.contains('PERMISSION_DENIED') || error.contains('Missing or insufficient permissions')) {
-            // Cerrar inmediatamente sin mostrar spinner
-            Future.microtask(() {
-              if (mounted && Navigator.of(context).canPop()) {
-                Navigator.of(context).pop();
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('Ya no eres miembro de este grupo'),
-                      duration: Duration(seconds: 2),
-                    ),
-                  );
-                }
-              }
-            });
-            // Retornar widget vacío en lugar de spinner
-            return SizedBox.shrink();
-          }
-          return Center(child: Text('Error: ${snapshot.error}'));
-        }
-
-        if (snapshot.connectionState == ConnectionState.waiting &&
-            _loadedMessages.isEmpty) {
-          return const Center(child: CircularProgressIndicator());
-        }
-
-        final recentMessages = snapshot.data?.docs ?? [];
-        final recentIds = recentMessages.map((doc) => doc.id).toSet();
-        final olderMessages =
-            _loadedMessages.where((doc) => !recentIds.contains(doc.id)).toList();
-
-        final allMessages = [...recentMessages, ...olderMessages];
+    // ✅ OPTIMISTIC: Usar ListenableBuilder para UI reactiva
+    return ListenableBuilder(
+      listenable: _controller,
+      builder: (context, child) {
+        final allMessages = _controller.messages;
 
         if (allMessages.isEmpty) {
           return Center(
@@ -723,141 +694,107 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
           },
           itemBuilder: (context, index) {
             if (index < allMessages.length) {
-              final messageDoc = allMessages[index];
-              final messageData = messageDoc.data() as Map<String, dynamic>;
-              final senderId = messageData['senderId'] ?? '';
+              // ✅ OPTIMISTIC: Ahora usamos ChatMessage directamente
+              final message = allMessages[index];
+              final senderId = message.senderId;
               final isMe = senderId == _controller.currentUserId;
-              final timestamp = messageData['timestamp'] as Timestamp?;
+              final timestamp = message.timestamp;
               final timeString = timestamp != null
                   ? '${timestamp.toDate().hour}:${timestamp.toDate().minute.toString().padLeft(2, '0')}'
                   : '';
 
               // Verificar si necesitamos mostrar separador de fecha
-              final bool showDateSeparator = _shouldShowDateSeparator(index, allMessages);
+              final bool showDateSeparator = _shouldShowDateSeparatorFromMessages(index, allMessages);
 
-              // Parse moderation status from Firestore
-              ModerationStatus? moderationStatus;
-              final modStatusString = messageData['moderationStatus'] as String?;
-              if (modStatusString != null) {
-                switch (modStatusString) {
-                  case 'approved':
-                    moderationStatus = ModerationStatus.approved;
-                    break;
-                  case 'blocked':
-                    moderationStatus = ModerationStatus.blocked;
-                    break;
-                  case 'pending':
-                    moderationStatus = ModerationStatus.pending;
-                    break;
-                }
-              }
+              // ✅ Usar estado de moderación del ChatMessage
+              final moderationStatus = message.moderationStatus;
 
               // ✅ Usar datos cacheados del controller (sin streams anidados)
               final realName = _controller.getUserName(senderId);
               final photoURL = _controller.getUserPhoto(senderId);
               final displayName = realName; // Por ahora sin alias para evitar más streams
-              final isHighlighted = _highlightedMessageId == messageDoc.id;
+              final isHighlighted = _highlightedMessageId == message.id;
 
-              // ✅ Calcular estado del mensaje usando datos cacheados del controller
-              MessageStatus messageStatus;
-              final members = _controller.memberIds;
+              // ✅ OPTIMISTIC: Usar estado del mensaje directamente
+              final messageStatus = message.status ?? MessageStatus.sent;
 
-              // Simplificar lógica de estado para evitar stream del grupo
-              if (members.isNotEmpty) {
-                final activeMembers = members; // Asumir todos activos para simplicidad
-                final membersWithReadReceipts = members; // Asumir todos con read receipts
+              Widget messageBubble = MessageBubble(
+                key: ValueKey('msg_${message.id}'),
+                messageId: message.id,
+                chatId: widget.groupId,
+                text: message.text,
+                imageUrl: message.imageUrl,
+                videoUrl: message.videoUrl,
+                audioUrl: message.audioUrl,
+                localPath: message.localPath,
+                type: message.type, // ✅ FIX: Pasar type para detectar imagen/video/audio optimistas
+                waveformData: message.waveformData,
+                status: messageStatus,
+                replyTo: message.replyTo,
+                reactions: message.reactions,
+                isMe: isMe,
+                time: timeString,
+                senderId: senderId,
+                senderName: displayName,
+                timestamp: timestamp,
+                moderationStatus: moderationStatus,
+                moderationReason: message.moderationReason,
+                moderationSeverity: message.moderationSeverity,
+                originalText: message.originalText,
+                isGroupChat: true,
+                senderPhotoURL: photoURL,
+                isForwarded: message.isForwarded ?? false,
+                originalContactName: message.originalContactName,
+                contactName: widget.groupName,
+                onReply: () {
+                  setState(() {
+                    _replyingTo = {
+                      'id': message.id,
+                      'text': message.text ?? '',
+                      'senderId': senderId,
+                      'senderName': displayName,
+                      if (message.imageUrl != null) 'imageUrl': message.imageUrl,
+                      if (message.videoUrl != null) 'videoUrl': message.videoUrl,
+                      if (message.audioUrl != null) 'audioUrl': message.audioUrl,
+                    };
+                  });
+                },
+                onReplyTap: (String messageId) {
+                  _scrollToSpecificMessage(messageId);
+                },
+                onLongPress: _showReactionPicker,
+                onDelete: _handleDeleteMessage,
+                onEdit: _handleEditBlockedMessage,
+                onViewMessageInfo: isMe
+                    ? () => _navigateToMessageInfo(message.id)
+                    : null,
+                isFavorite: _controller.favoriteIds.contains(message.id),  // ✅ NEW
+                onFavoriteToggled: () => _controller.refreshFavorites(),  // ✅ NEW
+              );
 
-                messageStatus = MessageStatusHelper.calculateGroupStatus(
-                  data: messageData,
-                  senderId: senderId,
-                  hasServerTimestamp: timestamp != null,
-                  activeMembers: activeMembers,
-                  membersWithReadReceipts: membersWithReadReceipts,
-                );
-              } else {
-                messageStatus = MessageStatusHelper.calculateStatus(
-                  data: messageData,
-                  senderId: senderId,
-                  hasServerTimestamp: timestamp != null,
+              // Wrap con highlight si es necesario
+              if (isHighlighted) {
+                messageBubble = Container(
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.3),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: messageBubble,
                 );
               }
 
-                          Widget messageBubble = MessageBubble(
-                            key: ValueKey('msg_${messageDoc.id}'),
-                            messageId: messageDoc.id,
-                            chatId: widget.groupId,
-                            text: messageData['text'],
-                            imageUrl: messageData['imageUrl'],
-                            videoUrl: messageData['videoUrl'],
-                            audioUrl: messageData['audioUrl'],
-                            localPath: messageData['localPath'],
-                            waveformData: messageData['waveformData'] != null
-                                ? (messageData['waveformData'] as List).map((e) => (e as num).toDouble()).toList()
-                                : null,
-                            status: messageStatus,
-                        replyTo: messageData['replyTo'],
-                        reactions: messageData['reactions'],
-                        isMe: isMe,
-                        time: timeString,
-                        senderId: senderId,
-                        senderName: displayName,
-                        timestamp: timestamp,
-                        moderationStatus: moderationStatus,
-                        moderationReason: messageData['moderationReason'] as String?,
-                        moderationSeverity: messageData['moderationSeverity'] as String?,
-                        originalText: messageData['originalText'] as String?,
-                        isGroupChat: true,
-                        senderPhotoURL: photoURL,
-                        isForwarded: messageData['isForwarded'] ?? false,
-                        originalContactName: messageData['originalContactName'] as String?,
-                        contactName: widget.groupName,
-                        onReply: () {
-                          setState(() {
-                            _replyingTo = {
-                              'id': messageDoc.id,
-                              'text': messageData['text'] ?? '',
-                              'senderId': senderId,
-                              'senderName': displayName,
-                              if (messageData['imageUrl'] != null) 'imageUrl': messageData['imageUrl'],
-                              if (messageData['videoUrl'] != null) 'videoUrl': messageData['videoUrl'],
-                              if (messageData['audioUrl'] != null) 'audioUrl': messageData['audioUrl'],
-                            };
-                          });
-                        },
-                        onReplyTap: (String messageId) {
-                          _scrollToSpecificMessage(messageId);
-                        },
-                        onLongPress: _showReactionPicker,
-                        onDelete: _handleDeleteMessage,
-                        onEdit: _handleEditBlockedMessage,
-                        onViewMessageInfo: isMe
-                            ? () => _navigateToMessageInfo(messageDoc.id)
-                            : null,
-                      );
+              // Agregar separador de fecha si es necesario
+              if (showDateSeparator && timestamp != null) {
+                return Column(
+                  children: [
+                    _buildDateSeparator(timestamp.toDate()),
+                    SizedBox(height: 16),
+                    messageBubble,
+                  ],
+                );
+              }
 
-                      // Wrap con highlight si es necesario
-                      if (isHighlighted) {
-                        messageBubble = Container(
-                          decoration: BoxDecoration(
-                            color: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.3),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: messageBubble,
-                        );
-                      }
-
-                      // Agregar separador de fecha si es necesario
-                      if (showDateSeparator && timestamp != null) {
-                        return Column(
-                          children: [
-                            _buildDateSeparator(timestamp.toDate()),
-                            SizedBox(height: 16),
-                            messageBubble,
-                          ],
-                        );
-                      }
-
-                      return messageBubble;
+              return messageBubble;
             }
 
             return const Padding(
@@ -877,6 +814,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   }
 
   Widget _buildTypingIndicator() {
+    // ✅ FIX: Evitar usar _controller antes de que esté inicializado
+    if (!_controllerInitialized) {
+      return const SizedBox.shrink();
+    }
+
     return StreamBuilder<List<String>>(
       stream: _controller.watchTypingUsers(),
       builder: (context, snapshot) {
@@ -924,8 +866,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
 
   Widget _buildReplyBar() {
     return ReplyBar(
-      senderName: _replyingTo!['senderName'] ?? 'Usuario',
-      text: _replyingTo!['text'] ?? '',
+      messageData: _replyingTo!,
       onClose: () => setState(() => _replyingTo = null),
     );
   }
@@ -1006,6 +947,39 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
 
     final currentTimestamp = currentMessageData['timestamp'] as Timestamp?;
     final nextTimestamp = nextMessageData['timestamp'] as Timestamp?;
+
+    if (currentTimestamp == null || nextTimestamp == null) {
+      return false;
+    }
+
+    final currentDate = DateTime(
+      currentTimestamp.toDate().year,
+      currentTimestamp.toDate().month,
+      currentTimestamp.toDate().day,
+    );
+
+    final nextDate = DateTime(
+      nextTimestamp.toDate().year,
+      nextTimestamp.toDate().month,
+      nextTimestamp.toDate().day,
+    );
+
+    // Mostrar separador si las fechas son diferentes
+    return currentDate != nextDate;
+  }
+
+  /// ✅ OPTIMISTIC: Versión que trabaja con ChatMessage
+  bool _shouldShowDateSeparatorFromMessages(int index, List<ChatMessage> messages) {
+    // Si es el último mensaje de la lista (el más antiguo), siempre mostrar fecha
+    if (index == messages.length - 1) {
+      return true;
+    }
+
+    final currentMessage = messages[index];
+    final nextMessage = messages[index + 1];
+
+    final currentTimestamp = currentMessage.timestamp;
+    final nextTimestamp = nextMessage.timestamp;
 
     if (currentTimestamp == null || nextTimestamp == null) {
       return false;

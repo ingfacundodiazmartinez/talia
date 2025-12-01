@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import 'package:image_picker/image_picker.dart';
 import '../models/parent.dart';
 import '../services/image_service.dart';
+import '../services/media_compression_service.dart';
 import '../utils/release_logger.dart';
 
 /// Controller que maneja la lógica del perfil de usuario
@@ -68,8 +70,13 @@ class ProfileController {
 
       ReleaseLogger.log('Imagen seleccionada: ${pickedFile.path}', tag: 'ProfileController');
 
+      // ✅ OPTIMIZACIÓN AGRESIVA: Comprimir foto de perfil (512x512, alta compresión)
+      final imageFile = File(pickedFile.path);
+      final compressedFile = await MediaCompressionService().compressProfilePhoto(imageFile);
+      final fileToUpload = compressedFile ?? imageFile;
+
       // Subir imagen
-      final String? downloadUrl = await _imageService.uploadImageToStorage(pickedFile.path);
+      final String? downloadUrl = await _imageService.uploadImageToStorage(fileToUpload.path);
 
       if (downloadUrl != null && _parent != null) {
         // Actualizar Firestore

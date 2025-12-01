@@ -39,9 +39,12 @@ class ChatStreamManager {
   StreamSubscription? _chatListSubscription;
 
   // ✅ GLOBAL MESSAGE LISTENER: Detecta mensajes en TODOS los chats para notificaciones instantáneas
-  StreamSubscription? _globalMessageSubscription;
   Set<String> _processedMessageIds = {}; // Evitar procesar el mismo mensaje múltiples veces
   final Set<String> _processingMessageIds = {}; // ✅ FIX #12: Lock para evitar race conditions
+
+  // ✅ OPTIMIZACIÓN: Límites de memoria para caches
+  static const int _maxProcessedMessageIds = 1000;
+  static const int _maxCacheEntries = 100;
 
   // Stream controllers
   final Map<String, StreamController<List<ChatMessage>>> _messageControllers = {};
@@ -222,7 +225,7 @@ class ChatStreamManager {
           // Combinar con cache optimista
           final finalMessages = _cacheManager.getCachedMessages(chatId);
 
-          // Emitir al stream (legacy compatibility)
+          // Emitir al stream
           if (!controller.isClosed) {
             controller.add(finalMessages);
           }
@@ -516,13 +519,33 @@ class ChatStreamManager {
           continue;
         }
 
-        // FILTRO 1: Solo procesar si lastMessageTime cambió (mensaje nuevo)
+        // FILTRO 1: Solo procesar si lastMessageTime es MÁS RECIENTE (mensaje nuevo)
+        // ✅ FIX: Si es la primera vez que vemos este chat, guardar timestamp y SKIP
+        // Esto evita notificaciones falsas al archivar/desarchivar/modificar chat
         final previousTimestamp = _lastSeenMessageTimestamps[chatId];
-        if (previousTimestamp != null) {
-          if (lastMessageTime.seconds == previousTimestamp.seconds &&
-              lastMessageTime.nanoseconds == previousTimestamp.nanoseconds) {
-            continue; // Sin cambios en lastMessageTime
-          }
+
+        if (previousTimestamp == null) {
+          // Primera vez que vemos este chat - solo guardar timestamp, no notificar
+          _lastSeenMessageTimestamps[chatId] = lastMessageTime;
+          ReleaseLogger.log('📝 [ChatDocsListener] Primera vez viendo chat $chatId - guardando timestamp inicial');
+          continue;
+        }
+
+        // Si el timestamp NO cambió, skip
+        if (lastMessageTime.seconds == previousTimestamp.seconds &&
+            lastMessageTime.nanoseconds == previousTimestamp.nanoseconds) {
+          continue; // Sin cambios en lastMessageTime
+        }
+
+        // ✅ FIX: Solo procesar si el nuevo timestamp es MAYOR (mensaje más reciente)
+        // Esto evita notificaciones si el timestamp cambió pero hacia atrás (edge case)
+        final isNewerMessage = lastMessageTime.seconds > previousTimestamp.seconds ||
+            (lastMessageTime.seconds == previousTimestamp.seconds &&
+             lastMessageTime.nanoseconds > previousTimestamp.nanoseconds);
+
+        if (!isNewerMessage) {
+          _lastSeenMessageTimestamps[chatId] = lastMessageTime;
+          continue; // Timestamp no es más reciente - skip
         }
 
         // Actualizar timestamp visto
@@ -544,6 +567,9 @@ class ChatStreamManager {
         // ⚡ Obtener el mensaje más reciente y mostrar notificación
         await _fetchAndShowLatestMessage(chatId, userId, isGroup: isGroup);
       }
+
+      // ✅ FIX: Limpiar caches para prevenir memory leaks en sesiones largas
+      _cleanupCachesIfNeeded();
     } catch (e) {
       ReleaseLogger.error('❌ [ChatDocsListener] Error en _processChatDocChanges: $e');
     }
@@ -703,173 +729,6 @@ class ChatStreamManager {
     }
   }
 
-  /// Procesar mensajes detectados por el listener global
-  Future<void> _processGlobalMessages(QuerySnapshot snapshot, String userId) async {
-    try {
-      // Detectar mensajes NUEVOS (solo documentChanges de tipo 'added')
-      final newMessages = snapshot.docChanges
-          .where((change) => change.type == DocumentChangeType.added)
-          .map((change) => change.doc)
-          .toList();
-
-      if (newMessages.isEmpty) {
-        return; // No hay mensajes nuevos
-      }
-
-      ReleaseLogger.log('⚡ [GlobalListener] Detectados ${newMessages.length} mensajes nuevos');
-
-      for (final messageDoc in newMessages) {
-        final messageId = messageDoc.id;
-
-        // FILTRO 1: Evitar procesar el mismo mensaje múltiples veces
-        if (_processedMessageIds.contains(messageId)) {
-          continue;
-        }
-
-        final messageData = messageDoc.data() as Map<String, dynamic>?;
-        if (messageData == null) continue;
-
-        final senderId = messageData['senderId'] as String?;
-        final createdAt = messageData['createdAt'] as Timestamp?;
-
-        // FILTRO 2: Solo mensajes de OTROS usuarios (no del usuario actual)
-        if (senderId == null || senderId == userId) {
-          _processedMessageIds.add(messageId);
-          continue;
-        }
-
-        // FILTRO 3: Solo mensajes recientes (últimos 10 segundos)
-        if (createdAt != null) {
-          final messageAge = DateTime.now().difference(createdAt.toDate());
-          if (messageAge.inSeconds > 10) {
-            _processedMessageIds.add(messageId);
-            continue; // Mensaje demasiado antiguo (probablemente de caché)
-          }
-        }
-
-        // Extraer información del chat parent
-        final chatId = messageDoc.reference.parent.parent?.id;
-        if (chatId == null) {
-          ReleaseLogger.log('⚠️ [GlobalListener] No se pudo determinar chatId para mensaje $messageId');
-          _processedMessageIds.add(messageId);
-          continue;
-        }
-
-        // FILTRO 4: Verificar si el usuario está viendo este chat actualmente
-        final currentChatId = await _getCurrentActiveChatId();
-        if (currentChatId != null && currentChatId == chatId) {
-          ReleaseLogger.log('📱 [GlobalListener] Usuario está en chat $chatId - SKIP notificación');
-          _processedMessageIds.add(messageId);
-          continue; // No mostrar notificación si está viendo el chat
-        }
-
-        // Determinar si es grupo o chat individual
-        final isGroup = messageDoc.reference.parent.parent!.parent.id == 'groups';
-
-        // Obtener información del remitente
-        String senderName = senderId;
-        String? groupName;
-
-        try {
-          if (isGroup) {
-            // Para grupos, obtener nombre del grupo
-            final groupDoc = await FirebaseFirestore.instance
-                .collection('groups')
-                .doc(chatId)
-                .get();
-            groupName = groupDoc.data()?['name'] as String? ?? 'Grupo';
-
-            // Y nombre del miembro que envió (primero nombre real, luego alias)
-            final senderDoc = await FirebaseFirestore.instance
-                .collection('users')
-                .doc(senderId)
-                .get();
-            final realName = senderDoc.data()?['name'] as String? ?? senderName;
-
-            // Obtener alias si existe
-            senderName = await ContactAliasService().getDisplayName(senderId, realName);
-          } else {
-            // Para chats 1-1, obtener nombre real del remitente
-            final senderDoc = await FirebaseFirestore.instance
-                .collection('users')
-                .doc(senderId)
-                .get();
-            final realName = senderDoc.data()?['name'] as String? ?? senderName;
-
-            // Obtener alias si existe (el receptor puede haberle puesto un alias al remitente)
-            senderName = await ContactAliasService().getDisplayName(senderId, realName);
-          }
-        } catch (e) {
-          ReleaseLogger.error('⚠️ [GlobalListener] Error obteniendo nombres: $e');
-        }
-
-        // ✅ FIX #7: Anti-duplicados usando servicio centralizado
-        if (!_deduplicationService.tryAcquire(messageId)) {
-          ReleaseLogger.log('⏭️ [GlobalListener] Mensaje ${messageId.substring(0, 8)}... ya procesado - SKIP');
-          _processedMessageIds.add(messageId);
-          continue; // Skip este mensaje
-        }
-
-        // ⚡ MOSTRAR NOTIFICACIÓN INSTANTÁNEA
-        // ✅ FIX: Usar type para determinar el texto si text es null
-        final rawText = messageData['text'] as String?;
-        final msgType = messageData['type'] as String?;
-        String messageText;
-        if (rawText != null && rawText.isNotEmpty) {
-          messageText = rawText;
-        } else {
-          switch (msgType) {
-            case 'image':
-              messageText = '📷 Imagen';
-              break;
-            case 'video':
-              messageText = '🎥 Video';
-              break;
-            case 'audio':
-              messageText = '🎤 Audio';
-              break;
-            default:
-              messageText = 'Nuevo mensaje';
-          }
-        }
-
-        ReleaseLogger.log('⚡ [GlobalListener] Mostrando notificación instantánea para mensaje ${messageId.substring(0, 8)}...');
-        ReleaseLogger.log('   - Chat: ${isGroup ? "Grupo" : "Individual"} ($chatId)');
-        ReleaseLogger.log('   - Remitente: $senderName');
-
-        try {
-          await NotificationService().showLocalChatNotification(
-            senderId: senderId,
-            senderName: senderName,
-            messageText: messageText,
-            chatId: chatId,
-            isGroup: isGroup,
-            groupName: groupName,
-          );
-
-          // ✅ Incrementar contador de mensajes no leídos (solo si no está en el chat)
-          await LocalUnreadCountService().incrementUnreadCount(chatId);
-
-          // ✅ FIX #7: Marcar como procesado SOLO después de mostrar exitosamente
-          _processedMessageIds.add(messageId);
-
-          ReleaseLogger.log('✅ [GlobalListener] Notificación instantánea mostrada para ${messageId.substring(0, 8)}...');
-        } catch (e) {
-          ReleaseLogger.error('❌ [GlobalListener] Error mostrando notificación: $e');
-        }
-      }
-
-      // Limpiar IDs procesados antiguos (mantener solo los últimos 100)
-      if (_processedMessageIds.length > 100) {
-        final toRemove = _processedMessageIds.length - 100;
-        _processedMessageIds = _processedMessageIds.skip(toRemove).toSet();
-      }
-
-    } catch (e) {
-      ReleaseLogger.error('❌ [GlobalListener] Error en _processGlobalMessages: $e');
-    }
-  }
-
   // ═══════════════════════════════════════════════════════════════
   // PER-CHAT LISTENERS - ARQUITECTURA CORRECTA PARA NOTIFICACIONES INSTANTÁNEAS
   // ═══════════════════════════════════════════════════════════════
@@ -938,13 +797,7 @@ class ChatStreamManager {
       _chatListSubscription?.cancel();
       _chatListSubscription = null;
 
-      // ⚡ Detener listener global de mensajes (legacy)
-      _globalMessageSubscription?.cancel();
-      _globalMessageSubscription = null;
-      _processedMessageIds.clear();
-      ReleaseLogger.log('⚡ [GlobalListener] Listener global detenido');
-
-      // ⚡ Detener listeners de documentos de chats/grupos (nuevo)
+      // ⚡ Detener listeners de documentos de chats/grupos
       _chatDocsSubscription?.cancel();
       _chatDocsSubscription = null;
       _groupDocsSubscription?.cancel();
@@ -1358,6 +1211,46 @@ class ChatStreamManager {
     ReleaseLogger.log('✅ [ChatStreamManager] Limpieza completa de sesión finalizada');
   }
 
+  /// ✅ OPTIMIZACIÓN: Limpiar caches cuando excedan límites de memoria
+  /// Previene memory leaks en sesiones largas
+  void _cleanupCachesIfNeeded() {
+    // Limpiar _processedMessageIds si excede el límite
+    if (_processedMessageIds.length > _maxProcessedMessageIds) {
+      final toRemove = _processedMessageIds.length - _maxProcessedMessageIds;
+      _processedMessageIds = _processedMessageIds.skip(toRemove).toSet();
+    }
+
+    // Limpiar _previousReadByState si excede el límite
+    if (_previousReadByState.length > _maxCacheEntries) {
+      final keysToRemove = _previousReadByState.keys
+          .take(_previousReadByState.length - _maxCacheEntries)
+          .toList();
+      for (final key in keysToRemove) {
+        _previousReadByState.remove(key);
+      }
+    }
+
+    // Limpiar _clearedAtCache si excede el límite
+    if (_clearedAtCache.length > _maxCacheEntries) {
+      final keysToRemove = _clearedAtCache.keys
+          .take(_clearedAtCache.length - _maxCacheEntries)
+          .toList();
+      for (final key in keysToRemove) {
+        _clearedAtCache.remove(key);
+      }
+    }
+
+    // Limpiar _lastUpdateTimes si excede el límite
+    if (_lastUpdateTimes.length > _maxCacheEntries) {
+      final keysToRemove = _lastUpdateTimes.keys
+          .take(_lastUpdateTimes.length - _maxCacheEntries)
+          .toList();
+      for (final key in keysToRemove) {
+        _lastUpdateTimes.remove(key);
+      }
+    }
+  }
+
   void dispose() {
     stopBackgroundStreams();
     _chatListController.close();
@@ -1371,7 +1264,9 @@ class ChatStreamManager {
     _chatIsGroupMap.clear();
     _lastUpdateTimes.clear();
     _clearedAtCache.clear();
-    _prefsCache = null;  // ✅ NUEVO: Limpiar cache de SharedPreferences
-    _cachedCurrentChatId = null;  // ✅ FIX #1: Limpiar MemoryCache
+    _previousReadByState.clear();
+    _processedMessageIds.clear();
+    _prefsCache = null;
+    _cachedCurrentChatId = null;
   }
 }

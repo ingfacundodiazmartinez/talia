@@ -634,7 +634,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
   }
 
   /// Procesar y subir audio
-  Future<void> processAndUploadAudio(String audioPath) async {
+  Future<void> processAndUploadAudio(String audioPath, {bool isAiGenerated = false}) async {
     if (currentUserId.isEmpty || _currentOptimisticAudioId == null) return;
 
     final tempId = _currentOptimisticAudioId!;
@@ -645,6 +645,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
         chatId: chatId,
         currentUserId: currentUserId,
         audioPath: audioPath,
+        isAiGenerated: isAiGenerated,
       );
 
       // Actualizar mensaje optimista a sent

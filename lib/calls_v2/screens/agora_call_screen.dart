@@ -19,6 +19,7 @@ import '../widgets/video_grid_widget.dart';
 import '../widgets/add_participant_sheet.dart';
 import '../services/add_participant_service.dart';
 import '../../services/voip_service.dart';
+import '../../services/ringtone_service.dart';
 import '../../utils/release_logger.dart';
 
 class AgoraCallScreen extends StatefulWidget {
@@ -79,6 +80,7 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
 
   late CallController _callController;
   late AgoraEngineService _agoraEngine;
+  final RingtoneService _ringtoneService = RingtoneService();
 
   // UI state
   bool _isInitializing = true;
@@ -511,6 +513,9 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
 
       ReleaseLogger.log('Call created: $_actualCallId, UID: $_localUid', tag: _tag);
 
+      // ✅ Start ringback tone while waiting for remote user to answer
+      await _ringtoneService.playRingbackTone();
+
       // ✅ FIX: Register event handlers NOW that engine is initialized
       // (They couldn't be registered earlier because engine was null)
       _setupAgoraEventHandlers();
@@ -604,6 +609,13 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
       RtcEngineEventHandler(
         onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
           if (!mounted) return;
+
+          // ✅ Stop ringback tone and play connected tone when first user joins
+          if (_remoteUsers.isEmpty) {
+            _ringtoneService.stop();
+            _ringtoneService.playConnectedTone();
+          }
+
           setState(() {
             _remoteUsers.add(remoteUid);
           });
@@ -953,6 +965,9 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
       return;
     }
     _isEnding = true;
+
+    // ✅ Stop any ringtone that might be playing
+    await _ringtoneService.stop();
 
     // ✅ Clear accepted call cache
     final callIdToClean = widget.callId ?? _actualCallId;
@@ -1412,6 +1427,9 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
   @override
   void dispose() {
     ReleaseLogger.log('🗑️ [AgoraCallScreen] Disposing screen...', tag: _tag);
+
+    // ✅ Stop and dispose ringtone service
+    _ringtoneService.dispose();
 
     _callSubscription?.cancel();
     _proximitySubscription?.cancel();

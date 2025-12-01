@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
+import '../utils/release_logger.dart';
 
 /// Diálogo que explica y solicita permisos de ubicación en segundo plano
-/// Solo se muestra cuando un niño vincula a su primer padre
+///
+/// Se muestra siempre ANTES de solicitar permisos de ubicación en background:
+/// - Android: Requerido por políticas de Play Store
+/// - iOS: Buena práctica para mejor experiencia de usuario
 class LocationPermissionDialog extends StatelessWidget {
   const LocationPermissionDialog({super.key});
 
@@ -26,16 +30,16 @@ class LocationPermissionDialog extends StatelessWidget {
         final backgroundStatus = await Permission.locationAlways.request();
 
         if (backgroundStatus.isGranted) {
-          print('✅ Permisos de ubicación en segundo plano otorgados');
+          ReleaseLogger.log('Permisos de ubicación en segundo plano otorgados', tag: 'LocationPermission');
         } else if (backgroundStatus.isDenied) {
-          print('⚠️ Permiso de ubicación en segundo plano denegado');
+          ReleaseLogger.log('Permiso de ubicación en segundo plano denegado', tag: 'LocationPermission');
         } else if (backgroundStatus.isPermanentlyDenied) {
           // Mostrar diálogo para ir a configuración
           _showOpenSettingsDialog(context);
           return;
         }
       } else if (locationStatus.isDenied) {
-        print('⚠️ Permiso de ubicación denegado');
+        ReleaseLogger.log('Permiso de ubicación denegado', tag: 'LocationPermission');
       } else if (locationStatus.isPermanentlyDenied) {
         // Mostrar diálogo para ir a configuración
         _showOpenSettingsDialog(context);
@@ -47,7 +51,7 @@ class LocationPermissionDialog extends StatelessWidget {
         Navigator.of(context).pop();
       }
     } catch (e) {
-      print('❌ Error solicitando permisos de ubicación: $e');
+      ReleaseLogger.error('Error solicitando permisos de ubicación: $e', tag: 'LocationPermission');
       if (context.mounted) {
         Navigator.of(context).pop();
       }

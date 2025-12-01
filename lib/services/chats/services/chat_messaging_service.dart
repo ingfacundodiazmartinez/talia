@@ -356,7 +356,8 @@ class ChatMessagingService {
       }
 
       // 🔒 2. PRE-MODERACIÓN: Verificar si el mensaje debe ser moderado
-      await _checkModeration(
+      // ✅ FIX: Capturar si hay moderación activa para usar Cloud Function
+      final hasModeration = await _checkModeration(
         chatId: chatId,
         content: optimisticMessage.text ?? '',
         type: optimisticMessage.type ?? 'text',
@@ -383,11 +384,43 @@ class ChatMessagingService {
         localId: tempMessageId, // ✅ NEW: Guardar ID temporal para deduplicación
       );
 
-      final realMessageId = await _messageRepository.createOptimisticMessage(
-        chatId: chatId,
-        message: finalMessage,
-        isGroup: isGroup,
-      );
+      String realMessageId;
+
+      // ✅ FIX: Si hay moderación activa, usar Cloud Function en lugar de escritura directa
+      // Firestore rules bloquean escritura directa cuando chatHasModeration() == true
+      if (hasModeration) {
+        ReleaseLogger.log('🔒 Usando Cloud Function sendChatMessage (moderación activa)', tag: 'ChatMessaging');
+
+        // ✅ IMPORTANTE: Eliminar mensaje optimista ANTES de enviar via Cloud Function
+        // para evitar duplicados cuando el stream detecte el mensaje real
+        _cacheManager.removeOptimisticMessage(chatId, tempMessageId);
+
+        final functions = FirebaseFunctions.instance;
+        final result = await functions.httpsCallable('sendChatMessage').call({
+          'chatId': chatId,
+          'text': finalMessage.text ?? '',
+          'type': finalMessage.type ?? 'text',
+          'localId': tempMessageId, // ✅ FIX: Enviar localId para deduplicación
+          if (finalMessage.imageUrl != null) 'imageUrl': finalMessage.imageUrl,
+          if (finalMessage.videoUrl != null) 'videoUrl': finalMessage.videoUrl,
+          if (finalMessage.audioUrl != null) 'audioUrl': finalMessage.audioUrl,
+          if (finalMessage.replyTo != null) 'replyTo': finalMessage.replyTo,
+        });
+
+        final data = Map<String, dynamic>.from(result.data as Map);
+        realMessageId = data['messageId'] as String;
+        ReleaseLogger.log('✅ Mensaje enviado via Cloud Function: $realMessageId', tag: 'ChatMessaging');
+
+        // No actualizar caché aquí - el mensaje llegará via stream
+        return realMessageId;
+      } else {
+        // Sin moderación: escribir directamente a Firestore (más rápido)
+        realMessageId = await _messageRepository.createOptimisticMessage(
+          chatId: chatId,
+          message: finalMessage,
+          isGroup: isGroup,
+        );
+      }
 
       // 4. Actualizar mensaje optimista con ID real (sin eliminarlo para evitar flash en UI)
       // ✅ FIX: UPDATE en vez de REMOVE para UX suave
@@ -529,7 +562,8 @@ class ChatMessagingService {
 
   /// 🔒 Verificar moderación si está activada
   /// Solo llama a Cloud Function si la moderación está activada
-  Future<void> _checkModeration({
+  /// Retorna true si hay moderación activa (para que el caller use Cloud Function)
+  Future<bool> _checkModeration({
     required String chatId,
     required String content,
     required String type,
@@ -537,7 +571,7 @@ class ChatMessagingService {
   }) async {
     try {
       final currentUserId = _messageRepository.currentUserId;
-      if (currentUserId == null) return;
+      if (currentUserId == null) return false;
 
       // 1. Verificar moderación a nivel de CHAT (solo si el chat existe)
       bool moderationEnabled = false;
@@ -602,7 +636,7 @@ class ChatMessagingService {
       // 3. Si NO hay moderación activada, permitir envío directo
       if (!moderationEnabled) {
         ReleaseLogger.info('✅ Sin moderación activada - enviando mensaje directamente', tag: 'Moderation');
-        return;
+        return false;
       }
 
       // 4. Hay moderación activada - llamar a Cloud Function
@@ -627,6 +661,7 @@ class ChatMessagingService {
       }
 
       ReleaseLogger.log('✅ Mensaje aprobado por moderación', tag: 'Moderation');
+      return true; // ✅ Retorna true para indicar que debe usar Cloud Function
     } on ModerationBlockedException {
       // Re-lanzar bloqueos de moderación sin modificar
       rethrow;
@@ -634,6 +669,7 @@ class ChatMessagingService {
       // Si es otro error (network, etc), loguearlo pero continuar
       ReleaseLogger.error('⚠️ Error técnico en verificación de moderación (continuando): $e', tag: 'Moderation');
       // Continuar - permitir que el mensaje se envíe si hay error técnico de red/timeout
+      return false;
     }
   }
 

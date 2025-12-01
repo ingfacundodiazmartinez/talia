@@ -6,9 +6,82 @@
 
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
-const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
 
 const db = getFirestore();
+
+// ═══════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════
+const RATE_LIMITS = {
+  STORY_REPLIES_PER_HOUR: 20,
+  STORY_REPLIES_PER_DAY: 50,
+};
+
+/**
+ * SECURITY: Rate limiting para respuestas a historias
+ * Previene spam y abuso de la función replyToStory
+ */
+async function checkStoryReplyRateLimit(userId) {
+  console.log(`🔒 [RateLimit] Verificando límites de respuestas para: ${userId}`);
+
+  // Verificar límite diario (últimas 24 horas)
+  const twentyFourHoursAgo = new Date();
+  twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
+
+  // Contar mensajes tipo story_reply del usuario en las últimas 24h
+  // Usamos una query en chats donde el usuario es participante
+  const userChatsQuery = await db
+    .collection('chats')
+    .where('participants', 'array-contains', userId)
+    .get();
+
+  let dailyCount = 0;
+  let hourlyCount = 0;
+  const oneHourAgo = new Date();
+  oneHourAgo.setHours(oneHourAgo.getHours() - 1);
+
+  // Contamos respuestas a historias en todos los chats del usuario
+  for (const chatDoc of userChatsQuery.docs) {
+    const messagesQuery = await db
+      .collection('chats')
+      .doc(chatDoc.id)
+      .collection('messages')
+      .where('senderId', '==', userId)
+      .where('replyTo.type', '==', 'story_reply')
+      .where('timestamp', '>', twentyFourHoursAgo)
+      .orderBy('timestamp', 'desc')
+      .limit(RATE_LIMITS.STORY_REPLIES_PER_DAY + 1)
+      .get();
+
+    for (const msgDoc of messagesQuery.docs) {
+      const msgData = msgDoc.data();
+      const msgTime = msgData.timestamp?.toDate?.() || new Date();
+
+      dailyCount++;
+      if (msgTime > oneHourAgo) {
+        hourlyCount++;
+      }
+    }
+
+    // Early exit si ya excedimos
+    if (dailyCount >= RATE_LIMITS.STORY_REPLIES_PER_DAY) break;
+  }
+
+  if (dailyCount >= RATE_LIMITS.STORY_REPLIES_PER_DAY) {
+    console.error(`❌ [RateLimit] Usuario ${userId} excedió límite diario: ${dailyCount}/${RATE_LIMITS.STORY_REPLIES_PER_DAY}`);
+    throw new HttpsError('resource-exhausted',
+      `Has excedido el límite de ${RATE_LIMITS.STORY_REPLIES_PER_DAY} respuestas a historias por día.`);
+  }
+
+  if (hourlyCount >= RATE_LIMITS.STORY_REPLIES_PER_HOUR) {
+    console.error(`❌ [RateLimit] Usuario ${userId} excedió límite horario: ${hourlyCount}/${RATE_LIMITS.STORY_REPLIES_PER_HOUR}`);
+    throw new HttpsError('resource-exhausted',
+      `Has excedido el límite de ${RATE_LIMITS.STORY_REPLIES_PER_HOUR} respuestas a historias por hora.`);
+  }
+
+  console.log(`✅ [RateLimit] Usuario dentro de límites: ${dailyCount}/${RATE_LIMITS.STORY_REPLIES_PER_DAY} diarias, ${hourlyCount}/${RATE_LIMITS.STORY_REPLIES_PER_HOUR} por hora`);
+}
 
 /**
  * Trigger que se ejecuta cuando se crea una solicitud de aprobación de historia
@@ -94,6 +167,227 @@ exports.onStoryApprovalRequestCreated = onDocumentCreated(
  * El mensaje creado activará automáticamente el trigger 'moderateMessage'
  * para moderación con IA antes de ser entregado al receptor.
  */
+/**
+ * ═══════════════════════════════════════════════════════════════
+ * LIKE STORY - Cloud Function segura para dar like a historias
+ * ═══════════════════════════════════════════════════════════════
+ *
+ * IMPORTANTE: Esta función es necesaria porque:
+ * 1. Firestore rules bloquean creación de chats desde cliente
+ * 2. Padre-hijo pueden no tener un chat existente
+ * 3. La función puede crear el chat y enviar el mensaje de like
+ */
+exports.likeStory = onCall(
+  { region: "us-central1", consumeAppCheckToken: true },
+  async (request) => {
+    const { storyId } = request.data;
+    const userId = request.auth?.uid;
+
+    // 1. Validaciones básicas
+    if (!userId) {
+      throw new HttpsError("unauthenticated", "Usuario no autenticado");
+    }
+
+    if (!storyId) {
+      throw new HttpsError("invalid-argument", "storyId es requerido");
+    }
+
+    try {
+      // 2. Obtener historia
+      const storyDoc = await db.collection("stories").doc(storyId).get();
+
+      if (!storyDoc.exists) {
+        console.error(`❌ [LikeStory] Historia no encontrada: ${storyId}`);
+        throw new HttpsError("not-found", "Historia no encontrada");
+      }
+
+      const storyData = storyDoc.data();
+      const storyOwnerId = storyData.userId;
+
+      // 3. Validar que no está dando like a su propia historia
+      if (userId === storyOwnerId) {
+        throw new HttpsError("permission-denied", "No puedes dar like a tu propia historia");
+      }
+
+      // 4. Validar que la historia está aprobada
+      if (storyData.status !== 'approved') {
+        throw new HttpsError("permission-denied", "Solo puedes dar like a historias aprobadas");
+      }
+
+      // 5. Verificar si ya dio like (idempotencia)
+      const likedBy = storyData.likedBy || [];
+      if (likedBy.includes(userId)) {
+        console.log(`ℹ️ [LikeStory] Usuario ${userId} ya dio like a historia ${storyId}`);
+        return {
+          success: true,
+          alreadyLiked: true,
+          message: "Ya diste like a esta historia"
+        };
+      }
+
+      // 6. Validar permisos: verificar relación (contacto O padre-hijo)
+      const hasPermission = await checkStoryViewPermission(userId, storyOwnerId, storyData);
+      if (!hasPermission) {
+        console.error(`❌ [LikeStory] Usuario ${userId} no tiene permiso para ver historia de ${storyOwnerId}`);
+        throw new HttpsError("permission-denied", "No tienes permiso para dar like a esta historia");
+      }
+
+      // 7. Agregar like a la historia
+      await db.collection("stories").doc(storyId).update({
+        likedBy: FieldValue.arrayUnion(userId)
+      });
+
+      console.log(`✅ [LikeStory] Like agregado a historia ${storyId} por ${userId}`);
+
+      // 8. Enviar mensaje de like al chat
+      await sendLikeMessage(userId, storyOwnerId, storyData, storyId);
+
+      return {
+        success: true,
+        alreadyLiked: false,
+        message: "Like enviado exitosamente"
+      };
+
+    } catch (error) {
+      console.error(`❌ [LikeStory] Error:`, error);
+
+      if (error instanceof HttpsError) {
+        throw error;
+      }
+
+      throw new HttpsError("internal", `Error procesando like: ${error.message}`);
+    }
+  }
+);
+
+/**
+ * Verificar si un usuario tiene permiso para ver una historia
+ * Puede ser contacto aprobado O relación padre-hijo
+ */
+async function checkStoryViewPermission(viewerId, ownerId, storyData) {
+  // Verificar si está en availableFor (ya validado en createStory)
+  const availableFor = storyData.availableFor || [];
+  if (availableFor.includes(viewerId)) {
+    return true;
+  }
+
+  // Verificar relación de contacto aprobado
+  const participants = [viewerId, ownerId].sort();
+  const contactQuery = await db
+    .collection("contacts")
+    .where("users", "==", participants)
+    .where("status", "==", "approved")
+    .limit(1)
+    .get();
+
+  if (!contactQuery.empty) {
+    return true;
+  }
+
+  // Verificar relación padre-hijo
+  // Caso 1: viewer es padre del owner
+  const viewerDoc = await db.collection("users").doc(viewerId).get();
+  if (viewerDoc.exists) {
+    const viewerData = viewerDoc.data();
+    const linkedChildren = viewerData.linkedChildrenIds || [];
+    if (linkedChildren.includes(ownerId)) {
+      return true;
+    }
+  }
+
+  // Caso 2: owner es padre del viewer
+  const ownerDoc = await db.collection("users").doc(ownerId).get();
+  if (ownerDoc.exists) {
+    const ownerData = ownerDoc.data();
+    const linkedChildren = ownerData.linkedChildrenIds || [];
+    if (linkedChildren.includes(viewerId)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Enviar mensaje de like al chat entre usuarios
+ * Crea el chat si no existe
+ */
+async function sendLikeMessage(senderId, receiverId, storyData, storyId) {
+  try {
+    // 1. Buscar o crear chat
+    const participants = [senderId, receiverId].sort();
+    const chatQuery = await db
+      .collection("chats")
+      .where("participants", "==", participants)
+      .limit(1)
+      .get();
+
+    let chatId;
+    if (!chatQuery.empty) {
+      chatId = chatQuery.docs[0].id;
+    } else {
+      // Crear nuevo chat (Cloud Functions puede hacerlo)
+      const newChatRef = await db.collection("chats").add({
+        participants: participants,
+        createdAt: FieldValue.serverTimestamp(),
+        lastMessage: "",
+        lastMessageTime: null,
+        lastMessageSender: null,
+      });
+      chatId = newChatRef.id;
+      console.log(`📝 [LikeStory] Chat creado: ${chatId}`);
+    }
+
+    // 2. Obtener info del sender
+    const senderDoc = await db.collection("users").doc(senderId).get();
+    const senderData = senderDoc.exists ? senderDoc.data() : {};
+    const senderName = senderData.name || 'Usuario';
+
+    // 3. Crear mensaje de like
+    const messageNow = new Date();
+    const deleteAt = new Date(messageNow.getTime() + 7 * 24 * 60 * 60 * 1000); // 7 días TTL
+
+    const messageData = {
+      senderId: senderId,
+      text: `❤️ Me gustó tu historia`,
+      type: "story_like",
+      timestamp: FieldValue.serverTimestamp(),
+      deleteAt: Timestamp.fromDate(deleteAt),
+      isRead: false,
+      // ✅ FIX: Usar replyTo (como story_reply) para que Flutter muestre el preview
+      replyTo: {
+        type: 'story_like',
+        storyId: storyId,
+        storyUserId: storyData.userId,
+        storyUserName: storyData.userName || 'Usuario',
+        storyMediaUrl: storyData.mediaUrl || '',
+        storyCaption: storyData.caption || '',
+        storyMediaType: storyData.mediaType || 'image',
+      },
+    };
+
+    // 4. Escribir mensaje
+    const messageRef = await db
+      .collection("chats")
+      .doc(chatId)
+      .collection("messages")
+      .add(messageData);
+
+    // 5. Actualizar lastMessage del chat
+    await db.collection("chats").doc(chatId).update({
+      lastMessage: `❤️ Me gustó tu historia`,
+      lastMessageTime: FieldValue.serverTimestamp(),
+      lastMessageSender: senderId,
+    });
+
+    console.log(`✅ [LikeStory] Mensaje de like enviado: ${messageRef.id}`);
+
+  } catch (error) {
+    // No fallar la operación principal si el mensaje falla
+    console.error(`⚠️ [LikeStory] Error enviando mensaje de like:`, error);
+  }
+}
+
 exports.replyToStory = onCall(
   { region: "us-central1", consumeAppCheckToken: true },
   async (request) => {
@@ -113,6 +407,15 @@ exports.replyToStory = onCall(
     if (!replyText || replyText.trim().length === 0) {
       throw new HttpsError("invalid-argument", "replyText no puede estar vacío");
     }
+
+    // 1.2 SECURITY: Validar longitud máxima del texto (prevenir abuso de storage)
+    const MAX_REPLY_LENGTH = 1000;
+    if (replyText.trim().length > MAX_REPLY_LENGTH) {
+      throw new HttpsError("invalid-argument", `El texto no puede exceder ${MAX_REPLY_LENGTH} caracteres`);
+    }
+
+    // 1.3 SECURITY: Rate limiting para prevenir spam
+    await checkStoryReplyRateLimit(userId);
 
     try {
       // 2. Obtener historia original
@@ -215,11 +518,17 @@ exports.replyToStory = onCall(
 
       // 7. CREAR MENSAJE EN FIRESTORE (esto activará moderateMessage automáticamente)
       // IMPORTANTE: NO usar MessageSendingService para que pase por moderación
+
+      // ✅ TTL: deleteAt = now + 7 días (para auto-eliminación via Firestore TTL Policy)
+      const messageNow = new Date();
+      const deleteAt = new Date(messageNow.getTime() + 7 * 24 * 60 * 60 * 1000); // 7 días
+
       const messageData = {
         senderId: userId,
         text: messageText,
         type: "text",
         timestamp: FieldValue.serverTimestamp(),
+        deleteAt: Timestamp.fromDate(deleteAt), // ✅ TTL: Firestore eliminará automáticamente
         isRead: false,
         replyTo: replyToStory, // Referencia a la historia original
       };
@@ -247,10 +556,49 @@ exports.replyToStory = onCall(
         .collection("messages")
         .add(messageData);
 
+      // ✅ FIX: Actualizar lastMessage inmediatamente para que B vea el chat
+      // El trigger moderateMessage también lo actualizará después de procesar
+      try {
+        await db.collection("chats").doc(chatId).update({
+          lastMessage: messageText,
+          lastMessageTime: FieldValue.serverTimestamp(),
+          lastMessageSender: userId,
+        });
+        console.log(`📝 [StoryReply] Chat ${chatId} actualizado con lastMessage`);
+      } catch (updateError) {
+        console.warn(`⚠️ [StoryReply] Error actualizando lastMessage (no crítico):`, updateError.message);
+      }
+
       // 8. Marcar historia original como vista por el usuario que responde
       await db.collection("stories").doc(storyId).update({
         viewedBy: FieldValue.arrayUnion(userId)
       });
+
+      // 9. ✅ FIX Issue 2: Guardar respuesta en el documento de la historia
+      // para que el owner pueda verla en el visor
+      try {
+        // Obtener información del usuario
+        const userDoc = await db.collection("users").doc(userId).get();
+        const userData = userDoc.exists ? userDoc.data() : {};
+        const userName = userData.name || 'Usuario';
+        const userPhotoURL = userData.photoURL || null;
+
+        const replyData = {
+          userId: userId,
+          userName: userName,
+          userPhotoURL: userPhotoURL,
+          text: replyText.trim(),
+          timestamp: Timestamp.now(),
+        };
+
+        await db.collection("stories").doc(storyId).update({
+          replies: FieldValue.arrayUnion(replyData)
+        });
+        console.log(`✅ [StoryReply] Respuesta guardada en story document ${storyId}`);
+      } catch (replyError) {
+        // No bloquear si falla - el mensaje ya se envió al chat
+        console.warn(`⚠️ [StoryReply] Error guardando reply en story (no crítico):`, replyError.message);
+      }
 
       return {
         success: true,

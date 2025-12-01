@@ -108,42 +108,56 @@ class HelpSupportScreen extends StatelessWidget {
             context: context,
             question: '¿Cómo vinculo a mi hijo?',
             answer:
-                'Ve a la sección "Hijos" y presiona "Vincular Hijo". Se generará un código que tu hijo debe ingresar en su aplicación.',
+                'Ve a la sección "Hijos" en tu perfil y presiona "Vincular Hijo". Se generará un código de 6 dígitos que tu hijo debe ingresar en su aplicación de Talia.',
           ),
 
           _buildFAQItem(
             context: context,
             question: '¿Cómo apruebo contactos?',
             answer:
-                'Cuando tu hijo solicite agregar un contacto, recibirás una notificación. Ve a "Lista Blanca" para aprobar o rechazar la solicitud.',
+                'Cuando tu hijo solicite agregar un contacto, recibirás una notificación. Ve a "Contactos" de tu hijo para aprobar o rechazar la solicitud. También puedes activar la aprobación automática en tu perfil.',
           ),
 
           _buildFAQItem(
             context: context,
-            question: '¿Qué significan los reportes de IA?',
+            question: '¿Cómo funcionan las historias?',
             answer:
-                'Los reportes analizan el tono emocional de las conversaciones sin mostrar contenido específico. Te alertan sobre cambios en el estado de ánimo o posibles situaciones de riesgo.',
+                'Tu hijo puede publicar historias (fotos/videos) que duran 24 horas. Según la configuración, las historias pueden requerir tu aprobación antes de ser visibles para sus contactos.',
           ),
 
           _buildFAQItem(
             context: context,
-            question: '¿Cómo funciona la detección de bullying?',
+            question: '¿Cómo funcionan las llamadas?',
             answer:
-                'Nuestra IA analiza patrones de lenguaje y contexto para detectar posibles casos de acoso. Recibirás alertas si se detecta algo preocupante.',
+                'Talia permite llamadas de voz y video entre contactos aprobados. Recibirás notificaciones cuando tu hijo reciba llamadas y podrás ver el historial de llamadas.',
+          ),
+
+          _buildFAQItem(
+            context: context,
+            question: '¿Qué es el botón de emergencia?',
+            answer:
+                'Tu hijo puede enviar una alerta de emergencia que te notifica inmediatamente con su ubicación en tiempo real. Las alertas permanecen activas hasta que las resuelvas.',
           ),
 
           _buildFAQItem(
             context: context,
             question: '¿Puedo ver los mensajes de mi hijo?',
             answer:
-                'No. Talia respeta la privacidad de tu hijo. Solo recibes reportes abstractos sobre su bienestar emocional, no el contenido de sus conversaciones.',
+                'No. Talia respeta la privacidad de tu hijo. Solo recibes reportes abstractos sobre su bienestar emocional y alertas de seguridad, no el contenido de sus conversaciones.',
+          ),
+
+          _buildFAQItem(
+            context: context,
+            question: '¿Cómo funciona la ubicación?',
+            answer:
+                'Puedes ver la ubicación de tu hijo en tiempo real cuando él lo permita o durante emergencias. También puedes solicitar su ubicación en cualquier momento.',
           ),
 
           _buildFAQItem(
             context: context,
             question: '¿Cómo desvinculo a un hijo?',
             answer:
-                'Ve a la sección "Hijos", selecciona al hijo que deseas desvincular y presiona "Desvincular". Esta acción es reversible.',
+                'Ve a "Hijos" en tu perfil, selecciona al hijo que deseas desvincular y presiona "Desvincular". Esta acción requiere confirmación.',
           ),
 
           SizedBox(height: 32),
@@ -164,7 +178,7 @@ class HelpSupportScreen extends StatelessWidget {
             icon: Icons.video_library,
             title: 'Video Tutoriales',
             subtitle: 'Aprende a usar todas las funciones',
-            onTap: () => _launchURL('https://smartconvo.com/tutoriales'),
+            onTap: () => _launchURL('https://taliachat.com/tutoriales'),
           ),
 
           _buildResourceOption(
@@ -172,7 +186,7 @@ class HelpSupportScreen extends StatelessWidget {
             icon: Icons.description,
             title: 'Guía de Usuario',
             subtitle: 'Manual completo de la aplicación',
-            onTap: () => _launchURL('https://smartconvo.com/guia'),
+            onTap: () => _launchURL('https://taliachat.com/guia'),
           ),
 
           _buildResourceOption(
@@ -180,7 +194,7 @@ class HelpSupportScreen extends StatelessWidget {
             icon: Icons.forum,
             title: 'Comunidad',
             subtitle: 'Únete a nuestro foro de padres',
-            onTap: () => _launchURL('https://smartconvo.com/comunidad'),
+            onTap: () => _launchURL('https://taliachat.com/comunidad'),
           ),
 
           _buildResourceOption(
@@ -211,7 +225,7 @@ class HelpSupportScreen extends StatelessWidget {
                 ),
                 SizedBox(height: 4),
                 Text(
-                  '© 2024 Talia. Todos los derechos reservados.',
+                  '© 2025 Talia. Todos los derechos reservados.',
                   style: TextStyle(
                     fontSize: 12,
                     color: colorScheme.onSurfaceVariant,
@@ -365,7 +379,7 @@ class HelpSupportScreen extends StatelessWidget {
   Future<void> _launchEmail() async {
     final Uri emailUri = Uri(
       scheme: 'mailto',
-      path: 'soporte@smartconvo.com',
+      path: 'support@taliachat.com',
       query: 'subject=Solicitud de Ayuda',
     );
     if (await canLaunchUrl(emailUri)) {

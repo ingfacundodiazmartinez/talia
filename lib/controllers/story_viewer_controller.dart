@@ -297,6 +297,51 @@ class StoryViewerController {
     }
   }
 
+  /// Dar like a una historia
+  /// Envía un mensaje al chat del owner diciendo "❤️ Le gustó tu historia"
+  Future<bool> likeStory(String storyId) async {
+    try {
+      final userId = currentUserId;
+      if (userId == null) {
+        ReleaseLogger.error('Usuario no autenticado para dar like', tag: 'StoryViewer');
+        return false;
+      }
+
+      await _storyService.likeStory(storyId);
+      ReleaseLogger.log('Like dado a historia $storyId', tag: 'StoryViewer');
+      return true;
+    } catch (e) {
+      ReleaseLogger.error('Error dando like a historia: $e', tag: 'StoryViewer');
+      return false;
+    }
+  }
+
+  /// Quitar like de una historia
+  /// Solo remueve el userId de likedBy (no borra el mensaje del chat)
+  Future<bool> unlikeStory(String storyId) async {
+    try {
+      final userId = currentUserId;
+      if (userId == null) {
+        ReleaseLogger.error('Usuario no autenticado para quitar like', tag: 'StoryViewer');
+        return false;
+      }
+
+      await _storyService.unlikeStory(storyId);
+      ReleaseLogger.log('Like quitado de historia $storyId', tag: 'StoryViewer');
+      return true;
+    } catch (e) {
+      ReleaseLogger.error('Error quitando like de historia: $e', tag: 'StoryViewer');
+      return false;
+    }
+  }
+
+  /// Verificar si el usuario actual dio like a una historia
+  bool hasLikedStory(Story story) {
+    final userId = currentUserId;
+    if (userId == null) return false;
+    return story.isLikedBy(userId);
+  }
+
   /// Responder a una historia (alias para sendStoryReply)
   Future<bool> replyToStory({
     required String storyId,

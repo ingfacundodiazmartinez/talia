@@ -1,5 +1,10 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
+import 'package:gal/gal.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 /// Pantalla para visualizar imágenes y videos en pantalla completa
 /// con navegación entre múltiples medios mediante swipe
@@ -33,6 +38,7 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
   late PageController _pageController;
   late int _currentIndex;
   final Map<int, VideoPlayerController> _videoControllers = {};
+  bool _isDownloading = false;
 
   @override
   void initState() {
@@ -59,7 +65,7 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
 
     final item = widget.mediaItems[index];
     if (item.type == 'video' && !_videoControllers.containsKey(index)) {
-      final controller = VideoPlayerController.network(item.url);
+      final controller = VideoPlayerController.networkUrl(Uri.parse(item.url));
       _videoControllers[index] = controller;
 
       try {
@@ -157,7 +163,7 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
                             begin: Alignment.bottomCenter,
                             end: Alignment.topCenter,
                             colors: [
-                              Colors.black.withOpacity(0.8),
+                              Colors.black.withValues(alpha: 0.8),
                               Colors.transparent,
                             ],
                           ),
@@ -179,7 +185,7 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
             },
           ),
 
-          // Header con botón de cerrar y contador
+          // Header con botón de cerrar, contador y descargar
           SafeArea(
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
@@ -194,7 +200,7 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                       decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.5),
+                        color: Colors.black.withValues(alpha: 0.5),
                         borderRadius: BorderRadius.circular(16),
                       ),
                       child: Text(
@@ -206,11 +212,107 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
                         ),
                       ),
                     ),
+                  // Download button
+                  _isDownloading
+                      ? Container(
+                          width: 48,
+                          height: 48,
+                          padding: const EdgeInsets.all(12),
+                          child: const CircularProgressIndicator(
+                            color: Colors.white,
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : IconButton(
+                          onPressed: _downloadCurrentMedia,
+                          icon: const Icon(Icons.download, color: Colors.white, size: 28),
+                        ),
                 ],
               ),
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Future<void> _downloadCurrentMedia() async {
+    if (_isDownloading) return;
+
+    final item = widget.mediaItems[_currentIndex];
+
+    setState(() => _isDownloading = true);
+
+    try {
+      // Request permission for photos on iOS, storage on Android
+      if (Platform.isIOS) {
+        final status = await Permission.photos.request();
+        if (!status.isGranted) {
+          if (mounted) {
+            _showSnackBar('Permiso denegado para acceder a fotos', isError: true);
+          }
+          return;
+        }
+      } else {
+        // Android 13+ doesn't need storage permission for MediaStore
+        // But for older versions, we might need it
+        if (await Permission.storage.isDenied) {
+          await Permission.storage.request();
+        }
+      }
+
+      // Download file from URL
+      final response = await http.get(Uri.parse(item.url));
+      if (response.statusCode != 200) {
+        throw Exception('Error descargando archivo');
+      }
+
+      // Get temp directory and save file
+      final tempDir = await getTemporaryDirectory();
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final extension = item.type == 'video' ? 'mp4' : 'jpg';
+      final filePath = '${tempDir.path}/talia_$timestamp.$extension';
+
+      final file = File(filePath);
+      await file.writeAsBytes(response.bodyBytes);
+
+      // Save to gallery using Gal
+      if (item.type == 'video') {
+        await Gal.putVideo(filePath, album: 'Talia');
+      } else {
+        await Gal.putImage(filePath, album: 'Talia');
+      }
+
+      // Clean up temp file
+      if (await file.exists()) {
+        await file.delete();
+      }
+
+      if (mounted) {
+        _showSnackBar(
+          item.type == 'video' ? 'Video guardado en galería' : 'Imagen guardada en galería',
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        _showSnackBar('Error al guardar: $e', isError: true);
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isDownloading = false);
+      }
+    }
+  }
+
+  void _showSnackBar(String message, {bool isError = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? Colors.red : Colors.green,
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.all(16),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        duration: const Duration(seconds: 2),
       ),
     );
   }
@@ -250,7 +352,7 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
               duration: const Duration(milliseconds: 200),
               child: Container(
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.5),
+                  color: Colors.black.withValues(alpha: 0.5),
                   shape: BoxShape.circle,
                 ),
                 padding: const EdgeInsets.all(16),
@@ -273,7 +375,7 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
                     begin: Alignment.bottomCenter,
                     end: Alignment.topCenter,
                     colors: [
-                      Colors.black.withOpacity(0.8),
+                      Colors.black.withValues(alpha: 0.8),
                       Colors.transparent,
                     ],
                   ),

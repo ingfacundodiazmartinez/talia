@@ -105,13 +105,7 @@ class MessageCacheService {
       for (final message in messages) {
         if (message.localId != null) {
           final oldKey = '${chatId}_${message.localId}';
-          final existed = _messagesBox!.containsKey(oldKey);
           await _messagesBox!.delete(oldKey);
-          if (existed) {
-            print('🗑️ [Hive] Eliminado mensaje optimista: $oldKey');
-          } else {
-            print('⚠️ [Hive] Mensaje optimista NO existía: $oldKey');
-          }
         }
       }
 

@@ -129,8 +129,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       // Pausar cámara cuando la app va al background
       _controller.cleanupDeepAR();
     } else if (state == AppLifecycleState.resumed) {
-      // Reinicializar cuando regresa al foreground
-      if (_controller.hasCameraPermissions && !_controller.hasInitializationFailed) {
+      // ✅ FIX: Solo reinicializar si la cámara YA estaba inicializada antes
+      // Esto evita race condition cuando el diálogo de permisos de Android
+      // causa un cambio de lifecycle (pause -> resume) que dispara otra inicialización
+      if (_controller.isCameraInitialized && !_controller.hasInitializationFailed) {
         _controller.initialize();
       }
     }
@@ -194,13 +196,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     // Forzar rebuild para que FlutterCameraView reciba el nuevo selectedCameraIndex
     if (mounted) {
       setState(() {});
-    }
-  }
-
-  Future<void> _applyColorFilter(String filterName) async {
-    await _controller.applyColorFilter(filterName);
-    if (mounted) {
-      setState(() {}); // Rebuild UI
     }
   }
 
@@ -521,25 +516,49 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           // Botón cerrar
-          IconButton(
+          _buildShadowedIconButton(
             onPressed: _closeScreen,
-            icon: Icon(Icons.close, color: Colors.white, size: 28),
+            icon: Icons.close,
           ),
           // Controles de cámara (flash, switch)
           Row(
             children: [
-              // Flash button - solo visible con cámara trasera
-              if (_controller.isBackCamera)
-                _buildFlashButton(),
+              // Flash button - disponible para ambas cámaras
+              _buildFlashButton(),
               SizedBox(width: 8),
               // Switch camera button
-              IconButton(
+              _buildShadowedIconButton(
                 onPressed: _switchCamera,
-                icon: Icon(Icons.flip_camera_ios, color: Colors.white, size: 28),
+                icon: Icons.flip_camera_ios,
               ),
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  /// Botón con sombra para visibilidad en fondos claros
+  Widget _buildShadowedIconButton({
+    required VoidCallback onPressed,
+    required IconData icon,
+    String? tooltip,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.5),
+            blurRadius: 8,
+            spreadRadius: 1,
+          ),
+        ],
+      ),
+      child: IconButton(
+        onPressed: onPressed,
+        icon: Icon(icon, color: Colors.white, size: 28),
+        tooltip: tooltip,
       ),
     );
   }
@@ -568,12 +587,12 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         break;
     }
 
-    return IconButton(
+    return _buildShadowedIconButton(
       onPressed: () async {
         await _controller.toggleFlashMode();
         setState(() {});
       },
-      icon: Icon(flashIcon, color: Colors.white, size: 28),
+      icon: flashIcon,
       tooltip: tooltip,
     );
   }
@@ -608,9 +627,9 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: [
             // Galería
-            IconButton(
+            _buildShadowedIconButton(
               onPressed: _pickFromGallery,
-              icon: Icon(Icons.photo_library, color: Colors.white, size: 32),
+              icon: Icons.photo_library,
             ),
 
             // Botón principal (cambia según modo)
@@ -630,6 +649,13 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       decoration: BoxDecoration(
         color: Colors.black.withValues(alpha: 0.5),
         borderRadius: BorderRadius.circular(25),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.4),
+            blurRadius: 8,
+            spreadRadius: 1,
+          ),
+        ],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -674,6 +700,13 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           shape: BoxShape.circle,
           color: Colors.white,
           border: Border.all(color: Colors.white, width: 4),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.4),
+              blurRadius: 10,
+              spreadRadius: 2,
+            ),
+          ],
         ),
         child: Icon(
           Icons.camera_alt,
@@ -695,6 +728,13 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           shape: BoxShape.circle,
           color: _controller.isRecordingVideo ? Colors.red : Colors.red.withValues(alpha: 0.8),
           border: Border.all(color: Colors.white, width: 4),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.4),
+              blurRadius: 10,
+              spreadRadius: 2,
+            ),
+          ],
         ),
         child: Icon(
           _controller.isRecordingVideo ? Icons.stop : Icons.videocam,
@@ -712,51 +752,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         scrollDirection: Axis.horizontal,
         padding: EdgeInsets.symmetric(horizontal: 20),
         children: [
-          // Filtros de color
-          _buildFilterButton('none', 'Normal', Icons.face),
-          _buildFilterButton('sepia', 'Sepia', Icons.filter_vintage),
-          _buildFilterButton('black_white', 'B&N', Icons.filter_b_and_w),
-          _buildFilterButton('vintage', 'Vintage', Icons.filter_vintage),
-
           // Filtros AR
           ..._controller.getAvailableDeepARFilters().entries.map((entry) =>
             _buildARFilterButton(entry.key, entry.value['name'], entry.value['emoji'])
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildFilterButton(String filterId, String name, IconData icon) {
-    final isSelected = _controller.selectedFilter == filterId;
-
-    return GestureDetector(
-      onTap: () => _applyColorFilter(filterId),
-      child: Container(
-        width: 70,
-        margin: EdgeInsets.only(right: 12),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(35),
-          border: Border.all(
-            color: isSelected ? Color(0xFF9D7FE8) : Colors.white,
-            width: isSelected ? 3 : 1,
-          ),
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, color: Colors.white, size: 32),
-            SizedBox(height: 4),
-            Text(
-              name,
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 10,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -771,10 +771,18 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         margin: EdgeInsets.only(right: 12),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(35),
+          color: Colors.black.withValues(alpha: 0.3),
           border: Border.all(
             color: isSelected ? Color(0xFF9D7FE8) : Colors.white,
             width: isSelected ? 3 : 1,
           ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.3),
+              blurRadius: 6,
+              spreadRadius: 1,
+            ),
+          ],
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -787,6 +795,12 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 color: Colors.white,
                 fontSize: 8,
                 fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                shadows: [
+                  Shadow(
+                    color: Colors.black,
+                    blurRadius: 4,
+                  ),
+                ],
               ),
               textAlign: TextAlign.center,
               maxLines: 2,

@@ -33,6 +33,10 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
   String? _contactAlias;
   ContactUser? _contactUser;
 
+  // ✅ Issue 3: Story notifications
+  bool _storyNotificationsEnabled = false;
+  bool _isLoadingStoryNotifications = true;
+
   // Tab controller para las pestañas
   late TabController _tabController;
 
@@ -86,6 +90,16 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
       if (mounted) {
         setState(() {
           _contactUser = user;
+        });
+      }
+    };
+
+    // ✅ Issue 3: Story notifications callback
+    _controller.onStoryNotificationsChanged = (enabled) {
+      if (mounted) {
+        setState(() {
+          _storyNotificationsEnabled = enabled;
+          _isLoadingStoryNotifications = false;
         });
       }
     };
@@ -609,6 +623,24 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
             ),
           ),
 
+          // ✅ Issue 3: Toggle de notificaciones de historias
+          SizedBox(height: 20),
+          Container(
+            margin: EdgeInsets.symmetric(horizontal: 20),
+            decoration: BoxDecoration(
+              color: colorScheme.surface,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.05),
+                  blurRadius: 10,
+                  offset: Offset(0, 2),
+                ),
+              ],
+            ),
+            child: _buildStoryNotificationsTile(colorScheme),
+          ),
+
           // Mostrar padres si es un hijo
           if (role == 'child') ...[
             SizedBox(height: 20),
@@ -1033,6 +1065,69 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
           ),
         );
       },
+    );
+  }
+
+  /// ✅ Issue 3: Widget para toggle de notificaciones de historias
+  Widget _buildStoryNotificationsTile(ColorScheme colorScheme) {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        children: [
+          Container(
+            padding: EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: colorScheme.primary.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(
+              Icons.auto_stories_outlined,
+              color: colorScheme.primary,
+              size: 24,
+            ),
+          ),
+          SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Notificar nuevas historias',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: colorScheme.onSurface,
+                  ),
+                ),
+                SizedBox(height: 2),
+                Text(
+                  'Recibe notificaciones cuando ${_contactAlias ?? widget.contactName} suba una historia',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDarkMode ? Colors.grey[400] : Colors.grey[600],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(width: 8),
+          _isLoadingStoryNotifications
+              ? SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : Switch.adaptive(
+                  value: _storyNotificationsEnabled,
+                  onChanged: (value) async {
+                    await _controller.toggleStoryNotifications();
+                  },
+                  activeColor: colorScheme.primary,
+                ),
+        ],
+      ),
     );
   }
 

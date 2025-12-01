@@ -5,6 +5,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import '../device_management_service.dart';
 import '../user_role_service.dart';
+import '../../notification_service.dart';
+import '../../utils/release_logger.dart';
 
 class ProfileCompletionResult {
   final bool success;
@@ -213,6 +215,9 @@ class ProfileCompletionService {
       // Register user device
       await _registerUserDevice(userId);
 
+      // ✅ FIX: Inicializar FCM token ahora que el usuario ya existe en Firestore
+      await _initializeFCMToken();
+
       // Obtener el rol final del usuario (puede haber sido actualizado por Cloud Function)
       final finalUserDoc = await FirebaseFirestore.instance
           .collection('users')
@@ -305,6 +310,7 @@ class ProfileCompletionService {
         });
 
         await _registerUserDevice(userId);
+        await _initializeFCMToken();
         return ProfileCompletionResult(
           success: true,
           role: existingRole,
@@ -326,6 +332,7 @@ class ProfileCompletionService {
         });
 
         await _registerUserDevice(userId);
+        await _initializeFCMToken();
         return ProfileCompletionResult(
           success: true,
           role: role,
@@ -395,6 +402,19 @@ class ProfileCompletionService {
       if (!result.isSuccess) {
       }
     } catch (e) {
+    }
+  }
+
+  /// Inicializar FCM token después de que el usuario ya existe en Firestore
+  /// Esto es necesario porque initializeFCMTokenAfterLogin se ejecutó antes
+  /// de que existiera el documento del usuario
+  Future<void> _initializeFCMToken() async {
+    try {
+      await NotificationService().initializeFCMTokenAfterLogin();
+      ReleaseLogger.log('✅ FCM token inicializado después de completar perfil', tag: 'ProfileCompletionService');
+    } catch (e) {
+      ReleaseLogger.log('⚠️ Error inicializando FCM token: $e', tag: 'ProfileCompletionService');
+      // No bloquear el flujo si falla
     }
   }
 }

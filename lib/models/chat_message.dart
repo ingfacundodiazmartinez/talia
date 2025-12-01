@@ -50,6 +50,7 @@ class ChatMessage {
 
   // Campos para audio
   final List<double>? waveformData;          // Datos de forma de onda para audio
+  final bool isAiGenerated;                  // Indica si el audio fue generado con IA (TTS)
 
   // Campos para mensajes reenviados
   final bool isForwarded;                    // Indica si el mensaje fue reenviado
@@ -85,6 +86,7 @@ class ChatMessage {
     this.moderationSeverity,
     this.originalText,
     this.waveformData,
+    this.isAiGenerated = false,
     this.isForwarded = false,
     this.originalSenderId,
     this.originalChatId,
@@ -162,6 +164,7 @@ class ChatMessage {
       waveformData: data['waveformData'] != null
           ? (data['waveformData'] as List).map((e) => (e as num).toDouble()).toList()
           : null,
+      isAiGenerated: data['isAiGenerated'] ?? false,
       isForwarded: data['isForwarded'] ?? false,
       originalSenderId: data['originalSenderId'] as String?,
       originalChatId: data['originalChatId'] as String?,
@@ -222,6 +225,7 @@ class ChatMessage {
       'senderId': senderId,
       'isRead': isRead,
       'isForwarded': isForwarded,
+      'isAiGenerated': isAiGenerated,
     };
 
     if (text != null) map['text'] = text;
@@ -339,6 +343,7 @@ class ChatMessage {
     String? moderationSeverity,
     String? originalText,
     List<double>? waveformData,
+    bool? isAiGenerated,
     String? localId, // ✅ FIX: Agregar localId como parámetro
   }) {
     return ChatMessage(
@@ -364,6 +369,7 @@ class ChatMessage {
       moderationSeverity: moderationSeverity ?? this.moderationSeverity,
       originalText: originalText ?? this.originalText,
       waveformData: waveformData ?? this.waveformData,
+      isAiGenerated: isAiGenerated ?? this.isAiGenerated,
       // Preservar campos de reenvío
       isForwarded: isForwarded,
       originalSenderId: originalSenderId,

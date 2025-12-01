@@ -59,7 +59,13 @@ class ContactPhotoCacheService {
         .where('users', arrayContains: currentUserId)
         .where('status', isEqualTo: 'approved')
         .snapshots()
-        .listen(_onContactsChanged);
+        .listen(
+          _onContactsChanged,
+          onError: (error) {
+            ReleaseLogger.error('❌ [PhotoCache] Contacts stream error: $error');
+          },
+          cancelOnError: false,
+        );
   }
 
   /// Handle contacts collection changes
@@ -104,7 +110,13 @@ class ContactPhotoCacheService {
         .collection('users')
         .doc(userId)
         .snapshots()
-        .listen((snapshot) => _onUserPhotoChanged(userId, snapshot));
+        .listen(
+          (snapshot) => _onUserPhotoChanged(userId, snapshot),
+          onError: (error) {
+            ReleaseLogger.error('❌ [PhotoCache] User $userId stream error: $error');
+          },
+          cancelOnError: false,
+        );
   }
 
   /// Stop listening to a user's photo changes

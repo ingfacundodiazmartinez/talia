@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -11,17 +12,31 @@ import '../screens/chat_detail_screen.dart';
 /// - Bloqueos bidireccionales
 /// - Restricciones parentales
 /// - Rate limiting
+///
+/// OPTIMIZACIÓN: Verifica si el chat existe localmente antes de llamar a CF
 class CreateChatService {
   final FirebaseFunctions _functions;
   final FirebaseAuth _auth;
+  final FirebaseFirestore _firestore;
 
   CreateChatService({
     FirebaseFunctions? functions,
     FirebaseAuth? auth,
+    FirebaseFirestore? firestore,
   })  : _functions = functions ?? FirebaseFunctions.instance,
-        _auth = auth ?? FirebaseAuth.instance;
+        _auth = auth ?? FirebaseAuth.instance,
+        _firestore = firestore ?? FirebaseFirestore.instance;
+
+  /// Genera el chatId a partir de dos userIds (ordenados alfabéticamente)
+  String _generateChatId(String userId1, String userId2) {
+    final sortedIds = [userId1, userId2]..sort();
+    return '${sortedIds[0]}_${sortedIds[1]}';
+  }
 
   /// Crear o obtener chat con un contacto
+  ///
+  /// OPTIMIZADO: Primero verifica si el chat existe localmente.
+  /// Solo llama a Cloud Function si el chat no existe.
   ///
   /// Returns: chatId si se creó o ya existía
   /// Throws: Exception si no se puede crear (no son contactos, bloqueados, etc.)
@@ -34,26 +49,39 @@ class CreateChatService {
         throw Exception('Usuario no autenticado');
       }
 
-      ReleaseLogger.log('📝 Creando/obteniendo chat con $otherUserId');
+      // ✅ OPTIMIZACIÓN: Verificar si el chat ya existe localmente (con timeout)
+      final chatId = _generateChatId(currentUserId, otherUserId);
+
+      try {
+        final chatDoc = await _firestore
+            .collection('chats')
+            .doc(chatId)
+            .get()
+            .timeout(const Duration(seconds: 5));
+
+        if (chatDoc.exists) {
+          ReleaseLogger.log('✅ Chat ya existe (local): $chatId');
+          return chatId;
+        }
+      } catch (e) {
+        // Si hay timeout o error, intentar con CF
+        ReleaseLogger.log('⚠️ Error verificando chat local, intentando CF: $e');
+      }
+
+      // Llamar a Cloud Function si el chat NO existe o hubo error
+      ReleaseLogger.log('📝 Creando chat via CF: $chatId');
 
       final callable = _functions.httpsCallable('createChat');
       final result = await callable.call({
         'otherUserId': otherUserId,
-      });
+      }).timeout(const Duration(seconds: 15));
 
       final data = result.data as Map<String, dynamic>;
 
       if (data['success'] == true) {
-        final chatId = data['chatId'] as String;
-        final alreadyExists = data['alreadyExists'] ?? false;
-
-        if (alreadyExists) {
-          ReleaseLogger.log('✅ Chat ya existía: $chatId');
-        } else {
-          ReleaseLogger.log('✅ Chat creado exitosamente: $chatId');
-        }
-
-        return chatId;
+        final newChatId = data['chatId'] as String;
+        ReleaseLogger.log('✅ Chat creado exitosamente: $newChatId');
+        return newChatId;
       } else {
         throw Exception('Error desconocido al crear chat');
       }
@@ -99,21 +127,28 @@ class CreateChatService {
   }) async {
     final service = CreateChatService();
 
+    // Guardar navigator antes de mostrar dialog
+    final navigator = Navigator.of(context, rootNavigator: true);
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+
     // Mostrar loading dialog
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => Center(
-        child: Card(
-          child: Padding(
-            padding: const EdgeInsets.all(20.0),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const CircularProgressIndicator(),
-                const SizedBox(height: 16),
-                Text('Abriendo chat...'),
-              ],
+      builder: (dialogContext) => PopScope(
+        canPop: false,
+        child: Center(
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(20.0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const CircularProgressIndicator(),
+                  const SizedBox(height: 16),
+                  Text('Abriendo chat...'),
+                ],
+              ),
             ),
           ),
         ),
@@ -126,11 +161,11 @@ class CreateChatService {
         otherUserId: otherUserId,
       );
 
-      // Cerrar loading dialog (usar rootNavigator para cerrar dialog correcto)
-      if (context.mounted) {
-        Navigator.of(context, rootNavigator: true).pop();
+      // Cerrar loading dialog
+      navigator.pop();
 
-        // Navegar a chat
+      // Navegar a chat
+      if (context.mounted) {
         Navigator.of(context).push(
           MaterialPageRoute(
             builder: (context) => ChatDetailScreen(
@@ -142,19 +177,21 @@ class CreateChatService {
         );
       }
     } catch (e) {
-      // Cerrar loading dialog (usar rootNavigator para cerrar dialog correcto)
-      if (context.mounted) {
-        Navigator.of(context, rootNavigator: true).pop();
-
-        // Mostrar error
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(e.toString().replaceFirst('Exception: ', '')),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 5),
-          ),
-        );
+      // Cerrar loading dialog
+      try {
+        navigator.pop();
+      } catch (_) {
+        // Dialog might already be closed
       }
+
+      // Mostrar error
+      scaffoldMessenger.showSnackBar(
+        SnackBar(
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 5),
+        ),
+      );
     }
   }
 }

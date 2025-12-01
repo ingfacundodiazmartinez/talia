@@ -163,39 +163,37 @@ class FirebaseService {
         .snapshots();
   }
 
-  // Aprobar contacto
+  // Aprobar contacto - Via Cloud Function para seguridad
   Future<void> approveContact(
     String requestId,
     String childId,
     String contactId,
   ) async {
-    // Actualizar el estado de la solicitud
-    await _firestore.collection('contact_requests').doc(requestId).update({
-      'status': 'approved',
-      'approvedAt': FieldValue.serverTimestamp(),
-    });
+    try {
+      final callable = FirebaseFunctions.instance.httpsCallable('approveContactFromRequest');
+      await callable.call({
+        'requestId': requestId,
+        'childId': childId,
+        'contactId': contactId,
+      });
 
-    // Agregar a contactos (sistema bidireccional)
-    await _firestore.collection('contacts').add({
-      'users': [childId, contactId],
-      'status': 'approved',
-      'createdAt': FieldValue.serverTimestamp(),
-      'type': 'contact',
-    });
-
-    // Procesar invitaciones de grupo pendientes
-    final groupChatService = GroupChatService();
-    await groupChatService.processGroupInvitationsAfterContactApproval(
-      childId,
-      contactId,
-    );
+      // Procesar invitaciones de grupo pendientes
+      final groupChatService = GroupChatService();
+      await groupChatService.processGroupInvitationsAfterContactApproval(
+        childId,
+        contactId,
+      );
+    } catch (e) {
+      ReleaseLogger.error('Error aprobando contacto via CF: $e', tag: 'FirebaseService');
+      rethrow;
+    }
   }
 
-  // Rechazar contacto
+  // Rechazar contacto - Via Cloud Function para seguridad
   Future<void> rejectContact(String requestId) async {
-    await _firestore.collection('contact_requests').doc(requestId).update({
+    await FirebaseFunctions.instance.httpsCallable('updateContactRequestStatus').call({
+      'requestId': requestId,
       'status': 'rejected',
-      'rejectedAt': FieldValue.serverTimestamp(),
     });
   }
 

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import '../services/location_service.dart';
+import '../utils/release_logger.dart';
 
 class ChildLocationScreen extends StatefulWidget {
   final String childId;
@@ -26,6 +28,7 @@ class _ChildLocationScreenState extends State<ChildLocationScreen> {
   DateTime? _lastUpdate;
   double? _accuracy;
   bool _isLoading = true;
+  bool _isRequestingLocation = false;
   String? _errorMessage;
 
   // Configuración inicial del mapa
@@ -38,6 +41,83 @@ class _ChildLocationScreenState extends State<ChildLocationScreen> {
   void initState() {
     super.initState();
     _loadChildLocation();
+  }
+
+  /// Solicitar ubicación actualizada del hijo
+  ///
+  /// Llama a la Cloud Function que envía una notificación push al hijo
+  /// para que actualice su ubicación en background.
+  Future<void> _requestChildLocation() async {
+    setState(() {
+      _isRequestingLocation = true;
+    });
+
+    try {
+      ReleaseLogger.log(
+        '📍 Solicitando ubicación de ${widget.childName}',
+        tag: 'ChildLocationScreen',
+      );
+
+      final callable = FirebaseFunctions.instance.httpsCallable(
+        'requestChildLocation',
+        options: HttpsCallableOptions(timeout: const Duration(seconds: 30)),
+      );
+
+      final result = await callable.call({'childId': widget.childId});
+      final data = result.data as Map<String, dynamic>;
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['message'] ?? 'Solicitud enviada'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+
+      ReleaseLogger.log(
+        '✅ Solicitud de ubicación enviada exitosamente',
+        tag: 'ChildLocationScreen',
+      );
+    } on FirebaseFunctionsException catch (e) {
+      ReleaseLogger.error(
+        '❌ Error solicitando ubicación: ${e.code} - ${e.message}',
+        tag: 'ChildLocationScreen',
+      );
+
+      if (mounted) {
+        String errorMessage = e.message ?? 'Error solicitando ubicación';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMessage),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 4),
+          ),
+        );
+      }
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ Error inesperado solicitando ubicación: $e',
+        tag: 'ChildLocationScreen',
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al solicitar ubicación'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isRequestingLocation = false;
+        });
+      }
+    }
   }
 
   // Cargar ubicación del niño
@@ -261,13 +341,18 @@ class _ChildLocationScreenState extends State<ChildLocationScreen> {
         elevation: 0,
         actions: [
           IconButton(
-            icon: Icon(Icons.refresh),
-            onPressed: () {
-              setState(() {
-                _isLoading = true;
-              });
-              _loadChildLocation();
-            },
+            icon: _isRequestingLocation
+                ? SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : Icon(Icons.refresh),
+            onPressed: _isRequestingLocation ? null : _requestChildLocation,
+            tooltip: 'Solicitar ubicación actual',
           ),
         ],
       ),

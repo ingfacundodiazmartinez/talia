@@ -82,49 +82,89 @@ exports.createGroup = onCall(
       console.log(`📊 [createGroup] Permisos faltantes: ${missingPermissions.length}`);
 
       // 4. Determinar miembros aprobados vs pendientes
-      let approvedMembers = [creatorId];
+      // NUEVO ALGORITMO: Encontrar el subconjunto máximo de miembros que pueden chatear entre sí
+      let approvedMembers = [];
       let pendingMemberIds = [];
 
       if (missingPermissions.length === 0) {
         // Todos tienen permiso, agregar a todos
-        approvedMembers = allMemberIds;
+        approvedMembers = [...allMemberIds];
+        console.log(`✅ [createGroup] Todos los miembros tienen permisos entre sí`);
       } else {
-        // Hay permisos faltantes, solo los que YA tienen permiso con el creador
-        for (const memberId of initialMembers) {
-          const canChat = await checkChatPermission(creatorId, memberId, db);
-          if (canChat) {
-            // Verificar que TAMBIÉN tenga permiso con todos los otros miembros aprobados
-            let hasAllPermissions = true;
-            for (const approvedId of approvedMembers) {
-              if (approvedId !== memberId) {
-                const canChatWithApproved = await checkChatPermission(memberId, approvedId, db);
-                if (!canChatWithApproved) {
-                  hasAllPermissions = false;
-                  break;
-                }
-              }
-            }
+        // Crear un grafo de conexiones permitidas
+        // Un miembro puede estar en el grupo si tiene permiso con TODOS los demás miembros del grupo
 
-            if (hasAllPermissions) {
-              approvedMembers.push(memberId);
-            } else {
-              pendingMemberIds.push(memberId);
+        // Crear set de pares sin permiso para búsqueda rápida
+        const missingPairs = new Set();
+        for (const mp of missingPermissions) {
+          // Guardar ambas direcciones para búsqueda rápida
+          missingPairs.add(`${mp.user1}_${mp.user2}`);
+          missingPairs.add(`${mp.user2}_${mp.user1}`);
+        }
+
+        // Función para verificar si dos usuarios pueden chatear
+        const canUsersPair = (u1, u2) => {
+          if (u1 === u2) return true;
+          return !missingPairs.has(`${u1}_${u2}`);
+        };
+
+        // Función para verificar si un usuario puede unirse a un grupo de usuarios
+        const canJoinGroup = (userId, groupMembers) => {
+          for (const memberId of groupMembers) {
+            if (!canUsersPair(userId, memberId)) {
+              return false;
             }
+          }
+          return true;
+        };
+
+        // El creador siempre está aprobado
+        approvedMembers = [creatorId];
+
+        // Para cada miembro inicial, verificar si puede unirse al grupo actual
+        // Ordenar por: primero los que tienen TODOS los permisos, luego los demás
+        const membersWithScores = initialMembers.map(memberId => {
+          let missingCount = 0;
+          for (const otherId of allMemberIds) {
+            if (otherId !== memberId && !canUsersPair(memberId, otherId)) {
+              missingCount++;
+            }
+          }
+          return { memberId, missingCount };
+        });
+
+        // Ordenar: primero los que menos permisos faltantes tienen
+        membersWithScores.sort((a, b) => a.missingCount - b.missingCount);
+
+        console.log(`📊 [createGroup] Orden de procesamiento:`, membersWithScores.map(m => `${m.memberId}(${m.missingCount})`));
+
+        // Agregar miembros en orden de prioridad
+        for (const { memberId, missingCount } of membersWithScores) {
+          if (canJoinGroup(memberId, approvedMembers)) {
+            approvedMembers.push(memberId);
+            console.log(`✅ [createGroup] ${memberInfoMap.get(memberId)?.name} puede unirse (permisos OK con grupo actual)`);
           } else {
             pendingMemberIds.push(memberId);
+            console.log(`⏳ [createGroup] ${memberInfoMap.get(memberId)?.name} pendiente (falta permiso con algún miembro aprobado)`);
           }
         }
       }
 
       console.log(`📊 [createGroup] Aprobados: ${approvedMembers.length}, Pendientes: ${pendingMemberIds.length}`);
+      console.log(`📊 [createGroup] Miembros aprobados:`, approvedMembers.map(id => memberInfoMap.get(id)?.name));
+      console.log(`📊 [createGroup] Miembros pendientes:`, pendingMemberIds.map(id => memberInfoMap.get(id)?.name));
 
       // 5. Crear el grupo con los miembros aprobados
+      // ✅ IMPORTANTE: Usar Timestamp.now() en lugar de FieldValue.serverTimestamp()
+      // para evitar problemas de timing donde el cliente lee el documento antes de
+      // que el servidor resuelva el timestamp (lo que excluiría el doc del orderBy)
+      const nowTimestamp = Timestamp.now();
       const groupRef = await db.collection("groups").add({
         name: name.trim(),
         description: description?.trim() || "",
         avatar: avatar || null,
         createdBy: creatorId,
-        createdAt: FieldValue.serverTimestamp(),
+        createdAt: nowTimestamp,
         isActive: true,
         members: approvedMembers,
         pendingMembers: pendingMemberIds, // ✅ Guardar miembros pendientes
@@ -134,7 +174,7 @@ exports.createGroup = onCall(
           allowMemberInvites: true,
           requireAdminApproval: false,
         },
-        lastActivity: FieldValue.serverTimestamp(),
+        lastActivity: nowTimestamp,
         messageCount: 0,
       });
 
@@ -302,7 +342,7 @@ exports.createGroup = onCall(
         await groupRef.update({
           members: updatedApprovedMembers,
           pendingMembers: updatedPendingMembers,
-          lastActivity: FieldValue.serverTimestamp(),
+          lastActivity: Timestamp.now(),
         });
 
         console.log(`📊 [createGroup] RECALCULADO - Aprobados: ${updatedApprovedMembers.length}, Pendientes: ${updatedPendingMembers.length}`);
@@ -354,8 +394,12 @@ async function checkChatPermission(userId1, userId2, db) {
     const user1Role = user1Data.role || "child";
     const user2Role = user2Data.role || "child";
 
-    // Si ambos son padres, pueden chatear libremente
-    if (user1Role === "parent" && user2Role === "parent") {
+    // Si ambos son adultos (parent o adult), pueden chatear libremente
+    const isUser1Adult = user1Role === "parent" || user1Role === "adult";
+    const isUser2Adult = user2Role === "parent" || user2Role === "adult";
+
+    if (isUser1Adult && isUser2Adult) {
+      console.log(`✅ [checkChatPermission] Ambos usuarios son adultos (${user1Role}, ${user2Role}) - permitido`);
       return true;
     }
 
@@ -420,6 +464,8 @@ async function createPermissionRequestForChildContact({
   db,
 }) {
   try {
+    const messaging = getMessaging();
+
     // Obtener padres vinculados al child
     const linksQuery = await db
       .collection("parent_children")
@@ -462,6 +508,47 @@ async function createPermissionRequestForChildContact({
       });
 
       console.log(`✅ [createPermissionRequestForChildContact] Solicitud creada para padre ${parentId} - Aprobar ${contactInfo.name} para ${childInfo.name}`);
+
+      // ✅ Enviar notificación push al padre
+      try {
+        const parentDoc = await db.collection("users").doc(parentId).get();
+        const parentData = parentDoc.data();
+        const parentToken = parentData?.fcmToken;
+
+        if (parentToken) {
+          await messaging.send({
+            token: parentToken,
+            notification: {
+              title: "Solicitud de contacto para grupo",
+              body: `${childInfo.name} necesita tu aprobación para agregar a ${contactInfo.name} al grupo "${groupName}"`,
+            },
+            data: {
+              type: "group_permission_request",
+              childId: childId,
+              groupId: groupId,
+            },
+            android: {
+              priority: "high",
+            },
+            apns: {
+              headers: {
+                "apns-priority": "10",
+              },
+              payload: {
+                aps: {
+                  sound: "default",
+                },
+              },
+            },
+          });
+          console.log(`📬 [createPermissionRequestForChildContact] Notificación enviada a padre ${parentId}`);
+        } else {
+          console.log(`⚠️ [createPermissionRequestForChildContact] Padre ${parentId} no tiene token FCM`);
+        }
+      } catch (notifError) {
+        console.error(`⚠️ [createPermissionRequestForChildContact] Error enviando notificación a ${parentId}:`, notifError);
+        // No lanzar error, la solicitud ya se creó
+      }
     }
   } catch (error) {
     console.error("❌ [createPermissionRequestForChildContact] Error:", error);
@@ -483,6 +570,8 @@ async function createCrossChildPermissionRequest({
   db,
 }) {
   try {
+    const messaging = getMessaging();
+
     // Obtener padres de child1
     const links1Query = await db
       .collection("parent_children")
@@ -529,6 +618,44 @@ async function createCrossChildPermissionRequest({
       });
 
       console.log(`✅ [createCrossChildPermissionRequest] Solicitud creada para padre ${parentId} de ${child1Info.name} - Aprobar ${child2Info.name}`);
+
+      // ✅ Enviar notificación push al padre
+      try {
+        const parentDoc = await db.collection("users").doc(parentId).get();
+        const parentData = parentDoc.data();
+        const parentToken = parentData?.fcmToken;
+
+        if (parentToken) {
+          await messaging.send({
+            token: parentToken,
+            notification: {
+              title: "Solicitud de contacto para grupo",
+              body: `${child1Info.name} necesita tu aprobación para agregar a ${child2Info.name} al grupo "${groupName}"`,
+            },
+            data: {
+              type: "group_permission_request",
+              childId: child1Id,
+              groupId: groupId,
+            },
+            android: {
+              priority: "high",
+            },
+            apns: {
+              headers: {
+                "apns-priority": "10",
+              },
+              payload: {
+                aps: {
+                  sound: "default",
+                },
+              },
+            },
+          });
+          console.log(`📬 [createCrossChildPermissionRequest] Notificación enviada a padre ${parentId} de ${child1Info.name}`);
+        }
+      } catch (notifError) {
+        console.error(`⚠️ [createCrossChildPermissionRequest] Error enviando notificación a ${parentId}:`, notifError);
+      }
     }
 
     // Crear solicitud para padres de child2 (pedir aprobar child1)
@@ -559,6 +686,44 @@ async function createCrossChildPermissionRequest({
       });
 
       console.log(`✅ [createCrossChildPermissionRequest] Solicitud creada para padre ${parentId} de ${child2Info.name} - Aprobar ${child1Info.name}`);
+
+      // ✅ Enviar notificación push al padre
+      try {
+        const parentDoc = await db.collection("users").doc(parentId).get();
+        const parentData = parentDoc.data();
+        const parentToken = parentData?.fcmToken;
+
+        if (parentToken) {
+          await messaging.send({
+            token: parentToken,
+            notification: {
+              title: "Solicitud de contacto para grupo",
+              body: `${child2Info.name} necesita tu aprobación para agregar a ${child1Info.name} al grupo "${groupName}"`,
+            },
+            data: {
+              type: "group_permission_request",
+              childId: child2Id,
+              groupId: groupId,
+            },
+            android: {
+              priority: "high",
+            },
+            apns: {
+              headers: {
+                "apns-priority": "10",
+              },
+              payload: {
+                aps: {
+                  sound: "default",
+                },
+              },
+            },
+          });
+          console.log(`📬 [createCrossChildPermissionRequest] Notificación enviada a padre ${parentId} de ${child2Info.name}`);
+        }
+      } catch (notifError) {
+        console.error(`⚠️ [createCrossChildPermissionRequest] Error enviando notificación a ${parentId}:`, notifError);
+      }
     }
   } catch (error) {
     console.error("❌ [createCrossChildPermissionRequest] Error:", error);
@@ -1068,6 +1233,9 @@ const genAI = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
  * @param {string} messageText - Texto del mensaje a analizar
  * @param {string} messageType - Tipo de mensaje (text, image, video, audio)
  * @param {string} conversationContext - Contexto de la conversación (últimos mensajes)
+ * @param {string} moderationLevel - Nivel de moderación (high, medium, low)
+ * @param {Array} participantsAges - Edades de los participantes
+ * @param {Array} participantsLocations - Ubicaciones de los participantes
  * @return {Promise<Object>} Resultado del análisis con isInappropriate, severity, reason
  */
 async function analyzeMessageWithGemini(messageText, messageType = "text", conversationContext = "", moderationLevel = "high", participantsAges = [], participantsLocations = []) {
@@ -1081,9 +1249,9 @@ async function analyzeMessageWithGemini(messageText, messageType = "text", conve
   }
 
   try {
-    // Usar gemini-2.5-flash que está disponible y es el modelo estable más reciente
+    // Usar gemini-2.0-flash-lite que es el más barato y rápido
     const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash",
+      model: "gemini-2.0-flash-lite",
     });
 
     const contextSection = conversationContext ?
@@ -1216,6 +1384,11 @@ NIVEL HIGH (estricto - solo conversación cordial):
 - Solo permite: conversación amistosa, respetuosa y positiva
 - Ante cualquier duda sobre el tono: BLOQUEA con severity: low
 
+NIVEL MEDIUM (equilibrado):
+- Bloquea insultos directos y palabrotas (severity: medium)
+- Permite sarcasmo, ironía y tono informal SIN insultos
+- Solo bloquea cuando hay clara intención ofensiva
+
 NIVEL LOW (permisivo en tono, estricto en contenido):
 - Bloquea TODOS los insultos y palabrotas (severity: medium)
 - Bloquea insinuaciones sexuales o violentas (severity: medium)
@@ -1248,6 +1421,8 @@ Nivel HIGH (estricto - conversación cordial):
 - "puto" → {"isInappropriate": true, "severity": "medium", "reason": "Lenguaje vulgar u obsceno"}
 - "hijo de puta" → {"isInappropriate": true, "severity": "medium", "reason": "Lenguaje vulgar u obsceno"}
 - "sos un idiota" → {"isInappropriate": true, "severity": "medium", "reason": "Lenguaje ofensivo o insultos"}
+- "pelotudo" → {"isInappropriate": true, "severity": "medium", "reason": "Lenguaje vulgar u obsceno"}
+- "boludo" → {"isInappropriate": true, "severity": "medium", "reason": "Lenguaje vulgar u obsceno"}
 - "no seas exagerado" → {"isInappropriate": true, "severity": "low", "reason": "Tono negativo o agresivo"}
 - "qué pesado sos" → {"isInappropriate": true, "severity": "low", "reason": "Tono negativo o agresivo"}
 - "dale ya" → {"isInappropriate": true, "severity": "low", "reason": "Tono negativo o agresivo"}
@@ -1257,10 +1432,14 @@ Nivel LOW (permisivo en tono, estricto en insultos):
 - "puto" → {"isInappropriate": true, "severity": "medium", "reason": "Lenguaje vulgar u obsceno"}
 - "hijo de puta" → {"isInappropriate": true, "severity": "medium", "reason": "Lenguaje vulgar u obsceno"}
 - "sos un idiota" → {"isInappropriate": true, "severity": "medium", "reason": "Lenguaje ofensivo o insultos"}
+- "pelotudo" → {"isInappropriate": true, "severity": "medium", "reason": "Lenguaje vulgar u obsceno"}
+- "boludo" → {"isInappropriate": true, "severity": "medium", "reason": "Lenguaje vulgar u obsceno"}
 - "no seas exagerado" → {"isInappropriate": false, "severity": "none", "reason": "Conversación apropiada"}
 - "qué pesado sos" → {"isInappropriate": false, "severity": "none", "reason": "Conversación apropiada"}
 - "dale ya" → {"isInappropriate": false, "severity": "none", "reason": "Conversación apropiada"}
 - "hola cómo estás" → {"isInappropriate": false, "severity": "none", "reason": "Conversación apropiada"}`;
+
+    console.log(`🔍 [Gemini Moderation] Analizando mensaje (nivel: ${moderationLevel}, hasMinor: ${hasMinor})`);
 
     const result = await model.generateContent(prompt);
     const response = await result.response;
