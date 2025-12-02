@@ -205,7 +205,7 @@ class MessageForwardService {
     // Solo Cloud Functions deben actualizar lastMessage después de validación
   }
 
-  /// Reenvía un mensaje a un chat grupal
+  /// Reenvía un mensaje a un chat grupal (Groups V2)
   Future<void> _forwardToGroup({
     required String groupId,
     required ChatMessage originalMessage,
@@ -213,15 +213,25 @@ class MessageForwardService {
     String? originalChatId,
     String? originalContactName,
   }) async {
-    // Crear nuevo mensaje basado en el original
+    // Get sender info for Groups V2 messages
+    final currentUser = _auth.currentUser;
+    final senderName = currentUser?.displayName ?? 'Usuario';
+    final senderPhotoURL = currentUser?.photoURL;
+
+    // Crear nuevo mensaje basado en el original (Groups V2 format)
     final newMessage = {
       'senderId': senderId,
+      'senderName': senderName,
+      'senderPhotoURL': senderPhotoURL,
       'text': originalMessage.text,
       'timestamp': FieldValue.serverTimestamp(),
       'status': 'sent',
-      'type': originalMessage.type,
+      'type': originalMessage.type ?? 'text',
       'isForwarded': true, // Marcar como reenviado
       'originalSenderId': originalMessage.senderId, // Referencia al sender original
+      'isDeleted': false,
+      'reactions': {},
+      'readBy': [senderId],
     };
 
     // Agregar contexto del chat original si está disponible
@@ -249,18 +259,22 @@ class MessageForwardService {
       newMessage['waveformData'] = originalMessage.waveformData!;
     }
 
-    // Guardar mensaje en el grupo
+    // Guardar mensaje en groups_v2 (new architecture)
     await _firestore
-        .collection('groups')
+        .collection('groups_v2')
         .doc(groupId)
         .collection('messages')
         .add(newMessage);
 
-    // Actualizar el último mensaje del grupo
-    await _firestore.collection('groups').doc(groupId).update({
-      'lastMessage': originalMessage.text,
-      'lastMessageTimestamp': FieldValue.serverTimestamp(),
-      'lastMessageSenderId': senderId,
+    // Actualizar el último mensaje del grupo (groups_v2 format)
+    final previewText = originalMessage.text ??
+        (originalMessage.imageUrl != null ? '📷 Imagen' :
+         originalMessage.videoUrl != null ? '🎥 Video' :
+         originalMessage.audioUrl != null ? '🎵 Audio' : 'Mensaje reenviado');
+
+    await _firestore.collection('groups_v2').doc(groupId).update({
+      'lastMessage': previewText,
+      'lastActivity': FieldValue.serverTimestamp(),
     });
   }
 }

@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import '../controllers/group_chat_controller.dart';
 import '../utils/release_logger.dart';
 import '../notification_service.dart';
+import '../services/local_unread_count_service.dart';
 import '../services/reaction_service.dart';
 import '../services/message_status_helper.dart';
 import '../services/read_receipts_service.dart';
@@ -93,6 +94,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     try {
       // 🔒 PASO 1: Establecer chat actual antes de inicializar controller
       await NotificationService().setCurrentChat(widget.groupId);
+      print('📊📊📊 [GroupChatScreen] ANTES de enterChat para ${widget.groupId}');
+      await LocalUnreadCountService().enterChat(widget.groupId); // ✅ FIX: Marcar que estamos en el grupo
+      print('📊📊📊 [GroupChatScreen] DESPUÉS de enterChat para ${widget.groupId}');
 
       // 🗑️ PASO 2: Limpiar notificaciones de este grupo al abrirlo
       NotificationService().clearGroupNotifications(widget.groupId);
@@ -194,6 +198,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     // 🔒 NOTA: clearCurrentChat() es async pero no necesitamos await en dispose
     // Es una operación de limpieza - fire-and-forget está bien aquí
     NotificationService().clearCurrentChat();
+    LocalUnreadCountService().exitChat(); // ✅ FIX: Marcar que salimos del grupo
 
     WidgetsBinding.instance.removeObserver(this);
     _controller.dispose();
@@ -217,9 +222,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     // para que las notificaciones nativas se muestren correctamente
     if (state == AppLifecycleState.paused) {
       NotificationService().clearCurrentChat();
+      LocalUnreadCountService().exitChat(); // ✅ FIX: Marcar que salimos del grupo
     } else if (state == AppLifecycleState.resumed) {
       // Restaurar el chat actual cuando vuelve a foreground
       NotificationService().setCurrentChat(widget.groupId);
+      LocalUnreadCountService().enterChat(widget.groupId); // ✅ FIX: Marcar que volvemos al grupo
       // Marcar mensajes como leídos
       _markMessagesAsDeliveredAndSeen();
     }

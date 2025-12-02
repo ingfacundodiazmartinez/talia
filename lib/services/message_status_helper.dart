@@ -108,6 +108,71 @@ class MessageStatusHelper {
     return MessageStatus.sending;
   }
 
+  /// Calcula el MessageStatus para mensajes de grupos V2
+  ///
+  /// Lógica para grupos:
+  /// - seen: TODOS los miembros del grupo (excepto el sender) leyeron el mensaje
+  /// - delivered: Tiene deliveredTo con miembros que no son el sender
+  /// - sent: Tiene timestamp del servidor
+  /// - sending: Aún no tiene timestamp
+  ///
+  /// [data] - Mapa de datos del mensaje desde Firestore
+  /// [senderId] - ID del remitente del mensaje
+  /// [hasServerTimestamp] - true si el mensaje tiene timestamp del servidor
+  /// [groupMembers] - Lista de IDs de todos los miembros del grupo
+  static MessageStatus calculateGroupV2Status({
+    required Map<String, dynamic> data,
+    required String senderId,
+    required bool hasServerTimestamp,
+    List<String>? groupMembers,
+  }) {
+    final currentUserId = _auth.currentUser?.uid;
+    if (currentUserId == null) return MessageStatus.sent;
+
+    // Si no es mi mensaje, siempre es "sent"
+    if (senderId != currentUserId) {
+      return MessageStatus.sent;
+    }
+
+    // Obtener otros miembros (todos excepto el sender)
+    final otherMembers = groupMembers?.where((id) => id != currentUserId).toList() ?? [];
+
+    // 1. Verificar si fue visto por TODOS los miembros (excepto sender)
+    try {
+      final readBy = data['readBy'] as List<dynamic>?;
+      if (readBy != null && otherMembers.isNotEmpty) {
+        // Verificar si TODOS los otros miembros lo leyeron
+        final allRead = otherMembers.every((memberId) => readBy.contains(memberId));
+        if (allRead) {
+          return MessageStatus.seen;
+        }
+      }
+    } catch (e) {
+      appLogger.log('Error al leer readBy en grupo V2: $e', level: 'ERROR');
+    }
+
+    // 2. Verificar si fue entregado a TODOS
+    try {
+      final deliveredTo = data['deliveredTo'] as List<dynamic>?;
+      if (deliveredTo != null && otherMembers.isNotEmpty) {
+        final allDelivered = otherMembers.every((memberId) => deliveredTo.contains(memberId));
+        if (allDelivered) {
+          return MessageStatus.delivered;
+        }
+      }
+    } catch (e) {
+      appLogger.log('Error al leer deliveredTo en grupo V2: $e', level: 'ERROR');
+    }
+
+    // 3. Verificar si fue enviado al servidor (tiene timestamp)
+    if (hasServerTimestamp) {
+      return MessageStatus.sent;
+    }
+
+    // 4. Aún no se ha enviado (optimistic)
+    return MessageStatus.sending;
+  }
+
   /// Calcula el MessageStatus para mensajes de GRUPO
   ///
   /// Lógica:

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../../../services/contact_alias_service.dart';
 import '../../../services/block_service.dart';
 import '../../../services/message_status_helper.dart';
@@ -7,13 +8,12 @@ import '../../../services/local_unread_count_service.dart';
 import '../../../services/search_service.dart';
 import '../../../models/chat_message.dart';
 import '../../../widgets/stories_section.dart';
-import '../../create_group_screen.dart';
+import '../../../groups/groups.dart'; // Groups V2
 import '../../../utils/chat_utils.dart';
 import '../../../models/chat_list_item_type.dart';
 import '../../../controllers/parent_chats_controller.dart';
 import '../../../theme_service.dart';
 import '../../chat_detail_screen.dart';
-import '../../group_chat_screen.dart';
 import 'widgets/chat_list_item.dart';
 import 'widgets/group_chat_list_item.dart';
 import 'widgets/parent_chat_header.dart';
@@ -148,16 +148,15 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                         size: 26,
                       ),
                       onPressed: () async {
-                        final result = await Navigator.push(
+                        await Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (context) => CreateGroupScreen(),
+                            builder: (context) => const CreateGroupScreenV2(),
                           ),
                         );
 
-                        // Refrescar si se creó el grupo
-                        if (result == true && mounted) {
-                          // Forzar refresh de grupos desde servidor para actualizar cache
+                        // Refrescar grupos al volver
+                        if (mounted) {
                           await _controller.refreshGroupsFromServer();
                           if (mounted) setState(() {});
                         }
@@ -476,6 +475,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
 
       case GroupItem(:final groupId, :final groupData):
         final groupName = groupData['name'] ?? 'Grupo';
+        final groupMembers = (groupData['members'] as List?)?.cast<String>() ?? <String>[];
         final parentId = _controller.currentUserId;
 
         // Filter by search
@@ -494,6 +494,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
             String? lastMessageSenderId;
             MessageStatus? lastMessageStatus;
             ModerationStatus? lastMessageModerationStatus;
+            String? lastMessageFromStream;
 
             if (messageSnapshot.hasData &&
                 messageSnapshot.data != null &&
@@ -505,14 +506,57 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
               final senderId = lastMessageData['senderId'] as String? ?? '';
               lastMessageSenderId = senderId;
 
-              // Calcular el estado del mensaje
-              lastMessageStatus = MessageStatusHelper.calculateStatus(
+              // Obtener preview del mensaje desde el stream si no hay en groupData
+              final messageText = lastMessageData['text'] as String?;
+              final hasImage = lastMessageData['imageUrl'] != null;
+              final hasVideo = lastMessageData['videoUrl'] != null;
+              final hasAudio = lastMessageData['audioUrl'] != null;
+              final isDeleted = lastMessageData['isDeleted'] as bool? ?? false;
+              final senderName = lastMessageData['senderName'] as String? ?? '';
+              final currentUserId = FirebaseAuth.instance.currentUser?.uid ?? '';
+              final isOwnMessage = senderId == currentUserId;
+
+              // Construir preview del mensaje
+              String messagePreview;
+              if (isDeleted) {
+                messagePreview = 'Mensaje eliminado';
+              } else if (messageText != null && messageText.isNotEmpty) {
+                messagePreview = messageText.length > 40
+                    ? '${messageText.substring(0, 40)}...'
+                    : messageText;
+              } else if (hasImage) {
+                messagePreview = '📷 Imagen';
+              } else if (hasVideo) {
+                messagePreview = '🎥 Video';
+              } else if (hasAudio) {
+                messagePreview = '🎵 Audio';
+              } else {
+                messagePreview = '';
+              }
+
+              // Agregar nombre del sender si no es mensaje propio
+              if (!isOwnMessage && senderName.isNotEmpty && messagePreview.isNotEmpty) {
+                // Usar solo el primer nombre para ahorrar espacio
+                final firstName = senderName.split(' ').first;
+                lastMessageFromStream = '$firstName: $messagePreview';
+              } else {
+                lastMessageFromStream = messagePreview;
+              }
+
+              // Usar calculateGroupV2Status - seen solo si TODOS los miembros leyeron
+              lastMessageStatus = MessageStatusHelper.calculateGroupV2Status(
                 data: lastMessageData,
                 senderId: senderId,
                 hasServerTimestamp: lastMessageData['timestamp'] != null,
+                groupMembers: groupMembers,
               );
 
-              // Obtener estado de moderación
+              // Para grupos V2, usar verde (approved) cuando está seen
+              if (lastMessageStatus == MessageStatus.seen) {
+                lastMessageModerationStatus = ModerationStatus.approved;
+              }
+
+              // Obtener estado de moderación (si existe)
               final modStatusString =
                   lastMessageData['moderationStatus'] as String?;
               if (modStatusString != null) {
@@ -530,11 +574,14 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
               }
             }
 
+            // Prioridad: groupData['lastMessage'] > lastMessageFromStream > 'Inicia la conversación'
+            final lastMessage = groupData['lastMessage'] ?? lastMessageFromStream ?? 'Inicia la conversación';
+
             return GroupChatListItem(
               groupId: groupId,
               groupName: groupName,
               memberCount: (groupData['members'] as List?)?.length ?? 0,
-              lastMessage: groupData['lastMessage'] ?? 'Toca para abrir',
+              lastMessage: lastMessage,
               messageCount: groupData['messageCount'] ?? 0,
               groupImageUrl:
                   groupData['avatar'], // Campo correcto es 'avatar' no 'imageUrl'
@@ -762,7 +809,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
     if (result.chatType == ChatType.group) {
       Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (context) => GroupChatScreen(
+          builder: (context) => GroupChatScreenV2(
             groupId: result.chatId,
             groupName: result.chatName,
           ),
@@ -785,7 +832,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
     if (result.chatType == ChatType.group) {
       Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (context) => GroupChatScreen(
+          builder: (context) => GroupChatScreenV2(
             groupId: result.chatId,
             groupName: result.chatName,
             scrollToMessageId: result.message.id,

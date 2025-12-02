@@ -18,6 +18,7 @@ import 'message_bubble/message_options_dialog.dart';
 import 'missed_call_bubble.dart';
 import 'answered_call_bubble.dart';
 import '../../message_info_screen.dart';
+import '../../forward_messages_screen.dart';
 
 /// Widget que muestra un mensaje individual en el chat
 ///
@@ -707,14 +708,42 @@ class _MessageBubbleState extends State<MessageBubble>
     }
   }
 
-  /// Funcionalidad de reenvío temporalmente deshabilitada
+  /// Navegar a la pantalla de reenvío
   void _forwardMessage(BuildContext context) {
-    // TODO: Implementar pantalla de reenvío
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Función de reenvío no disponible'),
-        duration: Duration(seconds: 2),
+    // Crear un ChatMessage a partir de los datos del widget
+    final message = ChatMessage(
+      id: widget.messageId,
+      senderId: widget.senderId,
+      text: widget.text,
+      timestamp: widget.timestamp,
+      type: _determineMessageType(),
+      imageUrl: widget.imageUrl,
+      videoUrl: widget.videoUrl,
+      audioUrl: widget.audioUrl,
+      waveformData: widget.waveformData,
+    );
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ForwardMessagesScreen(
+          messages: [message],
+          originalChatId: widget.chatId,
+          contactName: widget.contactName ?? 'Chat',
+        ),
       ),
     );
+  }
+
+  /// Determina el tipo de mensaje basado en los datos disponibles
+  String _determineMessageType() {
+    if (widget.imageUrl != null && widget.imageUrl!.isNotEmpty) {
+      return 'image';
+    } else if (widget.videoUrl != null && widget.videoUrl!.isNotEmpty) {
+      return 'video';
+    } else if (widget.audioUrl != null && widget.audioUrl!.isNotEmpty) {
+      return 'audio';
+    }
+    return 'text';
   }
 }

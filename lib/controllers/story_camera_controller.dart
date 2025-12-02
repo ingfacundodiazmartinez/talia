@@ -367,7 +367,24 @@ class StoryCameraController {
 
   /// Cambiar cámara (frontal/trasera)
   /// Solo alterna entre cámara frontal y trasera, ignorando otras cámaras (telephoto, ultra-wide, etc.)
+  /// Funciona tanto con la cámara Flutter como con DeepAR.
   Future<void> switchCamera() async {
+    // ✅ Si DeepAR está activo, usar su método switchCamera
+    if (_filterType == 'deepar' && _isDeepARInitialized) {
+      ReleaseLogger.log('🔄 Switching DeepAR camera...', tag: 'StoryCameraController');
+      final success = await _deepARService.switchCamera();
+      if (success) {
+        ReleaseLogger.log('✅ DeepAR camera switched successfully', tag: 'StoryCameraController');
+        // Notificar a la UI para que se actualice
+        onCameraInitialized?.call();
+      } else {
+        ReleaseLogger.error('❌ Failed to switch DeepAR camera', tag: 'StoryCameraController');
+        onError?.call('No se pudo cambiar la cámara');
+      }
+      return;
+    }
+
+    // Cámara Flutter estándar
     if (_cameras == null || _cameras!.length <= 1) return;
 
     // Determinar la dirección actual

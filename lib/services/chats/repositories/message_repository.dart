@@ -31,7 +31,8 @@ class MessageRepository {
     int limit = 50,
     Timestamp? clearedAt, // ✅ NEW: Timestamp desde cuando el usuario limpió el chat
   }) {
-    final collection = isGroup ? 'groups' : 'chats';
+    // ✅ FIX: Usar groups_v2 para grupos (no 'groups' legacy)
+    final collection = isGroup ? 'groups_v2' : 'chats';
 
     var query = _firestore
         .collection(collection)
@@ -56,7 +57,7 @@ class MessageRepository {
     bool isGroup = false,
   }) async {
     try {
-      final collection = isGroup ? 'groups' : 'chats';
+      final collection = isGroup ? 'groups_v2' : 'chats';
 
       // ✅ Usar batch write para operación atómica
       final batch = _firestore.batch();
@@ -126,7 +127,7 @@ class MessageRepository {
     bool isGroup = false,
   }) async {
     try {
-      final collection = isGroup ? 'groups' : 'chats';
+      final collection = isGroup ? 'groups_v2' : 'chats';
 
       await _firestore
           .collection(collection)
@@ -147,7 +148,7 @@ class MessageRepository {
     bool isGroup = false,
   }) async {
     try {
-      final collection = isGroup ? 'groups' : 'chats';
+      final collection = isGroup ? 'groups_v2' : 'chats';
 
       await _firestore
           .collection(collection)
@@ -167,7 +168,7 @@ class MessageRepository {
     bool isGroup = false,
   }) async {
     try {
-      final collection = isGroup ? 'groups' : 'chats';
+      final collection = isGroup ? 'groups_v2' : 'chats';
 
       await _firestore
           .collection(collection)
@@ -187,7 +188,7 @@ class MessageRepository {
     bool isGroup = false,
   }) async {
     try {
-      final collection = isGroup ? 'groups' : 'chats';
+      final collection = isGroup ? 'groups_v2' : 'chats';
 
       final doc = await _firestore
           .collection(collection)
@@ -210,7 +211,7 @@ class MessageRepository {
     int limit = 50,
   }) async {
     try {
-      final collection = isGroup ? 'groups' : 'chats';
+      final collection = isGroup ? 'groups_v2' : 'chats';
 
       // Búsqueda simple por contenido de texto
       return await _firestore
@@ -237,7 +238,7 @@ class MessageRepository {
     int limit = 20,
   }) async {
     try {
-      final collection = isGroup ? 'groups' : 'chats';
+      final collection = isGroup ? 'groups_v2' : 'chats';
 
       return await _firestore
           .collection(collection)
@@ -262,7 +263,7 @@ class MessageRepository {
       final currentUserId = _auth.currentUser?.uid;
       if (currentUserId == null) return;
 
-      final collection = isGroup ? 'groups' : 'chats';
+      final collection = isGroup ? 'groups_v2' : 'chats';
       final batch = _firestore.batch();
 
       for (final messageId in messageIds) {
@@ -294,7 +295,7 @@ class MessageRepository {
       final currentUserId = _auth.currentUser?.uid;
       if (currentUserId == null) return;
 
-      final collection = isGroup ? 'groups' : 'chats';
+      final collection = isGroup ? 'groups_v2' : 'chats';
       final batch = _firestore.batch();
 
       for (final messageId in messageIds) {
@@ -326,7 +327,7 @@ class MessageRepository {
       final currentUserId = _auth.currentUser?.uid;
       if (currentUserId == null) throw Exception('Usuario no autenticado');
 
-      final collection = isGroup ? 'groups' : 'chats';
+      final collection = isGroup ? 'groups_v2' : 'chats';
 
       // Obtener últimos 100 mensajes (optimización: no cargar todos)
       final snapshot = await _firestore
@@ -364,7 +365,7 @@ class MessageRepository {
     bool isGroup = false,
   }) async {
     // Mantener por compatibilidad pero redirigir internamente
-    final collection = isGroup ? 'groups' : 'chats';
+    final collection = isGroup ? 'groups_v2' : 'chats';
     return await _firestore
         .collection(collection)
         .doc(chatId)
@@ -384,7 +385,7 @@ class MessageRepository {
       final currentUserId = _auth.currentUser?.uid;
       if (currentUserId == null) throw Exception('Usuario no autenticado');
 
-      final collection = isGroup ? 'groups' : 'chats';
+      final collection = isGroup ? 'groups_v2' : 'chats';
 
       await _firestore
           .collection(collection)
@@ -410,7 +411,7 @@ class MessageRepository {
       final currentUserId = _auth.currentUser?.uid;
       if (currentUserId == null) throw Exception('Usuario no autenticado');
 
-      final collection = isGroup ? 'groups' : 'chats';
+      final collection = isGroup ? 'groups_v2' : 'chats';
 
       await _firestore
           .collection(collection)

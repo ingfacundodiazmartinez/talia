@@ -403,6 +403,12 @@ class ChildNotificationsController {
           icon: Icons.photo_library,
           label: 'Historia Pendiente',
         );
+      case 'group_approval_request':
+        return NotificationStyle(
+          color: const Color(0xFF00BCD4), // Cyan
+          icon: Icons.group_add,
+          label: 'Solicitud de Grupo',
+        );
       case 'story_approved':
         return NotificationStyle(
           color: const Color(0xFF4CAF50), // Green
@@ -448,6 +454,7 @@ class ChildNotificationsController {
     return [
       'contact_request',
       'story_approval_request',
+      'group_approval_request',
     ].contains(type);
   }
 
@@ -458,6 +465,8 @@ class ChildNotificationsController {
         return 'Ver Solicitud';
       case 'story_approval_request':
         return 'Revisar Historia';
+      case 'group_approval_request':
+        return 'Ver Solicitudes';
       default:
         return 'Ver Detalles';
     }

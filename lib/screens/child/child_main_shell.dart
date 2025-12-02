@@ -4,11 +4,11 @@ import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import '../../controllers/child_main_shell_controller.dart';
 import '../../notification_service.dart';
 import '../../utils/release_logger.dart';
+import '../../groups/groups.dart'; // Groups V2
 import 'chats/child_chats_screen.dart';
 import 'contacts/child_contacts_screen.dart';
 import 'profile/child_profile_screen.dart';
 import '../chat_detail_screen.dart';
-import '../group_chat_screen.dart';
 
 /// Observer para detectar cambios en la navegación anidada
 class _NavigatorObserver extends NavigatorObserver {
@@ -117,7 +117,7 @@ class _ChildMainShellState extends State<ChildMainShell> {
       if (mounted) {
         await Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (context) => GroupChatScreen(
+            builder: (context) => GroupChatScreenV2(
               groupId: effectiveGroupId,
               groupName: groupName,
             ),

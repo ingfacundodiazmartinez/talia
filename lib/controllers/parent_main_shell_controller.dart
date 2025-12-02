@@ -31,6 +31,7 @@ class ParentMainShellController {
   // Subscripciones privadas
   StreamSubscription? _chatNotificationSubscription;
   StreamSubscription? _storyApprovalNotificationSubscription;
+  StreamSubscription? _groupApprovalNotificationSubscription;
   StreamSubscription? _roleChangeSubscription;
 
   // ✅ OPTIMIZACIÓN: Stream centralizado para evitar duplicar listeners al mismo documento
@@ -39,6 +40,7 @@ class ParentMainShellController {
   // Callback para navegación (configurado por el screen)
   Function(Map<String, dynamic>)? onChatNotificationTap;
   Function(Map<String, dynamic>)? onStoryApprovalNotificationTap;
+  Function(Map<String, dynamic>)? onGroupApprovalNotificationTap;
 
   // Constructor
   ParentMainShellController({
@@ -102,6 +104,15 @@ class ParentMainShellController {
       ReleaseLogger.log('Story approval notification tapped: $data', tag: 'ParentMainShell');
       // Llamar al callback configurado por el screen para navegar a aprobación
       onStoryApprovalNotificationTap?.call(data);
+    });
+
+    // Listener para notificaciones de aprobación de grupos
+    _groupApprovalNotificationSubscription = _notificationService
+        .groupApprovalNotificationTapStream
+        .listen((data) {
+      ReleaseLogger.log('Group approval notification tapped: $data', tag: 'ParentMainShell');
+      // Llamar al callback configurado por el screen para navegar a aprobación de grupos
+      onGroupApprovalNotificationTap?.call(data);
     });
   }
 
@@ -182,10 +193,17 @@ class ParentMainShellController {
     return ChatUtils.getChatId(currentUserId, senderId);
   }
 
-  /// Stream de invitaciones de grupo pendientes para badge
+  /// Stream de invitaciones de grupo pendientes para badge (LEGACY)
+  /// TODO: Migrar a Groups V2 usando group_approval_requests
   Stream<int> getPendingGroupInvitationsStream() {
+    final userId = currentUserId;
+    if (userId == null) {
+      return Stream.value(0);
+    }
+
     return _firestore
         .collection('groupInvitations')
+        .where('invitedParentApproval.parentId', isEqualTo: userId)
         .where('status', isEqualTo: 'pending_approvals')
         .snapshots(includeMetadataChanges: false)
         .map((snapshot) => snapshot.docs.length);
@@ -259,6 +277,7 @@ class ParentMainShellController {
     ReleaseLogger.log('Disposing controller', tag: 'ParentMainShell');
     _chatNotificationSubscription?.cancel();
     _storyApprovalNotificationSubscription?.cancel();
+    _groupApprovalNotificationSubscription?.cancel();
     _roleChangeSubscription?.cancel();
 
     // ✅ OPTIMIZACIÓN: Limpiar stream cacheado

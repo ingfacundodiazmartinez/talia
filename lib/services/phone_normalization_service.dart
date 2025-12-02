@@ -1,80 +1,146 @@
-/// Servicio para normalizar números telefónicos
+/// Servicio para normalizar números telefónicos al formato E.164 canónico.
 ///
-/// Maneja diferentes formatos de números, especialmente para Argentina
-/// donde pueden existir variaciones con/sin el "9" de celular
+/// Problema que resuelve:
+/// En Argentina, los números móviles pueden escribirse con o sin el "9"
+/// después del código de país:
+/// - +5493875433442 (con 9) - FORMATO CANÓNICO E.164
+/// - +543875433442 (sin 9)
+///
+/// Según Google libphonenumber, el formato E.164 canónico para
+/// móviles argentinos DEBE incluir el "9": +549XXXXXXXXXX
+///
+/// Esto evita que un usuario pueda crear dos cuentas con el mismo número
+/// ingresándolo con y sin el "9".
 library;
+
+import '../utils/release_logger.dart';
 
 class PhoneNormalizationService {
   static final PhoneNormalizationService _instance = PhoneNormalizationService._internal();
   factory PhoneNormalizationService() => _instance;
   PhoneNormalizationService._internal();
 
-  /// Normaliza un número telefónico para comparación
+  /// Normaliza un número telefónico al formato E.164 canónico.
+  ///
+  /// Para Argentina móvil, SIEMPRE incluye el "9" después del +54.
   ///
   /// Ejemplos Argentina:
-  /// - "+54 9 387 5433442" -> "+543875433442"
-  /// - "+54 387 5433442" -> "+543875433442"
-  /// - "+54 9 11 5433442" -> "+54115433442"
-  /// - "387 5433442" -> "3875433442"
+  /// - "+54 387 5433442" -> "+5493875433442" (se agrega el 9)
+  /// - "+54 9 387 5433442" -> "+5493875433442" (ya tiene el 9)
+  /// - "387 5433442" -> "+5493875433442" (se agrega +549)
   ///
-  /// Estrategia:
-  /// 1. Remover espacios, guiones, paréntesis
-  /// 2. Si tiene código de país argentino (+54), remover el 9 si existe
-  /// 3. Mantener el + al inicio si existe
-  String normalizePhone(String phone) {
+  /// [phone] - El número a normalizar (cualquier formato)
+  /// [defaultCountryCode] - Código ISO del país por defecto (ej: 'AR')
+  ///
+  /// Returns: Número normalizado en formato E.164 canónico
+  String normalizePhone(String phone, {String defaultCountryCode = 'AR'}) {
     if (phone.isEmpty) return '';
 
     // 1. Limpiar caracteres no numéricos (excepto +)
     String cleaned = phone.replaceAll(RegExp(r'[^\d+]'), '');
 
-    // 2. Normalizar formato argentino
+    // 2. Si no tiene código de país, agregarlo según el país por defecto
+    if (!cleaned.startsWith('+')) {
+      if (cleaned.startsWith('54')) {
+        cleaned = '+$cleaned';
+      } else if (cleaned.startsWith('0')) {
+        // Formato local argentino con 0
+        cleaned = '+54${cleaned.substring(1)}';
+      } else if (defaultCountryCode.toUpperCase() == 'AR') {
+        // Asumir que es número argentino
+        if (cleaned.startsWith('9') && cleaned.length == 11) {
+          // Ya tiene el 9 de móvil
+          cleaned = '+54$cleaned';
+        } else if (cleaned.length == 10) {
+          // Es un móvil sin el 9
+          cleaned = '+549$cleaned';
+        } else {
+          cleaned = '+54$cleaned';
+        }
+      }
+    }
+
+    // 3. Normalizar formato argentino - AGREGAR el 9 si no existe
     if (cleaned.startsWith('+54')) {
-      // Extraer código de país
       String withoutCountryCode = cleaned.substring(3);
 
-      // Si empieza con 9, removerlo (es el prefijo de celular)
-      if (withoutCountryCode.startsWith('9')) {
-        withoutCountryCode = withoutCountryCode.substring(1);
+      // Si NO empieza con 9, agregarlo (asumiendo que es móvil)
+      if (!withoutCountryCode.startsWith('9')) {
+        // Solo si tiene 10 dígitos (longitud estándar de móviles argentinos sin el 9)
+        if (withoutCountryCode.length == 10) {
+          ReleaseLogger.log(
+            '📱 [PhoneNormalization] Agregando 9 a número AR: +54$withoutCountryCode -> +549$withoutCountryCode',
+            tag: 'PhoneNormalization',
+          );
+          return '+549$withoutCountryCode';
+        }
       }
 
       return '+54$withoutCountryCode';
     }
 
-    // 3. Si empieza con 54 sin +, agregar el +
+    // 4. Si empieza con 54 sin +, agregar el + y normalizar
     if (cleaned.startsWith('54') && !cleaned.startsWith('+')) {
-      String withoutCountryCode = cleaned.substring(2);
-
-      if (withoutCountryCode.startsWith('9')) {
-        withoutCountryCode = withoutCountryCode.substring(1);
-      }
-
-      return '+54$withoutCountryCode';
+      return normalizePhone('+$cleaned', defaultCountryCode: defaultCountryCode);
     }
 
     return cleaned;
   }
 
-  /// Genera múltiples variaciones posibles de un número
+  /// Genera múltiples variaciones posibles de un número para búsqueda.
   ///
-  /// Útil para buscar en base de datos con diferentes formatos
+  /// Útil para buscar contactos que podrían estar guardados en
+  /// diferentes formatos en la base de datos o en contactos del dispositivo.
+  ///
+  /// Ejemplo para +5493875433442:
+  /// - +5493875433442 (canónico con 9)
+  /// - +543875433442 (sin 9)
+  /// - 5493875433442 (sin +, con 9)
+  /// - 543875433442 (sin +, sin 9)
+  /// - 93875433442 (solo 9 + local)
+  /// - 3875433442 (solo local)
+  /// - 03875433442 (formato local con 0)
   List<String> generateVariations(String phone) {
     final normalized = normalizePhone(phone);
     final variations = <String>{normalized};
 
-    // Si es argentino, agregar variación con 9
-    if (normalized.startsWith('+54')) {
-      final withoutCode = normalized.substring(3);
+    if (normalized.isEmpty) return [];
 
-      // Variación con 9
-      variations.add('+549$withoutCode');
+    // Si es argentino con 9 (formato canónico)
+    if (normalized.startsWith('+549')) {
+      final localNumber = normalized.substring(4); // Sin +549
+
+      // Variación SIN el 9 (formato alternativo)
+      variations.add('+54$localNumber');
 
       // Variaciones sin +
-      variations.add('54$withoutCode');
-      variations.add('549$withoutCode');
+      variations.add('549$localNumber'); // Con 9
+      variations.add('54$localNumber'); // Sin 9
 
       // Variación solo número local
-      variations.add(withoutCode);
-      variations.add('9$withoutCode');
+      variations.add('9$localNumber'); // Con 9
+      variations.add(localNumber); // Solo local
+      variations.add('0$localNumber'); // Formato local con 0
+    }
+    // Si es argentino sin 9 (lo normalizamos y generamos variaciones)
+    else if (normalized.startsWith('+54')) {
+      final localNumber = normalized.substring(3); // Sin +54
+
+      // Variación CON el 9 (formato canónico)
+      variations.add('+549$localNumber');
+
+      // Variaciones sin +
+      variations.add('54$localNumber');
+      variations.add('549$localNumber');
+
+      // Variación solo número local
+      variations.add(localNumber);
+      variations.add('9$localNumber');
+      variations.add('0$localNumber');
+    }
+    // Otros países
+    else if (normalized.startsWith('+')) {
+      variations.add(normalized.substring(1)); // Sin +
     }
 
     return variations.toList();

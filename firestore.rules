@@ -1304,19 +1304,31 @@ service cloud.firestore {
         resource.data.userId == request.auth.uid;
     }
 
-    // Group invitations (con aprobación en cascada)
+    // Group invitations (con aprobación en cascada) - LEGACY
+    // TODO: Migrar a Groups V2 y eliminar esta colección
     match /groupInvitations/{invitationId} {
       // 🔒 SEGURIDAD: Solo puedes leer invitaciones donde estés involucrado
-      allow get: if request.auth != null &&
-        (resource.data.invitedUserId == request.auth.uid ||
-         resource.data.invitedBy == request.auth.uid ||
-         resource.data.parentId == request.auth.uid);
+      // o eres padre de algún miembro (para badges de notificación)
+      function isParentOfInvitedChild() {
+        let parentDoc = get(/databases/$(database)/documents/users/$(request.auth.uid));
+        return parentDoc.data.linkedChildrenIds != null &&
+               resource.data.invitedChildId != null &&
+               resource.data.invitedChildId in parentDoc.data.linkedChildrenIds;
+      }
+
+      function isInvolvedInInvitation() {
+        return resource.data.invitedUserId == request.auth.uid ||
+               resource.data.invitedBy == request.auth.uid ||
+               resource.data.parentId == request.auth.uid ||
+               (resource.data.invitedParentApproval != null &&
+                resource.data.invitedParentApproval.parentId == request.auth.uid) ||
+               isParentOfInvitedChild();
+      }
+
+      allow get: if request.auth != null && isInvolvedInInvitation();
 
       // 🔒 SEGURIDAD: Solo puedes listar invitaciones donde estés involucrado
-      allow list: if request.auth != null &&
-        (resource.data.invitedUserId == request.auth.uid ||
-         resource.data.invitedBy == request.auth.uid ||
-         resource.data.parentId == request.auth.uid);
+      allow list: if request.auth != null && isInvolvedInInvitation();
 
       // Permitir crear invitaciones (usando invitedBy en lugar de inviterId)
       allow create: if request.auth != null &&
@@ -1469,6 +1481,96 @@ service cloud.firestore {
 
       // Solo Cloud Functions pueden actualizar/eliminar
       allow update, delete: if false;
+    }
+
+    // ============================================================================
+    // GROUPS V2 (New groups system with parent approval)
+    // ============================================================================
+
+    // Groups V2 - Nueva colección de grupos con aprobación parental
+    match /groups_v2/{groupId} {
+      // Miembros activos o pendientes pueden leer el grupo
+      // Esto permite queries con array-contains en members o pendingMembers
+      allow read: if request.auth != null && (
+        request.auth.uid in resource.data.members ||
+        (resource.data.pendingMembers != null && request.auth.uid in resource.data.pendingMembers)
+      );
+
+      // Solo Cloud Functions pueden crear grupos
+      allow create: if false;
+
+      // Función para verificar si solo se actualizan campos permitidos
+      function isUpdatingOnlyAllowedGroupFields() {
+        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+        // Campos que los miembros pueden actualizar
+        return changedKeys.hasOnly(['lastActivity', 'lastMessage', 'lastMessageTime', 'lastMessageSender', 'lastMessageId', 'unreadCount_' + request.auth.uid]);
+      }
+
+      // Miembros pueden actualizar campos de actividad y su propio unreadCount
+      allow update: if request.auth != null &&
+        request.auth.uid in resource.data.members &&
+        isUpdatingOnlyAllowedGroupFields();
+
+      // Solo Cloud Functions pueden eliminar grupos
+      allow delete: if false;
+
+      // Messages subcollection
+      match /messages/{messageId} {
+        // Función para verificar si eres miembro del grupo
+        function isGroupV2Member() {
+          let groupDoc = get(/databases/$(database)/documents/groups_v2/$(groupId));
+          return request.auth.uid in groupDoc.data.members;
+        }
+
+        // Solo miembros pueden leer mensajes
+        allow read: if request.auth != null && isGroupV2Member();
+
+        // Solo miembros pueden crear mensajes (y deben ser el sender)
+        allow create: if request.auth != null &&
+          isGroupV2Member() &&
+          request.auth.uid == request.resource.data.senderId;
+
+        // Solo el sender puede actualizar su mensaje (editar)
+        // O miembros pueden actualizar metadata (reactions, readBy)
+        allow update: if request.auth != null && (
+          request.auth.uid == resource.data.senderId ||
+          isGroupV2Member()
+        );
+
+        // Solo el sender puede eliminar su mensaje
+        allow delete: if request.auth != null &&
+          request.auth.uid == resource.data.senderId;
+
+        // Favorites subcollection
+        match /favorites/{userId} {
+          allow read: if request.auth != null && request.auth.uid == userId;
+          allow create, delete: if request.auth != null && request.auth.uid == userId;
+          allow update: if false;
+        }
+      }
+
+      // Typing indicators
+      match /typing/{userId} {
+        function isGroupV2MemberForTyping() {
+          let groupDoc = get(/databases/$(database)/documents/groups_v2/$(groupId));
+          return request.auth.uid in groupDoc.data.members;
+        }
+
+        allow read: if request.auth != null && isGroupV2MemberForTyping();
+        allow write: if request.auth != null &&
+          request.auth.uid == userId &&
+          isGroupV2MemberForTyping();
+      }
+    }
+
+    // Group approval requests - Solicitudes de aprobación parental para grupos
+    match /group_approval_requests/{requestId} {
+      // Solo el parent destinatario puede leer la solicitud
+      allow read: if request.auth != null &&
+        resource.data.parentId == request.auth.uid;
+
+      // Solo Cloud Functions pueden crear/modificar solicitudes
+      allow create, update, delete: if false;
     }
 
     // ============================================================================

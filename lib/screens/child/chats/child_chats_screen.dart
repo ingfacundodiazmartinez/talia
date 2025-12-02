@@ -6,7 +6,7 @@ import '../../../controllers/child_home_controller.dart';
 import '../../../controllers/child_chats_controller.dart';
 import '../../../widgets/stories_section.dart';
 import '../../../widgets/emergency_button.dart';
-import '../../../widgets/create_group_widget.dart';
+import '../../../groups/groups.dart'; // Groups V2
 import '../../../services/chat_service.dart';
 import '../../../services/chat_archive_service.dart';
 import '../../../services/chat_mute_service.dart';
@@ -139,17 +139,15 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
           ),
         );
       },
-      onCreateGroupTap: () {
-        showModalBottomSheet(
-          context: context,
-          isScrollControlled: true,
-          backgroundColor: Colors.transparent,
-          builder: (context) => CreateGroupWidget(
-            onGroupCreated: () {
-              setState(() {});
-            },
+      onCreateGroupTap: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => const CreateGroupScreenV2(),
           ),
         );
+        // Refresh on return
+        if (mounted) setState(() {});
       },
       additionalAction: FutureBuilder<bool>(
         future: widget.controller.hasLinkedParents(),
@@ -330,6 +328,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
     final groupId = groupDoc.id;
     final groupData = groupDoc.data() as Map<String, dynamic>;
     final groupName = groupData['name'] ?? 'Grupo';
+    final groupMembers = (groupData['members'] as List?)?.cast<String>() ?? <String>[];
     // ✅ Leer contador de mensajes no leídos desde cache local
     final unreadCount = LocalUnreadCountService().getUnreadCount(groupId);
 
@@ -339,6 +338,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
         String? lastMessageSenderId;
         MessageStatus? lastMessageStatus;
         ModerationStatus? lastMessageModerationStatus;
+        String? lastMessageFromStream;
 
         if (messageSnapshot.hasData && messageSnapshot.data!.docs.isNotEmpty) {
           final lastMessageDoc = messageSnapshot.data!.docs.first;
@@ -347,11 +347,55 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
           final senderId = lastMessageData['senderId'] as String? ?? '';
           lastMessageSenderId = senderId;
 
-          lastMessageStatus = MessageStatusHelper.calculateStatus(
+          // Obtener preview del mensaje desde el stream si no hay en groupData
+          final messageText = lastMessageData['text'] as String?;
+          final hasImage = lastMessageData['imageUrl'] != null;
+          final hasVideo = lastMessageData['videoUrl'] != null;
+          final hasAudio = lastMessageData['audioUrl'] != null;
+          final isDeleted = lastMessageData['isDeleted'] as bool? ?? false;
+          final senderName = lastMessageData['senderName'] as String? ?? '';
+          final currentUserId = FirebaseAuth.instance.currentUser?.uid ?? '';
+          final isOwnMessage = senderId == currentUserId;
+
+          // Construir preview del mensaje
+          String messagePreview;
+          if (isDeleted) {
+            messagePreview = 'Mensaje eliminado';
+          } else if (messageText != null && messageText.isNotEmpty) {
+            messagePreview = messageText.length > 40
+                ? '${messageText.substring(0, 40)}...'
+                : messageText;
+          } else if (hasImage) {
+            messagePreview = '📷 Imagen';
+          } else if (hasVideo) {
+            messagePreview = '🎥 Video';
+          } else if (hasAudio) {
+            messagePreview = '🎵 Audio';
+          } else {
+            messagePreview = '';
+          }
+
+          // Agregar nombre del sender si no es mensaje propio
+          if (!isOwnMessage && senderName.isNotEmpty && messagePreview.isNotEmpty) {
+            // Usar solo el primer nombre para ahorrar espacio
+            final firstName = senderName.split(' ').first;
+            lastMessageFromStream = '$firstName: $messagePreview';
+          } else {
+            lastMessageFromStream = messagePreview;
+          }
+
+          // Usar calculateGroupV2Status - seen solo si TODOS los miembros leyeron
+          lastMessageStatus = MessageStatusHelper.calculateGroupV2Status(
             data: lastMessageData,
             senderId: senderId,
             hasServerTimestamp: lastMessageData['timestamp'] != null,
+            groupMembers: groupMembers,
           );
+
+          // Para grupos V2, usar verde (approved) cuando está seen, gris para otros estados
+          if (lastMessageStatus == MessageStatus.seen) {
+            lastMessageModerationStatus = ModerationStatus.approved;
+          }
 
           final modStatusString = lastMessageData['moderationStatus'] as String?;
           if (modStatusString != null) {
@@ -369,11 +413,14 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
           }
         }
 
+        // Prioridad: groupData['lastMessage'] > lastMessageFromStream > 'Inicia la conversación'
+        final lastMessage = groupData['lastMessage'] ?? lastMessageFromStream ?? 'Inicia la conversación';
+
         return GroupChatListItem(
           groupId: groupId,
           groupName: groupName,
           memberCount: (groupData['members'] as List?)?.length ?? 0,
-          lastMessage: groupData['lastMessage'] ?? 'Toca para abrir',
+          lastMessage: lastMessage,
           messageCount: groupData['messageCount'] ?? 0,
           groupImageUrl: groupData['avatar'],
           unreadCount: unreadCount,
@@ -527,6 +574,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
                   final senderId = lastMessageData['senderId'] as String? ?? '';
                   lastMessageSenderId = senderId;
 
+                  // Usar calculateStatus para chats 1:1
                   lastMessageStatus = MessageStatusHelper.calculateStatus(
                     data: lastMessageData,
                     senderId: senderId,

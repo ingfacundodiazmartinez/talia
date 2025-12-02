@@ -549,6 +549,116 @@ async function sendDirectPushNotification(params) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// SEND PUSH NOTIFICATION (Simple version for triggers)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Enviar push notification simple a un usuario
+ * Usado principalmente por triggers de Firestore
+ *
+ * @param {string} userId - ID del usuario receptor
+ * @param {string} title - Título de la notificación
+ * @param {string} body - Cuerpo de la notificación
+ * @param {Object} data - Datos adicionales
+ * @returns {Promise<boolean>} - true si se envió exitosamente
+ */
+async function sendPushNotification(userId, title, body, data = {}) {
+  try {
+    console.log(`📱 [sendPushNotification] Enviando a ${userId}: ${title}`);
+
+    // Obtener usuario para FCM token
+    const userDoc = await getFirestore().collection("users").doc(userId).get();
+
+    if (!userDoc.exists) {
+      console.log(`❌ [sendPushNotification] Usuario ${userId} no encontrado`);
+      return false;
+    }
+
+    const userData = userDoc.data();
+    let fcmTokens = [];
+
+    // Normalizar tokens FCM
+    if (userData.fcmTokens && Array.isArray(userData.fcmTokens) && userData.fcmTokens.length > 0) {
+      fcmTokens = userData.fcmTokens.filter(token => token && typeof token === 'string' && token.trim().length > 0);
+    }
+
+    if (fcmTokens.length === 0 && userData.fcmToken) {
+      const tokenString = String(userData.fcmToken).trim();
+      if (tokenString && tokenString !== 'null' && tokenString !== 'undefined' && tokenString.length > 10) {
+        fcmTokens = [tokenString];
+      }
+    }
+
+    if (fcmTokens.length === 0) {
+      console.log(`❌ [sendPushNotification] No hay tokens FCM para ${userId}`);
+      return false;
+    }
+
+    console.log(`📱 [sendPushNotification] Tokens FCM encontrados: ${fcmTokens.length}`);
+
+    // Preparar mensaje FCM
+    const fcmData = {
+      title: title || "Talia",
+      body: body || "",
+      ...Object.fromEntries(
+        Object.entries(data).map(([key, value]) => [key, String(value)])
+      ),
+    };
+
+    const message = {
+      notification: {
+        title: title || "Talia",
+        body: body || "",
+      },
+      data: fcmData,
+      tokens: fcmTokens,
+      android: {
+        priority: "high",
+        notification: {
+          sound: "default",
+          priority: "high",
+          channelId: "talia_notifications",
+        },
+      },
+      apns: {
+        headers: {
+          "apns-priority": "10",
+          "apns-push-type": "alert",
+        },
+        payload: {
+          aps: {
+            alert: {
+              title: title || "Talia",
+              body: body || "",
+            },
+            sound: "default",
+            "content-available": 1,
+          },
+        },
+      },
+    };
+
+    // Enviar notificación
+    const response = await getMessaging().sendEachForMulticast(message);
+
+    console.log(`✅ [sendPushNotification] Push enviado: ${response.successCount} exitosos, ${response.failureCount} fallidos`);
+
+    if (response.failureCount > 0) {
+      response.responses.forEach((resp, idx) => {
+        if (!resp.success) {
+          console.error(`  - Token ${idx}: ${resp.error?.code} - ${resp.error?.message}`);
+        }
+      });
+    }
+
+    return response.successCount > 0;
+  } catch (error) {
+    console.error(`❌ [sendPushNotification] Error:`, error);
+    return false;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // EXPORTS
 // ═══════════════════════════════════════════════════════════════
 
@@ -556,7 +666,8 @@ module.exports = {
   // VoIP
   sendVoIPPush,
 
-  // Direct Push (sin DB)
+  // Push Notifications
+  sendPushNotification,
   sendDirectPushNotification,
 
   // Validaciones

@@ -380,6 +380,14 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             return
         }
 
+        // ✅ FILTRAR LOCATION REQUEST: No mostrar notificación para solicitudes de ubicación
+        // Es una operación silenciosa manejada por Flutter background handler
+        if (type == "location_request") {
+            Log.e(TAG, "📍 Solicitud de ubicación detectada - delegando a Flutter background handler")
+            Log.e(TAG, "   (El servicio nativo NO mostrará notificación - operación silenciosa)")
+            return
+        }
+
         // ✅ FILTRO CHAT ACTUAL: Verificar si el usuario está viendo este chat
         Log.e(TAG, "🔍 [FILTRO] Iniciando verificación de chat actual...")
         val messageChatId = data["chatId"]

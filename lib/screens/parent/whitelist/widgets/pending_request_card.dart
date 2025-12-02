@@ -361,6 +361,21 @@ class PendingRequestCard extends StatelessWidget {
           result['contactAge'] = User.calculateAge(contactData['birthDate']);
         }
       }
+    } else if (type == 'group_v2') {
+      // Groups V2: La invitación es para que el hijo entre al grupo
+      result['groupName'] = data['groupName'];
+      result['contactName'] = data['inviterName'] ?? 'Invitador';
+      result['childName'] = data['childName'];
+
+      // Obtener datos del invitador
+      final invitedBy = data['invitedBy'];
+      if (invitedBy != null) {
+        final inviterData = await User.getById(invitedBy);
+        if (inviterData != null) {
+          result['contactPhotoURL'] = inviterData['photoURL'];
+          result['contactAge'] = User.calculateAge(inviterData['birthDate']);
+        }
+      }
     }
 
     return result;

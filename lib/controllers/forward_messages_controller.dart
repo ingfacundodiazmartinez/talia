@@ -143,14 +143,16 @@ class ForwardMessagesController {
     }
   }
 
-  /// Cargar grupos del usuario
+  /// Cargar grupos del usuario (Groups V2)
   Future<List<GroupItem>> _loadGroups(String currentUserId) async {
     try {
-      ReleaseLogger.log('Cargando grupos del usuario', tag: 'ForwardMessages');
+      ReleaseLogger.log('Cargando grupos del usuario (groups_v2)', tag: 'ForwardMessages');
 
+      // Query groups_v2 collection (new architecture)
       final groupsSnapshot = await _firestore
-          .collection('groups')
+          .collection('groups_v2')
           .where('members', arrayContains: currentUserId)
+          .where('isActive', isEqualTo: true)
           .get();
 
       final groupsList = <GroupItem>[];
@@ -161,7 +163,7 @@ class ForwardMessagesController {
         }
       }
 
-      ReleaseLogger.log('${groupsList.length} grupos procesados', tag: 'ForwardMessages');
+      ReleaseLogger.log('${groupsList.length} grupos V2 procesados', tag: 'ForwardMessages');
       return groupsList;
     } catch (e) {
       ReleaseLogger.error('Error cargando grupos: $e', tag: 'ForwardMessages');

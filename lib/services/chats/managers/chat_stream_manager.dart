@@ -437,9 +437,9 @@ class ChatStreamManager {
           },
         );
 
-      // 2️⃣ LISTENER PARA GRUPOS
+      // 2️⃣ LISTENER PARA GRUPOS (Groups V2)
       _groupDocsSubscription = FirebaseFirestore.instance
-        .collection('groups')
+        .collection('groups_v2')
         .where('members', arrayContains: userId)
         .snapshots()
         .listen(
@@ -507,15 +507,19 @@ class ChatStreamManager {
 
       for (final chatDoc in modifiedDocs) {
         final chatId = chatDoc.id;
-        // ✅ FIX #18: Removed excessive DEBUG logs
+
+        // 🔍 DEBUG: Log para ver qué grupos se detectan
+        ReleaseLogger.log('🔍 [ChatDocsListener] Procesando ${isGroup ? "grupo" : "chat"}: ${chatId.substring(0, 8)}...');
 
         final chatData = chatDoc.data() as Map<String, dynamic>?;
         if (chatData == null) {
+          ReleaseLogger.log('⚠️ [ChatDocsListener] chatData es null para $chatId');
           continue;
         }
 
         final lastMessageTime = chatData['lastMessageTime'] as Timestamp?;
         if (lastMessageTime == null) {
+          ReleaseLogger.log('⚠️ [ChatDocsListener] lastMessageTime es null para ${isGroup ? "grupo" : "chat"} $chatId - keys: ${chatData.keys.toList()}');
           continue;
         }
 
@@ -582,7 +586,7 @@ class ChatStreamManager {
     try {
       ReleaseLogger.log('📥 [ChatDocsListener] Obteniendo datos del chat ${isGroup ? "grupo" : "chat"} $chatId');
 
-      final collection = isGroup ? 'groups' : 'chats';
+      final collection = isGroup ? 'groups_v2' : 'chats';
 
       // ✅ SOLUCIÓN: Obtener documento del chat (ya tiene lastMessage, lastMessageSender)
       final chatDoc = await FirebaseFirestore.instance
@@ -713,7 +717,9 @@ class ChatStreamManager {
         );
 
         // ✅ Incrementar contador de mensajes no leídos (solo si no está en el chat)
-        await LocalUnreadCountService().incrementUnreadCount(chatId);
+        ReleaseLogger.log('📊 [ChatDocsListener] Llamando incrementUnreadCount para $chatId');
+        final incremented = await LocalUnreadCountService().incrementUnreadCount(chatId);
+        ReleaseLogger.log('📊 [ChatDocsListener] incrementUnreadCount retornó: $incremented');
 
         ReleaseLogger.log('✅ [ChatDocsListener] Notificación instantánea mostrada para chat $chatId');
       } finally {
@@ -764,9 +770,9 @@ class ChatStreamManager {
         ensureListenerActive(chatId, isGroup: false);
       }
 
-      // 2️⃣ Obtener todos los grupos donde el usuario es miembro
+      // 2️⃣ Obtener todos los grupos donde el usuario es miembro (Groups V2)
       final groupsSnapshot = await FirebaseFirestore.instance
-          .collection('groups')
+          .collection('groups_v2')
           .where('members', arrayContains: userId)
           .get();
 
@@ -982,9 +988,9 @@ class ChatStreamManager {
           String? senderPhotoUrl;  // ✅ FIX: Capturar foto del sender
 
           if (isGroup) {
-            // Para grupos, obtener nombre del grupo
+            // Para grupos, obtener nombre del grupo (Groups V2)
             final groupDoc = await FirebaseFirestore.instance
-                .collection('groups')
+                .collection('groups_v2')
                 .doc(chatId)
                 .get();
             groupName = groupDoc.data()?['name'] as String? ?? 'Grupo';
@@ -1100,7 +1106,7 @@ class ChatStreamManager {
   /// Actualizar contador de no leídos en Firestore
   Future<void> _updateUnreadCountInFirestore(String chatId, String userId, int unreadCount, {bool isGroup = false}) async {
     try {
-      final collection = isGroup ? 'groups' : 'chats';
+      final collection = isGroup ? 'groups_v2' : 'chats';
 
       await FirebaseFirestore.instance
           .collection(collection)
@@ -1133,7 +1139,7 @@ class ChatStreamManager {
 
     // Si no está en cache, hacer query y cachear
     try {
-      final collection = isGroup ? 'groups' : 'chats';
+      final collection = isGroup ? 'groups_v2' : 'chats';
       final chatDoc = await FirebaseFirestore.instance
           .collection(collection)
           .doc(chatId)

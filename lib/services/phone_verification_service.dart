@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show VoidCallback;
 import '../notification_service.dart';
+import 'phone_normalization_service.dart';
 import 'voip_service.dart';
 import '../utils/release_logger.dart';
 
@@ -231,15 +232,28 @@ class PhoneVerificationService {
   }
 
   /// Actualizar información de teléfono en Firestore
+  ///
+  /// El número se guarda normalizado al formato E.164 canónico.
+  /// Para Argentina, esto incluye el "9" después del +54 para móviles.
   Future<void> _updateUserPhoneInFirestore({
     required String userId,
     String? phoneNumber,
   }) async {
     try {
+      // Normalizar el número antes de guardarlo
+      String? normalizedPhone;
+      if (phoneNumber != null && phoneNumber.isNotEmpty) {
+        normalizedPhone = PhoneNormalizationService().normalizePhone(phoneNumber);
+        ReleaseLogger.log(
+          '📱 [PhoneVerification] Guardando número normalizado: $phoneNumber -> $normalizedPhone',
+          tag: 'PhoneVerificationService',
+        );
+      }
+
       await _firestore.collection('users').doc(userId).update({
-        'phone': phoneNumber,
-        'phoneVerified': phoneNumber != null,
-        'phoneVerifiedAt': phoneNumber != null
+        'phone': normalizedPhone,
+        'phoneVerified': normalizedPhone != null,
+        'phoneVerifiedAt': normalizedPhone != null
             ? FieldValue.serverTimestamp()
             : null,
         'updatedAt': FieldValue.serverTimestamp(),
@@ -286,7 +300,15 @@ class PhoneVerificationService {
     }
   }
 
-  /// Formatear número de teléfono con código de país
+  /// Formatear número de teléfono con código de país y normalizar al formato E.164 canónico.
+  ///
+  /// IMPORTANTE: Para Argentina, siempre incluye el "9" después del +54 para móviles.
+  /// Esto evita que un usuario pueda crear dos cuentas con el mismo número
+  /// ingresándolo con y sin el "9".
+  ///
+  /// Ejemplos:
+  /// - "+543875433442" -> "+5493875433442" (se agrega el 9)
+  /// - "+5493875433442" -> "+5493875433442" (ya tiene el 9)
   String _formatPhoneNumber(String phoneNumber, String countryCode) {
     // Limpiar número
     String cleanPhone = phoneNumber.replaceAll(RegExp(r'[^\d]'), '');
@@ -301,7 +323,29 @@ class PhoneVerificationService {
       cleanPhone = '+$cleanPhone';
     }
 
-    return cleanPhone;
+    // Detectar país por código para la normalización
+    String defaultCountryCode = 'AR'; // Argentina por defecto
+    if (countryCode == '1') {
+      defaultCountryCode = 'US';
+    } else if (countryCode == '52') {
+      defaultCountryCode = 'MX';
+    } else if (countryCode == '34') {
+      defaultCountryCode = 'ES';
+    }
+
+    // Normalizar usando PhoneNormalizationService
+    // Esto asegura que los números argentinos siempre tengan el "9" para móviles
+    final normalized = PhoneNormalizationService().normalizePhone(
+      cleanPhone,
+      defaultCountryCode: defaultCountryCode,
+    );
+
+    ReleaseLogger.log(
+      '📱 [PhoneVerification] Número normalizado: $cleanPhone -> $normalized',
+      tag: 'PhoneVerificationService',
+    );
+
+    return normalized;
   }
 
   /// Validar formato de número de teléfono

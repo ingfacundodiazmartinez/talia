@@ -21,6 +21,7 @@ import 'services/voip_service.dart';
 import 'services/app_state_service.dart';
 import 'services/notification_deduplication_service.dart';
 import 'services/location_service.dart';
+import 'services/local_unread_count_service.dart';
 import 'utils/release_logger.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 // V2 Call System imports
@@ -241,7 +242,8 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
               message.data['groupName'] != null;
 
           // Usar la colección correcta según el tipo de chat
-          final collection = isGroupMessage ? 'groups' : 'chats';
+          // NOTA: Groups V2 usa 'groups_v2', no 'groups' (legacy)
+          final collection = isGroupMessage ? 'groups_v2' : 'chats';
 
           ReleaseLogger.log(
             '🔍 [Background DEBUG] isGroupMessage: $isGroupMessage',
@@ -677,6 +679,12 @@ class NotificationService {
       StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get storyApprovalNotificationTapStream =>
       _storyApprovalNotificationTapController.stream;
+
+  // Stream para notificar cuando se toca una notificación de aprobación de grupo
+  final _groupApprovalNotificationTapController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get groupApprovalNotificationTapStream =>
+      _groupApprovalNotificationTapController.stream;
 
   // Método público para emitir llamadas entrantes al stream
   void emitIncomingCall(Map<String, dynamic> callData) {
@@ -1650,6 +1658,31 @@ class NotificationService {
         return;
       }
 
+      // ═══════════════════════════════════════════════════════════════
+      // LOCATION REQUEST: Actualizar ubicación en foreground (silencioso)
+      // ═══════════════════════════════════════════════════════════════
+      if (message.data['type'] == 'location_request') {
+        ReleaseLogger.log(
+          '📍 [Foreground] Solicitud de ubicación recibida de padre',
+          tag: 'NotificationService',
+        );
+        try {
+          // Actualizar ubicación silenciosamente
+          final locationService = LocationService();
+          await locationService.updateLocationNow();
+          ReleaseLogger.log(
+            '✅ [Foreground] Ubicación actualizada por solicitud de padre',
+            tag: 'NotificationService',
+          );
+        } catch (e) {
+          ReleaseLogger.error(
+            '❌ [Foreground] Error actualizando ubicación: $e',
+            tag: 'NotificationService',
+          );
+        }
+        return; // ✅ No mostrar notificación - es silenciosa
+      }
+
       // Verificar si es una videollamada o llamada de audio (legacy o V2)
       final isLegacyCall =
           message.data['type'] == 'video_call' ||
@@ -2013,10 +2046,17 @@ class NotificationService {
               tag: 'NotificationService',
             );
 
-            // ✅ FIX #3: ELIMINADO incremento de unreadCount del cliente
-            // Cloud Functions (chats.js:76-83) ya incrementan correctamente cuando se crea el mensaje
-            // Incrementar aquí causaba duplicación (+2 por mensaje en lugar de +1)
-            // El cliente SOLO lee unreadCount, NUNCA lo modifica directamente
+            // ✅ Incrementar contador LOCAL de mensajes no leídos para badge en UI
+            // NOTA: Esto es LocalUnreadCountService (SharedPreferences), NO Firestore
+            final effectiveChatId = targetId ?? chatId ?? '';
+            if (effectiveChatId.isNotEmpty) {
+              final incremented = await LocalUnreadCountService().incrementUnreadCount(effectiveChatId);
+              final currentCount = LocalUnreadCountService().getUnreadCount(effectiveChatId);
+              ReleaseLogger.log(
+                '📊 [FCM] LocalUnreadCount para $effectiveChatId: incremented=$incremented, count=$currentCount',
+                tag: 'NotificationService',
+              );
+            }
           } catch (e, stackTrace) {
             ReleaseLogger.error(
               '❌ Error mostrando notificación desde FCM: $e',
@@ -2459,6 +2499,12 @@ class NotificationService {
         tag: 'NotificationService',
       );
       _storyApprovalNotificationTapController.add(data);
+    } else if (data['type'] == 'group_approval_request') {
+      ReleaseLogger.log(
+        '👥 Notificación de aprobación de grupo tocada, navegando a aprobación',
+        tag: 'NotificationService',
+      );
+      _groupApprovalNotificationTapController.add(data);
     }
   }
 

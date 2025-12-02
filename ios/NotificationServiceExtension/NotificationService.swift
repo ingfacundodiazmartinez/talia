@@ -37,6 +37,22 @@ class NotificationService: UNNotificationServiceExtension {
         NSLog("📦 [NSE] UserInfo keys: \(keys)")
         appendDebugLog("KEYS: \(keys)")
 
+        // ✅ FILTRAR TIPOS SILENCIOSOS: No mostrar notificación para ciertos tipos
+        // location_request: Solicitud de ubicación del padre - operación silenciosa
+        let notificationType = bestAttemptContent.userInfo["type"] as? String
+        NSLog("📋 [NSE] Notification type: \(notificationType ?? "nil")")
+
+        if notificationType == "location_request" {
+            NSLog("📍 [NSE] location_request detectado - NO mostrar notificación (operación silenciosa)")
+            appendDebugLog("FILTERED: location_request - silent operation")
+            // Entregar contenido vacío para suprimir la notificación
+            bestAttemptContent.title = ""
+            bestAttemptContent.body = ""
+            bestAttemptContent.sound = nil
+            contentHandler(bestAttemptContent)
+            return
+        }
+
         // ✅ Guardar messageId en App Group para que la app Dart sepa que NSE ya lo procesó
         // Intentar múltiples paths ya que FCM puede estructurar los datos de diferentes formas
         var messageId: String? = nil

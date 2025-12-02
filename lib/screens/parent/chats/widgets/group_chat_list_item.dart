@@ -3,7 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
-import '../../../../screens/group_chat_screen.dart';
+import '../../../../groups/groups.dart'; // Groups V2
 import '../../../../models/chat_message.dart';
 import '../../../../widgets/message_status_indicator.dart';
 
@@ -65,7 +65,7 @@ class GroupChatListItem extends StatelessWidget {
           // Usar Navigator del tab (sin rootNavigator) para que pop() funcione correctamente
           await Navigator.of(context).push(
             MaterialPageRoute(
-              builder: (context) => GroupChatScreen(
+              builder: (context) => GroupChatScreenV2(
                 groupId: groupId,
                 groupName: groupName,
               ),
@@ -154,7 +154,7 @@ class GroupChatListItem extends StatelessWidget {
                     SizedBox(height: 4),
                     StreamBuilder<QuerySnapshot>(
                       stream: firestore
-                          .collection('groups')
+                          .collection('groups_v2')
                           .doc(groupId)
                           .collection('typing')
                           .snapshots(),

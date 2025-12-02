@@ -79,17 +79,15 @@ class ParentChatsController extends BaseChatsController {
   }
 
   /// Construye la lista de items para mostrar en la UI
-  /// Todos los chats tienen la misma jerarquía (sin agrupación)
+  /// Combina chats y grupos ordenados por última actividad
   List<ChatListItemType> buildListItems({
     required List<QueryDocumentSnapshot> chatDocs,
     required List<QueryDocumentSnapshot> groups,
   }) {
-    final List<ChatListItemType> items = [];
+    // Crear lista combinada de items con timestamps para ordenar
+    final List<_SortableItem> sortableItems = [];
 
-    // Ordenar chats por última actividad
-    sortChatsByLastActivity(chatDocs);
-
-    // Agregar chats a la lista
+    // Agregar chats a la lista con su timestamp
     for (final chatDoc in chatDocs) {
       final chatData = chatDoc.data() as Map<String, dynamic>;
       final participants = List<String>.from(chatData['participants'] ?? []);
@@ -99,19 +97,36 @@ class ParentChatsController extends BaseChatsController {
       );
 
       if (otherUserId.isNotEmpty) {
-        items.add(
-          ChatItem(userId: otherUserId, userData: {}, chatDoc: chatDoc),
-        );
+        final timestamp = chatData['lastMessageTime'] as Timestamp? ??
+            chatData['createdAt'] as Timestamp?;
+        sortableItems.add(_SortableItem(
+          item: ChatItem(userId: otherUserId, userData: {}, chatDoc: chatDoc),
+          timestamp: timestamp,
+        ));
       }
     }
 
-    // Add groups
+    // Agregar grupos a la lista con su timestamp
     for (final groupDoc in groups) {
       final groupData = groupDoc.data() as Map<String, dynamic>;
-      items.add(GroupItem(groupId: groupDoc.id, groupData: groupData));
+      final timestamp = groupData['lastActivity'] as Timestamp? ??
+          groupData['createdAt'] as Timestamp?;
+      sortableItems.add(_SortableItem(
+        item: GroupItem(groupId: groupDoc.id, groupData: groupData),
+        timestamp: timestamp,
+      ));
     }
 
-    return items;
+    // Ordenar todos los items juntos por timestamp (más reciente primero)
+    sortableItems.sort((a, b) {
+      if (a.timestamp == null && b.timestamp == null) return 0;
+      if (a.timestamp == null) return 1;
+      if (b.timestamp == null) return -1;
+      return b.timestamp!.compareTo(a.timestamp!);
+    });
+
+    // Extraer solo los items ordenados
+    return sortableItems.map((s) => s.item).toList();
   }
 
   /// Obtener ID del usuario actual
@@ -260,4 +275,12 @@ class ParentChatsController extends BaseChatsController {
       return null;
     }
   }
+}
+
+/// Helper class para ordenar chats y grupos juntos por timestamp
+class _SortableItem {
+  final ChatListItemType item;
+  final Timestamp? timestamp;
+
+  _SortableItem({required this.item, this.timestamp});
 }

@@ -5,7 +5,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../services/location_service.dart';
 import '../notification_service.dart';
 import '../services/user_role_service.dart';
-import '../screens/group_chat_screen.dart';
+import '../groups/groups.dart'; // Groups V2
 import '../screens/chat_detail_screen.dart';
 import '../widgets/location_permission_dialog.dart';
 import '../utils/release_logger.dart';
@@ -158,11 +158,11 @@ class ChildHomeController {
 
         if (chatId != null) {
           if (isGroup && groupName != null) {
-            // Navegar al chat de grupo
+            // Navegar al chat de grupo (Groups V2)
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (context) => GroupChatScreen(
+                builder: (context) => GroupChatScreenV2(
                   groupId: chatId,
                   groupName: groupName,
                 ),

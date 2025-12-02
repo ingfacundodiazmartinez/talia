@@ -7,7 +7,7 @@ import 'whitelist/whitelist_screen.dart';
 import 'profile/parent_profile_screen.dart';
 import 'group_invitations_screen.dart';
 import '../chat_detail_screen.dart';
-import '../group_chat_screen.dart';
+import '../../groups/groups.dart'; // Groups V2
 import '../story_approval_screen.dart';
 import '../../controllers/parent_main_shell_controller.dart';
 import '../../utils/release_logger.dart';
@@ -129,6 +129,7 @@ class _ParentMainShellState extends State<ParentMainShell> {
     // Configurar callbacks para navegación desde notificaciones
     _controller.onChatNotificationTap = _handleChatNotificationTap;
     _controller.onStoryApprovalNotificationTap = _handleStoryApprovalNotificationTap;
+    _controller.onGroupApprovalNotificationTap = _handleGroupApprovalNotificationTap;
 
     _controller.initialize();
 
@@ -182,7 +183,7 @@ class _ParentMainShellState extends State<ParentMainShell> {
 
         await Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (context) => GroupChatScreen(
+            builder: (context) => GroupChatScreenV2(
               groupId: effectiveGroupId,
               groupName: groupName,
             ),
@@ -248,6 +249,22 @@ class _ParentMainShellState extends State<ParentMainShell> {
       );
     } catch (e) {
       ReleaseLogger.error('Error handling story approval notification tap: $e', tag: 'ParentMainShell');
+    }
+  }
+
+  /// Manejar tap en notificación de aprobación de grupo
+  Future<void> _handleGroupApprovalNotificationTap(Map<String, dynamic> data) async {
+    try {
+      ReleaseLogger.log('Navigating to group approval screen from notification', tag: 'ParentMainShell');
+
+      // Navegar a la pantalla de aprobación de grupos
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => const GroupApprovalScreen(),
+        ),
+      );
+    } catch (e) {
+      ReleaseLogger.error('Error handling group approval notification tap: $e', tag: 'ParentMainShell');
     }
   }
 

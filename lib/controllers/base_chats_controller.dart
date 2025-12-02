@@ -42,12 +42,12 @@ abstract class BaseChatsController {
         .snapshots(includeMetadataChanges: false);
   }
 
-  /// Stream de grupos donde el usuario es miembro
+  /// Stream de grupos donde el usuario es miembro (Groups V2)
   Stream<QuerySnapshot> getGroupsStream() {
     ReleaseLogger.log('🔍 [getGroupsStream] Iniciando stream para userId: $userId', tag: 'BaseChats');
 
     return _firestore
-        .collection('groups')
+        .collection('groups_v2')
         .where('members', arrayContains: userId)
         .where('isActive', isEqualTo: true)
         .orderBy('lastActivity', descending: true)
@@ -121,18 +121,18 @@ abstract class BaseChatsController {
     }
   }
 
-  /// 🔄 Forzar actualización de grupos desde el servidor
+  /// 🔄 Forzar actualización de grupos desde el servidor (Groups V2)
   ///
   /// Útil después de crear un grupo para asegurar que el cache local
   /// tenga los datos más recientes del servidor.
   Future<void> refreshGroupsFromServer() async {
     try {
-      ReleaseLogger.log('🔄 Forzando refresh de grupos desde servidor para userId: $userId', tag: 'BaseChats');
+      ReleaseLogger.log('🔄 Forzando refresh de grupos_v2 desde servidor para userId: $userId', tag: 'BaseChats');
 
       // Hacer una query explícita al servidor para actualizar el cache
       // Con timeout para evitar que se cuelgue
       final snapshot = await _firestore
-          .collection('groups')
+          .collection('groups_v2')
           .where('members', arrayContains: userId)
           .where('isActive', isEqualTo: true)
           .orderBy('lastActivity', descending: true)
@@ -140,9 +140,9 @@ abstract class BaseChatsController {
           .timeout(
             Duration(seconds: 10),
             onTimeout: () {
-              ReleaseLogger.log('⏱️ Timeout en refresh de grupos, usando cache', tag: 'BaseChats');
+              ReleaseLogger.log('⏱️ Timeout en refresh de grupos_v2, usando cache', tag: 'BaseChats');
               return _firestore
-                  .collection('groups')
+                  .collection('groups_v2')
                   .where('members', arrayContains: userId)
                   .where('isActive', isEqualTo: true)
                   .orderBy('lastActivity', descending: true)
@@ -150,7 +150,7 @@ abstract class BaseChatsController {
             },
           );
 
-      ReleaseLogger.log('✅ Grupos actualizados desde servidor: ${snapshot.docs.length} grupos encontrados', tag: 'BaseChats');
+      ReleaseLogger.log('✅ Grupos V2 actualizados desde servidor: ${snapshot.docs.length} grupos encontrados', tag: 'BaseChats');
 
       for (final doc in snapshot.docs) {
         final data = doc.data();
@@ -253,11 +253,11 @@ abstract class BaseChatsController {
     }
   }
 
-  /// Stream del último mensaje de un grupo específico
+  /// Stream del último mensaje de un grupo específico (Groups V2)
   Stream<QuerySnapshot> getGroupLastMessageStream(String groupId) {
     try {
       return _firestore
-          .collection('groups')
+          .collection('groups_v2')
           .doc(groupId)
           .collection('messages')
           .orderBy('timestamp', descending: true)

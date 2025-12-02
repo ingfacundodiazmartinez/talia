@@ -5,6 +5,7 @@ import '../../../controllers/whitelist_controller.dart';
 import '../../../utils/release_logger.dart';
 import '../../../models/contact_request.dart';
 import '../../../models/permission_request.dart';
+import '../../../groups/groups.dart';
 import '../../../theme_service.dart';
 import '../chat_moderation_management_screen.dart';
 import 'widgets/pending_request_card.dart';
@@ -286,41 +287,49 @@ class _WhitelistScreenState extends State<WhitelistScreen>
         return StreamBuilder<List<PermissionRequest>>(
           stream: _controller.getPendingPermissionRequests(),
           builder: (context, groupSnapshot) {
-            if (contactSnapshot.hasError || groupSnapshot.hasError) {
-              return Center(
-                child: Text('Error al cargar solicitudes'),
-              );
-            }
+            return StreamBuilder<List<GroupApprovalRequest>>(
+              stream: _controller.getPendingGroupApprovalRequests(),
+              builder: (context, groupV2Snapshot) {
+                if (contactSnapshot.hasError || groupSnapshot.hasError || groupV2Snapshot.hasError) {
+                  return Center(
+                    child: Text('Error al cargar solicitudes'),
+                  );
+                }
 
-            if (contactSnapshot.connectionState == ConnectionState.waiting ||
-                groupSnapshot.connectionState == ConnectionState.waiting) {
-              return Center(
-                child: CircularProgressIndicator(
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-              );
-            }
+                if (contactSnapshot.connectionState == ConnectionState.waiting ||
+                    groupSnapshot.connectionState == ConnectionState.waiting ||
+                    groupV2Snapshot.connectionState == ConnectionState.waiting) {
+                  return Center(
+                    child: CircularProgressIndicator(
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  );
+                }
 
-            // Combinar ambos tipos de solicitudes
-            final contactRequests = contactSnapshot.data ?? [];
-            final permissionRequests = groupSnapshot.data ?? [];
+                // Combinar todos los tipos de solicitudes
+                final contactRequests = contactSnapshot.data ?? [];
+                final permissionRequests = groupSnapshot.data ?? [];
+                final groupApprovalRequests = groupV2Snapshot.data ?? [];
 
-            final allRequests = _controller.combinePendingRequests(
-              contactRequests: contactRequests,
-              permissionRequests: permissionRequests,
-            );
+                final allRequests = _controller.combinePendingRequests(
+                  contactRequests: contactRequests,
+                  permissionRequests: permissionRequests,
+                  groupApprovalRequests: groupApprovalRequests,
+                );
 
-            if (allRequests.isEmpty) {
-              return _buildEmptyState(
-                icon: Icons.check_circle_outline,
-                title: '¡Todo al día!',
-                subtitle: 'No hay solicitudes pendientes',
-              );
-            }
+                if (allRequests.isEmpty) {
+                  return _buildEmptyState(
+                    icon: Icons.check_circle_outline,
+                    title: '¡Todo al día!',
+                    subtitle: 'No hay solicitudes pendientes',
+                  );
+                }
 
-            return _buildRequestsList(
-              requests: allRequests,
-              showBulkActions: true,
+                return _buildRequestsList(
+                  requests: allRequests,
+                  showBulkActions: true,
+                );
+              },
             );
           },
         );

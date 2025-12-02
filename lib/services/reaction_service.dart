@@ -20,7 +20,7 @@ class ReactionService {
       }
 
 
-      final collection = isGroup ? 'groups' : 'chats';
+      final collection = isGroup ? 'groups_v2' : 'chats';
       final path = '$collection/$chatId/messages/$messageId';
 
       final messageRef = _firestore

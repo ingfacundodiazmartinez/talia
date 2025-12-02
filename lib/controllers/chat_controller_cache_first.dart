@@ -756,16 +756,26 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   // MESSAGE MANAGEMENT
   // ═══════════════════════════════════════════════════════════════
 
-  /// Delete a message
+  /// Delete a message (optimistic delete)
   Future<bool> deleteMessage(String messageId, Timestamp? timestamp) async {
     ReleaseLogger.log('Deleting message $messageId from chat $chatId');
 
+    // 1. ✅ Optimistic: Remove from UI immediately
+    _messages.removeWhere((m) => m.id == messageId);
+    _pendingMessages.removeWhere((m) => m.id == messageId);
+    notifyListeners();
+
+    // 2. ✅ Remove from local cache
+    await MessageCacheService().deleteMessage(chatId, messageId);
+
     try {
+      // 3. Delete from Firestore
       await _orchestrator.deleteMessage(chatId, messageId);
       ReleaseLogger.log('Message $messageId deleted successfully');
       return true;
     } catch (e) {
       ReleaseLogger.error('Failed to delete message $messageId: $e');
+      // Note: Message already removed from UI, Firestore stream will sync if delete failed
       return false;
     }
   }

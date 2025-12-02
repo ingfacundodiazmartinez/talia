@@ -178,7 +178,7 @@ class ChatRepository {
       final currentUserId = _auth.currentUser?.uid;
       if (currentUserId == null) return;
 
-      final collection = isGroup ? 'groups' : 'chats';
+      final collection = isGroup ? 'groups_v2' : 'chats';
 
       await _firestore.collection(collection).doc(chatId).update({
         'unreadCounts.$currentUserId': 0,
@@ -195,7 +195,7 @@ class ChatRepository {
     bool isGroup = false,
   }) async {
     try {
-      final collection = isGroup ? 'groups' : 'chats';
+      final collection = isGroup ? 'groups_v2' : 'chats';
 
       await _firestore.collection(collection).doc(chatId).update({
         'unreadCounts.$userId': FieldValue.increment(1),
@@ -208,7 +208,7 @@ class ChatRepository {
   /// Eliminar chat
   Future<void> deleteChat(String chatId, {bool isGroup = false}) async {
     try {
-      final collection = isGroup ? 'groups' : 'chats';
+      final collection = isGroup ? 'groups_v2' : 'chats';
       await _firestore.collection(collection).doc(chatId).delete();
     } catch (e) {
       throw Exception('Error eliminando chat: $e');

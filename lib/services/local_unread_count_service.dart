@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../utils/release_logger.dart';
 
 /// Servicio para gestionar contadores de mensajes no leídos localmente
 ///
@@ -85,14 +86,39 @@ class LocalUnreadCountService extends ChangeNotifier {
 
   /// Marcar que el usuario entró a un chat (resetear contador y guardar estado)
   Future<void> enterChat(String chatId) async {
-    _currentChatId = chatId;
-    await _prefs?.setString(_currentChatKey, chatId);
+    try {
+      ReleaseLogger.log('📊 [LocalUnreadCount] enterChat llamado para $chatId', tag: 'LocalUnreadCount');
 
-    // Resetear contador de este chat
-    if (_unreadCounts.containsKey(chatId) && _unreadCounts[chatId]! > 0) {
-      _unreadCounts[chatId] = 0;
-      await _saveToPrefs();
-      notifyListeners();
+      // ✅ FIX: Asegurar que el servicio esté inicializado
+      if (!_initialized) {
+        ReleaseLogger.log('📊 [LocalUnreadCount] Servicio no inicializado, inicializando...', tag: 'LocalUnreadCount');
+        await initialize();
+      }
+
+      ReleaseLogger.log('📊 [LocalUnreadCount] _initialized: $_initialized, _prefs: ${_prefs != null}', tag: 'LocalUnreadCount');
+      ReleaseLogger.log('📊 [LocalUnreadCount] _unreadCounts ANTES: $_unreadCounts', tag: 'LocalUnreadCount');
+
+      _currentChatId = chatId;
+      await _prefs?.setString(_currentChatKey, chatId);
+
+      // ✅ FIX: Siempre resetear contador y notificar
+      final previousCount = _unreadCounts[chatId] ?? 0;
+      ReleaseLogger.log('📊 [LocalUnreadCount] previousCount para $chatId: $previousCount', tag: 'LocalUnreadCount');
+
+      if (previousCount > 0) {
+        _unreadCounts[chatId] = 0;
+        await _saveToPrefs();
+        notifyListeners();
+        ReleaseLogger.log('📊 [LocalUnreadCount] Reset $chatId: $previousCount -> 0, listeners notificados', tag: 'LocalUnreadCount');
+      } else {
+        // ✅ Siempre notificar para actualizar UI
+        notifyListeners();
+        ReleaseLogger.log('📊 [LocalUnreadCount] Sin contador previo, pero notificando listeners', tag: 'LocalUnreadCount');
+      }
+
+      ReleaseLogger.log('📊 [LocalUnreadCount] _unreadCounts DESPUÉS: $_unreadCounts', tag: 'LocalUnreadCount');
+    } catch (e, stackTrace) {
+      ReleaseLogger.error('❌ [LocalUnreadCount] Error en enterChat: $e', error: e, stackTrace: stackTrace, tag: 'LocalUnreadCount');
     }
   }
 
@@ -105,14 +131,20 @@ class LocalUnreadCountService extends ChangeNotifier {
   /// Incrementar contador de un chat (solo si el usuario NO está en ese chat)
   /// Retorna true si se incrementó, false si no (porque el usuario está en el chat)
   Future<bool> incrementUnreadCount(String chatId, {int amount = 1}) async {
+    ReleaseLogger.log('📊 [LocalUnreadCount] incrementUnreadCount llamado para $chatId', tag: 'LocalUnreadCount');
+    ReleaseLogger.log('📊 [LocalUnreadCount] _currentChatId: $_currentChatId', tag: 'LocalUnreadCount');
+
     // No incrementar si el usuario está viendo este chat
     if (_currentChatId == chatId) {
+      ReleaseLogger.log('📊 [LocalUnreadCount] SKIP - usuario está en el chat', tag: 'LocalUnreadCount');
       return false;
     }
 
-    _unreadCounts[chatId] = (_unreadCounts[chatId] ?? 0) + amount;
+    final oldCount = _unreadCounts[chatId] ?? 0;
+    _unreadCounts[chatId] = oldCount + amount;
     await _saveToPrefs();
     notifyListeners();
+    ReleaseLogger.log('📊 [LocalUnreadCount] Incrementado $chatId: $oldCount -> ${_unreadCounts[chatId]}', tag: 'LocalUnreadCount');
     return true;
   }
 

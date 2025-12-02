@@ -4,6 +4,7 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../models/contact_request.dart';
 import '../models/permission_request.dart';
+import '../groups/groups.dart';
 import '../utils/release_logger.dart';
 
 /// Controller para manejar la lógica de negocio del Control Parental (Lista Blanca)
@@ -57,6 +58,12 @@ class WhitelistController {
           contactId: contactInfo?['userId'] ?? '',
           contactName: contactInfo?['name'] ?? '',
         );
+      } else if (type == 'group_v2') {
+        await _approveGroupV2Request(
+          requestId: requestId,
+          groupId: data['groupId'] ?? '',
+          childId: childId,
+        );
       }
 
       selectedRequests.remove(requestId);
@@ -70,6 +77,23 @@ class WhitelistController {
         'error': _getErrorMessage(e),
       };
     }
+  }
+
+  /// Aprobar solicitud de grupo V2
+  Future<void> _approveGroupV2Request({
+    required String requestId,
+    required String groupId,
+    required String childId,
+  }) async {
+    ReleaseLogger.log('📞Llamando a Cloud Function approveGroupMembership (Groups V2)...');
+
+    await _functions.httpsCallable('approveGroupMembership').call({
+      'requestId': requestId,
+      'groupId': groupId,
+      'childId': childId,
+    });
+
+    ReleaseLogger.log('✅Membresía de grupo V2 aprobada');
   }
 
   /// Aprobar un contacto via Cloud Function
@@ -147,6 +171,12 @@ class WhitelistController {
           'status': 'rejected',
         });
         ReleaseLogger.log('✅Solicitud de grupo rechazada via Cloud Function');
+      } else if (type == 'group_v2') {
+        // Rechazar solicitud de grupo V2
+        await _functions.httpsCallable('rejectGroupMembership').call({
+          'requestId': requestId,
+        });
+        ReleaseLogger.log('✅Solicitud de grupo V2 rechazada');
       }
 
       selectedRequests.remove(requestId);
@@ -471,10 +501,20 @@ class WhitelistController {
     return PermissionRequest.getRejectedByParent(parentId);
   }
 
-  /// Combinar solicitudes pendientes de contactos y permisos
+  // ============== Groups V2 Approval Requests ==============
+
+  final GroupApprovalRepository _groupApprovalRepository = GroupApprovalRepository();
+
+  /// Obtener solicitudes de grupos V2 pendientes
+  Stream<List<GroupApprovalRequest>> getPendingGroupApprovalRequests() {
+    return _groupApprovalRepository.watchPendingRequestsForParent(parentId);
+  }
+
+  /// Combinar solicitudes pendientes de contactos, permisos y grupos V2
   List<Map<String, dynamic>> combinePendingRequests({
     required List<ContactRequest> contactRequests,
     required List<PermissionRequest> permissionRequests,
+    List<GroupApprovalRequest>? groupApprovalRequests,
   }) {
     final requests = <Map<String, dynamic>>[];
 
@@ -488,7 +528,7 @@ class WhitelistController {
       });
     }
 
-    // Agregar permission_requests
+    // Agregar permission_requests (legacy)
     for (final request in permissionRequests) {
       requests.add({
         'requestId': request.id,
@@ -496,6 +536,26 @@ class WhitelistController {
         'type': 'group',
         'data': request.toMap()..['childId'] = request.childId,
       });
+    }
+
+    // Agregar group_approval_requests (Groups V2)
+    if (groupApprovalRequests != null) {
+      for (final request in groupApprovalRequests) {
+        requests.add({
+          'requestId': request.id,
+          'childId': request.childId,
+          'type': 'group_v2',
+          'data': {
+            'groupId': request.groupId,
+            'groupName': request.groupName,
+            'childId': request.childId,
+            'childName': request.childName,
+            'invitedBy': request.groupCreatorId,
+            'inviterName': request.groupCreatorName,
+            'createdAt': request.createdAt,
+          },
+        });
+      }
     }
 
     return requests;

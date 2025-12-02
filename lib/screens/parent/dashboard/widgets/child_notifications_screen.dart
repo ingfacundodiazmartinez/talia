@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../../controllers/child_notifications_controller.dart';
+import '../../../../groups/groups.dart';
 import '../../../story_approval_screen.dart';
 import '../../contacts/child_contacts_filter_screen.dart';
 
@@ -144,16 +145,6 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
 
           // ✅ Combinar: NO LEÍDAS primero, luego LEÍDAS
           final childNotifications = [...unreadNotifications, ...readNotifications];
-
-          // ✅ Actualizar _hasMoreData basado en el número de documentos recibidos
-          // Si recibimos menos de 50 documentos (el límite), no hay más datos
-          if (allDocs.length < 50) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted && _controller.hasMoreData) {
-                setState(() {}); // Trigger rebuild
-              }
-            });
-          }
 
           // Ya vienen ordenadas por timestamp desde Firestore
 
@@ -427,6 +418,15 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
             builder: (context) => StoryApprovalScreen(
               childId: widget.childId,
             ),
+          ),
+        );
+        break;
+
+      case 'group_approval_request':
+        // Navegar a pantalla de aprobación de grupos
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => const GroupApprovalScreen(),
           ),
         );
         break;

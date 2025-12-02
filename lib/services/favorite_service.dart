@@ -18,7 +18,7 @@ class FavoriteService {
         throw Exception('Usuario no autenticado');
       }
 
-      final collection = isGroupChat ? 'groups' : 'chats';
+      final collection = isGroupChat ? 'groups_v2' : 'chats';
 
       // Referencia en el mensaje (legacy)
       final favoriteRef = _firestore
@@ -75,7 +75,7 @@ class FavoriteService {
       final currentUserId = _auth.currentUser?.uid;
       if (currentUserId == null) return false;
 
-      final collection = isGroupChat ? 'groups' : 'chats';
+      final collection = isGroupChat ? 'groups_v2' : 'chats';
       final favoriteDoc = await _firestore
           .collection(collection)
           .doc(chatId)
@@ -101,7 +101,7 @@ class FavoriteService {
       return Stream.value([]);
     }
 
-    final collection = isGroupChat ? 'groups' : 'chats';
+    final collection = isGroupChat ? 'groups_v2' : 'chats';
 
     // Query para obtener mensajes que tienen el usuario actual en la subcolección de favoritos
     return _firestore
@@ -196,7 +196,7 @@ class FavoriteService {
       final currentUserId = _auth.currentUser?.uid;
       if (currentUserId == null) return [];
 
-      final collection = isGroupChat ? 'groups' : 'chats';  // ✅ FIX
+      final collection = isGroupChat ? 'groups_v2' : 'chats';
 
       // Obtener todos los mensajes del chat
       final messagesSnapshot = await _firestore

@@ -63,8 +63,11 @@ const parentChild = require("./parent-child");
 // Contactos y bloqueos
 const contacts = require("./contacts");
 
-// Grupos
+// Grupos (legacy)
 const groups = require("./groups");
+
+// Grupos V2 (nueva arquitectura con aprobación parental)
+const groupsV2 = require("./groups-v2");
 
 // Moderación de contenido
 const moderation = require("./moderation");
@@ -141,11 +144,28 @@ exports.getChildContactsForModeration = contacts.getChildContactsForModeration;
 exports.updateChildContactModeration = contacts.updateChildContactModeration;
 exports.updateContactStatus = contacts.updateContactStatus;
 
-// Grupos
+// Grupos (legacy - mantener para compatibilidad durante migración)
 exports.createGroup = groups.createGroup;
 exports.approveGroupPermission = groups.approveGroupPermission;
 exports.updateGroupPermissionStatus = groups.updateGroupPermissionStatus;
 exports.processGroupInvitationsAfterContactApproval = groups.processGroupInvitationsAfterContactApproval;
+
+// Grupos V2 (nueva arquitectura con aprobación parental)
+exports.createGroupV2 = groupsV2.createGroupV2;
+exports.approveGroupMembership = groupsV2.approveGroupMembership;
+exports.rejectGroupMembership = groupsV2.rejectGroupMembership;
+exports.revokeGroupMembership = groupsV2.revokeGroupMembership;
+exports.addGroupMembersV2 = groupsV2.addGroupMembersV2;
+exports.removeGroupMemberV2 = groupsV2.removeGroupMemberV2;
+exports.leaveGroupV2 = groupsV2.leaveGroupV2;
+exports.updateGroupInfoV2 = groupsV2.updateGroupInfoV2;
+exports.getGroupApprovalRequests = groupsV2.getGroupApprovalRequests;
+exports.onGroupApprovalRequestCreated = groupsV2.onGroupApprovalRequestCreated;
+exports.onParentChildUnlinkV2 = groupsV2.onParentChildUnlinkV2;
+exports.expireGroupApprovalRequests = groupsV2.expireGroupApprovalRequests;
+exports.onGroupV2MessageCreated = groupsV2.onGroupV2MessageCreated;
+exports.promoteGroupAdmin = groupsV2.promoteGroupAdmin;
+exports.demoteGroupAdmin = groupsV2.demoteGroupAdmin;
 
 // Moderación de contenido
 exports.checkMessageBeforeSending = moderation.checkMessageBeforeSending;
