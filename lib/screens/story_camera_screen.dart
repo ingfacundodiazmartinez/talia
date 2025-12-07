@@ -2,10 +2,13 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart' show FlashMode;
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
+import 'package:cached_network_image/cached_network_image.dart';
 import '../controllers/story_camera_controller.dart';
+import '../models/character.dart';
 import '../services/deepar_service.dart';
 import '../utils/release_logger.dart';
 import '../widgets/permission_dialog.dart';
+import '../widgets/character_selector_dialog.dart';
 import '../widgets/camera/flutter_camera_view.dart';
 import '../widgets/camera/deepar_camera_view.dart';
 import 'package:flutter_story_editor/flutter_story_editor.dart';
@@ -34,6 +37,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   bool _isVideoMode = false; // Estado para modo foto/video
   double _baseZoom = 1.0; // Para pinch-to-zoom
   bool _showZoomIndicator = false; // Mostrar indicador de zoom temporalmente
+  Character? _selectedFaceSwapCharacter; // Personaje seleccionado para Face Swap
 
   @override
   void initState() {
@@ -166,10 +170,64 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   /// ===== MÉTODOS DE ACCIÓN (LLAMAN AL CONTROLLER) =====
 
+  /// Mostrar selector de personajes para Face Swap
+  Future<void> _showFaceSwapSelector() async {
+    final selectedCharacter = await showDialog<Character>(
+      context: context,
+      builder: (context) => const CharacterSelectorDialog(),
+    );
+
+    if (selectedCharacter != null && mounted) {
+      setState(() {
+        _selectedFaceSwapCharacter = selectedCharacter;
+      });
+      ReleaseLogger.log('🎭 Personaje seleccionado: ${selectedCharacter.name}', tag: 'StoryCameraScreen');
+    }
+  }
+
+  /// Cancelar modo Face Swap
+  void _cancelFaceSwapMode() {
+    setState(() {
+      _selectedFaceSwapCharacter = null;
+    });
+  }
+
   Future<void> _takePicture() async {
     final imagePath = await _controller.takePhoto();
     if (imagePath != null) {
-      await _navigateToStoryEditor(imagePath, 'image');
+      // Si hay un personaje seleccionado, procesar Face Swap
+      if (_selectedFaceSwapCharacter != null) {
+        await _processFaceSwapPhoto(imagePath);
+      } else {
+        await _navigateToStoryEditor(imagePath, 'image');
+      }
+    }
+  }
+
+  /// Procesar foto con Face Swap usando el personaje pre-seleccionado
+  Future<void> _processFaceSwapPhoto(String imagePath) async {
+    final character = _selectedFaceSwapCharacter;
+    if (character == null) return;
+
+    try {
+      // Usar el método del controller para procesar con el personaje seleccionado
+      final transformedPath = await _controller.applyFaceSwapWithCharacter(
+        context,
+        File(imagePath),
+        character,
+      );
+
+      if (transformedPath != null && mounted) {
+        // Limpiar selección de personaje
+        setState(() {
+          _selectedFaceSwapCharacter = null;
+        });
+        // Navegar al editor con la imagen transformada
+        await _navigateToStoryEditor(transformedPath, 'image');
+      }
+    } catch (e) {
+      ReleaseLogger.error('❌ Error procesando Face Swap: $e', tag: 'StoryCameraScreen');
+      _controller.onError?.call('Error en Face Swap: $e');
     }
   }
 
@@ -617,8 +675,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   Widget _buildMainControls() {
     return Column(
       children: [
-        // Selector de modo: FOTO | VIDEO
-        _buildModeSelector(),
+        // Indicador de Face Swap activo
+        if (_selectedFaceSwapCharacter != null) _buildFaceSwapIndicator(),
+
+        // Selector de modo: FOTO | VIDEO (ocultar si Face Swap activo)
+        if (_selectedFaceSwapCharacter == null) _buildModeSelector(),
 
         SizedBox(height: 20),
 
@@ -626,20 +687,140 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: [
-            // Galería
-            _buildShadowedIconButton(
-              onPressed: _pickFromGallery,
-              icon: Icons.photo_library,
-            ),
+            // Galería (o Face Swap si no está en modo video)
+            _isVideoMode
+                ? _buildShadowedIconButton(
+                    onPressed: _pickFromGallery,
+                    icon: Icons.photo_library,
+                  )
+                : _buildFaceSwapButton(),
 
             // Botón principal (cambia según modo)
             _isVideoMode ? _buildVideoButton() : _buildPhotoButton(),
 
-            // Espacio vacío para mantener centrado el botón principal
-            SizedBox(width: 48), // Mismo ancho que un IconButton
+            // Galería (si estamos en modo foto con Face Swap disponible)
+            _isVideoMode
+                ? SizedBox(width: 48)
+                : _buildShadowedIconButton(
+                    onPressed: _pickFromGallery,
+                    icon: Icons.photo_library,
+                  ),
           ],
         ),
       ],
+    );
+  }
+
+  /// Botón de Face Swap prominente
+  Widget _buildFaceSwapButton() {
+    final isActive = _selectedFaceSwapCharacter != null;
+
+    return GestureDetector(
+      onTap: isActive ? _cancelFaceSwapMode : _showFaceSwapSelector,
+      child: Container(
+        width: 56,
+        height: 56,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: isActive
+              ? LinearGradient(
+                  colors: [Color(0xFF9D7FE8), Color(0xFFB39DDB)],
+                )
+              : null,
+          color: isActive ? null : Colors.black.withValues(alpha: 0.5),
+          border: Border.all(
+            color: isActive ? Color(0xFF9D7FE8) : Colors.white,
+            width: 2,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: isActive
+                  ? Color(0xFF9D7FE8).withValues(alpha: 0.5)
+                  : Colors.black.withValues(alpha: 0.4),
+              blurRadius: isActive ? 12 : 8,
+              spreadRadius: isActive ? 2 : 1,
+            ),
+          ],
+        ),
+        child: isActive && _selectedFaceSwapCharacter!.thumbnailUrl.isNotEmpty
+            ? ClipOval(
+                child: CachedNetworkImage(
+                  imageUrl: _selectedFaceSwapCharacter!.thumbnailUrl,
+                  width: 52,
+                  height: 52,
+                  fit: BoxFit.cover,
+                  placeholder: (context, url) => Icon(
+                    Icons.face_retouching_natural,
+                    color: Colors.white,
+                    size: 28,
+                  ),
+                  errorWidget: (context, url, error) => Icon(
+                    Icons.face_retouching_natural,
+                    color: Colors.white,
+                    size: 28,
+                  ),
+                ),
+              )
+            : Icon(
+                Icons.face_retouching_natural,
+                color: Colors.white,
+                size: 28,
+              ),
+      ),
+    );
+  }
+
+  /// Indicador visual de Face Swap activo
+  Widget _buildFaceSwapIndicator() {
+    final character = _selectedFaceSwapCharacter;
+    if (character == null) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            Color(0xFF9D7FE8).withValues(alpha: 0.9),
+            Color(0xFFB39DDB).withValues(alpha: 0.9),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(25),
+        boxShadow: [
+          BoxShadow(
+            color: Color(0xFF9D7FE8).withValues(alpha: 0.4),
+            blurRadius: 10,
+            spreadRadius: 1,
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.face_retouching_natural, color: Colors.white, size: 20),
+          const SizedBox(width: 8),
+          Text(
+            'Face Swap: ${character.name}',
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+              fontSize: 14,
+            ),
+          ),
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: _cancelFaceSwapMode,
+            child: Container(
+              padding: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.3),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.close, color: Colors.white, size: 16),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

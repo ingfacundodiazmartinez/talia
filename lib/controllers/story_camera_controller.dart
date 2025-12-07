@@ -1136,6 +1136,158 @@ class StoryCameraController {
     return completer.future;
   }
 
+  /// Aplicar face swap con un personaje pre-seleccionado (desde la cámara)
+  /// Esta variante NO muestra el selector de personajes porque ya viene seleccionado
+  Future<String?> applyFaceSwapWithCharacter(
+    BuildContext context,
+    File file,
+    Character selectedCharacter,
+  ) async {
+    late GlobalKey<_FaceSwapProgressDialogState> progressKey;
+    BuildContext? dialogContext;
+    bool hasError = false;
+    String? transformedFilePath;
+    final Completer<String?> completer = Completer<String?>();
+
+    try {
+      ReleaseLogger.log('🎭 Iniciando Face Swap con personaje: ${selectedCharacter.name}', tag: 'StoryCameraController');
+
+      // Verificar que sea imagen
+      if (!file.path.toLowerCase().contains('.jpg') &&
+          !file.path.toLowerCase().contains('.jpeg') &&
+          !file.path.toLowerCase().contains('.png')) {
+        onError?.call('Face swap solo funciona con imágenes');
+        return null;
+      }
+
+      // Verificar límites de face swap
+      final canUseFaceSwap = await _usageLimitsService.canUseFaceSwap();
+      if (!canUseFaceSwap) {
+        final hasSubscription = await hasActiveSubscription();
+        if (!hasSubscription) {
+          final usage = await _usageLimitsService.getFaceSwapUsage();
+          onError?.call('Has usado todos tus ${usage['limit']} face swaps gratuitos este mes. Suscríbete para uso ilimitado.');
+          return null;
+        }
+      }
+
+      // Verificar que hay una cara visible en la imagen
+      final faceDetectionService = FaceDetectionService();
+      final hasFace = await faceDetectionService.hasFace(file.path);
+      if (!hasFace) {
+        onError?.call('No se detectó una cara en la imagen. Para mejores resultados, asegúrate de que tu rostro sea claramente visible.');
+        return null;
+      }
+
+      // Capturar context antes de operaciones async
+      if (!context.mounted) return null;
+      dialogContext = context;
+
+      // Mostrar dialog de progreso INMEDIATAMENTE
+      progressKey = GlobalKey<_FaceSwapProgressDialogState>();
+
+      // Marcar modal como activo
+      _activeProgressDialogContext = dialogContext;
+      _isProgressDialogOpen = true;
+
+      // Show dialog immediately without awaiting
+      showDialog(
+        context: dialogContext,
+        barrierDismissible: false,
+        builder: (context) => _FaceSwapProgressDialog(
+          key: progressKey,
+          characterName: selectedCharacter.name,
+          onCancel: () {
+            _forceCloseProgressDialog();
+            if (!completer.isCompleted) {
+              completer.complete(null);
+            }
+          },
+          onContinue: () {
+            _forceCloseProgressDialog();
+            if (!completer.isCompleted) {
+              completer.complete(transformedFilePath);
+            }
+          },
+        ),
+      );
+
+      // Give the dialog a moment to render
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      _setLoading(true);
+
+      // Subir imagen a Firebase Storage
+      progressKey.currentState?.updateStatus('Subiendo imagen...');
+      progressKey.currentState?.updateProgress(0.1);
+
+      final fileName = 'temp_faceswap_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final storageRef = FirebaseStorage.instance.ref().child('temp_transforms').child(fileName);
+      final uploadTask = storageRef.putFile(file);
+      final snapshot = await uploadTask;
+      final imageUrl = await snapshot.ref.getDownloadURL();
+
+      progressKey.currentState?.updateStatus('Transformando en ${selectedCharacter.name}...');
+      progressKey.currentState?.updateProgress(0.3);
+
+      // Aplicar face swap
+      final transformedImageUrl = await _characterService.transformImageWithProgress(
+        imageUrl: imageUrl,
+        characterId: selectedCharacter.id,
+        onProgress: (progress) {
+          if (_isProgressDialogOpen) {
+            progressKey.currentState?.updateProgress(progress);
+          }
+        },
+        onStatusUpdate: (status) {
+          if (_isProgressDialogOpen) {
+            progressKey.currentState?.updateStatus(status);
+          }
+        },
+      );
+
+      // Incrementar contador
+      await _usageLimitsService.incrementFaceSwapUsage();
+      final usage = await _usageLimitsService.getFaceSwapUsage();
+
+      // Guardar resultado
+      if (_isProgressDialogOpen) {
+        progressKey.currentState?.updateStatus('Guardando resultado...');
+        progressKey.currentState?.updateProgress(0.95);
+      }
+
+      final transformedFile = await _downloadAndSaveTransformedImage(transformedImageUrl, file.path);
+      transformedFilePath = transformedFile?.path;
+
+      ReleaseLogger.log('🎭 Face swap completado: $transformedFilePath', tag: 'StoryCameraController');
+
+      // Mostrar éxito
+      if (_isProgressDialogOpen && progressKey.currentState != null) {
+        final isUnlimited = usage['unlimited'] == true;
+        final successMessage = isUnlimited
+            ? '¡Transformación completada!'
+            : '¡Transformación completada!\nTe quedan ${usage['remaining']} usos gratuitos este mes.';
+        progressKey.currentState!.showSuccess(successMessage);
+      }
+
+    } catch (e) {
+      hasError = true;
+      ReleaseLogger.error('❌ Error en Face Swap: $e', tag: 'StoryCameraController');
+      onError?.call('Error aplicando Face Swap: $e');
+
+      if (!completer.isCompleted) {
+        completer.complete(null);
+      }
+    } finally {
+      if (hasError) {
+        _forceCloseProgressDialog();
+      }
+      _setLoading(false);
+    }
+
+    return completer.future;
+  }
+
   /// Publicar historia de forma optimista (termina inmediatamente, sube en background)
   Future<bool> publishStory({
     required String mediaPath,
