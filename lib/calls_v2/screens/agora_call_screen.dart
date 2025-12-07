@@ -9,7 +9,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:proximity_sensor/proximity_sensor.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 import '../controllers/call_controller.dart';
 import '../controllers/participant_selector_controller.dart'; // Para SelectableContact
 import '../models/call_v2.dart';
@@ -17,6 +16,7 @@ import '../services/agora_engine_service.dart';
 import '../services/call_state_cache_service.dart';
 import '../widgets/video_grid_widget.dart';
 import '../widgets/add_participant_sheet.dart';
+import '../widgets/caller_avatar.dart';
 import '../services/add_participant_service.dart';
 import '../../services/voip_service.dart';
 import '../../services/ringtone_service.dart';
@@ -365,7 +365,7 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
         ReleaseLogger.log('Accepting incoming call for first time', tag: _tag);
         final result = await _callController.acceptCall(widget.callId!);
         if (!result.success) {
-          _showError(result.error ?? 'Failed to join call');
+          _showError(result.error ?? 'Error al unirse a la llamada');
           Navigator.of(context, rootNavigator: true).pop();
           return;
         }
@@ -414,7 +414,7 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
                 '❌ [VoIP Flow] Failed to join Agora: ${joinResult.error}',
                 tag: _tag,
               );
-              _showError(joinResult.error ?? 'Failed to join call');
+              _showError(joinResult.error ?? 'Error al unirse a la llamada');
               Navigator.of(context, rootNavigator: true).pop();
               return;
             }
@@ -476,7 +476,7 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
       _setupProximitySensor(isVideoCall: isVideoCall);
     } catch (e) {
       ReleaseLogger.error('Failed to initialize call', error: e, tag: _tag);
-      _showError('Failed to initialize call');
+      _showError('Error al iniciar la llamada');
       Navigator.of(context, rootNavigator: true).pop();
     }
   }
@@ -581,7 +581,7 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
       _setupProximitySensor(isVideoCall: widget.isVideo);
     } catch (e) {
       ReleaseLogger.error('Failed to create call', error: e, tag: _tag);
-      _showError('Failed to create call');
+      _showError('Error al crear la llamada');
       Navigator.of(context, rootNavigator: true).pop();
     }
   }
@@ -656,12 +656,12 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
         },
         onConnectionLost: (RtcConnection connection) {
           if (!mounted || _isEnding) return;
-          _showError('Connection lost');
+          _showError('Conexión perdida');
         },
         onError: (ErrorCodeType code, String msg) {
           ReleaseLogger.error('Agora error: ${code.name}: $msg', tag: _tag);
           if (code == ErrorCodeType.errTokenExpired && !_isEnding) {
-            _showError('Call session expired');
+            _showError('La sesión de llamada expiró');
             _endCall();
           }
         },
@@ -1337,7 +1337,7 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
               CircularProgressIndicator(color: Colors.white),
               SizedBox(height: 20),
               Text(
-                'Connecting...',
+                'Conectando...',
                 style: TextStyle(color: Colors.white, fontSize: 16),
               ),
             ],
@@ -1355,6 +1355,23 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
 
     if (!isVideo) {
       // Audio-only call UI
+      // ✅ Get remote participant info for displaying photo
+      final call = _callController.currentCall;
+      final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+      String remoteDisplayName = 'Usuario';
+      String? remotePhotoUrl;
+
+      if (call != null && currentUserId != null) {
+        // Find the first remote participant
+        for (final entry in call.participants.entries) {
+          if (entry.key != currentUserId) {
+            remoteDisplayName = entry.value.displayName ?? 'Usuario';
+            remotePhotoUrl = entry.value.photoUrl;
+            break;
+          }
+        }
+      }
+
       return Scaffold(
         backgroundColor: Colors.grey[900],
         body: SafeArea(
@@ -1364,15 +1381,26 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const CircleAvatar(
-                      radius: 60,
-                      backgroundColor: Colors.grey,
-                      child: Icon(Icons.person, size: 60, color: Colors.white),
+                    // ✅ Use CallerAvatar with photoUrl
+                    CallerAvatar(
+                      callerName: remoteDisplayName,
+                      photoUrl: remotePhotoUrl,
+                      size: 120,
+                      animate: _remoteUsers.isEmpty, // Animate while connecting
                     ),
                     const SizedBox(height: 20),
                     Text(
-                      _remoteUsers.isEmpty ? 'Connecting...' : 'Connected',
-                      style: const TextStyle(color: Colors.white, fontSize: 18),
+                      remoteDisplayName,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _remoteUsers.isEmpty ? 'Conectando...' : 'Conectado',
+                      style: const TextStyle(color: Colors.white70, fontSize: 16),
                     ),
                   ],
                 ),

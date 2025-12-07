@@ -5,6 +5,38 @@ const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestor
 const { getMessaging } = require("firebase-admin/messaging");
 const { getStorage } = require("firebase-admin/storage");
 const { checkRateLimit, RATE_LIMITS } = require("./helpers");
+const crypto = require("crypto");
+
+// ═══════════════════════════════════════════════════════════════
+// PHONE HASHING (Privacy-preserving contact matching)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Salt secreto para hashing de números telefónicos.
+ * IMPORTANTE: Este valor debe ser idéntico al usado en Flutter.
+ */
+const PHONE_HASH_SALT = "51043c5af83c18c0e2ebce94e554af71b927c7974c84fe3df6323dde13952111";
+
+/**
+ * Genera un hash SHA-256 de un número telefónico normalizado.
+ * @param {string} phone - Número en formato E.164 (ej: +5493875433442)
+ * @returns {string} Hash SHA-256
+ */
+function hashPhone(phone) {
+  if (!phone || phone.trim() === "") return "";
+  const normalized = normalizePhone(phone);
+  if (!normalized) return "";
+  return crypto.createHash("sha256").update(normalized + PHONE_HASH_SALT).digest("hex");
+}
+
+/**
+ * Genera múltiples hashes para variaciones de un número.
+ * Útil para matching bidireccional.
+ */
+function hashPhoneVariations(phone) {
+  const variations = generatePhoneVariations(phone);
+  return variations.map((v) => hashPhone(v)).filter((h) => h !== "");
+}
 
 // ═══════════════════════════════════════════════════════════════
 // HELPER FUNCTIONS
@@ -808,16 +840,19 @@ exports.invalidateChatOnContactDelete = onDocumentUpdated(
 // ═══════════════════════════════════════════════════════════════
 
 /**
- * Cloud Function: Sincronizar contactos del dispositivo
+ * Cloud Function: Sincronizar contactos del dispositivo (Privacy-preserving)
  *
- * Recibe números de teléfono del dispositivo del usuario y:
- * 1. Actualiza devicePhoneNumbers en el documento del usuario
- * 2. Busca usuarios registrados con esos números (excluyendo children)
- * 3. Verifica bidireccionalidad (si el otro usuario me tiene en sus contactos)
+ * Recibe HASHES de números de teléfono (no números en texto plano) y:
+ * 1. Actualiza devicePhoneHashes en el documento del usuario
+ * 2. Busca usuarios registrados cuyos phoneHash coincida (excluyendo children)
+ * 3. Verifica bidireccionalidad (si el otro usuario tiene mi hash)
  * 4. Crea contactos automáticamente con status 'approved'
  * 5. Crea chats con visible: false
  *
- * @param {string[]} phoneNumbers - Lista de números normalizados del dispositivo
+ * IMPORTANTE: Los números NUNCA se envían ni almacenan en texto plano.
+ * Solo se almacenan hashes SHA-256 con salt secreto.
+ *
+ * @param {string[]} phoneHashes - Lista de hashes SHA-256 de números normalizados
  * @returns {Object} - { success, created, matches }
  */
 exports.syncDeviceContacts = onCall(
@@ -830,14 +865,14 @@ exports.syncDeviceContacts = onCall(
       throw new HttpsError("unauthenticated", "Usuario no autenticado");
     }
 
-    const { phoneNumbers } = request.data;
+    const { phoneHashes } = request.data;
     const currentUserId = auth.uid;
 
-    if (!phoneNumbers || !Array.isArray(phoneNumbers)) {
-      throw new HttpsError("invalid-argument", "phoneNumbers debe ser un array");
+    if (!phoneHashes || !Array.isArray(phoneHashes)) {
+      throw new HttpsError("invalid-argument", "phoneHashes debe ser un array");
     }
 
-    console.log(`📱 Sync contactos para ${currentUserId}: ${phoneNumbers.length} números`);
+    console.log(`📱 Sync contactos para ${currentUserId}: ${phoneHashes.length} hashes`);
 
     try {
       // 1. Obtener datos del usuario actual
@@ -858,42 +893,47 @@ exports.syncDeviceContacts = onCall(
         return { success: true, created: 0, matches: 0, reason: "child_not_allowed" };
       }
 
-      // 2. Actualizar devicePhoneNumbers del usuario actual
+      // 2. Hashear el número del usuario actual para matching bidireccional
+      const currentUserPhoneHash = hashPhone(currentUserPhone);
+
+      // 3. Actualizar devicePhoneHashes del usuario actual (NO números en texto plano)
       await db.collection("users").doc(currentUserId).update({
-        devicePhoneNumbers: phoneNumbers,
+        devicePhoneHashes: phoneHashes,
+        phoneHash: currentUserPhoneHash, // Hash del propio número para que otros puedan encontrarme
         lastContactsSync: FieldValue.serverTimestamp(),
       });
 
-      console.log(`✅ devicePhoneNumbers actualizado para ${currentUserId}`);
+      console.log(`✅ devicePhoneHashes actualizado para ${currentUserId}`);
 
-      if (phoneNumbers.length === 0) {
+      if (phoneHashes.length === 0) {
         return { success: true, created: 0, matches: 0 };
       }
 
-      // 3. Buscar usuarios registrados con esos números (batches de 10)
+      // 4. Buscar usuarios registrados cuyos phoneHash coincida con mis hashes
+      // (esto significa que tengo su número en mis contactos)
       const registeredUsers = [];
 
-      for (let i = 0; i < phoneNumbers.length; i += 10) {
-        const batch = phoneNumbers.slice(i, i + 10);
+      for (let i = 0; i < phoneHashes.length; i += 10) {
+        const batch = phoneHashes.slice(i, i + 10);
 
         const usersQuery = await db
           .collection("users")
-          .where("phone", "in", batch)
+          .where("phoneHash", "in", batch)
           .get();
 
         for (const userDoc of usersQuery.docs) {
           const userData = userDoc.data();
 
-          // Excluir: el mismo usuario, children, usuarios sin phone
+          // Excluir: el mismo usuario, children, usuarios sin phoneHash
           if (userDoc.id === currentUserId) continue;
           if (userData.role === "child") continue;
-          if (!userData.phone) continue;
+          if (!userData.phoneHash) continue;
 
           registeredUsers.push({
             userId: userDoc.id,
-            phone: userData.phone,
+            phoneHash: userData.phoneHash,
             name: userData.name || "Usuario",
-            devicePhoneNumbers: userData.devicePhoneNumbers || [],
+            devicePhoneHashes: userData.devicePhoneHashes || [],
           });
         }
       }
@@ -922,8 +962,8 @@ exports.syncDeviceContacts = onCall(
 
       console.log(`📋 Contactos existentes: ${existingContactUserIds.size}`);
 
-      // 5. Generar variaciones del número del usuario actual para matching bidireccional
-      const currentPhoneVariations = generatePhoneVariations(currentUserPhone);
+      // 5. Verificar bidireccionalidad usando hashes
+      // El otro usuario me tiene si mi phoneHash está en sus devicePhoneHashes
 
       // 6. Crear contactos bidireccionales
       let createdCount = 0;
@@ -936,10 +976,8 @@ exports.syncDeviceContacts = onCall(
           continue;
         }
 
-        // Verificar bidireccionalidad: ¿el otro usuario me tiene en sus contactos?
-        const isBidirectional = currentPhoneVariations.some(
-          (variation) => contact.devicePhoneNumbers.includes(variation)
-        );
+        // Verificar bidireccionalidad: ¿el otro usuario tiene mi phoneHash en sus contactos?
+        const isBidirectional = contact.devicePhoneHashes.includes(currentUserPhoneHash);
 
         if (!isBidirectional) {
           console.log(`⏭️ ${contact.name} no es bidireccional, saltando`);
@@ -1608,8 +1646,9 @@ exports.getChildContactsForModeration = onCall(
 // ═══════════════════════════════════════════════════════════════
 
 /**
- * Actualizar configuración de moderación para un contacto del hijo
- * Solo padres vinculados pueden llamar esta función
+ * Actualizar configuración de moderación para un contacto del hijo o del padre
+ * Padres vinculados pueden moderar chats de sus hijos
+ * Padres también pueden moderar sus propios chats
  */
 exports.updateChildContactModeration = onCall(
   { cors: true, consumeAppCheckToken: true },
@@ -1633,26 +1672,34 @@ exports.updateChildContactModeration = onCall(
       throw new HttpsError("invalid-argument", "enabled debe ser un booleano");
     }
 
-    console.log(`🔧 [updateChildContactModeration] Padre ${parentId} actualizando moderación para ${contactId} de hijo ${childId}`);
+    console.log(`🔧 [updateChildContactModeration] Usuario ${parentId} actualizando moderación para ${contactId} en chat ${chatId}`);
 
     try {
-      // 1. Verificar que el solicitante es padre del hijo
+      // 1. Verificar permisos
       const parentDoc = await db.collection("users").doc(parentId).get();
       if (!parentDoc.exists) {
-        throw new HttpsError("not-found", "Usuario padre no encontrado");
+        throw new HttpsError("not-found", "Usuario no encontrado");
       }
 
       const parentData = parentDoc.data();
       const linkedChildrenIds = parentData.linkedChildrenIds || [];
 
-      if (!linkedChildrenIds.includes(childId)) {
-        throw new HttpsError("permission-denied", "No tienes permiso para modificar la moderación de este hijo");
+      // Caso 1: El usuario está moderando el chat de su hijo
+      const isModeratingChild = linkedChildrenIds.includes(childId);
+
+      // Caso 2: El usuario está moderando su propio chat (childId === parentId)
+      const isModeratingOwnChat = childId === parentId;
+
+      if (!isModeratingChild && !isModeratingOwnChat) {
+        throw new HttpsError("permission-denied", "No tienes permiso para modificar la moderación de este chat");
       }
 
-      // 2. Verificar que el chatId corresponde al hijo y contacto
+      console.log(`🔧 Tipo de moderación: ${isModeratingOwnChat ? 'chat propio' : 'chat de hijo'}`);
+
+      // Verificar que el chatId sea correcto para estos participantes
       const expectedChatId = [childId, contactId].sort().join("_");
       if (chatId !== expectedChatId) {
-        throw new HttpsError("invalid-argument", "El chatId no corresponde al hijo y contacto especificados");
+        throw new HttpsError("invalid-argument", "El chatId no corresponde a los participantes especificados");
       }
 
       const batch = db.batch();

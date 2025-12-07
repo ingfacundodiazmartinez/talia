@@ -72,23 +72,24 @@ class _ChatModerationSettingsScreenState
   }
 
   Future<void> _toggleModeration(bool enabled) async {
-    setState(() => _isLoading = true);
+    // ✅ Optimistic update: actualizar UI inmediatamente
+    final previousEnabled = _moderationEnabled;
+    setState(() {
+      _moderationEnabled = enabled;
+      _errorMessage = null;
+    });
 
     try {
+      // Llamar a la cloud function en background
       await _controller.toggleModeration(enabled, _moderationLevel);
-
-      if (mounted) {
-        setState(() {
-          _moderationEnabled = enabled;
-          _isLoading = false;
-        });
-      }
+      // Si llega aquí, el cambio fue exitoso - no necesitamos hacer nada más
     } catch (e) {
       ReleaseLogger.error('Error al actualizar moderación: $e', tag: 'ChatModerationScreen');
+      // ✅ Revertir el cambio si falla
       if (mounted) {
         setState(() {
+          _moderationEnabled = previousEnabled;
           _errorMessage = 'Error al actualizar: $e';
-          _isLoading = false;
         });
 
         ScaffoldMessenger.of(context).showSnackBar(
@@ -104,22 +105,21 @@ class _ChatModerationSettingsScreenState
   Future<void> _changeModerationLevel(String newLevel) async {
     if (newLevel == _moderationLevel) return;
 
-    setState(() => _isLoading = true);
+    // ✅ Optimistic update: actualizar UI inmediatamente
+    final previousLevel = _moderationLevel;
+    setState(() {
+      _moderationLevel = newLevel;
+    });
 
     try {
       await _controller.changeModerationLevel(newLevel);
-
-      if (mounted) {
-        setState(() {
-          _moderationLevel = newLevel;
-          _isLoading = false;
-        });
-      }
+      // Si llega aquí, el cambio fue exitoso - no necesitamos hacer nada más
     } catch (e) {
       ReleaseLogger.error('Error al cambiar nivel de moderación: $e', tag: 'ChatModerationScreen');
+      // ✅ Revertir el cambio si falla
       if (mounted) {
         setState(() {
-          _isLoading = false;
+          _moderationLevel = previousLevel;
         });
 
         ScaffoldMessenger.of(context).showSnackBar(
