@@ -5,6 +5,7 @@ import '../../../controllers/child_home_controller.dart';
 import '../../../controllers/child_contacts_controller.dart';
 import '../../../screens/add_contact_screen.dart';
 import '../../../services/create_chat_service.dart';
+import '../../../widgets/synced_user_widgets.dart';
 
 /// Pantalla de contactos para niños con funcionalidad completa
 ///
@@ -757,8 +758,9 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  name,
+                SyncedUserName(
+                  userId: contactId,
+                  fallbackName: name,
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w600,

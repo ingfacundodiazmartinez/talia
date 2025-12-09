@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../../../controllers/whitelist_controller.dart';
 import '../../../../widgets/filterable_request_item.dart';
 import '../../../../models/user.dart';
@@ -119,20 +120,39 @@ class ApprovedRequestCard extends StatelessWidget {
           CircleAvatar(
             radius: 28,
             backgroundColor: Colors.green.withValues(alpha: 0.1),
-            backgroundImage:
-                contactPhotoURL != null && contactPhotoURL.isNotEmpty
-                ? NetworkImage(contactPhotoURL)
-                : null,
-            child: contactPhotoURL == null || contactPhotoURL.isEmpty
-                ? Text(
+            child: contactPhotoURL != null && contactPhotoURL.isNotEmpty
+                ? ClipOval(
+                    child: CachedNetworkImage(
+                      imageUrl: contactPhotoURL,
+                      width: 56,
+                      height: 56,
+                      fit: BoxFit.cover,
+                      placeholder: (context, url) => Text(
+                        contactName.isNotEmpty ? contactName[0].toUpperCase() : 'U',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.green,
+                        ),
+                      ),
+                      errorWidget: (context, url, error) => Text(
+                        contactName.isNotEmpty ? contactName[0].toUpperCase() : 'U',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.green,
+                        ),
+                      ),
+                    ),
+                  )
+                : Text(
                     contactName.isNotEmpty ? contactName[0].toUpperCase() : 'U',
                     style: TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.bold,
                       color: Colors.green,
                     ),
-                  )
-                : null,
+                  ),
           ),
           SizedBox(width: 12),
           Expanded(

@@ -438,9 +438,66 @@ exports.moderateMessage = onDocumentCreated(
     const db = getFirestore();
 
     try {
-      // ✅ IMPORTANTE: Si el mensaje ya está bloqueado (pre-moderación), no hacer nada
+      // ✅ IMPORTANTE: Si el mensaje ya fue pre-moderado (blocked o approved), no re-analizar
       if (messageData.moderationStatus === "blocked") {
         console.log(`⏭️ Mensaje ya bloqueado por pre-moderación, saltando análisis`);
+        return;
+      }
+
+      // ✅ IMPORTANTE: Si el mensaje ya está aprobado, no re-analizar
+      if (messageData.moderationStatus === "approved") {
+        console.log(`⏭️ Mensaje ya aprobado, saltando análisis de IA`);
+        return;
+      }
+
+      // ✅ FIX CRÍTICO: Si el mensaje NO tiene moderationStatus (versión vieja del cliente),
+      // marcarlo como 'pending' INMEDIATAMENTE para que el receptor no lo vea durante el análisis
+      if (!messageData.moderationStatus) {
+        console.log(`🔒 Mensaje sin status - marcando como pending inmediatamente`);
+        await event.data.ref.update({ moderationStatus: "pending" });
+      }
+
+      // ✅ OPTIMIZACIÓN: Si ya fue aprobado por pre-moderación, solo enviar notificación
+      if (messageData.preModerated === true) {
+        console.log(`⏭️ Mensaje pre-moderado, saltando análisis de IA`);
+
+        // Solo necesitamos enviar la notificación push
+        const senderId = messageData.senderId;
+        const chatDoc = await db.collection("chats").doc(chatId).get();
+        if (!chatDoc.exists) return;
+
+        const chatData = chatDoc.data();
+        const participants = chatData.participants || [];
+        const receiverId = participants.find((p) => p !== senderId);
+
+        if (receiverId) {
+          // Obtener nombre del sender
+          const senderDoc = await db.collection("users").doc(senderId).get();
+          const senderName = senderDoc.exists ? (senderDoc.data().name || "Usuario") : "Usuario";
+          const senderPhotoUrl = senderDoc.exists ? (senderDoc.data().photoURL || null) : null;
+
+          // Crear preview del mensaje
+          let messagePreview = messageData.text || "";
+          if (messageData.imageUrl) messagePreview = "📷 Foto";
+          else if (messageData.videoUrl) messagePreview = "🎥 Video";
+          else if (messageData.audioUrl) messagePreview = "🎤 Audio";
+          else if (messagePreview.length > 100) messagePreview = messagePreview.substring(0, 100) + "...";
+
+          // Enviar push directo
+          await sendDirectPushNotification({
+            userId: receiverId,
+            type: "chat_message",
+            title: senderName,
+            body: messagePreview,
+            chatId: chatId,
+            messageId: messageId,
+            senderId: senderId,
+            senderName: senderName,
+            senderPhotoUrl: senderPhotoUrl,
+          });
+
+          console.log(`✅ Push enviado (mensaje pre-aprobado)`);
+        }
         return;
       }
 

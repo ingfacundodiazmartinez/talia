@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../controllers/controllers.dart';
 import '../models/models.dart';
 
@@ -207,11 +208,24 @@ class _GroupApprovalScreenState extends State<GroupApprovalScreen> {
               children: [
                 CircleAvatar(
                   backgroundColor: colorScheme.primaryContainer,
-                  backgroundImage: request.childPhotoURL != null
-                      ? NetworkImage(request.childPhotoURL!)
-                      : null,
-                  child: request.childPhotoURL == null
-                      ? Text(
+                  child: request.childPhotoURL != null && request.childPhotoURL!.isNotEmpty
+                      ? ClipOval(
+                          child: CachedNetworkImage(
+                            imageUrl: request.childPhotoURL!,
+                            width: 40,
+                            height: 40,
+                            fit: BoxFit.cover,
+                            placeholder: (context, url) => Icon(
+                              Icons.person,
+                              color: colorScheme.primary,
+                            ),
+                            errorWidget: (context, url, error) => Icon(
+                              Icons.person,
+                              color: colorScheme.primary,
+                            ),
+                          ),
+                        )
+                      : Text(
                           request.childName.isNotEmpty
                               ? request.childName[0].toUpperCase()
                               : 'H',
@@ -219,8 +233,7 @@ class _GroupApprovalScreenState extends State<GroupApprovalScreen> {
                             fontWeight: FontWeight.bold,
                             color: colorScheme.primary,
                           ),
-                        )
-                      : null,
+                        ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(

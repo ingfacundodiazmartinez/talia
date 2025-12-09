@@ -3,6 +3,7 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'user.dart';
 import 'child.dart';
 import '../services/contact_service.dart';
+import '../utils/release_logger.dart';
 
 /// Modelo para usuarios con rol de Padre/Madre
 class Parent extends User {
@@ -53,7 +54,7 @@ class Parent extends User {
 
       return Parent.fromFirestore(doc);
     } catch (e) {
-      print('❌ Error obteniendo padre: $e');
+      ReleaseLogger.error('Error obteniendo padre: $e', tag: 'Parent');
       return null;
     }
   }
@@ -72,7 +73,7 @@ class Parent extends User {
       final contactService = ContactService();
       return await contactService.getUserContacts(id);
     } catch (e) {
-      print('❌ Error cargando contactos: $e');
+      ReleaseLogger.error('Error cargando contactos: $e', tag: 'Parent');
       return [];
     }
   }
@@ -102,7 +103,7 @@ class Parent extends User {
 
       return doc.exists ? doc : null;
     } catch (e) {
-      print('❌ Error obteniendo emergencia: $e');
+      ReleaseLogger.error('Error obteniendo emergencia: $e', tag: 'Parent');
       return null;
     }
   }
@@ -215,7 +216,7 @@ class Parent extends User {
 
       return doc.data();
     } catch (e) {
-      print('❌ Error obteniendo datos de usuario: $e');
+      ReleaseLogger.error('Error obteniendo datos de usuario: $e', tag: 'Parent');
       return null;
     }
   }
@@ -232,8 +233,6 @@ class Parent extends User {
   /// NO elimina solicitudes de contacto del hijo (pueden ser gestionadas por otro padre)
   Future<bool> unlinkChild(String childId) async {
     try {
-      print('🔄 Iniciando desvinculación del hijo $childId del padre $id');
-
       // Llamar a la Cloud Function para desvincular
       final callable = FirebaseFunctions.instance.httpsCallable('unlinkChild');
       final result = await callable.call<Map<String, dynamic>>({
@@ -244,15 +243,12 @@ class Parent extends User {
       final success = response['success'] as bool? ?? false;
       final message = response['message'] as String? ?? '';
 
-      if (success) {
-        print('✅ $message');
-        return true;
-      } else {
-        print('❌ Error en la Cloud Function: $message');
-        return false;
+      if (!success) {
+        ReleaseLogger.error('Error en Cloud Function unlinkChild: $message', tag: 'Parent');
       }
+      return success;
     } catch (e) {
-      print('❌ Error desvinculando hijo: $e');
+      ReleaseLogger.error('Error desvinculando hijo: $e', tag: 'Parent');
       return false;
     }
   }

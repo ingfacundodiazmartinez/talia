@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../controllers/profile_controller.dart';
 
 /// Widget que muestra el header del perfil con foto, nombre y email
@@ -52,11 +53,18 @@ class _ProfileHeaderWidgetState extends State<ProfileHeaderWidget> {
                   CircleAvatar(
                     radius: 60,
                     backgroundColor: colorScheme.primary,
-                    backgroundImage:
-                        photoURL != null ? NetworkImage(photoURL) : null,
-                    child: photoURL == null
-                        ? Icon(Icons.person, size: 60, color: Colors.white)
-                        : null,
+                    child: photoURL != null
+                        ? ClipOval(
+                            child: CachedNetworkImage(
+                              imageUrl: photoURL,
+                              width: 120,
+                              height: 120,
+                              fit: BoxFit.cover,
+                              placeholder: (context, url) => Icon(Icons.person, size: 60, color: Colors.white),
+                              errorWidget: (context, url, error) => Icon(Icons.person, size: 60, color: Colors.white),
+                            ),
+                          )
+                        : Icon(Icons.person, size: 60, color: Colors.white),
                   ),
                   if (_isUploadingImage)
                     Positioned.fill(

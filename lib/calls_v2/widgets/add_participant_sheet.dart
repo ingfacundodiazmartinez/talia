@@ -204,24 +204,30 @@ class _AddParticipantSheetState extends State<AddParticipantSheet> {
   }
 
   Widget _buildAvatar(SelectableContact contact, {double size = 40}) {
-    if (contact.photoUrl != null && contact.photoUrl!.isNotEmpty) {
-      return CircleAvatar(
-        radius: size / 2,
-        backgroundImage: CachedNetworkImageProvider(contact.photoUrl!),
-      );
-    }
+    final fallbackWidget = Text(
+      _getInitials(contact.name),
+      style: TextStyle(
+        color: Colors.white,
+        fontSize: size / 2.5,
+        fontWeight: FontWeight.bold,
+      ),
+    );
 
     return CircleAvatar(
       radius: size / 2,
       backgroundColor: _getAvatarColor(contact.name),
-      child: Text(
-        _getInitials(contact.name),
-        style: TextStyle(
-          color: Colors.white,
-          fontSize: size / 2.5,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
+      child: contact.photoUrl != null && contact.photoUrl!.isNotEmpty
+          ? ClipOval(
+              child: CachedNetworkImage(
+                imageUrl: contact.photoUrl!,
+                width: size,
+                height: size,
+                fit: BoxFit.cover,
+                placeholder: (context, url) => fallbackWidget,
+                errorWidget: (context, url, error) => fallbackWidget,
+              ),
+            )
+          : fallbackWidget,
     );
   }
 

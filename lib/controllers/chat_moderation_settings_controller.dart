@@ -108,6 +108,10 @@ class ChatModerationSettingsController {
   }
 
   /// Cargar configuración actual de moderación
+  ///
+  /// ✅ FIX: Diferencia entre control parental (hijo) vs moderación entre adultos
+  /// - Control parental: lee de chats.moderationEnabled (compartido)
+  /// - Entre adultos: lee de contacts.moderationSettings[userId] (independiente)
   Future<Map<String, dynamic>> loadModerationSettings() async {
     try {
       if (_currentUserId == null || _contactId == null || _childId == null) {
@@ -118,23 +122,70 @@ class ChatModerationSettingsController {
         throw Exception('Usuario, contacto o hijo no encontrado');
       }
 
-      // Leer la configuración del chat directamente
-      final chatDoc = await _firestore.collection('chats').doc(chatId).get();
+      ReleaseLogger.log('Cargando moderación para chatId: $chatId (childId: $_childId, contactId: $_contactId)', tag: 'ChatModeration');
 
-      if (!chatDoc.exists) {
-        ReleaseLogger.log('Chat no existe aún, usando configuración por defecto', tag: 'ChatModeration');
+      // Determinar si es control parental o moderación entre adultos
+      final isOwnChat = _childId == _currentUserId;
+
+      if (isOwnChat) {
+        // CASO: Adulto moderando su propio chat
+        // Leer desde contacts.moderationSettings[currentUserId]
+        ReleaseLogger.log('👤 Cargando moderación PERSONAL desde contacts', tag: 'ChatModeration');
+
+        final sortedUsers = [_childId!, _contactId!]..sort();
+        final contactQuery = await _firestore
+            .collection('contacts')
+            .where('users', isEqualTo: sortedUsers)
+            .limit(1)
+            .get();
+
+        if (contactQuery.docs.isEmpty) {
+          ReleaseLogger.log('No existe contacto, usando configuración por defecto', tag: 'ChatModeration');
+          return {
+            'enabled': false,
+            'level': 'high',
+          };
+        }
+
+        final contactData = contactQuery.docs.first.data();
+        final moderationSettings = contactData['moderationSettings'] as Map<String, dynamic>? ?? {};
+        final mySettings = moderationSettings[_currentUserId] as Map<String, dynamic>? ?? {};
+
+        final enabled = mySettings['enabled'] ?? false;
+        final level = mySettings['level'] ?? 'high';
+
+        ReleaseLogger.log('contacts.moderationSettings.$_currentUserId = { enabled: $enabled, level: $level }', tag: 'ChatModeration');
+
         return {
-          'enabled': false,
-          'level': 'high',
+          'enabled': enabled,
+          'level': level,
+        };
+      } else {
+        // CASO: Padre moderando chat de su HIJO
+        // Leer desde chats.moderationEnabled (compartido para todo el chat)
+        ReleaseLogger.log('👶 Cargando moderación PARENTAL desde chats', tag: 'ChatModeration');
+
+        final chatDoc = await _firestore.collection('chats').doc(chatId).get();
+
+        if (!chatDoc.exists) {
+          ReleaseLogger.log('Chat $chatId no existe aún, usando configuración por defecto', tag: 'ChatModeration');
+          return {
+            'enabled': false,
+            'level': 'high',
+          };
+        }
+
+        final chatData = chatDoc.data() ?? {};
+        final enabled = chatData['moderationEnabled'] ?? false;
+        final level = chatData['moderationLevel'] ?? 'high';
+
+        ReleaseLogger.log('chats.$chatId.moderationEnabled: $enabled, level: $level', tag: 'ChatModeration');
+
+        return {
+          'enabled': enabled,
+          'level': level,
         };
       }
-
-      final chatData = chatDoc.data() ?? {};
-
-      return {
-        'enabled': chatData['moderationEnabled'] ?? false,
-        'level': chatData['moderationLevel'] ?? 'high',
-      };
     } catch (e) {
       ReleaseLogger.error('Error cargando configuración de moderación: $e', tag: 'ChatModeration');
       rethrow;

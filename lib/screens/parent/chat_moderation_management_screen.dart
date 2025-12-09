@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../controllers/chat_moderation_management_controller.dart';
 import '../../utils/release_logger.dart';
 
@@ -459,10 +460,18 @@ class _ChatModerationManagementScreenState
             leading: CircleAvatar(
               radius: 24,
               backgroundColor: colorScheme.primaryContainer,
-              backgroundImage: childPhotoURL != null ? NetworkImage(childPhotoURL) : null,
-              child: childPhotoURL == null
-                  ? Icon(Icons.child_care, color: colorScheme.onPrimaryContainer)
-                  : null,
+              child: childPhotoURL != null
+                  ? ClipOval(
+                      child: CachedNetworkImage(
+                        imageUrl: childPhotoURL,
+                        width: 48,
+                        height: 48,
+                        fit: BoxFit.cover,
+                        placeholder: (context, url) => Icon(Icons.child_care, color: colorScheme.onPrimaryContainer),
+                        errorWidget: (context, url, error) => Icon(Icons.child_care, color: colorScheme.onPrimaryContainer),
+                      ),
+                    )
+                  : Icon(Icons.child_care, color: colorScheme.onPrimaryContainer),
             ),
             title: Text(
               childName,
@@ -556,10 +565,18 @@ class _ChatModerationManagementScreenState
           ListTile(
             leading: CircleAvatar(
               backgroundColor: colorScheme.secondaryContainer,
-              backgroundImage: contact.photoURL != null ? NetworkImage(contact.photoURL!) : null,
-              child: contact.photoURL == null
-                  ? Icon(Icons.person, color: colorScheme.onSecondaryContainer)
-                  : null,
+              child: contact.photoURL != null
+                  ? ClipOval(
+                      child: CachedNetworkImage(
+                        imageUrl: contact.photoURL!,
+                        width: 40,
+                        height: 40,
+                        fit: BoxFit.cover,
+                        placeholder: (context, url) => Icon(Icons.person, color: colorScheme.onSecondaryContainer),
+                        errorWidget: (context, url, error) => Icon(Icons.person, color: colorScheme.onSecondaryContainer),
+                      ),
+                    )
+                  : Icon(Icons.person, color: colorScheme.onSecondaryContainer),
             ),
             title: Text(contact.name),
             subtitle: Column(

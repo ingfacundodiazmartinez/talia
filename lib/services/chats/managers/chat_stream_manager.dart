@@ -65,6 +65,9 @@ class ChatStreamManager {
   // Track previous readBy[] state to detect read receipt changes
   final Map<String, Map<String, List<String>>> _previousReadByState = {};
 
+  // ✅ FIX DUPLICATES: Track last emitted message IDs to prevent duplicate emissions
+  final Map<String, Set<String>> _lastEmittedMessageIds = {};
+
   // ✅ FIX: Cache para clearedAt timestamps (evita queries redundantes)
   final Map<String, Timestamp?> _clearedAtCache = {};
 
@@ -194,20 +197,34 @@ class ChatStreamManager {
           final currentUserId = FirebaseAuth.instance.currentUser?.uid;
 
           // Convertir QuerySnapshot a List<ChatMessage>
+          // ✅ FIX: Filtrar mensajes pendientes de contactos - NO deben llegar al cache
           final messages = snapshot.docs
               .map((doc) => ChatMessage.fromFirestore(doc, currentUserId: currentUserId))
+              .where((msg) {
+                // Mensajes propios: siempre incluir
+                if (msg.senderId == currentUserId) return true;
+                // Mensajes de contactos: solo si están aprobados o bloqueados (no pending/null)
+                return msg.moderationStatus == ModerationStatus.approved ||
+                       msg.moderationStatus == ModerationStatus.blocked;
+              })
               .toList();
-
-          // ✅ DEBUG: Log mensajes que se van a guardar
-          ReleaseLogger.log('📦 [DEBUG] Guardando ${messages.length} mensajes en Hive para chat $chatId:');
-          for (final msg in messages) {
-            final textPreview = msg.text != null && msg.text!.length > 10 ? msg.text!.substring(0, 10) : (msg.text ?? 'null');
-            ReleaseLogger.log('  - ID: ${msg.id.substring(0, 8)}..., localId: ${msg.localId}, text: $textPreview...');
-          }
 
           // ✅ CRITICAL: Save to Hive cache (persistent) - CACHE-FIRST ARCHITECTURE
           await MessageCacheService().saveMessages(chatId, messages);
           ReleaseLogger.log('Saved ${messages.length} messages to Hive cache for chat $chatId');
+
+          // ✅ FIX: Inicializar processed IDs con mensajes recibidos existentes
+          // Solo en la primera carga (cuando no hay IDs previos para este chat)
+          final previousIds = _lastEmittedMessageIds[chatId];
+          if (previousIds == null || previousIds.isEmpty) {
+            // Primera carga: marcar todos los mensajes recibidos como procesados
+            for (final msg in messages) {
+              if (msg.senderId != currentUserId) {
+                _processedNotificationMessageIds.add(msg.id);
+              }
+            }
+            ReleaseLogger.log('📋 [StreamDetector] Inicializados ${messages.where((m) => m.senderId != currentUserId).length} mensajes como procesados para $chatId');
+          }
 
           // ✅ Notify cache change listeners (no data emission, just notification)
           if (_cacheChangeControllers.containsKey(chatId) &&
@@ -219,15 +236,31 @@ class ChatStreamManager {
           // Actualizar cache in-memory (for quick access)
           _cacheManager.updateCacheForChat(chatId, messages);
 
-          // ✅ NUEVA LÓGICA CENTRALIZADA: Detectar mensajes nuevos y actualizar contadores
-          await _handleNewMessagesDetected(chatId, messages, isGroup: isGroup);
-
           // Combinar con cache optimista
           final finalMessages = _cacheManager.getCachedMessages(chatId);
 
-          // Emitir al stream
-          if (!controller.isClosed) {
-            controller.add(finalMessages);
+          // ✅ FIX DUPLICATES: Verificar si los mensajes ya fueron emitidos
+          final currentMessageIds = finalMessages.map((m) => m.id).toSet();
+          final previousMessageIds = _lastEmittedMessageIds[chatId] ?? <String>{};
+
+          // ✅ NUEVA LÓGICA CENTRALIZADA: Detectar mensajes nuevos y actualizar contadores
+          await _handleNewMessagesDetected(chatId, messages, isGroup: isGroup);
+
+          // Solo emitir si hay diferencias (nuevos mensajes o cambios)
+          final hasNewMessages = !currentMessageIds.every((id) => previousMessageIds.contains(id));
+          final hasRemovedMessages = !previousMessageIds.every((id) => currentMessageIds.contains(id));
+
+          if (!hasNewMessages && !hasRemovedMessages && currentMessageIds.length == previousMessageIds.length) {
+            ReleaseLogger.log('⏭️ [ChatStreamManager] Mensajes sin cambios para $chatId - SKIP emission');
+          } else {
+            // Actualizar tracking de IDs emitidos
+            _lastEmittedMessageIds[chatId] = currentMessageIds;
+
+            // Emitir al stream
+            if (!controller.isClosed) {
+              controller.add(finalMessages);
+              ReleaseLogger.log('📤 [ChatStreamManager] Emitidos ${finalMessages.length} mensajes para $chatId');
+            }
           }
         } catch (e) {
           ReleaseLogger.error('Error en stream de mensajes para chat $chatId: $e');
@@ -388,6 +421,7 @@ class ChatStreamManager {
   StreamSubscription? _chatDocsSubscription;
   StreamSubscription? _groupDocsSubscription;
   final Map<String, Timestamp?> _lastSeenMessageTimestamps = {}; // Track últimos mensajes procesados
+  final Set<String> _processedNotificationMessageIds = {}; // ✅ FIX: Mensajes que ya mostraron notificación (evita notifs para mensajes viejos)
 
   /// ⚡ NUEVO: Escuchar cambios en documentos principales de chats (NO subcollection)
   /// Detecta mensajes nuevos por cambios en lastMessageTime
@@ -612,7 +646,6 @@ class ChatStreamManager {
 
       // FILTRO 4: Solo mensajes de OTROS usuarios
       if (senderId == userId) {
-        ReleaseLogger.log('⏭️ [ChatDocsListener] Mensaje es del usuario actual - SKIP');
         return;
       }
 
@@ -684,6 +717,20 @@ class ChatStreamManager {
         if (!AppStateService().isInForeground) {
           ReleaseLogger.log('📱 [ChatDocsListener] App en background - SKIP notificación local (FCM se encargará)');
           return;
+        }
+
+        // ✅ FIX iOS DUPLICATES: Verificar si el mensaje ya fue procesado
+        // 1. Por el background handler (SharedPreferences) - cuando app estaba killed
+        // 2. Por el NSE (App Group UserDefaults) - cuando app estaba en background
+        if (Platform.isIOS) {
+          final wasProcessedInBackground = await wasMessageProcessedInBackground(lastMessageId);
+          final wasProcessedByNSE = await NotificationService().wasMessageProcessedByNSE(lastMessageId);
+
+          if (wasProcessedInBackground || wasProcessedByNSE) {
+            ReleaseLogger.log('📱 [ChatDocsListener] messageId=$lastMessageId ya procesado (bg=$wasProcessedInBackground, nse=$wasProcessedByNSE) - SKIP');
+            _deduplicationService.tryAcquire(lastMessageId);
+            return;
+          }
         }
 
         // ✅ CRITICAL: Verificar si el usuario tiene el chat abierto
@@ -906,6 +953,7 @@ class ChatStreamManager {
     _chatIsGroupMap.remove(chatId);
     _lastUpdateTimes.remove(chatId);
     _previousReadByState.remove(chatId); // ✅ Cleanup readBy[] state
+    _lastEmittedMessageIds.remove(chatId); // ✅ Cleanup emitted message IDs
     _activeStreamCount = _messageControllers.length;
   }
 
@@ -981,6 +1029,16 @@ class ChatStreamManager {
       if (receivedMessages.isNotEmpty) {  // ✅ ACTIVADO PARA TODOS (1-1 y grupos)
         final latestMessage = receivedMessages.first; // El más reciente
 
+        // ✅ FIX: Solo mostrar notificación si el mensaje NO fue procesado anteriormente
+        // Esto evita mostrar notificaciones para mensajes viejos durante sincronización del cache
+        if (_processedNotificationMessageIds.contains(latestMessage.id)) {
+          ReleaseLogger.log('⏭️ [StreamDetector] Mensaje ${latestMessage.id.substring(0, 8)}... ya fue procesado - SKIP notificación');
+          return;
+        }
+
+        // Marcar como procesado ANTES de mostrar notificación
+        _processedNotificationMessageIds.add(latestMessage.id);
+
         try {
           // Obtener información del remitente
           String senderName = latestMessage.senderId;
@@ -1016,6 +1074,21 @@ class ChatStreamManager {
 
             // Obtener alias si existe (el receptor puede haberle puesto un alias al remitente)
             senderName = await ContactAliasService().getDisplayName(latestMessage.senderId, realName);
+          }
+
+          // ✅ FIX iOS DUPLICATES: Verificar si el mensaje ya fue procesado
+          // 1. Por el background handler (SharedPreferences) - cuando app estaba killed
+          // 2. Por el NSE (App Group UserDefaults) - cuando app estaba en background
+          if (Platform.isIOS) {
+            final wasProcessedInBackground = await wasMessageProcessedInBackground(latestMessage.id);
+            final wasProcessedByNSE = await NotificationService().wasMessageProcessedByNSE(latestMessage.id);
+
+            if (wasProcessedInBackground || wasProcessedByNSE) {
+              ReleaseLogger.log('📱 [StreamDetector] messageId=${latestMessage.id.substring(0, 8)}... ya procesado (bg=$wasProcessedInBackground, nse=$wasProcessedByNSE) - SKIP');
+              // Marcar como procesado para evitar que otros listeners lo muestren
+              _deduplicationService.tryAcquire(latestMessage.id);
+              return;
+            }
           }
 
           // ✅ ATOMIC: Try to acquire the right to show this notification
@@ -1255,6 +1328,16 @@ class ChatStreamManager {
         _lastUpdateTimes.remove(key);
       }
     }
+
+    // ✅ Limpiar _lastEmittedMessageIds si excede el límite
+    if (_lastEmittedMessageIds.length > _maxCacheEntries) {
+      final keysToRemove = _lastEmittedMessageIds.keys
+          .take(_lastEmittedMessageIds.length - _maxCacheEntries)
+          .toList();
+      for (final key in keysToRemove) {
+        _lastEmittedMessageIds.remove(key);
+      }
+    }
   }
 
   void dispose() {
@@ -1272,6 +1355,7 @@ class ChatStreamManager {
     _clearedAtCache.clear();
     _previousReadByState.clear();
     _processedMessageIds.clear();
+    _lastEmittedMessageIds.clear(); // ✅ Cleanup emitted message IDs
     _prefsCache = null;
     _cachedCurrentChatId = null;
   }

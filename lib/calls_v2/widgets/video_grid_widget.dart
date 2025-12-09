@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 /// Estado de un participante en la llamada
 enum ParticipantState {
@@ -401,12 +402,13 @@ class PendingParticipantTile extends StatelessWidget {
                       : Colors.white24,
                   child: participant.photoUrl != null
                       ? ClipOval(
-                          child: Image.network(
-                            participant.photoUrl!,
+                          child: CachedNetworkImage(
+                            imageUrl: participant.photoUrl!,
                             width: 60,
                             height: 60,
                             fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => _buildInitials(),
+                            placeholder: (context, url) => _buildInitials(),
+                            errorWidget: (context, url, error) => _buildInitials(),
                           ),
                         )
                       : _buildInitials(),

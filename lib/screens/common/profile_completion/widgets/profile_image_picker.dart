@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 class ProfileImagePicker extends StatelessWidget {
   final File? profileImage;
@@ -66,20 +67,17 @@ class ProfileImagePicker extends StatelessWidget {
               )
             : existingPhotoURL != null
                 ? ClipOval(
-                    child: Image.network(
-                      existingPhotoURL!,
+                    child: CachedNetworkImage(
+                      imageUrl: existingPhotoURL!,
                       width: 120,
                       height: 120,
                       fit: BoxFit.cover,
-                      loadingBuilder: (context, child, loadingProgress) {
-                        if (loadingProgress == null) return child;
-                        return Center(
-                          child: CircularProgressIndicator(
-                            color: colorScheme.primary,
-                          ),
-                        );
-                      },
-                      errorBuilder: (context, error, stackTrace) {
+                      placeholder: (context, url) => Center(
+                        child: CircularProgressIndicator(
+                          color: colorScheme.primary,
+                        ),
+                      ),
+                      errorWidget: (context, url, error) {
                         return _buildDefaultPhotoPlaceholder(colorScheme);
                       },
                     ),

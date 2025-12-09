@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../utils/release_logger.dart';
 
@@ -20,49 +21,118 @@ class LocationPermissionDialog extends StatelessWidget {
   }
 
   /// Solicita permisos de ubicación (primero normal, luego en segundo plano)
+  ///
+  /// Flujo simplificado:
+  /// 1. Cerrar nuestro diálogo explicativo
+  /// 2. Solicitar permiso "When In Use" → iOS muestra diálogo nativo
+  /// 3. Obtener ubicación actual → Esto "activa" el permiso
+  /// 4. Solicitar permiso "Always" → iOS muestra segundo diálogo con opción "Siempre"
+  /// 5. NO mostramos diálogos adicionales - iOS maneja todo
   Future<void> _requestLocationPermissions(BuildContext context) async {
+    // Guardar referencia al Navigator antes de cerrar
+    final navigator = Navigator.of(context);
+
+    // CERRAR NUESTRO DIÁLOGO INMEDIATAMENTE para que no se superponga con el de iOS
+    navigator.pop();
+
     try {
-      // 1. Solicitar permiso de ubicación normal primero
-      final locationStatus = await Permission.location.request();
+      // 1. Solicitar permiso de ubicación "When In Use" primero
+      ReleaseLogger.log('Solicitando permiso de ubicación...', tag: 'LocationPermission');
+      final locationStatus = await Permission.locationWhenInUse.request();
 
       if (locationStatus.isGranted) {
-        // 2. Si se otorgó ubicación normal, solicitar ubicación en segundo plano
+        ReleaseLogger.log('Permiso "When In Use" otorgado', tag: 'LocationPermission');
+
+        // 2. iOS: Obtener ubicación actual para "activar" el permiso
+        try {
+          ReleaseLogger.log('Obteniendo ubicación actual...', tag: 'LocationPermission');
+          await _getCurrentLocationOnce();
+        } catch (e) {
+          ReleaseLogger.log('Error obteniendo ubicación: $e', tag: 'LocationPermission');
+        }
+
+        // 3. Pequeña pausa para que iOS procese el permiso
+        await Future.delayed(const Duration(milliseconds: 500));
+
+        // 4. Solicitar permiso "Always" (ubicación en segundo plano)
+        ReleaseLogger.log('Solicitando permiso "Always"...', tag: 'LocationPermission');
         final backgroundStatus = await Permission.locationAlways.request();
 
         if (backgroundStatus.isGranted) {
           ReleaseLogger.log('Permisos de ubicación en segundo plano otorgados', tag: 'LocationPermission');
-        } else if (backgroundStatus.isDenied) {
-          ReleaseLogger.log('Permiso de ubicación en segundo plano denegado', tag: 'LocationPermission');
-        } else if (backgroundStatus.isPermanentlyDenied) {
-          // Mostrar diálogo para ir a configuración
-          _showOpenSettingsDialog(context);
-          return;
+        } else {
+          ReleaseLogger.log('Permiso "Always" no otorgado: $backgroundStatus', tag: 'LocationPermission');
+          // NO mostramos diálogos adicionales - el usuario puede configurar después en Settings
         }
-      } else if (locationStatus.isDenied) {
-        ReleaseLogger.log('Permiso de ubicación denegado', tag: 'LocationPermission');
-      } else if (locationStatus.isPermanentlyDenied) {
-        // Mostrar diálogo para ir a configuración
-        _showOpenSettingsDialog(context);
-        return;
-      }
-
-      // Cerrar el diálogo después de solicitar permisos
-      if (context.mounted) {
-        Navigator.of(context).pop();
+      } else {
+        ReleaseLogger.log('Permiso de ubicación no otorgado: $locationStatus', tag: 'LocationPermission');
+        // NO mostramos diálogos adicionales - el usuario puede configurar después en Settings
       }
     } catch (e) {
       ReleaseLogger.error('Error solicitando permisos de ubicación: $e', tag: 'LocationPermission');
-      if (context.mounted) {
-        Navigator.of(context).pop();
-      }
     }
+  }
+
+  /// Obtiene la ubicación actual una vez (necesario para iOS)
+  Future<void> _getCurrentLocationOnce() async {
+    // Usar geolocator para obtener ubicación
+    // Esto es necesario para que iOS "active" el permiso y permita solicitar "Always"
+    final position = await Future.any<Position?>([
+      _getPositionWithGeolocator(),
+      Future.delayed(const Duration(seconds: 5), () => null), // Timeout de 5 segundos
+    ]);
+    if (position != null) {
+      ReleaseLogger.log('Ubicación obtenida: ${position.latitude}, ${position.longitude}', tag: 'LocationPermission');
+    }
+  }
+
+  Future<Position?> _getPositionWithGeolocator() async {
+    try {
+      // ignore: deprecated_member_use
+      return await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.medium,
+      );
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Muestra información sobre por qué necesitamos "Siempre"
+  void _showAlwaysPermissionInfo(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Ubicación en segundo plano'),
+        content: const Text(
+          'Para tu máxima seguridad, Talia necesita acceso a tu ubicación incluso cuando la app está cerrada.\n\n'
+          'Esto permite que tus padres puedan encontrarte en caso de emergencia.\n\n'
+          'Por favor, ve a Configuración > Ubicación y selecciona "Siempre".',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+            },
+            child: const Text('Entendido'),
+          ),
+          TextButton(
+            onPressed: () {
+              openAppSettings();
+              Navigator.of(dialogContext).pop();
+            },
+            child: const Text('Abrir Configuración'),
+          ),
+        ],
+      ),
+    );
   }
 
   /// Muestra diálogo para abrir configuración del sistema
   void _showOpenSettingsDialog(BuildContext context) {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
         title: const Text('Permisos necesarios'),
         content: const Text(
           'Para tu seguridad, Talia necesita acceso a tu ubicación en segundo plano. '
@@ -70,13 +140,9 @@ class LocationPermissionDialog extends StatelessWidget {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Ahora no'),
-          ),
-          TextButton(
             onPressed: () {
               openAppSettings();
-              Navigator.of(context).pop();
+              Navigator.of(dialogContext).pop();
             },
             child: const Text('Abrir Configuración'),
           ),
@@ -199,48 +265,28 @@ class LocationPermissionDialog extends StatelessWidget {
 
             const SizedBox(height: 28),
 
-            // Botones
-            Row(
-              children: [
-                Expanded(
-                  child: TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    style: TextButton.styleFrom(
-                      foregroundColor: const Color(0xFF9D7FE8),
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                    ),
-                    child: const Text(
-                      'Ahora no',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
+            // Botón único - Apple requiere que el usuario siempre proceda al request
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () => _requestLocationPermissions(context),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF9D7FE8),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  elevation: 0,
+                ),
+                child: const Text(
+                  'Continuar',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () => _requestLocationPermissions(context),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF9D7FE8),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      elevation: 0,
-                    ),
-                    child: const Text(
-                      'Activar',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+              ),
             ),
           ],
         ),

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../models/character.dart';
 import '../services/character_service.dart';
 
@@ -406,25 +407,18 @@ class _CharacterSelectorDialogState extends State<CharacterSelectorDialog> {
                 ),
                 child: character.thumbnailUrl.isNotEmpty &&
                         !character.thumbnailUrl.contains('example.com')
-                    ? Image.network(
-                        character.thumbnailUrl,
+                    ? CachedNetworkImage(
+                        imageUrl: character.thumbnailUrl,
                         fit: BoxFit.cover,
                         width: double.infinity,
-                        errorBuilder: (context, error, stackTrace) {
+                        placeholder: (context, url) => Center(
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Color(0xFF9D7FE8),
+                          ),
+                        ),
+                        errorWidget: (context, url, error) {
                           return _buildPlaceholderIcon();
-                        },
-                        loadingBuilder: (context, child, loadingProgress) {
-                          if (loadingProgress == null) return child;
-                          return Center(
-                            child: CircularProgressIndicator(
-                              value: loadingProgress.expectedTotalBytes != null
-                                  ? loadingProgress.cumulativeBytesLoaded /
-                                      loadingProgress.expectedTotalBytes!
-                                  : null,
-                              strokeWidth: 2,
-                              color: Color(0xFF9D7FE8),
-                            ),
-                          );
                         },
                       )
                     : _buildPlaceholderIcon(),

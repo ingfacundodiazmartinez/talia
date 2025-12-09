@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../models/chat_message.dart';
 import '../services/message_forward_service.dart';
 import '../controllers/forward_messages_controller.dart';
@@ -209,18 +210,26 @@ class _ForwardMessagesScreenState extends State<ForwardMessagesScreen> {
                             },
                             activeColor: colorScheme.primary,
                             secondary: CircleAvatar(
-                              backgroundImage: chat.contactPhotoUrl != null
-                                  ? NetworkImage(chat.contactPhotoUrl!)
-                                  : null,
-                              child: chat.contactPhotoUrl == null
-                                  ? Text(
+                              radius: 20,
+                              backgroundColor: colorScheme.primaryContainer,
+                              child: chat.contactPhotoUrl != null
+                                  ? ClipOval(
+                                      child: CachedNetworkImage(
+                                        imageUrl: chat.contactPhotoUrl!,
+                                        width: 40,
+                                        height: 40,
+                                        fit: BoxFit.cover,
+                                        placeholder: (context, url) => Icon(Icons.person),
+                                        errorWidget: (context, url, error) => Icon(Icons.person),
+                                      ),
+                                    )
+                                  : Text(
                                       chat.contactName[0].toUpperCase(),
                                       style: TextStyle(
                                         color: colorScheme.primary,
                                         fontWeight: FontWeight.bold,
                                       ),
-                                    )
-                                  : null,
+                                    ),
                             ),
                             title: Text(
                               chat.contactName,
@@ -261,12 +270,20 @@ class _ForwardMessagesScreenState extends State<ForwardMessagesScreen> {
                             },
                             activeColor: colorScheme.primary,
                             secondary: CircleAvatar(
-                              backgroundImage: group.groupPhotoUrl != null
-                                  ? NetworkImage(group.groupPhotoUrl!)
-                                  : null,
-                              child: group.groupPhotoUrl == null
-                                  ? Icon(Icons.group, color: colorScheme.primary)
-                                  : null,
+                              radius: 20,
+                              backgroundColor: colorScheme.primaryContainer,
+                              child: group.groupPhotoUrl != null
+                                  ? ClipOval(
+                                      child: CachedNetworkImage(
+                                        imageUrl: group.groupPhotoUrl!,
+                                        width: 40,
+                                        height: 40,
+                                        fit: BoxFit.cover,
+                                        placeholder: (context, url) => Icon(Icons.group, color: colorScheme.primary),
+                                        errorWidget: (context, url, error) => Icon(Icons.group, color: colorScheme.primary),
+                                      ),
+                                    )
+                                  : Icon(Icons.group, color: colorScheme.primary),
                             ),
                             title: Text(
                               group.groupName,

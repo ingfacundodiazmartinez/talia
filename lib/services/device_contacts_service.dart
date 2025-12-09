@@ -4,6 +4,7 @@
 library;
 
 import 'package:flutter_contacts/flutter_contacts.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:talia/services/remote_logger_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'phone_normalization_service.dart';
@@ -21,10 +22,10 @@ class DeviceContactsService {
     return await FlutterContacts.requestPermission();
   }
 
-  /// Verifica si ya se tiene permiso
+  /// Verifica si ya se tiene permiso (sin mostrar diálogo)
   Future<bool> hasPermission() async {
-    final permission = await FlutterContacts.requestPermission(readonly: true);
-    return permission;
+    final status = await Permission.contacts.status;
+    return status.isGranted;
   }
 
   /// Obtiene todos los contactos del dispositivo

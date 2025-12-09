@@ -9,7 +9,7 @@ const USED_FUNCTIONS = new Set([
   'approveGroupPermission',
   'blockChat',
   'cancelSubscription',
-  'checkMessageBeforeSending',
+  // 'checkMessageBeforeSending', // ✅ ELIMINADO: La moderación ahora se hace SOLO en el trigger
   'checkPremiumStatus',
   'createCheckoutSession',
   'createContactRequest',

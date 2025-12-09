@@ -1131,6 +1131,9 @@ exports.onStoryApproved = onDocumentUpdated(
         const recipientId = users.find(id => id !== storyOwnerId);
         if (!recipientId) continue;
 
+        // DEBUG: Log estructura de storyNotifications
+        console.log(`🔍 [StoryNotify] Contact ${contactDoc.id}: users=${JSON.stringify(users)}, storyNotifications=${JSON.stringify(storyNotifications)}, recipientId=${recipientId}`);
+
         // Verificar si el recipient tiene habilitadas las notificaciones de historias
         // IMPORTANTE: Por defecto está DESHABILITADO (false)
         const hasNotificationsEnabled = storyNotifications[recipientId] === true;
@@ -1217,6 +1220,155 @@ exports.onStoryApproved = onDocumentUpdated(
       return null;
     } catch (error) {
       console.error(`❌ [StoryNotify] Error:`, error);
+      return null;
+    }
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
+// TRIGGER: NOTIFICAR CONTACTOS CUANDO HISTORIA ES CREADA CON STATUS APPROVED
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * ✅ FIX: Trigger para historias que se CREAN directamente con status 'approved'
+ * (ej: historias de padres que no necesitan aprobación)
+ *
+ * El trigger onStoryApproved solo detecta CAMBIOS de status, pero si la historia
+ * se crea con status 'approved' directamente, nunca hay un cambio.
+ */
+exports.onStoryCreatedApproved = onDocumentCreated(
+  {
+    document: 'stories/{storyId}',
+    region: 'us-central1',
+  },
+  async (event) => {
+    const storyData = event.data.data();
+    const storyId = event.params.storyId;
+
+    // Solo procesar historias creadas directamente con status 'approved'
+    if (storyData.status !== 'approved') {
+      return null;
+    }
+
+    // No notificar si ya fue notificado (idempotencia)
+    if (storyData.contactsNotified) {
+      console.log(`📩 [StoryCreatedNotify] Historia ${storyId} ya fue notificada - skipping`);
+      return null;
+    }
+
+    console.log(`📩 [StoryCreatedNotify] Historia creada con approved: ${storyId} por ${storyData.userId}`);
+
+    try {
+      const storyOwnerId = storyData.userId;
+      const storyOwnerName = storyData.userName || 'Un contacto';
+      const storyOwnerPhoto = storyData.userPhotoURL || null;
+
+      // Obtener todos los contactos aprobados del story owner
+      const contactsSnapshot = await db
+        .collection('contacts')
+        .where('users', 'array-contains', storyOwnerId)
+        .where('status', '==', 'approved')
+        .get();
+
+      if (contactsSnapshot.empty) {
+        console.log(`📩 [StoryCreatedNotify] No hay contactos para notificar`);
+        await event.data.ref.update({ contactsNotified: true });
+        return null;
+      }
+
+      // Filtrar contactos que tienen storyNotifications habilitado
+      const usersToNotify = [];
+
+      for (const contactDoc of contactsSnapshot.docs) {
+        const contactData = contactDoc.data();
+        const users = contactData.users || [];
+        const storyNotifications = contactData.storyNotifications || {};
+
+        const recipientId = users.find(id => id !== storyOwnerId);
+        if (!recipientId) continue;
+
+        // DEBUG: Log estructura de storyNotifications
+        console.log(`🔍 [StoryCreatedNotify] Contact ${contactDoc.id}: users=${JSON.stringify(users)}, storyNotifications=${JSON.stringify(storyNotifications)}, recipientId=${recipientId}`);
+
+        const hasNotificationsEnabled = storyNotifications[recipientId] === true;
+
+        if (hasNotificationsEnabled) {
+          usersToNotify.push(recipientId);
+          console.log(`📩 [StoryCreatedNotify] ${recipientId} tiene notificaciones habilitadas`);
+        }
+      }
+
+      console.log(`📩 [StoryCreatedNotify] Usuarios con notificaciones: ${usersToNotify.length}`);
+
+      if (usersToNotify.length === 0) {
+        await event.data.ref.update({ contactsNotified: true });
+        return null;
+      }
+
+      // Aplicar throttling
+      const oneHourAgo = new Date();
+      oneHourAgo.setHours(oneHourAgo.getHours() - 1);
+
+      const filteredUsers = [];
+      for (const userId of usersToNotify) {
+        const recentNotification = await db
+          .collection('notifications')
+          .where('userId', '==', userId)
+          .where('type', '==', 'new_story')
+          .where('senderId', '==', storyOwnerId)
+          .where('createdAt', '>', oneHourAgo)
+          .limit(1)
+          .get();
+
+        if (recentNotification.empty) {
+          filteredUsers.push(userId);
+        } else {
+          console.log(`⏭️ [StoryCreatedNotify] Throttled: ${userId}`);
+        }
+      }
+
+      if (filteredUsers.length === 0) {
+        await event.data.ref.update({ contactsNotified: true });
+        return null;
+      }
+
+      // Crear notificaciones en batch
+      const batch = db.batch();
+
+      for (const userId of filteredUsers) {
+        const notificationRef = db.collection('notifications').doc();
+        const notificationData = {
+          userId: userId,
+          type: 'new_story',
+          title: `${storyOwnerName} tiene una nueva historia`,
+          body: storyData.caption
+            ? `"${storyData.caption.substring(0, 50)}${storyData.caption.length > 50 ? '...' : ''}"`
+            : 'Toca para verla antes de que desaparezca',
+          senderId: storyOwnerId,
+          senderName: storyOwnerName,
+          senderPhotoUrl: storyOwnerPhoto,
+          data: {
+            storyId: storyId,
+            storyOwnerId: storyOwnerId,
+            mediaType: storyData.mediaType || 'image',
+          },
+          read: false,
+          pushSent: false,
+          createdAt: FieldValue.serverTimestamp(),
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        };
+
+        batch.set(notificationRef, notificationData);
+      }
+
+      await batch.commit();
+      await event.data.ref.update({ contactsNotified: true });
+
+      console.log(`✅ [StoryCreatedNotify] ${filteredUsers.length} notificaciones creadas`);
+
+      return null;
+    } catch (error) {
+      console.error(`❌ [StoryCreatedNotify] Error:`, error);
       return null;
     }
   }

@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import '../services/story_service_refactored.dart';
 import '../services/ad_service.dart';
+import '../services/mood_polls/mood_poll_service.dart';
 import '../utils/release_logger.dart';
 
 /// Controller para la pantalla de visualización de stories
@@ -19,12 +21,15 @@ class StoryViewerController {
   // Servicios privados
   final StoryService _storyService;
   final AdService _adService;
+  final MoodPollService _moodPollService;
   final firebase_auth.FirebaseAuth _auth;
+  final FirebaseFirestore _firestore;
 
   // Estado interno
   String? _currentUserId;
   int _currentUserIndex = 0;
   int _storyGroupsViewed = 0;
+  bool? _isChild; // Cache para evitar múltiples queries
 
   /// Constructor
   StoryViewerController({
@@ -32,10 +37,14 @@ class StoryViewerController {
     required this.initialUserIndex,
     StoryService? storyService,
     AdService? adService,
+    MoodPollService? moodPollService,
     firebase_auth.FirebaseAuth? auth,
+    FirebaseFirestore? firestore,
   }) : _storyService = storyService ?? StoryService(),
        _adService = adService ?? AdService(),
-       _auth = auth ?? firebase_auth.FirebaseAuth.instance;
+       _moodPollService = moodPollService ?? MoodPollService(),
+       _auth = auth ?? firebase_auth.FirebaseAuth.instance,
+       _firestore = firestore ?? FirebaseFirestore.instance;
 
   // Getters para información del usuario actual
   String? get currentUserId => _currentUserId ?? _auth.currentUser?.uid;
@@ -381,6 +390,64 @@ class StoryViewerController {
     } catch (e) {
       ReleaseLogger.error('Error enviando respuesta a historia: $e', tag: 'StoryViewer');
       return false;
+    }
+  }
+
+  /// Verificar si el usuario actual es un hijo (no un padre)
+  /// Necesario para saber si mostrar encuestas de mood
+  bool isChildUser() {
+    // Si ya tenemos el valor cacheado, retornarlo
+    if (_isChild != null) return _isChild!;
+
+    // Por defecto asumimos que es un hijo (para no bloquear polls)
+    // El valor real se cargará asincrónicamente
+    _loadUserRole();
+    return true; // Optimista
+  }
+
+  /// Cargar rol del usuario de forma asíncrona
+  Future<void> _loadUserRole() async {
+    try {
+      final userId = currentUserId;
+      if (userId == null) return;
+
+      final doc = await _firestore.collection('users').doc(userId).get();
+      if (!doc.exists) return;
+
+      final role = doc.data()?['role'] as String?;
+      _isChild = role == 'child';
+    } catch (e) {
+      ReleaseLogger.error('Error cargando rol de usuario: $e', tag: 'StoryViewer');
+    }
+  }
+
+  /// Crear una historia de mood basada en la respuesta del poll
+  Future<void> createMoodStory({
+    required String emoji,
+    required String text,
+    required String questionText,
+    required String responseId,
+  }) async {
+    try {
+      final userId = currentUserId;
+      if (userId == null) {
+        throw Exception('Usuario no autenticado');
+      }
+
+      // Crear historia tipo "mood" - es una historia especial generada automáticamente
+      await _storyService.createMoodStory(
+        emoji: emoji,
+        text: text,
+        questionText: questionText,
+      );
+
+      // Marcar la respuesta como compartida
+      await _moodPollService.markResponseAsShared(responseId, 'pending');
+
+      ReleaseLogger.log('Historia de mood creada exitosamente', tag: 'StoryViewer');
+    } catch (e) {
+      ReleaseLogger.error('Error creando historia de mood: $e', tag: 'StoryViewer');
+      rethrow;
     }
   }
 

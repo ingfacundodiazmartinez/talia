@@ -7,6 +7,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:workmanager/workmanager.dart' as wm;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../utils/release_logger.dart';
 
 // Servicio de ubicación en background optimizado para Android
 // Usa WorkManager para tareas periódicas y notificaciones persistentes
@@ -62,6 +63,7 @@ class BackgroundLocationService {
         isInDebugMode: false, // Cambiar a true para debug
       );
     } catch (e) {
+      ReleaseLogger.error('Error inicializando WorkManager: $e', tag: 'BackgroundLocation');
     }
   }
 
@@ -123,6 +125,7 @@ class BackgroundLocationService {
       );
 
     } catch (e) {
+      ReleaseLogger.error('Error programando tareas de background: $e', tag: 'BackgroundLocation');
     }
   }
 
@@ -178,6 +181,7 @@ class BackgroundLocationService {
       }
 
     } catch (e) {
+      ReleaseLogger.error('Error actualizando ubicación en background: $e', tag: 'BackgroundLocation');
     }
   }
 
@@ -205,6 +209,7 @@ class BackgroundLocationService {
       }, SetOptions(merge: true));
 
     } catch (e) {
+      ReleaseLogger.error('Error guardando ubicación en Firestore: $e', tag: 'BackgroundLocation');
     }
   }
 
@@ -217,6 +222,7 @@ class BackgroundLocationService {
         await prefs.setString('current_user_id', user.uid);
       }
     } catch (e) {
+      ReleaseLogger.error('Error guardando userId: $e', tag: 'BackgroundLocation');
     }
   }
 

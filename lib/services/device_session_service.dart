@@ -26,6 +26,11 @@ class DeviceSessionService {
   bool _isInitialized = false;
   bool get isInitialized => _isInitialized;
 
+  /// Flag para ignorar el primer snapshot después de registrar sesión
+  /// Esto previene que el dispositivo nuevo se cierre a sí mismo
+  bool _justRegisteredSession = false;
+  DateTime? _sessionRegisteredAt;
+
   /// Obtener ID único del dispositivo actual
   Future<String> getDeviceId() async {
     if (_currentDeviceId != null) return _currentDeviceId!;
@@ -74,6 +79,7 @@ class DeviceSessionService {
         };
       }
     } catch (e) {
+      ReleaseLogger.error('Error obteniendo info de dispositivo: $e', tag: 'DeviceSessionService');
     }
 
     return {
@@ -87,7 +93,9 @@ class DeviceSessionService {
   /// Registrar sesión del dispositivo actual en Firestore
   /// IMPORTANTE: Solo actualiza si el documento ya existe para no interferir
   /// con el flujo de ProfileCompletionScreen
-  Future<void> registerDeviceSession(String userId) async {
+  ///
+  /// Retorna true si la sesión fue registrada exitosamente
+  Future<bool> registerDeviceSession(String userId) async {
     try {
       final deviceId = await getDeviceId();
       final deviceInfo = await getDeviceInfo();
@@ -98,8 +106,12 @@ class DeviceSessionService {
       if (!userDoc.exists) {
         // Usuario nuevo - no registrar sesión aún, esperar a que complete perfil
         ReleaseLogger.log('📱 Usuario nuevo, esperando completar perfil antes de registrar sesión', tag: 'DeviceSessionService');
-        return;
+        return false;
       }
+
+      // Marcar que acabamos de registrar sesión (para ignorar primer snapshot del listener)
+      _justRegisteredSession = true;
+      _sessionRegisteredAt = DateTime.now();
 
       // Usuario existente - actualizar datos de sesión
       await _firestore.collection('users').doc(userId).update({
@@ -109,10 +121,14 @@ class DeviceSessionService {
         'lastLoginDeviceId': deviceId,
       });
 
+      ReleaseLogger.log('✅ Sesión registrada para dispositivo: $deviceId', tag: 'DeviceSessionService');
+      return true;
+
     } catch (e) {
       // Si falla porque el documento no existe, simplemente ignorar
       // El usuario necesita completar su perfil primero
       ReleaseLogger.log('⚠️ Error registrando sesión (puede ser usuario nuevo): $e', tag: 'DeviceSessionService');
+      return false;
     }
   }
 
@@ -138,8 +154,30 @@ class DeviceSessionService {
       final activeDeviceId = data['activeDeviceId'] as String?;
       final currentDeviceId = await getDeviceId();
 
+      // ✅ FIX: Si acabamos de registrar sesión, ignorar los primeros 5 segundos
+      // Esto previene que el dispositivo nuevo se cierre a sí mismo debido a
+      // latencia en la propagación del update a Firestore
+      if (_justRegisteredSession && _sessionRegisteredAt != null) {
+        final timeSinceRegistration = DateTime.now().difference(_sessionRegisteredAt!);
+        if (timeSinceRegistration.inSeconds < 5) {
+          ReleaseLogger.log(
+            '⏳ Ignorando snapshot (sesión recién registrada, ${timeSinceRegistration.inMilliseconds}ms)',
+            tag: 'DeviceSessionService',
+          );
+          return;
+        } else {
+          // Ya pasaron 5 segundos, desactivar el flag
+          _justRegisteredSession = false;
+          _sessionRegisteredAt = null;
+        }
+      }
+
       // Si hay un dispositivo activo diferente al actual, cerrar sesión
       if (activeDeviceId != null && activeDeviceId != currentDeviceId) {
+        ReleaseLogger.log(
+          '🔄 Detectado otro dispositivo activo: $activeDeviceId (actual: $currentDeviceId)',
+          tag: 'DeviceSessionService',
+        );
 
         _isCheckingSession = true;
 
@@ -222,6 +260,7 @@ class DeviceSessionService {
       await _auth.signOut();
 
     } catch (e) {
+      ReleaseLogger.error('Error cerrando sesión del dispositivo: $e', tag: 'DeviceSessionService');
     }
   }
 
@@ -295,6 +334,17 @@ class DeviceSessionService {
 
       final activeDeviceId = data['activeDeviceId'] as String?;
       final currentDeviceId = await getDeviceId();
+
+      // ✅ FIX: Si acabamos de registrar sesión, ignorar los primeros 5 segundos
+      if (_justRegisteredSession && _sessionRegisteredAt != null) {
+        final timeSinceRegistration = DateTime.now().difference(_sessionRegisteredAt!);
+        if (timeSinceRegistration.inSeconds < 5) {
+          return;
+        } else {
+          _justRegisteredSession = false;
+          _sessionRegisteredAt = null;
+        }
+      }
 
       // Si hay un dispositivo activo diferente al actual, cerrar sesión silenciosamente
       if (activeDeviceId != null && activeDeviceId != currentDeviceId) {

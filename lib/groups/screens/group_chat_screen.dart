@@ -9,6 +9,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:async';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../controllers/controllers.dart';
 import '../models/models.dart';
 import 'group_profile_screen.dart';
@@ -923,12 +924,27 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
   Widget _buildSenderAvatar(GroupMessage message, ColorScheme colorScheme) {
     return CircleAvatar(
       radius: 16,
-      backgroundImage: message.senderPhotoURL != null
-          ? NetworkImage(message.senderPhotoURL!)
-          : null,
       backgroundColor: colorScheme.primaryContainer,
-      child: message.senderPhotoURL == null
-          ? Text(
+      child: message.senderPhotoURL != null && message.senderPhotoURL!.isNotEmpty
+          ? ClipOval(
+              child: CachedNetworkImage(
+                imageUrl: message.senderPhotoURL!,
+                width: 32,
+                height: 32,
+                fit: BoxFit.cover,
+                placeholder: (context, url) => Icon(
+                  Icons.person,
+                  size: 14,
+                  color: colorScheme.onPrimaryContainer,
+                ),
+                errorWidget: (context, url, error) => Icon(
+                  Icons.person,
+                  size: 14,
+                  color: colorScheme.onPrimaryContainer,
+                ),
+              ),
+            )
+          : Text(
               message.senderName.isNotEmpty
                   ? message.senderName[0].toUpperCase()
                   : '?',
@@ -937,8 +953,7 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
                 fontWeight: FontWeight.bold,
                 color: colorScheme.onPrimaryContainer,
               ),
-            )
-          : null,
+            ),
     );
   }
 

@@ -156,6 +156,7 @@ class ClickableAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final size = radius * 2;
 
     return GestureDetector(
       onTap: () {
@@ -166,19 +167,39 @@ class ClickableAvatar extends StatelessWidget {
       child: CircleAvatar(
         radius: radius,
         backgroundColor: backgroundColor ?? colorScheme.primaryContainer,
-        backgroundImage: photoUrl != null && photoUrl!.isNotEmpty
-            ? CachedNetworkImageProvider(photoUrl!)
-            : null,
-        child: photoUrl == null || photoUrl!.isEmpty
-            ? Text(
+        child: photoUrl != null && photoUrl!.isNotEmpty
+            ? ClipOval(
+                child: CachedNetworkImage(
+                  imageUrl: photoUrl!,
+                  width: size,
+                  height: size,
+                  fit: BoxFit.cover,
+                  placeholder: (context, url) => Text(
+                    name.isNotEmpty ? name[0].toUpperCase() : '?',
+                    style: TextStyle(
+                      fontSize: radius * 0.6,
+                      fontWeight: FontWeight.bold,
+                      color: colorScheme.onPrimaryContainer,
+                    ),
+                  ),
+                  errorWidget: (context, url, error) => Text(
+                    name.isNotEmpty ? name[0].toUpperCase() : '?',
+                    style: TextStyle(
+                      fontSize: radius * 0.6,
+                      fontWeight: FontWeight.bold,
+                      color: colorScheme.onPrimaryContainer,
+                    ),
+                  ),
+                ),
+              )
+            : Text(
                 name.isNotEmpty ? name[0].toUpperCase() : '?',
                 style: TextStyle(
                   fontSize: radius * 0.6,
                   fontWeight: FontWeight.bold,
                   color: colorScheme.onPrimaryContainer,
                 ),
-              )
-            : null,
+              ),
       ),
     );
   }

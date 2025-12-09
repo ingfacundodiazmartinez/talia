@@ -42,6 +42,55 @@ import 'calls_v2/services/call_state_cache_service.dart';
 // ✅ FIXED: Cache global para deduplicación (accesible desde background handler)
 final Set<String> _globalProcessedCallIds = {};
 
+// ✅ FIX DUPLICATES: Constantes para SharedPreferences
+const String _kBackgroundProcessedMessageIds = 'background_processed_message_ids';
+const int _kMaxBackgroundMessageIds = 100; // Límite para evitar crecimiento infinito
+
+/// ✅ FIX DUPLICATES: Guardar messageId procesado en background
+/// Usa una lista en SharedPreferences para persistencia entre sesiones
+Future<void> _saveBackgroundProcessedMessageId(SharedPreferences prefs, String messageId) async {
+  try {
+    final List<String> processedIds = prefs.getStringList(_kBackgroundProcessedMessageIds) ?? [];
+
+    // Evitar duplicados
+    if (processedIds.contains(messageId)) return;
+
+    // Agregar nuevo ID
+    processedIds.add(messageId);
+
+    // Limitar tamaño (FIFO - remover los más viejos)
+    while (processedIds.length > _kMaxBackgroundMessageIds) {
+      processedIds.removeAt(0);
+    }
+
+    await prefs.setStringList(_kBackgroundProcessedMessageIds, processedIds);
+  } catch (e) {
+    ReleaseLogger.error('Error guardando messageId procesado: $e', tag: 'NotificationService');
+  }
+}
+
+/// ✅ FIX DUPLICATES: Verificar si un messageId ya fue procesado en background
+Future<bool> wasMessageProcessedInBackground(String messageId) async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final List<String> processedIds = prefs.getStringList(_kBackgroundProcessedMessageIds) ?? [];
+    return processedIds.contains(messageId);
+  } catch (e) {
+    ReleaseLogger.error('Error verificando messageId procesado: $e', tag: 'NotificationService');
+    return false;
+  }
+}
+
+/// ✅ FIX DUPLICATES: Limpiar messageIds procesados (llamar al cerrar sesión)
+Future<void> clearBackgroundProcessedMessageIds() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_kBackgroundProcessedMessageIds);
+  } catch (e) {
+    ReleaseLogger.error('Error limpiando messageIds procesados: $e', tag: 'NotificationService');
+  }
+}
+
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   ReleaseLogger.log(
@@ -107,19 +156,26 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       final isChatMessage = messageType == 'chat_message' || messageType == 'group_message';
 
       if (isChatMessage) {
+        // ✅ FIX DUPLICATES: Guardar messageId como procesado ANTES de return
+        // Esto evita que ChatDocsListener muestre duplicado cuando app vuelve a foreground
+        final messageId = message.data['messageId'] as String?;
+        if (messageId != null && messageId.isNotEmpty) {
+          await _saveBackgroundProcessedMessageId(prefs, messageId);
+          ReleaseLogger.log(
+            '💾 [Background Handler iOS] messageId=$messageId guardado como procesado',
+            tag: 'NotificationService',
+          );
+        }
+
         ReleaseLogger.log(
-          '🚫 [Background Handler iOS] App en BACKGROUND/KILLED - NSE ya mostró notificación de chat',
-          tag: 'NotificationService',
-        );
-        ReleaseLogger.log(
-          '✅ [Background Handler iOS] Delegando a NSE para evitar duplicados',
+          '🚫 [Background Handler iOS] App en BACKGROUND/KILLED - iOS ya mostró notificación de chat',
           tag: 'NotificationService',
         );
         ReleaseLogger.log(
           '🔥 ============================================',
           tag: 'NotificationService',
         );
-        return; // NSE ya manejó la notificación con foto circular
+        return; // iOS ya manejó la notificación
       }
     }
   } catch (e) {
@@ -1982,6 +2038,17 @@ class NotificationService {
             }
 
             final senderId = message.data['senderId'] ?? '';
+
+            // ✅ FIX: No mostrar notificación para mensajes propios
+            final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+            if (senderId.isNotEmpty && senderId == currentUserId) {
+              ReleaseLogger.log(
+                '🚫 [FCM Foreground] Mensaje propio detectado (senderId=$senderId) - SKIP notificación',
+                tag: 'NotificationService',
+              );
+              return;
+            }
+
             final senderName = message.data['senderName'] ?? 'Usuario';
             final messageText =
                 message.data['body'] ??

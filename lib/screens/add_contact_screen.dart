@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 // Controllers
 import '../controllers/add_contact_controller.dart';
@@ -87,7 +89,16 @@ class _AddContactScreenState extends State<AddContactScreen>
   }
 
   void _shareCode() {
-    // Implementado en MyCodeTab widget
+    if (_userCode != null) {
+      final currentUserId = FirebaseAuth.instance.currentUser?.uid ?? '';
+      final deepLink = 'https://taliachat.com/add/$currentUserId';
+      Share.share(
+        'Agregame como contacto en Talia!\n\n'
+        'Haz click aqui: $deepLink\n\n'
+        'O usa mi codigo: $_userCode',
+        subject: 'Agregame en Talia',
+      );
+    }
   }
 
   Future<void> _regenerateCode() async {

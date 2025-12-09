@@ -1026,6 +1026,13 @@ exports.leaveGroupV2 = onCall(
         }
       }
 
+      // If user is the last member, delete the group entirely
+      if (groupData.members.length === 1) {
+        await db.collection("groups_v2").doc(groupId).delete();
+        console.log(`🗑️ [leaveGroupV2] Grupo ${groupId} eliminado (último miembro ${userId} abandonó)`);
+        return { success: true, groupDeleted: true };
+      }
+
       const now = admin.firestore.Timestamp.now();
 
       const updates = {

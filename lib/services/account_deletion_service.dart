@@ -1,6 +1,7 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import '../utils/release_logger.dart';
 
 class AccountDeletionService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -108,11 +109,13 @@ class AccountDeletionService {
           try {
             await item.delete();
           } catch (e) {
+            ReleaseLogger.error('Error eliminando imagen $userId: $e', tag: 'AccountDeletion');
           }
         }
       }
     } catch (e) {
       // No lanzar error aquí para no bloquear la eliminación de la cuenta
+      ReleaseLogger.error('Error eliminando imágenes de Storage: $e', tag: 'AccountDeletion');
     }
   }
 }

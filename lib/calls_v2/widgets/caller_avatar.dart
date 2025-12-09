@@ -4,6 +4,7 @@
 /// ✅ PHASE 1C: Provides a beautiful visual indicator during ringing state.
 
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 class CallerAvatar extends StatefulWidget {
   final String callerName;
@@ -143,12 +144,31 @@ class _CallerAvatarState extends State<CallerAvatar>
       child: widget.photoUrl != null && widget.photoUrl!.isNotEmpty
           ? CircleAvatar(
               radius: widget.size / 2,
-              backgroundImage: NetworkImage(widget.photoUrl!),
               backgroundColor: Theme.of(context).colorScheme.primary,
-              onBackgroundImageError: (_, __) {
-                // Fallback to initials if image fails
-              },
-              child: null,
+              child: ClipOval(
+                child: CachedNetworkImage(
+                  imageUrl: widget.photoUrl!,
+                  width: widget.size,
+                  height: widget.size,
+                  fit: BoxFit.cover,
+                  placeholder: (context, url) => Text(
+                    _getInitials(widget.callerName),
+                    style: TextStyle(
+                      fontSize: widget.size * 0.4,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  errorWidget: (context, url, error) => Text(
+                    _getInitials(widget.callerName),
+                    style: TextStyle(
+                      fontSize: widget.size * 0.4,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
             )
           : CircleAvatar(
               radius: widget.size / 2,

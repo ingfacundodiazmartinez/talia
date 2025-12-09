@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../controllers/controllers.dart';
 import 'group_chat_screen.dart';
 
@@ -470,11 +471,24 @@ class _CreateGroupScreenV2State extends State<CreateGroupScreenV2> {
           leading: CircleAvatar(
             radius: 24,
             backgroundColor: colorScheme.primaryContainer,
-            backgroundImage: contact.avatar != null && contact.avatar!.isNotEmpty
-                ? NetworkImage(contact.avatar!)
-                : null,
-            child: contact.avatar == null || contact.avatar!.isEmpty
-                ? Text(
+            child: contact.avatar != null && contact.avatar!.isNotEmpty
+                ? ClipOval(
+                    child: CachedNetworkImage(
+                      imageUrl: contact.avatar!,
+                      width: 48,
+                      height: 48,
+                      fit: BoxFit.cover,
+                      placeholder: (context, url) => Icon(
+                        Icons.person,
+                        color: colorScheme.primary,
+                      ),
+                      errorWidget: (context, url, error) => Icon(
+                        Icons.person,
+                        color: colorScheme.primary,
+                      ),
+                    ),
+                  )
+                : Text(
                     contact.name.isNotEmpty
                         ? contact.name[0].toUpperCase()
                         : 'U',
@@ -483,8 +497,7 @@ class _CreateGroupScreenV2State extends State<CreateGroupScreenV2> {
                       fontWeight: FontWeight.bold,
                       color: colorScheme.primary,
                     ),
-                  )
-                : null,
+                  ),
           ),
           title: Text(
             contact.name,

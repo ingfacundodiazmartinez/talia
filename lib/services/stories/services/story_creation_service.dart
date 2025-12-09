@@ -290,4 +290,75 @@ class StoryCreationService {
     final random = (timestamp % 10000).toString().padLeft(4, '0');
     return 'temp_story_${timestamp}_$random';
   }
+
+  // ═══════════════════════════════════════════════════════════════
+  // MOOD STORY CREATION
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Crear historia de mood (respuesta a encuesta)
+  /// Esta historia no tiene media, solo un fondo de color con emoji y texto
+  Future<String> createMoodStory({
+    required String emoji,
+    required String text,
+    required String questionText,
+  }) async {
+    final currentUserId = _storyRepository.currentUserId;
+    if (currentUserId == null) {
+      throw Exception('Usuario no autenticado');
+    }
+
+    // 1. Generar ID
+    final storyId = _generateTempStoryId();
+
+    try {
+      // 2. Obtener información del usuario y contactos
+      final userInfo = await _contactRepository.getUserInfo(currentUserId);
+      final contactIds = await _contactRepository.getContactIds();
+
+      final now = DateTime.now();
+      final expiresAt = now.add(Duration(hours: 24));
+
+      // 3. Crear historia de tipo "mood"
+      // El mediaUrl contendrá un placeholder especial que el UI interpretará
+      // para mostrar un fondo de color con el emoji
+      final moodStory = Story(
+        id: storyId,
+        userId: currentUserId,
+        userName: userInfo?['name'] ?? 'Usuario',
+        userPhotoURL: userInfo?['photoURL'],
+        mediaUrl: 'mood://$emoji', // URL especial para mood stories
+        mediaType: 'mood',
+        caption: '$emoji $text', // Emoji + respuesta
+        createdAt: now,
+        expiresAt: expiresAt,
+        viewedBy: [],
+        replies: [],
+        filter: {
+          'type': 'mood_poll',
+          'emoji': emoji,
+          'text': text,
+          'questionText': questionText,
+        },
+        status: StoryStatus.approved, // Mood stories se aprueban automáticamente
+        availableFor: contactIds.toList(), // Contactos que pueden ver la historia
+      );
+
+      // 4. Agregar a cache optimista
+      _cacheManager.addOptimisticStory(currentUserId, moodStory);
+
+      // 5. Guardar en Firestore
+      await _storyRepository.create(moodStory);
+
+      ReleaseLogger.log(
+        'Mood story creada: $emoji - $text (visible para ${contactIds.length} contactos)',
+        tag: 'StoryCreation',
+      );
+
+      return storyId;
+    } catch (e) {
+      _cacheManager.removeOptimisticStory(currentUserId, storyId);
+      ReleaseLogger.error('Error creando mood story: $e', tag: 'StoryCreation');
+      rethrow;
+    }
+  }
 }

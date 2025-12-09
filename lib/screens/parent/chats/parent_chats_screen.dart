@@ -761,41 +761,50 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
   }
 
   Future<void> _leaveGroup(String groupId, String groupName) async {
+    // ✅ FIX: Guardar referencias antes de operaciones asíncronas
+    final navigator = Navigator.of(context, rootNavigator: true);
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+
     // Mostrar loading
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => Center(child: CircularProgressIndicator()),
+      useRootNavigator: true,
+      builder: (dialogContext) => const Center(child: CircularProgressIndicator()),
     );
 
+    String? errorMessage;
     try {
       await _controller.leaveGroup(groupId);
+    } catch (e) {
+      errorMessage = e.toString();
+    } finally {
+      // ✅ SIEMPRE cerrar el spinner, sin importar el resultado
+      if (navigator.canPop()) {
+        navigator.pop();
+      }
+    }
 
-      if (!mounted) return;
-      Navigator.pop(context); // Cerrar loading
-
-      // Mostrar mensaje de éxito
-      ScaffoldMessenger.of(context).showSnackBar(
+    // Mostrar mensaje después de cerrar el spinner
+    if (errorMessage != null) {
+      scaffoldMessenger.showSnackBar(
+        SnackBar(
+          content: Text('Error al salir del grupo: $errorMessage'),
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 4),
+        ),
+      );
+    } else {
+      scaffoldMessenger.showSnackBar(
         SnackBar(
           content: Text('Has salido de "$groupName"'),
           duration: Duration(seconds: 2),
         ),
       );
-
       // Refrescar la UI
-      setState(() {});
-    } catch (e) {
-      if (!mounted) return;
-      Navigator.pop(context); // Cerrar loading
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error al salir del grupo: $e'),
-          backgroundColor: Colors.red,
-          duration: Duration(seconds: 4),
-        ),
-      );
+      if (mounted) {
+        setState(() {});
+      }
     }
   }
 

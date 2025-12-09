@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'dart:io';
 import 'package:firebase_storage/firebase_storage.dart';
 import '../services/group_chat_service.dart';
@@ -493,7 +494,12 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
                       )
                     : _groupAvatar != null
                         ? ClipOval(
-                            child: Image.network(_groupAvatar!, fit: BoxFit.cover),
+                            child: CachedNetworkImage(
+                              imageUrl: _groupAvatar!,
+                              fit: BoxFit.cover,
+                              placeholder: (context, url) => CircularProgressIndicator(strokeWidth: 2),
+                              errorWidget: (context, url, error) => Icon(Icons.group, size: 32, color: colorScheme.primary),
+                            ),
                           )
                         : Icon(Icons.group, size: 32, color: colorScheme.primary),
               ),
@@ -687,12 +693,24 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
             CircleAvatar(
               radius: 24,
               backgroundColor: colorScheme.primaryContainer,
-              backgroundImage:
-                  contact.avatar != null && contact.avatar!.isNotEmpty
-                  ? NetworkImage(contact.avatar!)
-                  : null,
-              child: contact.avatar == null || contact.avatar!.isEmpty
-                  ? Text(
+              child: contact.avatar != null && contact.avatar!.isNotEmpty
+                  ? ClipOval(
+                      child: CachedNetworkImage(
+                        imageUrl: contact.avatar!,
+                        width: 48,
+                        height: 48,
+                        fit: BoxFit.cover,
+                        placeholder: (context, url) => Text(
+                          contact.name.isNotEmpty ? contact.name[0].toUpperCase() : 'U',
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: colorScheme.primary),
+                        ),
+                        errorWidget: (context, url, error) => Text(
+                          contact.name.isNotEmpty ? contact.name[0].toUpperCase() : 'U',
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: colorScheme.primary),
+                        ),
+                      ),
+                    )
+                  : Text(
                       contact.name.isNotEmpty
                           ? contact.name[0].toUpperCase()
                           : 'U',
@@ -701,8 +719,7 @@ class _CreateGroupWidgetState extends State<CreateGroupWidget>
                         fontWeight: FontWeight.bold,
                         color: colorScheme.primary,
                       ),
-                    )
-                  : null,
+                    ),
             ),
             if (contact.isOnline)
               Positioned(

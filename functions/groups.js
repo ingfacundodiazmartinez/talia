@@ -1630,6 +1630,79 @@ exports.processGroupInvitationsAfterContactApproval = onCall(
   },
 );
 
+/**
+ * Leave a legacy group (groups collection)
+ *
+ * @param {string} groupId - The group ID
+ */
+exports.leaveGroup = onCall(
+  {
+    region: "us-central1",
+    memory: "256MiB",
+  },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Debes iniciar sesión");
+    }
+
+    const db = getFirestore();
+    const userId = request.auth.uid;
+    const { groupId } = request.data;
+
+    if (!groupId) {
+      throw new HttpsError("invalid-argument", "groupId es requerido");
+    }
+
+    try {
+      const groupDoc = await db.collection("groups").doc(groupId).get();
+      if (!groupDoc.exists) {
+        throw new HttpsError("not-found", "Grupo no encontrado");
+      }
+
+      const groupData = groupDoc.data();
+
+      if (!groupData.members?.includes(userId)) {
+        throw new HttpsError("failed-precondition", "No eres miembro de este grupo");
+      }
+
+      // Check if user is the only admin
+      if (groupData.admins?.includes(userId) && groupData.admins.length === 1) {
+        if (groupData.members.length > 1) {
+          throw new HttpsError(
+            "failed-precondition",
+            "Debes transferir el rol de administrador antes de abandonar el grupo"
+          );
+        }
+      }
+
+      const updates = {
+        members: FieldValue.arrayRemove(userId),
+        lastActivity: FieldValue.serverTimestamp(),
+      };
+
+      // If user is admin, remove from admins array
+      if (groupData.admins?.includes(userId)) {
+        updates.admins = FieldValue.arrayRemove(userId);
+      }
+
+      // If user was in pendingMembers, remove from there too
+      if (groupData.pendingMembers?.includes(userId)) {
+        updates.pendingMembers = FieldValue.arrayRemove(userId);
+      }
+
+      await db.collection("groups").doc(groupId).update(updates);
+
+      console.log(`👋 [leaveGroup] Usuario ${userId} abandonó el grupo ${groupId}`);
+
+      return { success: true };
+    } catch (error) {
+      console.error("❌ [leaveGroup] Error:", error);
+      if (error instanceof HttpsError) throw error;
+      throw new HttpsError("internal", error.message || "Error abandonando grupo");
+    }
+  }
+);
+
 // Export helper function for moderation
 module.exports.analyzeMessageWithGemini = analyzeMessageWithGemini;
 

@@ -91,6 +91,14 @@ class MessageRepository {
         messagePreview = '🎥 Video';
       } else if (messageType == 'audio' || message.audioUrl != null) {
         messagePreview = '🎤 Audio';
+      } else if (messageType == 'missed_call') {
+        // ✅ FIX: Manejar llamadas perdidas
+        final isVideo = message.callType == 'video';
+        messagePreview = isVideo ? '📹 Videollamada perdida' : '📞 Llamada perdida';
+      } else if (messageType == 'answered_call') {
+        // ✅ FIX: Manejar llamadas contestadas
+        final isVideo = message.callType == 'video';
+        messagePreview = isVideo ? '📹 Videollamada' : '📞 Llamada';
       }
 
       final chatUpdateData = {

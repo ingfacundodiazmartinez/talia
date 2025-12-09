@@ -9,7 +9,7 @@ class AnsweredCallBubble extends StatelessWidget {
   final String callType; // 'video' o 'audio'
   final String time;
   final int? callDuration; // Duración en segundos
-  final VoidCallback onCallBack;
+  final VoidCallback? onCallBack; // Opcional - puede ser null si no hay callback disponible
 
   const AnsweredCallBubble({
     super.key,
@@ -17,7 +17,7 @@ class AnsweredCallBubble extends StatelessWidget {
     required this.callType,
     required this.time,
     this.callDuration,
-    required this.onCallBack,
+    this.onCallBack,
   });
 
   String _formatDuration(int seconds) {
@@ -106,47 +106,48 @@ class AnsweredCallBubble extends StatelessWidget {
             ],
           ),
 
-          const SizedBox(height: 8),
-
-          // Botón para llamar de nuevo
-          InkWell(
-            onTap: onCallBack,
-            borderRadius: BorderRadius.circular(8),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                color: isMe
-                    ? Colors.white.withValues(alpha: 0.2)
-                    : colorScheme.primary.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
+          // Botón para llamar de nuevo (solo si hay callback disponible)
+          if (onCallBack != null) ...[
+            const SizedBox(height: 8),
+            InkWell(
+              onTap: onCallBack,
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
                   color: isMe
-                      ? Colors.white.withValues(alpha: 0.4)
-                      : colorScheme.primary.withValues(alpha: 0.4),
-                  width: 1,
-                ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    isVideo ? Icons.videocam : Icons.phone,
-                    size: 16,
-                    color: isMe ? Colors.white : colorScheme.primary,
+                      ? Colors.white.withValues(alpha: 0.2)
+                      : colorScheme.primary.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: isMe
+                        ? Colors.white.withValues(alpha: 0.4)
+                        : colorScheme.primary.withValues(alpha: 0.4),
+                    width: 1,
                   ),
-                  const SizedBox(width: 6),
-                  Text(
-                    'Llamar de nuevo',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      isVideo ? Icons.videocam : Icons.phone,
+                      size: 16,
                       color: isMe ? Colors.white : colorScheme.primary,
                     ),
-                  ),
-                ],
+                    const SizedBox(width: 6),
+                    Text(
+                      'Llamar de nuevo',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: isMe ? Colors.white : colorScheme.primary,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
+          ],
 
           // Hora
           const SizedBox(height: 4),

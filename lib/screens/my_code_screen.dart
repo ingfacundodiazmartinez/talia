@@ -3,7 +3,9 @@ import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/user_code_service.dart';
+import '../services/user_role_service.dart';
 
 class MyCodeScreen extends StatefulWidget {
   const MyCodeScreen({super.key});
@@ -14,9 +16,14 @@ class MyCodeScreen extends StatefulWidget {
 
 class _MyCodeScreenState extends State<MyCodeScreen> {
   final UserCodeService _userCodeService = UserCodeService();
+  final UserRoleService _userRoleService = UserRoleService();
   String? _userCode;
   bool _isLoading = true;
   String? _errorMessage;
+  String? _userRole;
+  bool _hasLinkedParent = false;
+
+  static const String _deepLinkBaseUrl = 'https://taliachat.com/add/';
 
   @override
   void initState() {
@@ -26,9 +33,26 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
 
   Future<void> _loadUserCode() async {
     try {
-      final code = await _userCodeService.getCurrentUserCode();
+      final userId = FirebaseAuth.instance.currentUser?.uid;
+      if (userId == null) {
+        setState(() {
+          _errorMessage = 'Usuario no autenticado';
+          _isLoading = false;
+        });
+        return;
+      }
+
+      // Cargar código, rol y estado de vinculación en paralelo
+      final results = await Future.wait([
+        _userCodeService.getCurrentUserCode(),
+        _loadUserRole(userId),
+        _userRoleService.hasParentLink(userId),
+      ]);
+
       setState(() {
-        _userCode = code;
+        _userCode = results[0] as String;
+        _userRole = results[1] as String?;
+        _hasLinkedParent = results[2] as bool;
         _isLoading = false;
       });
     } catch (e) {
@@ -37,6 +61,27 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
         _isLoading = false;
       });
     }
+  }
+
+  Future<String?> _loadUserRole(String userId) async {
+    try {
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(userId)
+          .get();
+      return userDoc.data()?['role'] as String?;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  String get _currentUserId => FirebaseAuth.instance.currentUser?.uid ?? '';
+
+  String get _deepLink => '$_deepLinkBaseUrl$_currentUserId';
+
+  bool get _shouldShowSecurityWarning {
+    // Solo mostrar para usuarios 'child' con un padre vinculado
+    return _userRole == 'child' && _hasLinkedParent;
   }
 
   Future<void> _regenerateCode() async {
@@ -99,8 +144,11 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
   void _shareCode() {
     if (_userCode != null) {
       Share.share(
-        'Mi código de Talia es: $_userCode\n\nÚsalo para agregarme como contacto.',
-        subject: 'Mi código de Talia',
+        '¡Agrégame en Talia!\n\n'
+        'Haz clic en este enlace para agregarme como contacto:\n'
+        '$_deepLink\n\n'
+        'O usa mi código: $_userCode',
+        subject: 'Agrégame en Talia',
       );
     }
   }
@@ -268,7 +316,7 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
                     border: Border.all(color: colorScheme.outline),
                   ),
                   child: QrImageView(
-                    data: _userCode!,
+                    data: _deepLink,
                     version: QrVersions.auto,
                     size: 200.0,
                     backgroundColor: Colors.white,
@@ -277,7 +325,7 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
                 ),
                 SizedBox(height: 16),
                 Text(
-                  'Pide a tu amigo que escanee este código',
+                  'Escanea para abrir Talia y agregarme',
                   style: TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant),
                 ),
               ],
@@ -384,41 +432,42 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
             ],
           ),
 
-          SizedBox(height: 16),
-
-          // Información adicional
-          Container(
-            padding: EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.orange.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
-            ),
-            child: Column(
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.security, color: Colors.orange[700], size: 20),
-                    SizedBox(width: 8),
-                    Text(
-                      'Información de Seguridad',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: Colors.orange[800],
+          // Información de seguridad - solo para usuarios child con padre vinculado
+          if (_shouldShowSecurityWarning) ...[
+            SizedBox(height: 16),
+            Container(
+              padding: EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.orange.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+              ),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.security, color: Colors.orange[700], size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        'Información de Seguridad',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.orange[800],
+                        ),
                       ),
-                    ),
-                  ],
-                ),
-                SizedBox(height: 8),
-                Text(
-                  '• Solo comparte tu código con personas que conoces\n'
-                  '• Tus padres deben aprobar cada contacto\n'
-                  '• Puedes regenerar tu código en cualquier momento',
-                  style: TextStyle(color: Colors.orange[700], fontSize: 12),
-                ),
-              ],
+                    ],
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    '• Solo comparte tu código con personas que conoces\n'
+                    '• Tus padres deben aprobar cada contacto\n'
+                    '• Puedes regenerar tu código en cualquier momento',
+                    style: TextStyle(color: Colors.orange[700], fontSize: 12),
+                  ),
+                ],
+              ),
             ),
-          ),
+          ],
         ],
       ),
     );

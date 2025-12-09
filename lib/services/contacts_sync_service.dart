@@ -70,17 +70,23 @@ class ContactsSyncService {
         }
       }
 
-      // 1. Verificar permiso de contactos
+      // 1. Verificar y solicitar permiso de contactos
       bool hasPermission = false;
       try {
         hasPermission = await _deviceContacts.hasPermission();
+
+        // Si no tiene permiso, solicitarlo
+        if (!hasPermission) {
+          ReleaseLogger.log('Solicitando permiso de contactos...', tag: 'ContactsSync');
+          hasPermission = await _deviceContacts.requestPermission();
+        }
       } catch (e) {
-        ReleaseLogger.log('Error verificando permisos: $e', tag: 'ContactsSync');
+        ReleaseLogger.log('Error verificando/solicitando permisos: $e', tag: 'ContactsSync');
         return;
       }
 
       if (!hasPermission) {
-        ReleaseLogger.log('Sin permiso de contactos', tag: 'ContactsSync');
+        ReleaseLogger.log('Permiso de contactos denegado por el usuario', tag: 'ContactsSync');
         return;
       }
 
@@ -112,14 +118,22 @@ class ContactsSyncService {
 
       ReleaseLogger.log('${normalizedNumbers.length} números normalizados', tag: 'ContactsSync');
 
-      // 4. Guardar en cache local
-      await _cacheBox?.put(_deviceNumbersKey, normalizedNumbers.toList());
+      // 4. Hashear los números para privacidad (no se envían números en texto plano)
+      final hashedNumbers = normalizedNumbers
+          .map((phone) => _phoneNormalizer.hashPhone(phone))
+          .where((hash) => hash.isNotEmpty)
+          .toSet();
 
-      // 5. Llamar a Cloud Function para matching
+      ReleaseLogger.log('${hashedNumbers.length} números hasheados para sync', tag: 'ContactsSync');
+
+      // 5. Guardar hashes en cache local (no números en texto plano)
+      await _cacheBox?.put(_deviceNumbersKey, hashedNumbers.toList());
+
+      // 6. Llamar a Cloud Function para matching (envía hashes, no números)
       try {
         final callable = FirebaseFunctions.instance.httpsCallable('syncDeviceContacts');
         final result = await callable.call<Map<String, dynamic>>({
-          'phoneNumbers': normalizedNumbers.toList(),
+          'phoneHashes': hashedNumbers.toList(),
         });
 
         final data = result.data;
@@ -135,7 +149,7 @@ class ContactsSyncService {
         // No bloquear el flujo si falla la Cloud Function
       }
 
-      // 6. Actualizar timestamp de último sync
+      // 7. Actualizar timestamp de último sync
       await _cacheBox?.put(_lastSyncKey, DateTime.now().millisecondsSinceEpoch);
 
     } catch (e) {
@@ -146,32 +160,33 @@ class ContactsSyncService {
   }
 
   /// Detectar si hay nuevos contactos en el dispositivo vs cache
+  /// Usa hashes para la comparación (privacidad)
   Future<bool> _hasNewDeviceContacts() async {
     try {
       final hasPermission = await _deviceContacts.hasPermission();
       if (!hasPermission) return false;
 
-      // Obtener números del cache
-      final cachedNumbers = _cacheBox?.get(_deviceNumbersKey) as List?;
-      if (cachedNumbers == null) return true; // Primera vez
+      // Obtener hashes del cache
+      final cachedHashes = _cacheBox?.get(_deviceNumbersKey) as List?;
+      if (cachedHashes == null) return true; // Primera vez
 
-      // Obtener números actuales del dispositivo
+      // Obtener números actuales del dispositivo y hashearlos
       final deviceContacts = await _deviceContacts.getDeviceContacts();
-      final currentNumbers = <String>{};
+      final currentHashes = <String>{};
 
       for (final contact in deviceContacts) {
         for (final phone in contact.phones) {
           if (phone.number.isEmpty) continue;
-          final normalized = _phoneNormalizer.normalizePhone(phone.number);
-          if (normalized.isNotEmpty) {
-            currentNumbers.add(normalized);
+          final hash = _phoneNormalizer.hashPhone(phone.number);
+          if (hash.isNotEmpty) {
+            currentHashes.add(hash);
           }
         }
       }
 
-      // Comparar
-      final cachedSet = Set<String>.from(cachedNumbers.map((e) => e.toString()));
-      return currentNumbers.difference(cachedSet).isNotEmpty;
+      // Comparar hashes
+      final cachedSet = Set<String>.from(cachedHashes.map((e) => e.toString()));
+      return currentHashes.difference(cachedSet).isNotEmpty;
     } catch (e) {
       return false;
     }

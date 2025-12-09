@@ -115,6 +115,153 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
         );
       }
     };
+
+    // Callback para límite mensual de llamadas alcanzado
+    _controller.onMonthlyLimitReached = (minutesUsed, limitMinutes) {
+      if (mounted) {
+        _showMonthlyLimitDialog(minutesUsed, limitMinutes);
+      }
+    };
+  }
+
+  /// Mostrar diálogo amigable cuando se alcanza el límite mensual de llamadas
+  void _showMonthlyLimitDialog(int minutesUsed, int limitMinutes) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        title: Row(
+          children: [
+            Container(
+              padding: EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Color(0xFF9D7FE8).withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                Icons.access_time_rounded,
+                color: Color(0xFF9D7FE8),
+                size: 24,
+              ),
+            ),
+            SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'Límite mensual alcanzado',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Has usado todos tus minutos de llamada este mes.',
+              style: TextStyle(
+                fontSize: 15,
+                color: Colors.grey[700],
+              ),
+            ),
+            SizedBox(height: 16),
+            Container(
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.grey[100],
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  Column(
+                    children: [
+                      Text(
+                        '$minutesUsed',
+                        style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF9D7FE8),
+                        ),
+                      ),
+                      Text(
+                        'minutos usados',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                    ],
+                  ),
+                  Container(
+                    height: 40,
+                    width: 1,
+                    color: Colors.grey[300],
+                  ),
+                  Column(
+                    children: [
+                      Text(
+                        '$limitMinutes',
+                        style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey[700],
+                        ),
+                      ),
+                      Text(
+                        'límite mensual',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            SizedBox(height: 16),
+            Row(
+              children: [
+                Icon(
+                  Icons.info_outline,
+                  size: 16,
+                  color: Colors.grey[500],
+                ),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Tu límite se reinicia el primer día del próximo mes.',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.grey[500],
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(
+              'Entendido',
+              style: TextStyle(
+                color: Color(0xFF9D7FE8),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override

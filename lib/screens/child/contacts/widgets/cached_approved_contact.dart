@@ -5,7 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../../../../services/block_service.dart';
 import '../../../../services/contact_service.dart';
 import '../../../../services/create_chat_service.dart';
-import '../../../chat_detail_screen.dart';
+import '../../../../widgets/synced_user_widgets.dart';
 
 /// Widget cacheado para mostrar un contacto aprobado
 /// Usa StreamBuilder para aprovechar el cache de Firestore
@@ -261,24 +261,45 @@ class _CachedApprovedContactState extends State<CachedApprovedContact> {
             CircleAvatar(
               radius: 28,
               backgroundColor: colorScheme.primaryContainer,
-              backgroundImage: photoURL != null && photoURL.isNotEmpty
-                  ? CachedNetworkImageProvider(photoURL)
-                  : null,
-              child: photoURL == null || photoURL.isEmpty
-                  ? Text(
+              child: photoURL != null && photoURL.isNotEmpty
+                  ? ClipOval(
+                      child: CachedNetworkImage(
+                        imageUrl: photoURL,
+                        width: 56,
+                        height: 56,
+                        fit: BoxFit.cover,
+                        placeholder: (context, url) => Text(
+                          name.isNotEmpty ? name[0].toUpperCase() : 'U',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: colorScheme.primary,
+                          ),
+                        ),
+                        errorWidget: (context, url, error) => Text(
+                          name.isNotEmpty ? name[0].toUpperCase() : 'U',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: colorScheme.primary,
+                          ),
+                        ),
+                      ),
+                    )
+                  : Text(
                       name.isNotEmpty ? name[0].toUpperCase() : 'U',
                       style: TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.bold,
                         color: colorScheme.primary,
                       ),
-                    )
-                  : null,
+                    ),
             ),
             const SizedBox(width: 16),
             Expanded(
-              child: Text(
-                name,
+              child: SyncedUserName(
+                userId: contactId,
+                fallbackName: name,
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w600,

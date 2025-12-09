@@ -548,11 +548,14 @@ class WhitelistController {
           'data': {
             'groupId': request.groupId,
             'groupName': request.groupName,
+            'groupAvatar': request.groupAvatar,
+            'groupDescription': request.groupDescription,
             'childId': request.childId,
             'childName': request.childName,
             'invitedBy': request.groupCreatorId,
             'inviterName': request.groupCreatorName,
             'createdAt': request.createdAt,
+            'members': request.members.map((m) => m.toMap()).toList(),
           },
         });
       }

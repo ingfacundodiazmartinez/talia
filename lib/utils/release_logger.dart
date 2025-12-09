@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:firebase_crashlytics/firebase_crashlytics.dart';
-import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 /// Logger que funciona tanto en debug como en release builds

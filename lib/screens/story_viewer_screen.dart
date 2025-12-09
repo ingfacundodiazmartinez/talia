@@ -4,9 +4,12 @@ import 'package:video_player/video_player.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 import '../models/story.dart';
+import '../models/mood_poll.dart';
 import '../controllers/story_viewer_controller.dart';
 import '../services/ad_service.dart';
+import '../services/mood_polls/mood_poll_service.dart';
 import '../widgets/story_native_ad_widget.dart';
+import '../widgets/mood_poll_story_widget.dart';
 import 'story_viewer/widgets/story_content_widget.dart';
 import 'story_viewer/widgets/story_overlay_widget.dart';
 
@@ -37,11 +40,16 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
   bool _isCurrentStoryLoaded = false;
 
   final AdService _adService = AdService();
+  final MoodPollService _moodPollService = MoodPollService();
   final Duration _storyDuration = Duration(seconds: 5);
 
   // Native Ad pre-cargado para mostrar entre historias
   NativeAd? _nativeAd;
   bool _isNativeAdLoaded = false;
+
+  // Mood Poll pre-cargado para mostrar entre historias
+  MoodPollQuestion? _pendingPollQuestion;
+  bool _hasPollBeenShown = false; // Para no mostrar más de una vez por sesión
 
   // VideoPlayerController map para manejar múltiples videos
   final Map<String, VideoPlayerController> _videoControllers = {};
@@ -94,6 +102,9 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     // Inicializar y pre-cargar ads para monetización
     _initializeAds();
 
+    // Pre-cargar mood poll (solo para hijos)
+    _loadMoodPoll();
+
     // Listener para pausar/reanudar historia cuando se escribe una respuesta
     _replyFocusNode.addListener(() {
       if (_replyFocusNode.hasFocus) {
@@ -115,6 +126,26 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       await _loadNativeAd();
     } catch (e) {
       // El controller ya maneja el logging de errores
+    }
+  }
+
+  /// Pre-cargar mood poll para mostrar al final de las historias
+  Future<void> _loadMoodPoll() async {
+    try {
+      // Verificar si el usuario actual es un hijo (no un padre)
+      // Solo los hijos responden encuestas de mood
+      if (!_controller.isChildUser()) return;
+
+      // Obtener una pregunta aleatoria (siempre, sin probabilidad)
+      // El servicio ya filtra las que ya fueron respondidas esta semana
+      final question = await _moodPollService.getRandomQuestion();
+      if (mounted) {
+        setState(() {
+          _pendingPollQuestion = question;
+        });
+      }
+    } catch (e) {
+      // Silently fail - polls are not critical
     }
   }
 
@@ -361,6 +392,8 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
         return;
       }
 
+      // Ya no mostramos el mood poll aquí - se muestra al final de todas las historias
+
       setState(() {
         _currentUserIndex++;
         // Calcular índice inicial de la primera historia no vista del nuevo grupo
@@ -375,6 +408,42 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       // No iniciar timer aquí - esperará a que _onStoryLoaded() lo inicie
       _markCurrentStoryAsViewed();
     } else {
+      // El usuario terminó de ver TODAS las historias
+      // Mostrar mood poll antes de cerrar si hay una disponible
+      await _showMoodPollBeforeClose();
+    }
+  }
+
+  /// Mostrar mood poll al terminar de ver todas las historias
+  Future<void> _showMoodPollBeforeClose() async {
+    // Verificar si hay una encuesta pendiente y no se ha mostrado
+    if (_pendingPollQuestion != null && !_hasPollBeenShown && _controller.isChildUser()) {
+      _hasPollBeenShown = true;
+      _pauseStoryTimer();
+
+      await MoodPollDialog.show(
+        context: context,
+        question: _pendingPollQuestion!,
+        onComplete: (response, shareAsStory) async {
+          if (response != null && shareAsStory) {
+            // Navegar a crear story con la respuesta
+            await _shareResponseAsStory(response);
+          }
+          // Limpiar poll pendiente
+          if (mounted) {
+            setState(() {
+              _pendingPollQuestion = null;
+            });
+          }
+        },
+      );
+
+      // Verificar que el widget aún está montado
+      if (!mounted) return;
+    }
+
+    // Cerrar el visor de historias
+    if (mounted) {
       Navigator.pop(context);
     }
   }
@@ -627,6 +696,52 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
               left: 20,
               right: 20,
             ),
+          ),
+        );
+      }
+    }
+  }
+
+  /// Compartir respuesta de mood poll como historia
+  Future<void> _shareResponseAsStory(MoodPollResponse response) async {
+    try {
+      // Crear una historia con el mood del usuario
+      // El formato es un fondo de color con el emoji y texto
+      await _controller.createMoodStory(
+        emoji: response.selectedEmoji,
+        text: response.selectedOptionText,
+        questionText: response.questionText,
+        responseId: response.id,
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                Text(response.selectedEmoji, style: TextStyle(fontSize: 20)),
+                SizedBox(width: 8),
+                Text('Historia compartida'),
+              ],
+            ),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+            margin: EdgeInsets.only(
+              bottom: MediaQuery.of(context).size.height - 150,
+              left: 20,
+              right: 20,
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al compartir'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 2),
           ),
         );
       }

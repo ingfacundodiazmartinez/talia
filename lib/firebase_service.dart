@@ -297,6 +297,9 @@ class FirebaseService {
       'type': type,
       'timestamp': FieldValue.serverTimestamp(),
       'isRead': false,
+      // ✅ FIX: Si NO hay moderación activa, marcar como approved directamente
+      // para que el receptor lo vea inmediatamente sin esperar al trigger
+      if (!moderationEnabled) 'moderationStatus': 'approved',
     };
 
     // Agregar campos opcionales si existen

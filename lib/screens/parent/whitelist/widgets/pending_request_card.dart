@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../../../controllers/whitelist_controller.dart';
 import '../../../../widgets/filterable_request_item.dart';
 import '../../../../models/user.dart';
@@ -152,90 +153,172 @@ class PendingRequestCard extends StatelessWidget {
                       visualDensity: VisualDensity.compact,
                     ),
                     SizedBox(width: 4),
-                    CircleAvatar(
-                      radius: 28,
-                      backgroundColor: colorScheme.primary.withValues(
-                        alpha: 0.1,
+                    // ✅ Avatar diferente para grupos vs contactos
+                    if (type == 'group_v2') ...[
+                      Builder(
+                        builder: (context) {
+                          final groupAvatar = data['groupAvatar'] as String?;
+                          final hasAvatar = groupAvatar != null && groupAvatar.isNotEmpty;
+                          return CircleAvatar(
+                            radius: 28,
+                            backgroundColor: Colors.blue.withValues(alpha: 0.15),
+                            backgroundImage: hasAvatar
+                                ? CachedNetworkImageProvider(groupAvatar)
+                                : null,
+                            child: hasAvatar
+                                ? null
+                                : Icon(
+                                    Icons.group,
+                                    size: 28,
+                                    color: Colors.blue,
+                                  ),
+                          );
+                        },
                       ),
-                      backgroundImage:
-                          contactPhotoURL != null && contactPhotoURL.isNotEmpty
-                          ? NetworkImage(contactPhotoURL)
-                          : null,
-                      child: contactPhotoURL == null || contactPhotoURL.isEmpty
-                          ? Text(
-                              contactName.isNotEmpty
-                                  ? contactName[0].toUpperCase()
-                                  : 'U',
-                              style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                                color: colorScheme.primary,
+                    ] else ...[
+                      CircleAvatar(
+                        radius: 28,
+                        backgroundColor: colorScheme.primary.withValues(
+                          alpha: 0.1,
+                        ),
+                        child: contactPhotoURL != null && contactPhotoURL.isNotEmpty
+                            ? ClipOval(
+                                child: CachedNetworkImage(
+                                  imageUrl: contactPhotoURL,
+                                  width: 56,
+                                  height: 56,
+                                  fit: BoxFit.cover,
+                                  placeholder: (context, url) => Text(
+                                    contactName.isNotEmpty
+                                        ? contactName[0].toUpperCase()
+                                        : 'U',
+                                    style: TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.bold,
+                                      color: colorScheme.primary,
+                                    ),
+                                  ),
+                                  errorWidget: (context, url, error) => Text(
+                                    contactName.isNotEmpty
+                                        ? contactName[0].toUpperCase()
+                                        : 'U',
+                                    style: TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.bold,
+                                      color: colorScheme.primary,
+                                    ),
+                                  ),
+                                ),
+                              )
+                            : Text(
+                                contactName.isNotEmpty
+                                    ? contactName[0].toUpperCase()
+                                    : 'U',
+                                style: TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                  color: colorScheme.primary,
+                                ),
                               ),
-                            )
-                          : null,
-                    ),
+                      ),
+                    ],
                     SizedBox(width: 12),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            contactName,
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: colorScheme.onSurface,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          SizedBox(height: 4),
-                          Row(
-                            children: [
-                              if (contactAge != null) ...[
-                                Text(
-                                  '$contactAge años',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    color: colorScheme.onSurfaceVariant,
-                                  ),
-                                ),
-                                Text(
-                                  ' • ',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    color: colorScheme.onSurfaceVariant,
-                                  ),
-                                ),
-                              ],
-                              Container(
-                                padding: EdgeInsets.symmetric(
-                                  horizontal: 6,
-                                  vertical: 2,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: colorScheme.primary.withValues(
-                                    alpha: 0.1,
-                                  ),
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: Text(
-                                  childName,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                    color: colorScheme.primary,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
+                          // ✅ Título diferente para grupos vs contactos
+                          if (type == 'group_v2') ...[
+                            Text(
+                              'Invitación al grupo',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.blue,
+                                fontWeight: FontWeight.w500,
                               ),
-                              if (groupName != null) ...[
-                                SizedBox(width: 6),
-                                Icon(Icons.group, size: 14, color: Colors.blue),
+                            ),
+                            Text(
+                              groupName ?? 'Grupo',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color: colorScheme.onSurface,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ] else ...[
+                            Text(
+                              contactName,
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color: colorScheme.onSurface,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                          SizedBox(height: 4),
+                          // ✅ Subtítulo diferente para grupos vs contactos
+                          if (type == 'group_v2') ...[
+                            Text(
+                              'Para: $childName • Creado por: $contactName',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: colorScheme.onSurfaceVariant,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ] else ...[
+                            Row(
+                              children: [
+                                if (contactAge != null) ...[
+                                  Text(
+                                    '$contactAge años',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: colorScheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                  Text(
+                                    ' • ',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: colorScheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ],
+                                Container(
+                                  padding: EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: colorScheme.primary.withValues(
+                                      alpha: 0.1,
+                                    ),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Text(
+                                    childName,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                      color: colorScheme.primary,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                if (groupName != null) ...[
+                                  SizedBox(width: 6),
+                                  Icon(Icons.group, size: 14, color: Colors.blue),
+                                ],
                               ],
-                            ],
-                          ),
+                            ),
+                          ],
                         ],
                       ),
                     ),
@@ -269,7 +352,19 @@ class PendingRequestCard extends StatelessWidget {
                     FilledButton.icon(
                       onPressed: isProcessing
                           ? null
-                          : () => onApprove(requestId, childId, data, type),
+                          : () {
+                              if (type == 'group_v2') {
+                                _showGroupApprovalDialog(
+                                  context: context,
+                                  requestId: requestId,
+                                  childId: childId,
+                                  data: data,
+                                  childName: childName,
+                                );
+                              } else {
+                                onApprove(requestId, childId, data, type);
+                              }
+                            },
                       icon: isProcessing
                           ? SizedBox(
                               width: 12,
@@ -379,5 +474,234 @@ class PendingRequestCard extends StatelessWidget {
     }
 
     return result;
+  }
+
+  void _showGroupApprovalDialog({
+    required BuildContext context,
+    required String requestId,
+    required String childId,
+    required Map<String, dynamic> data,
+    required String childName,
+  }) {
+    final groupName = data['groupName'] as String? ?? 'Grupo';
+    final inviterName = data['inviterName'] as String? ?? 'Usuario';
+    final groupAvatar = data['groupAvatar'] as String?;
+    final members = (data['members'] as List<dynamic>?)
+            ?.map((m) => m as Map<String, dynamic>)
+            .toList() ??
+        [];
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) {
+        final colorScheme = Theme.of(dialogContext).colorScheme;
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: Row(
+            children: [
+              CircleAvatar(
+                radius: 24,
+                backgroundColor: Colors.blue.withValues(alpha: 0.15),
+                backgroundImage:
+                    groupAvatar != null ? NetworkImage(groupAvatar) : null,
+                child: groupAvatar == null
+                    ? Icon(Icons.group, size: 24, color: Colors.blue)
+                    : null,
+              ),
+              SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Invitación a Grupo',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.blue,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    Text(
+                      groupName,
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Creado por: $inviterName',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                SizedBox(height: 16),
+                Text(
+                  'Participantes (${members.length}):',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                SizedBox(height: 8),
+                Container(
+                  constraints: BoxConstraints(maxHeight: 150),
+                  decoration: BoxDecoration(
+                    color: colorScheme.surfaceContainerHighest
+                        .withValues(alpha: 0.5),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: members.length,
+                    itemBuilder: (context, index) {
+                      final member = members[index];
+                      final name = member['name'] as String? ?? 'Usuario';
+                      final role = member['role'] as String? ?? 'member';
+                      final photoURL = member['photoURL'] as String?;
+                      final isCreator = role == 'creator' || role == 'admin';
+
+                      return Padding(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                        child: Row(
+                          children: [
+                            CircleAvatar(
+                              radius: 14,
+                              backgroundColor:
+                                  colorScheme.primary.withValues(alpha: 0.1),
+                              backgroundImage: photoURL != null
+                                  ? NetworkImage(photoURL)
+                                  : null,
+                              child: photoURL == null
+                                  ? Text(
+                                      name.isNotEmpty
+                                          ? name[0].toUpperCase()
+                                          : 'U',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.bold,
+                                        color: colorScheme.primary,
+                                      ),
+                                    )
+                                  : null,
+                            ),
+                            SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                name,
+                                style: TextStyle(fontSize: 14),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            if (isCreator)
+                              Container(
+                                padding: EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.blue.withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  'creador',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    color: Colors.blue,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                SizedBox(height: 16),
+                Container(
+                  padding: EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: Colors.orange.withValues(alpha: 0.3),
+                    ),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        Icons.warning_amber_rounded,
+                        color: Colors.orange[700],
+                        size: 20,
+                      ),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'La moderación de contenido NO está disponible en grupos. Los mensajes no serán revisados automáticamente.',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.orange[800],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(height: 12),
+                Text(
+                  '¿Permitir que $childName se una a este grupo?',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            OutlinedButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.red[600],
+                side: BorderSide(color: Colors.red.shade200),
+              ),
+              child: Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                onApprove(requestId, childId, data, 'group_v2');
+              },
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.green,
+                foregroundColor: Colors.white,
+              ),
+              child: Text('Aprobar'),
+            ),
+          ],
+        );
+      },
+    );
   }
 }

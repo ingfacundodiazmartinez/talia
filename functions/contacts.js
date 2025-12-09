@@ -973,14 +973,18 @@ exports.syncDeviceContacts = onCall(
       for (const contact of registeredUsers) {
         // Ya existe contacto?
         if (existingContactUserIds.has(contact.userId)) {
+          console.log(`⏭️ ${contact.name} (${contact.userId}) ya es contacto existente, saltando`);
           continue;
         }
 
         // Verificar bidireccionalidad: ¿el otro usuario tiene mi phoneHash en sus contactos?
-        const isBidirectional = contact.devicePhoneHashes.includes(currentUserPhoneHash);
+        const hasDeviceHashes = contact.devicePhoneHashes && contact.devicePhoneHashes.length > 0;
+        const isBidirectional = hasDeviceHashes && contact.devicePhoneHashes.includes(currentUserPhoneHash);
+
+        console.log(`🔍 Verificando ${contact.name}: devicePhoneHashes=${hasDeviceHashes ? contact.devicePhoneHashes.length : 0}, miPhoneHash=${currentUserPhoneHash ? currentUserPhoneHash.substring(0, 10) + '...' : 'NULL'}, bidireccional=${isBidirectional}`);
 
         if (!isBidirectional) {
-          console.log(`⏭️ ${contact.name} no es bidireccional, saltando`);
+          console.log(`⏭️ ${contact.name} no es bidireccional (${hasDeviceHashes ? 'tiene ' + contact.devicePhoneHashes.length + ' hashes pero no me incluye' : 'NO tiene devicePhoneHashes - nunca sincronizó'}), saltando`);
           continue;
         }
 
@@ -1705,43 +1709,78 @@ exports.updateChildContactModeration = onCall(
       const batch = db.batch();
       const moderationLevel = level || "high";
 
-      // 3. Actualizar documento del chat
-      const chatRef = db.collection("chats").doc(chatId);
-      const chatDoc = await chatRef.get();
+      // ✅ FIX: Diferenciar entre control parental (hijo) vs moderación entre adultos
+      if (isModeratingChild) {
+        // CASO 1: Padre moderando chat de su HIJO
+        // Usar chats.moderationEnabled (modera TODOS los mensajes del chat)
+        console.log(`👶 Moderación PARENTAL: padre ${parentId} moderando chat de hijo ${childId}`);
 
-      if (chatDoc.exists) {
-        batch.update(chatRef, {
-          moderationEnabled: enabled,
-          moderationLevel: moderationLevel,
-          moderationParentId: enabled ? parentId : null,
-          moderationEnabledAt: enabled ? FieldValue.serverTimestamp() : null,
+        const chatRef = db.collection("chats").doc(chatId);
+        const chatDoc = await chatRef.get();
+
+        if (chatDoc.exists) {
+          batch.update(chatRef, {
+            moderationEnabled: enabled,
+            moderationLevel: moderationLevel,
+            moderationParentId: enabled ? parentId : null,
+            moderationEnabledAt: enabled ? FieldValue.serverTimestamp() : null,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        } else {
+          batch.set(chatRef, {
+            participants: [childId, contactId],
+            moderationEnabled: enabled,
+            moderationLevel: moderationLevel,
+            moderationParentId: enabled ? parentId : null,
+            moderationEnabledAt: enabled ? FieldValue.serverTimestamp() : null,
+            createdAt: FieldValue.serverTimestamp(),
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        }
+
+        // Actualizar documento del hijo
+        const childRef = db.collection("users").doc(childId);
+        if (enabled) {
+          batch.update(childRef, {
+            moderatingUserIds: FieldValue.arrayUnion(contactId),
+            [`moderationLevels.${contactId}`]: moderationLevel,
+          });
+        } else {
+          batch.update(childRef, {
+            moderatingUserIds: FieldValue.arrayRemove(contactId),
+            [`moderationLevels.${contactId}`]: FieldValue.delete(),
+          });
+        }
+      } else {
+        // CASO 2: Adulto moderando su PROPIO chat
+        // Usar contacts.moderationSettings[userId] (independiente por usuario)
+        // Esto permite que A modere mensajes de B, sin que B pueda desactivarlo
+        console.log(`👤 Moderación PERSONAL: usuario ${childId} moderando mensajes de ${contactId}`);
+
+        // Buscar el documento de contacto entre estos usuarios
+        const sortedUsers = [childId, contactId].sort();
+        const contactQuery = await db
+          .collection("contacts")
+          .where("users", "==", sortedUsers)
+          .limit(1)
+          .get();
+
+        if (contactQuery.empty) {
+          throw new HttpsError("not-found", "No existe contacto entre estos usuarios");
+        }
+
+        const contactDocRef = contactQuery.docs[0].ref;
+
+        // Actualizar moderationSettings[childId] (el usuario que está activando)
+        // childId aquí es el usuario actual (parentId === childId en este caso)
+        batch.update(contactDocRef, {
+          [`moderationSettings.${childId}.enabled`]: enabled,
+          [`moderationSettings.${childId}.level`]: moderationLevel,
+          [`moderationSettings.${childId}.updatedAt`]: FieldValue.serverTimestamp(),
           updatedAt: FieldValue.serverTimestamp(),
         });
-      } else {
-        // Crear documento de chat si no existe
-        batch.set(chatRef, {
-          participants: [childId, contactId],
-          moderationEnabled: enabled,
-          moderationLevel: moderationLevel,
-          moderationParentId: enabled ? parentId : null,
-          moderationEnabledAt: enabled ? FieldValue.serverTimestamp() : null,
-          createdAt: FieldValue.serverTimestamp(),
-          updatedAt: FieldValue.serverTimestamp(),
-        });
-      }
 
-      // 4. Actualizar documento del hijo
-      const childRef = db.collection("users").doc(childId);
-      if (enabled) {
-        batch.update(childRef, {
-          moderatingUserIds: FieldValue.arrayUnion(contactId),
-          [`moderationLevels.${contactId}`]: moderationLevel,
-        });
-      } else {
-        batch.update(childRef, {
-          moderatingUserIds: FieldValue.arrayRemove(contactId),
-          [`moderationLevels.${contactId}`]: FieldValue.delete(),
-        });
+        console.log(`📝 Actualizando contacts.moderationSettings.${childId} = { enabled: ${enabled}, level: ${moderationLevel} }`);
       }
 
       await batch.commit();

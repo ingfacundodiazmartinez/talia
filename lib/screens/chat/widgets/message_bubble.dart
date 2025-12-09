@@ -258,24 +258,20 @@ class _MessageBubbleState extends State<MessageBubble>
                                   onLongPress: () =>
                                       _showMessageOptions(messageContext),
                                   child:
-                                      widget.type == 'missed_call' &&
-                                          widget.callType != null &&
-                                          widget.onCallBack != null
+                                      widget.type == 'missed_call'
                                       ? MissedCallBubble(
                                           isMe: widget.isMe,
-                                          callType: widget.callType!,
+                                          callType: widget.callType ?? 'audio',
                                           time: widget.time,
-                                          onCallBack: widget.onCallBack!,
+                                          onCallBack: widget.onCallBack,
                                         )
-                                      : widget.type == 'answered_call' &&
-                                            widget.callType != null &&
-                                            widget.onCallBack != null
+                                      : widget.type == 'answered_call'
                                       ? AnsweredCallBubble(
                                           isMe: widget.isMe,
-                                          callType: widget.callType!,
+                                          callType: widget.callType ?? 'audio',
                                           time: widget.time,
                                           callDuration: widget.callDuration,
-                                          onCallBack: widget.onCallBack!,
+                                          onCallBack: widget.onCallBack,
                                         )
                                       : Container(
                                           margin: const EdgeInsets.only(

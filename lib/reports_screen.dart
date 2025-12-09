@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'utils/release_logger.dart';
+import 'services/ad_service.dart';
+import 'services/subscription_service.dart';
 
 class ReportsScreen extends StatefulWidget {
   /// Opcional: si se proporciona, filtra alertas y reportes solo de este hijo
@@ -19,12 +22,15 @@ class ReportsScreen extends StatefulWidget {
 class _ReportsScreenState extends State<ReportsScreen> {
   late final FirebaseAuth _auth;
   late final FirebaseFirestore _firestore;
+  final AdService _adService = AdService();
 
   @override
   void initState() {
     super.initState();
     _auth = widget.auth ?? FirebaseAuth.instance;
     _firestore = widget.firestore ?? FirebaseFirestore.instance;
+    // Pre-cargar Rewarded Ad para cuando el usuario quiera generar un reporte
+    _adService.loadRewardedAd();
   }
 
   /// Obtener alertas no leídas para un padre
@@ -296,7 +302,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) {
+        final dialogColorScheme = Theme.of(dialogContext).colorScheme;
+        return AlertDialog(
         title: Text('Generar Reporte'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -307,20 +315,35 @@ class _ReportsScreenState extends State<ReportsScreen> {
             ...childrenData.map((child) {
               return ListTile(
                 leading: CircleAvatar(
-                  backgroundImage: child['photoURL'] != null
-                      ? NetworkImage(child['photoURL'])
-                      : null,
-                  child: child['photoURL'] == null
-                      ? Text(
+                  radius: 20,
+                  backgroundColor: dialogColorScheme.primaryContainer,
+                  child: child['photoURL'] != null
+                      ? ClipOval(
+                          child: CachedNetworkImage(
+                            imageUrl: child['photoURL'],
+                            width: 40,
+                            height: 40,
+                            fit: BoxFit.cover,
+                            placeholder: (context, url) => Icon(Icons.person),
+                            errorWidget: (context, url, error) => Icon(Icons.person),
+                          ),
+                        )
+                      : Text(
                           (child['name'] ?? 'H')[0].toUpperCase(),
                           style: TextStyle(fontWeight: FontWeight.bold),
-                        )
-                      : null,
+                        ),
                 ),
                 title: Text(child['name'] ?? 'Sin nombre'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _generateReport(child['id'], child['name'] ?? 'Hijo');
+                onTap: () async {
+                  final childId = child['id'] as String;
+                  final childName = child['name'] as String? ?? 'Hijo';
+                  ReleaseLogger.log('Seleccionado hijo: $childName ($childId)', tag: 'ReportsScreen');
+                  Navigator.pop(dialogContext);
+                  // Pequeño delay para asegurar que el dialog se cerró completamente
+                  await Future.delayed(const Duration(milliseconds: 100));
+                  if (mounted) {
+                    _generateReport(childId, childName);
+                  }
                 },
               );
             }),
@@ -328,11 +351,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogContext),
             child: Text('Cancelar'),
           ),
         ],
-      ),
+      );
+      },
     );
   }
 
@@ -458,20 +482,28 @@ class _ReportsScreenState extends State<ReportsScreen> {
                   // Avatar del niño
                   CircleAvatar(
                     radius: 28,
-                    backgroundImage: photoUrl != null ? NetworkImage(photoUrl) : null,
                     backgroundColor: isDarkMode
                         ? colorScheme.primaryContainer
                         : colorScheme.primaryContainer,
-                    child: photoUrl == null
-                        ? Text(
+                    child: photoUrl != null
+                        ? ClipOval(
+                            child: CachedNetworkImage(
+                              imageUrl: photoUrl,
+                              width: 56,
+                              height: 56,
+                              fit: BoxFit.cover,
+                              placeholder: (context, url) => Icon(Icons.person, size: 28, color: colorScheme.onPrimaryContainer),
+                              errorWidget: (context, url, error) => Icon(Icons.person, size: 28, color: colorScheme.onPrimaryContainer),
+                            ),
+                          )
+                        : Text(
                             childName.isNotEmpty ? childName[0].toUpperCase() : 'H',
                             style: TextStyle(
                               fontSize: 20,
                               fontWeight: FontWeight.bold,
                               color: colorScheme.onPrimaryContainer,
                             ),
-                          )
-                        : null,
+                          ),
                   ),
                   SizedBox(width: 16),
                   // Icono de estado de ánimo
@@ -673,85 +705,208 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   Future<void> _generateReport(String childId, String childName) async {
-    // Capturar el contexto del widget antes de mostrar el diálogo
+    ReleaseLogger.log('_generateReport llamado para $childName ($childId)', tag: 'ReportsScreen');
     final scaffoldContext = context;
 
-    // Mostrar diálogo y capturar su contexto
-    showDialog(
+    // ✅ PASO 1: Verificar si el usuario es Premium (no necesita ver ad)
+    ReleaseLogger.log('Verificando status Premium...', tag: 'ReportsScreen');
+    final premiumStatus = await SubscriptionService().checkPremiumStatus();
+    final needsRewardedAd = !premiumStatus.isPremium;
+    ReleaseLogger.log('isPremium=${premiumStatus.isPremium}, needsRewardedAd=$needsRewardedAd', tag: 'ReportsScreen');
+
+    // ✅ PASO 2: Si no es Premium, mostrar dialog de Rewarded Video
+    if (needsRewardedAd && mounted) {
+      ReleaseLogger.log('Usuario FREE, mostrando dialog de Rewarded Ad...', tag: 'ReportsScreen');
+      final shouldProceed = await _showRewardedAdDialog(scaffoldContext, childName);
+      ReleaseLogger.log('_showRewardedAdDialog retornó: $shouldProceed', tag: 'ReportsScreen');
+      if (!shouldProceed) {
+        ReleaseLogger.log('Usuario canceló o no completó el video, abortando', tag: 'ReportsScreen');
+        return; // Usuario canceló o no completó el video
+      }
+    }
+
+    // ✅ PASO 3: Mostrar dialog de "en proceso" (después de ver el video)
+    if (mounted) {
+      showDialog(
+        context: scaffoldContext,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          icon: Icon(Icons.access_time, size: 48, color: Colors.blue),
+          title: Text('Reporte en proceso'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Estamos generando el reporte de $childName. Te notificaremos cuando esté listo.',
+                textAlign: TextAlign.center,
+              ),
+              SizedBox(height: 16),
+              Container(
+                padding: EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.notifications_active, color: Colors.blue, size: 20),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Recibirás una notificación cuando esté listo',
+                        style: TextStyle(fontSize: 13, color: Colors.blue[800]),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: Text('Entendido'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Llamar a la Cloud Function en background (no bloquea la UI)
+    _callGenerateReportInBackground(childId, childName, scaffoldContext);
+  }
+
+  /// Muestra el dialog de Rewarded Video para usuarios FREE
+  /// Retorna true si el usuario completó el video, false si canceló
+  Future<bool> _showRewardedAdDialog(BuildContext scaffoldContext, String childName) async {
+    ReleaseLogger.log('Iniciando _showRewardedAdDialog para $childName', tag: 'ReportsScreen');
+    final colorScheme = Theme.of(scaffoldContext).colorScheme;
+
+    // Mostrar dialog inicial
+    final userWantsToWatch = await showDialog<bool>(
       context: scaffoldContext,
       barrierDismissible: false,
       builder: (dialogContext) => AlertDialog(
+        icon: Icon(
+          Icons.play_circle_filled,
+          size: 56,
+          color: colorScheme.primary,
+        ),
+        title: Text('Ver video para generar reporte'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 16),
-            Text('Generando reporte con IA...'),
-            Text('Esto puede tardar 30-60 segundos', style: TextStyle(fontSize: 12, color: Colors.grey)),
+            Text(
+              'Ve un breve video para generar el reporte de $childName.',
+              textAlign: TextAlign.center,
+            ),
           ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text('Cancelar'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            icon: Icon(Icons.play_arrow),
+            label: Text('Ver video'),
+          ),
+        ],
+      ),
+    );
+
+    // Si el usuario canceló, retornar false
+    ReleaseLogger.log('userWantsToWatch=$userWantsToWatch', tag: 'ReportsScreen');
+    if (userWantsToWatch != true) {
+      ReleaseLogger.log('Usuario NO quiere ver video, retornando false', tag: 'ReportsScreen');
+      return false;
+    }
+
+    ReleaseLogger.log('Usuario SÍ quiere ver video, verificando mounted...', tag: 'ReportsScreen');
+    // Mostrar indicador de carga mientras se prepara el ad
+    if (!scaffoldContext.mounted) {
+      ReleaseLogger.log('scaffoldContext no está mounted, retornando false', tag: 'ReportsScreen');
+      return false;
+    }
+    ReleaseLogger.log('scaffoldContext está mounted, mostrando indicador de carga...', tag: 'ReportsScreen');
+
+    showDialog(
+      context: scaffoldContext,
+      barrierDismissible: false,
+      builder: (_) => Center(
+        child: Container(
+          padding: EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 16),
+              Text('Cargando video...'),
+            ],
+          ),
         ),
       ),
     );
 
-    try {
-      ReleaseLogger.log('Llamando a Cloud Function generateChildReport', tag: 'ReportsScreen');
+    // Mostrar el Rewarded Ad
+    ReleaseLogger.log('Mostrando Rewarded Ad...', tag: 'ReportsScreen');
+    final rewarded = await _adService.showRewardedAd();
+    ReleaseLogger.log('Rewarded Ad resultado: $rewarded', tag: 'ReportsScreen');
 
-      // Llamar a la Cloud Function
-      final callable = FirebaseFunctions.instance.httpsCallable('generateChildReport');
-      final result = await callable.call({
-        'childId': childId,
-        'daysBack': 7,
-      });
+    // Cerrar indicador de carga
+    if (scaffoldContext.mounted) {
+      Navigator.of(scaffoldContext, rootNavigator: true).pop();
+    }
 
-      // Cerrar diálogo de loading de forma segura usando el contexto del scaffold
-      if (mounted) {
-        // Intentar cerrar el diálogo usando Navigator de forma más agresiva
-        Navigator.of(scaffoldContext, rootNavigator: true).pop();
-      }
+    if (!rewarded && scaffoldContext.mounted) {
+      // Usuario no completó el video
+      ReleaseLogger.log('Usuario no completó el video, mostrando SnackBar', tag: 'ReportsScreen');
+      ScaffoldMessenger.of(scaffoldContext).showSnackBar(
+        SnackBar(
+          content: Text('Debes ver el video completo para generar el reporte'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    }
 
-      // Verificar que result.data no sea null
+    ReleaseLogger.log('Retornando rewarded=$rewarded desde _showRewardedAdDialog', tag: 'ReportsScreen');
+    return rewarded;
+  }
+
+  /// Llama a la Cloud Function en background sin bloquear la UI
+  void _callGenerateReportInBackground(String childId, String childName, BuildContext scaffoldContext) {
+    ReleaseLogger.log('Solicitando reporte async para $childId', tag: 'ReportsScreen');
+
+    final callable = FirebaseFunctions.instance.httpsCallable('generateChildReport');
+    callable.call({
+      'childId': childId,
+      'daysBack': 7,
+    }).then((result) {
       final data = result.data as Map<String, dynamic>?;
       if (data == null) {
         throw Exception('No se recibió respuesta de la función');
       }
 
-      if (data['success'] == true) {
-        ReleaseLogger.log('Reporte generado exitosamente', tag: 'ReportsScreen');
+      // Límite semanal ELIMINADO - ahora con ads el usuario puede generar reportes ilimitados
 
-        // Dar tiempo para que Firestore propague el nuevo documento al stream
-        // Esto es necesario porque hay latencia entre cuando se escribe el documento
-        // y cuando llega al StreamBuilder a través de los listeners
-        await Future.delayed(Duration(seconds: 2));
-
-        // Mostrar mensaje de éxito
-        if (mounted) {
-          ScaffoldMessenger.of(scaffoldContext).showSnackBar(
-            SnackBar(
-              content: Text('✓ Reporte generado y actualizado'),
-              backgroundColor: Colors.green,
-              duration: Duration(seconds: 2),
-            ),
-          );
-        }
-
-        // El StreamBuilder debería haberse actualizado automáticamente
-        // con el nuevo reporte después del delay
+      if (data['success'] == true && data['pending'] == true) {
+        ReleaseLogger.log('Reporte en proceso: ${data['pendingReportId']}', tag: 'ReportsScreen');
+        // Escuchar el pending_report para mostrar progreso
+        _listenToPendingReport(data['pendingReportId'] as String, childName);
       } else {
         throw Exception(data['message'] ?? 'Error desconocido');
       }
-    } catch (e) {
-      ReleaseLogger.error('Error generando reporte: $e', tag: 'ReportsScreen');
-
-      // Cerrar diálogo si todavía está abierto
-      if (mounted) {
-        try {
-          Navigator.of(scaffoldContext, rootNavigator: true).pop();
-        } catch (popError) {
-          ReleaseLogger.error('No se pudo cerrar el diálogo: $popError', tag: 'ReportsScreen');
-        }
-      }
+    }).catchError((e) {
+      ReleaseLogger.error('Error solicitando reporte: $e', tag: 'ReportsScreen');
 
       if (mounted) {
+        // Cerrar el diálogo de "en proceso" si está abierto
+        Navigator.of(scaffoldContext, rootNavigator: true).pop();
         ScaffoldMessenger.of(scaffoldContext).showSnackBar(
           SnackBar(
             content: Text('Error generando reporte: ${e.toString()}'),
@@ -760,8 +915,64 @@ class _ReportsScreenState extends State<ReportsScreen> {
           ),
         );
       }
-    }
+    });
   }
+
+  /// Escuchar cambios en el pending_report para notificar cuando esté listo
+  void _listenToPendingReport(String pendingReportId, String childName) {
+    _firestore
+        .collection('pending_reports')
+        .doc(pendingReportId)
+        .snapshots()
+        .listen((snapshot) {
+      if (!snapshot.exists || !mounted) return;
+
+      final data = snapshot.data();
+      if (data == null) return;
+
+      final status = data['status'] as String?;
+      final progress = data['progress'] as int? ?? 0;
+      final progressMessage = data['progressMessage'] as String? ?? '';
+
+      ReleaseLogger.log('Pending report $pendingReportId: $status ($progress%) - $progressMessage', tag: 'ReportsScreen');
+
+      if (status == 'completed') {
+        // Mostrar snackbar de éxito
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.check_circle, color: Colors.white),
+                SizedBox(width: 8),
+                Expanded(child: Text('Reporte de $childName listo')),
+              ],
+            ),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 3),
+            action: SnackBarAction(
+              label: 'Ver',
+              textColor: Colors.white,
+              onPressed: () {
+                // El StreamBuilder ya debería haber actualizado la lista
+                // Pero podemos forzar un setState si es necesario
+                setState(() {});
+              },
+            ),
+          ),
+        );
+      } else if (status == 'failed') {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error generando reporte de $childName'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 4),
+          ),
+        );
+      }
+    });
+  }
+
+  // Límite semanal ELIMINADO - ahora con ads el usuario puede generar reportes ilimitados
 
   void _showAlertDetails(Map<String, dynamic> alertData) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -1050,6 +1261,25 @@ class DetailedReportScreen extends StatelessWidget {
 
           SizedBox(height: 32),
 
+          // Mood Poll Stats (si existen)
+          if (report['moodPollStats'] != null) ...[
+            _buildMoodPollSection(report, colorScheme),
+            SizedBox(height: 24),
+          ],
+
+          // Momento de Conexión
+          if (report['connectionMoment'] != null) ...[
+            _buildConnectionMomentSection(report, colorScheme),
+            SizedBox(height: 24),
+          ],
+
+          // Preguntas Sugeridas
+          if (report['suggestedQuestions'] != null &&
+              (report['suggestedQuestions'] as List).isNotEmpty) ...[
+            _buildSuggestedQuestionsSection(report, colorScheme),
+            SizedBox(height: 24),
+          ],
+
           // Recomendaciones
           Text(
             'Recomendaciones',
@@ -1182,6 +1412,320 @@ class DetailedReportScreen extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildMoodPollSection(Map<String, dynamic> report, ColorScheme colorScheme) {
+    final stats = report['moodPollStats'] as Map<String, dynamic>?;
+    final responses = report['moodPollResponses'] as List?;
+
+    if (stats == null) return SizedBox.shrink();
+
+    final moodEmoji = stats['moodEmoji'] ?? '😐';
+    final moodDescription = stats['moodDescription'] ?? 'Sin datos';
+    final totalPolls = stats['totalPolls'] ?? 0;
+    // averageSentiment available in stats['averageSentiment'] if needed
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.poll, color: colorScheme.primary),
+            SizedBox(width: 8),
+            Text(
+              'Estado de ánimo directo',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: colorScheme.onSurface,
+              ),
+            ),
+          ],
+        ),
+        SizedBox(height: 8),
+        Text(
+          'Basado en $totalPolls encuestas respondidas',
+          style: TextStyle(
+            fontSize: 14,
+            color: colorScheme.onSurfaceVariant,
+          ),
+        ),
+        SizedBox(height: 16),
+
+        // Mood summary card
+        Container(
+          padding: EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                colorScheme.primaryContainer,
+                colorScheme.primaryContainer.withValues(alpha: 0.7),
+              ],
+            ),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
+            children: [
+              Text(moodEmoji, style: TextStyle(fontSize: 48)),
+              SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      moodDescription,
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: colorScheme.onPrimaryContainer,
+                      ),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      'Tu hijo expresó sentirse así en las encuestas',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: colorScheme.onPrimaryContainer.withValues(alpha: 0.8),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        // Recent responses
+        if (responses != null && responses.isNotEmpty) ...[
+          SizedBox(height: 16),
+          Text(
+            'Respuestas recientes',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: colorScheme.onSurface,
+            ),
+          ),
+          SizedBox(height: 12),
+          ...responses.take(3).map((response) {
+            final r = response as Map<String, dynamic>;
+            return Container(
+              margin: EdgeInsets.only(bottom: 8),
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: colorScheme.surface,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: colorScheme.outlineVariant),
+              ),
+              child: Row(
+                children: [
+                  Text(r['selectedEmoji'] ?? '😐', style: TextStyle(fontSize: 24)),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          r['questionText'] ?? '',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: colorScheme.onSurfaceVariant,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        SizedBox(height: 2),
+                        Text(
+                          r['selectedOptionText'] ?? '',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                            color: colorScheme.onSurface,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildConnectionMomentSection(Map<String, dynamic> report, ColorScheme colorScheme) {
+    final moment = report['connectionMoment'] as Map<String, dynamic>?;
+    if (moment == null) return SizedBox.shrink();
+
+    final emoji = moment['emoji'] ?? '💬';
+    final suggestion = moment['suggestion'] ?? '';
+    final activity = moment['activity'] ?? '';
+    final reason = moment['reason'] ?? '';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(emoji, style: TextStyle(fontSize: 24)),
+            SizedBox(width: 8),
+            Text(
+              'Momento de Conexión',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: colorScheme.onSurface,
+              ),
+            ),
+          ],
+        ),
+        SizedBox(height: 16),
+
+        Container(
+          padding: EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: Colors.blue.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.blue.withOpacity(0.3)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                suggestion,
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: colorScheme.onSurface,
+                  height: 1.4,
+                ),
+              ),
+              SizedBox(height: 12),
+              Container(
+                padding: EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.5),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.lightbulb_outline, color: Colors.orange, size: 20),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        activity,
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: colorScheme.onSurface,
+                          height: 1.4,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (reason.isNotEmpty) ...[
+                SizedBox(height: 8),
+                Text(
+                  reason,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: colorScheme.onSurfaceVariant,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSuggestedQuestionsSection(Map<String, dynamic> report, ColorScheme colorScheme) {
+    final questions = (report['suggestedQuestions'] as List?)?.cast<String>() ?? [];
+    if (questions.isEmpty) return SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.chat_bubble_outline, color: colorScheme.primary),
+            SizedBox(width: 8),
+            Text(
+              'Preguntas para conversar',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: colorScheme.onSurface,
+              ),
+            ),
+          ],
+        ),
+        SizedBox(height: 8),
+        Text(
+          'Sugerencias basadas en el análisis de la semana',
+          style: TextStyle(
+            fontSize: 14,
+            color: colorScheme.onSurfaceVariant,
+          ),
+        ),
+        SizedBox(height: 16),
+
+        ...questions.asMap().entries.map((entry) {
+          final index = entry.key;
+          final question = entry.value;
+          return Container(
+            margin: EdgeInsets.only(bottom: 8),
+            padding: EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    color: colorScheme.primary,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Center(
+                    child: Text(
+                      '${index + 1}',
+                      style: TextStyle(
+                        color: colorScheme.onPrimary,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                ),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    question,
+                    style: TextStyle(
+                      fontSize: 15,
+                      color: colorScheme.onSurface,
+                      height: 1.4,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }),
+      ],
     );
   }
 

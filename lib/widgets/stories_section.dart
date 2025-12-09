@@ -9,6 +9,7 @@ import '../screens/story_camera_screen.dart';
 import '../screens/story_viewer_screen.dart';
 import '../theme_service.dart';
 import '../widgets/permission_dialog.dart';
+import '../widgets/synced_user_widgets.dart';
 
 class StoriesSection extends StatefulWidget {
   const StoriesSection({super.key});
@@ -26,31 +27,18 @@ class _StoriesSectionState extends State<StoriesSection> {
   @override
   void initState() {
     super.initState();
-    print('🎬 StoriesSection.initState() - Inicializando stream...');
 
-    // ✅ FORZAR inicio de background stream como fallback
-    print('🎬 StoriesSection.initState() - Forzando startBackgroundCacheUpdates()...');
-    storyService.startBackgroundCacheUpdates().then((_) {
-      print('🎬 StoriesSection.initState() - Background stream iniciado exitosamente');
-    }).catchError((e) {
-      print('🎬 StoriesSection.initState() - Error en background stream: $e');
-    });
+    // Forzar inicio de background stream como fallback
+    storyService.startBackgroundCacheUpdates();
 
     // CRÍTICO: Usar storiesFromCache que reacciona a los background streams
     _storiesStream = storyService.storiesFromCache;
-    print('🎬 StoriesSection.initState() - Stream asignado (cache): $_storiesStream');
   }
 
   @override
   void dispose() {
-    // ✅ CRÍTICO: Detener streams de background para evitar spinner infinito
-    print('🎬 StoriesSection.dispose() - Deteniendo background streams...');
-    try {
-      storyService.stopBackgroundCacheUpdates();
-      print('🎬 StoriesSection.dispose() - Background streams detenidos exitosamente');
-    } catch (e) {
-      print('🎬 StoriesSection.dispose() - Error deteniendo background streams: $e');
-    }
+    // Detener streams de background para evitar spinner infinito
+    storyService.stopBackgroundCacheUpdates();
     super.dispose();
   }
 
@@ -68,8 +56,6 @@ class _StoriesSectionState extends State<StoriesSection> {
             stream: _storiesStream,
             initialData: _cachedStories,
             builder: (context, snapshot) {
-              print('🎬 StoriesSection.StreamBuilder - connectionState: ${snapshot.connectionState}, hasData: ${snapshot.hasData}, data length: ${snapshot.data?.length ?? "null"}');
-
               // Actualizar cache cuando llegan datos nuevos
               if (snapshot.hasData && snapshot.data != null) {
                 _cachedStories = snapshot.data;
@@ -92,17 +78,6 @@ class _StoriesSectionState extends State<StoriesSection> {
 
               final userStoriesList = snapshot.data ?? _cachedStories ?? [];
 
-              // DEBUG: Log detallado para diagnosticar
-              print('🎬 StoriesSection: userStoriesList.length = ${userStoriesList.length}');
-              for (int i = 0; i < userStoriesList.length; i++) {
-                final userStory = userStoriesList[i];
-                print('🎬 Historia $i: userId=${userStory.userId}, userName=${userStory.userName}, stories.length=${userStory.stories.length}');
-                for (int j = 0; j < userStory.stories.length; j++) {
-                  final story = userStory.stories[j];
-                  print('🎬   Story $j: id=${story.id}, status=${story.status}, mediaUrl=${story.mediaUrl}');
-                }
-              }
-
               // Ordenar grupos: primero los que tienen historias no vistas, luego los que tienen todas vistas
               final sortedUserStoriesList = List<UserStories>.from(userStoriesList);
               sortedUserStoriesList.sort((a, b) {
@@ -112,8 +87,6 @@ class _StoriesSectionState extends State<StoriesSection> {
                 return a.hasUnviewed ? -1 : 1;
               });
 
-              print('🎬 StoriesSection: Después de ordenar, sortedUserStoriesList.length = ${sortedUserStoriesList.length}');
-
               return ListView.builder(
                 key: const ValueKey('stories_list'),
                 scrollDirection: Axis.horizontal,
@@ -121,23 +94,18 @@ class _StoriesSectionState extends State<StoriesSection> {
                 itemCount:
                     sortedUserStoriesList.length + 1, // +1 para el botón "Mi Historia"
                 itemBuilder: (context, index) {
-                  print('🎬 StoriesSection: Building item $index de ${sortedUserStoriesList.length + 1}');
-
                   if (index == 0) {
                     // Botón para crear historia
-                    print('🎬 StoriesSection: Building ADD button');
                     return _buildAddStoryButton(context);
                   }
 
                   // PROTECCIÓN: Verificar que el índice es válido
                   final storyIndex = index - 1;
                   if (storyIndex >= sortedUserStoriesList.length) {
-                    print('❌ StoriesSection: Invalid index $storyIndex for list of length ${sortedUserStoriesList.length}');
                     return Container(); // Widget vacío como fallback
                   }
 
                   final userStories = sortedUserStoriesList[storyIndex];
-                  print('🎬 StoriesSection: Building story item for ${userStories.userName}');
                   return _buildStoryItem(
                     key: ValueKey('story_${userStories.userId}'),
                     context: context,
@@ -283,7 +251,8 @@ class _StoriesSectionState extends State<StoriesSection> {
     LinearGradient? borderGradient;
 
     if (isCurrentUser) {
-      // Para el usuario actual, mostrar estado de la historia
+      // Para el usuario actual, mostrar estado de la historia (sin gradiente "no visto")
+      // El usuario siempre ha "visto" sus propias historias
       switch (latestStory.status) {
         case StoryStatus.uploading:
           borderColor = Colors.blue;
@@ -292,18 +261,8 @@ class _StoriesSectionState extends State<StoriesSection> {
           borderColor = Colors.orange;
           break;
         case StoryStatus.approved:
-          borderGradient = userStories.hasUnviewed
-              ? LinearGradient(
-                  begin: Alignment.topRight,
-                  end: Alignment.bottomLeft,
-                  colors: [
-                    Color(0xFF9D7FE8),
-                    Color(0xFFFF6B9D),
-                    Color(0xFFFFA726),
-                  ],
-                )
-              : null;
-          borderColor = userStories.hasUnviewed ? null : Colors.grey[300];
+          // Sin gradiente para historias propias - solo borde gris
+          borderColor = Colors.grey[300];
           break;
         case StoryStatus.rejected:
           borderColor = Colors.red;
@@ -365,19 +324,39 @@ class _StoriesSectionState extends State<StoriesSection> {
                     child: CircleAvatar(
                       radius: 24,
                       backgroundColor: Colors.grey[200],
-                      backgroundImage: userStories.userPhotoURL != null
-                          ? CachedNetworkImageProvider(userStories.userPhotoURL!)
-                          : null,
-                      child: userStories.userPhotoURL == null
-                          ? Text(
+                      child: userStories.userPhotoURL != null
+                          ? ClipOval(
+                              child: CachedNetworkImage(
+                                imageUrl: userStories.userPhotoURL!,
+                                width: 48,
+                                height: 48,
+                                fit: BoxFit.cover,
+                                placeholder: (context, url) => Text(
+                                  userStories.userName[0].toUpperCase(),
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF9D7FE8),
+                                  ),
+                                ),
+                                errorWidget: (context, url, error) => Text(
+                                  userStories.userName[0].toUpperCase(),
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF9D7FE8),
+                                  ),
+                                ),
+                              ),
+                            )
+                          : Text(
                               userStories.userName[0].toUpperCase(),
                               style: TextStyle(
                                 fontSize: 20,
                                 fontWeight: FontWeight.bold,
                                 color: Color(0xFF9D7FE8),
                               ),
-                            )
-                          : null,
+                            ),
                     ),
                   ),
                 ),
@@ -493,21 +472,39 @@ class _StoriesSectionState extends State<StoriesSection> {
             SizedBox(height: 6),
             Column(
               children: [
-                Text(
-                  userStories.userName,
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: userStories.hasUnviewed
-                        ? FontWeight.w600
-                        : FontWeight.w500,
-                    color: userStories.hasUnviewed
-                        ? Color(0xFF2D3142)
-                        : Colors.grey[600],
+                // Si es el usuario actual, mostrar "Yo" en lugar del nombre
+                if (isCurrentUser)
+                  Text(
+                    'Yo',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: userStories.hasUnviewed
+                          ? FontWeight.w600
+                          : FontWeight.w500,
+                      color: userStories.hasUnviewed
+                          ? Color(0xFF2D3142)
+                          : Colors.grey[600],
+                    ),
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  )
+                else
+                  SyncedUserName(
+                    userId: userStories.userId,
+                    fallbackName: userStories.userName,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: userStories.hasUnviewed
+                          ? FontWeight.w600
+                          : FontWeight.w500,
+                      color: userStories.hasUnviewed
+                          ? Color(0xFF2D3142)
+                          : Colors.grey[600],
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
                 // Mostrar estado de upload o estado de la historia
                 if (isCurrentUser) ...[
                   if (hasUploadProgress)

@@ -6,6 +6,7 @@ import '../../../../services/typing_indicator_service.dart';
 import '../../../../controllers/chat_list_item_controller.dart';
 import '../../../../models/chat_message.dart';
 import '../../../../widgets/message_status_indicator.dart';
+import '../../../../widgets/synced_user_widgets.dart';
 import '../../../chat_detail_screen.dart';
 
 class ChatListItem extends StatefulWidget {
@@ -236,19 +237,39 @@ class _ChatListItemState extends State<ChatListItem> {
                         CircleAvatar(
                           radius: 28,
                           backgroundColor: colorScheme.primary.withValues(alpha: 0.2),
-                          backgroundImage: widget.photoURL != null && widget.photoURL!.isNotEmpty
-                              ? CachedNetworkImageProvider(widget.photoURL!)
-                              : null,
-                          child: widget.photoURL == null || widget.photoURL!.isEmpty
-                              ? Text(
+                          child: widget.photoURL != null && widget.photoURL!.isNotEmpty
+                              ? ClipOval(
+                                  child: CachedNetworkImage(
+                                    imageUrl: widget.photoURL!,
+                                    width: 56,
+                                    height: 56,
+                                    fit: BoxFit.cover,
+                                    placeholder: (context, url) => Text(
+                                      widget.name.isNotEmpty ? widget.name[0].toUpperCase() : 'H',
+                                      style: TextStyle(
+                                        fontSize: 20,
+                                        fontWeight: FontWeight.bold,
+                                        color: colorScheme.primary,
+                                      ),
+                                    ),
+                                    errorWidget: (context, url, error) => Text(
+                                      widget.name.isNotEmpty ? widget.name[0].toUpperCase() : 'H',
+                                      style: TextStyle(
+                                        fontSize: 20,
+                                        fontWeight: FontWeight.bold,
+                                        color: colorScheme.primary,
+                                      ),
+                                    ),
+                                  ),
+                                )
+                              : Text(
                                   widget.name.isNotEmpty ? widget.name[0].toUpperCase() : 'H',
                                   style: TextStyle(
                                     fontSize: 20,
                                     fontWeight: FontWeight.bold,
                                     color: colorScheme.primary,
                                   ),
-                                )
-                              : null,
+                                ),
                         ),
                         if (widget.isBlocked)
                           Positioned(
@@ -309,8 +330,9 @@ class _ChatListItemState extends State<ChatListItem> {
                           Row(
                             children: [
                               Expanded(
-                                child: Text(
-                                  widget.name,
+                                child: SyncedUserName(
+                                  userId: widget.userId,
+                                  fallbackName: widget.name,
                                   style: TextStyle(
                                     fontSize: 16,
                                     fontWeight: FontWeight.w600,

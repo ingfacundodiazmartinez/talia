@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../../controllers/child_home_controller.dart';
 import '../../../controllers/child_chats_controller.dart';
 import '../../../widgets/stories_section.dart';
 import '../../../widgets/emergency_button.dart';
+import '../../../widgets/synced_user_widgets.dart';
 import '../../../groups/groups.dart'; // Groups V2
 import '../../../services/chat_service.dart';
 import '../../../services/chat_archive_service.dart';
@@ -16,7 +18,6 @@ import '../../../services/typing_indicator_service.dart';
 import '../../../services/message_status_helper.dart';
 import '../../../services/group_chat_service.dart';
 import '../../../services/local_unread_count_service.dart';
-import '../../../services/create_chat_service.dart';
 import '../../../models/chat_message.dart';
 import '../../../widgets/message_status_indicator.dart';
 import '../../chat_detail_screen.dart';
@@ -171,24 +172,10 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
     return StreamBuilder<QuerySnapshot>(
       stream: _chatsController.getChatsStream(),
       builder: (context, snapshot) {
-        // ✅ SPINNER DEBUG: Logs detallados para identificar el problema
-        print('🔄 [SPINNER_DEBUG] ═══════════════════════════════════════════');
-        print('🔄 [SPINNER_DEBUG] ConnectionState: ${snapshot.connectionState}');
-        print('🔄 [SPINNER_DEBUG] HasData: ${snapshot.hasData}');
-        print('🔄 [SPINNER_DEBUG] HasError: ${snapshot.hasError}');
-        print('🔄 [SPINNER_DEBUG] Data is null: ${snapshot.data == null}');
-        if (snapshot.hasData) {
-          print('🔄 [SPINNER_DEBUG] Documents count: ${snapshot.data!.docs.length}');
-        }
-        if (snapshot.hasError) {
-          print('🔄 [SPINNER_DEBUG] Error: ${snapshot.error}');
-        }
-
-        // ✅ CACHE LOGIC: Actualizar cache cuando tenemos datos válidos
+        // CACHE LOGIC: Actualizar cache cuando tenemos datos válidos
         if (snapshot.hasData && snapshot.data != null) {
           _lastValidChatsData = snapshot.data;
           _lastValidChatsTimestamp = DateTime.now();
-          print('🔄 [SPINNER_DEBUG] Cache actualizado con ${snapshot.data!.docs.length} documentos');
         }
 
         final isInitialLoading = snapshot.connectionState == ConnectionState.waiting &&
@@ -196,22 +183,15 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
                                  !snapshot.hasError &&
                                  _lastValidChatsData == null; // Solo initial loading si no hay cache
 
-        print('🔄 [SPINNER_DEBUG] Showing spinner: $isInitialLoading');
-        print('🔄 [SPINNER_DEBUG] Has cached data: ${_lastValidChatsData != null}');
-        print('🔄 [SPINNER_DEBUG] ═══════════════════════════════════════════');
-
         if (isInitialLoading) {
-          print('🟡 [SPINNER_DEBUG] MOSTRANDO SPINNER - Carga inicial (waiting sin datos ni cache)');
           return Center(child: CircularProgressIndicator());
         }
 
         if (snapshot.hasError) {
-          print('🔴 [SPINNER_DEBUG] ERROR EN STREAM: ${snapshot.error}');
-          // ✅ FIXED: En caso de error, usar cache si está disponible y es reciente (< 5 minutos)
+          // En caso de error, usar cache si está disponible y es reciente (< 5 minutos)
           if (_lastValidChatsData != null) {
             final cacheAge = DateTime.now().difference(_lastValidChatsTimestamp).inMinutes;
             if (cacheAge < 5) {
-              print('🔄 [SPINNER_DEBUG] Usando cache por error de stream (age: ${cacheAge}m)');
               var chatDocs = _chatService.filterDeletedChats(_lastValidChatsData!);
               chatDocs = _chatsController.filterArchivedChats(chatDocs);
               return _buildChatListContent(chatDocs, colorScheme);
@@ -220,19 +200,14 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
           return Center(child: Text('Error: ${snapshot.error}'));
         }
 
-        // ✅ FIXED: Usar cache cuando estamos waiting pero tenemos datos válidos recientes
+        // Usar cache cuando estamos waiting pero tenemos datos válidos recientes
         final useCache = !snapshot.hasData && _lastValidChatsData != null &&
                         DateTime.now().difference(_lastValidChatsTimestamp).inMinutes < 10;
 
         final dataToUse = useCache ? _lastValidChatsData! : snapshot.data;
 
         if (dataToUse == null) {
-          print('🔄 [SPINNER_DEBUG] No hay datos ni cache disponible');
           return Center(child: CircularProgressIndicator());
-        }
-
-        if (useCache) {
-          print('🟠 [SPINNER_DEBUG] USANDO CACHE (stream waiting, cache válido)');
         }
 
         var chatDocs = _chatService.filterDeletedChats(dataToUse);
@@ -245,30 +220,16 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
     );
   }
 
-  // ✅ EXTRACTED: Método separado para construir el contenido con grupos
+  // Método separado para construir el contenido con grupos
   Widget _buildChatListContent(List<QueryDocumentSnapshot> chatDocs, ColorScheme colorScheme) {
     // Obtener grupos del niño
     return StreamBuilder<QuerySnapshot>(
       stream: _chatsController.getGroupsStream(),
       builder: (context, groupsSnapshot) {
-        // ✅ GROUPS DEBUG: Logs para el segundo StreamBuilder
-        print('👥 [GROUPS_DEBUG] ═══════════════════════════════════════════');
-        print('👥 [GROUPS_DEBUG] Groups ConnectionState: ${groupsSnapshot.connectionState}');
-        print('👥 [GROUPS_DEBUG] Groups HasData: ${groupsSnapshot.hasData}');
-        print('👥 [GROUPS_DEBUG] Groups HasError: ${groupsSnapshot.hasError}');
-        if (groupsSnapshot.hasData) {
-          print('👥 [GROUPS_DEBUG] Groups count: ${groupsSnapshot.data!.docs.length}');
-        }
-        print('👥 [GROUPS_DEBUG] ═══════════════════════════════════════════');
-
         final allGroups = groupsSnapshot.data?.docs ?? [];
         final groups = _chatsController.filterArchivedGroups(allGroups);
 
-        print('📋 [CHATS_DEBUG] Final chatDocs: ${chatDocs.length}, Final groups: ${groups.length}');
-        print('📋 [CHATS_DEBUG] Will show empty state: ${chatDocs.isEmpty && groups.isEmpty}');
-
         if (chatDocs.isEmpty && groups.isEmpty) {
-          print('🔍 [CHATS_DEBUG] MOSTRANDO EMPTY STATE');
           return _buildEmptyState(colorScheme);
         }
 
@@ -462,40 +423,46 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
   }
 
   Future<void> _leaveGroup(String groupId, String groupName) async {
+    // ✅ FIX: Guardar referencias antes de operaciones asíncronas
+    final navigator = Navigator.of(context, rootNavigator: true);
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+
     // Mostrar loading
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => Center(child: CircularProgressIndicator()),
+      useRootNavigator: true,
+      builder: (dialogContext) => const Center(child: CircularProgressIndicator()),
     );
 
+    String? errorMessage;
     try {
       await GroupChatService().leaveGroup(groupId, widget.childId);
-
-      if (!mounted) return;
-      Navigator.pop(context); // Cerrar loading
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Has salido de "$groupName"'),
-            duration: Duration(seconds: 2),
-          ),
-        );
-      }
     } catch (e) {
-      if (!mounted) return;
-      Navigator.pop(context); // Cerrar loading
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al salir del grupo: $e'),
-            backgroundColor: Colors.red,
-            duration: Duration(seconds: 4),
-          ),
-        );
+      errorMessage = e.toString();
+    } finally {
+      // ✅ SIEMPRE cerrar el spinner, sin importar el resultado
+      if (navigator.canPop()) {
+        navigator.pop();
       }
+    }
+
+    // Mostrar mensaje después de cerrar el spinner
+    if (errorMessage != null) {
+      scaffoldMessenger.showSnackBar(
+        SnackBar(
+          content: Text('Error al salir del grupo: $errorMessage'),
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 4),
+        ),
+      );
+    } else {
+      scaffoldMessenger.showSnackBar(
+        SnackBar(
+          content: Text('Has salido de "$groupName"'),
+          duration: Duration(seconds: 2),
+        ),
+      );
     }
   }
 
@@ -853,13 +820,27 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
                         CircleAvatar(
                           radius: 25,
                           backgroundColor: colorScheme.primaryContainer,
-                          backgroundImage: photoURL != null && photoURL.isNotEmpty ? NetworkImage(photoURL) : null,
-                          child: photoURL == null || photoURL.isEmpty
-                              ? Text(
+                          child: photoURL != null && photoURL.isNotEmpty
+                              ? ClipOval(
+                                  child: CachedNetworkImage(
+                                    imageUrl: photoURL,
+                                    width: 50,
+                                    height: 50,
+                                    fit: BoxFit.cover,
+                                    placeholder: (context, url) => Text(
+                                      name.isNotEmpty ? name[0].toUpperCase() : 'U',
+                                      style: TextStyle(color: colorScheme.primary, fontWeight: FontWeight.bold),
+                                    ),
+                                    errorWidget: (context, url, error) => Text(
+                                      name.isNotEmpty ? name[0].toUpperCase() : 'U',
+                                      style: TextStyle(color: colorScheme.primary, fontWeight: FontWeight.bold),
+                                    ),
+                                  ),
+                                )
+                              : Text(
                                   name.isNotEmpty ? name[0].toUpperCase() : 'U',
                                   style: TextStyle(color: colorScheme.primary, fontWeight: FontWeight.bold),
-                                )
-                              : null,
+                                ),
                         ),
                         if (isBlocked)
                           Positioned(
@@ -900,8 +881,9 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
                           Row(
                             children: [
                               Expanded(
-                                child: Text(
-                                  name,
+                                child: SyncedUserName(
+                                  userId: userId,
+                                  fallbackName: name,
                                   style: TextStyle(
                                     fontWeight: FontWeight.w600,
                                     fontSize: 15,

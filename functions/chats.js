@@ -91,14 +91,29 @@ exports.incrementUnreadCount = onDocumentCreated(
 
       // ✅ FIX: Asegurar que el chat sea visible cuando tiene mensajes
       // Esto cubre el caso de chats creados con visible: false
-      await chatRef.update({
-        visible: true,
-        lastMessageAt: Timestamp.now(),
-        lastMessage: messageData.text || "",
-        lastMessageSender: senderId,
-      });
 
-      console.log(`✅ Mensaje procesado para ${receiverId}, chat visible: true`);
+      // ✅ FIX: Skip lastMessage update for call messages
+      // Call messages (missed_call, answered_call) are handled by onCallV2Updated
+      // which sets lastMessage to "📞 Llamada perdida" etc.
+      // This trigger was overwriting it with empty string because messageData.text is undefined for calls
+      const isCallMessage = messageData.type === 'missed_call' || messageData.type === 'answered_call';
+
+      if (isCallMessage) {
+        // For call messages, only update visibility (let onCallV2Updated handle lastMessage)
+        await chatRef.update({
+          visible: true,
+        });
+        console.log(`✅ Call message processed for ${receiverId}, skipping lastMessage update (handled by onCallV2Updated)`);
+      } else {
+        // For regular messages, update everything including lastMessage
+        await chatRef.update({
+          visible: true,
+          lastMessageAt: Timestamp.now(),
+          lastMessage: messageData.text || "",
+          lastMessageSender: senderId,
+        });
+        console.log(`✅ Mensaje procesado para ${receiverId}, chat visible: true`);
+      }
 
       return null;
     } catch (error) {
@@ -396,7 +411,21 @@ exports.createChat = onCall(
       const existingChat = await chatRef.get();
 
       if (existingChat.exists) {
-        console.log(`ℹ️ [createChat] Chat ya existe: ${chatId}`);
+        const existingData = existingChat.data();
+
+        // ✅ FIX: Verificar que el chat tenga los campos necesarios
+        // Si no tiene participants, actualizarlo
+        if (!existingData.participants || existingData.participants.length === 0) {
+          console.log(`⚠️ [createChat] Chat existe pero sin participants, actualizando: ${chatId}`);
+          await chatRef.update({
+            participants: participants,
+            isValidChat: true,
+          });
+          console.log(`✅ [createChat] Participants agregados a chat existente: ${chatId}`);
+        } else {
+          console.log(`ℹ️ [createChat] Chat ya existe con participants: ${chatId}`);
+        }
+
         return {
           success: true,
           chatId: chatId,
@@ -570,55 +599,36 @@ exports.sendChatMessage = onCall(
           messageData.replyTo = replyTo;
         }
 
-        // 🚀 OPTIMIZACIÓN: Moderación SOLO si viene desde el cliente con moderationEnabled
-        // El cliente YA verificó la moderación, no duplicar aquí
-        // Esta función solo se llama cuando:
-        // 1. Hay moderación activa (ya validada por cliente)
-        // 2. Es un mensaje multimedia (imagen/video/audio)
-        // 3. Es un fallback cuando falla escritura directa
+        // ✅ MODERACIÓN: El cliente indica si hay moderación activa via `requiresModeration`
+        // Si es true, guardar con `moderationStatus: 'pending'` para que el trigger lo procese
+        // El receptor NO verá el mensaje hasta que sea 'approved' (filtrado en UI)
+        const requiresModeration = request.data.requiresModeration === true;
 
-        // Comentado para evitar doble moderación (ya se hace en cliente)
-        // Solo descomentar si se quiere validación adicional del servidor
-        /*
-        if (text && text.trim() && data.requiresModeration) {
-          try {
-            const moderationResult = await functions
-                .httpsCallable("checkMessageBeforeSending")
-                .call({
-                  chatId,
-                  senderId,
-                  receiverId,
-                  message: text,
-                });
-
-            if (!moderationResult.data.canSend) {
-              console.log(`🚫 [sendChatMessage] Mensaje bloqueado por moderación`);
-              return {
-                success: false,
-                blocked: true,
-                reason: "Message was blocked by moderation",
-              };
-            }
-          } catch (moderationError) {
-            console.error("❌ [sendChatMessage] Error en moderación:", moderationError);
-            // Continuar sin moderación si hay error
-          }
+        if (requiresModeration) {
+          messageData.moderationStatus = "pending";
+          console.log(`🔒 [sendChatMessage] Mensaje guardado con moderationStatus: pending`);
         }
-        */
 
         // Añadir mensaje
         const messageRef = await chatRef.collection("messages").add(messageData);
 
         // Actualizar lastMessage y timestamp del chat
         const lastMessageNow = Timestamp.now();  // ✅ FIX: Timestamp inmediato para evitar NULL en listeners
+
+        // ✅ FIX: Si hay moderación, NO actualizar lastMessage con el texto original
+        // El trigger moderateMessage actualizará el lastMessage después de procesar
         const lastMessageData = {
-          lastMessage: text || (messageType === "image" ? "📷 Imagen" : messageType === "video" ? "🎥 Video" : messageType === "audio" ? "🎤 Audio" : ""),
-          lastMessageAt: lastMessageNow,  // ✅ FIX: Timestamp inmediato (no serverTimestamp que es NULL inicialmente)
+          lastMessageAt: lastMessageNow,
           lastMessageTime: lastMessageNow, // Legacy (mantener por compatibilidad)
           lastMessageSender: senderId,
           updatedAt: lastMessageNow,
           visible: true, // ✅ Hacer chat visible al enviar primer mensaje
         };
+
+        // Solo actualizar lastMessage si NO hay moderación pendiente
+        if (!requiresModeration) {
+          lastMessageData.lastMessage = text || (messageType === "image" ? "📷 Imagen" : messageType === "video" ? "🎥 Video" : messageType === "audio" ? "🎤 Audio" : "");
+        }
 
         await chatRef.update(lastMessageData);
 

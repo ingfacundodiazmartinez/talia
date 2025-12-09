@@ -67,13 +67,20 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
 
-            <!-- Deep Link para redirecciones (MercadoPago, etc) -->
-            <intent-filter android:autoVerify="true">
+            <!-- Custom scheme para deep links internos -->
+            <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
                 <data android:scheme="talia"/>
-                <data android:scheme="https" android:host="talia.app"/>
+            </intent-filter>
+
+            <!-- App Links (verificados) para taliachat.com -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="https" android:host="taliachat.com"/>
             </intent-filter>
         </activity>
         

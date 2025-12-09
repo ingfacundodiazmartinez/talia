@@ -117,6 +117,10 @@ class VoIPService {
   // 🔄 COORDINACIÓN: Track de llamadas activas desde VoIP/CallKit
   final Set<String> _voipActiveCallIds = <String>{};
 
+  // ✅ FIX: Listeners para detectar cuando el caller corta antes de que B conteste
+  // Esto cierra el CallKit UI si la llamada se cancela mientras B no ha aceptado
+  final Map<String, StreamSubscription<DocumentSnapshot>> _incomingCallListeners = {};
+
   /// Verificar si una llamada está siendo manejada por VoIP/CallKit
   bool isCallHandledByVoIP(String callId) {
     return _voipActiveCallIds.contains(callId);
@@ -132,6 +136,52 @@ class VoIPService {
   void unmarkVoIPCall(String callId) {
     _voipActiveCallIds.remove(callId);
     ReleaseLogger.log('📞 [VOIP COORDINATION] Llamada $callId desmarcada de VoIP', tag: 'VoIPService');
+  }
+
+  /// ✅ FIX: Escuchar cuando una llamada entrante es cancelada por el caller
+  /// Esto cierra el CallKit UI si A corta antes de que B conteste
+  void _watchIncomingCallForCancellation(String callId) {
+    // Evitar duplicados
+    if (_incomingCallListeners.containsKey(callId)) {
+      ReleaseLogger.log('⏭️ [VoIP] Ya escuchando llamada $callId', tag: 'VoIPService');
+      return;
+    }
+
+    ReleaseLogger.log('👁️ [VoIP] Iniciando listener para detectar cancelación de llamada $callId', tag: 'VoIPService');
+
+    final subscription = _firestore
+        .collection('calls_v2')
+        .doc(callId)
+        .snapshots()
+        .listen((snapshot) async {
+      if (!snapshot.exists) {
+        ReleaseLogger.log('⚠️ [VoIP] Llamada $callId ya no existe - cerrando CallKit', tag: 'VoIPService');
+        await _endCallKitUI(callId);
+        _cancelIncomingCallListener(callId);
+        return;
+      }
+
+      final data = snapshot.data();
+      final endedAt = data?['endedAt'];
+
+      if (endedAt != null) {
+        ReleaseLogger.log('📵 [VoIP] Llamada $callId fue cancelada por el caller - cerrando CallKit', tag: 'VoIPService');
+        await _endCallKitUI(callId);
+        _cancelIncomingCallListener(callId);
+      }
+    }, onError: (e) {
+      ReleaseLogger.error('❌ [VoIP] Error en listener de llamada $callId: $e', tag: 'VoIPService');
+      _cancelIncomingCallListener(callId);
+    });
+
+    _incomingCallListeners[callId] = subscription;
+  }
+
+  /// Cancelar el listener de una llamada entrante
+  void _cancelIncomingCallListener(String callId) {
+    final subscription = _incomingCallListeners.remove(callId);
+    subscription?.cancel();
+    ReleaseLogger.log('🛑 [VoIP] Listener de llamada $callId cancelado', tag: 'VoIPService');
   }
 
   /// ✅ FIX ESCENARIO CALLKIT: Limpiar tracking de llamadas VoIP más agresivamente
@@ -210,13 +260,22 @@ class VoIPService {
         final Map<dynamic, dynamic> data = call.arguments as Map<dynamic, dynamic>;
         ReleaseLogger.log('📞 [VoIP] Llamada entrante desde CallKit nativo', tag: 'VoIPService');
         ReleaseLogger.log('📞 [VoIP] Datos: $data', tag: 'VoIPService');
-        // Los datos ya están siendo manejados por el listener de Firestore
+
+        // ✅ FIX: Iniciar listener para detectar si el caller corta antes de que B acepte
+        // Esto cierra el CallKit UI automáticamente si A cancela la llamada
+        final String? callId = data['callId'] as String?;
+        if (callId != null) {
+          _watchIncomingCallForCancellation(callId);
+        }
         break;
 
       case 'onCallAccepted':
         final Map<dynamic, dynamic> data = call.arguments as Map<dynamic, dynamic>;
         final String callId = data['callId'] as String;
         ReleaseLogger.log('✅ [VoIP] Llamada aceptada desde CallKit nativo: $callId', tag: 'VoIPService');
+
+        // ✅ FIX: Cancelar listener de cancelación ya que la llamada fue aceptada
+        _cancelIncomingCallListener(callId);
 
         // Buscar la llamada en Firestore para obtener los datos completos
         await _handleNativeCallAccepted(callId);
@@ -226,6 +285,9 @@ class VoIPService {
         final Map<dynamic, dynamic> data = call.arguments as Map<dynamic, dynamic>;
         final String callId = data['callId'] as String;
         ReleaseLogger.log('❌ [VoIP] Llamada RECHAZADA desde CallKit nativo: $callId', tag: 'VoIPService');
+
+        // ✅ FIX: Cancelar listener de cancelación ya que la llamada fue rechazada
+        _cancelIncomingCallListener(callId);
 
         // ✅ CRITICAL FIX: Actualizar Firestore con decline para que A vea el rechazo
         try {
@@ -243,6 +305,9 @@ class VoIPService {
         final Map<dynamic, dynamic> data = call.arguments as Map<dynamic, dynamic>;
         final String callId = data['callId'] as String;
         ReleaseLogger.log('📵 [VoIP] Llamada terminada desde CallKit nativo: $callId', tag: 'VoIPService');
+
+        // ✅ FIX: Cancelar listener de cancelación
+        _cancelIncomingCallListener(callId);
 
         // ✅ FIX: Terminar la llamada directamente via CallController
         // Esto soluciona el problema donde B cuelga desde CallKit pero no deja el canal de Agora
@@ -267,11 +332,15 @@ class VoIPService {
     }
   }
 
-  /// ✅ SIMPLIFIED: Only accept in Firestore, let AgoraCallScreen handle Agora join
-  /// This is cleaner because:
-  /// - Single point of entry to Agora (AgoraCallScreen)
-  /// - All Agora events are received correctly
-  /// - No state synchronization needed
+  /// ✅ FIX AUDIO FROM LOCK SCREEN: Accept AND join Agora immediately
+  /// This fixes the issue where audio calls answered from lock screen
+  /// had no audio until the user opened the app, because:
+  /// - VoIPService only accepted in Firestore
+  /// - AgoraCallScreen.initState() didn't run until app was in foreground
+  /// - Without joining Agora, there was no audio
+  ///
+  /// Now we join Agora immediately here, and AgoraCallScreen will detect
+  /// that we're already in the channel and skip the join.
   Future<void> _handleNativeCallAccepted(String callId) async {
     try {
       ReleaseLogger.log('📞 [VoIP] Call accepted from CallKit: $callId', tag: 'VoIPService');
@@ -285,27 +354,26 @@ class VoIPService {
       // ✅ Mark as handled by VoIP to prevent IncomingCallScreen
       markCallAsVoIPHandled(callId);
 
-      // ✅ SIMPLIFIED: Only accept in Firestore - do NOT join Agora here
-      // AgoraCallScreen will handle the Agora join when it opens
-      // This ensures all Agora events (onUserJoined, etc.) are received correctly
-      ReleaseLogger.log('📞 [VoIP] Accepting call in Firestore only (Agora join deferred to AgoraCallScreen)', tag: 'VoIPService');
-
       final controller = calls_v2.CallController();
       controller.initialize();
 
-      // Use acceptCallWithoutJoining - only updates Firestore, no Agora
-      final acceptResult = await controller.acceptCallWithoutJoining(callId);
+      // ✅ FIX: Accept AND join Agora immediately for instant audio
+      // This is critical for calls answered from lock screen
+      ReleaseLogger.log('📞 [VoIP] Accepting call AND joining Agora for instant audio', tag: 'VoIPService');
+
+      // Step 1: Accept the call (this also joins Agora via acceptCall)
+      final acceptResult = await controller.acceptCall(callId);
       if (acceptResult.success) {
-        ReleaseLogger.log('✅ [VoIP] Call accepted in Firestore', tag: 'VoIPService');
-        // Mark as accepted so AgoraCallScreen knows to join (not accept again)
+        ReleaseLogger.log('✅ [VoIP] Call accepted AND joined Agora successfully', tag: 'VoIPService');
+        // Mark as accepted so AgoraCallScreen knows we're already in channel
         _cache.markCallAsAccepted(callId);
       } else {
         ReleaseLogger.error('❌ [VoIP] Failed to accept call: ${acceptResult.error}', tag: 'VoIPService');
       }
 
       // ✅ Navigation will happen via onVideoCallReady when audio session activates
-      // This ensures the app is in foreground and ready to render video
-      ReleaseLogger.log('✅ [VoIP] Waiting for onVideoCallReady to navigate', tag: 'VoIPService');
+      // At this point, audio is already connected via Agora!
+      ReleaseLogger.log('✅ [VoIP] Audio connected, waiting for onVideoCallReady to show UI', tag: 'VoIPService');
 
       // Clear from cache
       _cache.clearCall(callId);
@@ -656,6 +724,12 @@ class VoIPService {
 
     // _callEventSubscription?.cancel();
     // _callEventSubscription = null;
+
+    // ✅ FIX: Cancelar todos los listeners de llamadas entrantes
+    for (final subscription in _incomingCallListeners.values) {
+      subscription.cancel();
+    }
+    _incomingCallListeners.clear();
 
     _pendingCallNotifier.close();
     _callKitEndedNotifier.close();

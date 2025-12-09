@@ -5,8 +5,10 @@
 
 const { createAgoraCall } = require('./createAgoraCall');
 const { addParticipantToCall } = require('./addParticipantToCall');
+const { onCallV2Updated } = require('./onCallEnded');
 
 module.exports = {
   createAgoraCall,
   addParticipantToCall,
+  onCallV2Updated,
 };

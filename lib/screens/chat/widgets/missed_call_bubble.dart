@@ -8,14 +8,14 @@ class MissedCallBubble extends StatelessWidget {
   final bool isMe;
   final String callType; // 'video' o 'audio'
   final String time;
-  final VoidCallback onCallBack;
+  final VoidCallback? onCallBack; // Opcional - puede ser null si no hay callback disponible
 
   const MissedCallBubble({
     super.key,
     required this.isMe,
     required this.callType,
     required this.time,
-    required this.onCallBack,
+    this.onCallBack,
   });
 
   @override
@@ -72,8 +72,8 @@ class MissedCallBubble extends StatelessWidget {
             ],
           ),
 
-          // Solo mostrar botón de "Devolver llamada" si NO fui yo quien llamó
-          if (!isMe) ...[
+          // Solo mostrar botón de "Devolver llamada" si NO fui yo quien llamó Y hay callback disponible
+          if (!isMe && onCallBack != null) ...[
             const SizedBox(height: 8),
             InkWell(
               onTap: onCallBack,

@@ -2,10 +2,12 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../controllers/group_profile_controller.dart';
 import '../../calls_v2/screens/agora_call_screen.dart';
 import '../child/profile/widgets/media_gallery_widget.dart';
 import 'widgets/add_members_dialog.dart';
+import '../../widgets/synced_user_widgets.dart';
 
 /// Pantalla de perfil de grupo refactorizada siguiendo CODING_RULES.md
 ///
@@ -279,12 +281,19 @@ class _GroupProfileScreenState extends State<GroupProfileScreen>
             children: [
               CircleAvatar(
                 radius: 40,
-                backgroundImage: groupData['avatar'] != null
-                    ? NetworkImage(groupData['avatar'])
-                    : null,
-                child: groupData['avatar'] == null
-                    ? const Icon(Icons.group, size: 40)
-                    : null,
+                backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+                child: groupData['avatar'] != null
+                    ? ClipOval(
+                        child: CachedNetworkImage(
+                          imageUrl: groupData['avatar'],
+                          width: 80,
+                          height: 80,
+                          fit: BoxFit.cover,
+                          placeholder: (context, url) => const Icon(Icons.group, size: 40),
+                          errorWidget: (context, url, error) => const Icon(Icons.group, size: 40),
+                        ),
+                      )
+                    : const Icon(Icons.group, size: 40),
               ),
               if (_controller.isAdmin && _isEditing)
                 Positioned(
@@ -591,12 +600,17 @@ class _GroupProfileScreenState extends State<GroupProfileScreen>
                 padding: const EdgeInsets.only(top: 8),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(8),
-                  child: Image.network(
-                    message.imageUrl!,
+                  child: CachedNetworkImage(
+                    imageUrl: message.imageUrl!,
                     height: 120,
                     width: double.infinity,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => Container(
+                    placeholder: (context, url) => Container(
+                      height: 120,
+                      color: Colors.grey.shade200,
+                      child: const Center(child: CircularProgressIndicator()),
+                    ),
+                    errorWidget: (context, url, error) => Container(
                       height: 60,
                       color: Colors.grey.shade200,
                       child: Row(
@@ -659,13 +673,11 @@ class _GroupProfileScreenState extends State<GroupProfileScreen>
     return ListTile(
       leading: Stack(
         children: [
-          CircleAvatar(
-            backgroundImage: member['photoURL'] != null
-                ? NetworkImage(member['photoURL'])
-                : null,
-            child: member['photoURL'] == null
-                ? Text((member['name'] as String? ?? 'U')[0].toUpperCase())
-                : null,
+          SyncedUserAvatar(
+            userId: member['id'] ?? '',
+            fallbackPhotoUrl: member['photoURL'],
+            userName: member['name'] ?? 'Usuario',
+            backgroundColor: Theme.of(context).colorScheme.primaryContainer,
           ),
           Positioned(
             bottom: 0,
@@ -683,8 +695,9 @@ class _GroupProfileScreenState extends State<GroupProfileScreen>
           ),
         ],
       ),
-      title: Text(
-        member['displayName'] ?? member['name'] ?? 'Usuario',
+      title: SyncedUserName(
+        userId: member['id'] ?? '',
+        fallbackName: member['displayName'] ?? member['name'] ?? 'Usuario',
         style: TextStyle(color: Colors.grey[700]),
       ),
       subtitle: Text(
@@ -701,19 +714,18 @@ class _GroupProfileScreenState extends State<GroupProfileScreen>
     final isCurrentUser = member['id'] == _controller.currentUserId;
 
     return ListTile(
-      leading: CircleAvatar(
-        backgroundImage: member['photoURL'] != null
-            ? NetworkImage(member['photoURL'])
-            : null,
-        child: member['photoURL'] == null
-            ? Text(member['name'][0].toUpperCase())
-            : null,
+      leading: SyncedUserAvatar(
+        userId: member['id'] ?? '',
+        fallbackPhotoUrl: member['photoURL'],
+        userName: member['name'] ?? 'Usuario',
+        backgroundColor: Theme.of(context).colorScheme.primaryContainer,
       ),
       title: Row(
         children: [
           Flexible(
-            child: Text(
-              member['displayName'] ?? member['name'],
+            child: SyncedUserName(
+              userId: member['id'] ?? '',
+              fallbackName: member['displayName'] ?? member['name'] ?? 'Usuario',
               overflow: TextOverflow.ellipsis,
             ),
           ),
@@ -767,12 +779,19 @@ class _GroupProfileScreenState extends State<GroupProfileScreen>
   Widget _buildRequestTile(Map<String, dynamic> request) {
     return ListTile(
       leading: CircleAvatar(
-        backgroundImage: request['photoURL'] != null
-            ? NetworkImage(request['photoURL'])
-            : null,
-        child: request['photoURL'] == null
-            ? Text(request['name'][0].toUpperCase())
-            : null,
+        backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+        child: request['photoURL'] != null
+            ? ClipOval(
+                child: CachedNetworkImage(
+                  imageUrl: request['photoURL'],
+                  width: 40,
+                  height: 40,
+                  fit: BoxFit.cover,
+                  placeholder: (context, url) => Text(request['name'][0].toUpperCase()),
+                  errorWidget: (context, url, error) => Text(request['name'][0].toUpperCase()),
+                ),
+              )
+            : Text(request['name'][0].toUpperCase()),
       ),
       title: Text(request['name']),
       subtitle: Text(request['message'] ?? 'Quiere unirse al grupo'),

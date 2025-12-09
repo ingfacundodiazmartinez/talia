@@ -52,6 +52,24 @@ class CreateCallService {
 
       final data = result.data;
 
+      // Verificar si se alcanzó el límite mensual
+      if (data['monthlyLimitReached'] == true) {
+        ReleaseLogger.log(
+          'Monthly call limit reached: ${data['minutesUsed']}/${data['limitMinutes']} minutes',
+          tag: _tag,
+        );
+        return ServiceResponse.error(
+          data['message'] as String? ?? 'Límite mensual alcanzado',
+          errorCode: 'MONTHLY_LIMIT_REACHED',
+          metadata: {
+            'monthlyLimitReached': true,
+            'minutesUsed': data['minutesUsed'],
+            'minutesRemaining': data['minutesRemaining'],
+            'limitMinutes': data['limitMinutes'],
+          },
+        );
+      }
+
       final callId = data['callId'] as String?;
       final token = data['token'] as String?;
       final channelName = data['channelName'] as String?;

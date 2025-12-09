@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'user.dart';
+import '../utils/release_logger.dart';
 
 /// Modelo para usuarios con rol de Adulto (no padre ni hijo)
 class Adult extends User {
@@ -50,7 +51,7 @@ class Adult extends User {
 
       return Adult.fromFirestore(doc);
     } catch (e) {
-      print('❌ Error obteniendo adulto: $e');
+      ReleaseLogger.error('Error obteniendo adulto: $e', tag: 'Adult');
       return null;
     }
   }
@@ -73,7 +74,7 @@ class Adult extends User {
 
       return query.docs;
     } catch (e) {
-      print('❌ Error cargando contactos: $e');
+      ReleaseLogger.error('Error cargando contactos: $e', tag: 'Adult');
       return [];
     }
   }

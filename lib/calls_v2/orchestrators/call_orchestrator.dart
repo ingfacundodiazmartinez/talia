@@ -59,6 +59,7 @@ class CallOrchestrator {
         return ServiceResponse.error(
           createResult.error ?? 'Failed to create call',
           errorCode: createResult.errorCode,
+          metadata: createResult.metadata, // Propagar metadata (incluye info de límite mensual)
         );
       }
 

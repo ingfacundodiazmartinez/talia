@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../../services/chat_permission_service.dart';
@@ -239,17 +240,36 @@ class _AddMembersDialogState extends State<AddMembersDialog> {
             ),
             subtitle: Text(contact.email),
             secondary: CircleAvatar(
-              backgroundImage:
-                  contact.avatar != null ? NetworkImage(contact.avatar!) : null,
-              child: contact.avatar == null
-                  ? Text(
+              child: contact.avatar != null
+                  ? ClipOval(
+                      child: CachedNetworkImage(
+                        imageUrl: contact.avatar!,
+                        width: 40,
+                        height: 40,
+                        fit: BoxFit.cover,
+                        placeholder: (context, url) => Text(
+                          contact.name[0].toUpperCase(),
+                          style: TextStyle(
+                            color: GroupProfileConstants.primaryColor,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        errorWidget: (context, url, error) => Text(
+                          contact.name[0].toUpperCase(),
+                          style: TextStyle(
+                            color: GroupProfileConstants.primaryColor,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    )
+                  : Text(
                       contact.name[0].toUpperCase(),
                       style: TextStyle(
                         color: GroupProfileConstants.primaryColor,
                         fontWeight: FontWeight.bold,
                       ),
-                    )
-                  : null,
+                    ),
             ),
           );
         },

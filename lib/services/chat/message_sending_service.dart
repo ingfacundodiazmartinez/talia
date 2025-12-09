@@ -94,12 +94,13 @@ class MessageSendingService {
     if (moderationEnabled) {
       tempId = const Uuid().v4();
       final functions = FirebaseFunctions.instance;
+      // ✅ FIX: Agregar timeout para evitar que el mensaje quede "enviando" indefinidamente
       final result = await functions.httpsCallable('checkMessageBeforeSending').call({
         'chatId': chatId,
         'text': text,
         'type': 'text',
         'localId': tempId,
-      });
+      }).timeout(_sendTimeout);
 
       final approved = result.data['approved'] as bool;
 
@@ -341,12 +342,13 @@ class MessageSendingService {
     required String newText,
   }) async {
     final functions = FirebaseFunctions.instance;
+    // ✅ FIX: Agregar timeout para evitar espera indefinida
     final result = await functions.httpsCallable('checkMessageBeforeSending').call({
       'chatId': chatId,
       'text': newText,
       'type': 'text',
       'messageId': messageId,
-    });
+    }).timeout(_sendTimeout);
 
     final approved = result.data['approved'] as bool;
 

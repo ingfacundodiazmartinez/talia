@@ -401,6 +401,7 @@ class ChatMessagingService {
           'text': finalMessage.text ?? '',
           'type': finalMessage.type ?? 'text',
           'localId': tempMessageId, // ✅ FIX: Enviar localId para deduplicación
+          'requiresModeration': true, // ✅ OPTIMIZACIÓN: Indica que el mensaje debe guardarse con status pending
           if (finalMessage.imageUrl != null) 'imageUrl': finalMessage.imageUrl,
           if (finalMessage.videoUrl != null) 'videoUrl': finalMessage.videoUrl,
           if (finalMessage.audioUrl != null) 'audioUrl': finalMessage.audioUrl,
@@ -415,9 +416,13 @@ class ChatMessagingService {
         return realMessageId;
       } else {
         // Sin moderación: escribir directamente a Firestore (más rápido)
+        // ✅ FIX: Agregar moderationStatus: 'approved' para que el receptor lo vea inmediatamente
+        final messageWithApproved = finalMessage.copyWith(
+          moderationStatus: ModerationStatus.approved,
+        );
         realMessageId = await _messageRepository.createOptimisticMessage(
           chatId: chatId,
-          message: finalMessage,
+          message: messageWithApproved,
           isGroup: isGroup,
         );
       }
@@ -575,17 +580,12 @@ class ChatMessagingService {
 
       // 1. Verificar moderación a nivel de CHAT (solo si el chat existe)
       bool moderationEnabled = false;
-      try {
-        final chatDoc = await FirebaseFirestore.instance
-            .collection('chats')
-            .doc(chatId)
-            .get();
-        if (chatDoc.exists) {
-          moderationEnabled = chatDoc.data()?['moderationEnabled'] ?? false;
-        }
-      } catch (e) {
-        // Continuar sin moderación del chat si hay error
-        ReleaseLogger.warning('Error verificando moderación del chat: $e', tag: 'Moderation');
+      final chatDoc = await FirebaseFirestore.instance
+          .collection('chats')
+          .doc(chatId)
+          .get();
+      if (chatDoc.exists) {
+        moderationEnabled = chatDoc.data()?['moderationEnabled'] ?? false;
       }
 
       // 2. Verificar moderación a nivel de CONTACTO (del receptor) si no está activada en chat
@@ -639,29 +639,12 @@ class ChatMessagingService {
         return false;
       }
 
-      // 4. Hay moderación activada - llamar a Cloud Function
-      ReleaseLogger.log('🔒 Moderación activada - verificando mensaje con Cloud Function', tag: 'Moderation');
-
-      final functions = FirebaseFunctions.instance;
-      final result = await functions.httpsCallable('checkMessageBeforeSending').call({
-        'chatId': chatId,
-        'text': content,
-        'type': type,
-        if (mediaUrl != null) 'mediaUrl': mediaUrl,
-      });
-
-      final approved = result.data['approved'] as bool;
-
-      if (!approved) {
-        final reason =
-            result.data['reason'] as String? ?? 'Contenido inapropiado detectado';
-        ReleaseLogger.log('🚫 Mensaje bloqueado por moderación: $reason', tag: 'Moderation');
-        // Usar un tipo específico de excepción para identificar bloqueos de moderación
-        throw ModerationBlockedException(reason);
-      }
-
-      ReleaseLogger.log('✅ Mensaje aprobado por moderación', tag: 'Moderation');
-      return true; // ✅ Retorna true para indicar que debe usar Cloud Function
+      // 4. ✅ OPTIMIZACIÓN: Solo retornar true si hay moderación activa
+      // El trigger `moderateMessage` se encargará de analizar el mensaje
+      // El mensaje se guardará con `moderationStatus: pending` y el receptor
+      // no lo verá hasta que sea aprobado (filtrado en chat_controller_optimistic.dart)
+      ReleaseLogger.log('🔒 Moderación activada - mensaje será analizado por trigger', tag: 'Moderation');
+      return true; // ✅ Retorna true para indicar que debe usar Cloud Function con requiresModeration
     } on ModerationBlockedException {
       // Re-lanzar bloqueos de moderación sin modificar
       rethrow;

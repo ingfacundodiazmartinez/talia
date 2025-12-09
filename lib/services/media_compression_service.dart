@@ -68,6 +68,10 @@ class MediaCompressionService {
 
       ReleaseLogger.log('📸 Imagen original: ${image.width}x${image.height}', tag: 'MediaCompressionService');
 
+      // ✅ FIX: Aplicar rotación EXIF antes de redimensionar
+      // Esto corrige fotos que aparecen ensanchadas o rotadas
+      image = img.bakeOrientation(image);
+
       // 1. Redimensionar si excede las dimensiones objetivo
       if (image.width > targetImageWidth || image.height > targetImageHeight) {
         image = img.copyResize(
@@ -260,12 +264,26 @@ class MediaCompressionService {
 
       ReleaseLogger.log('📸 Foto de perfil original: ${image.width}x${image.height}', tag: 'MediaCompressionService');
 
-      // Redimensionar a tamaño de perfil
-      image = img.copyResize(
-        image,
-        width: profilePhotoWidth,
-        height: profilePhotoHeight,
-      );
+      // ✅ FIX: Aplicar rotación EXIF antes de redimensionar
+      // Esto corrige fotos que aparecen ensanchadas o rotadas
+      image = img.bakeOrientation(image);
+      ReleaseLogger.log('📸 Orientación EXIF aplicada: ${image.width}x${image.height}', tag: 'MediaCompressionService');
+
+      // ✅ FIX: Redimensionar manteniendo aspect ratio SIN recortar
+      // El CircleAvatar con BoxFit.cover se encargará del recorte visual
+      // Esto preserva la imagen completa en storage
+      final int maxSize = profilePhotoWidth; // 512
+
+      if (image.width > maxSize || image.height > maxSize) {
+        // Redimensionar manteniendo aspect ratio (lado más largo = maxSize)
+        if (image.width > image.height) {
+          image = img.copyResize(image, width: maxSize);
+        } else {
+          image = img.copyResize(image, height: maxSize);
+        }
+      }
+
+      ReleaseLogger.log('📸 Imagen redimensionada: ${image.width}x${image.height}', tag: 'MediaCompressionService');
 
       // Comprimir con calidad de perfil
       final compressedBytes = Uint8List.fromList(

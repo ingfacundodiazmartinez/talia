@@ -428,21 +428,32 @@ class GroupChatService {
     }
   }
 
-  // Salir de un grupo
+  // Salir de un grupo (Groups V2)
   Future<void> leaveGroup(String groupId, String userId) async {
     try {
-      ReleaseLogger.log('👋 Usuario $userId saliendo del grupo $groupId', tag: 'GroupChatService');
+      ReleaseLogger.log('👋 Usuario $userId saliendo del grupo $groupId via Cloud Function', tag: 'GroupChatService');
 
-      // Remover al usuario usando arrayRemove (operación atómica permitida por Firestore)
-      await _firestore.collection('groups').doc(groupId).update({
-        'members': FieldValue.arrayRemove([userId]),
-        'lastActivity': FieldValue.serverTimestamp(),
+      // ✅ FIX: Usar Cloud Function leaveGroupV2 en lugar de escritura directa
+      // La Cloud Function maneja:
+      // - Validación de permisos
+      // - Eliminar grupo si es el último miembro
+      // - Actualización atómica de members array
+      final functions = FirebaseFunctions.instance;
+      final result = await functions.httpsCallable('leaveGroupV2').call({
+        'groupId': groupId,
       });
 
-      ReleaseLogger.log('✅ Usuario removido del grupo exitosamente', tag: 'GroupChatService');
-
-      // Nota: Si el grupo queda sin miembros, no aparecerá en las consultas
-      // porque usamos arrayContains en la query. No es necesario marcarlo como inactivo.
+      final data = result.data as Map<String, dynamic>;
+      if (data['success'] == true) {
+        final groupDeleted = data['groupDeleted'] == true;
+        if (groupDeleted) {
+          ReleaseLogger.log('✅ Grupo eliminado (era el último miembro)', tag: 'GroupChatService');
+        } else {
+          ReleaseLogger.log('✅ Usuario removido del grupo exitosamente', tag: 'GroupChatService');
+        }
+      } else {
+        throw Exception(data['error'] ?? 'Error desconocido al salir del grupo');
+      }
     } catch (e) {
       ReleaseLogger.error('❌ Error saliendo del grupo: $e', tag: 'GroupChatService');
       rethrow;

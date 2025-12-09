@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 /// Widget para mostrar el código QR y de texto del usuario
 ///
@@ -9,13 +10,16 @@ import 'package:share_plus/share_plus.dart';
 /// - Mostrar código QR generado
 /// - Mostrar código de texto
 /// - Proveer opciones de copiar y compartir
-/// - Mostrar información de seguridad
+/// - Mostrar información de seguridad (solo para child con parent vinculado)
 class MyCodeTab extends StatelessWidget {
   final String? userCode;
   final bool isLoading;
   final VoidCallback onRetry;
   final VoidCallback onCopy;
   final VoidCallback onShare;
+  final bool showSecurityWarning;
+
+  static const String _deepLinkBaseUrl = 'https://taliachat.com/add/';
 
   const MyCodeTab({
     super.key,
@@ -24,7 +28,11 @@ class MyCodeTab extends StatelessWidget {
     required this.onRetry,
     required this.onCopy,
     required this.onShare,
+    this.showSecurityWarning = false,
   });
+
+  String get _currentUserId => FirebaseAuth.instance.currentUser?.uid ?? '';
+  String get _deepLink => '$_deepLinkBaseUrl$_currentUserId';
 
   void _handleCopy(BuildContext context) {
     if (userCode != null) {
@@ -42,8 +50,10 @@ class MyCodeTab extends StatelessWidget {
   void _handleShare() {
     if (userCode != null) {
       Share.share(
-        'Mi codigo de Talia es: $userCode\n\nUsalo para agregarme como contacto.',
-        subject: 'Mi codigo de Talia',
+        'Agregame como contacto en Talia!\n\n'
+        'Haz click aqui: $_deepLink\n\n'
+        'O usa mi codigo: $userCode',
+        subject: 'Agregame en Talia',
       );
     }
     onShare();
@@ -96,8 +106,10 @@ class MyCodeTab extends StatelessWidget {
           _buildTextCodeCard(colorScheme),
           SizedBox(height: 32),
           _buildActionButtons(context, colorScheme),
-          SizedBox(height: 16),
-          _buildSecurityInfo(),
+          if (showSecurityWarning) ...[
+            SizedBox(height: 16),
+            _buildSecurityInfo(),
+          ],
         ],
       ),
     );

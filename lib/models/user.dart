@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../utils/release_logger.dart';
 
 /// Abstract base class for all user types in the system (Child, Parent, Adult)
 abstract class User {
@@ -54,7 +55,7 @@ abstract class User {
 
       return doc.exists ? doc : null;
     } catch (e) {
-      print('❌ Error obteniendo usuario: $e');
+      ReleaseLogger.error('Error obteniendo usuario: $e', tag: 'User');
       return null;
     }
   }
@@ -81,7 +82,7 @@ abstract class User {
         'parentId': data['parentId'],
       };
     } catch (e) {
-      print('❌ Error obteniendo usuario por ID: $e');
+      ReleaseLogger.error('Error obteniendo usuario por ID: $e', tag: 'User');
       return null;
     }
   }
@@ -110,7 +111,7 @@ abstract class User {
         'parentId': data['parentId'],
       };
     } catch (e) {
-      print('❌ Error obteniendo usuario por teléfono: $e');
+      ReleaseLogger.error('Error obteniendo usuario por teléfono: $e', tag: 'User');
       return null;
     }
   }

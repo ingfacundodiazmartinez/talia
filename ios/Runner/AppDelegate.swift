@@ -93,10 +93,42 @@ import Intents  // ✅ Necesario para INPerson e INImage
     }
 
     // ✅ NSE Deduplication channel para verificar si messageId ya fue procesado por NSE
+    // IMPORTANTE: Usa archivos compartidos via FileManager (más confiable que UserDefaults para NSE)
     let nseDeduplicationChannel = FlutterMethodChannel(name: "com.talia.chat/nse_deduplication", binaryMessenger: controller.binaryMessenger)
     nseDeduplicationChannel.setMethodCallHandler { (call: FlutterMethodCall, result: @escaping FlutterResult) in
       let appGroupId = "group.com.talia.chat"
-      let processedMessagesKey = "nse_processed_message_ids"
+      let processedIdsFileName = "nse_processed_ids.json"
+      let debugLogFileName = "nse_debug_log.json"
+
+      // Helper para obtener la URL del container compartido
+      func getSharedContainerURL() -> URL? {
+        return FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId)
+      }
+
+      // Helper para leer array de strings desde archivo JSON
+      func readStringArray(from fileName: String) -> [String] {
+        guard let containerURL = getSharedContainerURL() else { return [] }
+        let fileURL = containerURL.appendingPathComponent(fileName)
+        guard let data = try? Data(contentsOf: fileURL),
+              let decoded = try? JSONDecoder().decode([String].self, from: data) else {
+          return []
+        }
+        return decoded
+      }
+
+      // Helper para escribir array de strings a archivo JSON
+      func writeStringArray(_ array: [String], to fileName: String) -> Bool {
+        guard let containerURL = getSharedContainerURL() else { return false }
+        let fileURL = containerURL.appendingPathComponent(fileName)
+        do {
+          let data = try JSONEncoder().encode(array)
+          try data.write(to: fileURL, options: .atomic)
+          return true
+        } catch {
+          NSLog("❌ [NSE Dedup] Error escribiendo archivo: \(error.localizedDescription)")
+          return false
+        }
+      }
 
       if call.method == "wasProcessedByNSE" {
         // Verificar si un messageId ya fue procesado por el NSE
@@ -105,61 +137,55 @@ import Intents  // ✅ Necesario para INPerson e INImage
           return
         }
 
-        guard let userDefaults = UserDefaults(suiteName: appGroupId) else {
-          NSLog("⚠️ [NSE Dedup] No se pudo acceder a App Group UserDefaults")
-          result(false)
-          return
-        }
-
-        let processedIds = userDefaults.stringArray(forKey: processedMessagesKey) ?? []
+        let processedIds = readStringArray(from: processedIdsFileName)
         let wasProcessed = processedIds.contains(messageId)
-        NSLog("🔍 [NSE Dedup] messageId=\(messageId.prefix(8))... wasProcessedByNSE=\(wasProcessed)")
+        NSLog("🔍 [NSE Dedup] messageId=\(messageId.prefix(8))... wasProcessedByNSE=\(wasProcessed) (file-based)")
         result(wasProcessed)
 
       } else if call.method == "getProcessedByNSE" {
         // Obtener todos los IDs procesados por NSE
-        guard let userDefaults = UserDefaults(suiteName: appGroupId) else {
-          result([String]())
-          return
-        }
-
-        let processedIds = userDefaults.stringArray(forKey: processedMessagesKey) ?? []
+        let processedIds = readStringArray(from: processedIdsFileName)
+        NSLog("📋 [NSE Dedup] Returning \(processedIds.count) processed IDs (file-based)")
         result(processedIds)
 
       } else if call.method == "clearProcessedByNSE" {
-        // Limpiar lista de IDs procesados (llamar al iniciar sesión o cuando sea necesario)
-        guard let userDefaults = UserDefaults(suiteName: appGroupId) else {
+        // Limpiar lista de IDs procesados
+        guard let containerURL = getSharedContainerURL() else {
           result(false)
           return
         }
-
-        userDefaults.removeObject(forKey: processedMessagesKey)
-        userDefaults.synchronize()
-        NSLog("🧹 [NSE Dedup] Lista de IDs procesados limpiada")
-        result(true)
+        let fileURL = containerURL.appendingPathComponent(processedIdsFileName)
+        do {
+          try FileManager.default.removeItem(at: fileURL)
+          NSLog("🧹 [NSE Dedup] Archivo de IDs procesados eliminado")
+          result(true)
+        } catch {
+          // Si no existe el archivo, también es éxito
+          NSLog("🧹 [NSE Dedup] Lista limpiada (archivo no existía o eliminado)")
+          result(true)
+        }
 
       } else if call.method == "getNSEDebugLogs" {
         // Obtener logs de debug del NSE para diagnóstico
-        guard let userDefaults = UserDefaults(suiteName: appGroupId) else {
-          result([String]())
-          return
-        }
-
-        let debugLogs = userDefaults.stringArray(forKey: "nse_debug_log") ?? []
-        NSLog("📋 [NSE Debug] Returning \(debugLogs.count) debug logs")
+        let debugLogs = readStringArray(from: debugLogFileName)
+        NSLog("📋 [NSE Debug] Returning \(debugLogs.count) debug logs (file-based)")
         result(debugLogs)
 
       } else if call.method == "clearNSEDebugLogs" {
         // Limpiar logs de debug
-        guard let userDefaults = UserDefaults(suiteName: appGroupId) else {
+        guard let containerURL = getSharedContainerURL() else {
           result(false)
           return
         }
-
-        userDefaults.removeObject(forKey: "nse_debug_log")
-        userDefaults.synchronize()
-        NSLog("🧹 [NSE Debug] Logs limpiados")
-        result(true)
+        let fileURL = containerURL.appendingPathComponent(debugLogFileName)
+        do {
+          try FileManager.default.removeItem(at: fileURL)
+          NSLog("🧹 [NSE Debug] Archivo de logs eliminado")
+          result(true)
+        } catch {
+          NSLog("🧹 [NSE Debug] Logs limpiados (archivo no existía o eliminado)")
+          result(true)
+        }
 
       } else {
         result(FlutterMethodNotImplemented)
@@ -258,11 +284,23 @@ import Intents  // ✅ Necesario para INPerson e INImage
         voipRegistry.delegate = self
         voipRegistry.desiredPushTypes = [.voIP]
 
-        // If we already have a pending token, send it immediately
+        // ✅ FIX: Always send existing token if available (even if same)
+        // Flutter will save it with updated timestamp
         if let pendingToken = self.pendingVoIPToken {
-          NSLog("✅ [VoIP] Sending existing pending token")
-          let channel = FlutterMethodChannel(name: "com.talia.chat/voip", binaryMessenger: (self.window?.rootViewController as! FlutterViewController).binaryMessenger)
-          channel.invokeMethod("onVoipToken", arguments: pendingToken)
+          NSLog("✅ [VoIP] Sending existing pending token: \(pendingToken.prefix(20))...")
+
+          // Use async to ensure Flutter channel is ready
+          DispatchQueue.main.async {
+            guard let controller = self.window?.rootViewController as? FlutterViewController else {
+              NSLog("❌ [VoIP] FlutterViewController not available")
+              return
+            }
+            let channel = FlutterMethodChannel(name: "com.talia.chat/voip", binaryMessenger: controller.binaryMessenger)
+            channel.invokeMethod("onVoipToken", arguments: pendingToken)
+            NSLog("✅ [VoIP] Token sent to Flutter")
+          }
+        } else {
+          NSLog("⚠️ [VoIP] No pending token available - waiting for iOS callback")
         }
 
         result(true)
@@ -293,34 +331,29 @@ import Intents  // ✅ Necesario para INPerson e INImage
           // CRÍTICO: Guardar referencia antes de limpiar
           let uuidToEnd = uuid
 
-          // ✅ PHASE 1B: Limpiar AMBOS mappings PRIMERO para evitar re-entrada
-          self.callUUIDToFirestoreID.removeValue(forKey: uuid)
-          self.firestoreIDToCallUUID.removeValue(forKey: callId)
-          NSLog("🧹 [CallKit] Mappings limpiados preventivamente")
+          // ✅ FIX: NO limpiar mappings aquí - dejar que performEndCallAction lo haga
+          // Los mappings se limpiarán automáticamente cuando CallKit ejecute el delegate
 
           // CRÍTICO: Ejecutar en main thread y con manejo de errores
           DispatchQueue.main.async {
             NSLog("📱 [CallKit] Ejecutando en main thread...")
 
-            // Verificar que callProvider existe
-            guard self.callProvider != nil else {
-              NSLog("❌ [CallKit] callProvider es nil!")
-              return
-            }
+            // ✅ FIX: Usar CXEndCallAction para terminar la llamada apropiadamente
+            // reportCall() solo reporta que terminó remotamente, pero NO cierra el indicador de llamada activa
+            // CXEndCallAction es la forma correcta de terminar una llamada desde la app
+            let endCallAction = CXEndCallAction(call: uuidToEnd)
+            let transaction = CXTransaction(action: endCallAction)
 
-            do {
-              // Reportar a CallKit que la llamada terminó
-              NSLog("📞 [CallKit] Llamando reportCall...")
-              self.callProvider.reportCall(with: uuidToEnd, endedAt: Date(), reason: .remoteEnded)
-              NSLog("✅ [CallKit] Llamada reportada como terminada exitosamente")
-            } catch let error as NSError {
-              NSLog("⚠️ [CallKit] Error reportando fin de llamada:")
-              NSLog("   - Code: \(error.code)")
-              NSLog("   - Domain: \(error.domain)")
-              NSLog("   - Description: \(error.localizedDescription)")
-              NSLog("   - Continuando de todas formas...")
-            } catch {
-              NSLog("⚠️ [CallKit] Error desconocido: \(error)")
+            NSLog("📞 [CallKit] Solicitando fin de llamada via CXCallController...")
+            self.callController.request(transaction) { error in
+              if let error = error {
+                NSLog("⚠️ [CallKit] Error solicitando fin de llamada: \(error.localizedDescription)")
+                // Fallback: Si CXCallController falla, intentar reportCall como antes
+                NSLog("📞 [CallKit] Fallback: usando reportCall...")
+                self.callProvider.reportCall(with: uuidToEnd, endedAt: Date(), reason: .remoteEnded)
+              } else {
+                NSLog("✅ [CallKit] Llamada terminada exitosamente via CXCallController")
+              }
             }
           }
 

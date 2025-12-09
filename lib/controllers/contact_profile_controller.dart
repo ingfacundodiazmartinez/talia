@@ -334,6 +334,9 @@ class ContactProfileController {
     }
   }
 
+  // Callback para mostrar diálogo de límite mensual alcanzado
+  Function(int minutesUsed, int limitMinutes)? onMonthlyLimitReached;
+
   /// Iniciar videollamada
   Future<bool> startVideoCall() async {
     try {
@@ -359,6 +362,13 @@ class ContactProfileController {
         onSuccess?.call('Videollamada iniciada');
         return true;
       } else {
+        // Verificar si se alcanzó el límite mensual
+        if (result.errorCode == 'MONTHLY_LIMIT_REACHED' && result.metadata != null) {
+          final minutesUsed = result.metadata!['minutesUsed'] as int? ?? 0;
+          final limitMinutes = result.metadata!['limitMinutes'] as int? ?? 60;
+          onMonthlyLimitReached?.call(minutesUsed, limitMinutes);
+          return false;
+        }
         onError?.call(result.error ?? 'Error iniciando videollamada');
         return false;
       }
@@ -393,6 +403,13 @@ class ContactProfileController {
         onSuccess?.call('Llamada de audio iniciada');
         return true;
       } else {
+        // Verificar si se alcanzó el límite mensual
+        if (result.errorCode == 'MONTHLY_LIMIT_REACHED' && result.metadata != null) {
+          final minutesUsed = result.metadata!['minutesUsed'] as int? ?? 0;
+          final limitMinutes = result.metadata!['limitMinutes'] as int? ?? 60;
+          onMonthlyLimitReached?.call(minutesUsed, limitMinutes);
+          return false;
+        }
         onError?.call(result.error ?? 'Error iniciando llamada de audio');
         return false;
       }

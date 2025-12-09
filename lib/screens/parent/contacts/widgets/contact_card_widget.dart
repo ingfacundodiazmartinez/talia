@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import '../../../../utils/chat_utils.dart';
 import '../../../../services/create_chat_service.dart';
-import '../../../chat_detail_screen.dart';
+import '../../../../widgets/synced_user_widgets.dart';
 import '../../../child_location_screen.dart';
 
 /// Widget para mostrar una tarjeta de contacto
@@ -66,19 +65,39 @@ class ContactCardWidget extends StatelessWidget {
                 CircleAvatar(
                   radius: 28,
                   backgroundColor: colorScheme.primary.withValues(alpha: 0.2),
-                  backgroundImage: photoURL != null && photoURL!.isNotEmpty
-                      ? CachedNetworkImageProvider(photoURL!)
-                      : null,
-                  child: photoURL == null || photoURL!.isEmpty
-                      ? Text(
+                  child: photoURL != null && photoURL!.isNotEmpty
+                      ? ClipOval(
+                          child: CachedNetworkImage(
+                            imageUrl: photoURL!,
+                            width: 56,
+                            height: 56,
+                            fit: BoxFit.cover,
+                            placeholder: (context, url) => Text(
+                              displayName.isNotEmpty ? displayName[0].toUpperCase() : 'U',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: colorScheme.primary,
+                              ),
+                            ),
+                            errorWidget: (context, url, error) => Text(
+                              displayName.isNotEmpty ? displayName[0].toUpperCase() : 'U',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: colorScheme.primary,
+                              ),
+                            ),
+                          ),
+                        )
+                      : Text(
                           displayName.isNotEmpty ? displayName[0].toUpperCase() : 'U',
                           style: TextStyle(
                             fontSize: 20,
                             fontWeight: FontWeight.bold,
                             color: colorScheme.primary,
                           ),
-                        )
-                      : null,
+                        ),
                 ),
                 if (isOnline)
                   Positioned(
@@ -105,8 +124,9 @@ class ContactCardWidget extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    displayName,
+                  SyncedUserName(
+                    userId: contactId,
+                    fallbackName: displayName,
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w600,

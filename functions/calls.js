@@ -56,6 +56,20 @@ exports.createCall = onCall(
       }
       const callerId = context.auth.uid;
 
+      // ✅ Verificar límite de minutos de llamada
+      const minutesCheck = await checkCallMinutesLimit(callerId);
+      if (!minutesCheck.allowed) {
+        console.log(`🚫 [createCall] Usuario ${callerId} sin minutos disponibles: ${minutesCheck.minutesUsed}/${minutesCheck.limitMinutes}`);
+        return {
+          success: false,
+          monthlyLimitReached: true,
+          minutesUsed: minutesCheck.minutesUsed,
+          minutesRemaining: minutesCheck.minutesRemaining,
+          limitMinutes: minutesCheck.limitMinutes,
+          message: `Has alcanzado el límite mensual de ${minutesCheck.limitMinutes} minutos de videollamadas. Tu límite se reinicia el primer día del próximo mes.`,
+        };
+      }
+
       // ✅ Validar campos requeridos
       if (!data.participantIds || !Array.isArray(data.participantIds)) {
         throw new HttpsError('invalid-argument', 'participantIds debe ser un array');
@@ -488,6 +502,53 @@ exports.updateCallStatus = onDocumentUpdated(
           endedAt: admin.firestore.FieldValue.serverTimestamp()
         });
 
+        // ═══════════════════════════════════════════════════════════════
+        // CREAR MENSAJE DE LLAMADA Y TRACKEAR MINUTOS
+        // ═══════════════════════════════════════════════════════════════
+
+        // Determinar si la llamada fue contestada
+        // Una llamada fue contestada si ALGUIEN ADEMÁS del creador tuvo status 'joined'
+        const createdBy = afterData.createdBy;
+        const wasAnswered = Object.entries(participantDetails).some(([id, details]) =>
+          id !== createdBy && details.status === 'joined'
+        );
+
+        console.log(`📞 [updateCallStatus] Llamada ${wasAnswered ? 'CONTESTADA' : 'PERDIDA'} (createdBy: ${createdBy})`);
+
+        // Obtener datos actualizados con endedAt para calcular duración
+        const updatedCallDoc = await change.after.ref.get();
+        const updatedCallData = updatedCallDoc.data();
+
+        // Crear mensaje de llamada en el chat (solo para 1-1)
+        await createCallMessageInChat(updatedCallData, callId, wasAnswered);
+
+        // Trackear minutos de llamada si fue contestada
+        if (wasAnswered && updatedCallData.endedAt) {
+          const startTime = updatedCallData.createdAt.toDate();
+          const endTime = updatedCallData.endedAt.toDate();
+
+          // Calcular duración real desde que el receptor contestó
+          let durationMs = endTime - startTime;
+
+          // Buscar joinedAt del receptor para cálculo más preciso
+          const receiverId = Object.keys(participantDetails).find(id => id !== createdBy);
+          if (receiverId && participantDetails[receiverId]?.joinedAt) {
+            const joinedTime = participantDetails[receiverId].joinedAt.toDate();
+            durationMs = endTime - joinedTime;
+          }
+
+          const durationMinutes = Math.ceil(Math.max(0, durationMs) / (1000 * 60));
+
+          if (durationMinutes > 0) {
+            // Trackear para AMBOS participantes en llamadas 1-1
+            const participants = updatedCallData.participants || [];
+            for (const participantId of participants) {
+              await trackCallMinutes(participantId, durationMinutes);
+            }
+            console.log(`📊 [updateCallStatus] Trackeados ${durationMinutes} minutos para ${participants.length} participantes`);
+          }
+        }
+
         // Programar eliminación del documento en 1 hora (para debugging/logs)
         await scheduleCallDeletion(callId);
 
@@ -502,6 +563,177 @@ exports.updateCallStatus = onDocumentUpdated(
       return null;
     }
   });
+
+// ═══════════════════════════════════════════════════════════════
+// FUNCIONES PARA MENSAJES DE LLAMADA Y TRACKING DE MINUTOS
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Límite mensual de minutos de llamada por usuario
+ * 60 minutos = 1 hora por mes
+ */
+const MONTHLY_CALL_LIMIT_MINUTES = 60;
+
+/**
+ * Crear mensaje de llamada en el chat entre participantes
+ *
+ * @param {Object} callData - Datos de la llamada
+ * @param {string} callId - ID de la llamada
+ * @param {boolean} wasAnswered - Si la llamada fue contestada
+ */
+async function createCallMessageInChat(callData, callId, wasAnswered) {
+  try {
+    const participants = callData.participants || [];
+    const participantDetails = callData.participantDetails || {};
+
+    // Solo para llamadas 1-1 (grupos no tienen chat individual)
+    if (participants.length !== 2) {
+      console.log(`⏩ [createCallMessage] Llamada grupal con ${participants.length} participantes, no se crea mensaje`);
+      return;
+    }
+
+    const callerId = callData.createdBy;
+    const receiverId = participants.find(id => id !== callerId);
+
+    if (!callerId || !receiverId) {
+      console.log(`⚠️ [createCallMessage] No se pudo determinar caller/receiver`);
+      return;
+    }
+
+    // Construir chatId (formato: userId1_userId2, ordenado alfabéticamente)
+    const chatParticipants = [callerId, receiverId].sort();
+    const chatId = chatParticipants.join('_');
+
+    console.log(`📝 [createCallMessage] Creando mensaje de llamada en chat ${chatId}`);
+
+    // Calcular duración si fue contestada
+    let callDuration = 0;
+    if (wasAnswered && callData.createdAt && callData.endedAt) {
+      const startTime = callData.createdAt.toDate ? callData.createdAt.toDate() : new Date(callData.createdAt);
+      const endTime = callData.endedAt.toDate ? callData.endedAt.toDate() : new Date(callData.endedAt);
+      callDuration = Math.floor((endTime - startTime) / 1000); // en segundos
+
+      // Restar tiempo de espera (antes de que contestaran)
+      // Buscar joinedAt del receiver
+      const receiverDetails = participantDetails[receiverId];
+      if (receiverDetails && receiverDetails.joinedAt) {
+        const joinedTime = receiverDetails.joinedAt.toDate ? receiverDetails.joinedAt.toDate() : new Date(receiverDetails.joinedAt);
+        callDuration = Math.floor((endTime - joinedTime) / 1000);
+      }
+
+      if (callDuration < 0) callDuration = 0;
+    }
+
+    // Tipo de mensaje
+    const messageType = wasAnswered ? 'answered_call' : 'missed_call';
+    const callType = callData.type || 'video'; // 'video' o 'audio'
+
+    // Crear el mensaje
+    const messageData = {
+      senderId: callerId,
+      receiverId: receiverId,
+      type: messageType,
+      callType: callType,
+      callId: callId,
+      callDuration: callDuration, // Duración en segundos
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      isRead: false,
+      readBy: [],
+    };
+
+    // Agregar mensaje a la subcolección del chat
+    const chatRef = db.collection('chats').doc(chatId);
+    await chatRef.collection('messages').add(messageData);
+
+    // Actualizar metadata del chat
+    const lastMessagePreview = wasAnswered
+      ? (callType === 'video' ? '📹 Videollamada' : '📞 Llamada')
+      : (callType === 'video' ? '📹 Videollamada perdida' : '📞 Llamada perdida');
+
+    await chatRef.update({
+      lastMessage: lastMessagePreview,
+      lastMessageAt: admin.firestore.FieldValue.serverTimestamp(),
+      lastMessageTime: admin.firestore.FieldValue.serverTimestamp(),
+      lastMessageSender: callerId,
+      visible: true,
+    });
+
+    console.log(`✅ [createCallMessage] Mensaje de ${messageType} creado en chat ${chatId} (duración: ${callDuration}s)`);
+
+  } catch (error) {
+    console.error(`❌ [createCallMessage] Error:`, error);
+    // No re-throw, el mensaje de llamada no es crítico
+  }
+}
+
+/**
+ * Trackear minutos de llamada por usuario
+ *
+ * @param {string} userId - ID del usuario
+ * @param {number} durationMinutes - Duración en minutos
+ */
+async function trackCallMinutes(userId, durationMinutes) {
+  try {
+    if (!userId || durationMinutes <= 0) return;
+
+    // Formato: YYYY-MM para el mes actual
+    const now = new Date();
+    const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+    const usageRef = db.collection('call_usage').doc(`${userId}_${monthKey}`);
+
+    // Incrementar minutos usados (usar FieldValue.increment para atomicidad)
+    await usageRef.set({
+      userId: userId,
+      month: monthKey,
+      minutesUsed: admin.firestore.FieldValue.increment(durationMinutes),
+      lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    console.log(`📊 [trackCallMinutes] Usuario ${userId}: +${durationMinutes} minutos en ${monthKey}`);
+
+  } catch (error) {
+    console.error(`❌ [trackCallMinutes] Error:`, error);
+  }
+}
+
+/**
+ * Verificar si el usuario tiene minutos disponibles
+ *
+ * @param {string} userId - ID del usuario
+ * @returns {Object} { allowed: boolean, minutesUsed: number, minutesRemaining: number }
+ */
+async function checkCallMinutesLimit(userId) {
+  try {
+    const now = new Date();
+    const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+    const usageRef = db.collection('call_usage').doc(`${userId}_${monthKey}`);
+    const usageDoc = await usageRef.get();
+
+    let minutesUsed = 0;
+    if (usageDoc.exists) {
+      minutesUsed = usageDoc.data().minutesUsed || 0;
+    }
+
+    const minutesRemaining = Math.max(0, MONTHLY_CALL_LIMIT_MINUTES - minutesUsed);
+    const allowed = minutesRemaining > 0;
+
+    console.log(`📊 [checkCallMinutes] Usuario ${userId}: ${minutesUsed}/${MONTHLY_CALL_LIMIT_MINUTES} minutos usados, ${minutesRemaining} restantes`);
+
+    return {
+      allowed,
+      minutesUsed,
+      minutesRemaining,
+      limitMinutes: MONTHLY_CALL_LIMIT_MINUTES,
+    };
+
+  } catch (error) {
+    console.error(`❌ [checkCallMinutes] Error:`, error);
+    // En caso de error, permitir la llamada (fail-open)
+    return { allowed: true, minutesUsed: 0, minutesRemaining: MONTHLY_CALL_LIMIT_MINUTES, limitMinutes: MONTHLY_CALL_LIMIT_MINUTES };
+  }
+}
 
 // ═══════════════════════════════════════════════════════════════
 // FUNCIONES AUXILIARES

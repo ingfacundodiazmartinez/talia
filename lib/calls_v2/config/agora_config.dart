@@ -1,13 +1,19 @@
 /// Agora RTC Engine Configuration
 ///
 /// This class contains all the configuration needed for Agora RTC Engine.
-/// The App ID should be stored as an environment variable for security.
+/// The App ID is provided via --dart-define at build time for security.
+///
+/// Build commands:
+/// flutter run --dart-define=AGORA_APP_ID=your_app_id
+/// flutter build apk --dart-define=AGORA_APP_ID=your_app_id
+/// flutter build ipa --dart-define=AGORA_APP_ID=your_app_id
 class AgoraConfig {
-  // App ID - Should be set from environment variable or Firebase Remote Config
-  // For development, you can temporarily use a test App ID here
-  // IMPORTANT: Never commit real App ID to version control
-  // Found existing App ID in .env file: f4537746b6fc4e65aca1bd969c42c988
-  static const String appId = 'f4537746b6fc4e65aca1bd969c42c988'; // Production Agora App ID
+  // App ID - Provided via dart-define at build time
+  // IMPORTANT: Never hardcode the real App ID here
+  static const String appId = String.fromEnvironment(
+    'AGORA_APP_ID',
+    defaultValue: '',
+  );
 
   // Token server endpoint - if using custom token server
   static const String tokenServerUrl = '';
@@ -48,8 +54,8 @@ class AgoraConfig {
     return hash;
   }
 
-  /// Check if App ID is configured
+  /// Check if App ID is configured via dart-define
   static bool isConfigured() {
-    return appId != 'YOUR_AGORA_APP_ID' && appId.isNotEmpty;
+    return appId.isNotEmpty;
   }
 }

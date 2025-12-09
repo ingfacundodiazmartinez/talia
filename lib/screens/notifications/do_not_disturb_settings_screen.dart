@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../services/notification_preferences_service.dart';
 
 class DoNotDisturbSettingsScreen extends StatefulWidget {
@@ -211,20 +212,39 @@ class _DoNotDisturbSettingsScreenState
                           backgroundColor: colorScheme.primary.withValues(
                             alpha: 0.2,
                           ),
-                          backgroundImage:
-                              photoURL != null && photoURL.isNotEmpty
-                              ? NetworkImage(photoURL)
-                              : null,
-                          child: photoURL == null || photoURL.isEmpty
-                              ? Text(
+                          child: photoURL != null && photoURL.isNotEmpty
+                              ? ClipOval(
+                                  child: CachedNetworkImage(
+                                    imageUrl: photoURL,
+                                    width: 48,
+                                    height: 48,
+                                    fit: BoxFit.cover,
+                                    placeholder: (context, url) => Text(
+                                      name[0].toUpperCase(),
+                                      style: TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold,
+                                        color: colorScheme.primary,
+                                      ),
+                                    ),
+                                    errorWidget: (context, url, error) => Text(
+                                      name[0].toUpperCase(),
+                                      style: TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold,
+                                        color: colorScheme.primary,
+                                      ),
+                                    ),
+                                  ),
+                                )
+                              : Text(
                                   name[0].toUpperCase(),
                                   style: TextStyle(
                                     fontSize: 18,
                                     fontWeight: FontWeight.bold,
                                     color: colorScheme.primary,
                                   ),
-                                )
-                              : null,
+                                ),
                         ),
                         title: Text(
                           name,
@@ -422,22 +442,37 @@ class _DoNotDisturbSettingsScreenState
                       backgroundColor: colorScheme.primary.withValues(
                         alpha: 0.2,
                       ),
-                      backgroundImage:
-                          contact['photoURL'] != null &&
+                      child: contact['photoURL'] != null &&
                               contact['photoURL'].isNotEmpty
-                          ? NetworkImage(contact['photoURL'])
-                          : null,
-                      child:
-                          contact['photoURL'] == null ||
-                              contact['photoURL'].isEmpty
-                          ? Text(
+                          ? ClipOval(
+                              child: CachedNetworkImage(
+                                imageUrl: contact['photoURL'],
+                                width: 40,
+                                height: 40,
+                                fit: BoxFit.cover,
+                                placeholder: (context, url) => Text(
+                                  contact['name'][0].toUpperCase(),
+                                  style: TextStyle(
+                                    color: colorScheme.primary,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                errorWidget: (context, url, error) => Text(
+                                  contact['name'][0].toUpperCase(),
+                                  style: TextStyle(
+                                    color: colorScheme.primary,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            )
+                          : Text(
                               contact['name'][0].toUpperCase(),
                               style: TextStyle(
                                 color: colorScheme.primary,
                                 fontWeight: FontWeight.bold,
                               ),
-                            )
-                          : null,
+                            ),
                     ),
                     title: Text(
                       contact['name'],

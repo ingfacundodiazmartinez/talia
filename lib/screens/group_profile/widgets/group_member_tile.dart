@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import '../../../widgets/synced_user_widgets.dart';
 import 'group_profile_constants.dart';
 
 class GroupMemberTile extends StatelessWidget {
@@ -29,7 +31,11 @@ class GroupMemberTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListTile(
       leading: _buildAvatar(),
-      title: Text(userName, style: TextStyle(fontWeight: FontWeight.w500)),
+      title: SyncedUserName(
+        userId: userId,
+        fallbackName: userName,
+        style: TextStyle(fontWeight: FontWeight.w500),
+      ),
       subtitle: _buildSubtitle(),
       trailing: _buildActions(),
     );
@@ -37,8 +43,18 @@ class GroupMemberTile extends StatelessWidget {
 
   Widget _buildAvatar() {
     return CircleAvatar(
-      backgroundImage: userPhoto.isNotEmpty ? NetworkImage(userPhoto) : null,
-      child: userPhoto.isEmpty ? Icon(Icons.person) : null,
+      child: userPhoto.isNotEmpty
+          ? ClipOval(
+              child: CachedNetworkImage(
+                imageUrl: userPhoto,
+                width: 40,
+                height: 40,
+                fit: BoxFit.cover,
+                placeholder: (context, url) => Icon(Icons.person),
+                errorWidget: (context, url, error) => Icon(Icons.person),
+              ),
+            )
+          : Icon(Icons.person),
     );
   }
 

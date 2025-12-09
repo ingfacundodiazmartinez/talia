@@ -135,6 +135,19 @@ class StoryOrchestrator {
     );
   }
 
+  /// Crear historia de mood (respuesta a encuesta)
+  Future<String> createMoodStory({
+    required String emoji,
+    required String text,
+    required String questionText,
+  }) async {
+    return await _creationService.createMoodStory(
+      emoji: emoji,
+      text: text,
+      questionText: questionText,
+    );
+  }
+
   /// Obtener stream de historias desde whitelist
   Stream<List<UserStories>> getStoriesFromWhitelist() {
     return _retrievalService.getStoriesFromWhitelist();

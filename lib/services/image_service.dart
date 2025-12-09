@@ -7,6 +7,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:image/image.dart' as img;
+import 'package:path_provider/path_provider.dart';
 import '../widgets/permission_dialog.dart';
 import '../utils/release_logger.dart';
 
@@ -276,12 +278,17 @@ class ImageService {
     try {
       final XFile? image = await _picker.pickImage(
         source: source,
-        maxWidth: 512,
-        maxHeight: 512,
-        imageQuality: 80,
+        maxWidth: 1024, // Aumentado para mejor calidad antes de procesar
+        maxHeight: 1024,
+        imageQuality: 90,
         requestFullMetadata: false, // Evita problemas de permisos adicionales
       );
-      return image;
+
+      if (image == null) return null;
+
+      // ✅ FIX: Normalizar orientación EXIF para evitar fotos ensanchadas/rotadas
+      final normalizedPath = await _normalizeImageOrientation(image.path);
+      return XFile(normalizedPath);
     } on PlatformException catch (e) {
       // Manejo específico de errores de plataforma
       if (e.code == 'camera_access_denied') {
@@ -295,6 +302,53 @@ class ImageService {
       }
     } catch (e) {
       throw Exception('Error inesperado al seleccionar imagen: $e');
+    }
+  }
+
+  /// Normaliza la orientación de la imagen basándose en los metadatos EXIF.
+  /// Esto corrige el problema de fotos que aparecen ensanchadas o rotadas.
+  Future<String> _normalizeImageOrientation(String imagePath) async {
+    try {
+      ReleaseLogger.log('🔄 Normalizando orientación EXIF de la imagen...', tag: 'ImageService');
+
+      final File originalFile = File(imagePath);
+      final Uint8List imageBytes = await originalFile.readAsBytes();
+
+      // Decodificar la imagen (esto lee los metadatos EXIF automáticamente)
+      img.Image? decodedImage = img.decodeImage(imageBytes);
+
+      if (decodedImage == null) {
+        ReleaseLogger.log('⚠️ No se pudo decodificar la imagen, usando original', tag: 'ImageService');
+        return imagePath;
+      }
+
+      // bakeOrientation aplica la rotación EXIF y la "hornea" en los píxeles
+      // Esto corrige la orientación sin depender de que el visor respete EXIF
+      decodedImage = img.bakeOrientation(decodedImage);
+
+      // Redimensionar a 512x512 manteniendo aspect ratio
+      if (decodedImage.width > 512 || decodedImage.height > 512) {
+        decodedImage = img.copyResize(
+          decodedImage,
+          width: decodedImage.width > decodedImage.height ? 512 : null,
+          height: decodedImage.height >= decodedImage.width ? 512 : null,
+          interpolation: img.Interpolation.linear,
+        );
+      }
+
+      // Guardar la imagen procesada
+      final tempDir = await getTemporaryDirectory();
+      final outputPath = '${tempDir.path}/profile_normalized_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final outputFile = File(outputPath);
+
+      await outputFile.writeAsBytes(img.encodeJpg(decodedImage, quality: 85));
+
+      ReleaseLogger.log('✅ Imagen normalizada: ${decodedImage.width}x${decodedImage.height}', tag: 'ImageService');
+
+      return outputPath;
+    } catch (e) {
+      ReleaseLogger.error('⚠️ Error normalizando imagen, usando original: $e', tag: 'ImageService');
+      return imagePath; // Fallback: usar la imagen original si falla
     }
   }
 

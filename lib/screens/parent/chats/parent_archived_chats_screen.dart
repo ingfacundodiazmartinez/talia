@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../../controllers/parent_archived_chats_controller.dart';
 import '../../../utils/chat_utils.dart';
 import '../../chat_detail_screen.dart';
@@ -312,19 +313,39 @@ class _ParentArchivedChatsScreenState extends State<ParentArchivedChatsScreen> {
                   CircleAvatar(
                     radius: 28,
                     backgroundColor: colorScheme.primary.withValues(alpha: 0.2),
-                    backgroundImage: photoURL != null && photoURL.isNotEmpty
-                        ? NetworkImage(photoURL)
-                        : null,
-                    child: photoURL == null || photoURL.isEmpty
-                        ? Text(
+                    child: photoURL != null && photoURL.isNotEmpty
+                        ? ClipOval(
+                            child: CachedNetworkImage(
+                              imageUrl: photoURL,
+                              width: 56,
+                              height: 56,
+                              fit: BoxFit.cover,
+                              placeholder: (context, url) => Text(
+                                name.isNotEmpty ? name[0].toUpperCase() : 'H',
+                                style: TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                  color: colorScheme.primary,
+                                ),
+                              ),
+                              errorWidget: (context, url, error) => Text(
+                                name.isNotEmpty ? name[0].toUpperCase() : 'H',
+                                style: TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                  color: colorScheme.primary,
+                                ),
+                              ),
+                            ),
+                          )
+                        : Text(
                             name.isNotEmpty ? name[0].toUpperCase() : 'H',
                             style: TextStyle(
                               fontSize: 20,
                               fontWeight: FontWeight.bold,
                               color: colorScheme.primary,
                             ),
-                          )
-                        : null,
+                          ),
                   ),
                   if (isBlocked)
                     Positioned(

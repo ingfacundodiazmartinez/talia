@@ -5,6 +5,57 @@ const { onValueWritten } = require("firebase-functions/v2/database");
 const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
 const { getMessaging } = require("firebase-admin/messaging");
 const { getStorage } = require("firebase-admin/storage");
+const crypto = require("crypto");
+
+// ═══════════════════════════════════════════════════════════════
+// PHONE HASHING (compartido con contacts.js)
+// ═══════════════════════════════════════════════════════════════
+const PHONE_HASH_SALT = "51043c5af83c18c0e2ebce94e554af71b927c7974c84fe3df6323dde13952111";
+
+/**
+ * Normaliza un número de teléfono al formato E.164 canónico.
+ */
+function normalizePhone(phone, defaultCountryCode = "AR") {
+  if (!phone || phone.trim() === "") return "";
+
+  let cleaned = phone.replace(/[^\d+]/g, "");
+
+  if (!cleaned.startsWith("+")) {
+    if (cleaned.startsWith("54")) {
+      cleaned = "+" + cleaned;
+    } else if (cleaned.startsWith("0")) {
+      cleaned = "+54" + cleaned.substring(1);
+    } else if (defaultCountryCode.toUpperCase() === "AR") {
+      if (cleaned.startsWith("9") && cleaned.length === 11) {
+        cleaned = "+54" + cleaned;
+      } else if (cleaned.length === 10) {
+        cleaned = "+549" + cleaned;
+      } else {
+        cleaned = "+54" + cleaned;
+      }
+    }
+  }
+
+  if (cleaned.startsWith("+54")) {
+    const withoutCountryCode = cleaned.substring(3);
+    if (!withoutCountryCode.startsWith("9") && withoutCountryCode.length === 10) {
+      return "+549" + withoutCountryCode;
+    }
+    return "+54" + withoutCountryCode;
+  }
+
+  return cleaned;
+}
+
+/**
+ * Genera un hash SHA-256 de un número telefónico normalizado.
+ */
+function hashPhone(phone) {
+  if (!phone || phone.trim() === "") return "";
+  const normalized = normalizePhone(phone);
+  if (!normalized) return "";
+  return crypto.createHash("sha256").update(normalized + PHONE_HASH_SALT).digest("hex");
+}
 
 // ═══════════════════════════════════════════════════════════════
 // USER PROFILE
@@ -81,10 +132,15 @@ exports.updateUserProfile = onCall(
         console.log(`👶 [updateUserProfile] Usuario < 18 años → rol 'child'`);
       }
 
-      // 6. Actualizar perfil en Firestore (con privilegios de admin)
+      // 6. Calcular phoneHash para matching de contactos
+      const phoneHash = hashPhone(phone);
+      console.log(`🔐 [updateUserProfile] phoneHash calculado: ${phoneHash.substring(0, 16)}...`);
+
+      // 7. Actualizar perfil en Firestore (con privilegios de admin)
       const updateData = {
         name,
         phone,
+        phoneHash, // Hash para matching de contactos (privacidad)
         birthDate: birthDateObj,
         role: newRole,
         updatedAt: FieldValue.serverTimestamp(),
@@ -141,10 +197,20 @@ exports.onUserRegistered = onDocumentCreated(
         return;
       }
 
-      // Buscar usuarios parent/adult que tengan este número en su lista de contactos
+      // Calcular hash del teléfono del nuevo usuario para buscar coincidencias
+      const newUserPhoneHash = hashPhone(userPhone);
+      console.log(`   🔐 Hash del teléfono: ${newUserPhoneHash.substring(0, 16)}...`);
+
+      if (!newUserPhoneHash) {
+        console.log("   ⚠️ No se pudo calcular hash del teléfono, saltando sync");
+        return;
+      }
+
+      // Buscar usuarios parent/adult que tengan este número hasheado en su lista de contactos
+      // NOTA: devicePhoneHashes es el array de hashes de contactos sincronizados desde el dispositivo
       const usersWithContact = await db
         .collection("users")
-        .where("devicePhoneNumbers", "array-contains", userPhone)
+        .where("devicePhoneHashes", "array-contains", newUserPhoneHash)
         .where("role", "in", ["parent", "adult"])
         .get();
 
@@ -170,15 +236,41 @@ exports.onUserRegistered = onDocumentCreated(
         const contactId = `${users[0]}_${users[1]}`;
         const contactRef = db.collection("contacts").doc(contactId);
 
+        // Verificar que no exista ya el contacto
+        const existingContact = await contactRef.get();
+        if (existingContact.exists) {
+          console.log(`   ⏭️ Contacto ${contactId} ya existe, saltando`);
+          continue;
+        }
+
+        // Crear contacto con todos los campos necesarios (igual que syncDeviceContacts)
         batch.set(contactRef, {
           users: users,
+          status: "approved",
           createdAt: FieldValue.serverTimestamp(),
-          source: "auto_device_sync", // Marca para saber que fue automático
+          autoCreated: true,
+          source: "auto_device_sync_registration", // Marca específica para sync en registro
+          user1Name: users[0] === userId ? userName : contactUserData.name || "Usuario",
+          user2Name: users[1] === userId ? userName : contactUserData.name || "Usuario",
         });
+
+        // Crear chat invisible para este contacto
+        const chatId = users.join("_");
+        const chatRef = db.collection("chats").doc(chatId);
+        batch.set(chatRef, {
+          users: users,
+          participants: users, // ✅ FIX: Campo requerido por Firestore rules para permisos
+          visible: false, // Invisible hasta que se envíe el primer mensaje
+          createdAt: FieldValue.serverTimestamp(),
+          lastMessage: null,
+          lastMessageTime: FieldValue.serverTimestamp(),
+          source: "auto_device_sync_registration",
+          isValidChat: true, // ✅ Marcar como chat válido
+        }, { merge: true }); // merge: true para no sobreescribir si ya existe
 
         relationsCreated++;
 
-        // Opcional: Enviar notificación silenciosa para refrescar UI
+        // Enviar notificación silenciosa para refrescar UI
         try {
           const fcmToken = contactUserData.fcmToken;
           if (fcmToken) {

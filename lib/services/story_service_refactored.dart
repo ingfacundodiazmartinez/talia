@@ -125,6 +125,20 @@ class StoryService {
     await _orchestrator.unlikeStory(storyId);
   }
 
+  /// Crear una historia de mood (respuesta a encuesta)
+  /// Genera una historia tipo "mood" con emoji y texto
+  Future<String> createMoodStory({
+    required String emoji,
+    required String text,
+    required String questionText,
+  }) async {
+    return await _orchestrator.createMoodStory(
+      emoji: emoji,
+      text: text,
+      questionText: questionText,
+    );
+  }
+
   // ═══════════════════════════════════════════════════════════════
   // MÉTODOS ADICIONALES de la API anterior (para total compatibilidad)
   // ═══════════════════════════════════════════════════════════════

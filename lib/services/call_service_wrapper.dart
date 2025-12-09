@@ -52,11 +52,19 @@ class CallServiceWrapper {
       isGroup: isGroup,
     );
 
-    return {
+    final response = {
       'success': result.success,
       'callId': result.data?['callId'],
       'error': result.error,
+      'errorCode': result.errorCode,
     };
+
+    // Propagar datos de límite mensual si aplica
+    if (result.metadata != null) {
+      response.addAll(result.metadata!.map((k, v) => MapEntry(k, v)));
+    }
+
+    return response;
   }
 
   /// Accept an incoming call

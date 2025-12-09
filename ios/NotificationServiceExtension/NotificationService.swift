@@ -16,9 +16,11 @@ class NotificationService: UNNotificationServiceExtension {
 
     // ✅ App Group para compartir datos con la app principal
     private let appGroupId = "group.com.talia.chat"
-    private let processedMessagesKey = "nse_processed_message_ids"
     private let maxStoredIds = 100 // Limitar para no consumir mucha memoria
-    private let nseDebugLogKey = "nse_debug_log" // Para diagnóstico desde Dart
+
+    // ✅ Archivos compartidos via FileManager (más confiable que UserDefaults para NSE)
+    private let processedIdsFileName = "nse_processed_ids.json"
+    private let debugLogFileName = "nse_debug_log.json"
 
     override func didReceive(_ request: UNNotificationRequest, withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void) {
         self.contentHandler = contentHandler
@@ -216,18 +218,31 @@ class NotificationService: UNNotificationServiceExtension {
         task.resume()
     }
 
-    // MARK: - App Group Storage (para evitar duplicados con app Dart)
+    // MARK: - App Group File Storage (más confiable que UserDefaults para NSE)
 
-    /// Guarda el messageId en App Group UserDefaults para que la app Dart sepa que NSE ya lo procesó
+    /// Obtiene la URL del directorio compartido del App Group
+    private func getSharedContainerURL() -> URL? {
+        return FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId)
+    }
+
+    /// Guarda el messageId en archivo compartido para que la app Dart sepa que NSE ya lo procesó
     private func saveProcessedMessageId(_ messageId: String) {
-        guard let userDefaults = UserDefaults(suiteName: appGroupId) else {
-            NSLog("⚠️ [NSE] No se pudo acceder a App Group UserDefaults")
-            appendDebugLog("ERROR: No se pudo acceder a App Group UserDefaults")
+        guard let containerURL = getSharedContainerURL() else {
+            NSLog("⚠️ [NSE] No se pudo acceder al App Group container")
+            appendDebugLog("ERROR: No se pudo acceder al App Group container")
             return
         }
 
-        var processedIds = userDefaults.stringArray(forKey: processedMessagesKey) ?? []
-        NSLog("📋 [NSE] IDs previos en App Group: \(processedIds.count)")
+        let fileURL = containerURL.appendingPathComponent(processedIdsFileName)
+
+        // Leer IDs existentes
+        var processedIds: [String] = []
+        if let data = try? Data(contentsOf: fileURL),
+           let decoded = try? JSONDecoder().decode([String].self, from: data) {
+            processedIds = decoded
+        }
+
+        NSLog("📋 [NSE] IDs previos en archivo: \(processedIds.count)")
 
         // Evitar duplicados
         if !processedIds.contains(messageId) {
@@ -238,24 +253,37 @@ class NotificationService: UNNotificationServiceExtension {
                 processedIds = Array(processedIds.suffix(maxStoredIds))
             }
 
-            userDefaults.set(processedIds, forKey: processedMessagesKey)
-            userDefaults.synchronize() // Forzar escritura inmediata
-            NSLog("✅ [NSE] MessageId guardado. Total IDs: \(processedIds.count)")
-            appendDebugLog("SAVED: \(messageId) (total: \(processedIds.count))")
+            // Guardar en archivo
+            do {
+                let data = try JSONEncoder().encode(processedIds)
+                try data.write(to: fileURL, options: .atomic)
+                NSLog("✅ [NSE] MessageId guardado en archivo. Total IDs: \(processedIds.count)")
+                appendDebugLog("SAVED: \(messageId) (total: \(processedIds.count))")
+            } catch {
+                NSLog("❌ [NSE] Error guardando IDs: \(error.localizedDescription)")
+                appendDebugLog("ERROR writing file: \(error.localizedDescription)")
+            }
         } else {
-            NSLog("ℹ️ [NSE] MessageId ya existe en App Group")
+            NSLog("ℹ️ [NSE] MessageId ya existe en archivo")
             appendDebugLog("DUPLICATE: \(messageId)")
         }
     }
 
-    /// Agrega un mensaje de debug al App Group para que Dart pueda leerlo
+    /// Agrega un mensaje de debug al archivo compartido para que Dart pueda leerlo
     private func appendDebugLog(_ message: String) {
-        guard let userDefaults = UserDefaults(suiteName: appGroupId) else { return }
+        guard let containerURL = getSharedContainerURL() else { return }
 
+        let fileURL = containerURL.appendingPathComponent(debugLogFileName)
         let timestamp = ISO8601DateFormatter().string(from: Date())
         let logEntry = "[\(timestamp)] \(message)"
 
-        var logs = userDefaults.stringArray(forKey: nseDebugLogKey) ?? []
+        // Leer logs existentes
+        var logs: [String] = []
+        if let data = try? Data(contentsOf: fileURL),
+           let decoded = try? JSONDecoder().decode([String].self, from: data) {
+            logs = decoded
+        }
+
         logs.append(logEntry)
 
         // Mantener solo los últimos 20 logs
@@ -263,7 +291,12 @@ class NotificationService: UNNotificationServiceExtension {
             logs = Array(logs.suffix(20))
         }
 
-        userDefaults.set(logs, forKey: nseDebugLogKey)
-        userDefaults.synchronize()
+        // Guardar en archivo
+        do {
+            let data = try JSONEncoder().encode(logs)
+            try data.write(to: fileURL, options: .atomic)
+        } catch {
+            NSLog("❌ [NSE] Error guardando debug log: \(error.localizedDescription)")
+        }
     }
 }

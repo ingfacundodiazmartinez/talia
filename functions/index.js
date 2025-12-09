@@ -122,6 +122,7 @@ exports.sendInstantPushNotification = notifications.sendInstantPushNotification;
 
 // Reportes
 exports.generateChildReport = reports.generateChildReport;
+exports.onPendingReportCreated = reports.onPendingReportCreated;
 
 // Gestión padre-hijo
 exports.createParentChildLink = parentChild.createParentChildLink;
@@ -146,6 +147,7 @@ exports.updateContactStatus = contacts.updateContactStatus;
 
 // Grupos (legacy - mantener para compatibilidad durante migración)
 exports.createGroup = groups.createGroup;
+exports.leaveGroup = groups.leaveGroup;
 exports.approveGroupPermission = groups.approveGroupPermission;
 exports.updateGroupPermissionStatus = groups.updateGroupPermissionStatus;
 exports.processGroupInvitationsAfterContactApproval = groups.processGroupInvitationsAfterContactApproval;
@@ -168,7 +170,8 @@ exports.promoteGroupAdmin = groupsV2.promoteGroupAdmin;
 exports.demoteGroupAdmin = groupsV2.demoteGroupAdmin;
 
 // Moderación de contenido
-exports.checkMessageBeforeSending = moderation.checkMessageBeforeSending;
+// ✅ ELIMINADO: checkMessageBeforeSending - La moderación ahora se hace SOLO en el trigger moderateMessage
+// exports.checkMessageBeforeSending = moderation.checkMessageBeforeSending;
 exports.moderateMessage = moderation.moderateMessage;
 exports.createApprovedMessage = moderation.createApprovedMessage;
 
@@ -228,12 +231,17 @@ exports.onContactCreated = storyApproval.onContactCreated;
 exports.onContactUpdated = storyApproval.onContactUpdated;
 exports.onContactDeleted = storyApproval.onContactDeleted;
 
+// Story Notifications (notificar contactos cuando se sube historia)
+exports.onStoryApproved = storyApproval.onStoryApproved;
+exports.onStoryCreatedApproved = storyApproval.onStoryCreatedApproved;
+
 // ═══════════════════════════════════════════════════════════════
 // VIDEOLLAMADAS V2 (Agora) - NUEVA ARQUITECTURA
 // ═══════════════════════════════════════════════════════════════
 
 exports.createAgoraCall = callsV2.createAgoraCall;
 exports.addParticipantToCall = callsV2.addParticipantToCall;
+exports.onCallV2Updated = callsV2.onCallV2Updated; // Trigger para mensaje de llamada y tracking de minutos
 
 // ═══════════════════════════════════════════════════════════════
 // ❌ VOICE CHANGER y TTS - ELIMINADOS

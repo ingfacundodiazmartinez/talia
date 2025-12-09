@@ -39,6 +39,10 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
   // Tab controller for media/favorites
   late TabController _tabController;
 
+  // Batch selection state
+  bool _isSelectionMode = false;
+  final Set<String> _selectedMembers = {};
+
   // Favorites state
   List<Map<String, dynamic>> _favoriteMessages = [];
   bool _isLoadingFavorites = true;
@@ -700,9 +704,98 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
     final members = _group!.memberDetails.values.toList();
     final pendingMembers = _group!.pendingMemberDetails.values.toList();
 
+    // Filter out members that can't be selected (current user, creator, admins if not admin)
+    final selectableMembers = members.where((m) {
+      final isCreator = _group!.createdBy == m.userId;
+      final isCurrentUser = m.userId == _currentUserId;
+      return !isCreator && !isCurrentUser;
+    }).toList();
+
     return ListView(
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: [
+        // Selection header (only for admins)
+        if (_isAdmin && selectableMembers.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                if (_isSelectionMode) ...[
+                  // Cancel button
+                  TextButton(
+                    onPressed: () {
+                      setState(() {
+                        _isSelectionMode = false;
+                        _selectedMembers.clear();
+                      });
+                    },
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    ),
+                    child: const Text('Cancelar'),
+                  ),
+                  const Spacer(),
+                  // Select all button
+                  TextButton(
+                    onPressed: () {
+                      setState(() {
+                        if (_selectedMembers.length == selectableMembers.length) {
+                          _selectedMembers.clear();
+                        } else {
+                          _selectedMembers.clear();
+                          for (final m in selectableMembers) {
+                            _selectedMembers.add(m.userId);
+                          }
+                        }
+                      });
+                    },
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    ),
+                    child: Text(
+                      _selectedMembers.length == selectableMembers.length
+                          ? 'Ninguno'
+                          : 'Todos',
+                    ),
+                  ),
+                  // Delete selected button
+                  if (_selectedMembers.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 8),
+                      child: ElevatedButton(
+                        onPressed: _handleBatchRemoveMembers,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.delete, size: 16),
+                            const SizedBox(width: 4),
+                            Text('${_selectedMembers.length}'),
+                          ],
+                        ),
+                      ),
+                    ),
+                ] else ...[
+                  const Spacer(),
+                  // Enter selection mode button
+                  TextButton.icon(
+                    onPressed: () {
+                      setState(() {
+                        _isSelectionMode = true;
+                      });
+                    },
+                    icon: const Icon(Icons.checklist, size: 18),
+                    label: const Text('Seleccionar'),
+                  ),
+                ],
+              ],
+            ),
+          ),
+
         // Active members
         ...members.map((member) => _buildMemberTile(colorScheme, member)),
 
@@ -931,23 +1024,50 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
     final isMemberAdmin = _group!.isAdmin(member.userId);
     final isCreator = _group!.createdBy == member.userId;
     final isCurrentUser = member.userId == _currentUserId;
+    final canSelect = !isCreator && !isCurrentUser;
+    final isSelected = _selectedMembers.contains(member.userId);
 
     return ListTile(
-      leading: CircleAvatar(
-        backgroundColor: colorScheme.primaryContainer,
-        backgroundImage: member.photoURL != null
-            ? NetworkImage(member.photoURL!)
-            : null,
-        child: member.photoURL == null
-            ? Text(
-                member.name.isNotEmpty ? member.name[0].toUpperCase() : 'U',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: colorScheme.primary,
-                ),
-              )
-            : null,
-      ),
+      leading: _isSelectionMode && canSelect
+          ? Checkbox(
+              value: isSelected,
+              onChanged: (value) {
+                setState(() {
+                  if (value == true) {
+                    _selectedMembers.add(member.userId);
+                  } else {
+                    _selectedMembers.remove(member.userId);
+                  }
+                });
+              },
+            )
+          : CircleAvatar(
+              backgroundColor: colorScheme.primaryContainer,
+              child: member.photoURL != null && member.photoURL!.isNotEmpty
+                  ? ClipOval(
+                      child: CachedNetworkImage(
+                        imageUrl: member.photoURL!,
+                        width: 40,
+                        height: 40,
+                        fit: BoxFit.cover,
+                        placeholder: (context, url) => Icon(
+                          Icons.person,
+                          color: colorScheme.primary,
+                        ),
+                        errorWidget: (context, url, error) => Icon(
+                          Icons.person,
+                          color: colorScheme.primary,
+                        ),
+                      ),
+                    )
+                  : Text(
+                      member.name.isNotEmpty ? member.name[0].toUpperCase() : 'U',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: colorScheme.primary,
+                      ),
+                    ),
+            ),
       title: Row(
         children: [
           Text(
@@ -982,14 +1102,26 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
           color: colorScheme.onSurfaceVariant,
         ),
       ),
-      // Only show options if current user is admin and not viewing themselves
-      trailing: (_isAdmin && !isCurrentUser && !isCreator)
+      // In selection mode, tap toggles selection
+      onTap: _isSelectionMode && canSelect
+          ? () {
+              setState(() {
+                if (isSelected) {
+                  _selectedMembers.remove(member.userId);
+                } else {
+                  _selectedMembers.add(member.userId);
+                }
+              });
+            }
+          : null,
+      // Only show options if current user is admin and not viewing themselves (and not in selection mode)
+      trailing: (!_isSelectionMode && _isAdmin && !isCurrentUser && !isCreator)
           ? IconButton(
               icon: const Icon(Icons.more_vert),
               onPressed: () => _showMemberOptions(member, isMemberAdmin),
             )
           : null,
-      onLongPress: (_isAdmin && !isCurrentUser && !isCreator)
+      onLongPress: (!_isSelectionMode && _isAdmin && !isCurrentUser && !isCreator)
           ? () => _showMemberOptions(member, isMemberAdmin)
           : null,
     );
@@ -1066,16 +1198,15 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
       if (mounted) {
         setState(() => _isUpdating = false);
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              success
-                  ? '${member.name} ahora es administrador'
-                  : 'Error al promover administrador',
+        // Solo mostrar snackbar si hubo error
+        if (!success) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Error al promover administrador'),
+              backgroundColor: Colors.red,
             ),
-            backgroundColor: success ? Colors.green : Colors.red,
-          ),
-        );
+          );
+        }
       }
     }
   }
@@ -1111,16 +1242,15 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
       if (mounted) {
         setState(() => _isUpdating = false);
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              success
-                  ? '${member.name} ya no es administrador'
-                  : 'Error al quitar administrador',
+        // Solo mostrar snackbar si hubo error
+        if (!success) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Error al quitar administrador'),
+              backgroundColor: Colors.red,
             ),
-            backgroundColor: success ? Colors.green : Colors.red,
-          ),
-        );
+          );
+        }
       }
     }
   }
@@ -1156,16 +1286,78 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
       if (mounted) {
         setState(() => _isUpdating = false);
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              success
-                  ? '${member.name} ha sido eliminado del grupo'
-                  : 'Error al eliminar miembro',
+        // Solo mostrar snackbar si hubo error
+        if (!success) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Error al eliminar miembro'),
+              backgroundColor: Colors.red,
             ),
-            backgroundColor: success ? Colors.green : Colors.red,
+          );
+        }
+      }
+    }
+  }
+
+  /// Batch remove multiple selected members
+  Future<void> _handleBatchRemoveMembers() async {
+    if (_selectedMembers.isEmpty) return;
+
+    final count = _selectedMembers.length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Eliminar miembros'),
+        content: Text(
+          '¿Deseas eliminar $count miembro${count > 1 ? 's' : ''} del grupo?\n\n'
+          'Ya no podrán ver ni enviar mensajes.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
           ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: Text('Eliminar $count'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      setState(() => _isUpdating = true);
+
+      int errorCount = 0;
+
+      // Remove members one by one
+      for (final userId in _selectedMembers.toList()) {
+        final success = await _groupService.removeMember(
+          groupId: widget.groupId,
+          userId: userId,
         );
+        if (!success) {
+          errorCount++;
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _isUpdating = false;
+          _isSelectionMode = false;
+          _selectedMembers.clear();
+        });
+
+        // Only show snackbar if there were errors
+        if (errorCount > 0) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Error al eliminar $errorCount miembro${errorCount > 1 ? 's' : ''}'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
       }
     }
   }
@@ -1174,18 +1366,30 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
     return ListTile(
       leading: CircleAvatar(
         backgroundColor: Colors.orange.shade100,
-        backgroundImage: member.photoURL != null
-            ? NetworkImage(member.photoURL!)
-            : null,
-        child: member.photoURL == null
-            ? Text(
+        child: member.photoURL != null && member.photoURL!.isNotEmpty
+            ? ClipOval(
+                child: CachedNetworkImage(
+                  imageUrl: member.photoURL!,
+                  width: 40,
+                  height: 40,
+                  fit: BoxFit.cover,
+                  placeholder: (context, url) => Icon(
+                    Icons.person,
+                    color: Colors.orange.shade700,
+                  ),
+                  errorWidget: (context, url, error) => Icon(
+                    Icons.person,
+                    color: Colors.orange.shade700,
+                  ),
+                ),
+              )
+            : Text(
                 member.name.isNotEmpty ? member.name[0].toUpperCase() : 'U',
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
                   color: Colors.orange.shade700,
                 ),
-              )
-            : null,
+              ),
       ),
       title: Text(
         member.name,

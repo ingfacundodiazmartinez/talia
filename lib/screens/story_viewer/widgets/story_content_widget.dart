@@ -74,13 +74,157 @@ class StoryContentWidget extends StatelessWidget {
                 color: Colors.black,
                 width: double.infinity,
                 height: double.infinity,
-                child: story.mediaType == 'image'
-                    ? _buildImageContent(context, story, userIndex, storyIndex)
-                    : buildVideoPlayer(story),
+                child: _buildStoryContent(context, story, userIndex, storyIndex),
               );
             },
           );
         },
+      ),
+    );
+  }
+
+  Widget _buildStoryContent(BuildContext context, Story story, int userIndex, int storyIndex) {
+    switch (story.mediaType) {
+      case 'image':
+        return _buildImageContent(context, story, userIndex, storyIndex);
+      case 'mood':
+        return _buildMoodContent(context, story, userIndex, storyIndex);
+      case 'video':
+      default:
+        return buildVideoPlayer(story);
+    }
+  }
+
+  Widget _buildMoodContent(BuildContext context, Story story, int userIndex, int storyIndex) {
+    // Extraer emoji del mediaUrl (formato: mood://😊)
+    final emoji = story.mediaUrl.replaceFirst('mood://', '');
+
+    // Extraer datos del filter
+    final questionText = story.filter?['questionText'] as String? ?? '';
+    final responseText = story.filter?['text'] as String? ??
+        story.caption?.replaceFirst(RegExp(r'^[\p{Emoji}]+\s*', unicode: true), '') ?? '';
+
+    // Notificar que la historia está cargada
+    if (!isCurrentStoryLoaded &&
+        userIndex == currentUserIndex &&
+        storyIndex == currentStoryIndex) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        onStoryLoaded();
+      });
+    }
+
+    return Container(
+      width: double.infinity,
+      height: double.infinity,
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFF667eea),
+            Color(0xFF764ba2),
+          ],
+        ),
+      ),
+      child: Stack(
+        children: [
+          // Círculos decorativos
+          Positioned(
+            top: -80,
+            right: -80,
+            child: Container(
+              width: 250,
+              height: 250,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white.withValues(alpha: 0.1),
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: -60,
+            left: -60,
+            child: Container(
+              width: 200,
+              height: 200,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white.withValues(alpha: 0.08),
+              ),
+            ),
+          ),
+          Positioned(
+            top: MediaQuery.of(context).size.height * 0.3,
+            left: -40,
+            child: Container(
+              width: 120,
+              height: 120,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white.withValues(alpha: 0.05),
+              ),
+            ),
+          ),
+          // Contenido centrado
+          SafeArea(
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Pregunta
+                    if (questionText.isNotEmpty) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          questionText,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.white70,
+                            height: 1.3,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 32),
+                    ],
+                    // Emoji grande
+                    Text(
+                      emoji,
+                      style: const TextStyle(fontSize: 90),
+                    ),
+                    const SizedBox(height: 20),
+                    // Respuesta
+                    if (responseText.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          responseText,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white,
+                            height: 1.4,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

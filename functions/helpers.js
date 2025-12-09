@@ -303,6 +303,9 @@ async function checkRateLimit(userId, action, limits) {
 
   const rateLimitRef = db.collection("rate_limits").doc(`${userId}_${action}`);
 
+  // Determinar si esta acción es sensible (fail-close en caso de error)
+  const isSensitive = limits.failClose === true;
+
   try {
     const result = await db.runTransaction(async (transaction) => {
       const doc = await transaction.get(rateLimitRef);
@@ -346,7 +349,12 @@ async function checkRateLimit(userId, action, limits) {
     return result;
   } catch (error) {
     console.error(`❌ Error en rate limit check: ${error}`);
-    // En caso de error, permitir la solicitud (fail-open)
+    if (isSensitive) {
+      // Fail-close para funciones sensibles (protege contra abuso y costos)
+      console.warn(`🔒 Fail-close activado para ${action} - bloqueando por seguridad`);
+      return { allowed: false, retryAfter: 60 };
+    }
+    // Fail-open para funciones no sensibles (mejor UX)
     return { allowed: true };
   }
 }
@@ -355,30 +363,37 @@ const RATE_LIMITS = {
   createLink: {
     maxRequests: 5,
     windowMs: 60 * 60 * 1000, // 5 intentos por hora
+    failClose: true, // Sensible: previene abuso de vinculación
   },
   generateToken: {
     maxRequests: 20,
     windowMs: 60 * 1000, // 20 tokens por minuto
+    failClose: true, // Sensible: tokens de Agora tienen costo
   },
   generateReport: {
     maxRequests: 10,
     windowMs: 60 * 60 * 1000, // 10 reportes por hora
+    failClose: true, // Sensible: Gemini AI tiene costo por request
   },
   sendMessage: {
     maxRequests: 100,
     windowMs: 60 * 1000, // 100 mensajes por minuto
+    failClose: false, // No sensible: mejor UX
   },
   blockContact: {
     maxRequests: 10,
     windowMs: 60 * 60 * 1000, // 10 bloqueos por hora
+    failClose: false, // No sensible: mejor UX
   },
   unblockContact: {
     maxRequests: 10,
     windowMs: 60 * 60 * 1000, // 10 desbloqueos por hora
+    failClose: false, // No sensible: mejor UX
   },
   createEmergency: {
     maxRequests: 20, // 20 emergencias por hora (producción)
     windowMs: 60 * 60 * 1000,
+    failClose: false, // No sensible: emergencias deben funcionar siempre
   },
 };
 

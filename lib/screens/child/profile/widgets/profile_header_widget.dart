@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 /// Widget que muestra el encabezado del perfil con foto y nombre
 class ProfileHeaderWidget extends StatelessWidget {
@@ -44,17 +45,30 @@ class ProfileHeaderWidget extends StatelessWidget {
                   child: CircleAvatar(
                     radius: 52,
                     backgroundColor: colorScheme.primary,
-                    backgroundImage:
-                        photoURL != null && photoURL!.isNotEmpty
-                            ? NetworkImage(photoURL!)
-                            : null,
-                    child: photoURL == null || photoURL!.isEmpty
-                        ? Icon(
+                    child: photoURL != null && photoURL!.isNotEmpty
+                        ? ClipOval(
+                            child: CachedNetworkImage(
+                              imageUrl: photoURL!,
+                              width: 104,
+                              height: 104,
+                              fit: BoxFit.cover,
+                              placeholder: (context, url) => Icon(
+                                Icons.person,
+                                size: 50,
+                                color: colorScheme.onPrimary,
+                              ),
+                              errorWidget: (context, url, error) => Icon(
+                                Icons.person,
+                                size: 50,
+                                color: colorScheme.onPrimary,
+                              ),
+                            ),
+                          )
+                        : Icon(
                             Icons.person,
                             size: 50,
                             color: colorScheme.onPrimary,
-                          )
-                        : null,
+                          ),
                   ),
                 ),
               ),

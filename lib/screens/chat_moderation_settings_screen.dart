@@ -53,12 +53,15 @@ class _ChatModerationSettingsScreenState
       await _controller.initialize();
       final settings = await _controller.loadModerationSettings();
 
+      ReleaseLogger.log('Settings recibidos: enabled=${settings['enabled']}, level=${settings['level']}', tag: 'ChatModerationScreen');
+
       if (mounted) {
         setState(() {
           _moderationEnabled = settings['enabled'] ?? false;
           _moderationLevel = settings['level'] ?? 'high';
           _isLoading = false;
         });
+        ReleaseLogger.log('Estado actualizado: _moderationEnabled=$_moderationEnabled, _moderationLevel=$_moderationLevel', tag: 'ChatModerationScreen');
       }
     } catch (e) {
       ReleaseLogger.error('Error cargando configuración de moderación: $e', tag: 'ChatModerationScreen');

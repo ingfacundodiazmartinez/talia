@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../services/story_service_refactored.dart';
 import '../services/story_upload_progress_service.dart';
 import '../services/unread_messages_service.dart';
@@ -430,19 +431,25 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
             child: CircleAvatar(
               radius: 22,
               backgroundColor: const Color(0xFF9D7FE8).withOpacity(0.1),
-              backgroundImage: story.userPhotoURL != null
-                  ? NetworkImage(story.userPhotoURL!)
-                  : null,
-              child: story.userPhotoURL == null
-                  ? Text(
+              child: story.userPhotoURL != null
+                  ? ClipOval(
+                      child: CachedNetworkImage(
+                        imageUrl: story.userPhotoURL!,
+                        width: 44,
+                        height: 44,
+                        fit: BoxFit.cover,
+                        placeholder: (context, url) => Icon(Icons.person, size: 22, color: Color(0xFF9D7FE8)),
+                        errorWidget: (context, url, error) => Icon(Icons.person, size: 22, color: Color(0xFF9D7FE8)),
+                      ),
+                    )
+                  : Text(
                       story.userName[0].toUpperCase(),
                       style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.bold,
                         color: Color(0xFF9D7FE8),
                       ),
-                    )
-                  : null,
+                    ),
             ),
           ),
           const SizedBox(width: 12),
@@ -569,45 +576,36 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
             // Image
             ClipRRect(
               borderRadius: BorderRadius.circular(12),
-              child: Image.network(
-                story.mediaUrl,
+              child: CachedNetworkImage(
+                imageUrl: story.mediaUrl,
                 fit: BoxFit.cover,
                 width: double.infinity,
                 height: double.infinity,
-                loadingBuilder: (context, child, loadingProgress) {
-                  if (loadingProgress == null) return child;
-                  return Center(
-                    child: CircularProgressIndicator(
-                      color: const Color(0xFF9D7FE8),
-                      value: loadingProgress.expectedTotalBytes != null
-                          ? loadingProgress.cumulativeBytesLoaded /
-                              loadingProgress.expectedTotalBytes!
-                          : null,
-                    ),
-                  );
-                },
-                errorBuilder: (context, error, stackTrace) {
-                  return Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.broken_image_outlined,
+                placeholder: (context, url) => Center(
+                  child: CircularProgressIndicator(
+                    color: const Color(0xFF9D7FE8),
+                  ),
+                ),
+                errorWidget: (context, url, error) => Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.broken_image_outlined,
+                        color: colorScheme.onSurfaceVariant,
+                        size: 40,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'No se pudo cargar',
+                        style: TextStyle(
                           color: colorScheme.onSurfaceVariant,
-                          size: 40,
+                          fontSize: 13,
                         ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'No se pudo cargar',
-                          style: TextStyle(
-                            color: colorScheme.onSurfaceVariant,
-                            fontSize: 13,
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                },
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
 
@@ -1060,11 +1058,17 @@ class StoryPreviewForApproval extends StatelessWidget {
           // Full screen image
           Center(
             child: InteractiveViewer(
-              child: Image.network(
-                story.mediaUrl,
+              child: CachedNetworkImage(
+                imageUrl: story.mediaUrl,
                 fit: BoxFit.contain,
                 width: double.infinity,
                 height: double.infinity,
+                placeholder: (context, url) => Center(
+                  child: CircularProgressIndicator(color: Colors.white),
+                ),
+                errorWidget: (context, url, error) => Center(
+                  child: Icon(Icons.broken_image, color: Colors.white, size: 64),
+                ),
               ),
             ),
           ),
@@ -1099,18 +1103,24 @@ class StoryPreviewForApproval extends StatelessWidget {
                 CircleAvatar(
                   radius: 20,
                   backgroundColor: Colors.white24,
-                  backgroundImage: story.userPhotoURL != null
-                      ? NetworkImage(story.userPhotoURL!)
-                      : null,
-                  child: story.userPhotoURL == null
-                      ? Text(
+                  child: story.userPhotoURL != null
+                      ? ClipOval(
+                          child: CachedNetworkImage(
+                            imageUrl: story.userPhotoURL!,
+                            width: 40,
+                            height: 40,
+                            fit: BoxFit.cover,
+                            placeholder: (context, url) => Icon(Icons.person, color: Colors.white),
+                            errorWidget: (context, url, error) => Icon(Icons.person, color: Colors.white),
+                          ),
+                        )
+                      : Text(
                           story.userName[0].toUpperCase(),
                           style: const TextStyle(
                             color: Colors.white,
                             fontWeight: FontWeight.bold,
                           ),
-                        )
-                      : null,
+                        ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(

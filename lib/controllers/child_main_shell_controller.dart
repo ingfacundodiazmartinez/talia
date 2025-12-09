@@ -8,6 +8,7 @@ import '../controllers/child_home_controller.dart';
 import '../notification_service.dart';
 import '../services/chats/chat_orchestrator.dart';
 import '../services/local_unread_count_service.dart';
+import '../services/contacts_sync_service.dart';
 
 /// Controller para el shell principal de niños
 ///
@@ -26,6 +27,7 @@ class ChildMainShellController {
   final NotificationService _notificationService;
   final FirebaseFirestore _firestore;
   final firebase_auth.FirebaseAuth _auth;
+  final ContactsSyncService _contactsSyncService;
 
   // Estado interno
   ChildHomeController? _childController;
@@ -46,9 +48,11 @@ class ChildMainShellController {
     NotificationService? notificationService,
     FirebaseFirestore? firestore,
     firebase_auth.FirebaseAuth? auth,
+    ContactsSyncService? contactsSyncService,
   }) : _notificationService = notificationService ?? NotificationService(),
        _firestore = firestore ?? FirebaseFirestore.instance,
-       _auth = auth ?? firebase_auth.FirebaseAuth.instance;
+       _auth = auth ?? firebase_auth.FirebaseAuth.instance,
+       _contactsSyncService = contactsSyncService ?? ContactsSyncService();
 
   // Getters for current user information
   String? get currentUserId => _auth.currentUser?.uid;
@@ -106,6 +110,11 @@ class ChildMainShellController {
 
         await _childController!.initialize();
         ReleaseLogger.log('ChildHomeController inicializado exitosamente', tag: 'ChildMainShell');
+
+        // Sincronizar contactos en background para adultos
+        if (userRole == 'adult') {
+          _syncContactsInBackground();
+        }
       } else {
         ReleaseLogger.warning('Usuario es parent (role: $userRole) - NO inicializando controller', tag: 'ChildMainShell');
         ReleaseLogger.warning('Este usuario debería estar en ParentMainShell, no en ChildMainShell', tag: 'ChildMainShell');
@@ -124,6 +133,17 @@ class ChildMainShellController {
     } catch (e) {
       ReleaseLogger.error('Error configurando listener de rol: $e', tag: 'ChildMainShell');
     }
+  }
+
+  /// Sincronizar contactos en background (solo para adultos)
+  void _syncContactsInBackground() {
+    // Usar WidgetsBinding para ejecutar después del primer frame
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ReleaseLogger.log('Iniciando sincronización de contactos para adult', tag: 'ChildMainShell');
+      _contactsSyncService.syncContacts().catchError((error) {
+        ReleaseLogger.error('Error syncing contacts: $error', tag: 'ChildMainShell');
+      });
+    });
   }
 
   /// Configurar listeners de notificaciones de chat

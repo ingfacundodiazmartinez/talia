@@ -22,6 +22,47 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 /**
+ * Límite mensual de minutos de llamada por usuario
+ * 60 minutos = 1 hora por mes
+ */
+const MONTHLY_CALL_LIMIT_MINUTES = 60;
+
+/**
+ * Verificar si el usuario tiene minutos disponibles
+ */
+async function checkCallMinutesLimit(userId) {
+  try {
+    const now = new Date();
+    const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+    const usageRef = db.collection('call_usage').doc(`${userId}_${monthKey}`);
+    const usageDoc = await usageRef.get();
+
+    let minutesUsed = 0;
+    if (usageDoc.exists) {
+      minutesUsed = usageDoc.data().minutesUsed || 0;
+    }
+
+    const minutesRemaining = Math.max(0, MONTHLY_CALL_LIMIT_MINUTES - minutesUsed);
+    const allowed = minutesRemaining > 0;
+
+    console.log(`📊 [checkCallMinutes] Usuario ${userId}: ${minutesUsed}/${MONTHLY_CALL_LIMIT_MINUTES} minutos usados, ${minutesRemaining} restantes`);
+
+    return {
+      allowed,
+      minutesUsed,
+      minutesRemaining,
+      limitMinutes: MONTHLY_CALL_LIMIT_MINUTES,
+    };
+
+  } catch (error) {
+    console.error(`❌ [checkCallMinutes] Error:`, error);
+    // En caso de error, permitir la llamada (fail-open)
+    return { allowed: true, minutesUsed: 0, minutesRemaining: MONTHLY_CALL_LIMIT_MINUTES, limitMinutes: MONTHLY_CALL_LIMIT_MINUTES };
+  }
+}
+
+/**
  * Create an Agora call
  * @param {Object} data - The call data
  * @param {string} data.callerId - The ID of the user initiating the call
@@ -65,6 +106,20 @@ exports.createAgoraCall = onCall(
           'invalid-argument',
           'At least one participant is required'
         );
+      }
+
+      // ✅ Verificar límite de minutos de llamada
+      const minutesCheck = await checkCallMinutesLimit(callerId);
+      if (!minutesCheck.allowed) {
+        console.log(`🚫 [createAgoraCall] Usuario ${callerId} sin minutos disponibles: ${minutesCheck.minutesUsed}/${minutesCheck.limitMinutes}`);
+        return {
+          success: false,
+          monthlyLimitReached: true,
+          minutesUsed: minutesCheck.minutesUsed,
+          minutesRemaining: minutesCheck.minutesRemaining,
+          limitMinutes: minutesCheck.limitMinutes,
+          message: `Has alcanzado el límite mensual de ${minutesCheck.limitMinutes} minutos de videollamadas. Tu límite se reinicia el primer día del próximo mes.`,
+        };
       }
 
       // Get Agora credentials from environment

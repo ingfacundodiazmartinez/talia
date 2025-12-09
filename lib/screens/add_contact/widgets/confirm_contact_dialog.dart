@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../../services/user_code_service.dart';
 
 /// Dialog para confirmar agregar un contacto
@@ -78,24 +79,42 @@ class _ConfirmContactDialog extends StatelessWidget {
   }
 
   Widget _buildAvatar(ColorScheme colorScheme) {
-    if (contactInfo.photoURL != null) {
-      return CircleAvatar(
-        radius: 40,
-        backgroundImage: NetworkImage(contactInfo.photoURL!),
-      );
-    }
-
     return CircleAvatar(
       radius: 40,
       backgroundColor: colorScheme.primaryContainer,
-      child: Text(
-        contactInfo.name![0].toUpperCase(),
-        style: TextStyle(
-          fontSize: 32,
-          fontWeight: FontWeight.bold,
-          color: colorScheme.primary,
-        ),
-      ),
+      child: contactInfo.photoURL != null
+          ? ClipOval(
+              child: CachedNetworkImage(
+                imageUrl: contactInfo.photoURL!,
+                width: 80,
+                height: 80,
+                fit: BoxFit.cover,
+                placeholder: (context, url) => Text(
+                  contactInfo.name![0].toUpperCase(),
+                  style: TextStyle(
+                    fontSize: 32,
+                    fontWeight: FontWeight.bold,
+                    color: colorScheme.primary,
+                  ),
+                ),
+                errorWidget: (context, url, error) => Text(
+                  contactInfo.name![0].toUpperCase(),
+                  style: TextStyle(
+                    fontSize: 32,
+                    fontWeight: FontWeight.bold,
+                    color: colorScheme.primary,
+                  ),
+                ),
+              ),
+            )
+          : Text(
+              contactInfo.name![0].toUpperCase(),
+              style: TextStyle(
+                fontSize: 32,
+                fontWeight: FontWeight.bold,
+                color: colorScheme.primary,
+              ),
+            ),
     );
   }
 

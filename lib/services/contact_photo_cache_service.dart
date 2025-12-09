@@ -16,10 +16,21 @@ import '../utils/release_logger.dart';
 /// - Cache en memoria (Map<userId, Uint8List>)
 /// - Usado por Native Services para mostrar fotos en notificaciones SIN descargar
 ///
+/// ✅ P2: Lazy/on-demand listeners para widgets
+/// - startWatching/stopWatching para cualquier userId
+/// - Stream de cambios para re-renderizar widgets
+/// - Cache de URLs (no bytes) para uso en widgets
+///
+/// ✅ P3: Alias sync (contactAliases)
+/// - Un solo listener para el documento del usuario actual
+/// - Sincroniza contactAliases cuando cambian
+/// - getDisplayName() retorna: alias > name > fallback
+///
 /// Ventajas vs descarga on-demand:
 /// - Notificaciones instantáneas (0 latency en descarga)
 /// - Reduce N+2 queries problem
 /// - Fotos siempre disponibles offline
+/// - Widgets se actualizan en tiempo real cuando cambia foto/nombre/alias
 class ContactPhotoCacheService {
   static final ContactPhotoCacheService _instance =
       ContactPhotoCacheService._internal();
@@ -30,6 +41,295 @@ class ContactPhotoCacheService {
     // Setup MethodChannel for native code to access photo cache
     _setupMethodChannel();
   }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // ✅ LAZY/ON-DEMAND USER PROFILE TRACKING (para widgets)
+  // Sincroniza: photoURL, name
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // Cache de datos de usuario: userId -> UserProfileCache
+  final Map<String, UserProfileCache> _userProfileCache = {};
+
+  // Listeners activos para widgets (lazy/on-demand)
+  final Map<String, StreamSubscription<DocumentSnapshot>> _lazyListeners = {};
+
+  // Contador de referencias por userId (para saber cuántos widgets lo usan)
+  final Map<String, int> _listenerRefCount = {};
+
+  // Stream controller para notificar cambios de perfil
+  final StreamController<UserProfileUpdateEvent> _profileUpdateController =
+      StreamController<UserProfileUpdateEvent>.broadcast();
+
+  /// Stream de eventos cuando cambia el perfil de un usuario
+  /// Los widgets pueden escuchar esto para re-renderizarse
+  Stream<UserProfileUpdateEvent> get onProfileUpdated => _profileUpdateController.stream;
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // ✅ ALIAS SYNC (contactAliases en documento del usuario actual)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // Cache de aliases: contactId -> alias
+  final Map<String, String> _aliasCache = {};
+
+  // Listener para el documento del usuario actual (para aliases)
+  StreamSubscription<DocumentSnapshot>? _aliasListener;
+
+  // Stream controller para notificar cambios de alias
+  final StreamController<AliasUpdateEvent> _aliasUpdateController =
+      StreamController<AliasUpdateEvent>.broadcast();
+
+  /// Stream de eventos cuando cambia un alias
+  Stream<AliasUpdateEvent> get onAliasUpdated => _aliasUpdateController.stream;
+
+  // ✅ Mantener compatibilidad con código existente
+  Stream<PhotoUpdateEvent> get onPhotoUpdated => _profileUpdateController.stream.map(
+        (e) => PhotoUpdateEvent(
+          userId: e.userId,
+          newPhotoUrl: e.newPhotoUrl,
+          oldPhotoUrl: e.oldPhotoUrl,
+        ),
+      );
+
+  /// Empezar a escuchar cambios de perfil para un usuario (lazy/on-demand)
+  /// Llamar desde initState() del widget
+  void startWatching(String userId) {
+    if (userId.isEmpty) return;
+
+    // Incrementar contador de referencias
+    _listenerRefCount[userId] = (_listenerRefCount[userId] ?? 0) + 1;
+
+    // Si ya hay listener activo, no crear otro
+    if (_lazyListeners.containsKey(userId)) {
+      ReleaseLogger.log(
+          '👁️ [ProfileCache] Already watching $userId (refs: ${_listenerRefCount[userId]})');
+      return;
+    }
+
+    ReleaseLogger.log('👁️ [ProfileCache] Start lazy watching: $userId');
+
+    _lazyListeners[userId] = FirebaseFirestore.instance
+        .collection('users')
+        .doc(userId)
+        .snapshots()
+        .listen(
+      (snapshot) {
+        if (!snapshot.exists) {
+          _updateUserProfile(userId, null, null);
+          return;
+        }
+
+        final data = snapshot.data();
+        final photoUrl = data?['photoURL'] as String?;
+        final name = data?['name'] as String?;
+        _updateUserProfile(userId, photoUrl, name);
+      },
+      onError: (error) {
+        ReleaseLogger.error(
+            '❌ [ProfileCache] Lazy listener error for $userId: $error');
+      },
+    );
+  }
+
+  /// Dejar de escuchar cambios de perfil para un usuario
+  /// Llamar desde dispose() del widget
+  void stopWatching(String userId) {
+    if (userId.isEmpty) return;
+
+    // Decrementar contador de referencias
+    final currentRefs = _listenerRefCount[userId] ?? 0;
+    if (currentRefs <= 1) {
+      // Último widget usando este listener, cancelarlo
+      _lazyListeners[userId]?.cancel();
+      _lazyListeners.remove(userId);
+      _listenerRefCount.remove(userId);
+      ReleaseLogger.log('👋 [ProfileCache] Stopped lazy watching: $userId');
+    } else {
+      // Todavía hay otros widgets usando este listener
+      _listenerRefCount[userId] = currentRefs - 1;
+      ReleaseLogger.log(
+          '👁️ [ProfileCache] Decreased refs for $userId (refs: ${_listenerRefCount[userId]})');
+    }
+  }
+
+  /// Actualizar cache de perfil y emitir evento
+  void _updateUserProfile(String userId, String? newPhotoUrl, String? newName) {
+    final oldCache = _userProfileCache[userId];
+    final oldPhotoUrl = oldCache?.photoUrl;
+    final oldName = oldCache?.name;
+
+    // Verificar si algo cambió
+    final photoChanged = oldPhotoUrl != newPhotoUrl;
+    final nameChanged = oldName != newName;
+
+    if (photoChanged || nameChanged) {
+      _userProfileCache[userId] = UserProfileCache(
+        photoUrl: newPhotoUrl,
+        name: newName,
+      );
+
+      if (photoChanged) {
+        ReleaseLogger.log(
+            '📸 [ProfileCache] Photo URL changed for $userId: ${newPhotoUrl != null ? "new URL" : "removed"}');
+      }
+      if (nameChanged) {
+        ReleaseLogger.log(
+            '👤 [ProfileCache] Name changed for $userId: $oldName -> $newName');
+      }
+
+      // Emitir evento para que los widgets se re-rendericen
+      _profileUpdateController.add(UserProfileUpdateEvent(
+        userId: userId,
+        newPhotoUrl: newPhotoUrl,
+        oldPhotoUrl: oldPhotoUrl,
+        newName: newName,
+        oldName: oldName,
+        photoChanged: photoChanged,
+        nameChanged: nameChanged,
+      ));
+    }
+  }
+
+  /// Obtener URL de foto cacheada (instantáneo)
+  /// Retorna null si no está en cache
+  String? getPhotoUrl(String userId) {
+    return _userProfileCache[userId]?.photoUrl;
+  }
+
+  /// Obtener nombre cacheado (instantáneo)
+  /// Retorna null si no está en cache
+  String? getName(String userId) {
+    return _userProfileCache[userId]?.name;
+  }
+
+  /// Obtener perfil completo cacheado
+  UserProfileCache? getProfile(String userId) {
+    return _userProfileCache[userId];
+  }
+
+  /// Obtener URL de foto, iniciando watch si no existe
+  /// Útil para obtener foto inmediatamente y empezar a escuchar cambios
+  String? getPhotoUrlAndWatch(String userId) {
+    startWatching(userId);
+    return _userProfileCache[userId]?.photoUrl;
+  }
+
+  /// Obtener nombre, iniciando watch si no existe
+  String? getNameAndWatch(String userId) {
+    startWatching(userId);
+    return _userProfileCache[userId]?.name;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // ✅ ALIAS METHODS
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /// Iniciar listener de aliases (llamar una vez al inicio de la app)
+  /// Escucha cambios en contactAliases del usuario actual
+  void startAliasListener() {
+    final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+    if (currentUserId == null) {
+      ReleaseLogger.error('❌ [ProfileCache] Cannot start alias listener - no auth user');
+      return;
+    }
+
+    // Si ya hay listener activo, no crear otro
+    if (_aliasListener != null) {
+      ReleaseLogger.log('👁️ [ProfileCache] Alias listener already active');
+      return;
+    }
+
+    ReleaseLogger.log('👁️ [ProfileCache] Starting alias listener for: $currentUserId');
+
+    _aliasListener = FirebaseFirestore.instance
+        .collection('users')
+        .doc(currentUserId)
+        .snapshots()
+        .listen(
+      (snapshot) {
+        ReleaseLogger.log('📥 [ProfileCache] Alias snapshot received, exists: ${snapshot.exists}');
+
+        if (!snapshot.exists) {
+          _updateAliases({});
+          return;
+        }
+
+        final data = snapshot.data();
+        final aliases = data?['contactAliases'] as Map<String, dynamic>? ?? {};
+        ReleaseLogger.log('📥 [ProfileCache] Aliases in snapshot: ${aliases.keys.toList()}');
+        _updateAliases(Map<String, String>.from(
+          aliases.map((key, value) => MapEntry(key, value.toString())),
+        ));
+      },
+      onError: (error) {
+        ReleaseLogger.error('❌ [ProfileCache] Alias listener error: $error');
+      },
+    );
+  }
+
+  /// Detener listener de aliases
+  void stopAliasListener() {
+    _aliasListener?.cancel();
+    _aliasListener = null;
+    _aliasCache.clear();
+    ReleaseLogger.log('👋 [ProfileCache] Stopped alias listener');
+  }
+
+  /// Actualizar cache de aliases y emitir eventos para los que cambiaron
+  void _updateAliases(Map<String, String> newAliases) {
+    // Detectar aliases que cambiaron
+    final allContactIds = {..._aliasCache.keys, ...newAliases.keys};
+
+    for (final contactId in allContactIds) {
+      final oldAlias = _aliasCache[contactId];
+      final newAlias = newAliases[contactId];
+
+      if (oldAlias != newAlias) {
+        ReleaseLogger.log(
+            '🏷️ [ProfileCache] Alias changed for $contactId: "$oldAlias" -> "$newAlias"');
+
+        _aliasUpdateController.add(AliasUpdateEvent(
+          contactId: contactId,
+          newAlias: newAlias,
+          oldAlias: oldAlias,
+        ));
+      }
+    }
+
+    // Actualizar cache completo
+    _aliasCache.clear();
+    _aliasCache.addAll(newAliases);
+  }
+
+  /// Obtener alias para un contacto (null si no tiene alias)
+  String? getAlias(String contactId) {
+    final alias = _aliasCache[contactId];
+    ReleaseLogger.log('🏷️ [ProfileCache] getAlias($contactId): "$alias" (cache size: ${_aliasCache.length}, keys: ${_aliasCache.keys.toList()})');
+    return alias;
+  }
+
+  /// Obtener nombre a mostrar: alias > name > fallback
+  /// @param contactId: ID del contacto
+  /// @param fallbackName: Nombre a usar si no hay alias ni name cacheado
+  String getDisplayName(String contactId, String fallbackName) {
+    // 1. Primero verificar si hay alias
+    final alias = _aliasCache[contactId];
+    if (alias != null && alias.isNotEmpty) {
+      return alias;
+    }
+
+    // 2. Si no hay alias, usar nombre cacheado
+    final cachedName = _userProfileCache[contactId]?.name;
+    if (cachedName != null && cachedName.isNotEmpty) {
+      return cachedName;
+    }
+
+    // 3. Fallback
+    return fallbackName;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // CÓDIGO EXISTENTE PARA NATIVE SERVICES (bytes de fotos)
+  // ══════════════════════════════════════════════════════════════════════════
 
   // MethodChannel for native code (Android/iOS) to access cached photos
   static const MethodChannel _channel = MethodChannel('com.talia.chat/photo_cache');
@@ -249,11 +549,26 @@ class ContactPhotoCacheService {
       subscription.cancel();
     }
 
+    // ✅ También limpiar lazy listeners
+    for (final subscription in _lazyListeners.values) {
+      subscription.cancel();
+    }
+    _lazyListeners.clear();
+    _listenerRefCount.clear();
+    _userProfileCache.clear();
+    _profileUpdateController.close();
+
+    // ✅ Limpiar alias listener
+    _aliasListener?.cancel();
+    _aliasListener = null;
+    _aliasCache.clear();
+    _aliasUpdateController.close();
+
     _userPhotoSubscriptions.clear();
     _trackedUserIds.clear();
     _photoCache.clear();
 
-    ReleaseLogger.log('🛑 [PhotoCache] Disposed');
+    ReleaseLogger.log('🛑 [ProfileCache] Disposed');
   }
 
   /// Get cache stats (for debugging)
@@ -262,6 +577,8 @@ class ContactPhotoCacheService {
       'cachedPhotos': _photoCache.length,
       'trackedUsers': _trackedUserIds.length,
       'activeListeners': _userPhotoSubscriptions.length,
+      'lazyListeners': _lazyListeners.length,
+      'userProfileCache': _userProfileCache.length,
     };
   }
 
@@ -305,4 +622,84 @@ class ContactPhotoCacheService {
 
     ReleaseLogger.log('✅ [PhotoCache] MethodChannel configured');
   }
+}
+
+/// Cache de perfil de usuario
+class UserProfileCache {
+  final String? photoUrl;
+  final String? name;
+
+  UserProfileCache({
+    this.photoUrl,
+    this.name,
+  });
+}
+
+/// Evento emitido cuando cambia el perfil de un usuario (foto o nombre)
+class UserProfileUpdateEvent {
+  final String userId;
+  final String? newPhotoUrl;
+  final String? oldPhotoUrl;
+  final String? newName;
+  final String? oldName;
+  final bool photoChanged;
+  final bool nameChanged;
+
+  UserProfileUpdateEvent({
+    required this.userId,
+    this.newPhotoUrl,
+    this.oldPhotoUrl,
+    this.newName,
+    this.oldName,
+    this.photoChanged = false,
+    this.nameChanged = false,
+  });
+
+  @override
+  String toString() =>
+      'UserProfileUpdateEvent(userId: $userId, photoChanged: $photoChanged, nameChanged: $nameChanged)';
+}
+
+/// Evento emitido cuando cambia la foto de un usuario (compatibilidad)
+class PhotoUpdateEvent {
+  final String userId;
+  final String? newPhotoUrl;
+  final String? oldPhotoUrl;
+
+  PhotoUpdateEvent({
+    required this.userId,
+    required this.newPhotoUrl,
+    this.oldPhotoUrl,
+  });
+
+  @override
+  String toString() =>
+      'PhotoUpdateEvent(userId: $userId, newPhotoUrl: ${newPhotoUrl != null ? "set" : "null"})';
+}
+
+/// Evento emitido cuando cambia el alias de un contacto
+class AliasUpdateEvent {
+  final String contactId;
+  final String? newAlias;
+  final String? oldAlias;
+
+  AliasUpdateEvent({
+    required this.contactId,
+    this.newAlias,
+    this.oldAlias,
+  });
+
+  /// Indica si el alias fue removido (antes tenía, ahora no)
+  bool get aliasRemoved => oldAlias != null && newAlias == null;
+
+  /// Indica si el alias fue agregado (antes no tenía, ahora sí)
+  bool get aliasAdded => oldAlias == null && newAlias != null;
+
+  /// Indica si el alias fue modificado (antes tenía uno, ahora tiene otro)
+  bool get aliasModified =>
+      oldAlias != null && newAlias != null && oldAlias != newAlias;
+
+  @override
+  String toString() =>
+      'AliasUpdateEvent(contactId: $contactId, "$oldAlias" -> "$newAlias")';
 }

@@ -29,28 +29,53 @@ class AdService {
   final SubscriptionService _subscriptionService = SubscriptionService();
 
   // Test Ad Unit IDs (usar en desarrollo/testing)
-  static const String _testAndroidInterstitialAdUnitId = 'ca-app-pub-3940256099942544/1033173712';
-  static const String _testIosInterstitialAdUnitId = 'ca-app-pub-3940256099942544/4411468910';
-  static const String _testAndroidNativeAdUnitId = 'ca-app-pub-3940256099942544/2247696110';
-  static const String _testIosNativeAdUnitId = 'ca-app-pub-3940256099942544/3986624511';
+  static const String _testAndroidInterstitialAdUnitId =
+      'ca-app-pub-3940256099942544/1033173712';
+  static const String _testIosInterstitialAdUnitId =
+      'ca-app-pub-3940256099942544/4411468910';
+  static const String _testAndroidNativeAdUnitId =
+      'ca-app-pub-3940256099942544/2247696110';
+  static const String _testIosNativeAdUnitId =
+      'ca-app-pub-3940256099942544/3986624511';
+
+  // Test Rewarded Video Ad Unit IDs
+  static const String _testAndroidRewardedAdUnitId =
+      'ca-app-pub-3940256099942544/5224354917';
+  static const String _testIosRewardedAdUnitId =
+      'ca-app-pub-3940256099942544/1712485313';
 
   // Production Ad Unit IDs (IDs reales de AdMob de Talia)
-  static const String _prodAndroidInterstitialAdUnitId = 'ca-app-pub-5189779496074211/3915483871';
-  static const String _prodIosInterstitialAdUnitId = 'ca-app-pub-5189779496074211/8559745396';
+  static const String _prodAndroidInterstitialAdUnitId =
+      'ca-app-pub-5189779496074211/3915483871';
+  static const String _prodIosInterstitialAdUnitId =
+      'ca-app-pub-5189779496074211/8559745396';
+
+  // Production Rewarded Video Ad Unit IDs (Talia - Reportes)
+  static const String _prodAndroidRewardedAdUnitId =
+      'ca-app-pub-5189779496074211/6223587981';
+  static const String _prodIosRewardedAdUnitId =
+      'ca-app-pub-5189779496074211/3792865761';
 
   // 🔒 SECURE NATIVE AD CONFIGURATION - Use environment variables for production
   static const String _prodAndroidNativeAdUnitId = String.fromEnvironment(
     'ADMOB_ANDROID_NATIVE_AD_UNIT_ID',
-    defaultValue: _testAndroidNativeAdUnitId, // Fallback to test ID if not configured
+    defaultValue:
+        _testAndroidNativeAdUnitId, // Fallback to test ID if not configured
   );
   static const String _prodIosNativeAdUnitId = String.fromEnvironment(
     'ADMOB_IOS_NATIVE_AD_UNIT_ID',
-    defaultValue: _testIosNativeAdUnitId, // Fallback to test ID if not configured
+    defaultValue:
+        _testIosNativeAdUnitId, // Fallback to test ID if not configured
   );
 
   InterstitialAd? _interstitialAd;
   bool _isAdLoaded = false;
   bool _isAdShowing = false;
+
+  // Rewarded Video state
+  RewardedAd? _rewardedAd;
+  bool _isRewardedAdLoaded = false;
+  bool _isRewardedAdShowing = false;
 
   // Estado de inicialización
   bool _isInitialized = false;
@@ -63,22 +88,32 @@ class AdService {
     }
 
     try {
-      ReleaseLogger.log('📢 [AdService] Inicializando AdMob SDK...', tag: 'AdService');
+      ReleaseLogger.log(
+        '📢 [AdService] Inicializando AdMob SDK...',
+        tag: 'AdService',
+      );
       await MobileAds.instance.initialize();
 
       // Configurar para cumplir con COPPA
       // NUNCA personalizar ads para menores de 13 años
       final requestConfiguration = RequestConfiguration(
-        tagForChildDirectedTreatment: TagForChildDirectedTreatment.no, // App tiene adultos y niños
+        tagForChildDirectedTreatment:
+            TagForChildDirectedTreatment.no, // App tiene adultos y niños
         tagForUnderAgeOfConsent: TagForUnderAgeOfConsent.no,
         maxAdContentRating: MaxAdContentRating.pg, // Solo contenido apropiado
       );
       MobileAds.instance.updateRequestConfiguration(requestConfiguration);
 
       _isInitialized = true;
-      ReleaseLogger.log('✅ [AdService] AdMob inicializado correctamente', tag: 'AdService');
+      ReleaseLogger.log(
+        '✅ [AdService] AdMob inicializado correctamente',
+        tag: 'AdService',
+      );
     } catch (e) {
-      ReleaseLogger.error('❌ [AdService] Error inicializando AdMob: $e', tag: 'AdService');
+      ReleaseLogger.error(
+        '❌ [AdService] Error inicializando AdMob: $e',
+        tag: 'AdService',
+      );
     }
   }
 
@@ -100,14 +135,20 @@ class AdService {
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) {
-        ReleaseLogger.log('⚠️ [AdService] Usuario no autenticado', tag: 'AdService');
+        ReleaseLogger.log(
+          '⚠️ [AdService] Usuario no autenticado',
+          tag: 'AdService',
+        );
         return false;
       }
 
       // 1. Verificar Premium status primero (más importante)
       final premiumStatus = await _subscriptionService.checkPremiumStatus();
       if (premiumStatus.isPremium) {
-        ReleaseLogger.log('⭐ [AdService] Usuario Premium/Premium+, NO mostrar ads (beneficio premium)', tag: 'AdService');
+        ReleaseLogger.log(
+          '⭐ [AdService] Usuario Premium/Premium+, NO mostrar ads (beneficio premium)',
+          tag: 'AdService',
+        );
         return false;
       }
 
@@ -118,46 +159,62 @@ class AdService {
           .get();
 
       if (!userDoc.exists) {
-        ReleaseLogger.log('⚠️ [AdService] Usuario no encontrado en Firestore', tag: 'AdService');
+        ReleaseLogger.log(
+          '⚠️ [AdService] Usuario no encontrado en Firestore',
+          tag: 'AdService',
+        );
         return false;
       }
 
       final data = userDoc.data()!;
       final role = data['role'] as String?;
 
-      // Si es padre, puede ver ads (si no es Premium)
-      if (role == 'parent') {
-        ReleaseLogger.log('✅ [AdService] Usuario FREE parent, puede ver ads', tag: 'AdService');
+      // Si es padre o adulto, puede ver ads (si no es Premium)
+      if (role == 'parent' || role == 'adult') {
+        ReleaseLogger.log(
+          '✅ [AdService] Usuario FREE $role, puede ver ads',
+          tag: 'AdService',
+        );
         return true;
       }
 
       // Si no es padre, verificar edad (debe tener 13+ años)
       final birthDate = data['birthDate'] as Timestamp?;
       if (birthDate == null) {
-        ReleaseLogger.log('⚠️ [AdService] No hay birthDate, no mostrar ads', tag: 'AdService');
+        ReleaseLogger.log(
+          '⚠️ [AdService] No hay birthDate, no mostrar ads',
+          tag: 'AdService',
+        );
         return false;
       }
 
       final age = _calculateAge(birthDate.toDate());
       final canShow = age >= 13;
 
-      ReleaseLogger.log('👤 [AdService] Usuario FREE rol: $role, edad: $age años, puede ver ads: $canShow', tag: 'AdService');
+      ReleaseLogger.log(
+        '👤 [AdService] Usuario FREE rol: $role, edad: $age años, puede ver ads: $canShow',
+        tag: 'AdService',
+      );
       return canShow;
     } catch (e) {
-      ReleaseLogger.error('❌ [AdService] Error verificando si puede ver ads: $e', tag: 'AdService');
+      ReleaseLogger.error(
+        '❌ [AdService] Error verificando si puede ver ads: $e',
+        tag: 'AdService',
+      );
       return false;
     }
   }
 
   /// Obtener el Ad Unit ID correcto según la plataforma, entorno y tipo de ad
   String _getAdUnitId({bool isNativeAd = false}) {
-    // ⚠️ TEMPORALMENTE FORZADO A TEST MODE
-    // Cambiar a false cuando la cuenta de AdMob sea aprobada
-    const bool useTestAds = true;
+    const bool useTestAds = false;
 
     if (useTestAds) {
       // Testing mode - usar test IDs
-      ReleaseLogger.log('📢 [AdService] Usando TEST Ad IDs (cuenta AdMob no aprobada aún)', tag: 'AdService');
+      ReleaseLogger.log(
+        '📢 [AdService] Usando TEST Ad IDs (cuenta AdMob no aprobada aún)',
+        tag: 'AdService',
+      );
       if (isNativeAd) {
         if (defaultTargetPlatform == TargetPlatform.android) {
           return _testAndroidNativeAdUnitId;
@@ -173,20 +230,27 @@ class AdService {
       }
     } else {
       // Production mode - usar production IDs
-      ReleaseLogger.log('📢 [AdService] Usando PRODUCTION Ad IDs', tag: 'AdService');
+      ReleaseLogger.log(
+        '📢 [AdService] Usando PRODUCTION Ad IDs',
+        tag: 'AdService',
+      );
       if (isNativeAd) {
         if (defaultTargetPlatform == TargetPlatform.android) {
           // ⚠️ REVENUE WARNING: Check if using fallback test ID
           if (_prodAndroidNativeAdUnitId == _testAndroidNativeAdUnitId) {
-            ReleaseLogger.error('💸 REVENUE LOSS: Using test Native Ad ID in production! Configure ADMOB_ANDROID_NATIVE_AD_UNIT_ID',
-                               tag: 'AdService');
+            ReleaseLogger.error(
+              '💸 REVENUE LOSS: Using test Native Ad ID in production! Configure ADMOB_ANDROID_NATIVE_AD_UNIT_ID',
+              tag: 'AdService',
+            );
           }
           return _prodAndroidNativeAdUnitId;
         } else if (defaultTargetPlatform == TargetPlatform.iOS) {
           // ⚠️ REVENUE WARNING: Check if using fallback test ID
           if (_prodIosNativeAdUnitId == _testIosNativeAdUnitId) {
-            ReleaseLogger.error('💸 REVENUE LOSS: Using test Native Ad ID in production! Configure ADMOB_IOS_NATIVE_AD_UNIT_ID',
-                               tag: 'AdService');
+            ReleaseLogger.error(
+              '💸 REVENUE LOSS: Using test Native Ad ID in production! Configure ADMOB_IOS_NATIVE_AD_UNIT_ID',
+              tag: 'AdService',
+            );
           }
           return _prodIosNativeAdUnitId;
         }
@@ -199,13 +263,18 @@ class AdService {
       }
     }
 
-    return isNativeAd ? _testAndroidNativeAdUnitId : _testAndroidInterstitialAdUnitId; // Fallback
+    return isNativeAd
+        ? _testAndroidNativeAdUnitId
+        : _testAndroidInterstitialAdUnitId; // Fallback
   }
 
   /// Cargar un anuncio intersticial
   Future<void> loadInterstitialAd() async {
     if (!_isInitialized) {
-      ReleaseLogger.log('⚠️ [AdService] No inicializado, inicializando primero...', tag: 'AdService');
+      ReleaseLogger.log(
+        '⚠️ [AdService] No inicializado, inicializando primero...',
+        tag: 'AdService',
+      );
       await initialize();
     }
 
@@ -213,7 +282,10 @@ class AdService {
     // (13+ o parent) Y no tiene Premium/Premium+
     final canShow = await _canShowAds();
     if (!canShow) {
-      ReleaseLogger.log('🚫 [AdService] Usuario <13 años, no parent, o Premium, NO cargar ads', tag: 'AdService');
+      ReleaseLogger.log(
+        '🚫 [AdService] Usuario <13 años, no parent, o Premium, NO cargar ads',
+        tag: 'AdService',
+      );
       return;
     }
 
@@ -223,50 +295,72 @@ class AdService {
     }
 
     try {
-      ReleaseLogger.log('📢 [AdService] Cargando interstitial ad...', tag: 'AdService');
+      ReleaseLogger.log(
+        '📢 [AdService] Cargando interstitial ad...',
+        tag: 'AdService',
+      );
 
       await InterstitialAd.load(
         adUnitId: _getAdUnitId(),
         request: const AdRequest(),
         adLoadCallback: InterstitialAdLoadCallback(
           onAdLoaded: (ad) {
-            ReleaseLogger.log('✅ [AdService] Interstitial ad cargado exitosamente', tag: 'AdService');
+            ReleaseLogger.log(
+              '✅ [AdService] Interstitial ad cargado exitosamente',
+              tag: 'AdService',
+            );
             _interstitialAd = ad;
             _isAdLoaded = true;
 
             // Configurar callbacks
-            _interstitialAd!.fullScreenContentCallback = FullScreenContentCallback(
-              onAdShowedFullScreenContent: (ad) {
-                ReleaseLogger.log('📺 [AdService] Ad mostrado en pantalla completa', tag: 'AdService');
-                _isAdShowing = true;
-              },
-              onAdDismissedFullScreenContent: (ad) {
-                ReleaseLogger.log('👋 [AdService] Ad cerrado por usuario', tag: 'AdService');
-                _isAdShowing = false;
-                ad.dispose();
-                _interstitialAd = null;
-                _isAdLoaded = false;
-                // Pre-cargar el siguiente ad
-                loadInterstitialAd();
-              },
-              onAdFailedToShowFullScreenContent: (ad, error) {
-                ReleaseLogger.error('❌ [AdService] Error mostrando ad: $error', tag: 'AdService');
-                _isAdShowing = false;
-                ad.dispose();
-                _interstitialAd = null;
-                _isAdLoaded = false;
-              },
-            );
+            _interstitialAd!.fullScreenContentCallback =
+                FullScreenContentCallback(
+                  onAdShowedFullScreenContent: (ad) {
+                    ReleaseLogger.log(
+                      '📺 [AdService] Ad mostrado en pantalla completa',
+                      tag: 'AdService',
+                    );
+                    _isAdShowing = true;
+                  },
+                  onAdDismissedFullScreenContent: (ad) {
+                    ReleaseLogger.log(
+                      '👋 [AdService] Ad cerrado por usuario',
+                      tag: 'AdService',
+                    );
+                    _isAdShowing = false;
+                    ad.dispose();
+                    _interstitialAd = null;
+                    _isAdLoaded = false;
+                    // Pre-cargar el siguiente ad
+                    loadInterstitialAd();
+                  },
+                  onAdFailedToShowFullScreenContent: (ad, error) {
+                    ReleaseLogger.error(
+                      '❌ [AdService] Error mostrando ad: $error',
+                      tag: 'AdService',
+                    );
+                    _isAdShowing = false;
+                    ad.dispose();
+                    _interstitialAd = null;
+                    _isAdLoaded = false;
+                  },
+                );
           },
           onAdFailedToLoad: (error) {
-            ReleaseLogger.error('❌ [AdService] Error cargando ad: ${error.message}', tag: 'AdService');
+            ReleaseLogger.error(
+              '❌ [AdService] Error cargando ad: ${error.message}',
+              tag: 'AdService',
+            );
             _isAdLoaded = false;
             _interstitialAd = null;
           },
         ),
       );
     } catch (e) {
-      ReleaseLogger.error('❌ [AdService] Excepción cargando ad: $e', tag: 'AdService');
+      ReleaseLogger.error(
+        '❌ [AdService] Excepción cargando ad: $e',
+        tag: 'AdService',
+      );
       _isAdLoaded = false;
     }
   }
@@ -279,23 +373,35 @@ class AdService {
     // (13+ o parent) Y no tiene Premium/Premium+
     final canShow = await _canShowAds();
     if (!canShow) {
-      ReleaseLogger.log('🚫 [AdService] Usuario <13 años, no parent, o Premium, NO mostrar ads', tag: 'AdService');
+      ReleaseLogger.log(
+        '🚫 [AdService] Usuario <13 años, no parent, o Premium, NO mostrar ads',
+        tag: 'AdService',
+      );
       return false;
     }
 
     if (_isAdShowing) {
-      ReleaseLogger.log('📢 [AdService] Ad ya se está mostrando', tag: 'AdService');
+      ReleaseLogger.log(
+        '📢 [AdService] Ad ya se está mostrando',
+        tag: 'AdService',
+      );
       return false;
     }
 
     if (_interstitialAd == null || !_isAdLoaded) {
-      ReleaseLogger.log('⚠️ [AdService] Ad no está cargado, intentando cargar...', tag: 'AdService');
+      ReleaseLogger.log(
+        '⚠️ [AdService] Ad no está cargado, intentando cargar...',
+        tag: 'AdService',
+      );
       await loadInterstitialAd();
       return false;
     }
 
     try {
-      ReleaseLogger.log('📺 [AdService] Mostrando interstitial ad...', tag: 'AdService');
+      ReleaseLogger.log(
+        '📺 [AdService] Mostrando interstitial ad...',
+        tag: 'AdService',
+      );
 
       // Crear un Completer para esperar a que el ad se cierre
       final completer = Completer<void>();
@@ -303,11 +409,17 @@ class AdService {
       // Configurar callbacks ANTES de mostrar el ad
       _interstitialAd!.fullScreenContentCallback = FullScreenContentCallback(
         onAdShowedFullScreenContent: (ad) {
-          ReleaseLogger.log('📺 [AdService] Ad mostrado en pantalla completa', tag: 'AdService');
+          ReleaseLogger.log(
+            '📺 [AdService] Ad mostrado en pantalla completa',
+            tag: 'AdService',
+          );
           _isAdShowing = true;
         },
         onAdDismissedFullScreenContent: (ad) {
-          ReleaseLogger.log('👋 [AdService] Ad cerrado por usuario', tag: 'AdService');
+          ReleaseLogger.log(
+            '👋 [AdService] Ad cerrado por usuario',
+            tag: 'AdService',
+          );
           _isAdShowing = false;
           ad.dispose();
           _interstitialAd = null;
@@ -322,7 +434,10 @@ class AdService {
           loadInterstitialAd();
         },
         onAdFailedToShowFullScreenContent: (ad, error) {
-          ReleaseLogger.error('❌ [AdService] Error mostrando ad: $error', tag: 'AdService');
+          ReleaseLogger.error(
+            '❌ [AdService] Error mostrando ad: $error',
+            tag: 'AdService',
+          );
           _isAdShowing = false;
           ad.dispose();
           _interstitialAd = null;
@@ -339,20 +454,32 @@ class AdService {
       await _interstitialAd!.show();
 
       // ESPERAR a que el ad se cierre (completer se completa en onAdDismissedFullScreenContent)
-      ReleaseLogger.log('⏳ [AdService] Esperando a que el ad se cierre...', tag: 'AdService');
+      ReleaseLogger.log(
+        '⏳ [AdService] Esperando a que el ad se cierre...',
+        tag: 'AdService',
+      );
       await completer.future;
-      ReleaseLogger.log('✅ [AdService] Ad cerrado, continuando ejecución', tag: 'AdService');
+      ReleaseLogger.log(
+        '✅ [AdService] Ad cerrado, continuando ejecución',
+        tag: 'AdService',
+      );
 
       return true;
     } catch (e) {
-      ReleaseLogger.error('❌ [AdService] Error mostrando ad: $e', tag: 'AdService');
+      ReleaseLogger.error(
+        '❌ [AdService] Error mostrando ad: $e',
+        tag: 'AdService',
+      );
       return false;
     }
   }
 
   /// Liberar recursos del ad actual
   void dispose() {
-    ReleaseLogger.log('🗑️ [AdService] Liberando recursos de ads', tag: 'AdService');
+    ReleaseLogger.log(
+      '🗑️ [AdService] Liberando recursos de ads',
+      tag: 'AdService',
+    );
     _interstitialAd?.dispose();
     _interstitialAd = null;
     _isAdLoaded = false;
@@ -369,7 +496,10 @@ class AdService {
     required Function(NativeAd ad, LoadAdError error) onAdFailedToLoad,
   }) async {
     if (!_isInitialized) {
-      ReleaseLogger.log('⚠️ [AdService] No inicializado, inicializando primero...', tag: 'AdService');
+      ReleaseLogger.log(
+        '⚠️ [AdService] No inicializado, inicializando primero...',
+        tag: 'AdService',
+      );
       await initialize();
     }
 
@@ -377,30 +507,48 @@ class AdService {
     // (13+ o parent) Y no tiene Premium/Premium+
     final canShow = await _canShowAds();
     if (!canShow) {
-      ReleaseLogger.log('🚫 [AdService] Usuario <13 años, no parent, o Premium, NO crear Native Ad', tag: 'AdService');
+      ReleaseLogger.log(
+        '🚫 [AdService] Usuario <13 años, no parent, o Premium, NO crear Native Ad',
+        tag: 'AdService',
+      );
       return null;
     }
 
     try {
-      ReleaseLogger.log('📢 [AdService] Creando Native Ad para stories...', tag: 'AdService');
+      ReleaseLogger.log(
+        '📢 [AdService] Creando Native Ad para stories...',
+        tag: 'AdService',
+      );
 
       final nativeAd = NativeAd(
         adUnitId: _getAdUnitId(isNativeAd: true),
         listener: NativeAdListener(
           onAdLoaded: (ad) {
-            ReleaseLogger.log('✅ [AdService] Native Ad cargado exitosamente', tag: 'AdService');
+            ReleaseLogger.log(
+              '✅ [AdService] Native Ad cargado exitosamente',
+              tag: 'AdService',
+            );
             onAdLoaded(ad as NativeAd);
           },
           onAdFailedToLoad: (ad, error) {
-            ReleaseLogger.error('❌ [AdService] Error cargando Native Ad: ${error.message}', tag: 'AdService');
+            ReleaseLogger.error(
+              '❌ [AdService] Error cargando Native Ad: ${error.message}',
+              tag: 'AdService',
+            );
             ad.dispose();
             onAdFailedToLoad(ad as NativeAd, error);
           },
           onAdClicked: (ad) {
-            ReleaseLogger.log('👆 [AdService] Native Ad clicked', tag: 'AdService');
+            ReleaseLogger.log(
+              '👆 [AdService] Native Ad clicked',
+              tag: 'AdService',
+            );
           },
           onAdImpression: (ad) {
-            ReleaseLogger.log('👁️ [AdService] Native Ad impression registrada', tag: 'AdService');
+            ReleaseLogger.log(
+              '👁️ [AdService] Native Ad impression registrada',
+              tag: 'AdService',
+            );
           },
         ),
         request: const AdRequest(),
@@ -441,8 +589,292 @@ class AdService {
 
       return nativeAd;
     } catch (e) {
-      ReleaseLogger.error('❌ [AdService] Excepción creando Native Ad: $e', tag: 'AdService');
+      ReleaseLogger.error(
+        '❌ [AdService] Excepción creando Native Ad: $e',
+        tag: 'AdService',
+      );
       return null;
     }
   }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // REWARDED VIDEO ADS - Para desbloquear reportes y features premium
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /// Obtener el Ad Unit ID para Rewarded Video
+  String _getRewardedAdUnitId() {
+    // TODO: Cambiar a false cuando la app esté publicada en las tiendas
+    const bool useTestAds = true;
+
+    if (useTestAds) {
+      ReleaseLogger.log(
+        '🎬 [AdService] Usando TEST Rewarded Ad IDs',
+        tag: 'AdService',
+      );
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        return _testAndroidRewardedAdUnitId;
+      } else if (defaultTargetPlatform == TargetPlatform.iOS) {
+        return _testIosRewardedAdUnitId;
+      }
+    } else {
+      ReleaseLogger.log(
+        '🎬 [AdService] Usando PRODUCTION Rewarded Ad IDs',
+        tag: 'AdService',
+      );
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        if (_prodAndroidRewardedAdUnitId == _testAndroidRewardedAdUnitId) {
+          ReleaseLogger.error(
+            '💸 REVENUE LOSS: Using test Rewarded Ad ID in production! Configure ADMOB_ANDROID_REWARDED_AD_UNIT_ID',
+            tag: 'AdService',
+          );
+        }
+        return _prodAndroidRewardedAdUnitId;
+      } else if (defaultTargetPlatform == TargetPlatform.iOS) {
+        if (_prodIosRewardedAdUnitId == _testIosRewardedAdUnitId) {
+          ReleaseLogger.error(
+            '💸 REVENUE LOSS: Using test Rewarded Ad ID in production! Configure ADMOB_IOS_REWARDED_AD_UNIT_ID',
+            tag: 'AdService',
+          );
+        }
+        return _prodIosRewardedAdUnitId;
+      }
+    }
+
+    return _testAndroidRewardedAdUnitId; // Fallback
+  }
+
+  /// Pre-cargar un Rewarded Video Ad
+  /// Llamar esto anticipadamente para que el ad esté listo cuando se necesite
+  Future<void> loadRewardedAd() async {
+    if (!_isInitialized) {
+      ReleaseLogger.log(
+        '⚠️ [AdService] No inicializado, inicializando primero...',
+        tag: 'AdService',
+      );
+      await initialize();
+    }
+
+    // Verificar COPPA + Premium
+    final canShow = await _canShowAds();
+    if (!canShow) {
+      ReleaseLogger.log(
+        '🚫 [AdService] Usuario no puede ver ads, NO cargar Rewarded',
+        tag: 'AdService',
+      );
+      return;
+    }
+
+    if (_isRewardedAdLoaded) {
+      ReleaseLogger.log(
+        '🎬 [AdService] Rewarded Ad ya está cargado',
+        tag: 'AdService',
+      );
+      return;
+    }
+
+    try {
+      ReleaseLogger.log(
+        '🎬 [AdService] Cargando Rewarded Video Ad...',
+        tag: 'AdService',
+      );
+
+      await RewardedAd.load(
+        adUnitId: _getRewardedAdUnitId(),
+        request: const AdRequest(),
+        rewardedAdLoadCallback: RewardedAdLoadCallback(
+          onAdLoaded: (ad) {
+            ReleaseLogger.log(
+              '✅ [AdService] Rewarded Ad cargado exitosamente',
+              tag: 'AdService',
+            );
+            _rewardedAd = ad;
+            _isRewardedAdLoaded = true;
+          },
+          onAdFailedToLoad: (error) {
+            ReleaseLogger.error(
+              '❌ [AdService] Error cargando Rewarded Ad: ${error.message}',
+              tag: 'AdService',
+            );
+            _isRewardedAdLoaded = false;
+            _rewardedAd = null;
+          },
+        ),
+      );
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [AdService] Excepción cargando Rewarded Ad: $e',
+        tag: 'AdService',
+      );
+      _isRewardedAdLoaded = false;
+    }
+  }
+
+  /// Verificar si el Rewarded Ad está listo
+  bool get isRewardedAdReady =>
+      _isRewardedAdLoaded && _rewardedAd != null && !_isRewardedAdShowing;
+
+  /// Mostrar Rewarded Video Ad y esperar a que el usuario complete
+  /// Retorna true si el usuario vio el video completo y ganó la recompensa
+  /// Retorna false si:
+  /// - El ad no está cargado
+  /// - El usuario cerró antes de completar
+  /// - Hubo un error
+  ///
+  /// Uso típico:
+  /// ```dart
+  /// final rewarded = await AdService().showRewardedAd();
+  /// if (rewarded) {
+  ///   // Usuario completó el video, dar la recompensa
+  ///   await generateReport();
+  /// } else {
+  ///   // Usuario no completó o hubo error
+  ///   showSnackBar('Debes ver el video completo para generar el reporte');
+  /// }
+  /// ```
+  Future<bool> showRewardedAd() async {
+    ReleaseLogger.log(
+      '🎬 [AdService] showRewardedAd() llamado',
+      tag: 'AdService',
+    );
+
+    // Verificar COPPA + Premium
+    ReleaseLogger.log(
+      '🎬 [AdService] Verificando _canShowAds()...',
+      tag: 'AdService',
+    );
+    final canShow = await _canShowAds();
+    ReleaseLogger.log(
+      '🎬 [AdService] _canShowAds() retornó: $canShow',
+      tag: 'AdService',
+    );
+
+    if (!canShow) {
+      ReleaseLogger.log(
+        '🚫 [AdService] Usuario no puede ver ads, NO mostrar Rewarded',
+        tag: 'AdService',
+      );
+      // Si es Premium, retornar true (no necesita ver ad)
+      final premiumStatus = await _subscriptionService.checkPremiumStatus();
+      if (premiumStatus.isPremium) {
+        ReleaseLogger.log(
+          '⭐ [AdService] Usuario Premium, bypass de Rewarded Ad',
+          tag: 'AdService',
+        );
+        return true;
+      }
+      return false;
+    }
+
+    if (_isRewardedAdShowing) {
+      ReleaseLogger.log(
+        '🎬 [AdService] Rewarded Ad ya se está mostrando',
+        tag: 'AdService',
+      );
+      return false;
+    }
+
+    if (_rewardedAd == null || !_isRewardedAdLoaded) {
+      ReleaseLogger.log(
+        '⚠️ [AdService] Rewarded Ad no está cargado, intentando cargar...',
+        tag: 'AdService',
+      );
+      await loadRewardedAd();
+
+      // Esperar un poco a que cargue
+      await Future.delayed(const Duration(seconds: 2));
+
+      if (_rewardedAd == null || !_isRewardedAdLoaded) {
+        ReleaseLogger.error(
+          '❌ [AdService] No se pudo cargar Rewarded Ad a tiempo',
+          tag: 'AdService',
+        );
+        return false;
+      }
+    }
+
+    try {
+      ReleaseLogger.log(
+        '🎬 [AdService] Mostrando Rewarded Video Ad...',
+        tag: 'AdService',
+      );
+
+      final completer = Completer<bool>();
+      bool userEarnedReward = false;
+
+      _rewardedAd!.fullScreenContentCallback = FullScreenContentCallback(
+        onAdShowedFullScreenContent: (ad) {
+          ReleaseLogger.log(
+            '📺 [AdService] Rewarded Ad mostrado en pantalla completa',
+            tag: 'AdService',
+          );
+          _isRewardedAdShowing = true;
+        },
+        onAdDismissedFullScreenContent: (ad) {
+          ReleaseLogger.log(
+            '👋 [AdService] Rewarded Ad cerrado, recompensa ganada: $userEarnedReward',
+            tag: 'AdService',
+          );
+          _isRewardedAdShowing = false;
+          ad.dispose();
+          _rewardedAd = null;
+          _isRewardedAdLoaded = false;
+
+          if (!completer.isCompleted) {
+            completer.complete(userEarnedReward);
+          }
+
+          // Pre-cargar el siguiente ad para la próxima vez
+          loadRewardedAd();
+        },
+        onAdFailedToShowFullScreenContent: (ad, error) {
+          ReleaseLogger.error(
+            '❌ [AdService] Error mostrando Rewarded Ad: $error',
+            tag: 'AdService',
+          );
+          _isRewardedAdShowing = false;
+          ad.dispose();
+          _rewardedAd = null;
+          _isRewardedAdLoaded = false;
+
+          if (!completer.isCompleted) {
+            completer.complete(false);
+          }
+        },
+      );
+
+      // Mostrar el ad con callback de recompensa
+      await _rewardedAd!.show(
+        onUserEarnedReward: (ad, reward) {
+          ReleaseLogger.log(
+            '🎁 [AdService] Usuario ganó recompensa: ${reward.amount} ${reward.type}',
+            tag: 'AdService',
+          );
+          userEarnedReward = true;
+        },
+      );
+
+      // Esperar a que el ad se cierre
+      ReleaseLogger.log(
+        '⏳ [AdService] Esperando a que el usuario complete el Rewarded Ad...',
+        tag: 'AdService',
+      );
+      final result = await completer.future;
+      ReleaseLogger.log(
+        '✅ [AdService] Rewarded Ad completado, resultado: $result',
+        tag: 'AdService',
+      );
+
+      return result;
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [AdService] Error mostrando Rewarded Ad: $e',
+        tag: 'AdService',
+      );
+      return false;
+    }
+  }
+
+  /// Verificar si el usuario puede ver ads (público para UI)
+  /// Útil para mostrar/ocultar botones de "Ver video para desbloquear"
+  Future<bool> canShowAds() => _canShowAds();
 }

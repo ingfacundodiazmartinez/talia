@@ -100,11 +100,17 @@ class VoIPTokenService {
 
   /// Save a VoIP token to Firestore
   /// Automatically cleans up duplicate tokens from other users
+  /// ✅ Always saves token (even if same) to update timestamp
   Future<bool> saveToken(String token) async {
     try {
       final userId = _auth.currentUser?.uid;
       if (userId == null) {
         ReleaseLogger.log('No authenticated user to save token', tag: _tag);
+        return false;
+      }
+
+      if (token.isEmpty) {
+        ReleaseLogger.error('Empty token received, not saving', tag: _tag);
         return false;
       }
 
@@ -116,12 +122,13 @@ class VoIPTokenService {
       // Clean up duplicate tokens from other users first
       await _cleanupDuplicateTokens(token, userId);
 
-      // Save the token
-      await _firestore.collection('users').doc(userId).update({
+      // ✅ FIX: Use set with merge to handle case where user doc might not exist
+      // Also always update timestamp even if token is the same
+      await _firestore.collection('users').doc(userId).set({
         'voipToken': token,
         'voipTokenUpdatedAt': FieldValue.serverTimestamp(),
         'voipTokenRefreshNeeded': FieldValue.delete(), // Clear refresh flag
-      });
+      }, SetOptions(merge: true));
 
       ReleaseLogger.log('VoIP token saved successfully', tag: _tag);
       return true;
@@ -143,9 +150,6 @@ class VoIPTokenService {
         return null;
       }
 
-      // Get previous token for comparison
-      final previousToken = await getToken();
-
       // Request token from native iOS
       try {
         await _voipChannel.invokeMethod('requestVoIPToken');
@@ -158,6 +162,8 @@ class VoIPTokenService {
       }
 
       // Wait for the token to be received and saved via the native callback
+      // ✅ FIX: Check if ANY token exists (not just new/different token)
+      // iOS may resend the same token if it hasn't changed
       for (int attempt = 1; attempt <= _maxRefreshRetries; attempt++) {
         ReleaseLogger.log(
           'Waiting for token (attempt $attempt/$_maxRefreshRetries)...',
@@ -172,18 +178,24 @@ class VoIPTokenService {
           final currentToken = data['voipToken'] as String?;
           final tokenUpdatedAt = data['voipTokenUpdatedAt'] as Timestamp?;
 
-          // Check if we got a new token (different from previous)
+          // ✅ FIX: Accept token if it exists and was recently updated
+          // Don't require it to be different from previous
           if (currentToken != null &&
-              currentToken != previousToken &&
+              currentToken.isNotEmpty &&
               tokenUpdatedAt != null) {
-            // Verify it's recent (less than 30 seconds)
             final tokenAge = DateTime.now().difference(tokenUpdatedAt.toDate());
-            if (tokenAge.inSeconds < 30) {
+            // Accept if updated in the last 60 seconds (more lenient)
+            if (tokenAge.inSeconds < 60) {
               ReleaseLogger.log(
-                'New token received: ${currentToken.substring(0, 20)}...',
+                'Token found: ${currentToken.substring(0, 20)}... (age: ${tokenAge.inSeconds}s)',
                 tag: _tag,
               );
               return currentToken;
+            } else {
+              ReleaseLogger.log(
+                'Token exists but is old (${tokenAge.inSeconds}s), waiting for fresh one...',
+                tag: _tag,
+              );
             }
           }
         }

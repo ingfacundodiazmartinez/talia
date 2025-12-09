@@ -38,6 +38,7 @@ import 'services/analytics_service.dart';
 import 'services/performance_service.dart';
 import 'services/snackbar_service.dart';
 import 'services/network_status_service.dart';
+import 'services/permission_sync_service.dart';
 import 'services/offline_queue_service.dart';
 import 'services/accessibility_service.dart';
 import 'services/stickers_service.dart';
@@ -45,6 +46,7 @@ import 'services/unread_messages_service.dart';
 import 'services/ad_service.dart';
 import 'services/story_service_refactored.dart';
 import 'services/contact_photo_cache_service.dart';
+import 'services/deep_link_service.dart';
 import 'dart:async';
 import 'utils/release_logger.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -545,6 +547,22 @@ Future<void> _initializeHeavyServicesInBackground() async {
 
   // Paralelizar servicios pesados para máximo performance
   await Future.wait([
+    // Deep Link Service (App Links / Universal Links)
+    DeepLinkService()
+        .initialize()
+        .then((_) {
+          ReleaseLogger.log(
+            '✅ DeepLinkService inicializado en background',
+            tag: 'BackgroundInit',
+          );
+        })
+        .catchError((e) {
+          ReleaseLogger.error(
+            '❌ Error inicializando DeepLinkService: $e',
+            tag: 'BackgroundInit',
+          );
+        }),
+
     // Notification Service (FCM setup)
     NotificationService()
         .initialize()
@@ -722,7 +740,8 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
   StreamSubscription<DocumentSnapshot>? _userRoleSubscription;
   StreamSubscription<firebase_auth.User?>?
   _authSubscription; // ✅ NUEVO: listener auth independiente
-  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+  // Usar el navigatorKey del DeepLinkService para navegación global
+  final GlobalKey<NavigatorState> _navigatorKey = DeepLinkService.navigatorKey;
   String? _currentUserRole;
 
   @override
@@ -793,6 +812,11 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
     // Esto evita que las notificaciones de background se muestren como foreground
     if (state == AppLifecycleState.resumed) {
       NotificationService().notifyAppResumed();
+
+      // Sincronizar permisos para usuarios hijo
+      if (_currentUserRole == 'child') {
+        PermissionSyncService().syncPermissions();
+      }
     }
   }
 
@@ -821,6 +845,10 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
         }).catchError((e) {
           ReleaseLogger.error('❌ Error inicializando ContactPhotoCacheService: $e');
         });
+
+        // ✅ P3: Inicializar listener de aliases
+        ReleaseLogger.log('🏷️ Inicializando alias listener...');
+        ContactPhotoCacheService().startAliasListener();
 
         // Inicializar stream background de historias
         ReleaseLogger.log('📱Iniciando stream background de historias...');
@@ -892,6 +920,11 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
                     'ℹ️Inicializando role por primera vez: $newRole',
                   );
                   _currentUserRole = newRole;
+
+                  // Sincronizar permisos para usuarios hijo al iniciar
+                  if (newRole == 'child') {
+                    PermissionSyncService().syncPermissions();
+                  }
                 }
               }
             },
@@ -1051,17 +1084,22 @@ class _AuthWrapperState extends State<AuthWrapper> {
         if (snapshot.hasData) {
           ReleaseLogger.log('✅Usuario autenticado: ${snapshot.data!.email}');
 
-          // Registrar sesión del dispositivo
+          // Registrar sesión del dispositivo y LUEGO iniciar listener
+          // Es importante esperar que se registre antes de escuchar cambios
+          // para evitar que el dispositivo nuevo se cierre a sí mismo
           _deviceSessionService
               .registerDeviceSession(snapshot.data!.uid)
+              .then((_) {
+                // Iniciar listener de sesión DESPUÉS de registrar
+                _deviceSessionService.startSessionListener(context);
+              })
               .catchError((e) {
                 ReleaseLogger.log(
                   '⚠️ Error registrando sesión de dispositivo: $e',
                 );
+                // Aún así iniciar listener para detectar otros dispositivos
+                _deviceSessionService.startSessionListener(context);
               });
-
-          // Iniciar listener de sesión para detectar login en otro dispositivo
-          _deviceSessionService.startSessionListener(context);
 
           // Inicializar servicio de estado online
           _onlineStatusService.initialize();

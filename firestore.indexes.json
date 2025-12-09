@@ -1306,6 +1306,25 @@
         }
       ],
       "density": "SPARSE_ALL"
+    },
+    {
+      "collectionGroup": "mood_poll_responses",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "userId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "respondedAt",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "DESCENDING"
+        }
+      ],
+      "density": "SPARSE_ALL"
     }
   ],
   "fieldOverrides": []

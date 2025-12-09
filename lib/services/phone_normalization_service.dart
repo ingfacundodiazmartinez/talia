@@ -13,7 +13,14 @@
 /// ingresándolo con y sin el "9".
 library;
 
+import 'dart:convert';
+import 'package:crypto/crypto.dart';
 import '../utils/release_logger.dart';
+
+/// Salt secreto para hashing de números telefónicos.
+/// Se usa el mismo valor en Flutter y Cloud Functions.
+/// IMPORTANTE: Este salt debe mantenerse secreto y consistente.
+const String _phoneHashSalt = '51043c5af83c18c0e2ebce94e554af71b927c7974c84fe3df6323dde13952111';
 
 class PhoneNormalizationService {
   static final PhoneNormalizationService _instance = PhoneNormalizationService._internal();
@@ -85,6 +92,33 @@ class PhoneNormalizationService {
     }
 
     return cleaned;
+  }
+
+  /// Genera un hash SHA-256 de un número telefónico para almacenamiento seguro.
+  ///
+  /// El número se normaliza primero al formato E.164 y luego se hashea
+  /// con un salt secreto para prevenir ataques de rainbow table.
+  ///
+  /// [phone] - El número a hashear (cualquier formato)
+  /// Returns: Hash SHA-256 del número normalizado + salt
+  String hashPhone(String phone) {
+    final normalized = normalizePhone(phone);
+    if (normalized.isEmpty) return '';
+
+    final bytes = utf8.encode(normalized + _phoneHashSalt);
+    final digest = sha256.convert(bytes);
+    return digest.toString();
+  }
+
+  /// Hashea una lista de números telefónicos.
+  ///
+  /// Útil para sincronización de contactos donde se envían
+  /// hashes en lugar de números en texto plano.
+  List<String> hashPhones(List<String> phones) {
+    return phones
+        .map((phone) => hashPhone(phone))
+        .where((hash) => hash.isNotEmpty)
+        .toList();
   }
 
   /// Genera múltiples variaciones posibles de un número para búsqueda.

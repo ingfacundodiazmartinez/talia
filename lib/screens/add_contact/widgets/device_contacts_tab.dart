@@ -331,13 +331,39 @@ class _DeviceContactsTabState extends State<DeviceContactsTab> {
     return Card(
       margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: ListTile(
-        leading: contact.photoUrl != null
-            ? CircleAvatar(
-                backgroundImage: CachedNetworkImageProvider(contact.photoUrl!),
-              )
-            : CircleAvatar(
-                child: Text(contact.displayName[0].toUpperCase()),
-              ),
+        leading: CircleAvatar(
+          backgroundColor: colorScheme.primaryContainer,
+          child: contact.photoUrl != null
+              ? ClipOval(
+                  child: CachedNetworkImage(
+                    imageUrl: contact.photoUrl!,
+                    width: 40,
+                    height: 40,
+                    fit: BoxFit.cover,
+                    placeholder: (context, url) => Text(
+                      contact.displayName[0].toUpperCase(),
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: colorScheme.onPrimaryContainer,
+                      ),
+                    ),
+                    errorWidget: (context, url, error) => Text(
+                      contact.displayName[0].toUpperCase(),
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: colorScheme.onPrimaryContainer,
+                      ),
+                    ),
+                  ),
+                )
+              : Text(
+                  contact.displayName[0].toUpperCase(),
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: colorScheme.onPrimaryContainer,
+                  ),
+                ),
+        ),
         title: Text(
           contact.displayName,
           style: TextStyle(fontWeight: FontWeight.w600),

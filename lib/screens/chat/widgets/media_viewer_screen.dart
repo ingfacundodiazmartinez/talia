@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:gal/gal.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 /// Pantalla para visualizar imágenes y videos en pantalla completa
 /// con navegación entre múltiples medios mediante swipe
@@ -115,22 +116,15 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
                         ? InteractiveViewer(
                             minScale: 0.5,
                             maxScale: 4.0,
-                            child: Image.network(
-                              item.url,
+                            child: CachedNetworkImage(
+                              imageUrl: item.url,
                               fit: BoxFit.contain,
-                              loadingBuilder: (context, child, loadingProgress) {
-                                if (loadingProgress == null) return child;
-                                return Center(
-                                  child: CircularProgressIndicator(
-                                    color: Colors.white,
-                                    value: loadingProgress.expectedTotalBytes != null
-                                        ? loadingProgress.cumulativeBytesLoaded /
-                                            loadingProgress.expectedTotalBytes!
-                                        : null,
-                                  ),
-                                );
-                              },
-                              errorBuilder: (context, error, stackTrace) {
+                              placeholder: (context, url) => Center(
+                                child: CircularProgressIndicator(
+                                  color: Colors.white,
+                                ),
+                              ),
+                              errorWidget: (context, url, error) {
                                 return const Center(
                                   child: Column(
                                     mainAxisAlignment: MainAxisAlignment.center,

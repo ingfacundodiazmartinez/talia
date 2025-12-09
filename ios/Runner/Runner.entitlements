@@ -12,5 +12,10 @@
 	<array>
 		<string>group.com.talia.chat</string>
 	</array>
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:taliachat.com</string>
+		<string>webcredentials:taliachat.com</string>
+	</array>
 </dict>
 </plist>

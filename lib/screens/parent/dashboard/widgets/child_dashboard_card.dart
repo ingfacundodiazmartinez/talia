@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../../../models/child.dart';
 import '../../../../theme_service.dart';
 import '../../../../services/dashboard_cache_service.dart';
+import '../../../../services/permission_sync_service.dart';
+import '../../../../widgets/synced_user_widgets.dart';
 import '../../../child_location_screen.dart';
 import '../../contacts/child_contacts_filter_screen.dart';
 import '../../../story_approval_screen.dart';
@@ -126,23 +127,14 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
         children: [
           Row(
             children: [
-              CircleAvatar(
+              SyncedUserAvatar(
+                userId: child.id,
+                fallbackPhotoUrl: child.photoURL,
+                userName: child.name,
                 radius: 30,
                 backgroundColor: isDarkMode
                     ? Colors.white.withValues(alpha: 0.3)
                     : Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
-                backgroundImage:
-                    child.photoURL != null ? CachedNetworkImageProvider(child.photoURL!) : null,
-                child: child.photoURL == null
-                    ? Text(
-                        child.initials,
-                        style: TextStyle(
-                          color: isDarkMode ? Colors.white : Theme.of(context).colorScheme.primary,
-                          fontSize: 28,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      )
-                    : null,
               ),
               SizedBox(width: 16),
               Expanded(
@@ -223,9 +215,74 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
             thickness: 1,
           ),
           SizedBox(height: 16),
+          // Indicador de permisos faltantes
+          _buildPermissionWarnings(context, child, isDarkMode),
           _buildQuickActions(context, child),
         ],
       ),
+    );
+  }
+
+  Widget _buildPermissionWarnings(BuildContext context, Child child, bool isDarkMode) {
+    return StreamBuilder<Map<String, dynamic>?>(
+      stream: PermissionSyncService.watchPermissionStatus(child.id),
+      builder: (context, snapshot) {
+        final permissions = snapshot.data;
+
+        // Si no hay datos de permisos, no mostrar nada (el hijo aún no sincronizó)
+        if (permissions == null) {
+          return SizedBox.shrink();
+        }
+
+        final locationEnabled = permissions['location'] == true;
+        final contactsEnabled = permissions['contacts'] == true;
+
+        // Si todos los permisos críticos están activados, no mostrar nada
+        if (locationEnabled && contactsEnabled) {
+          return SizedBox.shrink();
+        }
+
+        // Construir lista de permisos faltantes
+        final missingPermissions = <String>[];
+        if (!locationEnabled) missingPermissions.add('Ubicación');
+        if (!contactsEnabled) missingPermissions.add('Contactos');
+
+        return Container(
+          margin: EdgeInsets.only(bottom: 12),
+          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: isDarkMode
+                ? Colors.orange.withValues(alpha: 0.2)
+                : Colors.orange.shade50,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: isDarkMode
+                  ? Colors.orange.withValues(alpha: 0.4)
+                  : Colors.orange.shade200,
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                Icons.warning_amber_rounded,
+                color: isDarkMode ? Colors.orange.shade300 : Colors.orange.shade700,
+                size: 18,
+              ),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Permisos desactivados: ${missingPermissions.join(", ")}',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDarkMode ? Colors.orange.shade200 : Colors.orange.shade800,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 

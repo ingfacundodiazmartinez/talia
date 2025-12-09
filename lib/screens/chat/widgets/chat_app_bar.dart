@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../widgets/profile_photo_viewer.dart';
+import '../../../widgets/synced_user_widgets.dart';
 import '../../../services/block_service.dart';
 import '../../../services/typing_indicator_service.dart';
 import '../../../controllers/chat_app_bar_controller.dart';
@@ -95,8 +96,9 @@ class _ChatAppBarState extends State<ChatAppBar> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            widget.contactName,
+                          SyncedUserName(
+                            userId: widget.contactId,
+                            fallbackName: widget.contactName,
                             style: const TextStyle(fontSize: 16),
                             overflow: TextOverflow.ellipsis,
                           ),

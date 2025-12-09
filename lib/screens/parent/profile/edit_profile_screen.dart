@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../../controllers/edit_profile_controller.dart';
 import '../../../services/image_service.dart';
 import '../../../utils/release_logger.dart';
@@ -226,17 +227,30 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           CircleAvatar(
             radius: 60,
             backgroundColor: colorScheme.primary.withValues(alpha: 0.2),
-            backgroundImage: _profileImageUrl != null &&
-                    _profileImageUrl!.isNotEmpty
-                ? NetworkImage(_profileImageUrl!)
-                : null,
-            child: _profileImageUrl == null || _profileImageUrl!.isEmpty
-                ? Icon(
+            child: _profileImageUrl != null && _profileImageUrl!.isNotEmpty
+                ? ClipOval(
+                    child: CachedNetworkImage(
+                      imageUrl: _profileImageUrl!,
+                      width: 120,
+                      height: 120,
+                      fit: BoxFit.cover,
+                      placeholder: (context, url) => Icon(
+                        Icons.person,
+                        size: 60,
+                        color: colorScheme.primary,
+                      ),
+                      errorWidget: (context, url, error) => Icon(
+                        Icons.person,
+                        size: 60,
+                        color: colorScheme.primary,
+                      ),
+                    ),
+                  )
+                : Icon(
                     Icons.person,
                     size: 60,
                     color: colorScheme.primary,
-                  )
-                : null,
+                  ),
           ),
           if (_isUploadingImage)
             Positioned.fill(

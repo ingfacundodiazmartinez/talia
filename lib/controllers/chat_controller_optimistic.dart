@@ -55,6 +55,8 @@ class ChatControllerOptimistic extends ChangeNotifier {
   // Subscripciones
   StreamSubscription? _notificationSubscription;
   StreamSubscription? _messagesSubscription;
+  StreamSubscription? _isBlockedSubscription;
+  StreamSubscription? _isBlockedBySubscription;
 
   // Estado de carga
   bool _isLoading = false;
@@ -138,12 +140,12 @@ class ChatControllerOptimistic extends ChangeNotifier {
 
   /// Configurar listeners para estado de bloqueo
   void setupBlockListeners() {
-    _blockService.isBlockedStream(contactId).listen((isBlocked) {
+    _isBlockedSubscription = _blockService.isBlockedStream(contactId).listen((isBlocked) {
       _isBlocked = isBlocked;
       notifyListeners();
     });
 
-    _blockService.isBlockedByStream(contactId).listen((isBlockedBy) {
+    _isBlockedBySubscription = _blockService.isBlockedByStream(contactId).listen((isBlockedBy) {
       _isBlockedBy = isBlockedBy;
       notifyListeners();
     });
@@ -795,10 +797,11 @@ class ChatControllerOptimistic extends ChangeNotifier {
 
   @override
   void dispose() {
-    // ReleaseLogger.log('Disposing ChatController-$_controllerId', tag: 'ChatController');
     stopTyping();
     _notificationSubscription?.cancel();
     _messagesSubscription?.cancel();
+    _isBlockedSubscription?.cancel();
+    _isBlockedBySubscription?.cancel();
     super.dispose();
   }
 }

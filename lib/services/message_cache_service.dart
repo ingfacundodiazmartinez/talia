@@ -144,17 +144,24 @@ class MessageCacheService {
   }
 
   /// Recuperar mensajes del cache para un chat
+  /// ✅ FIX: Deduplicación por ID para evitar mensajes duplicados
   Future<List<ChatMessage>> getMessages(String chatId) async {
     if (_messagesBox == null) return [];
 
     try {
       final messages = <ChatMessage>[];
+      final seenIds = <String>{};  // ✅ Track IDs vistos para deduplicar
       final keys = _messagesBox!.keys.where((key) => key.toString().startsWith(chatId));
 
       for (final key in keys) {
         final data = _messagesBox!.get(key) as Map<dynamic, dynamic>?;
         if (data != null) {
-          messages.add(_messageFromCacheData(data));
+          final msg = _messageFromCacheData(data);
+          // ✅ Solo añadir si no hemos visto este ID
+          if (!seenIds.contains(msg.id)) {
+            messages.add(msg);
+            seenIds.add(msg.id);
+          }
         }
       }
 

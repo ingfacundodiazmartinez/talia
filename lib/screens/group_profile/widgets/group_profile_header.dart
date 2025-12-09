@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'group_profile_constants.dart';
 import '../../../widgets/profile_photo_viewer.dart';
 
@@ -82,8 +83,18 @@ class GroupProfileHeader extends StatelessWidget {
             child: CircleAvatar(
               radius: 60,
               backgroundColor: Colors.white.withOpacity(0.9),
-              backgroundImage: currentImageUrl != null ? NetworkImage(currentImageUrl!) : null,
-              child: _buildAvatarChild(),
+              child: currentImageUrl != null
+                  ? ClipOval(
+                      child: CachedNetworkImage(
+                        imageUrl: currentImageUrl!,
+                        width: 120,
+                        height: 120,
+                        fit: BoxFit.cover,
+                        placeholder: (context, url) => _buildAvatarChild() ?? SizedBox(),
+                        errorWidget: (context, url, error) => _buildAvatarChild() ?? Icon(Icons.group, size: 60, color: GroupProfileConstants.primaryColor),
+                      ),
+                    )
+                  : _buildAvatarChild(),
             ),
           ),
         ),

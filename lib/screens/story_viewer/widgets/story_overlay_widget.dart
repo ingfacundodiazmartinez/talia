@@ -135,6 +135,7 @@ class StoryOverlayWidget extends StatelessWidget {
               // Header con información del usuario
               StoryUserHeader(
                 userName: currentUserStories.userName,
+                userId: currentUserStories.userId,
                 userPhotoURL: currentUserStories.userPhotoURL,
                 timeAgo: formatStoryTime(currentStory.createdAt),
                 isCurrentUser: isCurrentUser,

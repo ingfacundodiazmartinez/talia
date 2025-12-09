@@ -115,7 +115,7 @@ class GroupProfileController {
   Future<void> _loadGroupData() async {
     try {
       final groupDoc = await _firestore
-          .collection('groups')
+          .collection('groups_v2')
           .doc(groupId)
           .get();
 
@@ -314,7 +314,7 @@ class GroupProfileController {
   void _setupListeners() {
     // Listener para datos del grupo
     _groupDataSubscription = _firestore
-        .collection('groups')
+        .collection('groups_v2')
         .doc(groupId)
         .snapshots()
         .listen(
@@ -372,7 +372,7 @@ class GroupProfileController {
         updates['updatedAt'] = FieldValue.serverTimestamp();
 
         await _firestore
-            .collection('groups')
+            .collection('groups_v2')
             .doc(groupId)
             .update(updates);
 
@@ -510,7 +510,7 @@ class GroupProfileController {
 
     try {
       final functions = _functions;
-      final result = await functions.httpsCallable('leaveGroup').call({
+      final result = await functions.httpsCallable('leaveGroupV2').call({
         'groupId': groupId,
       });
 
