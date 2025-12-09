@@ -437,6 +437,106 @@ exports.unlinkChild = onCall(
   },
 );
 
+// ═══════════════════════════════════════════════════════════════
+// VALIDATE LINK CODE (Seguridad: previene enumeración de códigos)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Cloud Function para validar un código de vinculación padre-hijo
+ * 🔒 SEGURIDAD: Busca códigos de forma segura sin exponer la colección
+ *
+ * @param {string} code - Código de vinculación (6 caracteres)
+ * @returns {Object} - Información del código y del padre
+ */
+exports.validateLinkCode = onCall({
+  cors: true,
+  consumeAppCheckToken: true,
+}, async (request) => {
+  const db = getFirestore();
+
+  // 1. Validar autenticación
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Usuario no autenticado");
+  }
+
+  const callerId = request.auth.uid;
+  const { code } = request.data;
+
+  // 2. Validar formato del código
+  if (!code || typeof code !== "string" || code.length !== 6) {
+    throw new HttpsError("invalid-argument", "Código de vinculación inválido");
+  }
+
+  // 3. Rate limiting (10 intentos por minuto)
+  const rateLimitCheck = await checkRateLimit(
+    callerId,
+    "validateLinkCode",
+    { maxRequests: 10, windowSeconds: 60 }
+  );
+  if (!rateLimitCheck.allowed) {
+    throw new HttpsError(
+      "resource-exhausted",
+      `Demasiados intentos. Intenta en ${rateLimitCheck.retryAfter} segundos.`
+    );
+  }
+
+  try {
+    // 4. Buscar el código
+    const codeSnapshot = await db.collection("link_codes")
+      .where("code", "==", code.toUpperCase())
+      .where("isActive", "==", true)
+      .where("used", "==", false)
+      .limit(1)
+      .get();
+
+    if (codeSnapshot.empty) {
+      return { valid: false, error: "Código inválido o expirado" };
+    }
+
+    const codeDoc = codeSnapshot.docs[0];
+    const codeData = codeDoc.data();
+
+    // 5. Verificar expiración
+    if (codeData.expiresAt && codeData.expiresAt.toDate() < new Date()) {
+      return { valid: false, error: "El código ha expirado" };
+    }
+
+    // 6. Obtener info del padre
+    const parentId = codeData.parentId || codeData.createdBy;
+    const parentDoc = await db.collection("users").doc(parentId).get();
+
+    if (!parentDoc.exists) {
+      return { valid: false, error: "Usuario no encontrado" };
+    }
+
+    const parentData = parentDoc.data();
+
+    // 7. Verificar si ya existe vínculo
+    const existingLink = await db.collection("parent_children")
+      .where("parentId", "==", parentId)
+      .where("childId", "==", callerId)
+      .where("status", "==", "approved")
+      .limit(1)
+      .get();
+
+    if (!existingLink.empty) {
+      return { valid: false, error: "Ya tienes un vínculo con este padre", alreadyLinked: true };
+    }
+
+    // 8. Retornar info (sin datos sensibles)
+    return {
+      valid: true,
+      parentId: parentId,
+      parentName: parentData.name || "Padre",
+      parentPhotoURL: parentData.photoURL || null,
+      expiresAt: codeData.expiresAt ? codeData.expiresAt.toDate().toISOString() : null,
+    };
+  } catch (error) {
+    console.error(`❌ [validateLinkCode] Error:`, error);
+    throw new HttpsError("internal", `Error validando código: ${error.message}`);
+  }
+});
+
 /**
  * Cloud Function para actualizar el perfil del usuario
  * Maneja el cambio automático de rol basado en la edad

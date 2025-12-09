@@ -60,6 +60,114 @@ async function getLinkedParents(userId) {
 // CONTACTS
 // ═══════════════════════════════════════════════════════════════
 
+/**
+ * Cloud Function para buscar un usuario por su código de contacto
+ * 🔒 SEGURIDAD: Previene enumeración de la colección user_codes
+ *
+ * @param {string} code - Código de usuario (formato: TALIA-ABC123)
+ * @returns {Object} - Información básica del usuario encontrado
+ */
+exports.findUserByCode = onCall({
+  cors: true,
+  consumeAppCheckToken: true,
+}, async (request) => {
+  const db = getFirestore();
+
+  // 1. Validar autenticación
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Usuario no autenticado");
+  }
+
+  const callerId = request.auth.uid;
+  const { code } = request.data;
+
+  // 2. Validar formato del código (TALIA-ABC123)
+  if (!code || typeof code !== "string") {
+    throw new HttpsError("invalid-argument", "Código inválido");
+  }
+
+  const codeUpper = code.toUpperCase().trim();
+  const codeRegex = /^TALIA-[A-Z]{3}[0-9]{3}$/;
+  if (!codeRegex.test(codeUpper)) {
+    throw new HttpsError("invalid-argument", "Formato de código inválido");
+  }
+
+  // 3. Rate limiting (15 intentos por minuto)
+  const rateLimitCheck = await checkRateLimit(
+    callerId,
+    "findUserByCode",
+    { maxRequests: 15, windowSeconds: 60 }
+  );
+  if (!rateLimitCheck.allowed) {
+    throw new HttpsError(
+      "resource-exhausted",
+      `Demasiados intentos. Intenta en ${rateLimitCheck.retryAfter} segundos.`
+    );
+  }
+
+  try {
+    // 4. Buscar el código
+    const codeSnapshot = await db.collection("user_codes")
+      .where("code", "==", codeUpper)
+      .where("isActive", "==", true)
+      .limit(1)
+      .get();
+
+    if (codeSnapshot.empty) {
+      return { found: false, error: "Código no encontrado" };
+    }
+
+    const codeData = codeSnapshot.docs[0].data();
+    const userId = codeData.userId;
+
+    // 5. No permitir buscarse a sí mismo
+    if (userId === callerId) {
+      return { found: false, error: "No puedes agregarte a ti mismo" };
+    }
+
+    // 6. Obtener info del usuario
+    const userDoc = await db.collection("users").doc(userId).get();
+
+    if (!userDoc.exists) {
+      return { found: false, error: "Usuario no encontrado" };
+    }
+
+    const userData = userDoc.data();
+
+    // 7. Verificar si ya son contactos
+    const existingContact = await db.collection("contacts")
+      .where("users", "array-contains", callerId)
+      .get();
+
+    const alreadyContact = existingContact.docs.some(doc => {
+      const users = doc.data().users || [];
+      return users.includes(userId);
+    });
+
+    // 8. Verificar si hay solicitud pendiente
+    const pendingRequest = await db.collection("contact_requests")
+      .where("childId", "in", [callerId, userId])
+      .where("contactId", "in", [callerId, userId])
+      .where("status", "==", "pending")
+      .limit(1)
+      .get();
+
+    // 9. Retornar info básica (sin datos sensibles)
+    return {
+      found: true,
+      userId: userId,
+      name: userData.name || "Usuario",
+      photoURL: userData.photoURL || null,
+      role: userData.role || "adult",
+      alreadyContact: alreadyContact,
+      pendingRequest: !pendingRequest.empty,
+    };
+  } catch (error) {
+    console.error(`❌ [findUserByCode] Error:`, error);
+    throw new HttpsError("internal", `Error buscando usuario: ${error.message}`);
+  }
+});
+
 exports.createContactRequest = onCall(
   { cors: true, consumeAppCheckToken: true },
   async (request) => {

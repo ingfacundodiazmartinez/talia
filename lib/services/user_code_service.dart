@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:math';
 
@@ -67,38 +68,32 @@ class UserCodeService {
   }
 
   /// Buscar usuario por código
+  /// 🔒 SEGURIDAD: Usa Cloud Function para prevenir enumeración de usuarios
   Future<UserCodeResult> findUserByCode(String code) async {
     try {
+      final functions = FirebaseFunctions.instance;
+      final result = await functions.httpsCallable('findUserByCode').call({
+        'code': code,
+      });
 
-      final codeQuery = await _firestore
-          .collection('user_codes')
-          .where('code', isEqualTo: code.toUpperCase())
-          .where('isActive', isEqualTo: true)
-          .limit(1)
-          .get();
+      final data = result.data as Map<String, dynamic>;
 
-      if (codeQuery.docs.isEmpty) {
+      if (data['found'] != true) {
+        final error = data['error'] as String?;
+        if (error != null) {
+          return UserCodeResult.error(error);
+        }
         return UserCodeResult.notFound();
       }
 
-      final codeData = codeQuery.docs.first.data();
-      final userId = codeData['userId'];
-
-      // Obtener información del usuario
-      final userDoc = await _firestore.collection('users').doc(userId).get();
-
-      if (!userDoc.exists) {
-        return UserCodeResult.userNotFound();
-      }
-
-      final userData = userDoc.data()!;
-
       return UserCodeResult.found(
-        userId: userId,
-        name: userData['name'] ?? 'Usuario',
-        email: userData['email'] ?? '',
-        photoURL: userData['photoURL'],
-        isParent: userData['isParent'] ?? false,
+        userId: data['userId'] as String,
+        name: data['name'] as String? ?? 'Usuario',
+        email: '', // No exponer email por seguridad
+        photoURL: data['photoURL'] as String?,
+        isParent: data['role'] == 'parent',
+        alreadyContact: data['alreadyContact'] as bool? ?? false,
+        pendingRequest: data['pendingRequest'] as bool? ?? false,
       );
     } catch (e) {
       return UserCodeResult.error(e.toString());
@@ -156,6 +151,8 @@ class UserCodeResult {
   final String? photoURL;
   final bool? isParent;
   final String? error;
+  final bool alreadyContact;
+  final bool pendingRequest;
 
   UserCodeResult._({
     required this.isFound,
@@ -165,6 +162,8 @@ class UserCodeResult {
     this.photoURL,
     this.isParent,
     this.error,
+    this.alreadyContact = false,
+    this.pendingRequest = false,
   });
 
   factory UserCodeResult.found({
@@ -173,6 +172,8 @@ class UserCodeResult {
     required String email,
     String? photoURL,
     required bool isParent,
+    bool alreadyContact = false,
+    bool pendingRequest = false,
   }) {
     return UserCodeResult._(
       isFound: true,
@@ -181,6 +182,8 @@ class UserCodeResult {
       email: email,
       photoURL: photoURL,
       isParent: isParent,
+      alreadyContact: alreadyContact,
+      pendingRequest: pendingRequest,
     );
   }
 

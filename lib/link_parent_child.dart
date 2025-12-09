@@ -395,55 +395,34 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
       final childId = _auth.currentUser?.uid;
       if (childId == null) return;
 
-      // Buscar el código
-      final linkCodeQuery = await _firestore
-          .collection('link_codes')
-          .where('code', isEqualTo: code)
-          .where('isActive', isEqualTo: true)
-          .where('used', isEqualTo: false)
-          .limit(1)
-          .get();
+      // 🔒 SEGURIDAD: Usar Cloud Function para validar código
+      // Esto previene enumeración de códigos de otros usuarios
+      final functions = FirebaseFunctions.instance;
+      final validateResult = await functions.httpsCallable('validateLinkCode').call({
+        'code': code,
+      });
 
-      if (linkCodeQuery.docs.isEmpty) {
+      final validationData = validateResult.data as Map<String, dynamic>;
+
+      if (validationData['valid'] != true) {
+        final error = validationData['error'] ?? 'Código inválido o expirado';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('❌ Código inválido o expirado'),
+            content: Text('❌ $error'),
             backgroundColor: Colors.red,
           ),
         );
         return;
       }
 
-      final linkCodeDoc = linkCodeQuery.docs.first;
-      final linkCodeData = linkCodeDoc.data();
-      final parentId = linkCodeData['parentId'];
-      final expiresAt = (linkCodeData['expiresAt'] as Timestamp).toDate();
-
-      // Verificar si expiró
-      if (expiresAt.isBefore(DateTime.now())) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('❌ El código ha expirado'),
-            backgroundColor: Colors.red,
-          ),
-        );
-        return;
-      }
-
-      // Verificar si ya existe un vínculo con este padre en parent_children
-      final existingLink = await _firestore
-          .collection('parent_children')
-          .where('parentId', isEqualTo: parentId)
-          .where('childId', isEqualTo: childId)
-          .where('status', isEqualTo: 'approved')
-          .limit(1)
-          .get();
-
-      if (existingLink.docs.isNotEmpty) {
+      // Si ya está vinculado
+      if (validationData['alreadyLinked'] == true) {
         ReleaseLogger.log('Ya existe un vínculo activo entre este padre e hijo', tag: 'LinkParentChild');
         Navigator.of(context).pop(false);
         return;
       }
+
+      final parentId = validationData['parentId'] as String;
 
       // Verificar si ya está vinculado con otro padre usando parent_children
       final userRoleService = UserRoleService();
@@ -457,7 +436,7 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
           childId: childId,
           existingParentId: existingParents.first,
           newParentId: parentId,
-          linkCodeDocId: linkCodeDoc.id,
+          linkCode: code, // Usar código en lugar de docId para seguridad
         );
 
         Navigator.of(context).pop(true);
@@ -650,7 +629,7 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
     required String childId,
     required String existingParentId,
     required String newParentId,
-    required String linkCodeDocId,
+    required String linkCode,
   }) async {
     try {
       // Obtener información del niño y del nuevo padre
@@ -667,7 +646,7 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
         'existingParentId': existingParentId,
         'newParentId': newParentId,
         'newParentName': newParentName,
-        'linkCodeDocId': linkCodeDocId,
+        'linkCode': linkCode, // Usar código en lugar de docId
         'status': 'pending', // pending, approved, rejected
         'createdAt': FieldValue.serverTimestamp(),
       });
