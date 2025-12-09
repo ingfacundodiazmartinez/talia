@@ -54,88 +54,92 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    // Forzar tema claro para la pantalla de login
+    return Theme(
+      data: ThemeData.light().copyWith(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Color(0xFF9D7FE8),
+          brightness: Brightness.light,
+        ),
+      ),
+      child: Builder(
+        builder: (context) {
+          final colorScheme = Theme.of(context).colorScheme;
 
-    return Scaffold(
-      resizeToAvoidBottomInset: true, // Ajustar layout cuando aparece el teclado
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: isDarkMode
-                ? [
-                    colorScheme.primary.withValues(alpha: 0.3),
-                    colorScheme.primary.withValues(alpha: 0.2),
-                    colorScheme.secondary.withValues(alpha: 0.2),
-                  ]
-                : [
+          return Scaffold(
+            resizeToAvoidBottomInset: true,
+            body: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
                     Color(0xFF9D7FE8),
                     Color(0xFFB39DDB),
                     Color(0xFFCE93D8),
                   ],
-          ),
-        ),
-        child: SafeArea(
-          child: FadeTransition(
-            opacity: _fadeAnimation,
-            child: Center(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(24.0),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    // Logo
-                    Image.asset(
-                      'assets/images/logo.png',
-                      height: 80,
-                      fit: BoxFit.contain,
-                    ),
+                ),
+              ),
+              child: SafeArea(
+                child: FadeTransition(
+                  opacity: _fadeAnimation,
+                  child: Center(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(24.0),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          // Logo
+                          Image.asset(
+                            'assets/images/logo.png',
+                            height: 80,
+                            fit: BoxFit.contain,
+                          ),
 
-                    SizedBox(height: 8),
+                          SizedBox(height: 8),
 
-                    Text(
-                      'Verificación con SMS',
-                      style: TextStyle(
-                        fontSize: 16,
-                        color: isDarkMode
-                            ? colorScheme.onSurface.withValues(alpha: 0.9)
-                            : Colors.white.withValues(alpha: 0.9),
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
+                          Text(
+                            'Verificación con SMS',
+                            style: TextStyle(
+                              fontSize: 16,
+                              color: Colors.white.withValues(alpha: 0.9),
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
 
-                    SizedBox(height: 48),
+                          SizedBox(height: 48),
 
-                    // Phone Verification Widget Card
-                    Container(
-                      padding: EdgeInsets.all(24),
-                      decoration: BoxDecoration(
-                        color: colorScheme.surface,
-                        borderRadius: BorderRadius.circular(24),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.1),
-                            blurRadius: 30,
-                            offset: Offset(0, 10),
+                          // Phone Verification Widget Card
+                          Container(
+                            padding: EdgeInsets.all(24),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(24),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.1),
+                                  blurRadius: 30,
+                                  offset: Offset(0, 10),
+                                ),
+                              ],
+                            ),
+                            child: PhoneVerificationWidget(
+                              onVerificationSuccess: _onPhoneVerificationSuccess,
+                              onCancel: () {
+                                // Volver al selector de tipo de app
+                                Navigator.of(context).pop();
+                              },
+                            ),
                           ),
                         ],
                       ),
-                      child: PhoneVerificationWidget(
-                        onVerificationSuccess: _onPhoneVerificationSuccess,
-                        onCancel: () {
-                          // Volver al selector de tipo de app
-                          Navigator.of(context).pop();
-                        },
-                      ),
                     ),
-                  ],
+                  ),
                 ),
               ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }

@@ -260,48 +260,54 @@ class _ProfileCompletionScreenState extends State<ProfileCompletionScreen>
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    // Forzar tema claro para la pantalla de completar perfil
+    return Theme(
+      data: ThemeData.light().copyWith(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Color(0xFF9D7FE8),
+          brightness: Brightness.light,
+        ),
+      ),
+      child: Builder(
+        builder: (context) {
+          final colorScheme = Theme.of(context).colorScheme;
 
-    return Scaffold(
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: isDarkMode
-                ? [
-                    colorScheme.primary.withValues(alpha: 0.3),
-                    colorScheme.primary.withValues(alpha: 0.2),
-                    colorScheme.secondary.withValues(alpha: 0.2),
-                  ]
-                : [
+          return Scaffold(
+            body: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
                     Color(0xFF9D7FE8),
                     Color(0xFFB39DDB),
                     Color(0xFFCE93D8),
                   ],
-          ),
-        ),
-        child: SafeArea(
-          child: _isLoadingData
-              ? _buildLoadingView(colorScheme)
-              : FadeTransition(
-                  opacity: _fadeAnimation,
-                  child: Center(
-                    child: SingleChildScrollView(
-                      padding: const EdgeInsets.all(24.0),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          ProfileHeader(isEditMode: _isEditMode),
-                          SizedBox(height: 32),
-                          _buildFormCard(colorScheme),
-                        ],
-                      ),
-                    ),
-                  ),
                 ),
-        ),
+              ),
+              child: SafeArea(
+                child: _isLoadingData
+                    ? _buildLoadingView(colorScheme)
+                    : FadeTransition(
+                        opacity: _fadeAnimation,
+                        child: Center(
+                          child: SingleChildScrollView(
+                            padding: const EdgeInsets.all(24.0),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                ProfileHeader(isEditMode: _isEditMode),
+                                SizedBox(height: 32),
+                                _buildFormCard(colorScheme),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+              ),
+            ),
+          );
+        },
       ),
     );
   }
