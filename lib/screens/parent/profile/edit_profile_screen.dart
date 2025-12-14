@@ -1,4 +1,6 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -31,6 +33,11 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   bool _isUploadingImage = false;
   String? _profileImageUrl;
 
+  // Debug NSE
+  String _nseLastInvoked = 'Cargando...';
+  List<String> _nseDebugLogs = [];
+  static const _nseChannel = MethodChannel('com.talia.chat/nse_deduplication');
+
   @override
   void initState() {
     super.initState();
@@ -39,6 +46,32 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     _phoneController = TextEditingController();
 
     _initializeController();
+    _loadNSEDebugInfo();
+  }
+
+  Future<void> _loadNSEDebugInfo() async {
+    if (!Platform.isIOS) {
+      setState(() => _nseLastInvoked = 'Solo disponible en iOS');
+      return;
+    }
+
+    try {
+      final lastInvoked = await _nseChannel.invokeMethod('getNSELastInvoked');
+      final logs = await _nseChannel.invokeMethod('getNSEDebugLogs');
+
+      if (mounted) {
+        setState(() {
+          _nseLastInvoked = lastInvoked?.toString() ?? 'Nunca invocado';
+          if (logs != null && logs is List) {
+            _nseDebugLogs = logs.map((e) => e.toString()).toList();
+          }
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _nseLastInvoked = 'Error: $e');
+      }
+    }
   }
 
   Future<void> _initializeController() async {
@@ -205,13 +238,15 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                 SizedBox(height: 40),
                 _buildNameField(colorScheme),
                 SizedBox(height: 24),
-                _buildEmailField(colorScheme),
-                SizedBox(height: 24),
                 _buildPhoneField(colorScheme),
                 SizedBox(height: 24),
                 _buildBirthDateField(colorScheme),
                 SizedBox(height: 40),
                 _buildSaveButton(colorScheme),
+                if (Platform.isIOS) ...[
+                  SizedBox(height: 40),
+                  _buildNSEDebugSection(colorScheme),
+                ],
               ],
             ),
           ),
@@ -335,42 +370,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
             }
             return null;
           },
-        ),
-      ],
-    );
-  }
-
-  Widget _buildEmailField(ColorScheme colorScheme) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Correo Electrónico',
-          style: TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
-            color: colorScheme.onSurface,
-          ),
-        ),
-        SizedBox(height: 8),
-        TextFormField(
-          initialValue: _controller.currentUserEmail ?? '',
-          enabled: false,
-          decoration: InputDecoration(
-            prefixIcon: Icon(Icons.email_outlined,
-                color: colorScheme.onSurfaceVariant),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            filled: true,
-            fillColor:
-                colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-          ),
-        ),
-        SizedBox(height: 8),
-        Text(
-          'El correo no se puede modificar',
-          style: TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant),
         ),
       ],
     );
@@ -511,6 +510,89 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   fontWeight: FontWeight.w600,
                 ),
               ),
+      ),
+    );
+  }
+
+  Widget _buildNSEDebugSection(ColorScheme colorScheme) {
+    return Container(
+      padding: EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.orange.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.bug_report, color: Colors.orange),
+              SizedBox(width: 8),
+              Text(
+                'DEBUG NSE',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.orange,
+                ),
+              ),
+              Spacer(),
+              IconButton(
+                icon: Icon(Icons.refresh, color: Colors.orange),
+                onPressed: _loadNSEDebugInfo,
+                tooltip: 'Recargar',
+              ),
+            ],
+          ),
+          SizedBox(height: 12),
+          Text(
+            'NSE Última invocación:',
+            style: TextStyle(fontWeight: FontWeight.w600),
+          ),
+          SizedBox(height: 4),
+          Container(
+            width: double.infinity,
+            padding: EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: colorScheme.surface,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              _nseLastInvoked,
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 12,
+                color: _nseLastInvoked.contains('Nunca') ? Colors.red : Colors.green,
+              ),
+            ),
+          ),
+          if (_nseDebugLogs.isNotEmpty) ...[
+            SizedBox(height: 12),
+            Text(
+              'NSE Logs:',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            SizedBox(height: 4),
+            Container(
+              width: double.infinity,
+              padding: EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: colorScheme.surface,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: _nseDebugLogs.map((log) => Text(
+                  log,
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 10,
+                  ),
+                )).toList(),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }

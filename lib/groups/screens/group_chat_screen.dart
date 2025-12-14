@@ -25,6 +25,7 @@ import '../../notification_service.dart';
 import '../../widgets/reaction_picker.dart';
 import '../../utils/release_logger.dart';
 import '../../services/local_unread_count_service.dart';
+import '../../services/notification_tracking_service.dart';
 
 /// Chat screen for Groups V2
 ///
@@ -80,6 +81,11 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
     NotificationService().setCurrentChat(widget.groupId);
     // ✅ FIX: Marcar que estamos en el grupo y resetear contador de no leídos
     LocalUnreadCountService().enterChat(widget.groupId);
+    // ✅ Auto-dismiss: Limpiar notificaciones de este grupo cuando el usuario entra
+    NotificationTrackingService().dismissNotificationsForContext(
+      type: NotificationContext.group,
+      contextId: widget.groupId,
+    );
     _initializeChat();
   }
 

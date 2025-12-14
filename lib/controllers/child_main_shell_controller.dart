@@ -9,6 +9,7 @@ import '../notification_service.dart';
 import '../services/chats/chat_orchestrator.dart';
 import '../services/local_unread_count_service.dart';
 import '../services/contacts_sync_service.dart';
+import '../services/app_state_service.dart';
 
 /// Controller para el shell principal de niños
 ///
@@ -36,10 +37,17 @@ class ChildMainShellController {
 
   // Subscripciones privadas
   StreamSubscription? _chatNotificationSubscription;
+  StreamSubscription? _storyNotificationSubscription;
+  StreamSubscription? _contactApprovedNotificationSubscription;
+  StreamSubscription? _groupMembershipApprovedNotificationSubscription;
   StreamSubscription? _roleChangeSubscription;
+  StreamSubscription? _appStateSubscription;
 
   // Callbacks para navegación (configurados por el screen)
   Function(Map<String, dynamic>)? onChatNotificationTap;
+  Function(Map<String, dynamic>)? onStoryNotificationTap;
+  Function(Map<String, dynamic>)? onContactApprovedNotificationTap;
+  Function(Map<String, dynamic>)? onGroupMembershipApprovedNotificationTap;
 
   /// Constructor
   ChildMainShellController({
@@ -114,6 +122,7 @@ class ChildMainShellController {
         // Sincronizar contactos en background para adultos
         if (userRole == 'adult') {
           _syncContactsInBackground();
+          _setupAppStateListener();
         }
       } else {
         ReleaseLogger.warning('Usuario es parent (role: $userRole) - NO inicializando controller', tag: 'ChildMainShell');
@@ -135,6 +144,18 @@ class ChildMainShellController {
     }
   }
 
+  /// Configurar listener para cambios de estado de la app (foreground/background)
+  void _setupAppStateListener() {
+    _appStateSubscription = AppStateService().foregroundStateStream.listen((isInForeground) {
+      if (isInForeground) {
+        ReleaseLogger.log('📱 App volvió a foreground - sincronizando contactos (adult)', tag: 'ChildMainShell');
+        _contactsSyncService.syncContacts().catchError((error) {
+          ReleaseLogger.error('Error syncing contacts on resume: $error', tag: 'ChildMainShell');
+        });
+      }
+    });
+  }
+
   /// Sincronizar contactos en background (solo para adultos)
   void _syncContactsInBackground() {
     // Usar WidgetsBinding para ejecutar después del primer frame
@@ -146,14 +167,39 @@ class ChildMainShellController {
     });
   }
 
-  /// Configurar listeners de notificaciones de chat
+  /// Configurar listeners de notificaciones
   void _setupNotificationListeners() {
     try {
+      // Chat y grupo messages
       _chatNotificationSubscription = _notificationService
           .chatNotificationTapStream
           .listen((data) {
         ReleaseLogger.log('Chat notification tapped: ${data.toString()}', tag: 'ChildMainShell');
         onChatNotificationTap?.call(data);
+      });
+
+      // Historias (approved/rejected/reply/new_story)
+      _storyNotificationSubscription = _notificationService
+          .storyNotificationTapStream
+          .listen((data) {
+        ReleaseLogger.log('Story notification tapped: $data', tag: 'ChildMainShell');
+        onStoryNotificationTap?.call(data);
+      });
+
+      // Contacto aprobado
+      _contactApprovedNotificationSubscription = _notificationService
+          .contactApprovedNotificationTapStream
+          .listen((data) {
+        ReleaseLogger.log('Contact approved notification tapped: $data', tag: 'ChildMainShell');
+        onContactApprovedNotificationTap?.call(data);
+      });
+
+      // Membresía de grupo aprobada
+      _groupMembershipApprovedNotificationSubscription = _notificationService
+          .groupMembershipApprovedNotificationTapStream
+          .listen((data) {
+        ReleaseLogger.log('Group membership approved notification tapped: $data', tag: 'ChildMainShell');
+        onGroupMembershipApprovedNotificationTap?.call(data);
       });
 
       ReleaseLogger.log('Listeners de notificaciones configurados', tag: 'ChildMainShell');
@@ -260,7 +306,11 @@ class ChildMainShellController {
   void dispose() {
     ReleaseLogger.log('Disposing ChildMainShellController', tag: 'ChildMainShell');
     _chatNotificationSubscription?.cancel();
+    _storyNotificationSubscription?.cancel();
+    _contactApprovedNotificationSubscription?.cancel();
+    _groupMembershipApprovedNotificationSubscription?.cancel();
     _roleChangeSubscription?.cancel();
+    _appStateSubscription?.cancel();
     _childController?.dispose();
   }
 }

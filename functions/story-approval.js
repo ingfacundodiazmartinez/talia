@@ -598,12 +598,12 @@ async function checkRateLimit(userId) {
     .get();
 
   const hourlyCount = hourlyQuery.size;
-  const maxPerHour = 5;
+  const maxPerHour = 20;
 
   if (hourlyCount >= maxPerHour) {
     console.error(`❌ [RateLimit] Usuario ${userId} excedió límite horario: ${hourlyCount}/${maxPerHour}`);
     throw new HttpsError('resource-exhausted',
-      `Has excedido el límite de ${maxPerHour} historias por hora. Espera un poco.`);
+      `Has alcanzado el límite de ${maxPerHour} historias por hora. Espera un poco.`);
   }
 
   console.log(`✅ [RateLimit] Usuario dentro de límites: ${dailyCount}/${maxPerDay} diarias, ${hourlyCount}/${maxPerHour} por hora`);

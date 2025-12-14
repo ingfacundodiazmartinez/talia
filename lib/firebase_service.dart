@@ -35,13 +35,20 @@ class FirebaseService {
     return doc.data();
   }
 
-  // Actualizar estado en línea (upsert)
+  // Actualizar estado en línea (solo si el documento existe)
+  // ✅ FIX: No crear documento si no existe para evitar interferir con ProfileCompletionScreen
   Future<void> updateOnlineStatus(bool isOnline) async {
     if (currentUser != null) {
-      await _firestore.collection('users').doc(currentUser!.uid).set({
+      // Verificar si el documento existe antes de actualizar
+      final userDoc = await _firestore.collection('users').doc(currentUser!.uid).get();
+      if (!userDoc.exists) {
+        // Usuario nuevo, no actualizar estado online hasta que complete perfil
+        return;
+      }
+      await _firestore.collection('users').doc(currentUser!.uid).update({
         'isOnline': isOnline,
         'lastSeen': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      });
     }
   }
 

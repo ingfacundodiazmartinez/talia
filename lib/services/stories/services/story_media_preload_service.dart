@@ -95,7 +95,10 @@ class StoryMediaPreloadService {
     _totalPreloads++;
 
     try {
-      ReleaseLogger.log('⬇️ Precargando ${story.mediaType}: ${story.mediaUrl.substring(0, 50)}...', tag: 'MediaPreload');
+      final urlPreview = story.mediaUrl.length > 50
+          ? '${story.mediaUrl.substring(0, 50)}...'
+          : story.mediaUrl;
+      ReleaseLogger.log('⬇️ Precargando ${story.mediaType}: $urlPreview', tag: 'MediaPreload');
 
       final stopwatch = Stopwatch()..start();
 
@@ -158,8 +161,13 @@ class StoryMediaPreloadService {
       return false;
     }
 
-    // Verificar que la URL sea válida
+    // Verificar que la URL sea válida y sea HTTP/HTTPS
     if (story.mediaUrl.isEmpty) {
+      return false;
+    }
+
+    // Solo precargar URLs HTTP/HTTPS (no mood://, file://, etc.)
+    if (!story.mediaUrl.startsWith('http://') && !story.mediaUrl.startsWith('https://')) {
       return false;
     }
 

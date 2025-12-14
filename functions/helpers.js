@@ -497,22 +497,17 @@ async function sendDirectPushNotification(params) {
     // Detectar si es mensaje de chat para activar NSE
     const isChatMessage = type === 'chat_message' || type === 'group_message';
 
-    // ✅ CRITICAL: Para que NSE se invoque, NO debe incluirse content-available
-    // Apple docs: "content-available must be set to 0 (or left un-set) for mutable-content to work"
-    // - Chat messages: mutable-content=true para NSE (sin content-available)
-    // - Other notifications: content-available=1 para background handler (sin mutable-content)
+    // ✅ FORMATO ORIGINAL que funcionaba para background notifications
     const apsPayload = {
       alert: {
         title: title || "Talia",
         body: body || "",
       },
       sound: "default",
-      // ⚠️ IMPORTANTE: content-available y mutable-content son MUTUAMENTE EXCLUYENTES
-      // Si ambos están presentes, iOS no invoca el NSE
-      // Usando 'true' (boolean) en lugar de 1 (integer) según documentación FCM Admin SDK
+      // mutable-content para NSE, content-available para background handler
       ...(isChatMessage
-        ? { "mutable-content": true }  // Para NSE (no content-available)
-        : { "content-available": 1 }  // Para background handler (no mutable-content)
+        ? { "mutable-content": 1 }
+        : { "content-available": 1 }
       ),
     };
 
@@ -523,23 +518,27 @@ async function sendDirectPushNotification(params) {
       },
       payload: {
         aps: apsPayload,
+        // Datos para NSE userInfo
+        ...(messageId && { messageId }),
+        ...(senderId && { senderId }),
+        ...(senderName && { senderName }),
+        ...(senderPhotoUrl && { senderPhotoUrl }),
+        ...(chatId && { chatId }),
+        ...(isGroup !== undefined && { isGroup: String(isGroup) }),
+        type: type || "chat_message",
       },
     };
 
     const message = {
-      // ✅ NO incluir notification en root ni en android para que onMessageReceived() se ejecute
-      // El Native Service (MyFirebaseMessagingService.kt) descargará la foto y mostrará la notificación
       data: fcmData,
       tokens: fcmTokens,
       android: {
         priority: "high",
-        // ❌ NO incluir android.notification - fuerza que onMessageReceived() se ejecute
-        // Nuestro código nativo descargará la foto del sender y mostrará la notificación
       },
       apns: apnsPayload,
     };
 
-    // 🔍 DEBUG: Log payload para verificar que NSE se invoque
+    // 🔍 DEBUG: Log payload
     console.log(`📱 [DirectPush] isChatMessage: ${isChatMessage}`);
     console.log(`📱 [DirectPush] apsPayload:`, JSON.stringify(apsPayload));
 
@@ -548,13 +547,14 @@ async function sendDirectPushNotification(params) {
 
     console.log(`✅ [DirectPush] Push enviado: ${response.successCount} exitosos, ${response.failureCount} fallidos`);
 
-    if (response.failureCount > 0) {
-      response.responses.forEach((resp, idx) => {
-        if (!resp.success) {
-          console.error(`  - Token ${idx}: ${resp.error?.code} - ${resp.error?.message}`);
-        }
-      });
-    }
+    // Log TODOS los responses para debugging
+    response.responses.forEach((resp, idx) => {
+      if (resp.success) {
+        console.log(`  ✅ Token ${idx}: SUCCESS - messageId: ${resp.messageId}`);
+      } else {
+        console.error(`  ❌ Token ${idx}: FAILED - ${resp.error?.code} - ${resp.error?.message}`);
+      }
+    });
 
     return { success: response.successCount > 0 };
   } catch (error) {

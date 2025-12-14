@@ -86,11 +86,12 @@ class UserCodeService {
         return UserCodeResult.notFound();
       }
 
+      // 🔒 SEGURIDAD: No exponer email ni photoURL por privacidad
       return UserCodeResult.found(
         userId: data['userId'] as String,
         name: data['name'] as String? ?? 'Usuario',
-        email: '', // No exponer email por seguridad
-        photoURL: data['photoURL'] as String?,
+        email: '',
+        photoURL: null,
         isParent: data['role'] == 'parent',
         alreadyContact: data['alreadyContact'] as bool? ?? false,
         pendingRequest: data['pendingRequest'] as bool? ?? false,

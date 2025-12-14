@@ -13,6 +13,8 @@ class StoryUserHeader extends StatefulWidget {
   final String timeAgo;
   final bool isCurrentUser;
   final VoidCallback? onDelete;
+  final VoidCallback? onDownload;
+  final VoidCallback? onShare;
   final VoidCallback onClose;
 
   const StoryUserHeader({
@@ -23,6 +25,8 @@ class StoryUserHeader extends StatefulWidget {
     required this.timeAgo,
     required this.isCurrentUser,
     this.onDelete,
+    this.onDownload,
+    this.onShare,
     required this.onClose,
   });
 
@@ -157,8 +161,19 @@ class _StoryUserHeaderState extends State<StoryUserHeader> {
               ],
             ),
           ),
+          // Botón de compartir (visible para todas las historias)
+          if (widget.onShare != null)
+            IconButton(
+              onPressed: widget.onShare,
+              icon: Icon(
+                Icons.share,
+                color: Colors.white,
+                shadows: _textShadows,
+              ),
+              tooltip: 'Compartir',
+            ),
           // Menú de opciones si es la historia del usuario actual
-          if (widget.isCurrentUser && widget.onDelete != null)
+          if (widget.isCurrentUser && (widget.onDelete != null || widget.onDownload != null))
             PopupMenuButton<String>(
               icon: Icon(
                 Icons.more_vert,
@@ -168,23 +183,40 @@ class _StoryUserHeaderState extends State<StoryUserHeader> {
               color: Colors.black87,
               onSelected: (value) async {
                 if (value == 'delete') {
-                  widget.onDelete!();
+                  widget.onDelete?.call();
+                } else if (value == 'download') {
+                  widget.onDownload?.call();
                 }
               },
-              itemBuilder: (context) => const [
-                PopupMenuItem(
-                  value: 'delete',
-                  child: Row(
-                    children: [
-                      Icon(Icons.delete, color: Colors.red),
-                      SizedBox(width: 8),
-                      Text(
-                        'Eliminar historia',
-                        style: TextStyle(color: Colors.white),
-                      ),
-                    ],
+              itemBuilder: (context) => [
+                if (widget.onDownload != null)
+                  const PopupMenuItem(
+                    value: 'download',
+                    child: Row(
+                      children: [
+                        Icon(Icons.download, color: Colors.white),
+                        SizedBox(width: 8),
+                        Text(
+                          'Descargar',
+                          style: TextStyle(color: Colors.white),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
+                if (widget.onDelete != null)
+                  const PopupMenuItem(
+                    value: 'delete',
+                    child: Row(
+                      children: [
+                        Icon(Icons.delete, color: Colors.red),
+                        SizedBox(width: 8),
+                        Text(
+                          'Eliminar historia',
+                          style: TextStyle(color: Colors.white),
+                        ),
+                      ],
+                    ),
+                  ),
               ],
             ),
           IconButton(

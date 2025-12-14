@@ -94,6 +94,10 @@ class MainActivity : FlutterActivity() {
                     Log.d("MainActivity", "📨 showChatNotification llamado desde Dart")
                     val args = call.arguments as? Map<String, Any>
                     if (args != null) {
+                        // ✅ Extraer notificationId para tracking y auto-dismiss
+                        val notificationId = (args["notificationId"] as? Int) ?: 0
+                        Log.d("MainActivity", "📨 notificationId=$notificationId")
+
                         // Crear servicio y llamar método showNotification
                         MyFirebaseMessagingService.showNotificationFromForeground(
                             context = this,
@@ -102,12 +106,21 @@ class MainActivity : FlutterActivity() {
                             senderName = args["senderName"] as? String ?: "Usuario",
                             senderId = args["senderId"] as? String ?: "",
                             senderPhotoUrl = args["senderPhotoUrl"] as? String ?: "",
-                            chatId = args["chatId"] as? String ?: ""
+                            chatId = args["chatId"] as? String ?: "",
+                            notificationId = notificationId
                         )
                         result.success(true)
                     } else {
                         result.error("INVALID_DATA", "No se recibieron datos de notificación", null)
                     }
+                }
+                "cancelAllNotifications" -> {
+                    // ✅ Cancelar TODAS las notificaciones nativas
+                    Log.d("MainActivity", "🧹 cancelAllNotifications llamado desde Dart")
+                    val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+                    notificationManager.cancelAll()
+                    Log.d("MainActivity", "✅ Todas las notificaciones canceladas")
+                    result.success(true)
                 }
                 else -> result.notImplemented()
             }

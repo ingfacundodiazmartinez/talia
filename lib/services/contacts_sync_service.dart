@@ -36,70 +36,63 @@ class ContactsSyncService {
 
   /// Sincronizar contactos del dispositivo con Cloud Function
   /// Se ejecuta al abrir la app (transparente al usuario)
+  ///
+  /// Lógica optimizada:
+  /// - SIEMPRE verifica cambios locales (comparando hashes del dispositivo vs cache)
+  /// - Solo llama a Cloud Function si hay cambios
+  /// - force=true salta la verificación de cambios y siempre llama a CF
   Future<void> syncContacts({bool force = false}) async {
+    ReleaseLogger.log('🔄 syncContacts() llamado (force=$force)', tag: 'ContactsSync');
+
     // Evitar syncs concurrentes
     if (_isSyncing) {
-      ReleaseLogger.log('Sync ya en progreso, saltando', tag: 'ContactsSync');
+      ReleaseLogger.log('⏭️ Sync ya en progreso, saltando', tag: 'ContactsSync');
       return;
     }
 
     _isSyncing = true;
+    ReleaseLogger.log('🔒 _isSyncing = true', tag: 'ContactsSync');
 
     try {
       await initialize();
+      ReleaseLogger.log('✅ Hive inicializado', tag: 'ContactsSync');
 
       final currentUser = _auth.currentUser;
       if (currentUser == null) {
-        ReleaseLogger.log('Usuario no autenticado', tag: 'ContactsSync');
+        ReleaseLogger.log('❌ Usuario no autenticado', tag: 'ContactsSync');
         return;
       }
+      ReleaseLogger.log('👤 Usuario: ${currentUser.uid}', tag: 'ContactsSync');
 
-      // Verificar throttling (no sincronizar si fue hace menos de 1 hora)
-      if (!force) {
-        final lastSync = _cacheBox?.get(_lastSyncKey) as int?;
-        if (lastSync != null) {
-          final timeSinceLastSync = DateTime.now().millisecondsSinceEpoch - lastSync;
-          if (timeSinceLastSync < 3600000) {
-            // Solo sincronizar si hay nuevos contactos
-            final hasNew = await _hasNewDeviceContacts();
-            if (!hasNew) {
-              ReleaseLogger.log('Sin cambios en contactos, saltando sync', tag: 'ContactsSync');
-              return;
-            }
-          }
-        }
-      }
-
-      // 1. Verificar y solicitar permiso de contactos
+      // 1. Verificar permiso de contactos (no solicitar automáticamente)
+      ReleaseLogger.log('📋 Verificando permiso de contactos...', tag: 'ContactsSync');
       bool hasPermission = false;
       try {
         hasPermission = await _deviceContacts.hasPermission();
-
-        // Si no tiene permiso, solicitarlo
-        if (!hasPermission) {
-          ReleaseLogger.log('Solicitando permiso de contactos...', tag: 'ContactsSync');
-          hasPermission = await _deviceContacts.requestPermission();
-        }
+        ReleaseLogger.log('📋 hasPermission: $hasPermission', tag: 'ContactsSync');
       } catch (e) {
-        ReleaseLogger.log('Error verificando/solicitando permisos: $e', tag: 'ContactsSync');
+        ReleaseLogger.log('❌ Error verificando permisos: $e', tag: 'ContactsSync');
         return;
       }
 
       if (!hasPermission) {
-        ReleaseLogger.log('Permiso de contactos denegado por el usuario', tag: 'ContactsSync');
+        ReleaseLogger.log('⏭️ Sin permiso de contactos, saltando sync', tag: 'ContactsSync');
         return;
       }
 
       // 2. Obtener contactos del dispositivo
+      ReleaseLogger.log('📱 Obteniendo contactos del dispositivo...', tag: 'ContactsSync');
       List<dynamic> deviceContacts = [];
       try {
         deviceContacts = await _deviceContacts.getDeviceContacts();
+        ReleaseLogger.log('📱 Contactos obtenidos: ${deviceContacts.length}', tag: 'ContactsSync');
       } catch (e) {
-        ReleaseLogger.log('Error obteniendo contactos: $e', tag: 'ContactsSync');
+        ReleaseLogger.log('❌ Error obteniendo contactos: $e', tag: 'ContactsSync');
         return;
       }
 
       // 3. Extraer y normalizar números de teléfono
+      ReleaseLogger.log('🔢 Normalizando números...', tag: 'ContactsSync');
       final normalizedNumbers = <String>{};
       for (final contact in deviceContacts) {
         try {
@@ -116,20 +109,42 @@ class ContactsSyncService {
         }
       }
 
-      ReleaseLogger.log('${normalizedNumbers.length} números normalizados', tag: 'ContactsSync');
+      ReleaseLogger.log('✅ ${normalizedNumbers.length} números normalizados', tag: 'ContactsSync');
 
-      // 4. Hashear los números para privacidad (no se envían números en texto plano)
+      // 4. Hashear los números para privacidad
       final hashedNumbers = normalizedNumbers
           .map((phone) => _phoneNormalizer.hashPhone(phone))
           .where((hash) => hash.isNotEmpty)
           .toSet();
 
-      ReleaseLogger.log('${hashedNumbers.length} números hasheados para sync', tag: 'ContactsSync');
+      ReleaseLogger.log('🔐 ${hashedNumbers.length} números hasheados', tag: 'ContactsSync');
 
-      // 5. Guardar hashes en cache local (no números en texto plano)
+      // 5. Comparar con cache local para detectar cambios
+      final cachedHashes = _cacheBox?.get(_deviceNumbersKey) as List?;
+      final cachedSet = cachedHashes != null
+          ? Set<String>.from(cachedHashes.map((e) => e.toString()))
+          : <String>{};
+
+      final hasChanges = force ||
+          cachedHashes == null ||
+          hashedNumbers.difference(cachedSet).isNotEmpty ||
+          cachedSet.difference(hashedNumbers).isNotEmpty;
+
+      if (!hasChanges) {
+        ReleaseLogger.log('⏭️ Sin cambios en contactos locales, saltando llamada a CF', tag: 'ContactsSync');
+        return;
+      }
+
+      final newContacts = hashedNumbers.difference(cachedSet).length;
+      final removedContacts = cachedSet.difference(hashedNumbers).length;
+      ReleaseLogger.log('🆕 Cambios detectados: +$newContacts nuevos, -$removedContacts eliminados', tag: 'ContactsSync');
+
+      // 6. Guardar hashes en cache local
       await _cacheBox?.put(_deviceNumbersKey, hashedNumbers.toList());
+      ReleaseLogger.log('💾 Hashes guardados en cache local', tag: 'ContactsSync');
 
-      // 6. Llamar a Cloud Function para matching (envía hashes, no números)
+      // 7. Llamar a Cloud Function para matching (solo si hay cambios)
+      ReleaseLogger.log('☁️ Llamando a Cloud Function syncDeviceContacts...', tag: 'ContactsSync');
       try {
         final callable = FirebaseFunctions.instance.httpsCallable('syncDeviceContacts');
         final result = await callable.call<Map<String, dynamic>>({
@@ -141,21 +156,22 @@ class ContactsSyncService {
         final matches = data['matches'] as int? ?? 0;
 
         ReleaseLogger.log(
-          'Sync completado: $created contactos creados, $matches matches encontrados',
+          '✅ Sync completado: $created contactos creados, $matches matches encontrados',
           tag: 'ContactsSync',
         );
       } catch (e) {
-        ReleaseLogger.error('Error en Cloud Function syncDeviceContacts: $e', tag: 'ContactsSync');
+        ReleaseLogger.error('❌ Error en Cloud Function syncDeviceContacts: $e', tag: 'ContactsSync');
         // No bloquear el flujo si falla la Cloud Function
       }
 
-      // 7. Actualizar timestamp de último sync
+      // 8. Actualizar timestamp de último sync
       await _cacheBox?.put(_lastSyncKey, DateTime.now().millisecondsSinceEpoch);
 
     } catch (e) {
-      ReleaseLogger.error('Error en syncContacts: $e', tag: 'ContactsSync');
+      ReleaseLogger.error('❌ Error general en syncContacts: $e', tag: 'ContactsSync');
     } finally {
       _isSyncing = false;
+      ReleaseLogger.log('🔓 _isSyncing = false', tag: 'ContactsSync');
     }
   }
 

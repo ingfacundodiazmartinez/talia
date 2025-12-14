@@ -113,6 +113,35 @@ class _ChatListItemState extends State<ChatListItem> {
     }
   }
 
+  Widget _buildSlideButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: Colors.white, size: 24),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -124,82 +153,103 @@ class _ChatListItemState extends State<ChatListItem> {
       builder: (context, muteSnapshot) {
         final isMuted = muteSnapshot.data ?? false;
 
-        return Slidable(
-          key: Key('chat_${widget.chatId}'),
-          // closeOnScroll: false mantiene el swipe abierto
-          closeOnScroll: false,
-          endActionPane: ActionPane(
-            // ScrollMotion mantiene los botones visibles sin cerrarse automáticamente
-            motion: const ScrollMotion(),
-            extentRatio: 0.5, // Más espacio para 3 botones
+        return Padding(
+          padding: EdgeInsets.only(bottom: 8),
+          child: ClipRect(
+            child: Container(
+              color: colorScheme.primary,
+              child: Slidable(
+            key: Key('chat_${widget.chatId}'),
+            // closeOnScroll: false mantiene el swipe abierto
+            closeOnScroll: false,
+            endActionPane: ActionPane(
+            motion: const BehindMotion(),
+            extentRatio: 0.5,
+            openThreshold: 0.1,
+            closeThreshold: 0.1,
             children: [
-              // Botón Archivar - Azul suave
-              CustomSlidableAction(
-                onPressed: (context) => _archiveChat(),
-                backgroundColor: Color(0xFF4A90E2), // Azul suave
-                foregroundColor: Colors.white,
-                child: Icon(Icons.archive_outlined, size: 32, color: Colors.white),
-              ),
-              // Botón Silenciar - Morado del tema
-              CustomSlidableAction(
-                onPressed: (context) {
-                  if (isMuted) {
-                    _unmuteChat();
-                  } else {
-                    _muteChat();
-                  }
-                },
-                backgroundColor: Color(0xFF7B68EE), // Morado medio
-                foregroundColor: Colors.white,
-                child: Icon(
-                  isMuted ? Icons.notifications_active_outlined : Icons.notifications_off_outlined,
-                  size: 32,
-                  color: Colors.white,
+              Expanded(
+                child: Container(
+                  color: colorScheme.primary,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                        _buildSlideButton(
+                          icon: Icons.archive_outlined,
+                          label: 'Archivar',
+                          onTap: _archiveChat,
+                        ),
+                        _buildSlideButton(
+                          icon: isMuted ? Icons.notifications_active_outlined : Icons.notifications_off_outlined,
+                          label: isMuted ? 'Activar' : 'Silenciar',
+                          onTap: () {
+                            if (isMuted) {
+                              _unmuteChat();
+                            } else {
+                              _muteChat();
+                            }
+                          },
+                        ),
+                        _buildSlideButton(
+                          icon: Icons.delete_outline_rounded,
+                          label: 'Limpiar',
+                          onTap: () async {
+                            final confirmed = await showDialog<bool>(
+                              context: context,
+                              builder: (dialogContext) => AlertDialog(
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                title: Row(
+                                  children: [
+                                    Icon(Icons.delete_sweep_rounded, color: Color(0xFFE53935)),
+                                    SizedBox(width: 8),
+                                    Text('¿Limpiar chat?'),
+                                  ],
+                                ),
+                                content: Text(
+                                  '¿Estás seguro de que quieres eliminar todo el historial de mensajes de este chat?\n\n'
+                                  'Esta acción no se puede deshacer.',
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(dialogContext, false),
+                                    child: Text('Cancelar'),
+                                  ),
+                                  ElevatedButton(
+                                    onPressed: () => Navigator.pop(dialogContext, true),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Color(0xFFE53935),
+                                      foregroundColor: Colors.white,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                    ),
+                                    child: Text('Limpiar'),
+                                  ),
+                                ],
+                              ),
+                            );
+
+                            if (confirmed == true) {
+                              final success = await _controller.clearChat();
+
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      success ? 'Chat limpiado' : 'Error al limpiar chat',
+                                    ),
+                                    backgroundColor: success ? Colors.green : Colors.red,
+                                  ),
+                                );
+                              }
+                            }
+                          },
+                        ),
+                    ],
+                  ),
                 ),
-              ),
-              // Botón Limpiar - Rojo/Rosado suave
-              CustomSlidableAction(
-                onPressed: (buttonContext) async {
-                  final confirmed = await showDialog<bool>(
-                    context: context, // Use widget's context for dialog
-                    builder: (dialogContext) => AlertDialog(
-                      title: Text('¿Limpiar chat?'),
-                      content: Text(
-                        '¿Estás seguro de que quieres eliminar todo el historial de mensajes de este chat?\n\n'
-                        'Esta acción no se puede deshacer.',
-                      ),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(dialogContext, false),
-                          child: Text('Cancelar'),
-                        ),
-                        TextButton(
-                          onPressed: () => Navigator.pop(dialogContext, true),
-                          style: TextButton.styleFrom(foregroundColor: Colors.red),
-                          child: Text('Limpiar'),
-                        ),
-                      ],
-                    ),
-                  );
-
-                  if (confirmed == true) {
-                    final success = await _controller.clearChat();
-
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            success ? 'Chat limpiado' : 'Error al limpiar chat',
-                          ),
-                          backgroundColor: success ? Colors.green : Colors.red,
-                        ),
-                      );
-                    }
-                  }
-                },
-                backgroundColor: Color(0xFFE74C3C), // Rojo más suave
-                foregroundColor: Colors.white,
-                child: Icon(Icons.delete_sweep_outlined, size: 32, color: Colors.white),
               ),
             ],
           ),
@@ -220,16 +270,10 @@ class _ChatListItemState extends State<ChatListItem> {
             child: Opacity(
               opacity: widget.isBlocked ? 0.5 : 1.0,
               child: Container(
-                margin: EdgeInsets.only(bottom: 8),
                 padding: EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: widget.isBlocked
-                      ? colorScheme.surfaceContainerHighest.withValues(alpha: 0.3)
-                      : (widget.unreadCount > 0
-                          ? colorScheme.primary.withValues(alpha: 0.1)
-                          : Colors.transparent),
-                  borderRadius: BorderRadius.circular(16),
-                ),
+                color: widget.isBlocked
+                    ? colorScheme.surfaceContainerHighest.withValues(alpha: 0.3)
+                    : colorScheme.surface,
                 child: Row(
                   children: [
                     Stack(
@@ -473,6 +517,9 @@ class _ChatListItemState extends State<ChatListItem> {
               ),
             ),
           ),
+        ),
+        ),
+        ),
         );
       },
     );

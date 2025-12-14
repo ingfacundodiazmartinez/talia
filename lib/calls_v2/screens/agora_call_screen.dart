@@ -337,21 +337,32 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
         // Initialize engine if not already done
         if (_agoraEngine.engine == null) {
           ReleaseLogger.log('📹 Initializing engine for incoming video call preview', tag: _tag);
-          await _agoraEngine.initialize();
+          final initResult = await _agoraEngine.initialize();
+          if (!initResult.success) {
+            ReleaseLogger.error('❌ Failed to initialize Agora engine: ${initResult.error}', tag: _tag);
+            _showError(initResult.error ?? 'Error al inicializar la cámara');
+            if (mounted) Navigator.of(context, rootNavigator: true).pop();
+            return;
+          }
         }
         _setupAgoraEventHandlers(); // Always register handlers for this screen
 
         // ✅ FIX: ALWAYS enable video and start camera for video calls
         // Even if engine was initialized by VoIPService in background (without video)
-        ReleaseLogger.log('📹 Enabling video for incoming video call', tag: _tag);
-        _agoraEngine.engine!.enableVideo().then((_) {
-          return _agoraEngine.engine!.startPreview();
-        }).then((_) {
-          ReleaseLogger.log('✅ Camera preview started for incoming video call', tag: _tag);
-          if (mounted) setState(() {});
-        }).catchError((e) {
-          ReleaseLogger.error('Failed to start camera preview', error: e, tag: _tag);
-        });
+        // Verify engine is not null before using it
+        if (_agoraEngine.engine != null) {
+          ReleaseLogger.log('📹 Enabling video for incoming video call', tag: _tag);
+          _agoraEngine.engine!.enableVideo().then((_) {
+            return _agoraEngine.engine!.startPreview();
+          }).then((_) {
+            ReleaseLogger.log('✅ Camera preview started for incoming video call', tag: _tag);
+            if (mounted) setState(() {});
+          }).catchError((e) {
+            ReleaseLogger.error('Failed to start camera preview', error: e, tag: _tag);
+          });
+        } else {
+          ReleaseLogger.error('❌ Engine is still null after initialization', tag: _tag);
+        }
       }
 
       // ✅ FIX iOS BACKGROUND: Check if call was already accepted via VoIPService

@@ -295,6 +295,8 @@ class ChatControllerOptimistic extends ChangeNotifier {
     ChatMessage newMessage,
     DocumentChangeType changeType,
   ) {
+    ReleaseLogger.log('📨[Realtime] Mensaje recibido: ${newMessage.id.substring(0, 8)}... tipo=$changeType sender=${newMessage.senderId == currentUserId ? "yo" : "contacto"}');
+
     // Filtrar mensajes del contacto sin moderación
     if (newMessage.senderId != currentUserId) {
       if (newMessage.moderationStatus != ModerationStatus.approved &&
@@ -309,6 +311,17 @@ class ChatControllerOptimistic extends ChangeNotifier {
         newMessage.moderationStatus == ModerationStatus.blocked) {
       _handleBlockedOwnMessage(newMessage);
       return;
+    }
+
+    // ✅ FIX CRÍTICO: Marcar como leído SIEMPRE que llegue mensaje del contacto
+    // Esto debe hacerse ANTES de verificar si existe, porque el mensaje puede
+    // haber llegado via ChatStreamManager pero aún no estar marcado como leído
+    if (newMessage.senderId != currentUserId) {
+      ReleaseLogger.log('📖[Realtime] Marcando mensajes como leídos (mensaje del contacto)');
+      _actionsService.markMessagesAsRead(
+        chatId: chatId,
+        currentUserId: currentUserId,
+      );
     }
 
     // Actualizar mensaje existente
@@ -363,12 +376,8 @@ class ChatControllerOptimistic extends ChangeNotifier {
     _stateService.addOptimisticMessage(newMessage);
     _stateService.updateLastMessageTimestamp(newMessage.timestamp);
 
-    // Reproducir sonido y marcar como leído
+    // Reproducir sonido (markMessagesAsRead ya se llamó arriba)
     _soundService.playReceiveSound();
-    _actionsService.markMessagesAsRead(
-      chatId: chatId,
-      currentUserId: currentUserId,
-    );
 
     notifyListeners();
   }

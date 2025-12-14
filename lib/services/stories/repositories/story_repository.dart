@@ -137,7 +137,8 @@ class StoryRepository {
   Stream<List<Story>> getStoriesAvailableForUser(String userId) {
     final twentyFourHoursAgo = _get24HoursAgo();
 
-    return _firestore
+    // Stream de historias de contactos (aprobadas)
+    final contactStoriesStream = _firestore
         .collection('stories')
         .where('availableFor', arrayContains: userId)
         .where('status', isEqualTo: 'approved')
@@ -145,11 +146,85 @@ class StoryRepository {
         .orderBy('createdAt', descending: true)
         .snapshots()
         .handleError((error) {
-          ReleaseLogger.error('Error en getStoriesAvailableForUser: $error');
+          ReleaseLogger.error('Error en getStoriesAvailableForUser (contacts): $error');
           return <Story>[];
         })
         .map((snapshot) =>
             snapshot.docs.map((doc) => Story.fromFirestore(doc)).toList());
+
+    // Stream de historias propias (cualquier estado excepto expired)
+    // Esto permite que el usuario vea sus propias historias pendientes/rechazadas
+    // y que se actualice en tiempo real cuando el padre las apruebe
+    final ownStoriesStream = _firestore
+        .collection('stories')
+        .where('userId', isEqualTo: userId)
+        .where('createdAt', isGreaterThan: twentyFourHoursAgo)
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .handleError((error) {
+          ReleaseLogger.error('Error en getStoriesAvailableForUser (own): $error');
+          return <Story>[];
+        })
+        .map((snapshot) =>
+            snapshot.docs.map((doc) => Story.fromFirestore(doc)).toList());
+
+    // Combinar ambos streams y deduplicar
+    return _combineStoriesStreams(contactStoriesStream, ownStoriesStream);
+  }
+
+  /// Combina dos streams de historias y elimina duplicados
+  /// Emite cada vez que cualquiera de los streams emite un nuevo valor
+  Stream<List<Story>> _combineStoriesStreams(
+    Stream<List<Story>> contactsStream,
+    Stream<List<Story>> ownStream,
+  ) {
+    final controller = StreamController<List<Story>>.broadcast();
+
+    List<Story> contactStories = [];
+    List<Story> ownStories = [];
+
+    void emitCombined() {
+      // Combinar y deduplicar por ID (ownStories tiene prioridad para mostrar estado actualizado)
+      final combined = <String, Story>{};
+      for (final story in contactStories) {
+        combined[story.id] = story;
+      }
+      for (final story in ownStories) {
+        combined[story.id] = story; // Sobreescribe con versión propia si existe
+      }
+
+      // Ordenar por fecha de creación (más reciente primero)
+      final sortedStories = combined.values.toList()
+        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+      controller.add(sortedStories);
+    }
+
+    StreamSubscription<List<Story>>? sub1;
+    StreamSubscription<List<Story>>? sub2;
+
+    sub1 = contactsStream.listen(
+      (stories) {
+        contactStories = stories;
+        emitCombined();
+      },
+      onError: controller.addError,
+    );
+
+    sub2 = ownStream.listen(
+      (stories) {
+        ownStories = stories;
+        emitCombined();
+      },
+      onError: controller.addError,
+    );
+
+    controller.onCancel = () async {
+      await sub1?.cancel();
+      await sub2?.cancel();
+    };
+
+    return controller.stream;
   }
 
   /// Stream de historias de múltiples usuarios (LEGACY - mantener por compatibilidad)

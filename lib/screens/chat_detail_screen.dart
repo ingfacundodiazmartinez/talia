@@ -9,6 +9,7 @@ import '../utils/release_logger.dart';
 import '../notification_service.dart';
 import '../services/reaction_service.dart';
 import '../services/local_unread_count_service.dart';
+import '../services/notification_tracking_service.dart';
 import '../calls_v2/screens/agora_call_screen.dart';
 import '../widgets/reaction_picker.dart';
 import 'chat/widgets/chat_app_bar.dart';
@@ -112,6 +113,12 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     NotificationService().setCurrentChat(widget.chatId);
     LocalUnreadCountService().enterChat(widget.chatId);
     NotificationService().clearChatNotifications(widget.chatId);
+
+    // ✅ Auto-dismiss: Limpiar notificaciones de este chat cuando el usuario entra
+    NotificationTrackingService().dismissNotificationsForContext(
+      type: NotificationContext.chat,
+      contextId: widget.chatId,
+    );
 
     // Inicializar controller (carga mensajes del cache primero, luego Firestore)
     _controller.initialize().catchError((e) {

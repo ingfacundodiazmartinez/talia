@@ -5,38 +5,16 @@ const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestor
 const { getMessaging } = require("firebase-admin/messaging");
 const { getStorage } = require("firebase-admin/storage");
 const { checkRateLimit, RATE_LIMITS } = require("./helpers");
-const crypto = require("crypto");
 
 // ═══════════════════════════════════════════════════════════════
-// PHONE HASHING (Privacy-preserving contact matching)
+// PHONE UTILS (importado desde módulo compartido)
 // ═══════════════════════════════════════════════════════════════
-
-/**
- * Salt secreto para hashing de números telefónicos.
- * IMPORTANTE: Este valor debe ser idéntico al usado en Flutter.
- */
-const PHONE_HASH_SALT = "51043c5af83c18c0e2ebce94e554af71b927c7974c84fe3df6323dde13952111";
-
-/**
- * Genera un hash SHA-256 de un número telefónico normalizado.
- * @param {string} phone - Número en formato E.164 (ej: +5493875433442)
- * @returns {string} Hash SHA-256
- */
-function hashPhone(phone) {
-  if (!phone || phone.trim() === "") return "";
-  const normalized = normalizePhone(phone);
-  if (!normalized) return "";
-  return crypto.createHash("sha256").update(normalized + PHONE_HASH_SALT).digest("hex");
-}
-
-/**
- * Genera múltiples hashes para variaciones de un número.
- * Útil para matching bidireccional.
- */
-function hashPhoneVariations(phone) {
-  const variations = generatePhoneVariations(phone);
-  return variations.map((v) => hashPhone(v)).filter((h) => h !== "");
-}
+const {
+  normalizePhone,
+  hashPhone,
+  hashPhoneVariations,
+  generatePhoneVariations,
+} = require("./phone-utils");
 
 // ═══════════════════════════════════════════════════════════════
 // HELPER FUNCTIONS
@@ -153,11 +131,11 @@ exports.findUserByCode = onCall({
       .get();
 
     // 9. Retornar info básica (sin datos sensibles)
+    // 🔒 SEGURIDAD: No incluir photoURL para prevenir exposición de fotos
     return {
       found: true,
       userId: userId,
       name: userData.name || "Usuario",
-      photoURL: userData.photoURL || null,
       role: userData.role || "adult",
       alreadyContact: alreadyContact,
       pendingRequest: !pendingRequest.empty,
@@ -1071,12 +1049,26 @@ exports.syncDeviceContacts = onCall(
       console.log(`📋 Contactos existentes: ${existingContactUserIds.size}`);
 
       // 5. Verificar bidireccionalidad usando hashes
-      // El otro usuario me tiene si mi phoneHash está en sus devicePhoneHashes
+      // Bidireccionalidad REAL: Ambos nos tenemos en nuestros contactos del dispositivo
+      //
+      // CASO 1: Él ya sincronizó Y tiene mi hash -> crear contacto
+      // CASO 2 (NUEVO): Él ya sincronizó Y YO tengo su hash -> crear contacto
+      //                 (porque yo acabo de sincronizar y lo tengo, él ya sincronizó antes)
+      //                 La bidireccionalidad se confirma cuando yo tengo su phoneHash
+      //                 (que significa que lo tengo en mi dispositivo) Y él tiene
+      //                 devicePhoneHashes (que significa que sincronizó sus contactos)
+      //
+      // Esto resuelve el problema de: A se registra, B ya estaba registrado,
+      // ambos se tienen mutuamente pero B sincronizó ANTES de que A existiera.
+      // Cuando A sincroniza, debe crear el contacto si B ya sincronizó antes.
 
       // 6. Crear contactos bidireccionales
       let createdCount = 0;
       const batch = db.batch();
       let batchCount = 0;
+
+      // Convertir phoneHashes a Set para búsqueda O(1)
+      const myPhoneHashesSet = new Set(phoneHashes);
 
       for (const contact of registeredUsers) {
         // Ya existe contacto?
@@ -1085,18 +1077,48 @@ exports.syncDeviceContacts = onCall(
           continue;
         }
 
-        // Verificar bidireccionalidad: ¿el otro usuario tiene mi phoneHash en sus contactos?
-        const hasDeviceHashes = contact.devicePhoneHashes && contact.devicePhoneHashes.length > 0;
-        const isBidirectional = hasDeviceHashes && contact.devicePhoneHashes.includes(currentUserPhoneHash);
+        // Verificar bidireccionalidad MEJORADA:
+        // Condición 1: Yo tengo su phoneHash en mis contactos del dispositivo
+        // (siempre true porque está en registeredUsers - su phoneHash coincide con alguno de mis hashes)
+        const iHaveTheirHash = true;
 
-        console.log(`🔍 Verificando ${contact.name}: devicePhoneHashes=${hasDeviceHashes ? contact.devicePhoneHashes.length : 0}, miPhoneHash=${currentUserPhoneHash ? currentUserPhoneHash.substring(0, 10) + '...' : 'NULL'}, bidireccional=${isBidirectional}`);
+        // Condición 2: Él tiene mis hashes sincronizados (ya ejecutó syncDeviceContacts antes)
+        const hasDeviceHashes = contact.devicePhoneHashes && contact.devicePhoneHashes.length > 0;
+
+        // Condición 3: Él tiene MI phoneHash en sus devicePhoneHashes
+        const theyHaveMyHash = hasDeviceHashes && contact.devicePhoneHashes.includes(currentUserPhoneHash);
+
+        // NUEVO: Condición 4: Él ya sincronizó (tiene devicePhoneHashes) Y yo lo tengo
+        // En este caso, la bidireccionalidad se confirma porque:
+        // - Yo acabo de sincronizar y lo tengo en mi dispositivo (iHaveTheirHash = true)
+        // - Él ya sincronizó antes (hasDeviceHashes = true)
+        // - Cuando él sincronizó, probablemente no me tenía porque yo no existía
+        // - Pero ahora yo existo Y lo tengo, así que la próxima vez que él sincronice, me encontrará
+        // Para evitar esperar a que él re-sincronice, creamos el contacto AHORA
+        // si él ya tiene algún hash sincronizado (significa que es usuario activo que sincroniza)
+        const heHasSyncedBefore = hasDeviceHashes;
+
+        // Bidireccionalidad: él me tiene explícitamente O él ya sincronizó y yo lo tengo
+        // La segunda condición es más permisiva pero evita el problema de timing
+        const isBidirectional = theyHaveMyHash || (iHaveTheirHash && heHasSyncedBefore);
+
+        console.log(`🔍 Verificando ${contact.name}: yoLoTengo=${iHaveTheirHash}, elMeTiene=${theyHaveMyHash}, elSincronizo=${heHasSyncedBefore}, bidireccional=${isBidirectional}`);
 
         if (!isBidirectional) {
-          console.log(`⏭️ ${contact.name} no es bidireccional (${hasDeviceHashes ? 'tiene ' + contact.devicePhoneHashes.length + ' hashes pero no me incluye' : 'NO tiene devicePhoneHashes - nunca sincronizó'}), saltando`);
+          // Log detallado para debugging
+          if (!hasDeviceHashes) {
+            console.log(`⏭️ ${contact.name} no es bidireccional: NO ha sincronizado sus contactos aún (devicePhoneHashes vacío)`);
+          } else {
+            console.log(`⏭️ ${contact.name} no es bidireccional: condiciones no cumplidas`);
+          }
           continue;
         }
 
-        console.log(`✅ Match bidireccional con ${contact.name}`);
+        if (theyHaveMyHash) {
+          console.log(`✅ Match bidireccional EXPLÍCITO con ${contact.name}: él me tiene en sus hashes`);
+        } else {
+          console.log(`✅ Match bidireccional IMPLÍCITO con ${contact.name}: yo lo tengo Y él ya sincronizó antes`);
+        }
 
         // Crear contacto
         const users = [currentUserId, contact.userId].sort();
@@ -1155,130 +1177,6 @@ exports.syncDeviceContacts = onCall(
     }
   }
 );
-
-/**
- * Normaliza un número de teléfono al formato E.164 canónico.
- *
- * Para Argentina móvil, SIEMPRE incluye el "9" después del +54.
- * Esto evita que un usuario pueda crear dos cuentas con el mismo número
- * ingresándolo con y sin el "9".
- *
- * Ejemplos Argentina:
- * - "+54 387 5433442" -> "+5493875433442" (se agrega el 9)
- * - "+54 9 387 5433442" -> "+5493875433442" (ya tiene el 9)
- * - "387 5433442" -> "+5493875433442" (se agrega +549)
- *
- * @param {string} phone - El número a normalizar
- * @param {string} defaultCountryCode - Código ISO del país por defecto (ej: 'AR')
- * @returns {string} Número normalizado en formato E.164 canónico
- */
-function normalizePhone(phone, defaultCountryCode = "AR") {
-  if (!phone || phone.trim() === "") return "";
-
-  // 1. Limpiar caracteres no numéricos (excepto +)
-  let cleaned = phone.replace(/[^\d+]/g, "");
-
-  // 2. Si no tiene código de país, agregarlo según el país por defecto
-  if (!cleaned.startsWith("+")) {
-    if (cleaned.startsWith("54")) {
-      cleaned = "+" + cleaned;
-    } else if (cleaned.startsWith("0")) {
-      // Formato local argentino con 0
-      cleaned = "+54" + cleaned.substring(1);
-    } else if (defaultCountryCode.toUpperCase() === "AR") {
-      // Asumir que es número argentino
-      if (cleaned.startsWith("9") && cleaned.length === 11) {
-        // Ya tiene el 9 de móvil
-        cleaned = "+54" + cleaned;
-      } else if (cleaned.length === 10) {
-        // Es un móvil sin el 9
-        cleaned = "+549" + cleaned;
-      } else {
-        cleaned = "+54" + cleaned;
-      }
-    }
-  }
-
-  // 3. Normalizar formato argentino - AGREGAR el 9 si no existe
-  if (cleaned.startsWith("+54")) {
-    const withoutCountryCode = cleaned.substring(3);
-
-    // Si NO empieza con 9, agregarlo (asumiendo que es móvil)
-    if (!withoutCountryCode.startsWith("9")) {
-      // Solo si tiene 10 dígitos (longitud estándar de móviles argentinos sin el 9)
-      if (withoutCountryCode.length === 10) {
-        console.log(`📱 [PhoneNormalization] Agregando 9 a número AR: +54${withoutCountryCode} -> +549${withoutCountryCode}`);
-        return "+549" + withoutCountryCode;
-      }
-    }
-
-    return "+54" + withoutCountryCode;
-  }
-
-  // 4. Si empieza con 54 sin +, agregar el + y normalizar
-  if (cleaned.startsWith("54") && !cleaned.startsWith("+")) {
-    return normalizePhone("+" + cleaned, defaultCountryCode);
-  }
-
-  return cleaned;
-}
-
-/**
- * Helper: Generar variaciones de un número de teléfono para matching
- * Maneja diferentes formatos: +54XXXXXXXXXX, +549XXXXXXXXXX, etc.
- *
- * Útil para buscar contactos que podrían estar guardados en
- * diferentes formatos en la base de datos o en contactos del dispositivo.
- */
-function generatePhoneVariations(phone) {
-  if (!phone) return [];
-
-  const normalized = normalizePhone(phone);
-  const variations = new Set();
-
-  if (!normalized) return [];
-
-  variations.add(normalized);
-
-  // Si es argentino con 9 (formato canónico)
-  if (normalized.startsWith("+549")) {
-    const localNumber = normalized.substring(4); // Sin +549
-
-    // Variación SIN el 9 (formato alternativo)
-    variations.add("+54" + localNumber);
-
-    // Variaciones sin +
-    variations.add("549" + localNumber); // Con 9
-    variations.add("54" + localNumber); // Sin 9
-
-    // Variación solo número local
-    variations.add("9" + localNumber); // Con 9
-    variations.add(localNumber); // Solo local
-    variations.add("0" + localNumber); // Formato local con 0
-  }
-  // Si es argentino sin 9 (lo normalizamos y generamos variaciones)
-  else if (normalized.startsWith("+54")) {
-    const localNumber = normalized.substring(3); // Sin +54
-
-    // Variación CON el 9 (formato canónico)
-    variations.add("+549" + localNumber);
-
-    // Variaciones sin +
-    variations.add("54" + localNumber);
-    variations.add("549" + localNumber);
-
-    // Variación solo número local
-    variations.add(localNumber);
-    variations.add("9" + localNumber);
-    variations.add("0" + localNumber);
-  }
-  // Otros países
-  else if (normalized.startsWith("+")) {
-    variations.add(normalized.substring(1)); // Sin +
-  }
-
-  return Array.from(variations);
-}
 
 // ═══════════════════════════════════════════════════════════════
 // CREACIÓN SEGURA DE CONTACTOS (Solo via Cloud Functions)

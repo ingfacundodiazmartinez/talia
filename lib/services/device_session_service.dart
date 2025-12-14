@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:flutter/material.dart';
 import '../utils/release_logger.dart';
 
@@ -90,6 +91,25 @@ class DeviceSessionService {
     };
   }
 
+  /// Obtener versión de la app
+  Future<Map<String, String>> getAppVersion() async {
+    try {
+      final packageInfo = await PackageInfo.fromPlatform();
+      return {
+        'version': packageInfo.version,
+        'buildNumber': packageInfo.buildNumber,
+        'fullVersion': '${packageInfo.version}+${packageInfo.buildNumber}',
+      };
+    } catch (e) {
+      ReleaseLogger.error('Error obteniendo versión de app: $e', tag: 'DeviceSessionService');
+      return {
+        'version': 'Unknown',
+        'buildNumber': 'Unknown',
+        'fullVersion': 'Unknown',
+      };
+    }
+  }
+
   /// Registrar sesión del dispositivo actual en Firestore
   /// IMPORTANTE: Solo actualiza si el documento ya existe para no interferir
   /// con el flujo de ProfileCompletionScreen
@@ -99,6 +119,7 @@ class DeviceSessionService {
     try {
       final deviceId = await getDeviceId();
       final deviceInfo = await getDeviceInfo();
+      final appVersion = await getAppVersion();
 
       // Primero verificar si el usuario existe en Firestore
       final userDoc = await _firestore.collection('users').doc(userId).get();
@@ -117,11 +138,13 @@ class DeviceSessionService {
       await _firestore.collection('users').doc(userId).update({
         'activeDeviceId': deviceId,
         'activeDeviceInfo': deviceInfo,
+        'appVersion': appVersion['fullVersion'],
+        'appVersionDetails': appVersion,
         'lastLoginAt': FieldValue.serverTimestamp(),
         'lastLoginDeviceId': deviceId,
       });
 
-      ReleaseLogger.log('✅ Sesión registrada para dispositivo: $deviceId', tag: 'DeviceSessionService');
+      ReleaseLogger.log('✅ Sesión registrada para dispositivo: $deviceId, versión: ${appVersion['fullVersion']}', tag: 'DeviceSessionService');
       return true;
 
     } catch (e) {
@@ -247,13 +270,18 @@ class DeviceSessionService {
     try {
       final user = _auth.currentUser;
       if (user != null) {
-        // Actualizar estado del usuario
-        await _firestore.collection('users').doc(user.uid).set({
-          'isOnline': false,
-          'lastSeen': FieldValue.serverTimestamp(),
-          'fcmToken': null,
-          'voipToken': null, // Limpiar también el token VoIP
-        }, SetOptions(merge: true));
+        // ✅ FIX: Verificar si el documento existe antes de actualizar
+        // Esto evita crear el documento si el usuario nunca completó el perfil
+        final userDoc = await _firestore.collection('users').doc(user.uid).get();
+        if (userDoc.exists) {
+          // Actualizar estado del usuario
+          await _firestore.collection('users').doc(user.uid).update({
+            'isOnline': false,
+            'lastSeen': FieldValue.serverTimestamp(),
+            'fcmToken': null,
+            'voipToken': null, // Limpiar también el token VoIP
+          });
+        }
       }
 
       // Cerrar sesión de Firebase Auth

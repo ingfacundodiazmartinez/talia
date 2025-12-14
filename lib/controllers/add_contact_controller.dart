@@ -57,6 +57,7 @@ class AddContactController {
   }
 
   /// Buscar contacto por código
+  /// 🔒 SEGURIDAD: No devuelve photoURL para proteger privacidad antes de aprobación
   Future<Map<String, dynamic>?> findContactByCode(String code) async {
     try {
       final result = await _userCodeService.findUserByCode(code);
@@ -64,9 +65,9 @@ class AddContactController {
         return {
           'userId': result.userId,
           'name': result.name,
-          'email': result.email,
-          'photoURL': result.photoURL,
           'isParent': result.isParent,
+          'alreadyContact': result.alreadyContact,
+          'pendingRequest': result.pendingRequest,
         };
       }
       return null;

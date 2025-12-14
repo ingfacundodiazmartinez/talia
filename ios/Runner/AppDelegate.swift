@@ -20,10 +20,6 @@ import Intents  // ✅ Necesario para INPerson e INImage
   // ✅ FIX VIDEO CALL FROM LOCK SCREEN: Store callId that needs navigation after audio activates
   private var pendingVideoCallNavigation: String? = nil
 
-  // ✅ FIX #9: Health check for Stream Detector
-  private var lastStreamDetectorHeartbeat: Date? = nil
-  private let streamDetectorTimeout: TimeInterval = 30.0 // 30 seconds
-
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -92,12 +88,13 @@ import Intents  // ✅ Necesario para INPerson e INImage
       }
     }
 
-    // ✅ NSE Deduplication channel para verificar si messageId ya fue procesado por NSE
+    // ✅ NSE Deduplication channel para verificar si messageId ya fue procesado por NSE o Background Handler
     // IMPORTANTE: Usa archivos compartidos via FileManager (más confiable que UserDefaults para NSE)
     let nseDeduplicationChannel = FlutterMethodChannel(name: "com.talia.chat/nse_deduplication", binaryMessenger: controller.binaryMessenger)
     nseDeduplicationChannel.setMethodCallHandler { (call: FlutterMethodCall, result: @escaping FlutterResult) in
       let appGroupId = "group.com.talia.chat"
       let processedIdsFileName = "nse_processed_ids.json"
+      let backgroundIdsFileName = "background_processed_ids.json"  // ✅ NEW: IDs del background handler
       let debugLogFileName = "nse_debug_log.json"
 
       // Helper para obtener la URL del container compartido
@@ -131,15 +128,21 @@ import Intents  // ✅ Necesario para INPerson e INImage
       }
 
       if call.method == "wasProcessedByNSE" {
-        // Verificar si un messageId ya fue procesado por el NSE
+        // Verificar si un messageId ya fue procesado por el NSE O el Background Handler
         guard let messageId = call.arguments as? String else {
           result(false)
           return
         }
 
-        let processedIds = readStringArray(from: processedIdsFileName)
-        let wasProcessed = processedIds.contains(messageId)
-        NSLog("🔍 [NSE Dedup] messageId=\(messageId.prefix(8))... wasProcessedByNSE=\(wasProcessed) (file-based)")
+        // ✅ Verificar ambos archivos: NSE y Background Handler
+        let nseProcessedIds = readStringArray(from: processedIdsFileName)
+        let backgroundProcessedIds = readStringArray(from: backgroundIdsFileName)
+
+        let wasProcessedByNSE = nseProcessedIds.contains(messageId)
+        let wasProcessedByBackground = backgroundProcessedIds.contains(messageId)
+        let wasProcessed = wasProcessedByNSE || wasProcessedByBackground
+
+        NSLog("🔍 [NSE Dedup] messageId=\(messageId.prefix(8))... NSE=\(wasProcessedByNSE), Background=\(wasProcessedByBackground), Final=\(wasProcessed)")
         result(wasProcessed)
 
       } else if call.method == "getProcessedByNSE" {
@@ -185,6 +188,69 @@ import Intents  // ✅ Necesario para INPerson e INImage
         } catch {
           NSLog("🧹 [NSE Debug] Logs limpiados (archivo no existía o eliminado)")
           result(true)
+        }
+
+      } else if call.method == "saveMessageIdForDeduplication" {
+        // ✅ NUEVO: StreamDetector guarda messageId ANTES de mostrar notificación
+        // Así cuando el NSE reciba el mismo mensaje, lo suprimirá
+        guard let messageId = call.arguments as? String else {
+          NSLog("❌ [NSE Dedup] saveMessageIdForDeduplication: messageId requerido")
+          result(false)
+          return
+        }
+
+        // ✅ MÉTODO 1: UserDefaults con App Group (más confiable para NSE)
+        if let sharedDefaults = UserDefaults(suiteName: appGroupId) {
+          let key = "processed_\(messageId)"
+          sharedDefaults.set(true, forKey: key)
+          sharedDefaults.synchronize()  // Forzar sincronización inmediata
+          NSLog("✅ [NSE Dedup] messageId guardado en UserDefaults: \(messageId.prefix(8))...")
+        }
+
+        // ✅ MÉTODO 2: También guardar en archivo (backup)
+        var processedIds = readStringArray(from: processedIdsFileName)
+        if !processedIds.contains(messageId) {
+          processedIds.append(messageId)
+          if processedIds.count > 100 {
+            processedIds = Array(processedIds.suffix(100))
+          }
+          let _ = writeStringArray(processedIds, to: processedIdsFileName)
+        }
+
+        result(true)
+
+      } else if call.method == "setAppInForeground" {
+        // ✅ NUEVO: Guardar estado foreground/background en App Group
+        // NSE lee esto para saber si debe mostrar notificación o no
+        guard let isInForeground = call.arguments as? Bool else {
+          NSLog("❌ [NSE Dedup] setAppInForeground: bool requerido")
+          result(false)
+          return
+        }
+
+        guard let containerURL = getSharedContainerURL() else {
+          result(false)
+          return
+        }
+
+        let fileURL = containerURL.appendingPathComponent("app_in_foreground.txt")
+        do {
+          try (isInForeground ? "1" : "0").write(to: fileURL, atomically: true, encoding: .utf8)
+          NSLog("✅ [NSE Dedup] App foreground state guardado: \(isInForeground)")
+          result(true)
+        } catch {
+          NSLog("❌ [NSE Dedup] Error guardando foreground state: \(error)")
+          result(false)
+        }
+
+      } else if call.method == "getNSELastInvoked" {
+        // ✅ DEBUG: Verificar si NSE fue invocado (lee timestamp guardado por NSE)
+        if let sharedDefaults = UserDefaults(suiteName: appGroupId) {
+          let lastInvoked = sharedDefaults.string(forKey: "nse_last_invoked")
+          NSLog("🔍 [NSE Debug] Último NSE invocado: \(lastInvoked ?? "never")")
+          result(lastInvoked)
+        } else {
+          result(nil)
         }
 
       } else {
@@ -408,21 +474,17 @@ import Intents  // ✅ Necesario para INPerson e INImage
         ) { success in
           result(success)
         }
-      } else {
-        result(FlutterMethodNotImplemented)
-      }
-    }
 
-    // ✅ FIX #9: Stream Detector health check channel
-    let streamDetectorChannel = FlutterMethodChannel(name: "com.talia.chat/stream_detector", binaryMessenger: controller.binaryMessenger)
+      } else if call.method == "removeAllDeliveredNotifications" {
+        // ✅ Remover TODAS las notificaciones del centro de notificaciones
+        NSLog("🧹 [Notifications] Removiendo TODAS las notificaciones...")
 
-    streamDetectorChannel.setMethodCallHandler { [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) in
-      guard let self = self else { return }
+        UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+        UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
 
-      if call.method == "heartbeat" {
-        // Update last heartbeat timestamp
-        self.lastStreamDetectorHeartbeat = Date()
+        NSLog("✅ [Notifications] Todas las notificaciones removidas")
         result(true)
+
       } else {
         result(FlutterMethodNotImplemented)
       }
@@ -528,15 +590,19 @@ import Intents  // ✅ Necesario para INPerson e INImage
 
       // Mostrar notificación (en main thread)
       DispatchQueue.main.async {
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 0.1, repeats: false)
+        // ✅ FIX: Usar 0.3s en lugar de 0.1s para más estabilidad
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 0.3, repeats: false)
         let request = UNNotificationRequest(identifier: requestId, content: finalContent, trigger: trigger)
+
+        NSLog("📤 [Notifications] Agregando notificación local: \(senderName) - \(messageText)")
+        NSLog("📤 [Notifications] Source: stream_detector, chatId: \(chatId)")
 
         UNUserNotificationCenter.current().add(request) { error in
           if let error = error {
             NSLog("❌ [Notifications] Error agregando notificación: \(error.localizedDescription)")
             completion(false)
           } else {
-            NSLog("✅ [Notifications] Notificación mostrada exitosamente")
+            NSLog("✅ [Notifications] Notificación agregada al centro - esperando 0.3s para mostrar")
             completion(true)
           }
         }
@@ -885,42 +951,32 @@ import Intents  // ✅ Necesario para INPerson e INImage
 
     // ✅ CRÍTICO: NO suprimir notificaciones locales del Stream Detector
     if notificationSource == "stream_detector" {
-      NSLog("✅ [Notifications] Local notification from Stream Detector - showing")
+      NSLog("✅ [Notifications] Local notification from Stream Detector - showing banner only (no persistence)")
       if #available(iOS 14.0, *) {
+        // ✅ NO usar .list - solo banner temporal que no persiste
         completionHandler([.banner, .sound, .badge])
       } else {
         completionHandler([.alert, .sound, .badge])
       }
-    } else if notificationType == "chat_message" || notificationType == "group_message" {
-      // Solo suprimir notificaciones FCM remotas (no tienen "source")
-      // ✅ FIX #9: Only suppress if Stream Detector is healthy (heartbeat recent)
-      if let lastHeartbeat = lastStreamDetectorHeartbeat {
-        let timeSinceHeartbeat = Date().timeIntervalSince(lastHeartbeat)
-        if timeSinceHeartbeat < streamDetectorTimeout {
-          NSLog("⏭️ [Notifications] Stream Detector healthy (\(Int(timeSinceHeartbeat))s ago) - suppressing FCM")
-          completionHandler([])  // NO mostrar nada (Stream Detector ya lo mostró)
-          return
-        } else {
-          NSLog("⚠️ [Notifications] Stream Detector unhealthy (last heartbeat \(Int(timeSinceHeartbeat))s ago) - showing notification")
-        }
-      } else {
-        NSLog("⚠️ [Notifications] No Stream Detector heartbeat received - showing notification")
-      }
-      // Mostrar notificación FCM porque Stream Detector no está saludable
-      if #available(iOS 14.0, *) {
-        completionHandler([.banner, .sound, .badge])
-      } else {
-        completionHandler([.alert, .sound, .badge])
-      }
+      return  // ✅ FIX: Salir inmediatamente después de mostrar
+    }
+
+    // ✅ FOREGROUND: SIEMPRE suprimir notificaciones FCM de chat
+    // StreamDetector ya las maneja (~100ms) - FCM llega 2-5 segundos después
+    // No necesitamos heartbeat - si estamos en foreground, StreamDetector está activo
+    if notificationType == "chat_message" || notificationType == "group_message" {
+      NSLog("⏭️ [Notifications] FOREGROUND - Suprimiendo FCM chat (StreamDetector ya lo mostró)")
+      completionHandler([])  // NO mostrar nada
+      return
+    }
+
+    // Para otros tipos de notificación (llamadas, etc): mostrar normalmente
+    if #available(iOS 14.0, *) {
+      completionHandler([.banner, .sound, .badge])
+      NSLog("✅ [Notifications] Mostrando banner temporal (sin persistencia)")
     } else {
-      // Para otros tipos (llamadas, etc): mostrar normalmente
-      if #available(iOS 14.0, *) {
-        completionHandler([.banner, .sound, .badge])
-        NSLog("✅ [Notifications] Mostrando con banner + sound + badge (iOS 14+)")
-      } else {
-        completionHandler([.alert, .sound, .badge])
-        NSLog("✅ [Notifications] Mostrando con alert + sound + badge (iOS <14)")
-      }
+      completionHandler([.alert, .sound, .badge])
+      NSLog("✅ [Notifications] Mostrando alert temporal (iOS <14)")
     }
   }
 

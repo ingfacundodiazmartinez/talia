@@ -126,12 +126,14 @@ exports.onPendingReportCreated = reports.onPendingReportCreated;
 
 // Gestión padre-hijo
 exports.createParentChildLink = parentChild.createParentChildLink;
+exports.validateLinkCode = parentChild.validateLinkCode;
 exports.unlinkChild = parentChild.unlinkChild;
 exports.onParentChildLinkCreated = parentChild.onParentChildLinkCreated;
 exports.onParentChildLinkDeleted = parentChild.onParentChildLinkDeleted;
 exports.requestChildLocation = parentChild.requestChildLocation;
 
 // Contactos y bloqueos
+exports.findUserByCode = contacts.findUserByCode;
 exports.createContactRequest = contacts.createContactRequest;
 exports.updateContactRequestStatus = contacts.updateContactRequestStatus;
 exports.blockChat = contacts.blockChat;

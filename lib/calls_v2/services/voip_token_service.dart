@@ -100,7 +100,8 @@ class VoIPTokenService {
 
   /// Save a VoIP token to Firestore
   /// Automatically cleans up duplicate tokens from other users
-  /// ✅ Always saves token (even if same) to update timestamp
+  /// ✅ Only saves token if user document already exists (to avoid creating document
+  /// before profile completion, which would break Firestore rules for 'role' field)
   Future<bool> saveToken(String token) async {
     try {
       final userId = _auth.currentUser?.uid;
@@ -119,16 +120,27 @@ class VoIPTokenService {
         tag: _tag,
       );
 
+      // ✅ FIX: Check if user document exists before saving token
+      // This prevents creating the document prematurely, which would interfere
+      // with ProfileCompletionScreen and cause Firestore permission errors
+      final userDoc = await _firestore.collection('users').doc(userId).get();
+      if (!userDoc.exists) {
+        ReleaseLogger.log(
+          'User document does not exist yet, VoIP token will be saved after profile completion',
+          tag: _tag,
+        );
+        return false;
+      }
+
       // Clean up duplicate tokens from other users first
       await _cleanupDuplicateTokens(token, userId);
 
-      // ✅ FIX: Use set with merge to handle case where user doc might not exist
-      // Also always update timestamp even if token is the same
-      await _firestore.collection('users').doc(userId).set({
+      // Use update() instead of set() to ensure we don't create the document
+      await _firestore.collection('users').doc(userId).update({
         'voipToken': token,
         'voipTokenUpdatedAt': FieldValue.serverTimestamp(),
         'voipTokenRefreshNeeded': FieldValue.delete(), // Clear refresh flag
-      }, SetOptions(merge: true));
+      });
 
       ReleaseLogger.log('VoIP token saved successfully', tag: _tag);
       return true;

@@ -47,14 +47,10 @@ target 'Runner' do
   end
 end
 
-# Notification Service Extension target
+# Notification Service Extension - solo descarga fotos para notificaciones
 target 'NotificationServiceExtension' do
   use_frameworks!
-
-  # ✅ NSE descarga foto manualmente - no necesita Firebase
-  # Solo necesita UserNotifications framework (incluido por defecto)
-
-  # Inherit deployment target
+  # No necesita pods - solo usa UserNotifications framework nativo
 end
 
 post_install do |installer|

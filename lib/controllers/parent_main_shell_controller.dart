@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import '../notification_service.dart';
 import '../services/contacts_sync_service.dart';
+import '../services/app_state_service.dart';
 import '../utils/chat_utils.dart';
 import '../utils/release_logger.dart';
 import '../constants/notification_types.dart';
@@ -32,7 +33,15 @@ class ParentMainShellController {
   StreamSubscription? _chatNotificationSubscription;
   StreamSubscription? _storyApprovalNotificationSubscription;
   StreamSubscription? _groupApprovalNotificationSubscription;
+  StreamSubscription? _storyNotificationSubscription;
+  StreamSubscription? _contactApprovedNotificationSubscription;
+  StreamSubscription? _contactRequestNotificationSubscription;
+  StreamSubscription? _alertNotificationSubscription;
+  StreamSubscription? _reportNotificationSubscription;
+  StreamSubscription? _emergencyNotificationSubscription;
+  StreamSubscription? _groupMembershipApprovedNotificationSubscription;
   StreamSubscription? _roleChangeSubscription;
+  StreamSubscription? _appStateSubscription;
 
   // ✅ OPTIMIZACIÓN: Stream centralizado para evitar duplicar listeners al mismo documento
   Stream<DocumentSnapshot>? _cachedUserDataStream;
@@ -41,6 +50,13 @@ class ParentMainShellController {
   Function(Map<String, dynamic>)? onChatNotificationTap;
   Function(Map<String, dynamic>)? onStoryApprovalNotificationTap;
   Function(Map<String, dynamic>)? onGroupApprovalNotificationTap;
+  Function(Map<String, dynamic>)? onStoryNotificationTap;
+  Function(Map<String, dynamic>)? onContactApprovedNotificationTap;
+  Function(Map<String, dynamic>)? onContactRequestNotificationTap;
+  Function(Map<String, dynamic>)? onAlertNotificationTap;
+  Function(Map<String, dynamic>)? onReportNotificationTap;
+  Function(Map<String, dynamic>)? onEmergencyNotificationTap;
+  Function(Map<String, dynamic>)? onGroupMembershipApprovedNotificationTap;
 
   // Constructor
   ParentMainShellController({
@@ -70,6 +86,7 @@ class ParentMainShellController {
 
       _setupNotificationListeners();
       _setupRoleChangeListener();
+      _setupAppStateListener();
       _syncContactsInBackground();
 
       // ⚡ Iniciar listener global de mensajes para notificaciones instantáneas
@@ -87,32 +104,86 @@ class ParentMainShellController {
     }
   }
 
-  /// Configurar listeners de notificaciones de chat
+  /// Configurar listeners de notificaciones
   void _setupNotificationListeners() {
+    // Chat y grupo messages
     _chatNotificationSubscription = _notificationService
         .chatNotificationTapStream
         .listen((data) {
       ReleaseLogger.log('Chat notification tapped: $data', tag: 'ParentMainShell');
-      // Llamar al callback configurado por el screen para manejar navegación
       onChatNotificationTap?.call(data);
     });
 
-    // Listener para notificaciones de aprobación de historias
+    // Aprobación de historias (parent recibe solicitud de aprobación)
     _storyApprovalNotificationSubscription = _notificationService
         .storyApprovalNotificationTapStream
         .listen((data) {
       ReleaseLogger.log('Story approval notification tapped: $data', tag: 'ParentMainShell');
-      // Llamar al callback configurado por el screen para navegar a aprobación
       onStoryApprovalNotificationTap?.call(data);
     });
 
-    // Listener para notificaciones de aprobación de grupos
+    // Aprobación de grupos
     _groupApprovalNotificationSubscription = _notificationService
         .groupApprovalNotificationTapStream
         .listen((data) {
       ReleaseLogger.log('Group approval notification tapped: $data', tag: 'ParentMainShell');
-      // Llamar al callback configurado por el screen para navegar a aprobación de grupos
       onGroupApprovalNotificationTap?.call(data);
+    });
+
+    // Historias (approved/rejected/reply/new_story)
+    _storyNotificationSubscription = _notificationService
+        .storyNotificationTapStream
+        .listen((data) {
+      ReleaseLogger.log('Story notification tapped: $data', tag: 'ParentMainShell');
+      onStoryNotificationTap?.call(data);
+    });
+
+    // Contacto aprobado
+    _contactApprovedNotificationSubscription = _notificationService
+        .contactApprovedNotificationTapStream
+        .listen((data) {
+      ReleaseLogger.log('Contact approved notification tapped: $data', tag: 'ParentMainShell');
+      onContactApprovedNotificationTap?.call(data);
+    });
+
+    // Solicitud de contacto
+    _contactRequestNotificationSubscription = _notificationService
+        .contactRequestNotificationTapStream
+        .listen((data) {
+      ReleaseLogger.log('Contact request notification tapped: $data', tag: 'ParentMainShell');
+      onContactRequestNotificationTap?.call(data);
+    });
+
+    // Alertas (actividad/bullying)
+    _alertNotificationSubscription = _notificationService
+        .alertNotificationTapStream
+        .listen((data) {
+      ReleaseLogger.log('Alert notification tapped: $data', tag: 'ParentMainShell');
+      onAlertNotificationTap?.call(data);
+    });
+
+    // Reporte listo
+    _reportNotificationSubscription = _notificationService
+        .reportNotificationTapStream
+        .listen((data) {
+      ReleaseLogger.log('Report notification tapped: $data', tag: 'ParentMainShell');
+      onReportNotificationTap?.call(data);
+    });
+
+    // Emergencia
+    _emergencyNotificationSubscription = _notificationService
+        .emergencyNotificationTapStream
+        .listen((data) {
+      ReleaseLogger.log('Emergency notification tapped: $data', tag: 'ParentMainShell');
+      onEmergencyNotificationTap?.call(data);
+    });
+
+    // Membresía de grupo aprobada
+    _groupMembershipApprovedNotificationSubscription = _notificationService
+        .groupMembershipApprovedNotificationTapStream
+        .listen((data) {
+      ReleaseLogger.log('Group membership approved notification tapped: $data', tag: 'ParentMainShell');
+      onGroupMembershipApprovedNotificationTap?.call(data);
     });
   }
 
@@ -152,6 +223,18 @@ class ParentMainShellController {
     } catch (e) {
       ReleaseLogger.error('Error configurando listener de rol: $e', tag: 'ParentMainShell');
     }
+  }
+
+  /// Configurar listener para cambios de estado de la app (foreground/background)
+  void _setupAppStateListener() {
+    _appStateSubscription = AppStateService().foregroundStateStream.listen((isInForeground) {
+      if (isInForeground) {
+        ReleaseLogger.log('📱 App volvió a foreground - sincronizando contactos', tag: 'ParentMainShell');
+        _contactsSyncService.syncContacts().catchError((error) {
+          ReleaseLogger.error('Error syncing contacts on resume: $error', tag: 'ParentMainShell');
+        });
+      }
+    });
   }
 
   /// Sincronizar contactos en background
@@ -278,7 +361,15 @@ class ParentMainShellController {
     _chatNotificationSubscription?.cancel();
     _storyApprovalNotificationSubscription?.cancel();
     _groupApprovalNotificationSubscription?.cancel();
+    _storyNotificationSubscription?.cancel();
+    _contactApprovedNotificationSubscription?.cancel();
+    _contactRequestNotificationSubscription?.cancel();
+    _alertNotificationSubscription?.cancel();
+    _reportNotificationSubscription?.cancel();
+    _emergencyNotificationSubscription?.cancel();
+    _groupMembershipApprovedNotificationSubscription?.cancel();
     _roleChangeSubscription?.cancel();
+    _appStateSubscription?.cancel();
 
     // ✅ OPTIMIZACIÓN: Limpiar stream cacheado
     _cachedUserDataStream = null;

@@ -7,55 +7,7 @@
  * Comparar con la salida de los tests de Flutter para verificar consistencia.
  */
 
-const crypto = require("crypto");
-
-// MISMO SALT que en Flutter y contacts.js
-const PHONE_HASH_SALT = "51043c5af83c18c0e2ebce94e554af71b927c7974c84fe3df6323dde13952111";
-
-/**
- * Normaliza un número de teléfono al formato E.164 canónico.
- */
-function normalizePhone(phone, defaultCountryCode = "AR") {
-  if (!phone || phone.trim() === "") return "";
-
-  let cleaned = phone.replace(/[^\d+]/g, "");
-
-  if (!cleaned.startsWith("+")) {
-    if (cleaned.startsWith("54")) {
-      cleaned = "+" + cleaned;
-    } else if (cleaned.startsWith("0")) {
-      cleaned = "+54" + cleaned.substring(1);
-    } else if (defaultCountryCode.toUpperCase() === "AR") {
-      if (cleaned.startsWith("9") && cleaned.length === 11) {
-        cleaned = "+54" + cleaned;
-      } else if (cleaned.length === 10) {
-        cleaned = "+549" + cleaned;
-      } else {
-        cleaned = "+54" + cleaned;
-      }
-    }
-  }
-
-  if (cleaned.startsWith("+54")) {
-    const withoutCountryCode = cleaned.substring(3);
-    if (!withoutCountryCode.startsWith("9") && withoutCountryCode.length === 10) {
-      return "+549" + withoutCountryCode;
-    }
-    return "+54" + withoutCountryCode;
-  }
-
-  return cleaned;
-}
-
-/**
- * Genera un hash SHA-256 de un número telefónico normalizado.
- */
-function hashPhone(phone) {
-  if (!phone || phone.trim() === "") return "";
-  const normalized = normalizePhone(phone);
-  if (!normalized) return "";
-  return crypto.createHash("sha256").update(normalized + PHONE_HASH_SALT).digest("hex");
-}
+const { normalizePhone, hashPhone } = require("../phone-utils");
 
 // ═══════════════════════════════════════════════════════════════
 // TESTS

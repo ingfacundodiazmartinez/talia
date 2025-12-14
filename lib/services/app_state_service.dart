@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../utils/release_logger.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'notification_tracking_service.dart';
 
 /// Servicio para gestionar el estado de la aplicación (foreground/background)
 ///
@@ -12,6 +15,9 @@ class AppStateService {
   static final AppStateService _instance = AppStateService._internal();
   factory AppStateService() => _instance;
   AppStateService._internal();
+
+  // ✅ iOS: Channel para guardar estado en App Group (NSE lo lee)
+  static const _nseDeduplicationChannel = MethodChannel('com.talia.chat/nse_deduplication');
 
   // Estado actual de la app
   AppLifecycleState _currentState = AppLifecycleState.resumed;
@@ -87,6 +93,40 @@ class AppStateService {
           ReleaseLogger.log('✅ App pasó a FOREGROUND', tag: 'AppStateService');
           // ✅ Guardar timestamp de cuando la app volvió a foreground
           await prefs.setInt('app_resumed_foreground_at', DateTime.now().millisecondsSinceEpoch);
+
+          // ✅ LIMPIAR TODAS LAS NOTIFICACIONES al entrar a la app
+          NotificationTrackingService().clearAllNotifications();
+
+          // 🔍 DEBUG: Verificar si NSE fue invocado mientras estaba en background
+          ReleaseLogger.log('🔍 [NSE Debug] Platform.isIOS = ${Platform.isIOS}', tag: 'AppStateService');
+          if (Platform.isIOS) {
+            ReleaseLogger.log('🔍 [NSE Debug] Consultando getNSELastInvoked...', tag: 'AppStateService');
+            try {
+              // Verificar timestamp de última invocación de NSE
+              final nseLastInvoked = await _nseDeduplicationChannel.invokeMethod('getNSELastInvoked');
+              ReleaseLogger.log('🔍 [NSE Debug] Resultado: $nseLastInvoked', tag: 'AppStateService');
+              if (nseLastInvoked != null) {
+                ReleaseLogger.log('🚀 [NSE] Última invocación: $nseLastInvoked', tag: 'AppStateService');
+              } else {
+                ReleaseLogger.log('⚠️ [NSE] Nunca invocado (FCM sin mutable-content o NSE no configurado)', tag: 'AppStateService');
+              }
+
+              // Leer logs detallados del NSE
+              final logs = await _nseDeduplicationChannel.invokeMethod('getNSEDebugLogs');
+              if (logs != null && (logs as List).isNotEmpty) {
+                ReleaseLogger.log('🔍 [NSE DEBUG LOGS]:', tag: 'AppStateService');
+                for (final log in logs) {
+                  ReleaseLogger.log('   $log', tag: 'AppStateService');
+                }
+                // Limpiar logs después de leerlos
+                await _nseDeduplicationChannel.invokeMethod('clearNSEDebugLogs');
+              }
+            } catch (e) {
+              ReleaseLogger.error('❌ Error leyendo NSE info: $e', tag: 'AppStateService');
+            }
+          } else {
+            ReleaseLogger.log('🔍 [NSE Debug] No es iOS, saltando verificación NSE', tag: 'AppStateService');
+          }
         } else {
           ReleaseLogger.log('⬇️ App pasó a BACKGROUND/PAUSED', tag: 'AppStateService');
           // ✅ Guardar timestamp de cuando la app entró en background
@@ -98,6 +138,22 @@ class AppStateService {
           '💾 Estado guardado en SharedPreferences: app_in_foreground = $isInForeground',
           tag: 'AppStateService'
         );
+
+        // ✅ iOS: Guardar en App Group para que NSE sepa si mostrar notificación
+        if (Platform.isIOS) {
+          try {
+            await _nseDeduplicationChannel.invokeMethod('setAppInForeground', isInForeground);
+            ReleaseLogger.log(
+              '🍎 Estado guardado en App Group para NSE: $isInForeground',
+              tag: 'AppStateService'
+            );
+          } catch (e) {
+            ReleaseLogger.error(
+              'Error guardando estado en App Group: $e',
+              tag: 'AppStateService'
+            );
+          }
+        }
       } catch (e) {
         ReleaseLogger.error(
           'Error guardando estado en SharedPreferences: $e',

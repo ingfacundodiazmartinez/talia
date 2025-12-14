@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 import '../../../services/user_code_service.dart';
 
 /// Dialog para confirmar agregar un contacto
@@ -53,8 +52,6 @@ class _ConfirmContactDialog extends StatelessWidget {
           _buildAvatar(colorScheme),
           SizedBox(height: 16),
           _buildName(colorScheme),
-          SizedBox(height: 8),
-          _buildEmail(colorScheme),
           SizedBox(height: 16),
           _buildInfoMessage(),
         ],
@@ -79,62 +76,31 @@ class _ConfirmContactDialog extends StatelessWidget {
   }
 
   Widget _buildAvatar(ColorScheme colorScheme) {
+    // 🔒 SEGURIDAD: Solo mostrar inicial del nombre, no foto
+    // La foto no está disponible hasta que sean contactos aprobados
     return CircleAvatar(
       radius: 40,
       backgroundColor: colorScheme.primaryContainer,
-      child: contactInfo.photoURL != null
-          ? ClipOval(
-              child: CachedNetworkImage(
-                imageUrl: contactInfo.photoURL!,
-                width: 80,
-                height: 80,
-                fit: BoxFit.cover,
-                placeholder: (context, url) => Text(
-                  contactInfo.name![0].toUpperCase(),
-                  style: TextStyle(
-                    fontSize: 32,
-                    fontWeight: FontWeight.bold,
-                    color: colorScheme.primary,
-                  ),
-                ),
-                errorWidget: (context, url, error) => Text(
-                  contactInfo.name![0].toUpperCase(),
-                  style: TextStyle(
-                    fontSize: 32,
-                    fontWeight: FontWeight.bold,
-                    color: colorScheme.primary,
-                  ),
-                ),
-              ),
-            )
-          : Text(
-              contactInfo.name![0].toUpperCase(),
-              style: TextStyle(
-                fontSize: 32,
-                fontWeight: FontWeight.bold,
-                color: colorScheme.primary,
-              ),
-            ),
+      child: Text(
+        contactInfo.name != null && contactInfo.name!.isNotEmpty
+            ? contactInfo.name![0].toUpperCase()
+            : '?',
+        style: TextStyle(
+          fontSize: 32,
+          fontWeight: FontWeight.bold,
+          color: colorScheme.primary,
+        ),
+      ),
     );
   }
 
   Widget _buildName(ColorScheme colorScheme) {
     return Text(
-      contactInfo.name!,
+      contactInfo.name ?? 'Usuario',
       style: TextStyle(
         fontSize: 18,
         fontWeight: FontWeight.bold,
         color: colorScheme.onSurface,
-      ),
-    );
-  }
-
-  Widget _buildEmail(ColorScheme colorScheme) {
-    return Text(
-      contactInfo.email!,
-      style: TextStyle(
-        fontSize: 14,
-        color: colorScheme.onSurfaceVariant,
       ),
     );
   }

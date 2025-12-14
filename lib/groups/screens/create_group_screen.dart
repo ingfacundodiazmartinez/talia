@@ -217,7 +217,10 @@ class _CreateGroupScreenV2State extends State<CreateGroupScreenV2> {
         ],
       ),
       resizeToAvoidBottomInset: true,
-      body: Column(
+      body: GestureDetector(
+        onTap: () => FocusScope.of(context).unfocus(),
+        behavior: HitTestBehavior.translucent,
+        child: Column(
         children: [
           // Top section: Avatar and name
           Flexible(
@@ -442,6 +445,7 @@ class _CreateGroupScreenV2State extends State<CreateGroupScreenV2> {
                   ),
           ),
         ],
+      ),
       ),
     );
   }

@@ -1,8 +1,13 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
+import 'package:gal/gal.dart';
+import 'package:share_plus/share_plus.dart';
 import '../models/story.dart';
 import '../models/mood_poll.dart';
 import '../controllers/story_viewer_controller.dart';
@@ -61,6 +66,15 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
 
   // Estado local de likes (para UI optimista)
   final Set<String> _localLikedStories = {};
+
+  // Swipe down para cerrar - offset vertical del drag
+  double _dragOffset = 0.0;
+
+  // Flag para deshabilitar gestos cuando un bottom sheet está abierto
+  bool _isBottomSheetOpen = false;
+
+  // Para trackear posición inicial del gesto
+  Offset? _gestureStartPosition;
 
   // Obtener las historias apropiadas para cada usuario
   List<Story> _getStoriesForUser(UserStories userStories) {
@@ -277,6 +291,22 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
   void _pauseStoryTimer() {
     _storyTimer?.cancel();
     _progressController.stop();
+  }
+
+  /// Llamado cuando se abre un bottom sheet (likes, respuestas)
+  void _onBottomSheetOpened() {
+    setState(() {
+      _isBottomSheetOpen = true;
+    });
+    _pauseStoryTimer();
+  }
+
+  /// Llamado cuando se cierra un bottom sheet
+  void _onBottomSheetClosed() {
+    setState(() {
+      _isBottomSheetOpen = false;
+    });
+    _resumeStoryTimer();
   }
 
   void _resumeStoryTimer() {
@@ -533,6 +563,216 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
         );
         _resumeStoryTimer();
       }
+    }
+  }
+
+  /// Descargar la historia actual a la galería del dispositivo
+  Future<void> _downloadCurrentStory() async {
+    _pauseStoryTimer();
+
+    try {
+      final currentUserStories = widget.allUserStories[_currentUserIndex];
+      final stories = _getStoriesForUser(currentUserStories);
+      final currentStory = stories[_currentStoryIndex];
+
+      // Verificar que sea una historia con media descargable (no mood)
+      if (currentStory.mediaType == 'mood' ||
+          !currentStory.mediaUrl.startsWith('http')) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Este tipo de historia no se puede descargar'),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+        _resumeStoryTimer();
+        return;
+      }
+
+      // Mostrar indicador de descarga
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                ),
+                SizedBox(width: 12),
+                Text('Descargando...'),
+              ],
+            ),
+            backgroundColor: Colors.blue,
+            duration: Duration(seconds: 10),
+          ),
+        );
+      }
+
+      // Descargar el archivo
+      final response = await http.get(Uri.parse(currentStory.mediaUrl));
+      if (response.statusCode != 200) {
+        throw Exception('Error descargando archivo');
+      }
+
+      // Determinar extensión
+      final isVideo = currentStory.mediaType == 'video';
+      final extension = isVideo ? 'mp4' : 'jpg';
+      final fileName = 'talia_story_${DateTime.now().millisecondsSinceEpoch}.$extension';
+
+      // Guardar temporalmente
+      final tempDir = await getTemporaryDirectory();
+      final tempFile = File('${tempDir.path}/$fileName');
+      await tempFile.writeAsBytes(response.bodyBytes);
+
+      // Guardar en galería usando gal
+      if (isVideo) {
+        await Gal.putVideo(tempFile.path, album: 'Talia');
+      } else {
+        await Gal.putImage(tempFile.path, album: 'Talia');
+      }
+
+      // Eliminar archivo temporal
+      await tempFile.delete();
+
+      // Mostrar confirmación
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.check_circle, color: Colors.white),
+                SizedBox(width: 12),
+                Text('Guardado en galería'),
+              ],
+            ),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al descargar: $e'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+    } finally {
+      _resumeStoryTimer();
+    }
+  }
+
+  /// Compartir la historia actual en redes sociales (Instagram, WhatsApp, etc.)
+  Future<void> _shareCurrentStory() async {
+    _pauseStoryTimer();
+
+    try {
+      final currentUserStories = widget.allUserStories[_currentUserIndex];
+      final stories = _getStoriesForUser(currentUserStories);
+      final currentStory = stories[_currentStoryIndex];
+
+      // Verificar que sea una historia con media compartible (no mood)
+      if (currentStory.mediaType == 'mood' ||
+          !currentStory.mediaUrl.startsWith('http')) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Este tipo de historia no se puede compartir'),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+        _resumeStoryTimer();
+        return;
+      }
+
+      // Mostrar indicador de preparación
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                ),
+                SizedBox(width: 12),
+                Text('Preparando para compartir...'),
+              ],
+            ),
+            backgroundColor: Colors.blue,
+            duration: Duration(seconds: 10),
+          ),
+        );
+      }
+
+      // Descargar el archivo temporalmente
+      final response = await http.get(Uri.parse(currentStory.mediaUrl));
+      if (response.statusCode != 200) {
+        throw Exception('Error descargando archivo');
+      }
+
+      // Determinar extensión y tipo MIME
+      final isVideo = currentStory.mediaType == 'video';
+      final extension = isVideo ? 'mp4' : 'jpg';
+      final mimeType = isVideo ? 'video/mp4' : 'image/jpeg';
+      final fileName = 'talia_story_${DateTime.now().millisecondsSinceEpoch}.$extension';
+
+      // Guardar en directorio temporal
+      final tempDir = await getTemporaryDirectory();
+      final tempFile = File('${tempDir.path}/$fileName');
+      await tempFile.writeAsBytes(response.bodyBytes);
+
+      // Cerrar el snackbar de preparación
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      }
+
+      // Compartir usando share_plus
+      final xFile = XFile(tempFile.path, mimeType: mimeType);
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [xFile],
+          text: currentStory.caption ?? '',
+          subject: 'Historia de Talia',
+        ),
+      );
+
+      // Limpiar archivo temporal después de compartir
+      await Future.delayed(Duration(seconds: 2));
+      if (await tempFile.exists()) {
+        await tempFile.delete();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al compartir: $e'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+    } finally {
+      _resumeStoryTimer();
     }
   }
 
@@ -861,10 +1101,15 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     return Scaffold(
       backgroundColor: Colors.black,
       body: GestureDetector(
-        onTapDown: (details) {
+        // Taps para cambiar historia y mantener presionado para pausar
+        onTapDown: _isBottomSheetOpen ? null : (details) {
+          _gestureStartPosition = details.localPosition;
           _pauseStoryTimer();
         },
-        onTapUp: (details) {
+        onTapUp: _isBottomSheetOpen ? null : (details) {
+          final gestureStart = _gestureStartPosition;
+          _gestureStartPosition = null;
+
           // Si el teclado está abierto, cerrarlo
           if (_replyFocusNode.hasFocus) {
             _replyFocusNode.unfocus();
@@ -872,18 +1117,52 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
           }
 
           final screenWidth = MediaQuery.of(context).size.width;
-          if (details.localPosition.dx < screenWidth / 3) {
+          final tapX = gestureStart?.dx ?? details.localPosition.dx;
+
+          if (tapX < screenWidth / 3) {
             _previousStory();
-          } else if (details.localPosition.dx > screenWidth * 2 / 3) {
+          } else if (tapX > screenWidth * 2 / 3) {
             _nextStory();
           } else {
             _resumeStoryTimer();
           }
         },
-        onTapCancel: () {
+        onTapCancel: _isBottomSheetOpen ? null : () {
+          _gestureStartPosition = null;
           _resumeStoryTimer();
         },
-        child: Stack(
+        // Solo swipe vertical para cerrar (el horizontal lo maneja el PageView)
+        onVerticalDragStart: _isBottomSheetOpen ? null : (_) {
+          _pauseStoryTimer();
+        },
+        onVerticalDragUpdate: _isBottomSheetOpen ? null : (details) {
+          // Solo permitir arrastrar hacia abajo
+          if (details.delta.dy > 0 || _dragOffset > 0) {
+            setState(() {
+              _dragOffset = (_dragOffset + details.delta.dy).clamp(0.0, double.infinity);
+            });
+          }
+        },
+        onVerticalDragEnd: _isBottomSheetOpen ? null : (details) {
+          final screenHeight = MediaQuery.of(context).size.height;
+          // Si se arrastró más del 20% de la pantalla o con velocidad alta, cerrar
+          if (_dragOffset > screenHeight * 0.2 ||
+              (details.primaryVelocity != null && details.primaryVelocity! > 500)) {
+            Navigator.pop(context);
+          } else {
+            // Volver a la posición original con animación
+            setState(() {
+              _dragOffset = 0.0;
+            });
+            _resumeStoryTimer();
+          }
+        },
+        child: Transform.translate(
+          offset: Offset(0, _dragOffset),
+          child: Opacity(
+            // Reducir opacidad mientras se arrastra
+            opacity: (1 - (_dragOffset / 500)).clamp(0.5, 1.0),
+            child: Stack(
           children: [
             // Contenido principal de historias
             StoryContentWidget(
@@ -923,11 +1202,15 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
               controller: _controller,
               onClose: () => Navigator.pop(context),
               onDelete: _deleteCurrentStory,
+              onDownload: _downloadCurrentStory,
+              onShare: _shareCurrentStory,
               replyController: _replyController,
               replyFocusNode: _replyFocusNode,
               onSendReply: _sendReply,
               getStoriesForUser: _getStoriesForUser,
               formatStoryTime: _formatStoryTime,
+              onPauseTimer: _onBottomSheetOpened,
+              onResumeTimer: _onBottomSheetClosed,
             ),
 
             // Campo de respuesta (con botón de like)
@@ -941,6 +1224,8 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
               onLikeToggle: _toggleLike,
             ),
           ],
+        ),
+          ),
         ),
       ),
     );

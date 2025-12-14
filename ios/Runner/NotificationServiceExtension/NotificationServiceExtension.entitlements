@@ -6,9 +6,5 @@
 	<array>
 		<string>group.com.talia.chat</string>
 	</array>
-	<key>aps-environment</key>
-	<string>production</string>
-	<key>com.apple.developer.usernotifications.communication</key>
-	<true/>
 </dict>
 </plist>

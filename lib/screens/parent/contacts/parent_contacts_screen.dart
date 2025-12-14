@@ -10,6 +10,7 @@ import '../../../services/user_role_service.dart';
 import '../../../services/contact_alias_service.dart';
 import '../../../services/auto_approval_service.dart';
 import '../../../services/block_service.dart';
+import '../../../services/contacts_sync_service.dart';
 import '../../../notification_service.dart';
 import '../../../theme_service.dart';
 import '../../../link_parent_child.dart';
@@ -40,6 +41,7 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
   late ParentDashboardController _controller;
   final ContactAliasService _aliasService = ContactAliasService();
   final BlockService _blockService = BlockService();
+  final ContactsSyncService _contactsSyncService = ContactsSyncService();
   final ValueNotifier<String> _contactsSearchQuery = ValueNotifier('');
   final TextEditingController _contactsSearchController = TextEditingController();
 
@@ -48,6 +50,9 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
 
   // Estado del permiso de contactos
   bool _hasContactsPermission = true; // Optimistic default
+
+  // Estado de sincronización
+  bool _isSyncing = false;
 
   @override
   bool get wantKeepAlive => true;
@@ -81,6 +86,45 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
       setState(() {
         _hasContactsPermission = hasPermission;
       });
+    }
+  }
+
+  /// Sincronizar contactos manualmente (forzado)
+  Future<void> _syncContacts() async {
+    if (_isSyncing) return;
+
+    setState(() {
+      _isSyncing = true;
+    });
+
+    try {
+      await _contactsSyncService.syncContacts(force: true);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Contactos sincronizados'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error sincronizando contactos'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSyncing = false;
+        });
+      }
     }
   }
 
@@ -143,6 +187,22 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
                     ),
                     Row(
                       children: [
+                        // Botón de sincronizar contactos
+                        IconButton(
+                          icon: _isSyncing
+                              ? SizedBox(
+                                  width: 24,
+                                  height: 24,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : Icon(Icons.sync, color: Colors.white, size: 26),
+                          onPressed: _isSyncing ? null : _syncContacts,
+                          padding: EdgeInsets.all(8),
+                          tooltip: 'Sincronizar contactos',
+                        ),
                         // Badge de solicitudes de aprobación pendientes
                         ApprovalRequestsBadge(
                           parentId: currentUserId ?? '',

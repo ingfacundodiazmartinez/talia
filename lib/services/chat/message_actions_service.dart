@@ -87,36 +87,20 @@ class MessageActionsService {
   }
 
   /// Marcar mensajes como leídos
+  ///
+  /// Este método delega a ReadReceiptsService que se encarga de:
+  /// 1. Resetear unreadCount (SIEMPRE)
+  /// 2. Marcar mensajes como leídos (solo si showReadReceipts está activado)
   Future<void> markMessagesAsRead({
     required String chatId,
     required String currentUserId,
   }) async {
     try {
-      // Verificar si el chat existe
-      final chatRef = _firestore.collection('chats').doc(chatId);
-      final chatDoc = await chatRef.get();
-
-      if (!chatDoc.exists) {
-        return;
-      }
-
-      // Verificar si realmente hay mensajes en el chat
-      final messagesSnapshot = await chatRef
-          .collection('messages')
-          .limit(1)
-          .get();
-
-      if (messagesSnapshot.docs.isEmpty) {
-        return;
-      }
-
-      // Marcar contador de no leídos en 0
-      await chatRef.update({'unreadCount_$currentUserId': 0});
-
       // Marcar mensajes como entregados primero
       await _deliveryReceiptsService.markMessagesAsDelivered(chatId: chatId);
 
-      // Luego marcar como leídos
+      // ReadReceiptsService maneja tanto el unreadCount como los read receipts
+      // El unreadCount SIEMPRE se resetea, independiente de la configuración
       await _readReceiptsService.markMessagesAsSeen(chatId: chatId);
     } catch (e) {
       // Error silencioso

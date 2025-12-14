@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import '../services/deepar_service.dart';
 import '../services/story_service_refactored.dart';
 import '../services/stickers_service.dart';
@@ -1313,9 +1314,27 @@ class StoryCameraController {
       ReleaseLogger.log('✅ Historia creada optimisticamente con ID: $storyId', tag: 'StoryCameraController');
       onSuccess?.call('Historia publicándose...');
       return true;
+    } on FirebaseFunctionsException catch (e) {
+      // Manejar errores específicos de Cloud Functions con mensajes amigables
+      ReleaseLogger.error('❌ Error Cloud Function publicando historia: ${e.code} - ${e.message}', tag: 'StoryCameraController');
+
+      String userMessage;
+      if (e.code == 'resource-exhausted') {
+        // Extraer mensaje amigable del servidor
+        userMessage = e.message ?? 'Has alcanzado el límite de historias. Espera un momento.';
+      } else if (e.code == 'unauthenticated') {
+        userMessage = 'Sesión expirada. Por favor vuelve a iniciar sesión.';
+      } else if (e.code == 'permission-denied') {
+        userMessage = 'No tienes permiso para publicar historias.';
+      } else {
+        userMessage = e.message ?? 'Error al publicar historia. Intenta de nuevo.';
+      }
+
+      onError?.call(userMessage);
+      return false;
     } catch (e) {
       ReleaseLogger.error('❌ Error publicando historia: $e', tag: 'StoryCameraController');
-      onError?.call('Error publicando historia: $e');
+      onError?.call('Error al publicar historia. Intenta de nuevo.');
       return false;
     }
   }

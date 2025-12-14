@@ -68,11 +68,15 @@ class StoryOverlayWidget extends StatelessWidget {
   final StoryViewerController controller;
   final VoidCallback onClose;
   final VoidCallback onDelete;
+  final VoidCallback? onDownload;
+  final VoidCallback? onShare;
   final TextEditingController replyController;
   final FocusNode replyFocusNode;
   final VoidCallback onSendReply;
   final List<Story> Function(UserStories) getStoriesForUser;
   final Function(DateTime) formatStoryTime;
+  final VoidCallback? onPauseTimer;
+  final VoidCallback? onResumeTimer;
 
   const StoryOverlayWidget({
     super.key,
@@ -83,11 +87,15 @@ class StoryOverlayWidget extends StatelessWidget {
     required this.controller,
     required this.onClose,
     required this.onDelete,
+    this.onDownload,
+    this.onShare,
     required this.replyController,
     required this.replyFocusNode,
     required this.onSendReply,
     required this.getStoriesForUser,
     required this.formatStoryTime,
+    this.onPauseTimer,
+    this.onResumeTimer,
   });
 
   @override
@@ -140,6 +148,8 @@ class StoryOverlayWidget extends StatelessWidget {
                 timeAgo: formatStoryTime(currentStory.createdAt),
                 isCurrentUser: isCurrentUser,
                 onDelete: onDelete,
+                onDownload: onDownload,
+                onShare: onShare,
                 onClose: onClose,
               ),
 
@@ -179,6 +189,14 @@ class StoryOverlayWidget extends StatelessWidget {
       padding: EdgeInsets.symmetric(horizontal: 16),
       margin: EdgeInsets.only(bottom: 8),
       child: GestureDetector(
+        // Prevenir que el tap se propague al visor de historias
+        behavior: HitTestBehavior.opaque,
+        onTapDown: (_) {
+          // No hacer nada en tapDown para evitar que el padre pause el timer
+        },
+        onTapUp: (_) {
+          // No hacer nada en tapUp
+        },
         onTap: () => _showLikesBottomSheet(context, currentStory),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.start,
@@ -189,7 +207,7 @@ class StoryOverlayWidget extends StatelessWidget {
               size: 24,
             ),
             SizedBox(width: 8),
-            // Like count text
+            // Like count text with shadow for visibility on light backgrounds
             Flexible(
               child: Text(
                 currentStory.likesCount == 1
@@ -199,6 +217,12 @@ class StoryOverlayWidget extends StatelessWidget {
                   color: Colors.white,
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
+                  shadows: [
+                    Shadow(
+                      color: Colors.black.withValues(alpha: 0.5),
+                      blurRadius: 4,
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -217,6 +241,10 @@ class StoryOverlayWidget extends StatelessWidget {
       width: double.infinity,
       padding: EdgeInsets.symmetric(horizontal: 16),
       child: GestureDetector(
+        // Prevenir que el tap se propague al visor de historias
+        behavior: HitTestBehavior.opaque,
+        onTapDown: (_) {},
+        onTapUp: (_) {},
         onTap: () => _showResponsesBottomSheet(context, currentStory),
         child: Container(
           padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -321,6 +349,9 @@ class StoryOverlayWidget extends StatelessWidget {
   }
 
   Future<void> _showResponsesBottomSheet(BuildContext context, Story currentStory) async {
+    // Pausar el timer mientras se muestra el bottom sheet
+    onPauseTimer?.call();
+
     await showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -427,9 +458,15 @@ class StoryOverlayWidget extends StatelessWidget {
         ),
       ),
     );
+
+    // Resumir el timer cuando se cierra el bottom sheet
+    onResumeTimer?.call();
   }
 
   Future<void> _showLikesBottomSheet(BuildContext context, Story currentStory) async {
+    // Pausar el timer mientras se muestra el bottom sheet
+    onPauseTimer?.call();
+
     await showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -492,6 +529,9 @@ class StoryOverlayWidget extends StatelessWidget {
         ),
       ),
     );
+
+    // Resumir el timer cuando se cierra el bottom sheet
+    onResumeTimer?.call();
   }
 }
 
@@ -533,6 +573,14 @@ class _StackedAvatarsWidget extends StatelessWidget {
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       border: Border.all(color: Colors.black, width: 1.5),
+                      // Sombra para visibilidad en fondos claros
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.4),
+                          blurRadius: 4,
+                          spreadRadius: 1,
+                        ),
+                      ],
                     ),
                     child: CircleAvatar(
                       radius: size / 2,

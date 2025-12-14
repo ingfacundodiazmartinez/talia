@@ -9,6 +9,7 @@ import 'group_invitations_screen.dart';
 import '../chat_detail_screen.dart';
 import '../../groups/groups.dart'; // Groups V2
 import '../story_approval_screen.dart';
+import 'dashboard/widgets/child_notifications_screen.dart';
 import '../../controllers/parent_main_shell_controller.dart';
 import '../../utils/release_logger.dart';
 import '../../notification_service.dart';
@@ -130,6 +131,13 @@ class _ParentMainShellState extends State<ParentMainShell> {
     _controller.onChatNotificationTap = _handleChatNotificationTap;
     _controller.onStoryApprovalNotificationTap = _handleStoryApprovalNotificationTap;
     _controller.onGroupApprovalNotificationTap = _handleGroupApprovalNotificationTap;
+    _controller.onStoryNotificationTap = _handleStoryNotificationTap;
+    _controller.onContactApprovedNotificationTap = _handleContactApprovedNotificationTap;
+    _controller.onContactRequestNotificationTap = _handleContactRequestNotificationTap;
+    _controller.onAlertNotificationTap = _handleAlertNotificationTap;
+    _controller.onReportNotificationTap = _handleReportNotificationTap;
+    _controller.onEmergencyNotificationTap = _handleEmergencyNotificationTap;
+    _controller.onGroupMembershipApprovedNotificationTap = _handleGroupMembershipApprovedNotificationTap;
 
     _controller.initialize();
 
@@ -265,6 +273,145 @@ class _ParentMainShellState extends State<ParentMainShell> {
       );
     } catch (e) {
       ReleaseLogger.error('Error handling group approval notification tap: $e', tag: 'ParentMainShell');
+    }
+  }
+
+  /// Manejar tap en notificación de historia (approved/rejected/reply/new_story)
+  Future<void> _handleStoryNotificationTap(Map<String, dynamic> data) async {
+    try {
+      final storyId = data['storyId'] as String?;
+      final storyOwnerId = data['storyOwnerId'] as String? ?? data['userId'] as String?;
+      final type = data['type'] as String?;
+
+      ReleaseLogger.log('Story notification tap: type=$type, storyId=$storyId, ownerId=$storyOwnerId', tag: 'ParentMainShell');
+
+      // Navegar al dashboard donde las historias son visibles
+      // El StoryViewerScreen requiere cargar las historias del usuario primero
+      // Por ahora, llevamos al usuario al dashboard para ver historias
+      setState(() => _selectedIndex = 0);
+    } catch (e) {
+      ReleaseLogger.error('Error handling story notification tap: $e', tag: 'ParentMainShell');
+    }
+  }
+
+  /// Manejar tap en notificación de contacto aprobado
+  Future<void> _handleContactApprovedNotificationTap(Map<String, dynamic> data) async {
+    try {
+      ReleaseLogger.log('Navigating to contacts tab from notification', tag: 'ParentMainShell');
+      // Cambiar al tab de contactos
+      setState(() => _selectedIndex = 2);
+    } catch (e) {
+      ReleaseLogger.error('Error handling contact approved notification tap: $e', tag: 'ParentMainShell');
+    }
+  }
+
+  /// Manejar tap en notificación de solicitud de contacto
+  Future<void> _handleContactRequestNotificationTap(Map<String, dynamic> data) async {
+    try {
+      final childId = data['childId'] as String?;
+      ReleaseLogger.log('Navigating to whitelist screen (pendientes) from notification, childId=$childId', tag: 'ParentMainShell');
+
+      // Cambiar al tab de whitelist
+      setState(() => _selectedIndex = 3);
+
+      // Navegar a la pantalla de whitelist con tab de pendientes
+      // WhitelistScreen tiene 3 tabs: Pendientes (0), Aprobadas (1), Rechazadas (2)
+      // Por ahora solo cambiamos al tab, la pantalla manejará mostrar pendientes por defecto
+    } catch (e) {
+      ReleaseLogger.error('Error handling contact request notification tap: $e', tag: 'ParentMainShell');
+    }
+  }
+
+  /// Manejar tap en notificación de alerta (actividad/bullying)
+  Future<void> _handleAlertNotificationTap(Map<String, dynamic> data) async {
+    try {
+      final childId = data['childId'] as String?;
+      final childName = data['childName'] as String? ?? 'Hijo';
+      ReleaseLogger.log('Navigating to child notifications screen, childId=$childId', tag: 'ParentMainShell');
+
+      if (childId != null) {
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => ChildNotificationsScreen(
+              childId: childId,
+              childName: childName,
+            ),
+          ),
+        );
+      } else {
+        // Si no hay childId, ir al dashboard
+        setState(() => _selectedIndex = 0);
+      }
+    } catch (e) {
+      ReleaseLogger.error('Error handling alert notification tap: $e', tag: 'ParentMainShell');
+    }
+  }
+
+  /// Manejar tap en notificación de reporte listo
+  Future<void> _handleReportNotificationTap(Map<String, dynamic> data) async {
+    try {
+      final childId = data['childId'] as String?;
+      final childName = data['childName'] as String? ?? 'Hijo';
+      ReleaseLogger.log('Navigating to child notifications screen for report, childId=$childId', tag: 'ParentMainShell');
+
+      if (childId != null) {
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => ChildNotificationsScreen(
+              childId: childId,
+              childName: childName,
+            ),
+          ),
+        );
+      } else {
+        // Si no hay childId, ir al dashboard
+        setState(() => _selectedIndex = 0);
+      }
+    } catch (e) {
+      ReleaseLogger.error('Error handling report notification tap: $e', tag: 'ParentMainShell');
+    }
+  }
+
+  /// Manejar tap en notificación de emergencia
+  Future<void> _handleEmergencyNotificationTap(Map<String, dynamic> data) async {
+    try {
+      final emergencyId = data['emergencyId'] as String?;
+      ReleaseLogger.log('Navigating to emergency detail screen, emergencyId=$emergencyId', tag: 'ParentMainShell');
+
+      // Navegar al dashboard donde se muestran las emergencias
+      // El EmergencyDetailScreen requiere emergencyData que no viene en la notificación
+      // El dashboard mostrará la alerta de emergencia y permitirá navegar al detalle
+      setState(() => _selectedIndex = 0);
+    } catch (e) {
+      ReleaseLogger.error('Error handling emergency notification tap: $e', tag: 'ParentMainShell');
+    }
+  }
+
+  /// Manejar tap en notificación de membresía de grupo aprobada
+  Future<void> _handleGroupMembershipApprovedNotificationTap(Map<String, dynamic> data) async {
+    try {
+      final groupId = data['groupId'] as String?;
+      final groupName = data['groupName'] as String? ?? 'Grupo';
+      ReleaseLogger.log('Navigating to group chat, groupId=$groupId', tag: 'ParentMainShell');
+
+      if (groupId != null) {
+        // Primero cambiar al tab de chats
+        setState(() => _selectedIndex = 1);
+
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => GroupChatScreenV2(
+              groupId: groupId,
+              groupName: groupName,
+            ),
+          ),
+        );
+      } else {
+        // Si no hay groupId, ir al tab de chats
+        setState(() => _selectedIndex = 1);
+      }
+    } catch (e) {
+      ReleaseLogger.error('Error handling group membership approved notification tap: $e', tag: 'ParentMainShell');
     }
   }
 

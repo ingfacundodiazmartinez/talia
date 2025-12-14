@@ -20,8 +20,9 @@ class ReadReceiptsService {
 
   /// Marca los mensajes de un chat como "seen" (leídos)
   ///
-  /// Solo actualiza el estado si el usuario tiene activadas las confirmaciones
-  /// de lectura en su configuración de privacidad.
+  /// IMPORTANTE: El unreadCount SIEMPRE se resetea cuando el usuario abre el chat.
+  /// Los read receipts (marcar isRead, readBy) solo se actualizan si el usuario
+  /// tiene activada la configuración de confirmaciones de lectura.
   ///
   /// [chatId] - ID del chat
   /// [isGroupChat] - true si es un chat grupal, false si es individual
@@ -31,11 +32,33 @@ class ReadReceiptsService {
   }) async {
     try {
       final currentUser = _auth.currentUser;
-      if (currentUser == null) return;
+      if (currentUser == null) {
+        appLogger.log('⚠️ [ReadReceipts] currentUser es null', level: 'WARNING');
+        return;
+      }
+
+      appLogger.log('📖 [ReadReceipts] markMessagesAsSeen llamado para chat $chatId', level: 'INFO');
+
+      // ⚡ CRÍTICO: SIEMPRE resetear unreadCount cuando el usuario abre el chat
+      // Esto es independiente de la configuración de read receipts
+      final chatRef = _firestore.collection(isGroupChat ? 'groups' : 'chats').doc(chatId);
+      try {
+        await chatRef.update({
+          'unreadCount_${currentUser.uid}': 0,
+        });
+        appLogger.log('✅ [ReadReceipts] unreadCount reseteado a 0', level: 'INFO');
+      } catch (e) {
+        // El documento puede no existir aún, ignorar error
+        appLogger.log('⚠️ [ReadReceipts] No se pudo resetear unreadCount: $e', level: 'WARNING');
+      }
 
       // Verificar si el usuario tiene activadas las confirmaciones de lectura
+      // Solo si está activado, actualizamos isRead/readBy en los mensajes
       final showReceipts = await _settingsService.showReadReceipts();
-      if (!showReceipts) return;
+      if (!showReceipts) {
+        appLogger.log('ℹ️ [ReadReceipts] Usuario tiene deshabilitado showReadReceipts - solo se reseteó unreadCount', level: 'INFO');
+        return;
+      }
 
       // Obtener mensajes no leídos del otro usuario
       final messagesRef = _firestore
@@ -47,7 +70,10 @@ class ReadReceiptsService {
           .where('senderId', isNotEqualTo: currentUser.uid)
           .get();
 
-      if (unreadMessages.docs.isEmpty) return;
+      if (unreadMessages.docs.isEmpty) {
+        appLogger.log('ℹ️ [ReadReceipts] No hay mensajes para marcar como leídos', level: 'INFO');
+        return;
+      }
 
       // Marcar todos los mensajes como leídos en un batch
       final batch = _firestore.batch();
@@ -71,13 +97,8 @@ class ReadReceiptsService {
 
       if (count > 0) {
         await batch.commit();
+        appLogger.log('✅ [ReadReceipts] $count mensajes marcados como leídos', level: 'INFO');
       }
-
-      // ⚡ CRÍTICO: Resetear unreadCount cuando se marcan mensajes como leídos
-      final chatRef = _firestore.collection(isGroupChat ? 'groups' : 'chats').doc(chatId);
-      await chatRef.update({
-        'unreadCount_${currentUser.uid}': 0,
-      });
     } catch (e) {
       appLogger.log('❌ [ReadReceipts] Error: $e', level: 'ERROR');
     }

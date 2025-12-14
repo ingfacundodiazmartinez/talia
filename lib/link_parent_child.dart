@@ -581,13 +581,8 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
         }
       }
 
-      // Marcar código como usado
-      await linkCodeDoc.reference.update({
-        'used': true,
-        'usedBy': childId,
-        'usedAt': FieldValue.serverTimestamp(),
-        'isActive': false,
-      });
+      // NOTA: El código de vinculación se marca como usado por la Cloud Function createParentChildLink
+      // No es necesario hacerlo aquí de forma redundante
 
       // Solicitar permisos de ubicación para niños que vinculan su primer padre
       // Solo si es el primer padre (no tiene otros padres vinculados) Y no tiene permisos ya concedidos

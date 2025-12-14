@@ -12,11 +12,11 @@ import '../../../utils/release_logger.dart';
 import '../chat_orchestrator.dart';
 import '../../unread_messages_service.dart';
 import '../../message_cache_service.dart';
-import '../../../notification_service.dart';
-import '../../contact_alias_service.dart';
-import '../../notification_deduplication_service.dart';
-import '../../app_state_service.dart';
+import '../../read_receipts_service.dart';
 import '../../local_unread_count_service.dart';
+import '../../../notification_service.dart';
+import '../../contact_photo_cache_service.dart';
+import '../../app_state_service.dart';
 
 /// Manager para coordinación de streams de chats
 ///
@@ -30,7 +30,7 @@ class ChatStreamManager {
   final MessageRepository _messageRepository;
   final ChatCacheManager _cacheManager;
   final UnreadMessagesService _unreadService;
-  final NotificationDeduplicationService _deduplicationService = NotificationDeduplicationService();
+  // ❌ REMOVED: _deduplicationService (DATA-ONLY strategy - FCM handles all)
 
   // Background stream management
   bool _isBackgroundStreamActive = false;
@@ -40,7 +40,6 @@ class ChatStreamManager {
 
   // ✅ GLOBAL MESSAGE LISTENER: Detecta mensajes en TODOS los chats para notificaciones instantáneas
   Set<String> _processedMessageIds = {}; // Evitar procesar el mismo mensaje múltiples veces
-  final Set<String> _processingMessageIds = {}; // ✅ FIX #12: Lock para evitar race conditions
 
   // ✅ OPTIMIZACIÓN: Límites de memoria para caches
   static const int _maxProcessedMessageIds = 1000;
@@ -78,9 +77,6 @@ class ChatStreamManager {
   // Esta variable en memoria elimina completamente el I/O bloqueante en path crítico
   String? _cachedCurrentChatId;
 
-  // ✅ FIX #9: Stream Detector health check for iOS
-  Timer? _heartbeatTimer;
-  static const MethodChannel _streamDetectorChannel = MethodChannel('com.talia.chat/stream_detector');
 
   ChatStreamManager({
     required ChatRepository chatRepository,
@@ -491,40 +487,20 @@ class ChatStreamManager {
 
       ReleaseLogger.log('✅ [ChatDocsListener] Listeners iniciados (2 listeners: chats + grupos)');
 
-      // ✅ FIX #9: Start heartbeat timer for iOS health check
-      _startHeartbeatTimer();
+      // ❌ REMOVED: Heartbeat timer ya no es necesario
+      // DATA-ONLY strategy: StreamDetector NO muestra notificaciones
+      // Por lo tanto, NO debemos decirle a iOS que estamos "healthy"
+      // (si lo hacemos, iOS suprime FCM pensando que StreamDetector mostrará la notificación)
+      // _startHeartbeatTimer();
     } catch (e) {
       ReleaseLogger.error('❌ [ChatDocsListener] Error iniciando listeners: $e');
     }
   }
 
-  /// ✅ FIX #9: Send periodic heartbeats to iOS to indicate Stream Detector is healthy
-  void _startHeartbeatTimer() {
-    // Only run on iOS
-    if (!Platform.isIOS) return;
-
-    // Cancel existing timer if any
-    _heartbeatTimer?.cancel();
-
-    // Send immediate heartbeat
-    _sendHeartbeat();
-
-    // Send heartbeat every 15 seconds
-    _heartbeatTimer = Timer.periodic(Duration(seconds: 15), (_) {
-      _sendHeartbeat();
-    });
-
-    ReleaseLogger.log('✅ [StreamDetector] Heartbeat timer started (every 15s)');
-  }
-
-  /// ✅ FIX #9: Send heartbeat to iOS
-  Future<void> _sendHeartbeat() async {
-    try {
-      await _streamDetectorChannel.invokeMethod('heartbeat');
-    } catch (e) {
-      // Silently fail - iOS might not have the channel set up yet
-    }
-  }
+  // ❌ DEPRECATED: Heartbeat methods ya no se usan (DATA-ONLY strategy)
+  // Stream Detector no muestra notificaciones, FCM es el único punto de entrada
+  // void _startHeartbeatTimer() { ... }
+  // Future<void> _sendHeartbeat() async { ... }
 
   /// Procesar cambios en documentos de chat/grupo
   Future<void> _processChatDocChanges(QuerySnapshot snapshot, String userId, {required bool isGroup}) async {
@@ -635,9 +611,7 @@ class ChatStreamManager {
 
       final chatData = chatDoc.data() as Map<String, dynamic>;
       final senderId = chatData['lastMessageSender'] as String?;
-      final messageText = chatData['lastMessage'] as String?;
-      final lastMessageType = chatData['lastMessageType'] as String?; // ✅ NEW: Tipo del mensaje
-      final lastMessageId = chatData['lastMessageId'] as String?; // ✅ NUEVO: ID real del mensaje
+      final lastMessageId = chatData['lastMessageId'] as String?;
 
       if (senderId == null) {
         ReleaseLogger.log('⚠️ [ChatDocsListener] No hay lastMessageSender en chat $chatId');
@@ -655,130 +629,73 @@ class ChatStreamManager {
         return;
       }
 
-      // ✅ FIX #12: Race condition lock - Evitar procesamiento simultáneo del mismo mensaje
-      if (_processingMessageIds.contains(lastMessageId)) {
-        ReleaseLogger.log('🔒 [ChatDocsListener] Mensaje $lastMessageId ya está siendo procesado - SKIP');
+      // ✅ Verificar si ya procesamos este mensaje (evita duplicados)
+      if (_processedNotificationMessageIds.contains(lastMessageId)) {
+        ReleaseLogger.log('⏭️ [ChatDocsListener] Mensaje $lastMessageId ya procesado - SKIP');
         return;
       }
-      _processingMessageIds.add(lastMessageId);
 
-      try {
-        // Query: Usuario remitente + alias en paralelo
-        final results = await Future.wait([
-          FirebaseFirestore.instance.collection('users').doc(senderId).get(),
-          ContactAliasService().getDisplayName(
-            senderId,
-            '', // Placeholder, se reemplaza con el nombre real después
-          ),
-        ]);
+      // Marcar como procesado ANTES de mostrar notificación
+      _processedNotificationMessageIds.add(lastMessageId);
 
-        final senderDoc = results[0] as DocumentSnapshot;
-        final realName = senderDoc.data() != null
-            ? (senderDoc.data() as Map<String, dynamic>)['name'] as String? ?? senderId
-            : senderId;
+      // ✅ SIEMPRE incrementar contador LOCAL (Cloud Functions NO incrementan)
+      await LocalUnreadCountService().incrementUnreadCount(chatId);
+      await _unreadService.updateBadgeCount();
+      ReleaseLogger.log('📊 [ChatDocsListener] Unread count incrementado para $chatId');
 
-        // Obtener alias (si existe)
-        final senderName = await ContactAliasService().getDisplayName(senderId, realName);
-        final groupName = isGroup ? (chatData['name'] as String? ?? 'Grupo') : null;
-        final senderPhotoUrl = senderDoc.data() != null
-            ? (senderDoc.data() as Map<String, dynamic>)['photoURL'] as String?
-            : null;
+      // ═══════════════════════════════════════════════════════════════
+      // ⚡ STREAM DETECTOR: Mostrar notificación instantánea (<100ms)
+      // SOLO EN FOREGROUND - En background, FCM/NSE manejan la notificación
+      // ═══════════════════════════════════════════════════════════════
 
-        // ⚡ MOSTRAR NOTIFICACIÓN INSTANTÁNEA
-        // ✅ FIX: Usar lastMessageType para determinar el texto si lastMessage es null
-        String displayText;
-        if (messageText != null && messageText.isNotEmpty) {
-          displayText = messageText;
-        } else {
-          // Fallback basado en tipo de mensaje
-          switch (lastMessageType) {
-            case 'image':
-              displayText = '📷 Imagen';
-              break;
-            case 'video':
-              displayText = '🎥 Video';
-              break;
-            case 'audio':
-              displayText = '🎤 Audio';
-              break;
-            default:
-              displayText = 'Nuevo mensaje';
-          }
-        }
+      final isInForeground = AppStateService().isInForeground;
 
-        ReleaseLogger.log('⚡ [ChatDocsListener] Mostrando notificación instantánea');
-        ReleaseLogger.log('   - Chat: ${isGroup ? "Grupo" : "Individual"} ($chatId)');
-        ReleaseLogger.log('   - Remitente: $senderName');
-        ReleaseLogger.log('   - Mensaje: $displayText');
-        ReleaseLogger.log('   - MessageId: $lastMessageId');
-
-        // ✅ FIX #10: Solo mostrar notificaciones instantáneas si la app está en FOREGROUND
-        // Si está en background, dejar que FCM maneje la notificación (evita duplicados)
-        if (!AppStateService().isInForeground) {
-          ReleaseLogger.log('📱 [ChatDocsListener] App en background - SKIP notificación local (FCM se encargará)');
-          return;
-        }
-
-        // ✅ FIX iOS DUPLICATES: Verificar si el mensaje ya fue procesado
-        // 1. Por el background handler (SharedPreferences) - cuando app estaba killed
-        // 2. Por el NSE (App Group UserDefaults) - cuando app estaba en background
-        if (Platform.isIOS) {
-          final wasProcessedInBackground = await wasMessageProcessedInBackground(lastMessageId);
-          final wasProcessedByNSE = await NotificationService().wasMessageProcessedByNSE(lastMessageId);
-
-          if (wasProcessedInBackground || wasProcessedByNSE) {
-            ReleaseLogger.log('📱 [ChatDocsListener] messageId=$lastMessageId ya procesado (bg=$wasProcessedInBackground, nse=$wasProcessedByNSE) - SKIP');
-            _deduplicationService.tryAcquire(lastMessageId);
-            return;
-          }
-        }
-
-        // ✅ CRITICAL: Verificar si el usuario tiene el chat abierto
-        // Si el chat del sender está abierto, NO mostrar notificación
-        final prefs = await SharedPreferences.getInstance();
-        final currentChatId = prefs.getString('current_chat_id');
-
-        if (currentChatId != null && currentChatId == chatId) {
-          ReleaseLogger.log('🚫 [ChatDocsListener] Usuario tiene el chat $chatId abierto - NO mostrar notificación');
-          // Marcar como procesado para evitar que se muestre después
-          _deduplicationService.tryAcquire(lastMessageId);
-          return;
-        }
-
-        // ✅ ATOMIC: Try to acquire the right to show this notification
-        // El messageId ya está marcado en cache si el usuario tocó la notificación push (onMessageOpenedApp)
-        // Only ONE listener (ChatDocsListener OR StreamDetector) will succeed
-        if (!_deduplicationService.tryAcquire(lastMessageId)) {
-          ReleaseLogger.log('⏭️ [ChatDocsListener] Otro listener ya mostró $lastMessageId - SKIP');
-          return;
-        }
-
-        await NotificationService().showLocalChatNotification(
-          senderId: senderId,
-          senderName: senderName,
-          messageText: displayText,
-          chatId: chatId,
-          isGroup: isGroup,
-          groupName: groupName,
-          senderPhotoUrl: senderPhotoUrl,
+      if (!isInForeground) {
+        ReleaseLogger.log(
+          '📱 [ChatDocsListener] App en BACKGROUND - unread incrementado, FCM maneja notificación',
         );
-
-        // ✅ Incrementar contador de mensajes no leídos (solo si no está en el chat)
-        ReleaseLogger.log('📊 [ChatDocsListener] Llamando incrementUnreadCount para $chatId');
-        final incremented = await LocalUnreadCountService().incrementUnreadCount(chatId);
-        ReleaseLogger.log('📊 [ChatDocsListener] incrementUnreadCount retornó: $incremented');
-
-        ReleaseLogger.log('✅ [ChatDocsListener] Notificación instantánea mostrada para chat $chatId');
-      } finally {
-        // ✅ FIX #12: Liberar lock
-        _processingMessageIds.remove(lastMessageId);
+        return;
       }
+      ReleaseLogger.log(
+        '🔍 [StreamDetector] Procesando lastMessageId = $lastMessageId',
+      );
+      final lastMessage = chatData['lastMessage'] as String? ?? '';
+      final lastMessageType = chatData['lastMessageType'] as String?;
+
+      // Determinar el preview del mensaje
+      String messagePreview;
+      if (lastMessageType == 'image') {
+        messagePreview = '📷 Imagen';
+      } else if (lastMessageType == 'video') {
+        messagePreview = '🎥 Video';
+      } else if (lastMessageType == 'audio') {
+        messagePreview = '🎤 Audio';
+      } else {
+        messagePreview = lastMessage.isNotEmpty ? lastMessage : 'Mensaje nuevo';
+      }
+
+      ReleaseLogger.log(
+        '⚡ [ChatDocsListener] Mostrando notificación instantánea para mensaje $lastMessageId',
+      );
+
+      // Crear ChatMessage virtual con datos del documento
+      final virtualMessage = ChatMessage(
+        id: lastMessageId,
+        senderId: senderId,
+        text: messagePreview,
+        type: lastMessageType,
+      );
+
+      // Mostrar notificación instantánea
+      await _showInstantNotification(
+        chatId: chatId,
+        message: virtualMessage,
+        isGroup: isGroup,
+      );
 
     } catch (e, stackTrace) {
       ReleaseLogger.error('❌ [ChatDocsListener] Error en _fetchAndShowLatestMessage: $e');
       ReleaseLogger.error('Stack trace: $stackTrace');
-      // Asegurar que se libere el lock en caso de error fuera del try block (aunque el finally lo cubre)
-      // _processingMessageIds.remove(lastMessageId); // Eliminado porque lastMessageId no es visible y finally ya lo maneja
     }
   }
 
@@ -858,10 +775,9 @@ class ChatStreamManager {
       _lastSeenMessageTimestamps.clear();
       ReleaseLogger.log('⚡ [ChatDocsListener] Listeners de documentos detenidos');
 
-      // ✅ FIX #9: Stop heartbeat timer
-      _heartbeatTimer?.cancel();
-      _heartbeatTimer = null;
-      ReleaseLogger.log('⚡ [StreamDetector] Heartbeat timer stopped');
+      // ❌ DEPRECATED: Heartbeat timer ya no se usa
+      // _heartbeatTimer?.cancel();
+      // _heartbeatTimer = null;
 
       // Detener streams de mensajes
       for (final subscription in _messageStreamSubscriptions.values) {
@@ -991,15 +907,24 @@ class ChatStreamManager {
       final currentChatId = await _getCurrentActiveChatId();
 
       if (currentChatId != null && currentChatId == chatId) {
-        ReleaseLogger.log('📱 [ChatStreamManager] Usuario está en chat $chatId - el ChatController se encarga de marcar como leído');
+        ReleaseLogger.log('📱 [ChatStreamManager] Chat activo detectado: $chatId');
 
-        // ✅ SIMPLIFICADO: El ChatController maneja los read receipts
-        // Aquí solo reseteamos el rate limit y actualizamos el contador
+        // ✅ SIMPLIFICADO: Reseteamos el rate limit y actualizamos el contador
         _lastUpdateTimes.remove(chatId);
 
         // Poner contador en 0 automáticamente
         await _updateUnreadCountInFirestore(chatId, currentUserId, 0, isGroup: isGroup);
         await _unreadService.updateBadgeCount();
+
+        // ✅ FIX CRÍTICO: Marcar mensajes como leídos cuando el chat está activo
+        // Esto es necesario porque el ChatController puede no estar procesando
+        // correctamente los mensajes en tiempo real (filtros de moderación, etc.)
+        ReleaseLogger.log('📖 [ChatStreamManager] Marcando mensajes como leídos para chat activo $chatId');
+        await ReadReceiptsService().markMessagesAsSeen(
+          chatId: chatId,
+          isGroupChat: isGroup,
+        );
+
         return; // No necesitamos calcular contador ni mostrar notificación
       }
 
@@ -1016,134 +941,21 @@ class ChatStreamManager {
 
       ReleaseLogger.log('📊 [ChatStreamManager] Detectados $newUnreadMessages mensajes no leídos nuevos en ${isGroup ? 'grupo' : 'chat'} $chatId');
 
-      // ✅ FIX #3: ELIMINADO incremento de unreadCount del cliente
-      // Cloud Functions (chats.js:76-83) ya incrementan correctamente cuando se crea el mensaje
-      // Incrementar aquí causaba duplicación (+2 por mensaje en lugar de +1)
-      // El cliente SOLO lee unreadCount, NUNCA lo modifica directamente
+      // ✅ NOTA: El incremento del unread count se hace en _fetchAndShowLatestMessage
+      // (ChatDocsListener) para evitar duplicados. Este listener de mensajes
+      // solo se usa para tracking interno.
+      ReleaseLogger.log('📊 [ChatStreamManager] Detectados $newUnreadMessages mensajes nuevos (increment en ChatDocsListener)');
 
       // ⚡ NOTIFICACIÓN INSTANTÁNEA: Mostrar notificación local para el mensaje más reciente
       // Esto evita el delay de 2-5 segundos de las Cloud Functions
       // El listener de Firestore detecta mensajes en <100ms
       // ✅ FIX #18: Removed excessive DEBUG logs
 
-      if (receivedMessages.isNotEmpty) {  // ✅ ACTIVADO PARA TODOS (1-1 y grupos)
-        final latestMessage = receivedMessages.first; // El más reciente
-
-        // ✅ FIX: Solo mostrar notificación si el mensaje NO fue procesado anteriormente
-        // Esto evita mostrar notificaciones para mensajes viejos durante sincronización del cache
-        if (_processedNotificationMessageIds.contains(latestMessage.id)) {
-          ReleaseLogger.log('⏭️ [StreamDetector] Mensaje ${latestMessage.id.substring(0, 8)}... ya fue procesado - SKIP notificación');
-          return;
-        }
-
-        // Marcar como procesado ANTES de mostrar notificación
-        _processedNotificationMessageIds.add(latestMessage.id);
-
-        try {
-          // Obtener información del remitente
-          String senderName = latestMessage.senderId;
-          String? groupName;
-          String? senderPhotoUrl;  // ✅ FIX: Capturar foto del sender
-
-          if (isGroup) {
-            // Para grupos, obtener nombre del grupo (Groups V2)
-            final groupDoc = await FirebaseFirestore.instance
-                .collection('groups_v2')
-                .doc(chatId)
-                .get();
-            groupName = groupDoc.data()?['name'] as String? ?? 'Grupo';
-
-            // Y nombre del miembro que envió (primero nombre real, luego alias)
-            final senderDoc = await FirebaseFirestore.instance
-                .collection('users')
-                .doc(latestMessage.senderId)
-                .get();
-            final realName = senderDoc.data()?['name'] as String? ?? senderName;
-            senderPhotoUrl = senderDoc.data()?['photoURL'] as String?;  // ✅ FIX: Capturar foto
-
-            // Obtener alias si existe
-            senderName = await ContactAliasService().getDisplayName(latestMessage.senderId, realName);
-          } else {
-            // Para chats 1-1, obtener nombre real del remitente
-            final senderDoc = await FirebaseFirestore.instance
-                .collection('users')
-                .doc(latestMessage.senderId)
-                .get();
-            final realName = senderDoc.data()?['name'] as String? ?? senderName;
-            senderPhotoUrl = senderDoc.data()?['photoURL'] as String?;  // ✅ FIX: Capturar foto
-
-            // Obtener alias si existe (el receptor puede haberle puesto un alias al remitente)
-            senderName = await ContactAliasService().getDisplayName(latestMessage.senderId, realName);
-          }
-
-          // ✅ FIX iOS DUPLICATES: Verificar si el mensaje ya fue procesado
-          // 1. Por el background handler (SharedPreferences) - cuando app estaba killed
-          // 2. Por el NSE (App Group UserDefaults) - cuando app estaba en background
-          if (Platform.isIOS) {
-            final wasProcessedInBackground = await wasMessageProcessedInBackground(latestMessage.id);
-            final wasProcessedByNSE = await NotificationService().wasMessageProcessedByNSE(latestMessage.id);
-
-            if (wasProcessedInBackground || wasProcessedByNSE) {
-              ReleaseLogger.log('📱 [StreamDetector] messageId=${latestMessage.id.substring(0, 8)}... ya procesado (bg=$wasProcessedInBackground, nse=$wasProcessedByNSE) - SKIP');
-              // Marcar como procesado para evitar que otros listeners lo muestren
-              _deduplicationService.tryAcquire(latestMessage.id);
-              return;
-            }
-          }
-
-          // ✅ ATOMIC: Try to acquire the right to show this notification
-          // Only ONE listener (ChatDocsListener OR StreamDetector) will succeed
-          if (!_deduplicationService.tryAcquire(latestMessage.id)) {
-            ReleaseLogger.log('⏭️ [StreamDetector] Otro listener ya mostró ${latestMessage.id.substring(0, 8)}... - SKIP');
-          } else {
-            // Mostrar notificación local instantánea
-            // ✅ FIX: Determinar texto de notificación basado en tipo de mensaje
-            String notificationText;
-            if (latestMessage.text != null && latestMessage.text!.isNotEmpty) {
-              notificationText = latestMessage.text!;
-            } else {
-              switch (latestMessage.type) {
-                case 'image':
-                  notificationText = '📷 Imagen';
-                  break;
-                case 'video':
-                  notificationText = '🎥 Video';
-                  break;
-                case 'audio':
-                  notificationText = '🎤 Audio';
-                  break;
-                default:
-                  notificationText = 'Nuevo mensaje';
-              }
-            }
-
-            ReleaseLogger.log('⚡ [StreamDetector] Mostrando notificación instantánea...');
-            ReleaseLogger.log('   - senderId=${latestMessage.senderId.substring(0, 8)}..., senderName=$senderName');
-            ReleaseLogger.log('   - messageText=$notificationText');
-            ReleaseLogger.log('   - chatId=${chatId.substring(0, 8)}..., isGroup=$isGroup');
-
-            await NotificationService().showLocalChatNotification(
-              senderId: latestMessage.senderId,
-              senderName: senderName,
-              messageText: notificationText,
-              chatId: chatId,
-              isGroup: isGroup,
-              groupName: groupName,
-              senderPhotoUrl: senderPhotoUrl,  // ✅ FIX: Pasar foto del sender
-            );
-
-            // ✅ Incrementar contador de mensajes no leídos (solo si no está en el chat)
-            await LocalUnreadCountService().incrementUnreadCount(chatId);
-
-            ReleaseLogger.log('✅ [StreamDetector] Notificación instantánea mostrada para ${latestMessage.id.substring(0, 8)}...');
-          }
-        } catch (e, stackTrace) {
-          ReleaseLogger.error('❌ Error disparando notificación instantánea: $e');
-          ReleaseLogger.error('Stack trace: $stackTrace');
-        }
-      } else {
-        ReleaseLogger.log('⚠️ [DEBUG] receivedMessages está vacío - no se mostrará notificación');
-      }
+      // ═══════════════════════════════════════════════════════════════
+      // ⚠️ NOTIFICACIONES: Manejadas por ChatDocsListener (_fetchAndShowLatestMessage)
+      // Este método solo actualiza cache/UI, NO muestra notificaciones
+      // Esto evita duplicados entre los dos sistemas de detección
+      // ═══════════════════════════════════════════════════════════════
 
       // Actualizar badge global
       await _unreadService.updateBadgeCount();
@@ -1337,6 +1149,114 @@ class ChatStreamManager {
       for (final key in keysToRemove) {
         _lastEmittedMessageIds.remove(key);
       }
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // INSTANT NOTIFICATIONS - StreamDetector
+  // ═══════════════════════════════════════════════════════════════
+
+  /// ⚡ Mostrar notificación instantánea usando NotificationService
+  ///
+  /// Este método es llamado cuando se detecta un nuevo mensaje vía Firestore listener.
+  /// La ventaja sobre FCM es que tiene ~100ms de latencia vs 2-5 segundos de FCM.
+  Future<void> _showInstantNotification({
+    required String chatId,
+    required ChatMessage message,
+    required bool isGroup,
+  }) async {
+    try {
+      final cacheService = ContactPhotoCacheService();
+
+      // 1. Obtener nombre del remitente (alias > nombre cacheado > query Firestore)
+      String senderName = cacheService.getDisplayName(message.senderId, 'Usuario');
+      String? senderPhotoUrl = cacheService.getPhotoUrl(message.senderId);
+
+      // Si no hay datos en cache, hacer query rápido a Firestore
+      if (senderName == 'Usuario' || senderPhotoUrl == null) {
+        try {
+          final userDoc = await FirebaseFirestore.instance
+              .collection('users')
+              .doc(message.senderId)
+              .get();
+
+          if (userDoc.exists) {
+            final userData = userDoc.data();
+            if (senderName == 'Usuario') {
+              senderName = userData?['name'] ?? userData?['displayName'] ?? 'Usuario';
+            }
+            senderPhotoUrl ??= userData?['photoURL'] as String?;
+          }
+        } catch (e) {
+          ReleaseLogger.error('⚠️ [StreamDetector] Error fetching user data: $e');
+        }
+      }
+
+      // 2. Aplicar alias si existe
+      final alias = cacheService.getAlias(message.senderId);
+      if (alias != null && alias.isNotEmpty) {
+        senderName = alias;
+      }
+
+      // 3. Obtener nombre del grupo si aplica
+      String? groupName;
+      if (isGroup) {
+        try {
+          final groupDoc = await FirebaseFirestore.instance
+              .collection('groups_v2')
+              .doc(chatId)
+              .get();
+
+          if (groupDoc.exists) {
+            groupName = groupDoc.data()?['name'] as String? ?? 'Grupo';
+          }
+        } catch (e) {
+          ReleaseLogger.error('⚠️ [StreamDetector] Error fetching group name: $e');
+          groupName = 'Grupo';
+        }
+      }
+
+      // 4. Obtener texto del mensaje
+      final messageText = message.preview;
+
+      // 5. Verificar si estamos en foreground
+      final isInForeground = AppStateService().isInForeground;
+
+      if (isInForeground) {
+        // ✅ FOREGROUND: Mostrar notificación local igual que background
+        ReleaseLogger.log(
+          '🔔 [StreamDetector] Mostrando notificación local: $senderName - $messageText',
+          tag: 'ChatStreamManager',
+        );
+
+        await NotificationService().showLocalChatNotification(
+          senderId: message.senderId,
+          senderName: senderName,
+          messageText: messageText,
+          chatId: chatId,
+          messageId: message.id,
+          isGroup: isGroup,
+          groupName: groupName,
+          senderPhotoUrl: senderPhotoUrl,
+        );
+
+        ReleaseLogger.log(
+          '✅ [StreamDetector] Notificación local mostrada para mensaje ${message.id.substring(0, 8)}...',
+          tag: 'ChatStreamManager',
+        );
+      } else {
+        // ✅ BACKGROUND: No mostrar nada - FCM se encarga
+        ReleaseLogger.log(
+          '📱 [StreamDetector] App en background - FCM manejará la notificación',
+          tag: 'ChatStreamManager',
+        );
+      }
+    } catch (e, stackTrace) {
+      ReleaseLogger.error(
+        '❌ [StreamDetector] Error mostrando notificación instantánea: $e',
+        tag: 'ChatStreamManager',
+      );
+      ReleaseLogger.error('Stack: $stackTrace');
     }
   }
 

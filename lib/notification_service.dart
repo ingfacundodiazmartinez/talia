@@ -19,10 +19,10 @@ import 'services/notification_filter.dart';
 import 'services/callkit_service.dart';
 import 'services/voip_service.dart';
 import 'services/app_state_service.dart';
-import 'services/notification_deduplication_service.dart';
 import 'services/location_service.dart';
-import 'services/local_unread_count_service.dart';
+import 'services/notification_tracking_service.dart';
 import 'utils/release_logger.dart';
+// ❌ REMOVED (DATA-ONLY): notification_deduplication_service, local_unread_count_service
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 // V2 Call System imports
 import 'calls_v2/controllers/call_controller.dart' as calls_v2;
@@ -42,621 +42,127 @@ import 'calls_v2/services/call_state_cache_service.dart';
 // ✅ FIXED: Cache global para deduplicación (accesible desde background handler)
 final Set<String> _globalProcessedCallIds = {};
 
-// ✅ FIX DUPLICATES: Constantes para SharedPreferences
-const String _kBackgroundProcessedMessageIds = 'background_processed_message_ids';
-const int _kMaxBackgroundMessageIds = 100; // Límite para evitar crecimiento infinito
-
-/// ✅ FIX DUPLICATES: Guardar messageId procesado en background
-/// Usa una lista en SharedPreferences para persistencia entre sesiones
-Future<void> _saveBackgroundProcessedMessageId(SharedPreferences prefs, String messageId) async {
-  try {
-    final List<String> processedIds = prefs.getStringList(_kBackgroundProcessedMessageIds) ?? [];
-
-    // Evitar duplicados
-    if (processedIds.contains(messageId)) return;
-
-    // Agregar nuevo ID
-    processedIds.add(messageId);
-
-    // Limitar tamaño (FIFO - remover los más viejos)
-    while (processedIds.length > _kMaxBackgroundMessageIds) {
-      processedIds.removeAt(0);
-    }
-
-    await prefs.setStringList(_kBackgroundProcessedMessageIds, processedIds);
-  } catch (e) {
-    ReleaseLogger.error('Error guardando messageId procesado: $e', tag: 'NotificationService');
-  }
-}
-
-/// ✅ FIX DUPLICATES: Verificar si un messageId ya fue procesado en background
-Future<bool> wasMessageProcessedInBackground(String messageId) async {
-  try {
-    final prefs = await SharedPreferences.getInstance();
-    final List<String> processedIds = prefs.getStringList(_kBackgroundProcessedMessageIds) ?? [];
-    return processedIds.contains(messageId);
-  } catch (e) {
-    ReleaseLogger.error('Error verificando messageId procesado: $e', tag: 'NotificationService');
-    return false;
-  }
-}
-
-/// ✅ FIX DUPLICATES: Limpiar messageIds procesados (llamar al cerrar sesión)
-Future<void> clearBackgroundProcessedMessageIds() async {
-  try {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_kBackgroundProcessedMessageIds);
-  } catch (e) {
-    ReleaseLogger.error('Error limpiando messageIds procesados: $e', tag: 'NotificationService');
-  }
-}
+// ❌ REMOVED: SharedPreferences deduplication (DATA-ONLY uses in-memory Set)
+// Con DATA-ONLY strategy:
+// - Background handler muestra notificación directamente
+// - Foreground usa _processedMessageIds en NotificationService
+// - No hay necesidad de cross-process dedup
 
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  ReleaseLogger.log(
-    '🔥 ============================================',
-    tag: 'NotificationService',
-  );
-  ReleaseLogger.log(
-    '📩 BACKGROUND MESSAGE HANDLER EJECUTADO',
-    tag: 'NotificationService',
-  );
-  ReleaseLogger.log(
-    '🔥 ============================================',
-    tag: 'NotificationService',
-  );
+  // ═══════════════════════════════════════════════════════════════
+  // DATA-ONLY STRATEGY: Background handler simplificado
+  // ═══════════════════════════════════════════════════════════════
 
-  // ✅ CRITICAL FIX: Verificar si la app está en foreground PRIMERO
-  // NO hacer tryAcquire() hasta saber si realmente mostraremos la notificación
-  try {
-    final prefs = await SharedPreferences.getInstance();
-    final appInForeground = prefs.getBool('app_in_foreground') ?? false;
-
-    if (appInForeground) {
-      ReleaseLogger.log(
-        '🚫 [Background Handler] App está en FOREGROUND - delegando a ChatDocsListener',
-        tag: 'NotificationService',
-      );
-      ReleaseLogger.log(
-        '🔥 ============================================',
-        tag: 'NotificationService',
-      );
-      return; // Dejar que ChatDocsListener maneje la notificación
-    }
-
-    // ✅ ANDROID: En background, el Native Service debe mostrar la notificación
-    // El background handler NO debe mostrar notificaciones de chat en Android cuando app está en background
-    if (Platform.isAndroid && !appInForeground) {
-      final messageType = message.data['type'];
-      final isChatMessage = messageType == 'chat_message' || messageType == 'group_message';
-
-      if (isChatMessage) {
-        ReleaseLogger.log(
-          '🚫 [Background Handler Android] App en BACKGROUND - delegando a Native Service',
-          tag: 'NotificationService',
-        );
-        ReleaseLogger.log(
-          '✅ [Background Handler Android] MyFirebaseMessagingService se encargará',
-          tag: 'NotificationService',
-        );
-        ReleaseLogger.log(
-          '🔥 ============================================',
-          tag: 'NotificationService',
-        );
-        return; // Dejar que Native Service muestre notificación con foto circular
-      }
-    }
-
-    // ✅ CRITICAL FIX iOS: Si la app NO está en foreground (background/killed) y es iOS
-    // entonces el NSE (Notification Service Extension) ya mostró la notificación
-    // El background handler NO debe mostrar notificaciones de chat en iOS cuando app está killed
-    // Solo debe manejar llamadas y otras notificaciones críticas
-    if (Platform.isIOS && !appInForeground) {
-      final messageType = message.data['type'];
-      final isChatMessage = messageType == 'chat_message' || messageType == 'group_message';
-
-      if (isChatMessage) {
-        // ✅ FIX DUPLICATES: Guardar messageId como procesado ANTES de return
-        // Esto evita que ChatDocsListener muestre duplicado cuando app vuelve a foreground
-        final messageId = message.data['messageId'] as String?;
-        if (messageId != null && messageId.isNotEmpty) {
-          await _saveBackgroundProcessedMessageId(prefs, messageId);
-          ReleaseLogger.log(
-            '💾 [Background Handler iOS] messageId=$messageId guardado como procesado',
-            tag: 'NotificationService',
-          );
-        }
-
-        ReleaseLogger.log(
-          '🚫 [Background Handler iOS] App en BACKGROUND/KILLED - iOS ya mostró notificación de chat',
-          tag: 'NotificationService',
-        );
-        ReleaseLogger.log(
-          '🔥 ============================================',
-          tag: 'NotificationService',
-        );
-        return; // iOS ya manejó la notificación
-      }
-    }
-  } catch (e) {
-    ReleaseLogger.error(
-      '⚠️ [Background Handler] Error verificando estado foreground: $e',
-      tag: 'NotificationService',
-    );
-    // Continuar en caso de error (fail-safe)
-  }
+  final messageType = message.data['type'];
+  final messageId = message.data['messageId'];
 
   ReleaseLogger.log(
-    '📩 Notification title: ${message.notification?.title}',
-    tag: 'NotificationService',
-  );
-  ReleaseLogger.log(
-    '📩 Notification body: ${message.notification?.body}',
-    tag: 'NotificationService',
-  );
-  ReleaseLogger.log(
-    '📦 Tipo: ${message.data['type']}',
-    tag: 'NotificationService',
-  );
-  ReleaseLogger.log(
-    '📦 Data completa: ${message.data}',
-    tag: 'NotificationService',
-  );
-  ReleaseLogger.log(
-    '🔥 ============================================',
+    '🔥 [Background] type=$messageType, messageId=$messageId',
     tag: 'NotificationService',
   );
 
-  // Inicializar Firebase si no está inicializado
-  // Esto es necesario para que el background handler funcione en iOS
+  // 1. Inicializar Firebase
   try {
     if (Firebase.apps.isEmpty) {
-      await Firebase.initializeApp(
-        options: DefaultFirebaseOptions.currentPlatform,
-      );
-      ReleaseLogger.log(
-        '✅ Firebase inicializado en background handler',
-        tag: 'NotificationService',
-      );
+      await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
     }
   } catch (e) {
-    ReleaseLogger.error(
-      'Error inicializando Firebase en background: $e',
-      tag: 'NotificationService',
-    );
+    ReleaseLogger.error('Error init Firebase: $e', tag: 'NotificationService');
   }
 
-  // Obtener el ID correcto según el tipo de notificación
-  final chatId = message.data['chatId'];
+  // 2. Filtro: Usuario viendo este chat
+  final chatId = message.data['chatId'] ?? '';
   final groupId = message.data['groupId'];
-  final messageType = message.data['type'];
+  final targetId = (messageType == 'group_message' || groupId != null)
+      ? (groupId ?? chatId)
+      : chatId;
 
-  // Determinar el ID del chat/grupo actual
-  String? targetId;
-  if (messageType == 'group_message' || groupId != null) {
-    targetId = groupId ?? chatId;
-  } else {
-    targetId = chatId;
-  }
-
-  // ✅ FILTRO CHAT ACTUAL MEJORADO: Verificar si el usuario está viendo este chat
   try {
     final prefs = await SharedPreferences.getInstance();
     final currentChatId = prefs.getString('current_chat_id');
-
-    if (currentChatId != null &&
-        targetId != null &&
-        currentChatId == targetId) {
-      ReleaseLogger.log(
-        '🚫 [Background] Usuario está viendo ${messageType == 'group_message' ? 'grupo' : 'chat'} $targetId - bloqueando notificación push',
-        tag: 'NotificationService',
-      );
-      return; // No mostrar notificación push
+    if (currentChatId != null && currentChatId == targetId) {
+      ReleaseLogger.log('🚫 [Background] Usuario viendo chat - SKIP', tag: 'NotificationService');
+      return;
     }
+  } catch (_) {}
 
-    // 🔒 FILTRO ANTI-SPAM ESTILO WHATSAPP: Verificar unreadCount antes de mostrar notificación
-    ReleaseLogger.log(
-      '🔍 [Background DEBUG] Iniciando validación unreadCount...',
-      tag: 'NotificationService',
-    );
-    ReleaseLogger.log(
-      '🔍 [Background DEBUG] targetId: $targetId',
-      tag: 'NotificationService',
-    );
-    ReleaseLogger.log(
-      '🔍 [Background DEBUG] messageType: $messageType',
-      tag: 'NotificationService',
-    );
-    ReleaseLogger.log(
-      '🔍 [Background DEBUG] groupId: $groupId',
-      tag: 'NotificationService',
-    );
-    ReleaseLogger.log(
-      '🔍 [Background DEBUG] chatId: $chatId',
-      tag: 'NotificationService',
-    );
+  // 3. LLAMADAS: Mostrar CallKit
+  if (messageType == 'incoming_call' ||
+      messageType == 'video_call' ||
+      messageType == 'audio_call' ||
+      messageType == 'group_video_call' ||
+      messageType == 'group_audio_call' ||
+      messageType == 'emergency_call') {
 
-    if (targetId != null) {
-      try {
-        // Inicializar Firebase en background si es necesario
-        if (!Firebase.apps.isNotEmpty) {
-          await Firebase.initializeApp();
-        }
-
-        final currentUserId = FirebaseAuth.instance.currentUser?.uid;
-        ReleaseLogger.log(
-          '🔍 [Background DEBUG] currentUserId: $currentUserId',
-          tag: 'NotificationService',
-        );
-
-        if (currentUserId != null) {
-          // Detectar si es mensaje de grupo o chat individual
-          final isGroupMessage =
-              messageType == 'group_message' ||
-              message.data['isGroup'] == 'true' ||
-              groupId != null ||
-              message.data['groupName'] != null;
-
-          // Usar la colección correcta según el tipo de chat
-          // NOTA: Groups V2 usa 'groups_v2', no 'groups' (legacy)
-          final collection = isGroupMessage ? 'groups_v2' : 'chats';
-
-          ReleaseLogger.log(
-            '🔍 [Background DEBUG] isGroupMessage: $isGroupMessage',
-            tag: 'NotificationService',
-          );
-          ReleaseLogger.log(
-            '🔍 [Background DEBUG] collection: $collection',
-            tag: 'NotificationService',
-          );
-          ReleaseLogger.log(
-            '🔍 [Background DEBUG] Consultando: $collection/$targetId',
-            tag: 'NotificationService',
-          );
-
-          final chatDoc = await FirebaseFirestore.instance
-              .collection(collection)
-              .doc(targetId)
-              .get();
-          ReleaseLogger.log(
-            '🔍 [Background DEBUG] chatDoc.exists: ${chatDoc.exists}',
-            tag: 'NotificationService',
-          );
-
-          if (chatDoc.exists) {
-            final chatData = chatDoc.data();
-            final unreadCount = chatData?['unreadCount_$currentUserId'] ?? 0;
-
-            ReleaseLogger.log(
-              '🔍 [Background DEBUG] unreadCount_$currentUserId: $unreadCount',
-              tag: 'NotificationService',
-            );
-            ReleaseLogger.log(
-              '🔍 [Background DEBUG] chatData keys: ${chatData?.keys.toList()}',
-              tag: 'NotificationService',
-            );
-
-            // ⚠️ TEMP FIX: Deshabilitado para testing - unreadCount siempre es 0 (bug en Cloud Functions)
-            // TODO: Restaurar cuando se arregle el incremento de unreadCount en chats.js
-            // if (unreadCount == 0) {
-            //   ReleaseLogger.log(
-            //     '🚫 [Background] ${isGroupMessage ? 'Grupo' : 'Chat'} $targetId ya leído (unreadCount=0) - NO mostrar notificación',
-            //     tag: 'NotificationService',
-            //   );
-            //   return;
-            // } else {
-              ReleaseLogger.log(
-                '✅ [Background] ${isGroupMessage ? 'Grupo' : 'Chat'} $targetId tiene $unreadCount mensajes no leídos - mostrando notificación (validación deshabilitada)',
-                tag: 'NotificationService',
-              );
-            // }
-          } else {
-            ReleaseLogger.log(
-              '⚠️ [Background DEBUG] Documento no encontrado: $collection/$targetId',
-              tag: 'NotificationService',
-            );
-          }
-        }
-      } catch (e) {
-        ReleaseLogger.error(
-          '❌ [Background] Error verificando unreadCount: $e',
-          tag: 'NotificationService',
-        );
-        // En caso de error, continuar y mostrar notificación (fail-safe)
-      }
-    }
-
-    if (currentChatId != null) {
-      ReleaseLogger.log(
-        '📱 [Background] Usuario en chat $currentChatId, notificación de chat $chatId - permitida',
-        tag: 'NotificationService',
-      );
-    } else {
-      ReleaseLogger.log(
-        '📱 [Background] No hay chat actual - notificación permitida',
-        tag: 'NotificationService',
-      );
-    }
-  } catch (e) {
-    ReleaseLogger.error(
-      '❌ [Background] Error verificando chat actual: $e',
-      tag: 'NotificationService',
-    );
-    // En caso de error, permitir notificación (fail-safe)
-  }
-
-  // ✅ FIX NOTIFICACIÓN PUSH DUPLICADA: Si es una llamada, mostrar SOLO CallKit
-  // NO generar notificación push adicional - CallKit/ConnectionService maneja toda la UI
-  // ✅ PHASE 2: Support new 'incoming_call' type from calls_v2
-  if (message.data['type'] == 'incoming_call' ||
-      message.data['type'] == 'video_call' ||
-      message.data['type'] == 'audio_call' ||
-      message.data['type'] == 'group_video_call' ||
-      message.data['type'] == 'group_audio_call' ||
-      message.data['type'] == 'emergency_call') {
-    ReleaseLogger.log(
-      '📞 LLAMADA ENTRANTE DETECTADA EN SEGUNDO PLANO',
-      tag: 'NotificationService',
-    );
-    ReleaseLogger.log(
-      '📞 Tipo de llamada: ${message.data['type']}',
-      tag: 'NotificationService',
-    );
-    ReleaseLogger.log(
-      '📞 Call ID: ${message.data['callId']}',
-      tag: 'NotificationService',
-    );
-    ReleaseLogger.log(
-      '📞 Caller Name: ${message.data['callerName']}',
-      tag: 'NotificationService',
-    );
-    ReleaseLogger.log(
-      '📞 Caller ID: ${message.data['callerId']}',
-      tag: 'NotificationService',
-    );
-
-    // ✅ FIXED: Deduplicación para evitar CallKit duplicado
     final callId = message.data['callId'] ?? message.messageId ?? '';
-    if (_globalProcessedCallIds.contains(callId)) {
-      ReleaseLogger.log(
-        '⚠️ CallId $callId ya procesado - SALTANDO para evitar duplicados',
-        tag: 'NotificationService',
-      );
-      return; // ✅ CRÍTICO: Salir INMEDIATAMENTE para evitar notificación duplicada
-    }
+
+    // Deduplicación
+    if (_globalProcessedCallIds.contains(callId)) return;
     _globalProcessedCallIds.add(callId);
 
-    // ✅ Mark as VoIP handled to prevent duplicate processing
-    VoIPService().markCallAsVoIPHandled(callId);
-    ReleaseLogger.log(
-      '✅ [Background] Call $callId marked as VoIP handled to prevent duplicate',
-      tag: 'NotificationService',
-    );
-
-    // ✅ CRÍTICO: Verificar timestamp para evitar mostrar notificaciones de llamadas expiradas
-    // Las notificaciones FCM pueden llegar después de que la llamada ya fue cancelada
+    // Verificar timestamp (llamadas > 30s son obsoletas)
     final sentTime = message.sentTime;
-    if (sentTime != null &&
-        DateTime.now().difference(sentTime).inSeconds > 30) {
-      ReleaseLogger.log(
-        '⚠️ [NotificationService] Notificación muy vieja: ${DateTime.now().difference(sentTime).inSeconds} segundos - SALTANDO (background)',
-        tag: 'NotificationService',
-      );
-      return; // ✅ CRÍTICO: Salir INMEDIATAMENTE
-    }
+    if (sentTime != null && DateTime.now().difference(sentTime).inSeconds > 30) return;
+
+    // Marcar como VoIP handled
+    VoIPService().markCallAsVoIPHandled(callId);
 
     try {
-      // ✅ DEBUG: Log para verificar el tipo de llamada que llega
-      final messageType = message.data['type'];
-      final isVideoFromData =
-          message.data['isVideo'] == 'true' || message.data['isVideo'] == true;
-      final isAudioCall =
-          (messageType == 'audio_call' || messageType == 'group_audio_call') ||
-          (!isVideoFromData && messageType == 'incoming_call');
-      final resolvedCallType = isAudioCall ? 'audio' : 'video';
+      final isVideo = message.data['isVideo'] == 'true' || message.data['isVideo'] == true;
+      final isAudioType = messageType == 'audio_call' || messageType == 'group_audio_call';
 
-      ReleaseLogger.log(
-        '🔍 [CallKit Debug] message.data[\'type\']: "$messageType"',
-        tag: 'NotificationService',
-      );
-      ReleaseLogger.log(
-        '🔍 [CallKit Debug] isVideo from data: $isVideoFromData',
-        tag: 'NotificationService',
-      );
-      ReleaseLogger.log(
-        '🔍 [CallKit Debug] isAudioCall: $isAudioCall',
-        tag: 'NotificationService',
-      );
-      ReleaseLogger.log(
-        '🔍 [CallKit Debug] resolvedCallType: "$resolvedCallType"',
-        tag: 'NotificationService',
-      );
-
-      final callKit = CallKitService();
-      await callKit.showIncomingCall(
+      await CallKitService().showIncomingCall(
         callId: callId,
         callerName: message.data['callerName'] ?? 'Usuario',
         callerId: message.data['callerId'] ?? message.data['senderId'] ?? '',
-        callerPhotoUrl:
-            message.data['callerPhotoURL'] ?? message.data['senderPhotoUrl'],
-        callType: resolvedCallType,
-        isEmergency:
-            message.data['isEmergency'] == 'true' ||
-            message.data['isEmergency'] == true,
+        callerPhotoUrl: message.data['callerPhotoURL'] ?? message.data['senderPhotoUrl'],
+        callType: (isAudioType || !isVideo) ? 'audio' : 'video',
+        isEmergency: message.data['isEmergency'] == 'true',
         extraData: message.data,
       );
-      ReleaseLogger.log(
-        '✅ CallKit mostrado exitosamente',
-        tag: 'NotificationService',
-      );
-
-      // ✅ CRÍTICO: SALIR INMEDIATAMENTE después de mostrar CallKit
-      // NO continuar con el flujo normal de notificaciones push
-      // Esto previene que Android muestre una notificación push adicional
-      ReleaseLogger.log(
-        '🔥 ============================================',
-        tag: 'NotificationService',
-      );
-      ReleaseLogger.log(
-        '📩 BACKGROUND HANDLER FINALIZADO (CallKit shown, NO push notification)',
-        tag: 'NotificationService',
-      );
-      ReleaseLogger.log(
-        '🔥 ============================================',
-        tag: 'NotificationService',
-      );
-      return; // ✅ CRÍTICO: Salir INMEDIATAMENTE - NO mostrar notificación push
+      ReleaseLogger.log('✅ [Background] CallKit mostrado', tag: 'NotificationService');
     } catch (e) {
-      ReleaseLogger.error(
-        'ERROR mostrando CallKit: $e',
-        tag: 'NotificationService',
-      );
-      ReleaseLogger.error(
-        'Stack trace: ${StackTrace.current}',
-        tag: 'NotificationService',
-      );
-      return; // ✅ CRÍTICO: Salir incluso en error para evitar notificación push
+      ReleaseLogger.error('❌ [Background] Error CallKit: $e', tag: 'NotificationService');
     }
+    return;
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // LOCATION REQUEST: Actualizar ubicación en background
-  // ═══════════════════════════════════════════════════════════════
-  if (message.data['type'] == 'location_request') {
-    ReleaseLogger.log(
-      '📍 [Background] Solicitud de ubicación recibida de padre',
-      tag: 'NotificationService',
-    );
+  // 4. LOCATION REQUEST: Actualizar ubicación silenciosamente
+  if (messageType == 'location_request') {
     try {
-      // Actualizar ubicación silenciosamente
-      final locationService = LocationService();
-      await locationService.updateLocationNow();
-      ReleaseLogger.log(
-        '✅ [Background] Ubicación actualizada por solicitud de padre',
-        tag: 'NotificationService',
-      );
+      await LocationService().updateLocationNow();
+      ReleaseLogger.log('✅ [Background] Ubicación actualizada', tag: 'NotificationService');
     } catch (e) {
-      ReleaseLogger.error(
-        '❌ [Background] Error actualizando ubicación: $e',
-        tag: 'NotificationService',
-      );
+      ReleaseLogger.error('❌ [Background] Error ubicación: $e', tag: 'NotificationService');
     }
-    return; // ✅ No mostrar notificación - es silenciosa
+    return;
   }
 
-  // ✅ Para iOS con senderPhotoUrl, el NSE descargará la foto y agregará attachment
-  // NO procesar aquí - dejar que el NSE lo maneje completamente
-  if (Platform.isIOS && message.data['senderPhotoUrl'] != null) {
-    ReleaseLogger.log(
-      '📸 [Background iOS] Mensaje con senderPhotoUrl - delegando completamente a NSE',
-      tag: 'NotificationService',
-    );
-    ReleaseLogger.log(
-      '🔥 ============================================',
-      tag: 'NotificationService',
-    );
-    ReleaseLogger.log(
-      '📩 BACKGROUND HANDLER FINALIZADO (delegated to NSE)',
-      tag: 'NotificationService',
-    );
-    ReleaseLogger.log(
-      '🔥 ============================================',
-      tag: 'NotificationService',
-    );
-    return; // ✅ CRÍTICO: Salir inmediatamente - dejar que NSE procese
-  }
-
-  // Las demás notificaciones (NO llamadas):
-  // - iOS: Se manejan automáticamente por NSE (Notification Service Extension)
-  // - Android: Crear notificación usando flutter_local_notifications
-  if (Platform.isAndroid) {
-    ReleaseLogger.log(
-      '🤖 [Android] Creando notificación local con flutter_local_notifications',
-      tag: 'NotificationService',
-    );
-
-    try {
-      // Extraer datos del mensaje
-      final title = message.data['title'] ?? message.data['senderName'] ?? 'Nuevo mensaje';
-      final body = message.data['body'] ?? message.data['message'] ?? '';
-      final chatId = message.data['chatId'] ?? '';
-      final senderId = message.data['senderId'] ?? '';
-      final senderName = message.data['senderName'] ?? 'Usuario';
-
-      // Configurar canal de notificación
-      const AndroidNotificationChannel channel = AndroidNotificationChannel(
-        'high_importance_channel',
-        'Notificaciones Importantes',
-        description: 'Canal para notificaciones de mensajes',
-        importance: Importance.high,
-      );
-
-      final FlutterLocalNotificationsPlugin notifications = FlutterLocalNotificationsPlugin();
-
-      // Crear canal
-      await notifications
-          .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-          ?.createNotificationChannel(channel);
-
-      // Crear Person para MessagingStyle
-      final person = Person(
-        name: senderName,
-        key: senderId,
-      );
-
-      // Crear mensaje
-      final messageStyle = MessagingStyleInformation(
-        person,
-        conversationTitle: null, // null para chat 1-1
-        messages: [
-          Message(
-            body,
-            DateTime.now(),
-            person,
-          ),
-        ],
-      );
-
-      // Mostrar notificación
-      await notifications.show(
-        chatId.hashCode,
-        title,
-        body,
-        NotificationDetails(
-          android: AndroidNotificationDetails(
-            channel.id,
-            channel.name,
-            channelDescription: channel.description,
-            importance: Importance.high,
-            priority: Priority.high,
-            styleInformation: messageStyle,
-          ),
-        ),
-        payload: chatId,
-      );
-
+  // 5. MENSAJES DE CHAT:
+  // - Android: El servicio nativo (MyFirebaseMessagingService) muestra la notificación con MessagingStyle
+  // - iOS: Flutter muestra la notificación (con deduplicación)
+  if (messageType == 'chat_message' || messageType == 'group_message') {
+    if (Platform.isAndroid) {
+      // ✅ Android: No hacer nada aquí - el servicio nativo maneja la notificación
+      // MyFirebaseMessagingService.kt ya tiene el MessagingStyle correcto
+      ReleaseLogger.log('📱 [Background] Android: Servicio nativo manejará la notificación', tag: 'NotificationService');
+    } else if (Platform.isIOS) {
+      // ═══════════════════════════════════════════════════════════════
+      // 🍎 iOS: NSE STRATEGY - NSE maneja deduplicación
+      // Cloud Functions envía alert + mutable-content para invocar NSE
+      // NSE verifica si StreamDetector ya mostró y suprime si es necesario
+      // Si NSE no se invoca, iOS muestra la notificación automáticamente
+      // ═══════════════════════════════════════════════════════════════
       ReleaseLogger.log(
-        '✅ [Android] Notificación local creada exitosamente',
-        tag: 'NotificationService',
-      );
-    } catch (e) {
-      ReleaseLogger.error(
-        '❌ [Android] Error creando notificación local: $e',
+        '🍎 [Background iOS] Push recibido - NSE debería haberlo procesado',
         tag: 'NotificationService',
       );
     }
   }
 
   ReleaseLogger.log(
-    '🔥 ============================================',
-    tag: 'NotificationService',
-  );
-  ReleaseLogger.log(
-    '📩 BACKGROUND HANDLER FINALIZADO (non-call notification)',
-    tag: 'NotificationService',
-  );
-  ReleaseLogger.log(
-    '🔥 ============================================',
+    '🔥 [BackgroundHandler] FINALIZADO',
     tag: 'NotificationService',
   );
 }
@@ -679,10 +185,8 @@ class NotificationService {
     'com.talia.chat/notifications',
   );
 
-  // ✅ FIX iOS: Channel para verificar si el NSE ya procesó un messageId
-  static const _nseDeduplicationChannel = MethodChannel(
-    'com.talia.chat/nse_deduplication',
-  );
+  // ❌ NSE REMOVED: Con DATA-ONLY strategy, ya no usamos NSE
+  // Las notificaciones se manejan directamente en Dart (flutter_local_notifications)
 
   String? _fcmToken;
   bool _isInitialized = false;
@@ -741,6 +245,36 @@ class NotificationService {
       StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get groupApprovalNotificationTapStream =>
       _groupApprovalNotificationTapController.stream;
+
+  // Stream para notificar cuando se toca una notificación de historia (aprobada/rechazada/reply)
+  final _storyNotificationTapController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get storyNotificationTapStream =>
+      _storyNotificationTapController.stream;
+
+  // Stream para notificar cuando se toca una notificación de contacto aprobado
+  final _contactApprovedNotificationTapController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get contactApprovedNotificationTapStream =>
+      _contactApprovedNotificationTapController.stream;
+
+  // Stream para notificar cuando se toca una notificación de alerta (actividad/bullying)
+  final _alertNotificationTapController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get alertNotificationTapStream =>
+      _alertNotificationTapController.stream;
+
+  // Stream para notificar cuando se toca una notificación de reporte listo
+  final _reportNotificationTapController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get reportNotificationTapStream =>
+      _reportNotificationTapController.stream;
+
+  // Stream para notificar cuando se toca una notificación de membresía de grupo aprobada
+  final _groupMembershipApprovedNotificationTapController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get groupMembershipApprovedNotificationTapStream =>
+      _groupMembershipApprovedNotificationTapController.stream;
 
   // Método público para emitir llamadas entrantes al stream
   void emitIncomingCall(Map<String, dynamic> callData) {
@@ -824,94 +358,9 @@ class NotificationService {
     );
   }
 
-  /// ✅ FIX iOS: Verificar si el NSE ya procesó un messageId
-  /// El NSE guarda los messageIds en App Group UserDefaults
-  /// Esta verificación evita mostrar notificaciones duplicadas
-  /// PUBLIC: Usado por ChatStreamManager para evitar duplicados al reanudar la app
-  Future<bool> wasMessageProcessedByNSE(String messageId) async {
-    if (!Platform.isIOS) return false;
-
-    try {
-      final result = await _nseDeduplicationChannel.invokeMethod<bool>(
-        'wasProcessedByNSE',
-        messageId,
-      );
-      final wasProcessed = result ?? false;
-      ReleaseLogger.log(
-        '🔍 [NSE Dedup] Check messageId=${messageId.substring(0, 8)}... result=$wasProcessed',
-        tag: 'NotificationService',
-      );
-      return wasProcessed;
-    } catch (e) {
-      ReleaseLogger.error(
-        '⚠️ [NSE Dedup] Error verificando messageId: $e',
-        tag: 'NotificationService',
-      );
-      return false;
-    }
-  }
-
-  /// Obtener todos los IDs procesados por NSE (para diagnóstico)
-  Future<List<String>> getProcessedByNSE() async {
-    if (!Platform.isIOS) return [];
-
-    try {
-      final result = await _nseDeduplicationChannel.invokeMethod<List<dynamic>>(
-        'getProcessedByNSE',
-      );
-      final ids = result?.cast<String>() ?? [];
-      ReleaseLogger.log(
-        '📋 [NSE Dedup] IDs procesados por NSE: ${ids.length} items',
-        tag: 'NotificationService',
-      );
-      if (ids.isNotEmpty) {
-        ReleaseLogger.log(
-          '📋 [NSE Dedup] Últimos 5: ${ids.take(5).map((id) => id.length > 8 ? id.substring(0, 8) : id).join(", ")}...',
-          tag: 'NotificationService',
-        );
-      }
-      return ids;
-    } catch (e) {
-      ReleaseLogger.error(
-        '⚠️ [NSE Dedup] Error obteniendo IDs: $e',
-        tag: 'NotificationService',
-      );
-      return [];
-    }
-  }
-
-  /// Obtener logs de debug del NSE (para diagnóstico)
-  Future<List<String>> getNSEDebugLogs() async {
-    if (!Platform.isIOS) return [];
-
-    try {
-      final result = await _nseDeduplicationChannel.invokeMethod<List<dynamic>>(
-        'getNSEDebugLogs',
-      );
-      final logs = result?.cast<String>() ?? [];
-      ReleaseLogger.log(
-        '🔍 [NSE Debug] === LOGS DEL NSE (${logs.length} entries) ===',
-        tag: 'NotificationService',
-      );
-      for (final log in logs) {
-        ReleaseLogger.log(
-          '🔍 [NSE Debug] $log',
-          tag: 'NotificationService',
-        );
-      }
-      ReleaseLogger.log(
-        '🔍 [NSE Debug] === FIN LOGS NSE ===',
-        tag: 'NotificationService',
-      );
-      return logs;
-    } catch (e) {
-      ReleaseLogger.error(
-        '⚠️ [NSE Debug] Error obteniendo logs: $e',
-        tag: 'NotificationService',
-      );
-      return [];
-    }
-  }
+  // ❌ NSE FUNCTIONS REMOVED: Con DATA-ONLY strategy, ya no usamos NSE
+  // Las notificaciones se manejan directamente en Dart via flutter_local_notifications
+  // Ver firebaseMessagingBackgroundHandler() para el flujo unificado
 
   // Helper para upsert de datos de usuario
   /// Actualizar datos del usuario en Firestore
@@ -1296,15 +745,9 @@ class NotificationService {
 
       _isInitialized = true;
       ReleaseLogger.log(
-        '✅ Servicio de notificaciones inicializado',
+        '✅ Servicio de notificaciones inicializado (DATA-ONLY strategy)',
         tag: 'NotificationService',
       );
-
-      // ✅ DIAGNÓSTICO: Ver qué messageIds tiene el NSE guardados y logs de debug
-      if (Platform.isIOS) {
-        await getProcessedByNSE();
-        await getNSEDebugLogs();
-      }
     } catch (e) {
       ReleaseLogger.error(
         'Error inicializando notificaciones: $e',
@@ -1409,6 +852,9 @@ class NotificationService {
       settings,
       onDidReceiveNotificationResponse: _onNotificationTapped,
     );
+
+    // ✅ Inicializar NotificationTrackingService para auto-dismiss
+    NotificationTrackingService().initialize(_localNotifications);
 
     // Crear canales de notificaciones para Android
     if (Platform.isAndroid) {
@@ -1670,478 +1116,98 @@ class NotificationService {
     );
   }
 
-  // Configurar listeners de mensajes
+  // ═══════════════════════════════════════════════════════════════
+  // LISTENERS FCM SIMPLIFICADOS (DATA-ONLY STRATEGY)
+  // ═══════════════════════════════════════════════════════════════
   Future<void> _setupListeners() async {
     // Mensajes cuando la app está en primer plano
     FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
+      final messageType = message.data['type'];
+      final messageId = message.data['messageId'];
+
+      final platform = Platform.isIOS ? 'iOS' : 'Android';
       ReleaseLogger.log(
-        '📨 Mensaje recibido en primer plano: ${message.notification?.title}',
-        tag: 'NotificationService',
-      );
-      ReleaseLogger.log(
-        '📦 [DEBUG FCM] message.data completo: ${message.data}',
-        tag: 'NotificationService',
-      );
-      ReleaseLogger.log(
-        '🆔 [DEBUG FCM] messageId en data: ${message.data['messageId']}',
+        '📨 [Foreground $platform] type=$messageType, messageId=$messageId',
         tag: 'NotificationService',
       );
 
-      // ✅ FIX DUPLICADOS iOS: Verificar si el NSE ya mostró esta notificación
-      // El NSE guarda los messageIds procesados en App Group UserDefaults
-      // La app Dart verifica antes de mostrar para evitar duplicados
-      final messageId = message.data['messageId'] as String?;
+      // Filtrar mensajes muy viejos (>60s)
       final sentTime = message.sentTime;
-      final now = DateTime.now();
-
-      if (Platform.isIOS && messageId != null && messageId.isNotEmpty) {
-        final wasProcessedByNSE = await wasMessageProcessedByNSE(messageId);
-        if (wasProcessedByNSE) {
-          ReleaseLogger.log(
-            '⏭️ [iOS Foreground] messageId=$messageId ya fue procesado por NSE - SALTANDO duplicado',
-            tag: 'NotificationService',
-          );
-          return;
-        }
-      }
-
-      // Filtrar mensajes muy viejos (>60s) para evitar notificaciones obsoletas
-      if (sentTime != null && now.difference(sentTime).inSeconds > 60) {
-        ReleaseLogger.log(
-          '⚠️ [Foreground] Notificación antigua (${now.difference(sentTime).inSeconds}s) - SALTANDO',
-          tag: 'NotificationService',
-        );
+      if (sentTime != null && DateTime.now().difference(sentTime).inSeconds > 60) {
+        ReleaseLogger.log('⚠️ [Foreground] Mensaje antiguo - SKIP', tag: 'NotificationService');
         return;
       }
 
-      // ═══════════════════════════════════════════════════════════════
-      // LOCATION REQUEST: Actualizar ubicación en foreground (silencioso)
-      // ═══════════════════════════════════════════════════════════════
-      if (message.data['type'] == 'location_request') {
-        ReleaseLogger.log(
-          '📍 [Foreground] Solicitud de ubicación recibida de padre',
-          tag: 'NotificationService',
-        );
+      // 1. LOCATION REQUEST: Silencioso
+      if (messageType == 'location_request') {
         try {
-          // Actualizar ubicación silenciosamente
-          final locationService = LocationService();
-          await locationService.updateLocationNow();
-          ReleaseLogger.log(
-            '✅ [Foreground] Ubicación actualizada por solicitud de padre',
-            tag: 'NotificationService',
-          );
+          await LocationService().updateLocationNow();
+          ReleaseLogger.log('✅ [Foreground] Ubicación actualizada', tag: 'NotificationService');
         } catch (e) {
-          ReleaseLogger.error(
-            '❌ [Foreground] Error actualizando ubicación: $e',
-            tag: 'NotificationService',
-          );
+          ReleaseLogger.error('❌ [Foreground] Error ubicación: $e', tag: 'NotificationService');
         }
-        return; // ✅ No mostrar notificación - es silenciosa
+        return;
       }
 
-      // Verificar si es una videollamada o llamada de audio (legacy o V2)
-      final isLegacyCall =
-          message.data['type'] == 'video_call' ||
-          message.data['type'] == 'audio_call' ||
-          message.data['type'] == 'group_video_call' ||
-          message.data['type'] == 'group_audio_call' ||
-          message.data['type'] == 'emergency_call';
+      // 2. LLAMADAS: Mostrar CallKit
+      if (messageType == 'incoming_call' ||
+          messageType == 'video_call' ||
+          messageType == 'audio_call' ||
+          messageType == 'group_video_call' ||
+          messageType == 'group_audio_call' ||
+          messageType == 'emergency_call') {
 
-      final isV2Call = message.data['type'] == 'incoming_call';
-
-      if (isLegacyCall || isV2Call) {
-        ReleaseLogger.log(
-          '📞 ${message.data['type']} entrante detectada en FOREGROUND',
-          tag: 'NotificationService',
-        );
-
-        // ✅ V2 SYSTEM: Always show CallKit (VoIP handles coordination)
-        if (isV2Call) {
-          ReleaseLogger.log(
-            '📞 [V2] Incoming call detected - showing CallKit in foreground',
-            tag: 'NotificationService',
-          );
-
-          // ✅ CRITICAL: Check for duplicates
-          final callId = message.data['callId'] ?? message.messageId ?? '';
-          if (_processedCallIds.contains(callId) ||
-              _globalProcessedCallIds.contains(callId)) {
-            ReleaseLogger.log(
-              '⚠️ CallId $callId already processed - SKIPPING',
-              tag: 'NotificationService',
-            );
-            return;
-          }
-          _processedCallIds.add(callId);
-          _globalProcessedCallIds.add(callId);
-
-          // ✅ Check timestamp to avoid showing expired calls
-          final sentTime = message.sentTime;
-          if (sentTime != null &&
-              DateTime.now().difference(sentTime).inSeconds > 30) {
-            ReleaseLogger.log(
-              '⚠️ [NotificationService] Notification too old: ${DateTime.now().difference(sentTime).inSeconds} seconds - SKIPPING',
-              tag: 'NotificationService',
-            );
-            return;
-          }
-
-          // ✅ Mark as VoIP handled to prevent duplicate processing
-          VoIPService().markCallAsVoIPHandled(callId);
-          ReleaseLogger.log(
-            '✅ [V2] Call $callId marked as VoIP handled to prevent duplicate',
-            tag: 'NotificationService',
-          );
-
-          try {
-            if (Platform.isAndroid) {
-              await _callKit.showIncomingCall(
-                callId: callId,
-                callerName: message.data['callerName'] ?? 'Usuario',
-                callerId:
-                    message.data['callerId'] ?? message.data['senderId'] ?? '',
-                callerPhotoUrl:
-                    message.data['callerPhotoURL'] ??
-                    message.data['senderPhotoUrl'],
-                callType:
-                    (message.data['isVideo'] == 'false' ||
-                        message.data['isVideo'] == false)
-                    ? 'audio'
-                    : 'video',
-                isEmergency:
-                    message.data['isEmergency'] == 'true' ||
-                    message.data['isEmergency'] == true,
-                extraData: message.data,
-              );
-              ReleaseLogger.log(
-                '✅ [V2] CallKit (Android) shown successfully in foreground',
-                tag: 'NotificationService',
-              );
-            } else if (Platform.isIOS) {
-              // iOS VoIP push shows CallKit natively, also mark as handled
-              ReleaseLogger.log(
-                '✅ [V2] iOS VoIP - handled by system',
-                tag: 'NotificationService',
-              );
-            }
-          } catch (e) {
-            ReleaseLogger.error(
-              '❌ [V2] Error showing CallKit: $e',
-              tag: 'NotificationService',
-            );
-          }
-          return;
-        }
-
-        // V2 SYSTEM: Uses VoIP/CallKit directly (no listener health checks needed)
-        ReleaseLogger.log(
-          '📱 Mostrando CallKit para experiencia nativa',
-          tag: 'NotificationService',
-        );
-
-        // ✅ FIXED: Deduplicación también en background
         final callId = message.data['callId'] ?? message.messageId ?? '';
-        if (_processedCallIds.contains(callId) ||
-            _globalProcessedCallIds.contains(callId)) {
-          ReleaseLogger.log(
-            '⚠️ CallId $callId ya procesado en BACKGROUND - SALTANDO para evitar duplicados',
-            tag: 'NotificationService',
-          );
+
+        // Deduplicación
+        if (_processedCallIds.contains(callId) || _globalProcessedCallIds.contains(callId)) {
           return;
         }
         _processedCallIds.add(callId);
         _globalProcessedCallIds.add(callId);
 
-        // ✅ CRÍTICO: Verificar timestamp para evitar mostrar notificaciones de llamadas expiradas
-        // Las notificaciones FCM pueden llegar después de que la llamada ya fue cancelada
-        final sentTime = message.sentTime;
-        if (sentTime != null &&
-            DateTime.now().difference(sentTime).inSeconds > 30) {
-          ReleaseLogger.log(
-            '⚠️ [NotificationService] Notificación muy vieja: ${DateTime.now().difference(sentTime).inSeconds} segundos - SALTANDO (background)',
-            tag: 'NotificationService',
-          );
+        // Verificar timestamp
+        if (sentTime != null && DateTime.now().difference(sentTime).inSeconds > 30) {
           return;
         }
+
+        VoIPService().markCallAsVoIPHandled(callId);
 
         try {
           if (Platform.isAndroid) {
-            // Android usa CallKit SOLO en background
+            final isVideo = message.data['isVideo'] == 'true' || message.data['isVideo'] == true;
+            final isAudioType = messageType == 'audio_call' || messageType == 'group_audio_call';
+
             await _callKit.showIncomingCall(
               callId: callId,
               callerName: message.data['callerName'] ?? 'Usuario',
-              callerId:
-                  message.data['callerId'] ?? message.data['senderId'] ?? '',
-              callerPhotoUrl:
-                  message.data['callerPhotoURL'] ??
-                  message.data['senderPhotoUrl'],
-              callType:
-                  (message.data['type'] == 'audio_call' ||
-                      message.data['type'] == 'group_audio_call')
-                  ? 'audio'
-                  : 'video',
-              isEmergency:
-                  message.data['isEmergency'] == 'true' ||
-                  message.data['isEmergency'] == true,
+              callerId: message.data['callerId'] ?? message.data['senderId'] ?? '',
+              callerPhotoUrl: message.data['callerPhotoURL'] ?? message.data['senderPhotoUrl'],
+              callType: (isAudioType || !isVideo) ? 'audio' : 'video',
+              isEmergency: message.data['isEmergency'] == 'true',
               extraData: message.data,
             );
-            ReleaseLogger.log(
-              '✅ CallKit (Android) mostrado exitosamente en background',
-              tag: 'NotificationService',
-            );
-          } else if (Platform.isIOS) {
-            // iOS usa VoIP nativo - las notificaciones VoIP se manejan automáticamente por el sistema
-            ReleaseLogger.log(
-              '✅ iOS VoIP - las llamadas se manejan automáticamente por el sistema (background)',
-              tag: 'NotificationService',
-            );
-            // En iOS, las notificaciones VoIP push aparecen automáticamente como CallKit
-            // No necesitamos hacer nada adicional aquí
+            ReleaseLogger.log('✅ [Foreground] CallKit mostrado', tag: 'NotificationService');
           }
+          // iOS: VoIP push maneja CallKit automáticamente
         } catch (e) {
-          ReleaseLogger.error(
-            'ERROR mostrando notificación nativa en background: $e',
-            tag: 'NotificationService',
-          );
+          ReleaseLogger.error('❌ [Foreground] Error CallKit: $e', tag: 'NotificationService');
         }
         return;
-      } else {
-        // ✅ MOSTRAR notificaciones push también en foreground (excepto si está en el chat)
-        // Aplicar filtros múltiples
-        final chatId = message.data['chatId'];
-        final groupId = message.data['groupId'];
-        final messageType = message.data['type'];
+      }
 
-        // Determinar el ID del chat/grupo actual
-        String? targetId;
-        if (messageType == 'group_message' || groupId != null) {
-          targetId = groupId ?? chatId;
-        } else {
-          targetId = chatId;
-        }
-
-        // FILTRO 1: Usuario viendo el chat actualmente
-        if (targetId != null &&
-            _currentChatId != null &&
-            targetId == _currentChatId) {
-          ReleaseLogger.log(
-            '🚫 [Foreground] Usuario está viendo ${messageType == 'group_message' ? 'grupo' : 'chat'} $targetId - NO mostrar notificación',
-            tag: 'NotificationService',
-          );
-          return;
-        }
-
-        // FILTRO 1.5: Ya se mostró notificación instantánea (listener de Firestore)
-        // Evita duplicados cuando el listener ya disparó la notificación local
-        final messageId = message.data['messageId'] ?? message.data['id'];
+      // 3. MENSAJES DE CHAT: StreamDetector maneja foreground, FCM solo background
+      // ═══════════════════════════════════════════════════════════════
+      // ⚠️ NO mostrar notificación aquí - StreamDetector es más rápido (~100ms vs 2-5s)
+      // ChatStreamManager._fetchAndShowLatestMessage ya muestra la notificación
+      // FCM onMessage solo se usa para logging/debugging en foreground
+      // ═══════════════════════════════════════════════════════════════
+      if (messageType == 'chat_message' || messageType == 'group_message') {
         ReleaseLogger.log(
-          '🔍 [DEBUG Anti-dup] messageId extraído: $messageId',
+          '📱 [Foreground $platform] Chat message recibido via FCM - StreamDetector maneja notificación',
           tag: 'NotificationService',
         );
-
-        // ⚠️ ANTI-DUPLICADO: Solo activo para iOS
-        // En Android causa problemas porque Stream Detector marca antes que FCM llegue
-        if (Platform.isIOS && messageId != null) {
-          try {
-            // ✅ FIX #7: Anti-duplicados usando servicio centralizado
-            final dedup = NotificationDeduplicationService();
-
-            if (!dedup.tryAcquire(messageId)) {
-              ReleaseLogger.log(
-                '🚫 [iOS Foreground FCM] Notificación ya mostrada por Stream Detector - SKIP duplicado',
-                tag: 'NotificationService',
-              );
-              return;
-            }
-
-            ReleaseLogger.log(
-              '✅ [iOS Anti-dup] No hay marca previa - continuar con notificación',
-              tag: 'NotificationService',
-            );
-          } catch (e) {
-            ReleaseLogger.error(
-              '⚠️ Error verificando duplicado instantáneo: $e',
-              tag: 'NotificationService',
-            );
-            // En caso de error, continuar (fail-safe)
-          }
-        }
-
-        // ✅ FILTRO 2: Usuario está viendo el chat (mismo filtro que background)
-        try {
-          final prefs = await SharedPreferences.getInstance();
-          final currentChatId = prefs.getString('current_chat_id');
-
-          ReleaseLogger.log(
-            '🔍 [Foreground DEBUG] current_chat_id en SharedPreferences: $currentChatId',
-            tag: 'NotificationService',
-          );
-          ReleaseLogger.log(
-            '🔍 [Foreground DEBUG] targetId del mensaje: $targetId',
-            tag: 'NotificationService',
-          );
-          ReleaseLogger.log(
-            '🔍 [Foreground DEBUG] ¿Son iguales?: ${currentChatId == targetId}',
-            tag: 'NotificationService',
-          );
-
-          if (currentChatId != null &&
-              targetId != null &&
-              currentChatId == targetId) {
-            ReleaseLogger.log(
-              '🚫 [Foreground] Usuario está viendo ${messageType == 'group_message' ? 'grupo' : 'chat'} $targetId - NO mostrar notificación',
-              tag: 'NotificationService',
-            );
-            return;
-          } else {
-            ReleaseLogger.log(
-              '✅ [Foreground] Usuario NO está viendo este chat - MOSTRAR notificación',
-              tag: 'NotificationService',
-            );
-          }
-        } catch (e) {
-          ReleaseLogger.error(
-            'Error verificando current_chat_id: $e',
-            tag: 'NotificationService',
-          );
-          // En caso de error, continuar y mostrar notificación (fail-safe)
-        }
-
-        // ⚡ NOTIFICACIÓN INSTANTÁNEA: Mostrar ANTES de que llegue FCM
-        // Esto evita el delay de 2-5 segundos de FCM
-        if (messageType == 'chat_message' || messageType == 'group_message') {
-          try {
-            ReleaseLogger.log(
-              '⚡ [FCM] Procesando notificación de mensaje en foreground',
-              tag: 'NotificationService',
-            );
-
-            // ✅ ANTI-DUPLICADOS: Usar NotificationDeduplicationService (igual que ChatDocsListener)
-            if (messageId != null && messageId.isNotEmpty) {
-              final dedup = NotificationDeduplicationService();
-              if (!dedup.tryAcquire(messageId)) {
-                ReleaseLogger.log(
-                  '⏭️ [FCM] Mensaje $messageId ya mostrado por ChatDocsListener - SKIP',
-                  tag: 'NotificationService',
-                );
-                return; // No mostrar notificación duplicada
-              }
-              ReleaseLogger.log(
-                '✅ [FCM] Mensaje $messageId - primera vez, mostrando notificación',
-                tag: 'NotificationService',
-              );
-            } else {
-              ReleaseLogger.log(
-                '⚠️ [FCM] Sin messageId en payload - no se puede verificar duplicados',
-                tag: 'NotificationService',
-              );
-            }
-
-            final senderId = message.data['senderId'] ?? '';
-
-            // ✅ FIX: No mostrar notificación para mensajes propios
-            final currentUserId = FirebaseAuth.instance.currentUser?.uid;
-            if (senderId.isNotEmpty && senderId == currentUserId) {
-              ReleaseLogger.log(
-                '🚫 [FCM Foreground] Mensaje propio detectado (senderId=$senderId) - SKIP notificación',
-                tag: 'NotificationService',
-              );
-              return;
-            }
-
-            final senderName = message.data['senderName'] ?? 'Usuario';
-            final messageText =
-                message.data['body'] ??
-                message.data['messagePreview'] ??
-                'Mensaje nuevo';
-            final isGroup =
-                messageType == 'group_message' ||
-                message.data['isGroup'] == 'true';
-            final groupName = message.data['groupName'];
-
-            // ⚡ OPTIMIZACIÓN: En Android foreground, llamar DIRECTAMENTE al código nativo
-            // Evita descarga/procesamiento lento de imagen en Dart (5+ segundos)
-            // El código nativo descarga y procesa la imagen en thread nativo (< 1 segundo)
-            if (Platform.isAndroid) {
-              try {
-                ReleaseLogger.log(
-                  '⚡ [Android Foreground] Llamando código nativo DIRECTO (sin procesamiento Dart)',
-                  tag: 'NotificationService',
-                );
-
-                final senderPhotoUrl = message.data['senderPhotoUrl'];
-
-                await _notificationChannel.invokeMethod('showChatNotification', {
-                  'title': message.notification?.title ?? message.data['title'] ?? 'Mensaje nuevo',
-                  'body': messageText,
-                  'senderId': senderId,
-                  'senderName': senderName,
-                  'senderPhotoUrl': senderPhotoUrl ?? '',
-                  'chatId': targetId ?? chatId ?? '',
-                  'isGroup': isGroup,
-                  'groupName': groupName ?? '',
-                });
-
-                ReleaseLogger.log(
-                  '✅ [Android Foreground] Notificación nativa mostrada en < 1s',
-                  tag: 'NotificationService',
-                );
-              } catch (e) {
-                ReleaseLogger.error(
-                  '❌ [Android Foreground] Error en código nativo: $e',
-                  tag: 'NotificationService',
-                );
-              }
-            } else {
-              // iOS: Usar el método completo que incluye Communication Notifications
-              ReleaseLogger.log(
-                '⚡ [FCM] Mostrando notificación para mensaje nuevo',
-                tag: 'NotificationService',
-              );
-              await showLocalChatNotification(
-                senderId: senderId,
-                senderName: senderName,
-                messageText: messageText,
-                chatId: targetId ?? chatId ?? '',
-                isGroup: isGroup,
-                groupName: groupName,
-              );
-            }
-
-            ReleaseLogger.log(
-              '✅ [FCM] Notificación mostrada exitosamente',
-              tag: 'NotificationService',
-            );
-
-            // ✅ Incrementar contador LOCAL de mensajes no leídos para badge en UI
-            // NOTA: Esto es LocalUnreadCountService (SharedPreferences), NO Firestore
-            final effectiveChatId = targetId ?? chatId ?? '';
-            if (effectiveChatId.isNotEmpty) {
-              final incremented = await LocalUnreadCountService().incrementUnreadCount(effectiveChatId);
-              final currentCount = LocalUnreadCountService().getUnreadCount(effectiveChatId);
-              ReleaseLogger.log(
-                '📊 [FCM] LocalUnreadCount para $effectiveChatId: incremented=$incremented, count=$currentCount',
-                tag: 'NotificationService',
-              );
-            }
-          } catch (e, stackTrace) {
-            ReleaseLogger.error(
-              '❌ Error mostrando notificación desde FCM: $e',
-              tag: 'NotificationService',
-            );
-            ReleaseLogger.error(
-              'Stack trace: $stackTrace',
-              tag: 'NotificationService',
-            );
-          }
-        }
-
-        // 🔄 MULTI-PLATFORM: iOS y Android ya mostraron notificación instantánea
-        ReleaseLogger.log(
-          '✅ [Foreground] Notificación instantánea ya mostrada para ${Platform.isIOS ? "iOS" : "Android"}',
-          tag: 'NotificationService',
-        );
-        // NOTA: La notificación instantánea con showLocalChatNotification() ya incluye nombre y foto
+        // NO llamar a showLocalChatNotification - StreamDetector ya lo hace
         return;
       }
     });
@@ -2149,62 +1215,22 @@ class NotificationService {
     // Mensajes cuando se toca la notificación (app en segundo plano)
     FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
       ReleaseLogger.log(
-        '🔔 Notificación tocada: ${message.notification?.title}',
+        '🔔 Notificación tocada: ${message.data['type']}',
         tag: 'NotificationService',
       );
-
-      // ✅ FIX iOS DUPLICATE: Marcar mensaje como ya mostrado para evitar duplicados con ChatDocsListener
-      // Cuando el usuario toca una notificación push, ChatDocsListener NO debe mostrar otra
-      final messageId = message.data['messageId'] ?? message.data['id'];
-      if (messageId != null) {
-        try {
-          final dedup = NotificationDeduplicationService();
-          dedup.tryAcquire(messageId);
-          ReleaseLogger.log(
-            '✅ [Dedup] Mensaje $messageId marcado (notificación tocada desde background)',
-            tag: 'NotificationService',
-          );
-        } catch (e) {
-          ReleaseLogger.error(
-            '⚠️ [Dedup] Error marcando mensaje: $e',
-            tag: 'NotificationService',
-          );
-        }
-      }
-
-      _handleNotificationTap(message.data);
+      handleNotificationTap(message.data);
     });
 
-    // Verificar si la app se abrió desde una notificación
+    // Verificar si la app se abrió desde una notificación (app cerrada)
     _fcm.getInitialMessage().then((RemoteMessage? message) async {
       if (message != null) {
         ReleaseLogger.log(
-          '🚀 App abierta desde notificación: ${message.notification?.title}',
+          '🚀 App abierta desde notificación: ${message.data['type']}',
           tag: 'NotificationService',
         );
-
-        // ✅ CRITICAL FIX: Marcar mensaje como ya mostrado para evitar duplicados con ChatDocsListener
-        // Cuando abres la app desde una notificación del NSE, el ChatDocsListener NO debe mostrar otra
-        final messageId = message.data['messageId'] ?? message.data['id'];
-        if (messageId != null) {
-          try {
-            final dedup = NotificationDeduplicationService();
-            dedup.tryAcquire(messageId);
-            ReleaseLogger.log(
-              '✅ [Dedup] Mensaje $messageId marcado como ya mostrado (app abierta desde notificación)',
-              tag: 'NotificationService',
-            );
-          } catch (e) {
-            ReleaseLogger.error(
-              '⚠️ [Dedup] Error marcando mensaje: $e',
-              tag: 'NotificationService',
-            );
-          }
-        }
-
-        // Delay para dar tiempo a que los shells se inicialicen y agreguen sus listeners
+        // Delay para dar tiempo a que los shells se inicialicen
         Future.delayed(Duration(milliseconds: 500), () {
-          _handleNotificationTap(message.data);
+          handleNotificationTap(message.data);
         });
       }
     });
@@ -2223,7 +1249,7 @@ class NotificationService {
 
           // Delay para dar tiempo a que los shells se inicialicen
           Future.delayed(Duration(milliseconds: 500), () {
-            _handleNotificationTap(data);
+            handleNotificationTap(data);
           });
         }
       } catch (e) {
@@ -2250,7 +1276,7 @@ class NotificationService {
         );
 
         // Navegar al chat usando el mismo handler
-        _handleNotificationTap(data);
+        handleNotificationTap(data);
       }
     });
   }
@@ -2470,7 +1496,7 @@ class NotificationService {
         );
 
         // Manejar según el tipo
-        _handleNotificationTap(data);
+        handleNotificationTap(data);
       } catch (e) {
         ReleaseLogger.error(
           '❌ Error parseando payload: $e',
@@ -2509,7 +1535,7 @@ class NotificationService {
         await Future.delayed(const Duration(milliseconds: 500));
 
         // Navigate using existing handler
-        _handleNotificationTap(data);
+        handleNotificationTap(data);
 
         ReleaseLogger.log(
           '✅ [PendingNav] Navegación desde killed state completada',
@@ -2524,54 +1550,140 @@ class NotificationService {
     }
   }
 
-  // Manejar tap en notificación
-  void _handleNotificationTap(Map<String, dynamic> data) {
+  /// Manejar tap en notificación (público para uso desde in-app banner)
+  void handleNotificationTap(Map<String, dynamic> data) {
+    final type = data['type'] as String?;
     ReleaseLogger.log(
-      '📍 Navegando según tipo: ${data['type']}',
+      '📍 Navegando según tipo: $type',
       tag: 'NotificationService',
     );
 
-    // Si es una videollamada o llamada de audio, emitir evento para mostrar el diálogo
-    if (data['type'] == 'video_call' || data['type'] == 'audio_call') {
-      ReleaseLogger.log(
-        '📞 Notificación de ${data['type'] == 'video_call' ? 'videollamada' : 'llamada de audio'} tocada, mostrando diálogo',
-        tag: 'NotificationService',
-      );
-      // Marcar como originado desde tap de notificación (no CallKit acceptance)
-      data['fromNotificationTap'] = true;
-      _incomingCallController.add(data);
-    } else if (data['type'] == 'chat_message' ||
-        data['type'] == 'group_message') {
-      ReleaseLogger.log(
-        '💬 Notificación de ${data['type'] == 'group_message' ? 'mensaje grupal' : 'chat'} tocada, navegando',
-        tag: 'NotificationService',
-      );
+    switch (type) {
+      // ═══════════════════════════════════════════════════════════════
+      // LLAMADAS
+      // ═══════════════════════════════════════════════════════════════
+      case 'video_call':
+      case 'audio_call':
+      case 'incoming_call':
+      case 'group_video_call':
+      case 'group_audio_call':
+        ReleaseLogger.log(
+          '📞 Notificación de llamada tocada, mostrando diálogo',
+          tag: 'NotificationService',
+        );
+        data['fromNotificationTap'] = true;
+        _incomingCallController.add(data);
+        break;
 
-      _chatNotificationTapController.add(data);
-    } else if (data['type'] == 'contact_request') {
-      ReleaseLogger.log(
-        '👥 Notificación de solicitud de contacto tocada, navegando a contactos',
-        tag: 'NotificationService',
-      );
-      _contactRequestNotificationTapController.add(data);
-    } else if (data['type'] == 'emergency') {
-      ReleaseLogger.log(
-        '🆘 Notificación de emergencia tocada, navegando a detalles',
-        tag: 'NotificationService',
-      );
-      _emergencyNotificationTapController.add(data);
-    } else if (data['type'] == 'story_approval_request') {
-      ReleaseLogger.log(
-        '📸 Notificación de historia pendiente tocada, navegando a aprobación',
-        tag: 'NotificationService',
-      );
-      _storyApprovalNotificationTapController.add(data);
-    } else if (data['type'] == 'group_approval_request') {
-      ReleaseLogger.log(
-        '👥 Notificación de aprobación de grupo tocada, navegando a aprobación',
-        tag: 'NotificationService',
-      );
-      _groupApprovalNotificationTapController.add(data);
+      // ═══════════════════════════════════════════════════════════════
+      // MENSAJES DE CHAT
+      // ═══════════════════════════════════════════════════════════════
+      case 'chat_message':
+      case 'group_message':
+        ReleaseLogger.log(
+          '💬 Notificación de chat tocada, navegando',
+          tag: 'NotificationService',
+        );
+        _chatNotificationTapController.add(data);
+        break;
+
+      // ═══════════════════════════════════════════════════════════════
+      // HISTORIAS
+      // ═══════════════════════════════════════════════════════════════
+      case 'story_approval_request':
+        ReleaseLogger.log(
+          '📸 Notificación de historia pendiente tocada, navegando a aprobación',
+          tag: 'NotificationService',
+        );
+        _storyApprovalNotificationTapController.add(data);
+        break;
+
+      case 'story_approved':
+      case 'story_rejected':
+      case 'story_reply':
+      case 'new_story':
+        ReleaseLogger.log(
+          '📸 Notificación de historia ($type) tocada, navegando a story viewer',
+          tag: 'NotificationService',
+        );
+        _storyNotificationTapController.add(data);
+        break;
+
+      // ═══════════════════════════════════════════════════════════════
+      // CONTACTOS
+      // ═══════════════════════════════════════════════════════════════
+      case 'contact_request':
+        ReleaseLogger.log(
+          '👥 Notificación de solicitud de contacto tocada, navegando a pendientes',
+          tag: 'NotificationService',
+        );
+        _contactRequestNotificationTapController.add(data);
+        break;
+
+      case 'contact_approved':
+        ReleaseLogger.log(
+          '✅ Notificación de contacto aprobado tocada, navegando a contactos',
+          tag: 'NotificationService',
+        );
+        _contactApprovedNotificationTapController.add(data);
+        break;
+
+      // ═══════════════════════════════════════════════════════════════
+      // GRUPOS
+      // ═══════════════════════════════════════════════════════════════
+      case 'group_approval_request':
+      case 'group_permission_reminder':
+        ReleaseLogger.log(
+          '👥 Notificación de aprobación de grupo tocada, navegando a aprobación',
+          tag: 'NotificationService',
+        );
+        _groupApprovalNotificationTapController.add(data);
+        break;
+
+      case 'group_membership_approved':
+        ReleaseLogger.log(
+          '🎉 Notificación de membresía aprobada tocada, navegando al grupo',
+          tag: 'NotificationService',
+        );
+        _groupMembershipApprovedNotificationTapController.add(data);
+        break;
+
+      // ═══════════════════════════════════════════════════════════════
+      // EMERGENCIAS
+      // ═══════════════════════════════════════════════════════════════
+      case 'emergency':
+        ReleaseLogger.log(
+          '🆘 Notificación de emergencia tocada, navegando a detalles',
+          tag: 'NotificationService',
+        );
+        _emergencyNotificationTapController.add(data);
+        break;
+
+      // ═══════════════════════════════════════════════════════════════
+      // ALERTAS Y REPORTES
+      // ═══════════════════════════════════════════════════════════════
+      case 'activity_alert':
+      case 'bullying_alert':
+        ReleaseLogger.log(
+          '⚠️ Notificación de alerta ($type) tocada, navegando a alertas',
+          tag: 'NotificationService',
+        );
+        _alertNotificationTapController.add(data);
+        break;
+
+      case 'report_ready':
+        ReleaseLogger.log(
+          '📊 Notificación de reporte listo tocada, navegando a reportes',
+          tag: 'NotificationService',
+        );
+        _reportNotificationTapController.add(data);
+        break;
+
+      default:
+        ReleaseLogger.log(
+          '⚠️ Tipo de notificación no manejado: $type',
+          tag: 'NotificationService',
+        );
     }
   }
 
@@ -3213,23 +2325,59 @@ class NotificationService {
     }
   }
 
-  /// Muestra notificación local instantánea (solo para foreground)
+  /// ═══════════════════════════════════════════════════════════════
+  /// 🔔 ÚNICO PUNTO DE ENTRADA PARA NOTIFICACIONES DE CHAT
+  /// ═══════════════════════════════════════════════════════════════
+  /// Este método es llamado desde:
+  /// - firebaseMessagingBackgroundHandler (background/terminated)
+  /// - onMessage listener (foreground)
   ///
-  /// Este método muestra notificaciones locales inmediatamente cuando
-  /// la app está en foreground, evitando el retraso de FCM desde Cloud Functions.
+  /// Incluye deduplicación en memoria para evitar notificaciones duplicadas.
+  /// ═══════════════════════════════════════════════════════════════
   Future<void> showLocalChatNotification({
     required String senderId,
     required String senderName,
     required String messageText,
     required String chatId,
+    String? messageId,
     bool isGroup = false,
     String? groupName,
-    String?
-    senderPhotoUrl, // ✅ FIX: Parámetro opcional para evitar query redundante
+    String? senderPhotoUrl,
   }) async {
+    // ═══════════════════════════════════════════════════════════════
+    // DEDUPLICACIÓN: Evitar mostrar la misma notificación dos veces
+    // ═══════════════════════════════════════════════════════════════
+    if (messageId != null && messageId.isNotEmpty) {
+      if (_processedMessageIds.contains(messageId)) {
+        ReleaseLogger.log(
+          '⏭️ [Notification] messageId=$messageId ya mostrado - SKIP',
+          tag: 'NotificationService',
+        );
+        return;
+      }
+      _processedMessageIds.add(messageId);
+
+      // Limpiar IDs viejos para evitar memory leak (mantener últimos 200)
+      if (_processedMessageIds.length > 200) {
+        final toRemove = _processedMessageIds.take(100).toList();
+        _processedMessageIds.removeAll(toRemove);
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // FILTRO: No mostrar si el usuario está viendo este chat
+    // ═══════════════════════════════════════════════════════════════
+    if (_currentChatId != null && _currentChatId == chatId) {
+      ReleaseLogger.log(
+        '🚫 [Notification] Usuario viendo chat $chatId - SKIP',
+        tag: 'NotificationService',
+      );
+      return;
+    }
+
     try {
       ReleaseLogger.log(
-        '⚡ [INSTANT] Mostrando notificación local para mensaje en foreground',
+        '🔔 [Notification] Mostrando notificación: $senderName',
         tag: 'NotificationService',
       );
       ReleaseLogger.log(
@@ -3380,19 +2528,18 @@ class NotificationService {
 
       // ✅ iOS: Usar Communication Notifications nativas via platform channel
       if (Platform.isIOS) {
+        bool success = false;
         try {
           // ✅ FIX #5: Usar senderPhotoUrl directamente (ya viene del Stream Detector)
           // ELIMINADA query redundante que agregaba 50-200ms de latencia
           String? photoUrl = senderPhotoUrl;
 
           ReleaseLogger.log(
-            '📱 [iOS] Llamando a Communication Notification nativa',
+            '📱 [iOS FOREGROUND] Llamando a Communication Notification nativa para: $senderName',
             tag: 'NotificationService',
           );
 
-          final foregroundTitle = 'Foreground: $title';
-
-          await _notificationChannel.invokeMethod('showCommunicationNotification', {
+          final result = await _notificationChannel.invokeMethod('showCommunicationNotification', {
             'senderId': senderId,
             'senderName': senderName,
             'messageText': body,
@@ -3401,16 +2548,68 @@ class NotificationService {
             'senderPhotoUrl': photoPath ?? photoUrl ?? '',
           });
 
+          success = result == true;
           ReleaseLogger.log(
-            '✅ [iOS] Communication Notification mostrada exitosamente',
+            '✅ [iOS FOREGROUND] Communication Notification resultado: $result',
             tag: 'NotificationService',
           );
         } catch (e) {
           ReleaseLogger.error(
-            '❌ [iOS] Error llamando a Communication Notification: $e',
+            '❌ [iOS FOREGROUND] Error llamando a Communication Notification: $e',
             tag: 'NotificationService',
           );
         }
+
+        // ✅ FALLBACK: Si falla la Communication Notification, usar flutter_local_notifications
+        if (!success) {
+          ReleaseLogger.log(
+            '🔄 [iOS FOREGROUND] Fallback: usando flutter_local_notifications',
+            tag: 'NotificationService',
+          );
+          try {
+            final iosDetails = DarwinNotificationDetails(
+              presentAlert: true,
+              presentBadge: true,
+              presentSound: true,
+              threadIdentifier: chatId,
+            );
+            final details = NotificationDetails(iOS: iosDetails);
+
+            // ✅ Usar ID consistente para poder cancelar después
+            final contextType = isGroup ? NotificationContext.group : NotificationContext.chat;
+            final notificationId = NotificationTrackingService.generateNotificationId(
+              contextType,
+              chatId,
+              messageId: messageId,
+            );
+
+            await _localNotifications.show(
+              notificationId,
+              title,
+              body,
+              details,
+              payload: jsonEncode(data),
+            );
+
+            // ✅ Trackear notificación para auto-dismiss
+            await NotificationTrackingService().trackNotification(
+              type: contextType,
+              contextId: chatId,
+              notificationId: notificationId,
+            );
+
+            ReleaseLogger.log(
+              '✅ [iOS FOREGROUND] Fallback notification mostrada (id=$notificationId)',
+              tag: 'NotificationService',
+            );
+          } catch (e2) {
+            ReleaseLogger.error(
+              '❌ [iOS FOREGROUND] Error en fallback: $e2',
+              tag: 'NotificationService',
+            );
+          }
+        }
+        return;  // ✅ Retornar después de iOS para no continuar a Android
       } else {
         // Android: Llamar código nativo para crear ShortcutInfo (requerido para avatar)
         // flutter_local_notifications NO puede crear ShortcutInfo, necesario para Android 11+
@@ -3418,6 +2617,14 @@ class NotificationService {
           ReleaseLogger.log(
             '🤖 [Android] Llamando código nativo para crear notificación con ShortcutInfo',
             tag: 'NotificationService',
+          );
+
+          // ✅ Generar ID consistente para tracking y dismiss
+          final contextType = isGroup ? NotificationContext.group : NotificationContext.chat;
+          final notificationId = NotificationTrackingService.generateNotificationId(
+            contextType,
+            chatId,
+            messageId: messageId,
           );
 
           await _notificationChannel.invokeMethod('showChatNotification', {
@@ -3429,10 +2636,18 @@ class NotificationService {
             'chatId': chatId,
             'isGroup': isGroup,
             'groupName': groupName ?? '',
+            'notificationId': notificationId, // ✅ Pasar ID consistente al código nativo
           });
 
+          // ✅ Trackear notificación para auto-dismiss
+          await NotificationTrackingService().trackNotification(
+            type: contextType,
+            contextId: chatId,
+            notificationId: notificationId,
+          );
+
           ReleaseLogger.log(
-            '✅ [Android] Notificación nativa creada con ShortcutInfo',
+            '✅ [Android] Notificación nativa creada con ShortcutInfo (id=$notificationId)',
             tag: 'NotificationService',
           );
           return; // Salir después de llamar código nativo
@@ -3449,9 +2664,13 @@ class NotificationService {
           android: androidDetails,
         );
 
-        // ✅ Calcular ID positivo y estable
-        final notificationId =
-            (chatId.hashCode.abs() % 1000000) + (senderId.hashCode.abs() % 1000);
+        // ✅ Usar ID consistente para poder cancelar después
+        final contextType = isGroup ? NotificationContext.group : NotificationContext.chat;
+        final notificationId = NotificationTrackingService.generateNotificationId(
+          contextType,
+          chatId,
+          messageId: messageId,
+        );
 
         // ✅ Agregar distintivo "Foreground:" para identificar notificaciones del Stream Detector
         final foregroundTitle = 'Foreground: $title';
@@ -3463,6 +2682,13 @@ class NotificationService {
           body,
           details,
           payload: jsonEncode(data),
+        );
+
+        // ✅ Trackear notificación para auto-dismiss
+        await NotificationTrackingService().trackNotification(
+          type: contextType,
+          contextId: chatId,
+          notificationId: notificationId,
         );
       }
 

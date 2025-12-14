@@ -221,6 +221,16 @@ class GroupChatController extends ChangeNotifier {
       return bTime.compareTo(aTime);
     });
 
+    // ✅ FIX: Marcar mensajes como leídos cuando llegan mensajes de otros usuarios
+    // Esto asegura que los mensajes se marquen como vistos mientras el chat está abierto
+    final hasUnreadFromOthers = firestoreMessages.any((msg) =>
+      msg.senderId != currentUserId &&
+      !(msg.readBy?.contains(currentUserId) ?? false)
+    );
+    if (hasUnreadFromOthers) {
+      markMessagesAsRead();
+    }
+
     notifyListeners();
   }
 

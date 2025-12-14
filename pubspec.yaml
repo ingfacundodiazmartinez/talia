@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.61+111
+version: 1.0.67+117
 
 environment:
   sdk: ^3.9.2
@@ -91,6 +91,7 @@ dependencies:
   provider: ^6.1.2
   otp: ^3.1.4
   cached_network_image: ^3.4.1
+  flutter_cache_manager: ^3.3.0  # Used for notification images caching
   flutter_callkit_incoming:
     path: ../flutter_callkit_incoming
   connectivity_plus: ^6.0.5
@@ -107,6 +108,7 @@ dependencies:
   async: ^2.11.0
   wakelock_plus: ^1.2.8  # Keep screen on during calls
   proximity_sensor: ^1.0.4  # Detect phone near ear for audio calls
+  package_info_plus: ^8.0.0  # Get app version info
 
   flutter_native_splash: any
   path: any

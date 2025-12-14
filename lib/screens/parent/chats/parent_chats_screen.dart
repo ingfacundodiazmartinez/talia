@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter_slidable/flutter_slidable.dart';
 import '../../../services/contact_alias_service.dart';
 import '../../../services/block_service.dart';
 import '../../../services/message_status_helper.dart';
@@ -256,17 +257,19 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                                         builder: (context, query, _) {
                                           // Si no hay query, mostrar lista normal
                                           if (query.trim().isEmpty) {
-                                            return ListView.builder(
-                                              padding: EdgeInsets.all(16),
-                                              itemCount: listItems.length,
-                                              itemBuilder: (context, index) {
-                                                final item = listItems[index];
-                                                return _buildItemWidget(
-                                                  item,
-                                                  chatDocs,
-                                                  query.toLowerCase(),
-                                                );
-                                              },
+                                            return SlidableAutoCloseBehavior(
+                                              child: ListView.builder(
+                                                padding: EdgeInsets.all(16),
+                                                itemCount: listItems.length,
+                                                itemBuilder: (context, index) {
+                                                  final item = listItems[index];
+                                                  return _buildItemWidget(
+                                                    item,
+                                                    chatDocs,
+                                                    query.toLowerCase(),
+                                                  );
+                                                },
+                                              ),
                                             );
                                           }
 

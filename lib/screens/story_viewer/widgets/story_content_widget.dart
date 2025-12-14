@@ -58,8 +58,12 @@ class StoryContentWidget extends StatelessWidget {
           final userStories = allUserStories[userIndex];
           final stories = _getStoriesForUser(userStories);
 
+          // ✅ Deshabilitar scroll del PageView interno para que el swipe horizontal
+          // se propague al PageView externo (cambio de usuario/grupo)
+          // Las historias individuales se cambian con taps izquierda/derecha
           return PageView.builder(
             controller: userIndex == currentUserIndex ? storyPageController : null,
+            physics: const NeverScrollableScrollPhysics(), // ← Deshabilitar swipe
             itemCount: stories.length,
             onPageChanged: (storyIndex) {
               if (userIndex == currentUserIndex) {

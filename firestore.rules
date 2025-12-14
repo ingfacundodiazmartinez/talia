@@ -10,7 +10,30 @@ service cloud.firestore {
 
     // Usuarios
     match /users/{userId} {
-      allow read: if request.auth != null;
+      // 🔒 SEGURIDAD: Función para verificar si existe chat entre usuarios
+      // El chatId tiene formato: {sortedUserId1}_{sortedUserId2}
+      function hasChatWith() {
+        let chatId = request.auth.uid < userId ?
+          request.auth.uid + '_' + userId : userId + '_' + request.auth.uid;
+        return exists(/databases/$(database)/documents/chats/$(chatId));
+      }
+
+      // 🔒 SEGURIDAD: Función para verificar relación padre-hijo usando parent_children
+      function isParentOrChildRelation() {
+        return exists(/databases/$(database)/documents/parent_children/$(request.auth.uid + '_' + userId)) ||
+               exists(/databases/$(database)/documents/parent_children/$(userId + '_' + request.auth.uid));
+      }
+
+      // 🔒 SEGURIDAD: Solo puedes leer usuarios si:
+      // 1. Es tu propio perfil, O
+      // 2. Existe un chat entre ambos (se crea al aprobar contacto), O
+      // 3. Hay relación padre-hijo
+      // Nota: La búsqueda por código usa Cloud Function findUserByCode
+      allow read: if request.auth != null && (
+        request.auth.uid == userId ||
+        hasChatWith() ||
+        isParentOrChildRelation()
+      );
 
       // CREAR: Solo puede crear su propio usuario Y sin campos sensibles
       allow create: if request.auth.uid == userId &&
@@ -883,11 +906,10 @@ service cloud.firestore {
     }
 
     // User codes (códigos de usuario para agregar contactos)
-    // ⚠️ TODO: Después de deploy de Cloud Function findUserByCode, cambiar a:
-    //   allow read: if request.auth != null && request.auth.uid == userId;
-    // Esto previene enumeración de todos los usuarios de la app (vulnerabilidad #6)
+    // 🔒 SEGURIDAD: Solo puedes leer TU PROPIO código
+    // La búsqueda de códigos de otros usuarios se hace via Cloud Function findUserByCode
     match /user_codes/{userId} {
-      allow read: if request.auth != null;
+      allow read: if request.auth != null && request.auth.uid == userId;
       allow write: if request.auth != null && request.auth.uid == userId;
     }
 
@@ -908,13 +930,43 @@ service cloud.firestore {
     }
 
     // ============================================================================
-    // CALLS V2 (100ms Video Calls)
+    // CALLS V2 (Agora Video Calls)
     // ============================================================================
     match /calls_v2/{callId} {
       // Función auxiliar para verificar si el usuario es participante
       function isParticipant() {
         return resource.data.participants != null &&
                resource.data.participants[request.auth.uid] != null;
+      }
+
+      // 🔒 SEGURIDAD: Validar que solo se actualicen campos permitidos para participantes
+      // Campos permitidos:
+      // - participants.{uid}.status (cambiar estado del participante)
+      // - participants.{uid}.joinedAt (cuando se une)
+      // - participants.{uid}.leftAt (cuando se va)
+      // - endedAt (terminar la llamada)
+      // - endedBy (quién terminó)
+      // - endReason (razón del fin)
+      function isValidCallUpdate() {
+        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+        let allowedTopLevel = ['endedAt', 'endedBy', 'endReason', 'participants'];
+
+        // Verificar que solo se cambian campos permitidos de nivel superior
+        return changedKeys.hasOnly(allowedTopLevel);
+      }
+
+      // 🔒 SEGURIDAD: Verificar que no se agregan ni eliminan participantes
+      // Los participantes solo pueden ser agregados por Cloud Functions
+      function isNotChangingParticipantKeys() {
+        let oldParticipants = resource.data.participants;
+        let newParticipants = request.resource.data.participants;
+
+        // Si no hay cambios en participants, está bien
+        // O verificar que las keys de participantes son las mismas
+        // (no se pueden agregar ni eliminar participantes, solo modificar status)
+        return oldParticipants == newParticipants ||
+               (newParticipants.keys().hasAll(oldParticipants.keys()) &&
+                oldParticipants.keys().hasAll(newParticipants.keys()));
       }
 
       // Permitir leer si eres participante
@@ -926,10 +978,14 @@ service cloud.firestore {
       // Solo Cloud Functions pueden crear llamadas
       allow create: if false;
 
-      // Permitir actualizar si eres participante
+      // 🔒 SEGURIDAD: Permitir actualizar solo campos específicos si eres participante
+      // Nota: Los participantes pueden actualizar el status de otros (ej: marcar como 'missed')
+      // pero NO pueden agregar ni eliminar participantes de la llamada
       allow update: if request.auth != null &&
         resource != null &&
-        isParticipant();
+        isParticipant() &&
+        isValidCallUpdate() &&
+        isNotChangingParticipantKeys();
 
       // Permitir eliminar si eres el creador
       allow delete: if request.auth != null &&
@@ -958,79 +1014,15 @@ service cloud.firestore {
       }
     }
 
-    // Video calls
+    // ============================================================================
+    // ❌ LEGACY: video_calls - BLOQUEADO
+    // ============================================================================
+    // Esta colección ya NO se usa. El sistema de llamadas usa 'calls_v2'.
+    // Solo Cloud Functions (con Admin SDK) pueden acceder para migración/cleanup.
+    // Los clientes NO deben tener acceso.
     match /video_calls/{callId} {
-      // Función auxiliar para verificar si el usuario es padre del caller (para emergencias)
-      function isParentOfCaller() {
-        let callerId = resource.data.callerId;
-        return exists(/databases/$(database)/documents/parent_children/$(request.auth.uid + '_' + callerId)) ||
-               exists(/databases/$(database)/documents/parent_children/$(callerId + '_' + request.auth.uid));
-      }
-
-      // ✅ FUNCIÓN CORREGIDA: Usar participantIds en lugar de verificación manual
-      // Este array contiene solo UIDs para queries eficientes con array-contains
-      function isGroupCallParticipant() {
-        return resource.data.isGroupCall == true &&
-               resource.data.participantIds != null &&
-               request.auth.uid in resource.data.participantIds;
-      }
-
-      // Función auxiliar para verificar si el usuario está en el array participantIds
-      // Este array se usa para queries eficientes (array-contains)
-      function isInParticipantIds() {
-        return resource.data.participantIds != null &&
-               request.auth.uid in resource.data.participantIds;
-      }
-
-      // Permitir leer si:
-      // 1. El documento no existe (para detectar eliminación en listeners), O
-      // 2. Eres el caller o receiver (llamadas 1:1), O
-      // 3. Es una llamada grupal Y estás en la lista de participantes, O
-      // 4. Estás en el array participantIds (para queries eficientes), O
-      // 5. Es una emergencia (isEmergency) Y eres padre del caller
-      allow read: if request.auth != null && (
-        resource == null ||
-        request.auth.uid == resource.data.callerId ||
-        request.auth.uid == resource.data.receiverId ||
-        isGroupCallParticipant() ||
-        isInParticipantIds() ||
-        (resource.data.isEmergency == true && isParentOfCaller())
-      );
-
-      // ❌ SEGURIDAD: Solo Cloud Functions pueden crear videollamadas
-      // Migrado a backend por seguridad - usar Cloud Function 'initiateVideoCall'
-      allow create: if false;
-
-      // Función auxiliar para verificar si solo se están actualizando campos de estado de llamada
-      function isOnlyUpdatingCallStatus() {
-        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
-        // Campos que los participantes pueden actualizar para cancelar/terminar llamadas
-        return changedKeys.size() > 0 &&
-               changedKeys.hasOnly(['status', 'cancelledAt', 'endedAt', 'acceptedAt', 'rejectedAt', 'updatedAt']);
-      }
-
-      // Permitir actualizar si:
-      // 1. Eres el caller o receiver (para actualizar llamadas 1:1)
-      // 2. Es una llamada grupal Y estás en la lista de participantes
-      // 3. Estás en el array participantIds
-      // 4. Es una emergencia Y eres padre del caller
-      // 5. Eres caller o receiver Y solo actualizas campos de estado (para cancelar llamadas)
-      allow update: if request.auth != null && (
-        (resource != null && (request.auth.uid == resource.data.callerId ||
-                              request.auth.uid == resource.data.receiverId)) ||
-        (resource != null && isGroupCallParticipant()) ||
-        (resource != null && isInParticipantIds()) ||
-        (resource != null && resource.data.isEmergency == true && isParentOfCaller()) ||
-        (resource != null &&
-         (request.auth.uid == resource.data.callerId || request.auth.uid == resource.data.receiverId) &&
-         isOnlyUpdatingCallStatus())
-      );
-
-      // Permitir eliminar si eres el caller o receiver
-      allow delete: if request.auth != null && resource != null && (
-        request.auth.uid == resource.data.callerId ||
-        request.auth.uid == resource.data.receiverId
-      );
+      allow read: if false;
+      allow write: if false;
     }
 
     // Chat permissions

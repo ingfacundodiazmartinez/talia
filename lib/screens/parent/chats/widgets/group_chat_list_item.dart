@@ -36,51 +36,72 @@ class GroupChatListItem extends StatelessWidget {
     this.lastMessageModerationStatus,
   });
 
+
   @override
   Widget build(BuildContext context) {
     final firestore = FirebaseFirestore.instance;
     final auth = FirebaseAuth.instance;
 
-    return Slidable(
-      key: Key('group_$groupId'),
-      // closeOnScroll: false mantiene el swipe abierto
-      closeOnScroll: false,
-      endActionPane: ActionPane(
-        // ScrollMotion mantiene los botones visibles sin cerrarse automáticamente
-        motion: const ScrollMotion(),
-        extentRatio: 0.25,
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: 8),
+      child: ClipRect(
+        child: Container(
+          color: colorScheme.primary,
+          child: Slidable(
+        key: Key('group_$groupId'),
+        closeOnScroll: false,
+        endActionPane: ActionPane(
+        motion: const BehindMotion(),
+        extentRatio: 0.2,
+        openThreshold: 0.1,
+        closeThreshold: 0.1,
         children: [
-          // Botón Salir - Rojo suave
-          CustomSlidableAction(
-            onPressed: (context) => onLeaveGroup?.call(),
-            backgroundColor: Color(0xFFE74C3C), // Rojo más suave
-            foregroundColor: Colors.white,
-            child: Icon(Icons.exit_to_app, size: 32, color: Colors.white),
+          Expanded(
+            child: Container(
+              color: colorScheme.primary,
+              child: GestureDetector(
+                onTap: () => onLeaveGroup?.call(),
+                behavior: HitTestBehavior.opaque,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.exit_to_app_outlined, color: Colors.white, size: 24),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Salir',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
         ],
       ),
       child: GestureDetector(
-        onTap: () async {
-          // MaterialPageRoute evita parpadeo Y habilita swipe-to-go-back en iOS
-          // Usar Navigator del tab (sin rootNavigator) para que pop() funcione correctamente
-          await Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (context) => GroupChatScreenV2(
-                groupId: groupId,
-                groupName: groupName,
+          onTap: () async {
+            // MaterialPageRoute evita parpadeo Y habilita swipe-to-go-back en iOS
+            // Usar Navigator del tab (sin rootNavigator) para que pop() funcione correctamente
+            await Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (context) => GroupChatScreenV2(
+                  groupId: groupId,
+                  groupName: groupName,
+                ),
               ),
-            ),
-          );
-        },
-        child: Container(
-          margin: EdgeInsets.only(bottom: 8),
+            );
+          },
+          child: Container(
           padding: EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: unreadCount > 0
-                ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.1)
-                : Colors.transparent,
-            borderRadius: BorderRadius.circular(16),
-          ),
+          color: unreadCount > 0
+              ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.1)
+              : colorScheme.surface,
           child: Row(
             children: [
               CircleAvatar(
@@ -321,6 +342,9 @@ class GroupChatListItem extends StatelessWidget {
               ),
             ],
           ),
+          ),
+        ),
+        ),
         ),
       ),
     );

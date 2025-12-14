@@ -109,63 +109,54 @@ exports.sendNotificationOnCreate = onDocumentCreated(
 
       console.log(`📦 [NotificationTrigger] fcmData completo:`, JSON.stringify(fcmData));
 
-      // ✅ ESTRATEGIA FINAL para iOS:
-      // 1. Enviar payload COMPLETO con alert + sound + content-available
-      // 2. Incluir foto del sender en fcmOptions.image (iOS la descarga automáticamente)
-      // 3. Foreground: AppDelegate suprime notificaciones FCM de chat (Stream Detector maneja)
-      // 4. Background: iOS muestra notificación inmediatamente CON foto
+      // ═══════════════════════════════════════════════════════════════
+      // ✅ STRATEGY (CORREGIDO según firebase-ios-sdk #3368):
+      // ═══════════════════════════════════════════════════════════════
+      // Chat messages:
+      //   - notification en raíz → FCM genera aps.alert automáticamente
+      //   - apns.payload.aps solo mutable-content → Invoca NSE
+      //   - NO duplicar alert en aps (causa conflicto y NSE no se invoca)
+      // Otros tipos: content-available=1 → Background handler de Flutter
+      // ═══════════════════════════════════════════════════════════════
+
       const isChatMessage = type === 'chat_message' || type === 'group_message';
 
-      // ✅ FIXED APPROACH: Usar notificaciones CON alert para garantizar entrega
-      // NSE descargará la foto manualmente (sin usar Firebase Messaging roto)
-      // Silent notifications son poco confiables en iOS (Apple las throttlea)
-
-      // ✅ CRITICAL: Para que NSE se invoque, NO debe incluirse content-available
-      // Apple docs: "content-available must be set to 0 (or left un-set) for mutable-content to work"
-      // - Chat messages: mutable-content=true para NSE (sin content-available)
-      // - Other notifications: content-available=1 para background handler (sin mutable-content)
-      const apsPayload = {
-        alert: {
-          title: title || "Talia",
-          body: body || "",
-        },
-        sound: "default",
-        // ⚠️ IMPORTANTE: content-available y mutable-content son MUTUAMENTE EXCLUYENTES
-        // Si ambos están presentes, iOS no invoca el NSE
-        // Usando 'true' (boolean) en lugar de 1 (integer) según documentación FCM Admin SDK
-        ...(isChatMessage
-          ? { "mutable-content": true }  // Para NSE (no content-available)
-          : { "content-available": 1 }  // Para background handler (no mutable-content)
-        ),
-      };
-
-      const apnsPayload = {
-        headers: {
-          "apns-priority": "10",
-          "apns-push-type": "alert",
-        },
-        payload: {
-          aps: apsPayload,
-        },
-      };
+      // ✅ FORMATO RESTAURADO que funcionaba
+      const apsPayload = isChatMessage
+        ? {
+            alert: { title: title || "Talia", body: body || "" },
+            sound: "default",
+            "mutable-content": 1,
+          }
+        : {
+            "content-available": 1,
+          };
 
       const message = {
-        // ✅ NO incluir notification en root ni en android para que onMessageReceived() se ejecute
-        // El Native Service (MyFirebaseMessagingService.kt) descargará la foto y mostrará la notificación
         data: fcmData,
         tokens: fcmTokens,
         android: {
           priority: "high",
-          // ❌ NO incluir android.notification - fuerza que onMessageReceived() se ejecute
-          // Nuestro código nativo descargará la foto del sender y mostrará la notificación
         },
-        apns: apnsPayload,
+        apns: {
+          headers: {
+            "apns-priority": "10",
+            "apns-push-type": isChatMessage ? "alert" : "background",
+          },
+          payload: {
+            aps: apsPayload,
+            ...(messageId && { messageId }),
+            ...(senderId && { senderId }),
+            ...(senderName && { senderName }),
+            ...(senderPhotoUrl && { senderPhotoUrl }),
+            ...(chatId && { chatId }),
+            ...(isGroup !== undefined && { isGroup: String(isGroup) }),
+            type: type || "notification",
+          },
+        },
       };
 
-      console.log(`📦 [NotificationTrigger] aps payload:`, JSON.stringify(apsPayload));
-      console.log(`📦 [NotificationTrigger] senderPhotoUrl:`, senderPhotoUrl);
-      console.log(`📦 [NotificationTrigger] hasMutableContent:`, !!senderPhotoUrl);
-      console.log(`📦 [NotificationTrigger] FULL apnsPayload:`, JSON.stringify(apnsPayload, null, 2));
+      console.log(`📦 [NotificationTrigger] ${isChatMessage ? 'ALERT+NSE' : 'DATA-ONLY'} message`);
 
       // Enviar notificación
       const response = await getMessaging().sendEachForMulticast(message);
@@ -430,8 +421,28 @@ exports.sendInstantPushNotification = onCall(
       };
 
       // ✅ CONFIGURACIÓN OPTIMIZADA FCM
-      // Detectar si es mensaje de chat
+      // ═══════════════════════════════════════════════════════════════
+      // ✅ STRATEGY (CORREGIDO según firebase-ios-sdk #3368):
+      // ═══════════════════════════════════════════════════════════════
+      // Chat messages:
+      //   - notification en raíz → FCM genera aps.alert automáticamente
+      //   - apns.payload.aps solo mutable-content → Invoca NSE
+      //   - NO duplicar alert en aps (causa conflicto y NSE no se invoca)
+      // Otros tipos: content-available=1 → Background handler de Flutter
+      // ═══════════════════════════════════════════════════════════════
+
       const isChatMessage = type === 'chat_message' || type === 'group_message';
+
+      // ✅ FORMATO RESTAURADO que funcionaba
+      const apsPayload = isChatMessage
+        ? {
+            alert: { title: finalTitle, body: finalBody },
+            sound: "default",
+            "mutable-content": 1,
+          }
+        : {
+            "content-available": 1,
+          };
 
       const message = {
         token: fcmTokens[0],
@@ -442,46 +453,28 @@ exports.sendInstantPushNotification = onCall(
             body: finalBody,
           }).map(([k, v]) => [k, String(v)])
         ),
-        // ✅ CONFIGURACIÓN iOS vs Android basado en voipToken
-        ...(voipToken ? {
-          // iOS - configuración con soporte para fotos de perfil
-          apns: {
-            headers: {
-              "apns-priority": "10",
-              "apns-push-type": "alert",
-            },
-            payload: {
-              aps: {
-                alert: {
-                  title: finalTitle,
-                  body: finalBody,
-                },
-                "content-available": 1,
-                sound: "default",
-                badge: 1,
-                // ✅ CRÍTICO: mutable-content SIEMPRE activo para mensajes de chat
-                ...(isChatMessage ? { "mutable-content": 1 } : {}),
-              },
-            },
+        apns: {
+          headers: {
+            "apns-priority": "10",
+            "apns-push-type": isChatMessage ? "alert" : "background",
           },
-        } : {
-          // Android - configuración estándar
-          notification: {
-            title: finalTitle,
-            body: finalBody,
+          payload: {
+            aps: apsPayload,
+            ...(request.data.messageId && { messageId: request.data.messageId }),
+            ...(senderId && { senderId }),
+            ...(senderName && { senderName }),
+            ...(senderPhotoUrl && { senderPhotoUrl }),
+            ...(chatId && { chatId }),
+            ...(isGroup && { isGroup: 'true' }),
+            type: type || "notification",
           },
-          android: {
-            priority: "high",
-            notification: {
-              channelId: isChatMessage ? "chat_messages" : (isCall ? "video_calls" : "default"),
-              ...(isCall && {
-                category: "call",
-                click_action: "FLUTTER_NOTIFICATION_CLICK",
-              }),
-            },
-          }
-        }),
+        },
+        android: {
+          priority: "high",
+        },
       };
+
+      console.log(`📦 [INSTANT PUSH] ${isChatMessage ? 'ALERT+NSE' : 'DATA-ONLY'} message`);
 
       // ✅ Enviar FCM solo si hay tokens disponibles
       let fcmResponse = null;

@@ -45,9 +45,10 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             senderName: String,
             senderId: String,
             senderPhotoUrl: String?,
-            chatId: String
+            chatId: String,
+            notificationId: Int = 0 // ✅ ID consistente para poder cancelar después
         ) {
-            Log.d(TAG, "📨 [Foreground] Creando notificación desde MainActivity")
+            Log.d(TAG, "📨 [Foreground] Creando notificación desde MainActivity (id=$notificationId)")
 
             createNotificationChannelStatic(context)
 
@@ -65,6 +66,9 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
+
+            // ✅ Calcular ID final: usar el pasado o generar uno basado en chatId
+            val finalNotificationId = if (notificationId != 0) notificationId else chatId.hashCode()
 
             // ✅ Try to get cached photo: Flutter cache first, then local file cache
             var cachedPhoto = getCachedPhoto(senderId)
@@ -84,7 +88,8 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                         senderId = senderId,
                         cachedPhotoBytes = downloadedBytes,
                         intent = intent,
-                        pendingIntent = pendingIntent
+                        pendingIntent = pendingIntent,
+                        notificationId = finalNotificationId
                     )
                 }
                 return // La notificación se mostrará cuando termine la descarga
@@ -97,7 +102,8 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                 senderId = senderId,
                 cachedPhotoBytes = cachedPhoto,
                 intent = intent,
-                pendingIntent = pendingIntent
+                pendingIntent = pendingIntent,
+                notificationId = finalNotificationId
             )
         }
 
@@ -212,7 +218,8 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             senderId: String,
             cachedPhotoBytes: ByteArray?,
             intent: Intent,
-            pendingIntent: PendingIntent
+            pendingIntent: PendingIntent,
+            notificationId: Int = 0
         ) {
             val shortcutId = "chat_$senderId"
 
@@ -271,7 +278,10 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             }
 
             val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            notificationManager.notify(System.currentTimeMillis().toInt(), notificationBuilder.build())
+            // ✅ Usar ID consistente para poder cancelar después (auto-dismiss cuando usuario entra al chat)
+            val finalId = if (notificationId != 0) notificationId else System.currentTimeMillis().toInt()
+            notificationManager.notify(finalId, notificationBuilder.build())
+            Log.d(TAG, "✅ Notificación mostrada con id=$finalId")
         }
 
         /**
@@ -301,6 +311,21 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                 val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                 notificationManager.createNotificationChannel(channel)
             }
+        }
+
+        /**
+         * ✅ Hash djb2 cross-platform - produce el mismo resultado en Dart y Kotlin
+         * Esto es necesario porque Dart's String.hashCode != Kotlin's String.hashCode()
+         */
+        private fun crossPlatformHash(input: String): Int {
+            var hash: Long = 5381
+            for (c in input) {
+                hash = ((hash shl 5) + hash) + c.code
+                // Mantener en rango de 32 bits para compatibilidad con Dart
+                hash = hash and 0xFFFFFFFFL
+            }
+            // Asegurar positivo y en rango de int32 Android
+            return (hash and 0x7FFFFFFFL).toInt()
         }
     }
 
@@ -388,6 +413,10 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             return
         }
 
+        // ✅ MENSAJES DE CHAT: El servicio nativo muestra la notificación con MessagingStyle
+        // Flutter background handler no puede usar Platform Channel en background isolate
+        // Por lo tanto, el servicio nativo es responsable de mostrar notificaciones en background
+
         // ✅ FILTRO CHAT ACTUAL: Verificar si el usuario está viendo este chat
         Log.e(TAG, "🔍 [FILTRO] Iniciando verificación de chat actual...")
         val messageChatId = data["chatId"]
@@ -461,31 +490,38 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
 
         val senderName = data["senderName"] ?: "Usuario"
         val senderId = data["senderId"] ?: (data["chatId"] ?: "unknown")
+        val chatId = data["chatId"] ?: ""
+        val messageId = data["messageId"]
 
-        // ✅ FIXED: Try Flutter cache first, then local file cache
-        var photoBytes = getCachedPhoto(senderId)
-        if (photoBytes == null) {
-            photoBytes = getFromLocalCache(senderId)
-        }
+        // ✅ Generar ID consistente para auto-dismiss usando djb2 hash (coincide con Dart)
+        val contextKey = if (messageId != null) "chat_${chatId}_$messageId" else "chat_$chatId"
+        val consistentNotificationId = crossPlatformHash(contextKey)
 
-        // Si no hay cache y hay URL, descargar la foto en background thread
-        if (photoBytes == null && !photoUrl.isNullOrEmpty()) {
-            Log.d(TAG, "📥 [Background] Descargando foto desde URL: ${photoUrl.take(50)}...")
+        Log.d(TAG, "📥 [Background] notificationId consistente=$consistentNotificationId para chat=$chatId")
+
+        // ✅ SIEMPRE descargar foto fresca si hay URL (evita mostrar foto vieja del cache)
+        if (!photoUrl.isNullOrEmpty()) {
+            Log.d(TAG, "📥 [Background] Descargando foto fresca desde URL...")
             thread {
                 val downloadedBytes = downloadPhoto(photoUrl, senderId)
+                // Si falla descarga, usar cache local como fallback
+                val finalBytes = downloadedBytes ?: getFromLocalCache(senderId)
                 buildAndShowNotification(
                     context = this,
                     body = body,
                     senderName = senderName,
                     senderId = senderId,
-                    cachedPhotoBytes = downloadedBytes,
+                    cachedPhotoBytes = finalBytes,
                     intent = intent,
-                    pendingIntent = pendingIntent
+                    pendingIntent = pendingIntent,
+                    notificationId = consistentNotificationId
                 )
             }
-            return // La notificación se mostrará cuando termine la descarga
+            return
         }
 
+        // Sin URL, usar cache local
+        val photoBytes = getFromLocalCache(senderId)
         buildAndShowNotification(
             context = this,
             body = body,
@@ -493,7 +529,8 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             senderId = senderId,
             cachedPhotoBytes = photoBytes,
             intent = intent,
-            pendingIntent = pendingIntent
+            pendingIntent = pendingIntent,
+            notificationId = consistentNotificationId
         )
     }
 

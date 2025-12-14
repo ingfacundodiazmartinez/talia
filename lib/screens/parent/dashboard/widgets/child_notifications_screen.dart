@@ -4,6 +4,7 @@ import '../../../../controllers/child_notifications_controller.dart';
 import '../../../../groups/groups.dart';
 import '../../../story_approval_screen.dart';
 import '../../contacts/child_contacts_filter_screen.dart';
+import '../../../../services/notification_tracking_service.dart';
 
 /// Pantalla que muestra todas las notificaciones/alertas de un hijo específico
 ///
@@ -43,8 +44,21 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
     _controller.initialize();
 
     _scrollController.addListener(_onScroll);
-    // ❌ REMOVED: Automatic read marking was causing false read receipts
-    // Only mark as read when user explicitly taps notifications
+
+    // ✅ Auto-dismiss: Limpiar notificaciones de alertas para este hijo
+    NotificationTrackingService().dismissNotificationsForContext(
+      type: NotificationContext.alert,
+      contextId: widget.childId,
+    );
+    NotificationTrackingService().dismissNotificationsForContext(
+      type: NotificationContext.report,
+      contextId: widget.childId,
+    );
+
+    // Marcar todas las notificaciones como leídas al entrar a la pantalla
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _markAllAsRead(showSnackbar: false);
+    });
   }
 
   @override
@@ -89,13 +103,6 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
         title: Text('Alertas de ${widget.childName}'),
         backgroundColor: Color(0xFF9D7FE8),
         foregroundColor: Colors.white,
-        actions: [
-          IconButton(
-            icon: Icon(Icons.done_all),
-            tooltip: 'Marcar todas como leídas',
-            onPressed: _markAllAsRead,
-          ),
-        ],
       ),
       body: StreamBuilder<QuerySnapshot>(
         stream: _controller.getNotificationsStream(),
@@ -442,10 +449,10 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
     }
   }
 
-  Future<void> _markAllAsRead() async {
+  Future<void> _markAllAsRead({bool showSnackbar = true}) async {
     final markedCount = await _controller.markAllAsRead();
 
-    if (mounted) {
+    if (mounted && showSnackbar) {
       if (markedCount > 0) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

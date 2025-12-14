@@ -22,21 +22,24 @@ class StoryReplyInput extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
 
     return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.bottomCenter,
-          end: Alignment.topCenter,
-          colors: [
-            Colors.black.withOpacity(0.6),
-            Colors.black.withOpacity(0.3),
-            Colors.transparent,
-          ],
-          stops: const [0.0, 0.7, 1.0],
+      color: Colors.black, // Fondo negro sólido para cubrir el área del SafeArea
+      child: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.bottomCenter,
+            end: Alignment.topCenter,
+            colors: [
+              Colors.black.withOpacity(0.8),
+              Colors.black.withOpacity(0.5),
+              Colors.transparent,
+            ],
+            stops: const [0.0, 0.6, 1.0],
+          ),
         ),
-      ),
-      child: SafeArea(
-        child: Container(
-          padding: const EdgeInsets.all(12),
+        child: SafeArea(
+          top: false, // No necesitamos SafeArea arriba
+          child: Container(
+            padding: const EdgeInsets.all(12),
           child: Row(
             children: [
               Expanded(
@@ -128,6 +131,7 @@ class StoryReplyInput extends StatelessWidget {
               ),
             ],
           ),
+        ),
         ),
       ),
     );

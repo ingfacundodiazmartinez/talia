@@ -48,6 +48,11 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
   Ticker? _ticker;
   List<double>? _waveformData; // Datos reales del waveform
 
+  // Playback speed control
+  static const List<double> _playbackSpeeds = [1.0, 1.5, 2.0];
+  int _currentSpeedIndex = 0;
+  double get _playbackSpeed => _playbackSpeeds[_currentSpeedIndex];
+
   // Proximity sensor for earpiece switching
   StreamSubscription<int>? _proximitySubscription;
   bool _isNearEar = false;
@@ -401,8 +406,11 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
 
     _ticker = createTicker((elapsed) {
       if (mounted) {
-        // Posición = posición inicial + tiempo transcurrido
-        final newPosition = startPosition + elapsed;
+        // Posición = posición inicial + (tiempo transcurrido * velocidad de reproducción)
+        final adjustedElapsed = Duration(
+          microseconds: (elapsed.inMicroseconds * _playbackSpeed).round(),
+        );
+        final newPosition = startPosition + adjustedElapsed;
 
         setState(() {
           _position = newPosition >= _duration ? _duration : newPosition;
@@ -423,6 +431,29 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
     final minutes = twoDigits(duration.inMinutes.remainder(60));
     final seconds = twoDigits(duration.inSeconds.remainder(60));
     return '$minutes:$seconds';
+  }
+
+  /// Cycle through playback speeds: 1x -> 1.5x -> 2x -> 1x
+  Future<void> _cyclePlaybackSpeed() async {
+    setState(() {
+      _currentSpeedIndex = (_currentSpeedIndex + 1) % _playbackSpeeds.length;
+    });
+    await _audioPlayer.setPlaybackRate(_playbackSpeed);
+
+    // Restart progress timer with new speed if playing
+    if (_isPlaying) {
+      _stopProgressTimer();
+      _startProgressTimer();
+    }
+
+    ReleaseLogger.log('Playback speed set to ${_playbackSpeed}x', tag: 'AudioPlayer');
+  }
+
+  /// Format speed for display (removes trailing zero for 1x and 2x)
+  String _formatSpeed(double speed) {
+    if (speed == 1.0) return '1x';
+    if (speed == 2.0) return '2x';
+    return '${speed}x';
   }
 
   @override
@@ -508,9 +539,41 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
               ],
             ),
           ),
-          const SizedBox(width: 8),
-          // AI badge or mic icon
-          if (widget.isAiGenerated)
+          const SizedBox(width: 4),
+          // Playback speed button
+          GestureDetector(
+            onTap: _cyclePlaybackSpeed,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+              decoration: BoxDecoration(
+                color: widget.isMe
+                    ? Colors.white.withValues(alpha: _playbackSpeed != 1.0 ? 0.3 : 0.15)
+                    : widget.colorScheme.primary.withValues(alpha: _playbackSpeed != 1.0 ? 0.2 : 0.1),
+                borderRadius: BorderRadius.circular(8),
+                border: _playbackSpeed != 1.0
+                    ? Border.all(
+                        color: widget.isMe
+                            ? Colors.white.withValues(alpha: 0.5)
+                            : widget.colorScheme.primary.withValues(alpha: 0.4),
+                        width: 1,
+                      )
+                    : null,
+              ),
+              child: Text(
+                _formatSpeed(_playbackSpeed),
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: _playbackSpeed != 1.0 ? FontWeight.bold : FontWeight.w500,
+                  color: widget.isMe
+                      ? Colors.white.withValues(alpha: 0.9)
+                      : widget.colorScheme.primary,
+                ),
+              ),
+            ),
+          ),
+          // AI badge (only show if AI generated)
+          if (widget.isAiGenerated) ...[
+            const SizedBox(width: 4),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
               decoration: BoxDecoration(
@@ -542,15 +605,8 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
                   ),
                 ],
               ),
-            )
-          else
-            Icon(
-              Icons.mic,
-              size: 20,
-              color: widget.isMe
-                  ? Colors.white.withValues(alpha: 0.7)
-                  : widget.colorScheme.primary.withValues(alpha: 0.7),
             ),
+          ],
         ],
       ),
     );

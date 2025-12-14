@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../controllers/controllers.dart';
 import '../models/models.dart';
+import '../../services/notification_tracking_service.dart';
 
 /// Screen for parents to manage group approval requests
 ///
@@ -23,6 +24,12 @@ class _GroupApprovalScreenState extends State<GroupApprovalScreen> {
     _controller = GroupApprovalController();
     _setupCallbacks();
     _controller.initialize();
+
+    // ✅ Auto-dismiss: Limpiar notificaciones de aprobación de grupos
+    NotificationTrackingService().dismissNotificationsForContext(
+      type: NotificationContext.groupApproval,
+      contextId: 'global',
+    );
   }
 
   @override

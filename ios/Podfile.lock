@@ -1782,9 +1782,9 @@ PODS:
   - RecaptchaInterop (101.0.0)
   - record_ios (1.1.0):
     - Flutter
-  - SDWebImage (5.21.4):
-    - SDWebImage/Core (= 5.21.4)
-  - SDWebImage/Core (5.21.4)
+  - SDWebImage (5.21.5):
+    - SDWebImage/Core (= 5.21.5)
+  - SDWebImage/Core (5.21.5)
   - share_plus (0.0.1):
     - Flutter
   - shared_preferences_foundation (0.0.1):
@@ -2160,7 +2160,7 @@ SPEC CHECKSUMS:
   proximity_sensor: 2aef59f90cf0382935faf58ad0a79e1e860773bd
   RecaptchaInterop: 11e0b637842dfb48308d242afc3f448062325aba
   record_ios: f75fa1d57f840012775c0e93a38a7f3ceea1a374
-  SDWebImage: d0184764be51240d49c761c37f53dd017e1ccaaf
+  SDWebImage: e9c98383c7572d713c1a0d7dd2783b10599b9838
   share_plus: 50da8cb520a8f0f65671c6c6a99b3617ed10a58a
   shared_preferences_foundation: 9e1978ff2562383bd5676f64ec4e9aa8fa06a6f7
   sqflite_darwin: 20b2a3a3b70e43edae938624ce550a3cbf66a3d0
@@ -2174,6 +2174,6 @@ SPEC CHECKSUMS:
   webview_flutter_wkwebview: 8ebf4fded22593026f7dbff1fbff31ea98573c8d
   workmanager_apple: f540d652595dfe5c8b8200c4c85ba622d6fb5c5b
 
-PODFILE CHECKSUM: 6cbdd3aa18cf5c58f705f4c0219b6f2cc41607b3
+PODFILE CHECKSUM: 365de6ed5ee9c2b9fcf36b1ff475c2ae77904b8c
 
 COCOAPODS: 1.16.2

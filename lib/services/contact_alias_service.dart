@@ -53,16 +53,15 @@ class ContactAliasService {
   }
 
   /// Guardar un alias para un contacto
+  /// ✅ FIX: Usar update() en lugar de set() para no crear documento si no existe
   Future<void> setAlias(String contactId, String alias) async {
     try {
       final currentUser = _auth.currentUser;
       if (currentUser == null) throw Exception('Usuario no autenticado');
 
-      await _firestore.collection('users').doc(currentUser.uid).set({
-        'contactAliases': {
-          contactId: alias,
-        },
-      }, SetOptions(merge: true));
+      await _firestore.collection('users').doc(currentUser.uid).update({
+        'contactAliases.$contactId': alias,
+      });
     } catch (e) {
       rethrow;
     }

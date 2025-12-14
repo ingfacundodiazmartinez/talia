@@ -3,6 +3,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../services/story_service_refactored.dart';
 import '../services/story_upload_progress_service.dart';
 import '../services/unread_messages_service.dart';
+import '../services/notification_tracking_service.dart';
 
 class StoryApprovalScreen extends StatefulWidget {
   final String? childId;
@@ -31,6 +32,13 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+
+    // ✅ Auto-dismiss: Limpiar notificaciones de aprobación de historias
+    final contextId = widget.childId ?? 'all';
+    NotificationTrackingService().dismissNotificationsForContext(
+      type: NotificationContext.storyApproval,
+      contextId: contextId,
+    );
   }
 
   @override
