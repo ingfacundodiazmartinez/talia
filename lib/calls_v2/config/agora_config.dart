@@ -1,19 +1,78 @@
+import 'package:firebase_remote_config/firebase_remote_config.dart';
+import 'package:talia/utils/release_logger.dart';
+
 /// Agora RTC Engine Configuration
 ///
 /// This class contains all the configuration needed for Agora RTC Engine.
-/// The App ID is provided via --dart-define at build time for security.
+/// The App ID is loaded from Firebase Remote Config for security.
 ///
-/// Build commands:
-/// flutter run --dart-define=AGORA_APP_ID=your_app_id
-/// flutter build apk --dart-define=AGORA_APP_ID=your_app_id
-/// flutter build ipa --dart-define=AGORA_APP_ID=your_app_id
+/// Setup in Firebase Console:
+/// 1. Go to Remote Config
+/// 2. Add parameter: agora_app_id = "your_app_id"
+/// 3. Publish changes
+///
+/// Fallback: Can also use --dart-define=AGORA_APP_ID=your_app_id
 class AgoraConfig {
-  // App ID - Provided via dart-define at build time
-  // IMPORTANT: Never hardcode the real App ID here
-  static const String appId = String.fromEnvironment(
+  static String? _cachedAppId;
+  static bool _isInitialized = false;
+
+  // Fallback App ID from dart-define (for development/CI)
+  static const String _dartDefineAppId = String.fromEnvironment(
     'AGORA_APP_ID',
     defaultValue: '',
   );
+
+  /// Get App ID - prioritizes Remote Config, falls back to dart-define
+  static String get appId {
+    return _cachedAppId ?? _dartDefineAppId;
+  }
+
+  /// Initialize Agora config from Firebase Remote Config
+  /// Call this during app startup (after Firebase.initializeApp)
+  static Future<void> initialize() async {
+    if (_isInitialized) return;
+
+    try {
+      final remoteConfig = FirebaseRemoteConfig.instance;
+
+      // Set defaults
+      await remoteConfig.setDefaults({
+        'agora_app_id': _dartDefineAppId,
+      });
+
+      // Fetch with short timeout for faster startup
+      await remoteConfig.setConfigSettings(RemoteConfigSettings(
+        fetchTimeout: const Duration(seconds: 10),
+        minimumFetchInterval: const Duration(hours: 1),
+      ));
+
+      // Try to fetch from server
+      try {
+        await remoteConfig.fetchAndActivate();
+      } catch (e) {
+        ReleaseLogger.log(
+          'AgoraConfig: Remote fetch failed, using cached/default: $e',
+        );
+      }
+
+      // Get the App ID
+      _cachedAppId = remoteConfig.getString('agora_app_id');
+
+      if (_cachedAppId?.isEmpty ?? true) {
+        _cachedAppId = _dartDefineAppId;
+      }
+
+      _isInitialized = true;
+
+      ReleaseLogger.log(
+        'AgoraConfig: Initialized (source: ${_cachedAppId == _dartDefineAppId ? "dart-define" : "Remote Config"})',
+      );
+    } catch (e) {
+      ReleaseLogger.error('AgoraConfig: Init failed, using dart-define: $e');
+      _cachedAppId = _dartDefineAppId;
+      _isInitialized = true;
+    }
+  }
 
   // Token server endpoint - if using custom token server
   static const String tokenServerUrl = '';

@@ -95,7 +95,7 @@ class _TwoFactorVerificationScreenState
           Navigator.of(context).pushAndRemoveUntil(
             MaterialPageRoute(
               builder: (context) => widget.role == 'parent'
-                  ? ParentMainShell()
+                  ? ParentMainShell(key: ParentMainShell.shellKey)
                   : ChildMainShell(),
             ),
             (route) => false, // Remover todas las rutas anteriores

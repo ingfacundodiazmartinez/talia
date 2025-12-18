@@ -9,6 +9,7 @@
 
 const { onDocumentUpdated } = require('firebase-functions/v2/firestore');
 const admin = require('firebase-admin');
+const { sendVoIPPush } = require('../helpers');
 
 // Initialize admin if not already initialized
 if (!admin.apps.length) {
@@ -45,6 +46,89 @@ async function trackCallMinutes(userId, durationMinutes) {
 
   } catch (error) {
     console.error(`❌ [trackCallMinutes] Error:`, error);
+  }
+}
+
+/**
+ * ✅ FIX: Notificar a los participantes que la llamada fue cancelada
+ * Esto cierra el CallKit UI en dispositivos iOS cuando el caller cancela
+ */
+async function notifyCallCancelled(callData, callId, endedBy) {
+  try {
+    const participants = callData.participants || {};
+
+    for (const [participantId, details] of Object.entries(participants)) {
+      // No notificar al que terminó la llamada
+      if (participantId === endedBy) continue;
+
+      // Solo notificar a participantes que aún estaban esperando (status: 'ringing' o 'waiting')
+      const status = details.status;
+      if (status !== 'ringing' && status !== 'waiting' && status !== 'connecting') {
+        console.log(`⏭️ [notifyCallCancelled] Skipping ${participantId} (status: ${status})`);
+        continue;
+      }
+
+      // Obtener datos del usuario para voipToken y fcmToken
+      const userDoc = await db.collection('users').doc(participantId).get();
+      if (!userDoc.exists) {
+        console.log(`⚠️ [notifyCallCancelled] User ${participantId} not found`);
+        continue;
+      }
+
+      const userData = userDoc.data();
+      const voipToken = userData.voipToken;
+      const fcmToken = userData.fcmToken;
+
+      console.log(`📵 [notifyCallCancelled] Notificando a ${participantId} que la llamada ${callId} fue cancelada`);
+
+      // ✅ Enviar VoIP push para cerrar CallKit (iOS)
+      if (voipToken) {
+        const voipPayload = {
+          callId: callId,
+          type: 'call_cancelled',
+          action: 'end_call',
+        };
+
+        try {
+          await sendVoIPPush(voipToken, voipPayload);
+          console.log(`✅ [notifyCallCancelled] VoIP push enviado a ${participantId}`);
+        } catch (e) {
+          console.error(`❌ [notifyCallCancelled] Error enviando VoIP push: ${e}`);
+        }
+      }
+
+      // ✅ También enviar FCM para Android y como fallback
+      if (fcmToken) {
+        try {
+          await admin.messaging().send({
+            token: fcmToken,
+            data: {
+              type: 'call_cancelled',
+              callId: callId,
+              action: 'end_call',
+            },
+            android: {
+              priority: 'high',
+            },
+            apns: {
+              payload: {
+                aps: {
+                  contentAvailable: true,
+                },
+              },
+              headers: {
+                'apns-priority': '10',
+              },
+            },
+          });
+          console.log(`✅ [notifyCallCancelled] FCM enviado a ${participantId}`);
+        } catch (e) {
+          console.error(`❌ [notifyCallCancelled] Error enviando FCM: ${e}`);
+        }
+      }
+    }
+  } catch (error) {
+    console.error(`❌ [notifyCallCancelled] Error:`, error);
   }
 }
 
@@ -125,15 +209,19 @@ async function createCallMessageInChat(callData, callId, wasAnswered) {
       });
     }
 
-    await chatRef.collection('messages').add(messageData);
+    // ✅ FIX: Guardar referencia del mensaje para obtener su ID
+    const messageRef = await chatRef.collection('messages').add(messageData);
 
     // Actualizar metadata del chat
     const lastMessagePreview = wasAnswered
       ? (callType === 'video' ? '📹 Videollamada' : '📞 Llamada')
       : (callType === 'video' ? '📹 Videollamada perdida' : '📞 Llamada perdida');
 
+    // ✅ FIX: Agregar lastMessageType y lastMessageId para que el frontend identifique el mensaje
     await chatRef.update({
       lastMessage: lastMessagePreview,
+      lastMessageType: messageType, // ✅ 'missed_call' o 'answered_call'
+      lastMessageId: messageRef.id, // ✅ ID del mensaje para anti-duplicados
       lastMessageAt: admin.firestore.FieldValue.serverTimestamp(),
       lastMessageTime: admin.firestore.FieldValue.serverTimestamp(),
       lastMessageSender: callerId,
@@ -187,6 +275,13 @@ exports.onCallV2Updated = onDocumentUpdated(
       });
 
       console.log(`📞 [onCallV2Updated] Llamada ${wasAnswered ? 'CONTESTADA' : 'PERDIDA'} (createdBy: ${createdBy})`);
+
+      // ✅ FIX: Si la llamada NO fue contestada, notificar a los participantes para cerrar CallKit
+      if (!wasAnswered) {
+        const endedBy = afterData.endedBy || createdBy;
+        console.log(`📵 [onCallV2Updated] Llamada cancelada por ${endedBy}, notificando a participantes...`);
+        await notifyCallCancelled(afterData, callId, endedBy);
+      }
 
       // Crear mensaje de llamada en el chat
       await createCallMessageInChat(afterData, callId, wasAnswered);

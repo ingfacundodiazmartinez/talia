@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.67+117
+version: 1.0.70+120
 
 environment:
   sdk: ^3.9.2
@@ -63,6 +63,7 @@ dependencies:
   gal: ^2.3.0  # Save images and videos to gallery
   share_plus: ^12.0.1  # Actualizado para compatibilidad con hms_room_kit
   app_links: ^6.3.3  # Deep linking / Universal Links / App Links
+  app_tracking_transparency: ^2.0.6  # iOS App Tracking Transparency for ads
   camera: ^0.10.5+5
   image: ^4.0.17
   google_mlkit_face_detection: ^0.13.1  # Face detection for AI transformations
@@ -89,6 +90,7 @@ dependencies:
   record: ^6.1.2
   audio_waveforms: ^1.1.0
   provider: ^6.1.2
+  rxdart: ^0.28.0  # Reactive stream extensions
   otp: ^3.1.4
   cached_network_image: ^3.4.1
   flutter_cache_manager: ^3.3.0  # Used for notification images caching

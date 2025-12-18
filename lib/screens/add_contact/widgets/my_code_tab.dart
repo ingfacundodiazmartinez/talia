@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -10,13 +11,16 @@ import 'package:firebase_auth/firebase_auth.dart';
 /// - Mostrar código QR generado
 /// - Mostrar código de texto
 /// - Proveer opciones de copiar y compartir
-/// - Mostrar información de seguridad (solo para child con parent vinculado)
-class MyCodeTab extends StatelessWidget {
+/// - Mostrar countdown de expiración
+/// - Auto-regenerar cuando el código expira
+class MyCodeTab extends StatefulWidget {
   final String? userCode;
+  final DateTime? expiresAt;
   final bool isLoading;
   final VoidCallback onRetry;
   final VoidCallback onCopy;
   final VoidCallback onShare;
+  final VoidCallback? onRegenerate;
   final bool showSecurityWarning;
 
   static const String _deepLinkBaseUrl = 'https://taliachat.com/add/';
@@ -24,19 +28,97 @@ class MyCodeTab extends StatelessWidget {
   const MyCodeTab({
     super.key,
     required this.userCode,
+    this.expiresAt,
     required this.isLoading,
     required this.onRetry,
     required this.onCopy,
     required this.onShare,
+    this.onRegenerate,
     this.showSecurityWarning = false,
   });
 
+  @override
+  State<MyCodeTab> createState() => _MyCodeTabState();
+}
+
+class _MyCodeTabState extends State<MyCodeTab> {
+  Timer? _countdownTimer;
+  Duration _timeRemaining = Duration.zero;
+
   String get _currentUserId => FirebaseAuth.instance.currentUser?.uid ?? '';
-  String get _deepLink => '$_deepLinkBaseUrl$_currentUserId';
+  String get _deepLink => '${MyCodeTab._deepLinkBaseUrl}$_currentUserId';
+
+  @override
+  void initState() {
+    super.initState();
+    _startCountdownTimer();
+  }
+
+  @override
+  void didUpdateWidget(MyCodeTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.expiresAt != widget.expiresAt) {
+      _startCountdownTimer();
+    }
+  }
+
+  @override
+  void dispose() {
+    _countdownTimer?.cancel();
+    super.dispose();
+  }
+
+  void _startCountdownTimer() {
+    _countdownTimer?.cancel();
+
+    if (widget.expiresAt == null) {
+      setState(() {
+        _timeRemaining = Duration.zero;
+      });
+      return;
+    }
+
+    _updateTimeRemaining();
+
+    _countdownTimer = Timer.periodic(Duration(seconds: 1), (_) {
+      _updateTimeRemaining();
+    });
+  }
+
+  void _updateTimeRemaining() {
+    if (widget.expiresAt == null) return;
+
+    final now = DateTime.now();
+    final remaining = widget.expiresAt!.difference(now);
+
+    setState(() {
+      _timeRemaining = remaining.isNegative ? Duration.zero : remaining;
+    });
+
+    // Si expiró, auto-regenerar
+    if (remaining.isNegative && widget.onRegenerate != null) {
+      _countdownTimer?.cancel();
+      widget.onRegenerate!();
+    }
+  }
+
+  String _formatTimeRemaining() {
+    if (_timeRemaining.inSeconds <= 0) return 'Expirado';
+
+    final minutes = _timeRemaining.inMinutes;
+    final seconds = _timeRemaining.inSeconds.remainder(60);
+    return '${minutes}m ${seconds.toString().padLeft(2, '0')}s';
+  }
+
+  Color _getExpirationColor() {
+    if (_timeRemaining.inSeconds <= 0) return Colors.red;
+    if (_timeRemaining.inMinutes < 1) return Colors.orange;
+    return Colors.green;
+  }
 
   void _handleCopy(BuildContext context) {
-    if (userCode != null) {
-      Clipboard.setData(ClipboardData(text: userCode!));
+    if (widget.userCode != null) {
+      Clipboard.setData(ClipboardData(text: widget.userCode!));
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Codigo copiado al portapapeles'),
@@ -44,30 +126,30 @@ class MyCodeTab extends StatelessWidget {
         ),
       );
     }
-    onCopy();
+    widget.onCopy();
   }
 
   void _handleShare() {
-    if (userCode != null) {
+    if (widget.userCode != null) {
       Share.share(
         'Agregame como contacto en Talia!\n\n'
         'Haz click aqui: $_deepLink\n\n'
-        'O usa mi codigo: $userCode',
+        'O usa mi codigo: ${widget.userCode}',
         subject: 'Agregame en Talia',
       );
     }
-    onShare();
+    widget.onShare();
   }
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
 
-    if (isLoading) {
+    if (widget.isLoading) {
       return Center(child: CircularProgressIndicator());
     }
 
-    if (userCode == null) {
+    if (widget.userCode == null) {
       return Center(
         child: Padding(
           padding: EdgeInsets.all(24),
@@ -86,7 +168,7 @@ class MyCodeTab extends StatelessWidget {
               ),
               SizedBox(height: 24),
               ElevatedButton(
-                onPressed: onRetry,
+                onPressed: widget.onRetry,
                 child: Text('Reintentar'),
               ),
             ],
@@ -99,16 +181,62 @@ class MyCodeTab extends StatelessWidget {
       padding: EdgeInsets.all(24),
       child: Column(
         children: [
+          _buildExpirationBanner(colorScheme),
+          SizedBox(height: 16),
           _buildInfoBanner(colorScheme),
-          SizedBox(height: 32),
+          SizedBox(height: 24),
           _buildQRCodeCard(colorScheme),
           SizedBox(height: 24),
           _buildTextCodeCard(colorScheme),
           SizedBox(height: 32),
           _buildActionButtons(context, colorScheme),
-          if (showSecurityWarning) ...[
+          if (widget.showSecurityWarning) ...[
             SizedBox(height: 16),
             _buildSecurityInfo(),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildExpirationBanner(ColorScheme colorScheme) {
+    final expirationColor = _getExpirationColor();
+    final isExpired = _timeRemaining.inSeconds <= 0;
+
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: expirationColor.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: expirationColor.withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            isExpired ? Icons.timer_off : Icons.timer,
+            color: expirationColor,
+            size: 20,
+          ),
+          SizedBox(width: 8),
+          Text(
+            isExpired ? 'Codigo expirado' : 'Expira en: ${_formatTimeRemaining()}',
+            style: TextStyle(
+              color: expirationColor,
+              fontWeight: FontWeight.bold,
+              fontSize: 16,
+            ),
+          ),
+          if (isExpired && widget.onRegenerate != null) ...[
+            SizedBox(width: 12),
+            TextButton(
+              onPressed: widget.onRegenerate,
+              style: TextButton.styleFrom(
+                foregroundColor: expirationColor,
+                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              ),
+              child: Text('Regenerar'),
+            ),
           ],
         ],
       ),
@@ -139,6 +267,8 @@ class MyCodeTab extends StatelessWidget {
   }
 
   Widget _buildQRCodeCard(ColorScheme colorScheme) {
+    final isExpired = _timeRemaining.inSeconds <= 0;
+
     return Container(
       padding: EdgeInsets.all(24),
       decoration: BoxDecoration(
@@ -163,20 +293,43 @@ class MyCodeTab extends StatelessWidget {
             ),
           ),
           SizedBox(height: 16),
-          Container(
-            padding: EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: colorScheme.outline),
-            ),
-            child: QrImageView(
-              data: userCode!,
-              version: QrVersions.auto,
-              size: 200.0,
-              backgroundColor: Colors.white,
-              foregroundColor: Colors.black,
-            ),
+          Stack(
+            alignment: Alignment.center,
+            children: [
+              Container(
+                padding: EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: colorScheme.outline),
+                ),
+                child: Opacity(
+                  opacity: isExpired ? 0.3 : 1.0,
+                  child: QrImageView(
+                    data: widget.userCode!,
+                    version: QrVersions.auto,
+                    size: 200.0,
+                    backgroundColor: Colors.white,
+                    foregroundColor: Colors.black,
+                  ),
+                ),
+              ),
+              if (isExpired)
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.red,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    'EXPIRADO',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+            ],
           ),
           SizedBox(height: 16),
           Text(
@@ -189,6 +342,8 @@ class MyCodeTab extends StatelessWidget {
   }
 
   Widget _buildTextCodeCard(ColorScheme colorScheme) {
+    final isExpired = _timeRemaining.inSeconds <= 0;
+
     return Container(
       padding: EdgeInsets.all(24),
       decoration: BoxDecoration(
@@ -216,23 +371,28 @@ class MyCodeTab extends StatelessWidget {
           Container(
             padding: EdgeInsets.all(20),
             decoration: BoxDecoration(
-              color: colorScheme.primaryContainer,
+              color: isExpired
+                  ? Colors.grey.withValues(alpha: 0.2)
+                  : colorScheme.primaryContainer,
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
-                color: colorScheme.primary.withValues(alpha: 0.3),
+                color: isExpired
+                    ? Colors.grey
+                    : colorScheme.primary.withValues(alpha: 0.3),
               ),
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
-                  userCode!,
+                  widget.userCode!,
                   style: TextStyle(
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
                     fontFamily: 'Courier',
-                    color: colorScheme.primary,
+                    color: isExpired ? Colors.grey : colorScheme.primary,
                     letterSpacing: 2,
+                    decoration: isExpired ? TextDecoration.lineThrough : null,
                   ),
                 ),
               ],
@@ -249,16 +409,18 @@ class MyCodeTab extends StatelessWidget {
   }
 
   Widget _buildActionButtons(BuildContext context, ColorScheme colorScheme) {
+    final isExpired = _timeRemaining.inSeconds <= 0;
+
     return Row(
       children: [
         Expanded(
           child: OutlinedButton.icon(
-            onPressed: () => _handleCopy(context),
+            onPressed: isExpired ? null : () => _handleCopy(context),
             icon: Icon(Icons.copy),
             label: Text('Copiar'),
             style: OutlinedButton.styleFrom(
               foregroundColor: colorScheme.primary,
-              side: BorderSide(color: colorScheme.primary),
+              side: BorderSide(color: isExpired ? Colors.grey : colorScheme.primary),
               padding: EdgeInsets.symmetric(vertical: 16),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -269,7 +431,7 @@ class MyCodeTab extends StatelessWidget {
         SizedBox(width: 16),
         Expanded(
           child: ElevatedButton.icon(
-            onPressed: _handleShare,
+            onPressed: isExpired ? null : _handleShare,
             icon: Icon(Icons.share),
             label: Text('Compartir'),
             style: ElevatedButton.styleFrom(
@@ -313,7 +475,7 @@ class MyCodeTab extends StatelessWidget {
           Text(
             '• Solo comparte tu codigo con personas que conoces\n'
             '• Tus padres deben aprobar cada contacto\n'
-            '• Puedes regenerar tu codigo en cualquier momento',
+            '• El codigo expira en 5 minutos por seguridad',
             style: TextStyle(color: Colors.orange[700], fontSize: 12),
           ),
         ],

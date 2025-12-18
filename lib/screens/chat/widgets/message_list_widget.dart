@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../controllers/chat_controller_cache_first.dart';
+import '../../../models/chat_message.dart';
 import 'message_bubble.dart';
 import 'date_separator_widget.dart';
 
@@ -158,6 +159,10 @@ class MessageListWidget extends StatelessWidget {
       isGroupChat: false,
       isFavorite: controller.favoriteIds.contains(message.id),  // ✅ NEW
       onFavoriteToggled: () => controller.refreshFavorites(),  // ✅ Refresh tras toggle
+      localTimestamp: message.localTimestamp,  // ✅ NEW: Para timeout de pending
+      onRetry: isMe && message.status == MessageStatus.sending
+          ? () => _retryMessage(context, message)
+          : null,  // ✅ NEW: Callback para reenviar
       onReply: () {
         // Construir datos completos del mensaje incluyendo media
         final replyData = {
@@ -244,6 +249,23 @@ class MessageListWidget extends StatelessWidget {
     }
 
     return finalWidget;
+  }
+
+  /// Reintenta enviar un mensaje que falló o está en timeout
+  /// Mantiene el mensaje en su posición original y solo cambia el estado
+  void _retryMessage(BuildContext context, ChatMessage message) {
+    // Mostrar snackbar de reintento
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Reenviando mensaje...'),
+        duration: Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+
+    // Reenviar usando el método retryMessage del controller
+    // Esto mantiene el mensaje en su posición original
+    controller.retryMessage(message.id);
   }
 
   /// Determina si se debe mostrar un separador de fecha antes de este mensaje

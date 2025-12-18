@@ -137,6 +137,11 @@ class StoryRepository {
   Stream<List<Story>> getStoriesAvailableForUser(String userId) {
     final twentyFourHoursAgo = _get24HoursAgo();
 
+    ReleaseLogger.log(
+      '🔍 [StoryRepository] getStoriesAvailableForUser called for userId: $userId, cutoff: ${twentyFourHoursAgo.toDate()}',
+      tag: 'StoryRepository',
+    );
+
     // Stream de historias de contactos (aprobadas)
     final contactStoriesStream = _firestore
         .collection('stories')
@@ -146,11 +151,23 @@ class StoryRepository {
         .orderBy('createdAt', descending: true)
         .snapshots()
         .handleError((error) {
-          ReleaseLogger.error('Error en getStoriesAvailableForUser (contacts): $error');
+          ReleaseLogger.error('❌ [StoryRepository] Error en getStoriesAvailableForUser (contacts): $error', tag: 'StoryRepository');
           return <Story>[];
         })
-        .map((snapshot) =>
-            snapshot.docs.map((doc) => Story.fromFirestore(doc)).toList());
+        .map((snapshot) {
+          ReleaseLogger.log(
+            '📥 [StoryRepository] Contact stories snapshot: ${snapshot.docs.length} stories received',
+            tag: 'StoryRepository',
+          );
+          for (final doc in snapshot.docs) {
+            final data = doc.data();
+            ReleaseLogger.log(
+              '  📖 Story ${doc.id}: userId=${data['userId']}, status=${data['status']}, availableFor=${(data['availableFor'] as List?)?.length ?? 0} users',
+              tag: 'StoryRepository',
+            );
+          }
+          return snapshot.docs.map((doc) => Story.fromFirestore(doc)).toList();
+        });
 
     // Stream de historias propias (cualquier estado excepto expired)
     // Esto permite que el usuario vea sus propias historias pendientes/rechazadas
@@ -162,11 +179,16 @@ class StoryRepository {
         .orderBy('createdAt', descending: true)
         .snapshots()
         .handleError((error) {
-          ReleaseLogger.error('Error en getStoriesAvailableForUser (own): $error');
+          ReleaseLogger.error('❌ [StoryRepository] Error en getStoriesAvailableForUser (own): $error', tag: 'StoryRepository');
           return <Story>[];
         })
-        .map((snapshot) =>
-            snapshot.docs.map((doc) => Story.fromFirestore(doc)).toList());
+        .map((snapshot) {
+          ReleaseLogger.log(
+            '📥 [StoryRepository] Own stories snapshot: ${snapshot.docs.length} own stories received',
+            tag: 'StoryRepository',
+          );
+          return snapshot.docs.map((doc) => Story.fromFirestore(doc)).toList();
+        });
 
     // Combinar ambos streams y deduplicar
     return _combineStoriesStreams(contactStoriesStream, ownStoriesStream);
@@ -196,6 +218,11 @@ class StoryRepository {
       // Ordenar por fecha de creación (más reciente primero)
       final sortedStories = combined.values.toList()
         ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+      ReleaseLogger.log(
+        '📤 [StoryRepository] Combined stories: ${sortedStories.length} total (${contactStories.length} from contacts, ${ownStories.length} own)',
+        tag: 'StoryRepository',
+      );
 
       controller.add(sortedStories);
     }
@@ -441,13 +468,86 @@ class StoryRepository {
   // ═══════════════════════════════════════════════════════════════
 
   /// Marcar historia como vista por usuario
+  /// ✅ FIX #7: Handles legacy stories where viewedBy was incorrectly set as object instead of array
+  /// ✅ FIX #8: Improved error logging to diagnose silent failures
   Future<void> markAsViewed(String storyId, String userId) async {
+    ReleaseLogger.log(
+      '🔍 [markAsViewed] Intentando marcar historia $storyId como vista por $userId',
+      tag: 'StoryRepository',
+    );
+
     try {
       await _firestore.collection('stories').doc(storyId).update({
         'viewedBy': FieldValue.arrayUnion([userId]),
       });
+      ReleaseLogger.log(
+        '✅ [markAsViewed] Historia $storyId marcada como vista exitosamente',
+        tag: 'StoryRepository',
+      );
     } catch (e) {
-      throw Exception('Error marcando historia como vista: $e');
+      ReleaseLogger.error(
+        '❌ [markAsViewed] Error inicial: $e (tipo: ${e.runtimeType})',
+        tag: 'StoryRepository',
+      );
+
+      // ✅ FIX #7: If arrayUnion fails (viewedBy is object), migrate to array
+      if (e.toString().contains('cannot be applied to a map value') ||
+          e.toString().contains('array-contains') ||
+          e.toString().contains('not an array')) {
+        ReleaseLogger.log(
+          '⚠️ [markAsViewed] Migrando legacy viewedBy field para story $storyId',
+          tag: 'StoryRepository',
+        );
+        try {
+          // Get current story to preserve any existing data
+          final storyDoc = await _firestore.collection('stories').doc(storyId).get();
+          if (storyDoc.exists) {
+            final currentViewedBy = storyDoc.data()?['viewedBy'];
+            List<String> newViewedBy = [userId];
+
+            // If viewedBy is a map, convert keys to list (preserving existing views)
+            if (currentViewedBy is Map) {
+              newViewedBy = [...currentViewedBy.keys.cast<String>(), userId];
+            }
+
+            // Remove duplicates
+            newViewedBy = newViewedBy.toSet().toList();
+
+            await _firestore.collection('stories').doc(storyId).update({
+              'viewedBy': newViewedBy,
+            });
+            ReleaseLogger.log(
+              '✅ [markAsViewed] Migración exitosa para story $storyId',
+              tag: 'StoryRepository',
+            );
+          }
+        } catch (migrationError) {
+          ReleaseLogger.error(
+            '❌ [markAsViewed] Error en migración: $migrationError',
+            tag: 'StoryRepository',
+          );
+          // Don't rethrow - viewing the story is not critical
+        }
+      } else if (e.toString().contains('PERMISSION_DENIED') ||
+                 e.toString().contains('permission-denied')) {
+        // ✅ FIX #8: Log permission errors clearly
+        ReleaseLogger.error(
+          '🚫 [markAsViewed] PERMISO DENEGADO para story $storyId - Revisar Firestore rules',
+          tag: 'StoryRepository',
+        );
+      } else if (e.toString().contains('NOT_FOUND') ||
+                 e.toString().contains('not-found')) {
+        ReleaseLogger.error(
+          '🔍 [markAsViewed] Historia $storyId NO ENCONTRADA',
+          tag: 'StoryRepository',
+        );
+      } else {
+        // For other errors, log details for diagnosis
+        ReleaseLogger.error(
+          '❓ [markAsViewed] Error desconocido: $e',
+          tag: 'StoryRepository',
+        );
+      }
     }
   }
 

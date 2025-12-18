@@ -57,6 +57,7 @@ class ContactProfileController {
   Function(String)? onError;
   Function(String)? onSuccess;
   Function(bool)? onStoryNotificationsChanged;
+  Function()? onParentBlocked;
 
   // Constructor
   ContactProfileController({
@@ -292,6 +293,9 @@ class ContactProfileController {
         onSuccess?.call('Contacto bloqueado exitosamente');
         return true;
       }
+    } on ParentBlockedException {
+      onParentBlocked?.call();
+      return false;
     } catch (e) {
       onError?.call(
         'Error ${_isBlocked ? 'desbloqueando' : 'bloqueando'} contacto',
@@ -492,8 +496,16 @@ class ContactProfileController {
   }
 
   /// Stream de datos del contacto para actualizaciones en tiempo real
-  Stream<DocumentSnapshot> getContactDataStream() {
-    return _firestore.collection('users').doc(contactId).snapshots();
+  /// ✅ FIX: Maneja errores de permisos gracefully (ej: cuando se revoca un contacto)
+  Stream<DocumentSnapshot?> getContactDataStream() {
+    return _firestore
+        .collection('users')
+        .doc(contactId)
+        .snapshots()
+        .handleError((error) {
+          // Ignorar errores de permisos silenciosamente
+          return null;
+        });
   }
 
   /// Stream de mensajes del chat para la galería de medios

@@ -60,6 +60,7 @@ class TypingIndicatorService {
   }
 
   // Escuchar si el otro usuario está escribiendo
+  // ✅ handleError evita crashes cuando el chat es bloqueado/revocado
   Stream<bool> watchOtherUserTyping(String chatId, String otherUserId) {
     return _firestore
         .collection('chats')
@@ -67,6 +68,9 @@ class TypingIndicatorService {
         .collection('typing')
         .doc(otherUserId)
         .snapshots()
+        .handleError((error) {
+          // Ignorar errores de permisos cuando el chat es bloqueado
+        })
         .map((doc) {
       if (!doc.exists) return false;
 

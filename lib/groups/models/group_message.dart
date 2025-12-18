@@ -71,6 +71,12 @@ class GroupMessage {
   // Read receipts
   final List<String> readBy;
 
+  // ✅ FIX #8: Forwarded message support
+  final bool isForwarded;
+  final String? originalContactName;
+  final String? originalChatId;
+  final String? originalSenderId;
+
   const GroupMessage({
     required this.id,
     required this.senderId,
@@ -91,6 +97,10 @@ class GroupMessage {
     required this.isDeleted,
     required this.reactions,
     required this.readBy,
+    this.isForwarded = false,
+    this.originalContactName,
+    this.originalChatId,
+    this.originalSenderId,
   });
 
   factory GroupMessage.fromFirestore(String id, Map<String, dynamic> data) {
@@ -125,6 +135,11 @@ class GroupMessage {
       isDeleted: data['isDeleted'] as bool? ?? false,
       reactions: reactionsMap,
       readBy: List<String>.from(data['readBy'] ?? []),
+      // ✅ FIX #8: Parse forwarded message fields
+      isForwarded: data['isForwarded'] as bool? ?? false,
+      originalContactName: data['originalContactName'] as String?,
+      originalChatId: data['originalChatId'] as String?,
+      originalSenderId: data['originalSenderId'] as String?,
     );
   }
 
@@ -144,6 +159,11 @@ class GroupMessage {
       'isDeleted': isDeleted,
       'reactions': reactions,
       'readBy': readBy,
+      // ✅ FIX #8: Include forwarded message fields
+      'isForwarded': isForwarded,
+      if (originalContactName != null) 'originalContactName': originalContactName,
+      if (originalChatId != null) 'originalChatId': originalChatId,
+      if (originalSenderId != null) 'originalSenderId': originalSenderId,
     };
   }
 
@@ -197,6 +217,10 @@ class GroupMessage {
     bool? isDeleted,
     Map<String, List<String>>? reactions,
     List<String>? readBy,
+    bool? isForwarded,
+    String? originalContactName,
+    String? originalChatId,
+    String? originalSenderId,
   }) {
     return GroupMessage(
       id: id ?? this.id,
@@ -218,6 +242,10 @@ class GroupMessage {
       isDeleted: isDeleted ?? this.isDeleted,
       reactions: reactions ?? this.reactions,
       readBy: readBy ?? this.readBy,
+      isForwarded: isForwarded ?? this.isForwarded,
+      originalContactName: originalContactName ?? this.originalContactName,
+      originalChatId: originalChatId ?? this.originalChatId,
+      originalSenderId: originalSenderId ?? this.originalSenderId,
     );
   }
 

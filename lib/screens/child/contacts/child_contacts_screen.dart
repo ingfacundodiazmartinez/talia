@@ -1,17 +1,28 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter_contacts/flutter_contacts.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../../../controllers/child_home_controller.dart';
 import '../../../controllers/child_contacts_controller.dart';
+import '../../../models/contact.dart' as contact_model;
 import '../../../screens/add_contact_screen.dart';
 import '../../../services/create_chat_service.dart';
+import '../../../services/contacts_sync_service.dart';
+import '../../../services/device_contacts_service.dart';
+import '../../../services/phone_normalization_service.dart';
 import '../../../widgets/synced_user_widgets.dart';
+import '../../../utils/release_logger.dart';
+import 'widgets/potential_contact_card.dart';
+import 'widgets/potential_contact_sheet.dart';
 
-/// Pantalla de contactos para niños con funcionalidad completa
+/// Pantalla de contactos para niños con lista unificada
 ///
 /// Características:
+/// - Lista unificada: Aprobados → Pendientes → Rechazados
 /// - Búsqueda de contactos en tiempo real
-/// - Solicitudes pendientes agrupadas por usuario
+/// - Solicitudes pendientes y rechazadas con acciones
 /// - Contactos aprobados con estado en línea
 /// - Navegación a chat individual
 /// - Soporte completo para tema oscuro
@@ -32,18 +43,158 @@ class ChildContactsScreen extends StatefulWidget {
 class _ChildContactsScreenState extends State<ChildContactsScreen> {
   late final ChildContactsController _contactsController;
   String _contactSearchQuery = '';
+  bool _isSyncing = false;
+
+  // Cache de contactos del dispositivo para lookup de nombres
+  List<Contact>? _deviceContacts;
+  final PhoneNormalizationService _phoneNormalizer = PhoneNormalizationService();
 
   @override
   void initState() {
     super.initState();
     _contactsController = ChildContactsController(childId: widget.childId);
     _contactsController.initialize();
+    _loadDeviceContacts();
+  }
+
+  /// Cargar contactos del dispositivo para lookup de nombres
+  Future<void> _loadDeviceContacts() async {
+    try {
+      // Verificar permiso primero sin acceder a contactos
+      final status = await Permission.contacts.status;
+      if (!status.isGranted) {
+        return; // No tenemos permiso, no intentar cargar
+      }
+
+      final contacts = await DeviceContactsService().getDeviceContacts();
+      if (mounted) {
+        setState(() {
+          _deviceContacts = contacts;
+        });
+      }
+    } catch (e) {
+      ReleaseLogger.error('Error cargando contactos del dispositivo: $e', tag: 'ChildContacts');
+    }
+  }
+
+  /// Obtener nombre del contacto desde la agenda del dispositivo
+  String _getDeviceContactName(String phoneNumber) {
+    if (_deviceContacts == null || phoneNumber.isEmpty) {
+      return phoneNumber;
+    }
+
+    // Normalizar el número que buscamos
+    final normalizedSearch = _phoneNormalizer.normalizePhone(phoneNumber);
+    final searchVariations = _phoneNormalizer.generateVariations(phoneNumber);
+
+    for (final contact in _deviceContacts!) {
+      for (final phone in contact.phones) {
+        final normalizedPhone = _phoneNormalizer.normalizePhone(phone.number);
+        if (normalizedPhone == normalizedSearch ||
+            searchVariations.contains(normalizedPhone)) {
+          return contact.displayName;
+        }
+      }
+    }
+
+    // Si no se encuentra, devolver el número de teléfono formateado
+    return phoneNumber;
+  }
+
+  /// Solicitar aprobación para un contacto potential
+  Future<void> _requestContactApproval(contact_model.Contact contact, String contactName) async {
+    final currentUserId = _contactsController.currentUserId;
+    if (currentUserId == null) return;
+
+    try {
+      final functions = FirebaseFunctions.instance;
+      final result = await functions.httpsCallable('requestContactApproval').call({
+        'contactDocId': contact.id,
+      });
+
+      if (!mounted) return;
+
+      final resultData = result.data as Map<String, dynamic>;
+      final success = resultData['success'] ?? false;
+      final newStatus = resultData['newStatus'] ?? '';
+
+      if (success) {
+        String message;
+        if (newStatus == 'approved') {
+          message = '¡Contacto aprobado! Ya puedes chatear con $contactName';
+        } else {
+          message = 'Solicitud enviada. Tu padre/madre debe aprobarla.';
+        }
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            backgroundColor: Colors.green,
+          ),
+        );
+      } else {
+        final errorMessage = resultData['message'] ?? 'Error desconocido';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMessage),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+    } catch (e) {
+      ReleaseLogger.error('Error solicitando aprobación: $e', tag: 'ChildContacts');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al solicitar aprobación'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      rethrow;
+    }
   }
 
   @override
   void dispose() {
     _contactsController.dispose();
     super.dispose();
+  }
+
+  /// Sincronizar contactos del dispositivo
+  Future<void> _syncContacts() async {
+    if (_isSyncing) return;
+
+    setState(() => _isSyncing = true);
+
+    try {
+      await ContactsSyncService().syncContacts(force: true);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Contactos sincronizados'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      ReleaseLogger.error('Error sincronizando contactos: $e', tag: 'ChildContacts');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al sincronizar contactos'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isSyncing = false);
+      }
+    }
   }
 
   @override
@@ -56,6 +207,22 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
         title: Text('Mis Contactos'),
         backgroundColor: isDarkMode ? colorScheme.surface : colorScheme.primary,
         foregroundColor: isDarkMode ? colorScheme.onSurface : colorScheme.onPrimary,
+        actions: [
+          IconButton(
+            onPressed: _isSyncing ? null : _syncContacts,
+            icon: _isSyncing
+                ? SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: isDarkMode ? colorScheme.onSurface : colorScheme.onPrimary,
+                    ),
+                  )
+                : Icon(Icons.refresh),
+            tooltip: 'Sincronizar contactos',
+          ),
+        ],
       ),
       body: Column(
         children: [
@@ -105,125 +272,179 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
               style: TextStyle(color: colorScheme.onSurface),
             ),
           ),
-          // Lista de contactos con StreamBuilder para bloqueados
+          // Lista unificada de contactos con múltiples StreamBuilders
           Expanded(
             child: StreamBuilder<List<String>>(
               stream: _contactsController.getBlockedContactsStream(),
               builder: (context, blockedSnapshot) {
                 final blockedContacts = blockedSnapshot.data ?? [];
 
-                return StreamBuilder<QuerySnapshot>(
-                  // Solicitudes donde YO soy el hijo (mis padres deben aprobar)
-                  stream: _contactsController.getMyContactRequestsStream(),
-                  builder: (context, myRequestsSnapshot) {
-                return StreamBuilder<QuerySnapshot>(
-                  // Solicitudes donde YO soy el contacto (padres del otro deben aprobar)
-                  stream: _contactsController.getOtherContactRequestsStream(),
-                  builder: (context, otherRequestsSnapshot) {
-                    return StreamBuilder<List<String>>(
-                      stream: _contactsController.getBidirectionallyApprovedContactsStream(),
-                      builder: (context, approvedSnapshot) {
-                        if (myRequestsSnapshot.hasError ||
-                            otherRequestsSnapshot.hasError ||
-                            approvedSnapshot.hasError) {
-                          return Center(
-                            child: Text(
-                              'Error cargando contactos',
-                              style: TextStyle(color: colorScheme.error),
-                            ),
-                          );
-                        }
-
-                        if (myRequestsSnapshot.connectionState == ConnectionState.waiting ||
-                            otherRequestsSnapshot.connectionState == ConnectionState.waiting ||
-                            approvedSnapshot.connectionState == ConnectionState.waiting) {
-                          return Center(
-                            child: CircularProgressIndicator(
-                              color: colorScheme.primary,
-                            ),
-                          );
-                        }
-
-                        // Combinar todas las solicitudes pendientes
-                        final allPendingDocs = <QueryDocumentSnapshot>[];
-                        if (myRequestsSnapshot.hasData) {
-                          allPendingDocs.addAll(myRequestsSnapshot.data!.docs);
-                        }
-                        if (otherRequestsSnapshot.hasData) {
-                          allPendingDocs.addAll(otherRequestsSnapshot.data!.docs);
-                        }
-
-                        final hasPendingRequests = allPendingDocs.isNotEmpty;
-                        final hasApprovedContacts = approvedSnapshot.hasData &&
-                                                    approvedSnapshot.data!.isNotEmpty;
-
-                        if (!hasPendingRequests && !hasApprovedContacts) {
-                          return _buildEmptyState(colorScheme);
-                        }
-
-                        return ListView(
-                          padding: EdgeInsets.all(16),
-                          children: [
-                            // Sección de solicitudes pendientes
-                            if (hasPendingRequests) ...[
-                              _buildSectionHeader(
-                                'Solicitudes Pendientes',
-                                colorScheme,
-                                isPending: true,
-                              ),
-                              SizedBox(height: 12),
-                              ..._buildGroupedPendingRequests(
-                                allPendingDocs,
-                                colorScheme,
-                              ),
-                              SizedBox(height: 24),
-                            ],
-
-                            // Sección de contactos aprobados (filtrar bloqueados)
-                            if (hasApprovedContacts) ...[
-                              _buildSectionHeader(
-                                'Contactos Aprobados',
-                                colorScheme,
-                                isPending: false,
-                              ),
-                              SizedBox(height: 12),
-                              ...approvedSnapshot.data!
-                                  .where((contactId) => !blockedContacts.contains(contactId))
-                                  .map((contactId) {
-                                return FutureBuilder<DocumentSnapshot>(
-                                  future: _contactsController.getUserDocument(contactId),
-                                  builder: (context, userSnapshot) {
-                                    if (!userSnapshot.hasData) {
-                                      return SizedBox();
+                return StreamBuilder<List<contact_model.Contact>>(
+                  // Contactos SUGERIDOS (potential) - descubiertos en sync
+                  stream: _contactsController.getPotentialContactsStream(),
+                  builder: (context, potentialSnapshot) {
+                    return StreamBuilder<List<contact_model.Contact>>(
+                      // Contactos donde MI aprobación está pendiente (mis padres deben aprobar)
+                      stream: _contactsController.getMyPendingContactsStream(),
+                      builder: (context, myPendingSnapshot) {
+                        return StreamBuilder<List<contact_model.Contact>>(
+                          // Contactos donde el OTRO tiene aprobación pendiente (sus padres deben aprobar)
+                          stream: _contactsController.getOtherPendingContactsStream(),
+                          builder: (context, otherPendingSnapshot) {
+                            return StreamBuilder<List<contact_model.Contact>>(
+                              // Contactos RECHAZADOS donde yo soy el child
+                              stream: _contactsController.getRejectedContactsStream(),
+                              builder: (context, rejectedSnapshot) {
+                                return StreamBuilder<List<String>>(
+                                  stream: _contactsController.getBidirectionallyApprovedContactsStream(),
+                                  builder: (context, approvedSnapshot) {
+                                    if (potentialSnapshot.hasError ||
+                                        myPendingSnapshot.hasError ||
+                                        otherPendingSnapshot.hasError ||
+                                        rejectedSnapshot.hasError ||
+                                        approvedSnapshot.hasError) {
+                                      return Center(
+                                        child: Text(
+                                          'Error cargando contactos',
+                                          style: TextStyle(color: colorScheme.error),
+                                        ),
+                                      );
                                     }
 
-                                    final userData =
-                                        userSnapshot.data!.data() as Map<String, dynamic>?;
-                                    final name = userData?['name'] ?? 'Usuario';
-                                    final isOnline = userData?['isOnline'] ?? false;
-                                    final photoURL = userData?['photoURL'];
-
-                                    // Filtrar por búsqueda
-                                    if (_contactSearchQuery.isNotEmpty &&
-                                        !name.toLowerCase().contains(_contactSearchQuery)) {
-                                      return SizedBox();
+                                    if (potentialSnapshot.connectionState == ConnectionState.waiting ||
+                                        myPendingSnapshot.connectionState == ConnectionState.waiting ||
+                                        otherPendingSnapshot.connectionState == ConnectionState.waiting ||
+                                        rejectedSnapshot.connectionState == ConnectionState.waiting ||
+                                        approvedSnapshot.connectionState == ConnectionState.waiting) {
+                                      return Center(
+                                        child: CircularProgressIndicator(
+                                          color: colorScheme.primary,
+                                        ),
+                                      );
                                     }
 
-                                    return _buildContactCard(
-                                      contactId: contactId,
-                                      name: name,
-                                      status: isOnline ? 'En línea' : 'Desconectado',
-                                      isOnline: isOnline,
-                                      photoURL: photoURL,
-                                      colorScheme: colorScheme,
+                                    // Obtener contactos sugeridos (potential)
+                                    final potentialContacts = potentialSnapshot.data ?? [];
+
+                                    // Combinar todos los contactos pendientes
+                                    final allPendingContacts = <contact_model.Contact>[
+                                      ...myPendingSnapshot.data ?? [],
+                                      ...otherPendingSnapshot.data ?? [],
+                                    ];
+
+                                    // Obtener contactos rechazados
+                                    final rejectedContacts = rejectedSnapshot.data ?? [];
+
+                                    final hasPotentialContacts = potentialContacts.isNotEmpty;
+                                    final hasPendingRequests = allPendingContacts.isNotEmpty;
+                                    final hasRejectedRequests = rejectedContacts.isNotEmpty;
+                                    final hasApprovedContacts = approvedSnapshot.hasData &&
+                                                                approvedSnapshot.data!.isNotEmpty;
+
+                                    if (!hasPotentialContacts && !hasPendingRequests && !hasRejectedRequests && !hasApprovedContacts) {
+                                      return _buildEmptyState(colorScheme);
+                                    }
+
+                                    return ListView(
+                                      padding: EdgeInsets.all(16),
+                                      children: [
+                                        // 0. Sección de contactos SUGERIDOS (potential) - primero
+                                        if (hasPotentialContacts) ...[
+                                          _buildSectionHeader(
+                                            'Sugeridos',
+                                            colorScheme,
+                                            icon: Icons.person_add_alt_1,
+                                            iconColor: Colors.teal,
+                                          ),
+                                          SizedBox(height: 12),
+                                          ..._buildPotentialContactsList(
+                                            potentialContacts,
+                                            colorScheme,
+                                          ),
+                                          SizedBox(height: 24),
+                                        ],
+
+                                        // 1. Sección de contactos aprobados
+                                        if (hasApprovedContacts) ...[
+                                          _buildSectionHeader(
+                                            'Contactos',
+                                            colorScheme,
+                                            icon: Icons.check_circle,
+                                            iconColor: Colors.green,
+                                          ),
+                                          SizedBox(height: 12),
+                                          ...approvedSnapshot.data!
+                                              .where((contactId) => !blockedContacts.contains(contactId))
+                                              .map((contactId) {
+                                            return FutureBuilder<DocumentSnapshot>(
+                                              future: _contactsController.getUserDocument(contactId),
+                                              builder: (context, userSnapshot) {
+                                                if (!userSnapshot.hasData) {
+                                                  return SizedBox();
+                                                }
+
+                                                final userData =
+                                                    userSnapshot.data!.data() as Map<String, dynamic>?;
+                                                final name = userData?['name'] ?? 'Usuario';
+                                                final phone = userData?['phone'] as String? ?? '';
+                                                final photoURL = userData?['photoURL'];
+
+                                                // Filtrar por búsqueda
+                                                if (_contactSearchQuery.isNotEmpty &&
+                                                    !name.toLowerCase().contains(_contactSearchQuery)) {
+                                                  return SizedBox();
+                                                }
+
+                                                return _buildContactCard(
+                                                  contactId: contactId,
+                                                  name: name,
+                                                  phone: phone,
+                                                  photoURL: photoURL,
+                                                  colorScheme: colorScheme,
+                                                );
+                                              },
+                                            );
+                                          }),
+                                          SizedBox(height: 24),
+                                        ],
+
+                                        // 2. Sección de contactos pendientes
+                                        if (hasPendingRequests) ...[
+                                          _buildSectionHeader(
+                                            'Pendientes de Aprobación',
+                                            colorScheme,
+                                            icon: Icons.schedule,
+                                            iconColor: Colors.amber.shade600,
+                                          ),
+                                          SizedBox(height: 12),
+                                          ..._buildGroupedPendingContacts(
+                                            allPendingContacts,
+                                            colorScheme,
+                                          ),
+                                          SizedBox(height: 24),
+                                        ],
+
+                                        // 3. Sección de contactos rechazados
+                                        if (hasRejectedRequests) ...[
+                                          _buildSectionHeader(
+                                            'Solicitudes Rechazadas',
+                                            colorScheme,
+                                            icon: Icons.cancel,
+                                            iconColor: Colors.red.shade400,
+                                          ),
+                                          SizedBox(height: 12),
+                                          ..._buildGroupedRejectedContacts(
+                                            rejectedContacts,
+                                            colorScheme,
+                                          ),
+                                        ],
+                                      ],
                                     );
                                   },
                                 );
-                              }),
-                            ],
-                          ],
-                        );
-                      },
+                              },
+                            );
+                          },
                         );
                       },
                     );
@@ -282,67 +503,126 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
     );
   }
 
-  /// Agrupar solicitudes pendientes por el "otro usuario"
-  List<Widget> _buildGroupedPendingRequests(
-    List<QueryDocumentSnapshot> docs,
+  /// Construir lista de contactos sugeridos (potential)
+  List<Widget> _buildPotentialContactsList(
+    List<contact_model.Contact> contacts,
     ColorScheme colorScheme,
   ) {
     final currentUserId = _contactsController.currentUserId;
     if (currentUserId == null) return [];
 
-    // Agrupar solicitudes por el "otro usuario" (el que no soy yo)
-    final Map<String, List<QueryDocumentSnapshot>> groupedRequests = {};
+    return contacts.map((contact) {
+      final otherUserId = contact.getOtherUserId(currentUserId);
 
-    for (var doc in docs) {
-      final data = doc.data() as Map<String, dynamic>;
-      final childId = data['childId'] as String;
-      final contactId = data['contactId'] as String;
+      // Obtener el teléfono del otro usuario desde el mapa phones
+      final phoneNumber = contact.phones[otherUserId] ?? '';
 
-      // Identificar quién es el "otro usuario" dependiendo de mi rol en la solicitud
-      final otherUserId = (childId == currentUserId) ? contactId : childId;
-
-      if (!groupedRequests.containsKey(otherUserId)) {
-        groupedRequests[otherUserId] = [];
-      }
-      groupedRequests[otherUserId]!.add(doc);
-    }
-
-    // Crear una card por cada contacto único y filtrar por búsqueda
-    return groupedRequests.entries.map((entry) {
-      final requests = entry.value;
-      if (requests.isEmpty) return SizedBox();
-
-      final firstRequest = requests.first.data() as Map<String, dynamic>;
-      final childId = firstRequest['childId'] as String;
-
-      final otherUserName = (childId == currentUserId)
-          ? (firstRequest['contactName'] ?? 'Usuario')
-          : (firstRequest['childName'] ?? 'Usuario');
+      // Obtener el nombre del contacto de la agenda del dispositivo
+      final deviceContactName = _getDeviceContactName(phoneNumber);
 
       // Filtrar por búsqueda
       if (_contactSearchQuery.isNotEmpty &&
-          !otherUserName.toLowerCase().contains(_contactSearchQuery)) {
+          !deviceContactName.toLowerCase().contains(_contactSearchQuery) &&
+          !phoneNumber.contains(_contactSearchQuery)) {
         return SizedBox();
       }
 
-      return _buildPendingRequestCard(entry.value, colorScheme);
+      return PotentialContactCard(
+        contact: contact,
+        deviceContactName: deviceContactName,
+        phoneNumber: phoneNumber,
+        onTap: () => _showPotentialContactSheet(contact, deviceContactName, phoneNumber),
+      );
     }).toList();
   }
 
-  /// Header de sección (Pendientes o Aprobados)
-  Widget _buildSectionHeader(String title, ColorScheme colorScheme, {required bool isPending}) {
+  /// Mostrar sheet de contacto sugerido
+  Future<void> _showPotentialContactSheet(
+    contact_model.Contact contact,
+    String deviceContactName,
+    String phoneNumber,
+  ) async {
+    final currentUserId = _contactsController.currentUserId;
+    if (currentUserId == null) return;
+
+    // Obtener datos del usuario actual para determinar el mensaje
+    final currentUserDoc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(currentUserId)
+        .get();
+
+    final currentUserData = currentUserDoc.data();
+    final linkedParentIds = List<String>.from(currentUserData?['linkedParentIds'] ?? []);
+    final hasLinkedParents = linkedParentIds.isNotEmpty;
+
+    // Determinar mensaje según quién necesita aprobación
+    String explanationMessage;
+    if (hasLinkedParents) {
+      // El usuario actual tiene padres vinculados - su padre debe aprobar
+      explanationMessage = 'Este contacto ya está en Talia.\n\nPara poder chatear, tu padre o madre debe aprobar la solicitud.';
+    } else {
+      // El usuario actual NO tiene padres - el padre del otro debe aprobar (si tiene)
+      explanationMessage = 'Este contacto ya está en Talia.\n\nPara poder chatear, el padre o madre de $deviceContactName debe aprobar la solicitud.';
+    }
+
+    if (!mounted) return;
+
+    PotentialContactSheet.show(
+      context: context,
+      contact: contact,
+      deviceContactName: deviceContactName,
+      phoneNumber: phoneNumber,
+      explanationMessage: explanationMessage,
+      onRequestApproval: () => _requestContactApproval(contact, deviceContactName),
+    );
+  }
+
+  /// Agrupar contactos pendientes por el "otro usuario"
+  List<Widget> _buildGroupedPendingContacts(
+    List<contact_model.Contact> contacts,
+    ColorScheme colorScheme,
+  ) {
+    final currentUserId = _contactsController.currentUserId;
+    if (currentUserId == null) return [];
+
+    // Agrupar contactos por el "otro usuario" (el que no soy yo)
+    final Map<String, contact_model.Contact> groupedContacts = {};
+
+    for (var contact in contacts) {
+      final otherUserId = contact.getOtherUserId(currentUserId);
+      if (otherUserId.isNotEmpty && !groupedContacts.containsKey(otherUserId)) {
+        groupedContacts[otherUserId] = contact;
+      }
+    }
+
+    // Crear una card por cada contacto único
+    return groupedContacts.entries.map((entry) {
+      final contact = entry.value;
+      final otherUserId = entry.key;
+
+      return _buildPendingContactCard(contact, otherUserId, colorScheme);
+    }).toList();
+  }
+
+  /// Header de sección con icono personalizable
+  Widget _buildSectionHeader(
+    String title,
+    ColorScheme colorScheme, {
+    required IconData icon,
+    required Color iconColor,
+  }) {
     return Row(
       children: [
         Container(
           padding: EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: colorScheme.primaryContainer,
+            color: iconColor.withValues(alpha: 0.15),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Icon(
-            isPending ? Icons.schedule : Icons.check_circle,
+            icon,
             size: 16,
-            color: colorScheme.primary,
+            color: iconColor,
           ),
         ),
         SizedBox(width: 8),
@@ -358,37 +638,71 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
     );
   }
 
-  /// Card compacta de solicitud pendiente - click para ver detalles
-  Widget _buildPendingRequestCard(
-    List<QueryDocumentSnapshot> requests,
+  /// Card compacta de contacto pendiente - click para ver detalles
+  Widget _buildPendingContactCard(
+    contact_model.Contact contact,
+    String otherUserId,
     ColorScheme colorScheme,
   ) {
-    if (requests.isEmpty) return SizedBox();
+    // Intentar obtener el teléfono del mapa phones del contacto
+    final phoneFromContact = contact.phones[otherUserId] ?? '';
 
-    final currentUserId = _contactsController.currentUserId;
-    if (currentUserId == null) return SizedBox();
-
-    final firstRequest = requests.first.data() as Map<String, dynamic>;
-    final childId = firstRequest['childId'] as String;
-    final contactId = firstRequest['contactId'] as String;
-
-    // Determinar quién es el "otro usuario" y obtener su nombre
-    final otherUserId = (childId == currentUserId) ? contactId : childId;
-    final otherUserName = (childId == currentUserId)
-        ? (firstRequest['contactName'] ?? 'Usuario')
-        : (firstRequest['childName'] ?? 'Usuario');
+    // Si tenemos el teléfono en el documento de contacto, usarlo para buscar nombre
+    String? deviceNameFromContactPhone;
+    if (phoneFromContact.isNotEmpty) {
+      deviceNameFromContactPhone = _getDeviceContactName(phoneFromContact);
+    }
 
     return FutureBuilder<DocumentSnapshot>(
       future: _contactsController.getUserDocument(otherUserId),
       builder: (context, otherUserSnapshot) {
-        String displayName = otherUserName;
+        String displayName = 'Usuario';
+        String phoneNumber = phoneFromContact; // Usar teléfono del contacto como fallback
+
         if (otherUserSnapshot.hasData) {
-          final userData = otherUserSnapshot.data!.data() as Map<String, dynamic>?;
-          displayName = userData?['name'] ?? otherUserName;
+          final docExists = otherUserSnapshot.data!.exists;
+
+          if (docExists) {
+            final userData = otherUserSnapshot.data!.data() as Map<String, dynamic>?;
+            final firestoreName = userData?['name'] as String? ?? '';
+            final firestorePhone = userData?['phone'] as String? ?? '';
+            phoneNumber = firestorePhone.isNotEmpty ? firestorePhone : phoneFromContact;
+
+            // Intentar obtener nombre de la agenda del dispositivo
+            final deviceName = phoneNumber.isNotEmpty ? _getDeviceContactName(phoneNumber) : '';
+
+            // Usar nombre de Firestore si existe, sino nombre de agenda, sino "Usuario"
+            if (firestoreName.isNotEmpty && firestoreName != 'Usuario') {
+              displayName = firestoreName;
+            } else if (deviceNameFromContactPhone != null && deviceNameFromContactPhone != phoneFromContact && deviceNameFromContactPhone.isNotEmpty) {
+              // Primero intentar con el teléfono del documento de contacto
+              displayName = deviceNameFromContactPhone;
+            } else if (deviceName != phoneNumber && deviceName.isNotEmpty) {
+              displayName = deviceName;
+            } else {
+              displayName = firestoreName.isNotEmpty ? firestoreName : 'Usuario';
+            }
+          } else {
+            // Documento no existe, usar nombre de dispositivo si tenemos el teléfono
+            if (deviceNameFromContactPhone != null && deviceNameFromContactPhone != phoneFromContact) {
+              displayName = deviceNameFromContactPhone;
+            }
+          }
+        } else {
+          // Aún cargando, pero podemos usar el nombre del dispositivo si lo tenemos
+          if (deviceNameFromContactPhone != null && deviceNameFromContactPhone != phoneFromContact) {
+            displayName = deviceNameFromContactPhone;
+          }
+        }
+
+        // Filtrar por búsqueda
+        if (_contactSearchQuery.isNotEmpty &&
+            !displayName.toLowerCase().contains(_contactSearchQuery)) {
+          return SizedBox();
         }
 
         return GestureDetector(
-          onTap: () => _showPendingDetailsDialog(requests, displayName, colorScheme),
+          onTap: () => _showPendingContactDetailsDialog(contact, displayName, colorScheme),
           child: Container(
             margin: EdgeInsets.only(bottom: 12),
             padding: EdgeInsets.all(16),
@@ -409,7 +723,7 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
             ),
             child: Row(
               children: [
-                // Avatar con icono de persona (sin foto porque no está aprobado)
+                // Avatar con inicial (sin foto porque no está aprobado)
                 CircleAvatar(
                   radius: 28,
                   backgroundColor: Colors.amber.shade100,
@@ -447,7 +761,7 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
                   ),
                 ),
                 IconButton(
-                  onPressed: () => _showPendingDetailsDialog(requests, displayName, colorScheme),
+                  onPressed: () => _showPendingContactDetailsDialog(contact, displayName, colorScheme),
                   icon: Icon(
                     Icons.info_outline,
                     color: Colors.amber.shade600,
@@ -455,7 +769,7 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
                   tooltip: 'Ver detalles',
                 ),
                 IconButton(
-                  onPressed: () => _cancelPendingRequest(requests, displayName),
+                  onPressed: () => _cancelPendingContact(contact, displayName),
                   icon: Icon(
                     Icons.close,
                     color: colorScheme.error,
@@ -470,9 +784,9 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
     );
   }
 
-  /// Cancelar/rechazar una solicitud pendiente
-  Future<void> _cancelPendingRequest(
-    List<QueryDocumentSnapshot> requests,
+  /// Cancelar/rechazar un contacto pendiente
+  Future<void> _cancelPendingContact(
+    contact_model.Contact contact,
     String contactName,
   ) async {
     final confirmed = await showDialog<bool>(
@@ -499,30 +813,17 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
     if (confirmed != true || !mounted) return;
 
     try {
-      // Obtener el contactDocId de la primera solicitud
-      final firstRequest = requests.first.data() as Map<String, dynamic>;
-      final contactDocId = firstRequest['contactDocId'] as String?;
+      final currentUserId = _contactsController.currentUserId;
+      if (currentUserId == null) return;
 
       final firestore = FirebaseFirestore.instance;
-      final batch = firestore.batch();
 
-      // Eliminar todas las solicitudes pendientes
-      for (final request in requests) {
-        batch.delete(request.reference);
-      }
-
-      // Marcar el contacto como rejected si existe
-      if (contactDocId != null) {
-        batch.update(
-          firestore.collection('contacts').doc(contactDocId),
-          {
-            'status': 'rejected',
-            'rejectedAt': FieldValue.serverTimestamp(),
-          },
-        );
-      }
-
-      await batch.commit();
+      // Marcar mi approval como rejected en el contacto
+      await firestore.collection('contacts').doc(contact.id).update({
+        'approvals.$currentUserId.status': 'rejected',
+        'approvals.$currentUserId.rejectedAt': FieldValue.serverTimestamp(),
+        'approvals.$currentUserId.rejectedBy': currentUserId,
+      });
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -544,158 +845,324 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
     }
   }
 
-  /// Dialog con detalles de aprobaciones pendientes
-  void _showPendingDetailsDialog(
-    List<QueryDocumentSnapshot> requests,
+  /// Dialog de detalles de contacto pendiente
+  void _showPendingContactDetailsDialog(
+    contact_model.Contact contact,
     String contactName,
     ColorScheme colorScheme,
   ) {
-    final currentUserId = _contactsController.currentUserId;
-    if (currentUserId == null) return;
-
-    final parentIds = requests
-        .map((r) => (r.data() as Map<String, dynamic>)['parentId'] as String)
-        .toList();
-
     showDialog(
       context: context,
-      builder: (context) => FutureBuilder<List<DocumentSnapshot>>(
-        future: _contactsController.getMultipleUserDocuments(parentIds),
-        builder: (context, parentsSnapshot) {
-          final myParentRequests = <Map<String, dynamic>>[];
-          final otherParentRequests = <Map<String, dynamic>>[];
-
-          for (var request in requests) {
-            final data = request.data() as Map<String, dynamic>;
-            final requestChildId = data['childId'] as String;
-
-            if (requestChildId == currentUserId) {
-              myParentRequests.add(data);
-            } else {
-              otherParentRequests.add(data);
-            }
-          }
-
-          final parentNamesMap = <String, String>{};
-          if (parentsSnapshot.hasData) {
-            for (var i = 0; i < parentIds.length; i++) {
-              final doc = parentsSnapshot.data![i];
-              final name = (doc.data() as Map<String, dynamic>?)?['name'] ?? 'Padre/Madre';
-              parentNamesMap[parentIds[i]] = name;
-            }
-          }
-
-          return AlertDialog(
-            title: Row(
-              children: [
-                Icon(Icons.schedule, color: Colors.amber.shade600),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    contactName,
-                    style: TextStyle(fontSize: 18),
-                  ),
-                ),
-              ],
-            ),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Esperando aprobación de:',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w500,
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                SizedBox(height: 12),
-                // Mis padres
-                if (myParentRequests.isNotEmpty)
-                  ...myParentRequests.map((req) {
-                    final parentId = req['parentId'] as String;
-                    final parentName = parentNamesMap[parentId] ?? 'Padre/Madre';
-                    final status = req['status'] as String?;
-                    final isApproved = status == 'approved';
-
-                    return Padding(
-                      padding: EdgeInsets.only(bottom: 8),
-                      child: Row(
-                        children: [
-                          Icon(
-                            isApproved ? Icons.check_circle : Icons.schedule,
-                            size: 20,
-                            color: isApproved ? Colors.green : Colors.amber.shade600,
-                          ),
-                          SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'Mi padre/madre ($parentName)',
-                              style: TextStyle(
-                                decoration: isApproved ? TextDecoration.lineThrough : null,
-                                color: isApproved
-                                    ? colorScheme.onSurfaceVariant.withValues(alpha: 0.6)
-                                    : colorScheme.onSurface,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  }),
-                // Padres del otro usuario
-                if (otherParentRequests.isNotEmpty)
-                  ...otherParentRequests.map((req) {
-                    final parentId = req['parentId'] as String;
-                    final parentName = parentNamesMap[parentId] ?? 'Padre/Madre';
-                    final status = req['status'] as String?;
-                    final isApproved = status == 'approved';
-
-                    return Padding(
-                      padding: EdgeInsets.only(bottom: 8),
-                      child: Row(
-                        children: [
-                          Icon(
-                            isApproved ? Icons.check_circle : Icons.schedule,
-                            size: 20,
-                            color: isApproved ? Colors.green : Colors.amber.shade600,
-                          ),
-                          SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'Su padre/madre ($parentName)',
-                              style: TextStyle(
-                                decoration: isApproved ? TextDecoration.lineThrough : null,
-                                color: isApproved
-                                    ? colorScheme.onSurfaceVariant.withValues(alpha: 0.6)
-                                    : colorScheme.onSurface,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  }),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: Text('Entendido'),
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.schedule, color: Colors.amber.shade600),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                contactName,
+                style: TextStyle(fontSize: 18),
               ),
-            ],
-          );
-        },
+            ),
+          ],
+        ),
+        content: Text(
+          'Esta solicitud de contacto está pendiente de aprobación por tu padre/madre.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cerrar'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _cancelPendingContact(contact, contactName);
+            },
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: Text('Cancelar solicitud'),
+          ),
+        ],
       ),
     );
   }
 
-  /// Card de contacto aprobado con estado en línea y navegación a chat
+  /// Agrupar contactos rechazados por el "otro usuario"
+  List<Widget> _buildGroupedRejectedContacts(
+    List<contact_model.Contact> contacts,
+    ColorScheme colorScheme,
+  ) {
+    final currentUserId = _contactsController.currentUserId;
+    if (currentUserId == null) return [];
+
+    // Un widget por cada contacto rechazado
+    return contacts.map((contact) {
+      final otherUserId = contact.getOtherUserId(currentUserId);
+      return _buildRejectedContactCard(contact, otherUserId, colorScheme);
+    }).toList();
+  }
+
+  /// Card de contacto rechazado con opción de reenviar
+  Widget _buildRejectedContactCard(
+    contact_model.Contact contact,
+    String otherUserId,
+    ColorScheme colorScheme,
+  ) {
+    final currentUserId = _contactsController.currentUserId;
+    final myApproval = currentUserId != null ? contact.approvals[currentUserId] : null;
+    final rejectedByName = myApproval?.rejectedBy != null ? 'tu padre/madre' : 'tu padre/madre';
+
+    return FutureBuilder<DocumentSnapshot>(
+      future: _contactsController.getUserDocument(otherUserId),
+      builder: (context, otherUserSnapshot) {
+        String displayName = 'Usuario';
+        if (otherUserSnapshot.hasData) {
+          final userData = otherUserSnapshot.data!.data() as Map<String, dynamic>?;
+          displayName = userData?['name'] ?? 'Usuario';
+        }
+
+        // Filtrar por búsqueda
+        if (_contactSearchQuery.isNotEmpty &&
+            !displayName.toLowerCase().contains(_contactSearchQuery)) {
+          return SizedBox();
+        }
+
+        return GestureDetector(
+          onTap: () => _showResendContactDialog(contact, otherUserId, displayName, colorScheme),
+          child: Container(
+            margin: EdgeInsets.only(bottom: 12),
+            padding: EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: colorScheme.surface,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: Colors.red.shade300,
+                width: 2,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.05),
+                  blurRadius: 10,
+                  offset: Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Row(
+              children: [
+                // Avatar con inicial (sin foto porque fue rechazado)
+                CircleAvatar(
+                  radius: 28,
+                  backgroundColor: Colors.red.shade50,
+                  child: Text(
+                    displayName.isNotEmpty ? displayName[0].toUpperCase() : 'U',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.red.shade700,
+                    ),
+                  ),
+                ),
+                SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        displayName,
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: colorScheme.onSurface,
+                        ),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        'Rechazado por $rejectedByName',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Colors.red.shade600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // Botón para reenviar solicitud
+                IconButton(
+                  onPressed: () => _showResendContactDialog(contact, otherUserId, displayName, colorScheme),
+                  icon: Icon(
+                    Icons.refresh,
+                    color: colorScheme.primary,
+                  ),
+                  tooltip: 'Reenviar solicitud',
+                ),
+                // Botón para eliminar
+                IconButton(
+                  onPressed: () => _deleteRejectedContact(contact, displayName),
+                  icon: Icon(
+                    Icons.delete_outline,
+                    color: Colors.red.shade400,
+                  ),
+                  tooltip: 'Eliminar',
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// Dialog para confirmar reenvío de contacto rechazado
+  void _showResendContactDialog(
+    contact_model.Contact contact,
+    String otherUserId,
+    String contactName,
+    ColorScheme colorScheme,
+  ) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.refresh, color: colorScheme.primary),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '¿Reenviar solicitud?',
+                style: TextStyle(fontSize: 18),
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          'Tu padre/madre rechazó la solicitud de contacto con $contactName. '
+          '¿Quieres enviar una nueva solicitud?\n\n'
+          'Tu padre/madre recibirá una notificación para aprobar.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _resendContact(contact, otherUserId, contactName);
+            },
+            child: Text('Reenviar'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Reenviar solicitud de contacto (resetea el estado a pending)
+  Future<void> _resendContact(
+    contact_model.Contact contact,
+    String otherUserId,
+    String contactName,
+  ) async {
+    try {
+      // Llamar a la Cloud Function para crear nueva solicitud
+      final functions = FirebaseFunctions.instance;
+      final result = await functions.httpsCallable('createContactRequest').call({
+        'contactUserId': otherUserId,
+      });
+
+      if (!mounted) return;
+
+      final resultData = result.data as Map<String, dynamic>;
+      final success = resultData['success'] ?? false;
+
+      if (success) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Solicitud reenviada a $contactName'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } else {
+        final message = resultData['message'] ?? 'Error desconocido';
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(message),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      ReleaseLogger.error('Error reenviando solicitud: $e', tag: 'ChildContacts');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al reenviar solicitud'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  /// Eliminar un contacto rechazado (elimina el documento)
+  Future<void> _deleteRejectedContact(
+    contact_model.Contact contact,
+    String contactName,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Eliminar solicitud'),
+        content: Text(
+          '¿Estás seguro de eliminar la solicitud rechazada con $contactName?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text('No'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: Text('Sí, eliminar'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    try {
+      await FirebaseFirestore.instance.collection('contacts').doc(contact.id).delete();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Solicitud eliminada'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al eliminar solicitud'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  /// Card de contacto aprobado con teléfono y navegación a chat
   Widget _buildContactCard({
     required String contactId,
     required String name,
-    required String status,
-    required bool isOnline,
+    required String phone,
     String? photoURL,
     required ColorScheme colorScheme,
   }) {
@@ -715,43 +1182,22 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
       ),
       child: Row(
         children: [
-          Stack(
-            children: [
-              CircleAvatar(
-                radius: 28,
-                backgroundColor: colorScheme.primaryContainer,
-                backgroundImage: photoURL != null && photoURL.isNotEmpty
-                    ? CachedNetworkImageProvider(photoURL)
-                    : null,
-                child: photoURL == null || photoURL.isEmpty
-                    ? Text(
-                        name.isNotEmpty ? name[0].toUpperCase() : 'U',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                          color: colorScheme.primary,
-                        ),
-                      )
-                    : null,
-              ),
-              if (isOnline)
-                Positioned(
-                  right: 0,
-                  bottom: 0,
-                  child: Container(
-                    width: 14,
-                    height: 14,
-                    decoration: BoxDecoration(
-                      color: Colors.green,
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: colorScheme.surface,
-                        width: 2,
-                      ),
+          CircleAvatar(
+            radius: 28,
+            backgroundColor: colorScheme.primaryContainer,
+            backgroundImage: photoURL != null && photoURL.isNotEmpty
+                ? CachedNetworkImageProvider(photoURL)
+                : null,
+            child: photoURL == null || photoURL.isEmpty
+                ? Text(
+                    name.isNotEmpty ? name[0].toUpperCase() : 'U',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: colorScheme.primary,
                     ),
-                  ),
-                ),
-            ],
+                  )
+                : null,
           ),
           SizedBox(width: 16),
           Expanded(
@@ -769,10 +1215,10 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
                 ),
                 SizedBox(height: 4),
                 Text(
-                  status,
+                  phone.isNotEmpty ? phone : 'Sin teléfono',
                   style: TextStyle(
                     fontSize: 14,
-                    color: isOnline ? Colors.green : colorScheme.onSurfaceVariant,
+                    color: colorScheme.onSurfaceVariant,
                   ),
                 ),
               ],

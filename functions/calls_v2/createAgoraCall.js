@@ -179,8 +179,34 @@ exports.createAgoraCall = onCall(
       // Add other participants
       const notificationPromises = [];
 
+      // ✅ FIX: Track busy participants to return to caller
+      const busyParticipants = [];
+
+      console.log(`🔔 [NOTIFICATIONS] Processing ${participantIds.length} participants for notifications`);
+      console.log(`🔔 [NOTIFICATIONS] Caller ID: ${callerId}`);
+      console.log(`🔔 [NOTIFICATIONS] Participant IDs: ${JSON.stringify(participantIds)}`);
+
       for (const participantId of participantIds) {
-        if (participantId === callerId) continue; // Skip caller if included
+        if (participantId === callerId) {
+          console.log(`⏭️ Skipping caller ${participantId} in notification loop`);
+          continue;
+        }
+        console.log(`📱 [NOTIFICATIONS] Processing participant: ${participantId}`);
+
+        // ✅ FIX: Check if participant is already in an active call (busy)
+        const activeCallsSnapshot = await db.collection('calls_v2')
+          .where('participantIds', 'array-contains', participantId)
+          .where('endedAt', '==', null)
+          .limit(1)
+          .get();
+
+        const isInActiveCall = !activeCallsSnapshot.empty &&
+          activeCallsSnapshot.docs.some(doc => doc.id !== callId);
+
+        if (isInActiveCall) {
+          console.log(`📵 [BUSY] Participant ${participantId} is already in an active call`);
+          busyParticipants.push(participantId);
+        }
 
         const participantUid = uidCounter++;
         const participantToken = RtcTokenBuilder.buildTokenWithUid(
@@ -197,14 +223,21 @@ exports.createAgoraCall = onCall(
         const participantData = participantDoc.exists ? participantDoc.data() : {};
         const participantName = participantData.name || participantData.displayName || 'Unknown';
 
+        // ✅ FIX: Set status based on whether user is busy or available
         participants[participantId] = {
           uid: participantId,
           agoraUid: participantUid,
           token: participantToken,
-          status: 'ringing',
+          status: isInActiveCall ? 'busy' : 'ringing',
           displayName: participantName,
           photoUrl: participantData.photoURL || null
         };
+
+        // ✅ FIX: Skip notifications for busy users - they're already in a call
+        if (isInActiveCall) {
+          console.log(`⏭️ [NOTIFICATIONS] Skipping notifications for busy user ${participantId}`);
+          continue;
+        }
 
         // ✅ PHASE 1: VoIP Token Validation
         // Prepare push notifications for participant
@@ -314,6 +347,9 @@ exports.createAgoraCall = onCall(
       const callType = isGroup ? 'group' : 'oneToOne';
 
       // Create call document
+      // ✅ FIX: Add participantIds array for querying active calls (busy detection)
+      const allParticipantIds = [callerId, ...participantIds.filter(id => id !== callerId)];
+
       const callData = {
         channelName: channelName,
         createdBy: callerId,
@@ -321,6 +357,7 @@ exports.createAgoraCall = onCall(
         isVideo: isVideo,
         isGroup: isGroup,
         participants: participants,
+        participantIds: allParticipantIds, // ✅ Array for querying
         callType: callType,
         metadata: {
           appId: appId,
@@ -386,13 +423,19 @@ exports.createAgoraCall = onCall(
       console.log(`Call created successfully: ${callId}, channel: ${channelName}`);
 
       // Return caller's token and call info
+      // ✅ FIX: Include busy participants info so caller can show appropriate UI
+      const allParticipantsBusy = busyParticipants.length > 0 &&
+        busyParticipants.length === participantIds.filter(id => id !== callerId).length;
+
       return {
         success: true,
         callId: callId,
         channelName: channelName,
         token: callerToken,
         agoraUid: callerUid,
-        participants: Object.keys(participants)
+        participants: Object.keys(participants),
+        busyParticipants: busyParticipants,
+        allParticipantsBusy: allParticipantsBusy,
       };
 
     } catch (error) {

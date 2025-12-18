@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -18,6 +19,9 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
   final UserCodeService _userCodeService = UserCodeService();
   final UserRoleService _userRoleService = UserRoleService();
   String? _userCode;
+  DateTime? _expiresAt;
+  Timer? _countdownTimer;
+  Duration _timeRemaining = Duration.zero;
   bool _isLoading = true;
   String? _errorMessage;
   String? _userRole;
@@ -30,6 +34,61 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
     super.initState();
     _loadUserCode();
   }
+
+  @override
+  void dispose() {
+    _countdownTimer?.cancel();
+    super.dispose();
+  }
+
+  void _startCountdownTimer() {
+    _countdownTimer?.cancel();
+
+    if (_expiresAt == null) {
+      setState(() {
+        _timeRemaining = Duration.zero;
+      });
+      return;
+    }
+
+    _updateTimeRemaining();
+
+    _countdownTimer = Timer.periodic(Duration(seconds: 1), (_) {
+      _updateTimeRemaining();
+    });
+  }
+
+  void _updateTimeRemaining() {
+    if (_expiresAt == null) return;
+
+    final now = DateTime.now();
+    final remaining = _expiresAt!.difference(now);
+
+    setState(() {
+      _timeRemaining = remaining.isNegative ? Duration.zero : remaining;
+    });
+
+    // Si expiró, auto-regenerar
+    if (remaining.isNegative) {
+      _countdownTimer?.cancel();
+    }
+  }
+
+  String _formatTimeRemaining() {
+    if (_timeRemaining.inSeconds <= 0) return 'Expirado';
+
+    final minutes = _timeRemaining.inMinutes;
+    final seconds = _timeRemaining.inSeconds.remainder(60);
+    return '${minutes}m ${seconds.toString().padLeft(2, '0')}s';
+  }
+
+  Color _getExpirationColor() {
+    if (_timeRemaining.inSeconds <= 0) return Colors.red;
+    if (_timeRemaining.inMinutes < 1) return Colors.orange;
+    return Colors.green;
+  }
+
+  bool get _isExpired => _timeRemaining.inSeconds <= 0;
 
   Future<void> _loadUserCode() async {
     try {
@@ -49,12 +108,15 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
         _userRoleService.hasParentLink(userId),
       ]);
 
+      final codeResult = results[0] as ({String code, DateTime? expiresAt});
       setState(() {
-        _userCode = results[0] as String;
+        _userCode = codeResult.code;
+        _expiresAt = codeResult.expiresAt;
         _userRole = results[1] as String?;
         _hasLinkedParent = results[2] as bool;
         _isLoading = false;
       });
+      _startCountdownTimer();
     } catch (e) {
       setState(() {
         _errorMessage = 'Error cargando código: $e';
@@ -113,13 +175,15 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
       });
 
       try {
-        final newCode = await _userCodeService.regenerateUserCode(
+        final result = await _userCodeService.regenerateUserCode(
           FirebaseAuth.instance.currentUser!.uid,
         );
         setState(() {
-          _userCode = newCode;
+          _userCode = result.code;
+          _expiresAt = result.expiresAt;
           _isLoading = false;
         });
+        _startCountdownTimer();
       } catch (e) {
         setState(() {
           _errorMessage = 'Error regenerando código: $e';
@@ -281,7 +345,49 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
             ),
           ),
 
-          SizedBox(height: 32),
+          SizedBox(height: 16),
+
+          // Countdown banner
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: _getExpirationColor().withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _getExpirationColor().withValues(alpha: 0.5)),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  _isExpired ? Icons.timer_off : Icons.timer,
+                  color: _getExpirationColor(),
+                  size: 20,
+                ),
+                SizedBox(width: 8),
+                Text(
+                  _isExpired ? 'Codigo expirado' : 'Expira en: ${_formatTimeRemaining()}',
+                  style: TextStyle(
+                    color: _getExpirationColor(),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
+                if (_isExpired) ...[
+                  SizedBox(width: 12),
+                  TextButton(
+                    onPressed: _regenerateCode,
+                    style: TextButton.styleFrom(
+                      foregroundColor: _getExpirationColor(),
+                      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                    ),
+                    child: Text('Regenerar'),
+                  ),
+                ],
+              ],
+            ),
+          ),
+
+          SizedBox(height: 24),
 
           // Código QR
           Container(
@@ -308,24 +414,47 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
                   ),
                 ),
                 SizedBox(height: 16),
-                Container(
-                  padding: EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: colorScheme.outline),
-                  ),
-                  child: QrImageView(
-                    data: _deepLink,
-                    version: QrVersions.auto,
-                    size: 200.0,
-                    backgroundColor: Colors.white,
-                    foregroundColor: Colors.black,
-                  ),
+                Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Container(
+                      padding: EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: colorScheme.outline),
+                      ),
+                      child: Opacity(
+                        opacity: _isExpired ? 0.3 : 1.0,
+                        child: QrImageView(
+                          data: _userCode!,
+                          version: QrVersions.auto,
+                          size: 200.0,
+                          backgroundColor: Colors.white,
+                          foregroundColor: Colors.black,
+                        ),
+                      ),
+                    ),
+                    if (_isExpired)
+                      Container(
+                        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.red,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          'EXPIRADO',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
                 SizedBox(height: 16),
                 Text(
-                  'Escanea para abrir Talia y agregarme',
+                  'Pide a tu amigo que escanee este codigo',
                   style: TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant),
                 ),
               ],
@@ -362,10 +491,14 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
                 Container(
                   padding: EdgeInsets.all(20),
                   decoration: BoxDecoration(
-                    color: colorScheme.primaryContainer,
+                    color: _isExpired
+                        ? Colors.grey.withValues(alpha: 0.2)
+                        : colorScheme.primaryContainer,
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
-                      color: colorScheme.primary.withValues(alpha: 0.3),
+                      color: _isExpired
+                          ? Colors.grey
+                          : colorScheme.primary.withValues(alpha: 0.3),
                     ),
                   ),
                   child: Row(
@@ -377,8 +510,9 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
                           fontSize: 24,
                           fontWeight: FontWeight.bold,
                           fontFamily: 'Courier',
-                          color: colorScheme.primary,
+                          color: _isExpired ? Colors.grey : colorScheme.primary,
                           letterSpacing: 2,
+                          decoration: _isExpired ? TextDecoration.lineThrough : null,
                         ),
                       ),
                     ],
@@ -386,7 +520,7 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
                 ),
                 SizedBox(height: 16),
                 Text(
-                  'O compártelo escribiéndolo manualmente',
+                  'O compartelo escribiendolo manualmente',
                   style: TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant),
                 ),
               ],
@@ -400,12 +534,12 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
             children: [
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: _copyCode,
+                  onPressed: _isExpired ? null : _copyCode,
                   icon: Icon(Icons.copy),
                   label: Text('Copiar'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: colorScheme.primary,
-                    side: BorderSide(color: colorScheme.primary),
+                    side: BorderSide(color: _isExpired ? Colors.grey : colorScheme.primary),
                     padding: EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
@@ -416,7 +550,7 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
               SizedBox(width: 16),
               Expanded(
                 child: ElevatedButton.icon(
-                  onPressed: _shareCode,
+                  onPressed: _isExpired ? null : _shareCode,
                   icon: Icon(Icons.share),
                   label: Text('Compartir'),
                   style: ElevatedButton.styleFrom(

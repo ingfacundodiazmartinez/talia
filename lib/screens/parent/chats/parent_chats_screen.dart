@@ -436,7 +436,9 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
 
       case ChatItem(:final userId, :final chatDoc):
         // Todos los chats se manejan igual (sin agrupación)
+        // ✅ FIX #5: Key única para evitar reutilización incorrecta de estado
         return StreamBuilder<DocumentSnapshot>(
+          key: ValueKey('user_stream_$userId'),
           stream: _controller.getUserDataStream(userId),
           builder: (context, userSnapshot) {
             if (!userSnapshot.hasData || userSnapshot.data == null) return SizedBox.shrink();
@@ -447,7 +449,9 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
 
             final userName = fetchedUserData['name'] ?? 'Usuario';
 
+            // ✅ FIX #5: Key única para alias del usuario
             return StreamBuilder<String>(
+              key: ValueKey('alias_$userId'),
               stream: _aliasService.watchDisplayName(userId, userName),
               initialData: userName,
               builder: (context, aliasSnapshot) {
@@ -611,7 +615,9 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
     final photoURL = childData['photoURL'];
     final parentId = _controller.currentUserId;
 
+    // ✅ FIX #5: Keys únicas para evitar reutilización incorrecta de estado
     return StreamBuilder<String>(
+      key: ValueKey('chat_alias_$childId'),
       stream: _aliasService.watchDisplayName(childId, realName),
       initialData: realName,
       builder: (context, aliasSnapshot) {
@@ -619,6 +625,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
 
         // ✅ Verificar si el contacto está bloqueado
         return StreamBuilder<bool>(
+          key: ValueKey('blocked_$childId'),
           stream: _blockService.isBlockedStream(childId),
           initialData: false,
           builder: (context, blockedSnapshot) {
@@ -631,7 +638,9 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
               final unreadCount = LocalUnreadCountService().getUnreadCount(chatDoc.id);
 
               // Obtener el último mensaje para mostrar su estado
+              // ✅ FIX #5: Key única para el último mensaje
               return StreamBuilder<QuerySnapshot>(
+                key: ValueKey('last_msg_${chatDoc.id}'),
                 stream: _controller.getLastMessageStream(chatDoc.id),
                 builder: (context, messageSnapshot) {
                   String? lastMessageSenderId;
@@ -871,7 +880,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
       if (contactId == null) return;
 
       if (mounted) {
-        Navigator.of(context).push(
+        await Navigator.of(context).push(
           MaterialPageRoute(
             builder: (context) => ChatDetailScreen(
               chatId: chatId,
@@ -881,6 +890,8 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
             ),
           ),
         );
+        // ✅ FIX: Forzar refresh cuando vuelve del chat para actualizar lastMessageTime
+        if (mounted) setState(() {});
       }
     } catch (e) {
       debugPrint('Error navegando a chat directo: $e');

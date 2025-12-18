@@ -230,6 +230,8 @@ class DeepARCameraController(
             val mirror = lensFacing == CameraSelector.LENS_FACING_FRONT
 
             // Enviar frame a DeepAR en el thread principal
+            // Nota: Aunque convertimos los datos a formato NV21, el SDK usa el enum YUV_420_888
+            // ya que NV21 no existe como constante en DeepARImageFormat
             mainHandler.post {
                 try {
                     deepAR.receiveFrame(

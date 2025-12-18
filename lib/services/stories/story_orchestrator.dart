@@ -164,7 +164,16 @@ class StoryOrchestrator {
   }
 
   /// Marcar historia como vista
+  /// ✅ FIX #7: También actualiza cache local para UI instantánea
   Future<void> markStoryAsViewed(String storyId) async {
+    final currentUserId = _storyRepository.currentUserId;
+
+    // Primero actualizar cache local para UI instantánea (optimistic update)
+    if (currentUserId != null) {
+      _cacheManager.markStoryAsViewedLocally(storyId, currentUserId);
+    }
+
+    // Luego actualizar Firestore (confirmación)
     await _viewingService.markStoryAsViewed(storyId);
   }
 
@@ -205,6 +214,7 @@ class StoryOrchestrator {
     String? replyMediaPath,
     String? replyMediaType,
   }) async {
+    // Actualizar Firestore - el cache se actualizará via stream
     await _viewingService.replyToStory(
       storyId: storyId,
       replyText: replyText,
@@ -215,13 +225,31 @@ class StoryOrchestrator {
 
   /// Dar like a una historia
   /// Agrega el userId a likedBy y envía mensaje al chat del owner
+  /// También actualiza el cache local para UI instantánea
   Future<void> likeStory(String storyId) async {
+    final currentUserId = _storyRepository.currentUserId;
+
+    // Primero actualizar cache local para UI instantánea (optimistic update)
+    if (currentUserId != null) {
+      _cacheManager.updateStoryLikeLocally(storyId, currentUserId, true);
+    }
+
+    // Luego actualizar Firestore (confirmación)
     await _viewingService.likeStory(storyId);
   }
 
   /// Quitar like de una historia
   /// Remueve el userId de likedBy (no borra el mensaje del chat)
+  /// También actualiza el cache local para UI instantánea
   Future<void> unlikeStory(String storyId) async {
+    final currentUserId = _storyRepository.currentUserId;
+
+    // Primero actualizar cache local para UI instantánea (optimistic update)
+    if (currentUserId != null) {
+      _cacheManager.updateStoryLikeLocally(storyId, currentUserId, false);
+    }
+
+    // Luego actualizar Firestore (confirmación)
     await _viewingService.unlikeStory(storyId);
   }
 

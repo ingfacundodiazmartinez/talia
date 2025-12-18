@@ -47,14 +47,16 @@ class ChatRetrievalService {
   /// 1. Initial data from Hive cache (instant, works offline)
   /// 2. Updates when background listener updates cache
   Stream<List<ChatMessage>> watchMessages(String chatId) async* {
-    ReleaseLogger.log('📖 [ChatRetrieval] Reading messages from cache for chat $chatId');
+    ReleaseLogger.log('📖 [ChatRetrieval] watchMessages() llamado para chat $chatId');
 
     // ✅ CRITICAL FIX: Create cache change listener BEFORE activating Firestore listener
     // This ensures we don't miss the initial Firestore emission
     final cacheChangeStream = _streamManager.watchCacheChanges(chatId);
+    ReleaseLogger.log('📖 [ChatRetrieval] cacheChangeStream creado para $chatId');
 
     // STEP 1: Ensure background Firestore listener is active
     // This will automatically update the cache when Firestore changes
+    ReleaseLogger.log('📖 [ChatRetrieval] Llamando ensureListenerActive para $chatId');
     _streamManager.ensureListenerActive(chatId);
 
     // STEP 2: Emit initial cached data immediately (from Hive)

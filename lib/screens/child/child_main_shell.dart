@@ -307,16 +307,13 @@ class _ChildMainShellState extends State<ChildMainShell> {
             unselectedItemColor: colorScheme.onSurfaceVariant,
             showSelectedLabels: showLabels,
             showUnselectedLabels: showLabels,
+            // Eliminar espacio de labels cuando no se muestran
+            selectedFontSize: showLabels ? 14 : 0,
+            unselectedFontSize: showLabels ? 12 : 0,
             items: [
               BottomNavigationBarItem(
-                icon: _buildIconWithBadge(
-                  Icons.chat_bubble_outline,
-                  totalUnreadMessages,
-                ),
-                activeIcon: _buildIconWithBadge(
-                  Icons.chat_bubble,
-                  totalUnreadMessages,
-                ),
+                icon: _buildIconWithBadge(Icons.chat_bubble_outline, totalUnreadMessages),
+                activeIcon: _buildIconWithBadge(Icons.chat_bubble, totalUnreadMessages),
                 label: 'Chats',
               ),
               BottomNavigationBarItem(

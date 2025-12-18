@@ -236,7 +236,7 @@ class StoryViewerController {
 
   /// Logging para ad no disponible
   void logAdNotAvailable() {
-    ReleaseLogger.warning('Ad no disponible o usuario no cumple COPPA', tag: 'StoryViewer');
+    ReleaseLogger.warning('⚠️ Ad no disponible o usuario no cumple COPPA', tag: 'StoryViewer');
   }
 
   /// Logging para widget desmontado
@@ -272,6 +272,11 @@ class StoryViewerController {
   /// Logging para error de native ad
   void logNativeAdError(String errorMessage) {
     ReleaseLogger.error('Error cargando Native Ad: $errorMessage', tag: 'StoryViewer');
+  }
+
+  /// Logging para debug de ads
+  void logDebug(String message) {
+    ReleaseLogger.log(message, tag: 'StoryViewer');
   }
 
   /// Verificar que el usuario esté autenticado
@@ -434,19 +439,30 @@ class StoryViewerController {
         throw Exception('Usuario no autenticado');
       }
 
-      // Crear historia tipo "mood" - es una historia especial generada automáticamente
-      await _storyService.createMoodStory(
+      ReleaseLogger.log('📝 Creando mood story: emoji=$emoji, responseId=$responseId', tag: 'StoryViewer');
+
+      // ✅ FIX: Capturar el storyId retornado
+      final storyId = await _storyService.createMoodStory(
         emoji: emoji,
         text: text,
         questionText: questionText,
       );
 
-      // Marcar la respuesta como compartida
-      await _moodPollService.markResponseAsShared(responseId, 'pending');
+      ReleaseLogger.log('✅ Mood story creada: $storyId, marcando respuesta...', tag: 'StoryViewer');
+
+      // ✅ FIX: Pasar el storyId real en lugar de 'pending'
+      try {
+        await _moodPollService.markResponseAsShared(responseId, storyId);
+        ReleaseLogger.log('✅ Respuesta $responseId marcada como compartida', tag: 'StoryViewer');
+      } catch (markError) {
+        // ✅ FIX: No fallar si marcar la respuesta falla - la historia ya se creó
+        ReleaseLogger.error('⚠️ Error marcando respuesta como compartida (historia creada OK): $markError', tag: 'StoryViewer');
+        // No rethrow - la historia se creó exitosamente
+      }
 
       ReleaseLogger.log('Historia de mood creada exitosamente', tag: 'StoryViewer');
     } catch (e) {
-      ReleaseLogger.error('Error creando historia de mood: $e', tag: 'StoryViewer');
+      ReleaseLogger.error('❌ Error creando historia de mood: $e', tag: 'StoryViewer');
       rethrow;
     }
   }

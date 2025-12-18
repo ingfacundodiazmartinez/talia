@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../models/models.dart';
 import '../services/services.dart';
 import '../services/group_message_cache_service.dart';
+import '../../services/reaction_service.dart';  // ✅ NEW: For reactions
 import '../../utils/release_logger.dart';
 
 /// Controller for group chat
@@ -16,6 +17,7 @@ class GroupChatController {
   final String groupId;
   final GroupService _groupService;
   final GroupMessageCacheService _cacheService;
+  final ReactionService _reactionService;  // ✅ NEW
 
   // State
   Group? _group;
@@ -25,10 +27,12 @@ class GroupChatController {
   bool _isSending = false;
   GroupMessage? _replyingTo;
   String? _error;
+  bool _isDisposed = false;  // ✅ NEW: Para ignorar errores después de dispose
 
   // Subscriptions
   StreamSubscription? _groupSubscription;
   StreamSubscription? _messagesSubscription;
+  StreamSubscription<Map<String, Map<String, List<String>>>>? _reactionsSubscription;  // ✅ NEW
 
   // Callbacks
   Function(Group?)? onGroupChanged;
@@ -42,8 +46,10 @@ class GroupChatController {
     required this.groupId,
     GroupService? groupService,
     GroupMessageCacheService? cacheService,
+    ReactionService? reactionService,
   }) : _groupService = groupService ?? GroupService(),
-       _cacheService = cacheService ?? GroupMessageCacheService();
+       _cacheService = cacheService ?? GroupMessageCacheService(),
+       _reactionService = reactionService ?? ReactionService();
 
   // Getters
   Group? get group => _group;
@@ -102,28 +108,115 @@ class GroupChatController {
       // 3. DESPUÉS: Suscribirse al stream de Firestore (últimos 50) para sincronizar
       _groupSubscription = _groupService.watchGroup(groupId).listen(
         (group) {
+          if (_isDisposed) return;
           _group = group;
           onGroupChanged?.call(_group);
         },
         onError: (e) {
+          // ✅ FIX: Ignorar errores de permisos (ocurre cuando el usuario sale del grupo)
+          if (_isDisposed || _isPermissionError(e)) {
+            _groupSubscription?.cancel();
+            return;
+          }
           _setError('Error en grupo: $e');
         },
       );
 
       _messagesSubscription = _groupService.watchMessages(groupId).listen(
         (firestoreMessages) {
+          if (_isDisposed) return;
           // Merge: actualizar cache con mensajes de Firestore
           _mergeAndCacheMessages(firestoreMessages);
         },
         onError: (e) {
+          // ✅ FIX: Ignorar errores de permisos (ocurre cuando el usuario sale del grupo)
+          if (_isDisposed || _isPermissionError(e)) {
+            _messagesSubscription?.cancel();
+            return;
+          }
           _setError('Error en mensajes: $e');
         },
       );
+
+      // ✅ NEW: Suscribirse al stream de reacciones
+      _startListeningToReactions();
     } catch (e) {
       _setError('Error inicializando chat: $e');
     } finally {
       _setLoading(false);
     }
+  }
+
+  /// ✅ NEW: Start listening to reactions stream
+  void _startListeningToReactions() {
+    _reactionsSubscription?.cancel();
+
+    _reactionsSubscription = _reactionService.watchReactions(
+      chatId: groupId,
+      isGroup: true,
+    ).listen(
+      (reactionsMap) {
+        if (_isDisposed) return;
+        _updateMessagesWithReactions(reactionsMap);
+      },
+      onError: (error) {
+        // ✅ FIX: Ignorar errores de permisos (ocurre cuando el usuario sale del grupo)
+        if (_isDisposed || _isPermissionError(error)) {
+          _reactionsSubscription?.cancel();
+          return;
+        }
+        ReleaseLogger.error('Error in reactions stream for group $groupId: $error', tag: 'GroupChatController');
+      },
+    );
+  }
+
+  /// ✅ Helper: Check if error is a permission error (expected when leaving group)
+  bool _isPermissionError(dynamic error) {
+    final errorStr = error.toString().toLowerCase();
+    return errorStr.contains('permission') ||
+           errorStr.contains('permission_denied') ||
+           errorStr.contains('permission-denied') ||
+           errorStr.contains('insufficient');
+  }
+
+  /// ✅ NEW: Update messages with reactions from subcollection
+  void _updateMessagesWithReactions(Map<String, Map<String, List<String>>> reactionsMap) {
+    if (reactionsMap.isEmpty && _messages.every((m) => m.reactions.isEmpty)) {
+      return;
+    }
+
+    bool hasChanges = false;
+
+    for (int i = 0; i < _messages.length; i++) {
+      final message = _messages[i];
+      final messageReactions = reactionsMap[message.id] ?? {};
+
+      // Comparar si hay cambios
+      if (!_reactionsAreEqual(message.reactions, messageReactions)) {
+        _messages[i] = message.copyWith(reactions: messageReactions);
+        hasChanges = true;
+      }
+    }
+
+    if (hasChanges) {
+      onMessagesChanged?.call(messages);
+      ReleaseLogger.log('✅ [Reactions] Updated reactions for group $groupId', tag: 'GroupChatController');
+    }
+  }
+
+  /// ✅ Helper: Compare two reaction maps
+  bool _reactionsAreEqual(Map<String, List<String>> a, Map<String, List<String>> b) {
+    if (a.length != b.length) return false;
+    for (final key in a.keys) {
+      if (!b.containsKey(key)) return false;
+      final aList = a[key]!;
+      final bList = b[key]!;
+      if (aList.length != bList.length) return false;
+      for (int i = 0; i < aList.length; i++) {
+        if (aList[i] != bList[i]) return false;
+      }
+    }
+    return true;
   }
 
   /// Merge Firestore messages with cached messages
@@ -381,7 +474,9 @@ class GroupChatController {
 
   /// Dispose resources
   void dispose() {
+    _isDisposed = true;  // ✅ FIX: Marcar como disposed PRIMERO para ignorar errores pendientes
     _groupSubscription?.cancel();
     _messagesSubscription?.cancel();
+    _reactionsSubscription?.cancel();
   }
 }

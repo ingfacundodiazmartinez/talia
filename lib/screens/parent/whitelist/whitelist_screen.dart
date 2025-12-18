@@ -1,40 +1,66 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:rxdart/rxdart.dart';
 import '../../../controllers/whitelist_controller.dart';
-import '../../../utils/release_logger.dart';
-import '../../../models/contact_request.dart';
-import '../../../models/permission_request.dart';
+import '../../../models/contact.dart' as contact_model;
+import '../../../models/grouped_contact.dart';
 import '../../../groups/groups.dart';
+import '../../../utils/release_logger.dart';
 import '../../../theme_service.dart';
 import '../chat_moderation_management_screen.dart';
-import 'widgets/pending_request_card.dart';
-import 'widgets/approved_request_card.dart';
-import 'widgets/rejected_request_card.dart';
+import 'widgets/grouped_contact_card.dart';
+import 'widgets/contact_detail_sheet.dart';
 import '../../../services/unread_messages_service.dart';
 
-/// Screen principal de Control Parental (Lista Blanca)
+/// Screen principal de Control Parental (Lista Blanca) - Simplificado
 ///
-/// Responsabilidades (SOLO UI):
-/// - Mostrar tabs de solicitudes (Pendientes/Aprobadas/Rechazadas)
-/// - Delegar lógica de negocio al WhitelistController
-/// - Renderizar widgets extraídos
+/// Arquitectura unificada:
+/// - Una sola query a `/contacts` donde `parentViewers` contiene el parentId
+/// - Filtros dropdown por estado e hijo
+/// - Header compacto con icono de Moderación IA
 class WhitelistScreen extends StatefulWidget {
-  const WhitelistScreen({super.key});
+  /// Filtro inicial por hijo (opcional)
+  final String? initialChildFilter;
+
+  /// Filtro pendiente para aplicar (usado cuando se navega desde el dashboard)
+  static String? pendingChildFilter;
+
+  /// Establecer filtro pendiente para cuando se navegue al tab de whitelist
+  static void setChildFilter(String childId) {
+    pendingChildFilter = childId;
+  }
+
+  const WhitelistScreen({
+    super.key,
+    this.initialChildFilter,
+  });
 
   @override
   State<WhitelistScreen> createState() => _WhitelistScreenState();
 }
 
 class _WhitelistScreenState extends State<WhitelistScreen>
-    with SingleTickerProviderStateMixin, AutomaticKeepAliveClientMixin {
+    with AutomaticKeepAliveClientMixin {
   late WhitelistController _controller;
-  late TabController _tabController;
 
   final TextEditingController _searchController = TextEditingController();
-  final ValueNotifier<String> _searchQuery = ValueNotifier<String>('');
+  String _searchQuery = '';
 
-  final List<Map<String, dynamic>> _currentPendingRequests = [];
+  // Filtros
+  String _statusFilter = 'all'; // all, pending, approved, rejected, revoked
+  late String _childFilter;
+
+  // Estado
+  List<GroupedContact> _groupedContacts = [];
+  List<Map<String, String>> _linkedChildren = [];
+  bool _isLoading = true;
+
+  // Contadores para badges
+  int _pendingCount = 0;
+
+  // Stream subscriptions
+  StreamSubscription? _contactsSubscription;
 
   @override
   bool get wantKeepAlive => true;
@@ -42,28 +68,109 @@ class _WhitelistScreenState extends State<WhitelistScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _childFilter = widget.initialChildFilter ?? 'all';
 
-    // Inicializar controller
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser != null) {
       _controller = WhitelistController(parentId: currentUser.uid);
+      _loadData();
     }
+  }
+
+  Future<void> _loadData() async {
+    if (!mounted) return;
+
+    try {
+      // Cargar hijos vinculados
+      final children = await _controller.getLinkedChildrenWithNames();
+      if (!mounted) return;
+      setState(() => _linkedChildren = children);
+
+      // Cancelar suscripción anterior
+      await _contactsSubscription?.cancel();
+
+      // Stream combinado de contactos + grupos V2 pendientes + grupos aprobados
+      // Usamos startWith([]) para que el CombineLatestStream emita inmediatamente
+      _contactsSubscription = CombineLatestStream.combine3(
+        _controller.getContactsStream().startWith([]),
+        _controller.getPendingGroupApprovalRequests().startWith([]),
+        _controller.getApprovedGroupMembershipsStream().startWith([]),
+        (
+          List<contact_model.Contact> contacts,
+          List<GroupApprovalRequest> pendingGroups,
+          List<Map<String, dynamic>> approvedGroups,
+        ) => {
+          'contacts': contacts,
+          'pendingGroups': pendingGroups,
+          'approvedGroups': approvedGroups,
+        },
+      ).listen(
+        (data) async {
+          if (!mounted) return;
+
+          final contacts = data['contacts'] as List<contact_model.Contact>;
+          final pendingGroups = data['pendingGroups'] as List<GroupApprovalRequest>;
+          final approvedGroups = data['approvedGroups'] as List<Map<String, dynamic>>;
+
+          final grouped = await _controller.groupContactsByPerson(
+            contacts,
+            pendingGroups,
+            approvedGroups,
+          );
+
+          if (!mounted) return;
+          setState(() {
+            _groupedContacts = grouped;
+            _pendingCount =
+                grouped.fold(0, (total, c) => total + c.pendingCount);
+            _isLoading = false;
+          });
+        },
+        onError: (error) {
+          ReleaseLogger.error('Error en stream de contactos: $error', tag: 'WhitelistScreen');
+          if (mounted) {
+            setState(() => _isLoading = false);
+          }
+        },
+      );
+    } catch (e) {
+      ReleaseLogger.error('Error cargando datos: $e', tag: 'WhitelistScreen');
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  Future<void> _refresh() async {
+    await _loadData();
   }
 
   @override
   void dispose() {
-    _tabController.dispose();
+    _contactsSubscription?.cancel();
     _searchController.dispose();
-    _searchQuery.dispose();
     _controller.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    super.build(context); // Necesario para AutomaticKeepAliveClientMixin
+    super.build(context);
+
+    // Aplicar filtro pendiente si existe (navegación desde dashboard)
+    if (WhitelistScreen.pendingChildFilter != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && WhitelistScreen.pendingChildFilter != null) {
+          setState(() {
+            _childFilter = WhitelistScreen.pendingChildFilter!;
+            WhitelistScreen.pendingChildFilter = null;
+          });
+        }
+      });
+    }
+
     return Scaffold(
+      resizeToAvoidBottomInset: true,
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
@@ -78,61 +185,7 @@ class _WhitelistScreenState extends State<WhitelistScreen>
         child: SafeArea(
           child: Column(
             children: [
-              Padding(
-                padding: const EdgeInsets.all(20.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Control Parental 🛡️',
-                                style: TextStyle(
-                                  fontSize: 28,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.white,
-                                ),
-                              ),
-                              SizedBox(height: 4),
-                              Text(
-                                'Gestiona las solicitudes de tus hijos',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: Colors.white.withValues(alpha: 0.9),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        if (_controller.selectedRequests.isNotEmpty)
-                          Container(
-                            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.2),
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: Text(
-                              '${_controller.selectedRequests.length} seleccionada(s)',
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                    SizedBox(height: 16),
-                    // OPCIÓN C: Card Completa con Diseño Híbrido
-                    _buildModerationCard(context),
-                  ],
-                ),
-              ),
+              _buildHeader(context),
               Expanded(
                 child: Container(
                   decoration: BoxDecoration(
@@ -144,8 +197,8 @@ class _WhitelistScreenState extends State<WhitelistScreen>
                   ),
                   child: Column(
                     children: [
-                      _buildTabBar(),
-                      Expanded(child: _buildBody()),
+                      _buildSearchAndFilters(context),
+                      Expanded(child: _buildBody(context)),
                     ],
                   ),
                 ),
@@ -157,65 +210,239 @@ class _WhitelistScreenState extends State<WhitelistScreen>
     );
   }
 
-  Widget _buildTabBar() {
-    return Material(
-      color: Colors.transparent,
-      child: TabBar(
-        controller: _tabController,
-        labelColor: Theme.of(context).colorScheme.primary,
-        unselectedLabelColor: Theme.of(context).colorScheme.onSurfaceVariant,
-        indicatorColor: Theme.of(context).colorScheme.primary,
-        tabs: [
-          Tab(text: 'Pendientes'),
-          Tab(text: 'Aprobadas'),
-          Tab(text: 'Rechazadas'),
+  Widget _buildHeader(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(20.0),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Control Parental',
+                  style: TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  'Gestiona los contactos de tus hijos',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.white.withValues(alpha: 0.9),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Botón de Moderación IA
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: IconButton(
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => const ChatModerationManagementScreen(),
+                  ),
+                );
+              },
+              icon: Icon(Icons.psychology, color: Colors.white, size: 26),
+              tooltip: 'Moderación con IA',
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildBody() {
-    return StreamBuilder<List<String>>(
-      stream: _controller.getLinkedChildrenIdsStream(),
-      builder: (context, childrenSnapshot) {
-        if (childrenSnapshot.hasError) {
-          return Center(child: Text('Error: ${childrenSnapshot.error}'));
-        }
+  Widget _buildSearchAndFilters(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
 
-        if (childrenSnapshot.connectionState == ConnectionState.waiting) {
-          return Center(
-            child: CircularProgressIndicator(
-              color: Theme.of(context).colorScheme.primary,
-            ),
-          );
-        }
-
-        if (!childrenSnapshot.hasData || childrenSnapshot.data!.isEmpty) {
-          return _buildNoChildren();
-        }
-
-        final childrenIds = childrenSnapshot.data!;
-
-        return Column(
-          children: [
-            _buildSearchBar(),
-            Expanded(
-              child: TabBarView(
-                controller: _tabController,
-                children: [
-                  _buildPendingTab(childrenIds),
-                  _buildApprovedTab(),
-                  _buildRejectedTab(childrenIds),
-                ],
+    return Padding(
+      padding: EdgeInsets.all(16),
+      child: Column(
+        children: [
+          // Barra de búsqueda
+          TextField(
+            controller: _searchController,
+            onChanged: (value) => setState(() => _searchQuery = value),
+            style: TextStyle(color: colorScheme.onSurface),
+            decoration: InputDecoration(
+              hintText: 'Buscar contacto o hijo...',
+              hintStyle: TextStyle(color: colorScheme.onSurfaceVariant),
+              prefixIcon: Icon(Icons.search, color: colorScheme.primary),
+              suffixIcon: _searchQuery.isNotEmpty
+                  ? IconButton(
+                      icon: Icon(Icons.clear, size: 20),
+                      onPressed: () {
+                        _searchController.clear();
+                        setState(() => _searchQuery = '');
+                      },
+                    )
+                  : null,
+              filled: true,
+              fillColor: context.customColors.searchBarBackground,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide.none,
               ),
+              contentPadding: EdgeInsets.symmetric(vertical: 12),
             ),
-          ],
-        );
-      },
+          ),
+          SizedBox(height: 12),
+          // Filtros
+          Row(
+            children: [
+              // Filtro por estado
+              Expanded(
+                child: _buildFilterDropdown(
+                  value: _statusFilter,
+                  items: [
+                    DropdownMenuItem(value: 'all', child: Text('Todos')),
+                    DropdownMenuItem(
+                      value: 'pending',
+                      child: Row(
+                        children: [
+                          Text('Pendientes'),
+                          if (_pendingCount > 0) ...[
+                            SizedBox(width: 6),
+                            Container(
+                              padding: EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.orange,
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Text(
+                                '$_pendingCount',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    DropdownMenuItem(value: 'approved', child: Text('Aprobados')),
+                    DropdownMenuItem(value: 'rejected', child: Text('Rechazados')),
+                    DropdownMenuItem(value: 'revoked', child: Text('Revocados')),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) setState(() => _statusFilter = value);
+                  },
+                  icon: Icons.filter_list,
+                ),
+              ),
+              SizedBox(width: 12),
+              // Filtro por hijo
+              Expanded(
+                child: _buildFilterDropdown(
+                  value: _childFilter,
+                  items: [
+                    DropdownMenuItem(value: 'all', child: Text('Todos los hijos')),
+                    ..._linkedChildren.map((child) => DropdownMenuItem(
+                          value: child['id'],
+                          child: Text(child['name'] ?? 'Hijo'),
+                        )),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) setState(() => _childFilter = value);
+                  },
+                  icon: Icons.child_care,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
-  Widget _buildNoChildren() {
+  Widget _buildFilterDropdown({
+    required String value,
+    required List<DropdownMenuItem<String>> items,
+    required ValueChanged<String?> onChanged,
+    required IconData icon,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: context.customColors.searchBarBackground,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: value,
+          items: items,
+          onChanged: onChanged,
+          isExpanded: true,
+          icon: Icon(Icons.expand_more, color: colorScheme.onSurfaceVariant),
+          style: TextStyle(
+            fontSize: 14,
+            color: colorScheme.onSurface,
+          ),
+          dropdownColor: colorScheme.surface,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBody(BuildContext context) {
+    if (_isLoading) {
+      return Center(
+        child: CircularProgressIndicator(
+          color: Theme.of(context).colorScheme.primary,
+        ),
+      );
+    }
+
+    if (_linkedChildren.isEmpty) {
+      return _buildNoChildren(context);
+    }
+
+    // Aplicar filtros
+    final filteredContacts = _controller.filterGroupedContacts(
+      _groupedContacts,
+      statusFilter: _statusFilter,
+      childIdFilter: _childFilter,
+    );
+
+    if (filteredContacts.isEmpty) {
+      return _buildEmptyState(context);
+    }
+
+    return RefreshIndicator(
+      onRefresh: _refresh,
+      child: ListView.builder(
+        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        itemCount: filteredContacts.length,
+        itemBuilder: (context, index) {
+          final contact = filteredContacts[index];
+          return GroupedContactCard(
+            contact: contact,
+            controller: _controller,
+            searchQuery: _searchQuery,
+            onTap: () => _showContactDetail(contact),
+            onApprove: _handleApprove,
+            onReject: _handleReject,
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildNoChildren(BuildContext context) {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -223,7 +450,10 @@ class _WhitelistScreenState extends State<WhitelistScreen>
           Icon(
             Icons.family_restroom,
             size: 80,
-            color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+            color: Theme.of(context)
+                .colorScheme
+                .onSurfaceVariant
+                .withValues(alpha: 0.5),
           ),
           SizedBox(height: 16),
           Text(
@@ -248,189 +478,38 @@ class _WhitelistScreenState extends State<WhitelistScreen>
     );
   }
 
-  Widget _buildSearchBar() {
-    return Container(
-      padding: EdgeInsets.all(16),
-      color: Theme.of(context).colorScheme.surface,
-      child: TextField(
-        controller: _searchController,
-        onChanged: (value) => _searchQuery.value = value,
-        style: TextStyle(
-          color: Theme.of(context).colorScheme.onSurface,
-        ),
-        decoration: InputDecoration(
-          hintText: 'Buscar contacto o hijo...',
-          hintStyle: TextStyle(
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
-          ),
-          prefixIcon: Icon(
-            Icons.search,
-            color: Theme.of(context).colorScheme.primary,
-          ),
-          filled: true,
-          fillColor: context.customColors.searchBarBackground,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide.none,
-          ),
-          contentPadding: EdgeInsets.symmetric(vertical: 12),
-        ),
-      ),
-    );
-  }
+  Widget _buildEmptyState(BuildContext context) {
+    String title;
+    String subtitle;
+    IconData icon;
 
-  /// Tab de solicitudes pendientes
-  Widget _buildPendingTab(List<String> childrenIds) {
-    return StreamBuilder<List<ContactRequest>>(
-      stream: _controller.getPendingContactRequests(),
-      builder: (context, contactSnapshot) {
-        return StreamBuilder<List<PermissionRequest>>(
-          stream: _controller.getPendingPermissionRequests(),
-          builder: (context, groupSnapshot) {
-            return StreamBuilder<List<GroupApprovalRequest>>(
-              stream: _controller.getPendingGroupApprovalRequests(),
-              builder: (context, groupV2Snapshot) {
-                if (contactSnapshot.hasError || groupSnapshot.hasError || groupV2Snapshot.hasError) {
-                  return Center(
-                    child: Text('Error al cargar solicitudes'),
-                  );
-                }
+    switch (_statusFilter) {
+      case 'pending':
+        icon = Icons.check_circle_outline;
+        title = '¡Todo al día!';
+        subtitle = 'No hay solicitudes pendientes';
+        break;
+      case 'approved':
+        icon = Icons.shield_outlined;
+        title = 'Sin contactos aprobados';
+        subtitle = 'Los contactos aprobados aparecerán aquí';
+        break;
+      case 'rejected':
+        icon = Icons.block_outlined;
+        title = 'Sin solicitudes rechazadas';
+        subtitle = 'Las solicitudes rechazadas aparecerán aquí';
+        break;
+      case 'revoked':
+        icon = Icons.remove_circle_outline;
+        title = 'Sin contactos revocados';
+        subtitle = 'Los contactos revocados aparecerán aquí';
+        break;
+      default:
+        icon = Icons.people_outline;
+        title = 'Sin contactos';
+        subtitle = 'Los contactos de tus hijos aparecerán aquí';
+    }
 
-                if (contactSnapshot.connectionState == ConnectionState.waiting ||
-                    groupSnapshot.connectionState == ConnectionState.waiting ||
-                    groupV2Snapshot.connectionState == ConnectionState.waiting) {
-                  return Center(
-                    child: CircularProgressIndicator(
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
-                  );
-                }
-
-                // Combinar todos los tipos de solicitudes
-                final contactRequests = contactSnapshot.data ?? [];
-                final permissionRequests = groupSnapshot.data ?? [];
-                final groupApprovalRequests = groupV2Snapshot.data ?? [];
-
-                final allRequests = _controller.combinePendingRequests(
-                  contactRequests: contactRequests,
-                  permissionRequests: permissionRequests,
-                  groupApprovalRequests: groupApprovalRequests,
-                );
-
-                if (allRequests.isEmpty) {
-                  return _buildEmptyState(
-                    icon: Icons.check_circle_outline,
-                    title: '¡Todo al día!',
-                    subtitle: 'No hay solicitudes pendientes',
-                  );
-                }
-
-                return _buildRequestsList(
-                  requests: allRequests,
-                  showBulkActions: true,
-                );
-              },
-            );
-          },
-        );
-      },
-    );
-  }
-
-  /// Tab de solicitudes aprobadas
-  Widget _buildApprovedTab() {
-    return StreamBuilder<List<ContactRequest>>(
-      stream: _controller.getApprovedContactRequests(),
-      builder: (context, contactSnapshot) {
-        return StreamBuilder<List<PermissionRequest>>(
-          stream: _controller.getApprovedPermissionRequests(),
-          builder: (context, groupSnapshot) {
-            if (contactSnapshot.hasError || groupSnapshot.hasError) {
-              return Center(child: Text('Error al cargar solicitudes aprobadas'));
-            }
-
-            if (contactSnapshot.connectionState == ConnectionState.waiting ||
-                groupSnapshot.connectionState == ConnectionState.waiting) {
-              return Center(
-                child: CircularProgressIndicator(
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-              );
-            }
-
-            // Combinar ambos tipos
-            final contactRequests = contactSnapshot.data ?? [];
-            final permissionRequests = groupSnapshot.data ?? [];
-
-            final allRequests = _controller.combineApprovedRequests(
-              contactRequests: contactRequests,
-              permissionRequests: permissionRequests,
-            );
-
-            if (allRequests.isEmpty) {
-              return _buildEmptyState(
-                icon: Icons.shield_outlined,
-                title: 'Sin solicitudes aprobadas',
-                subtitle: 'Las solicitudes aprobadas aparecerán aquí',
-              );
-            }
-
-            return _buildApprovedRequestsList(requests: allRequests);
-          },
-        );
-      },
-    );
-  }
-
-  /// Tab de solicitudes rechazadas
-  Widget _buildRejectedTab(List<String> childrenIds) {
-    return StreamBuilder<List<ContactRequest>>(
-      stream: _controller.getRejectedContactRequests(),
-      builder: (context, contactSnapshot) {
-        return StreamBuilder<List<PermissionRequest>>(
-          stream: _controller.getRejectedPermissionRequests(),
-          builder: (context, groupSnapshot) {
-            if (contactSnapshot.hasError || groupSnapshot.hasError) {
-              return Center(child: Text('Error al cargar solicitudes rechazadas'));
-            }
-
-            if (contactSnapshot.connectionState == ConnectionState.waiting ||
-                groupSnapshot.connectionState == ConnectionState.waiting) {
-              return Center(
-                child: CircularProgressIndicator(
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-              );
-            }
-
-            final contactRequests = contactSnapshot.data ?? [];
-            final permissionRequests = groupSnapshot.data ?? [];
-
-            final allRequests = _controller.combineRejectedRequests(
-              contactRequests: contactRequests,
-              permissionRequests: permissionRequests,
-            );
-
-            if (allRequests.isEmpty) {
-              return _buildEmptyState(
-                icon: Icons.block_outlined,
-                title: 'Sin solicitudes rechazadas',
-                subtitle: 'Las solicitudes rechazadas aparecerán aquí',
-              );
-            }
-
-            return _buildRejectedRequestsList(requests: allRequests);
-          },
-        );
-      },
-    );
-  }
-
-  Widget _buildEmptyState({
-    required IconData icon,
-    required String title,
-    required String subtitle,
-  }) {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -438,7 +517,10 @@ class _WhitelistScreenState extends State<WhitelistScreen>
           Icon(
             icon,
             size: 80,
-            color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+            color: Theme.of(context)
+                .colorScheme
+                .onSurfaceVariant
+                .withValues(alpha: 0.5),
           ),
           SizedBox(height: 16),
           Text(
@@ -462,271 +544,396 @@ class _WhitelistScreenState extends State<WhitelistScreen>
     );
   }
 
-  Widget _buildRequestsList({
-    required List<Map<String, dynamic>> requests,
-    required bool showBulkActions,
-  }) {
-    return Column(
-      children: [
-        if (showBulkActions && _controller.selectedRequests.isNotEmpty)
-          _buildBulkActionsBar(),
-        Expanded(
-          child: ListView.builder(
-            padding: EdgeInsets.all(16),
-            itemCount: requests.length,
-            itemBuilder: (context, index) {
-              final request = requests[index];
-              return PendingRequestCard(
-                request: request,
-                controller: _controller,
-                searchQuery: _searchQuery,
-                onSelectionChanged: () => setState(() {}),
-                onApprove: _handleApproveSingleRequest,
-                onReject: _handleRejectSingleRequest,
-              );
-            },
+  // ═══════════════════════════════════════════════════════════════
+  // EVENT HANDLERS - Usan nuevos métodos del controller
+  // ═══════════════════════════════════════════════════════════════
+
+  Future<void> _handleApprove(ChildRelation relation) async {
+    ReleaseLogger.log('🔄 [HandleApprove] Iniciando - type: ${relation.type}, contactDocId: ${relation.contactDocId}, childId: ${relation.childId}', tag: 'WhitelistScreen');
+
+    // Feedback visual inmediato
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+              ),
+              SizedBox(width: 12),
+              Text('Aprobando...'),
+            ],
           ),
+          duration: Duration(seconds: 1),
+          backgroundColor: Colors.blue,
         ),
-      ],
-    );
-  }
+      );
+    }
 
-  Widget _buildApprovedRequestsList({
-    required List<Map<String, dynamic>> requests,
-  }) {
-    return ListView.builder(
-      padding: EdgeInsets.all(16),
-      itemCount: requests.length,
-      itemBuilder: (context, index) {
-        final request = requests[index];
-        return ApprovedRequestCard(
-          request: request,
-          controller: _controller,
-          searchQuery: _searchQuery,
-          onRevoke: _handleRevokeApproval,
+    Map<String, dynamic> result;
+
+    if (relation.type == 'group_v2') {
+      ReleaseLogger.log('📤 [HandleApprove] Llamando approveGroupV2Request', tag: 'WhitelistScreen');
+      result = await _controller.approveGroupV2Request(
+        requestId: relation.contactDocId,
+        groupId: relation.data['groupId'] ?? '',
+        childId: relation.childId,
+      );
+    } else {
+      // Contacto - usar escritura directa a Firestore
+      ReleaseLogger.log('📤 [HandleApprove] Llamando approveContact', tag: 'WhitelistScreen');
+      result = await _controller.approveContact(
+        contactDocId: relation.contactDocId,
+        childId: relation.childId,
+      );
+    }
+
+    ReleaseLogger.log('📥 [HandleApprove] Resultado: $result', tag: 'WhitelistScreen');
+
+    await UnreadMessagesService().updateBadgeCount();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      if (!result['success']) {
+        ReleaseLogger.error('❌ [HandleApprove] Error: ${result['error']}', tag: 'WhitelistScreen');
+        _showErrorSnackBar(result['error']);
+      } else {
+        ReleaseLogger.log('✅ [HandleApprove] Aprobación exitosa', tag: 'WhitelistScreen');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Contacto aprobado'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
         );
-      },
-    );
+        // Forzar recarga de datos para actualizar UI
+        await _loadData();
+      }
+    }
   }
 
-  Widget _buildRejectedRequestsList({
-    required List<Map<String, dynamic>> requests,
-  }) {
-    return ListView.builder(
-      padding: EdgeInsets.all(16),
-      itemCount: requests.length,
-      itemBuilder: (context, index) {
-        final request = requests[index];
-        return RejectedRequestCard(
-          request: request,
-          controller: _controller,
-          searchQuery: _searchQuery,
-          onReApprove: _handleReApproveRequest,
+  Future<void> _handleReject(ChildRelation relation) async {
+    // Feedback visual inmediato
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+              ),
+              SizedBox(width: 12),
+              Text('Rechazando...'),
+            ],
+          ),
+          duration: Duration(seconds: 1),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    }
+
+    Map<String, dynamic> result;
+
+    if (relation.type == 'group_v2') {
+      result = await _controller.rejectGroupV2Request(
+        requestId: relation.contactDocId,
+      );
+    } else {
+      // Contacto - usar escritura directa a Firestore
+      result = await _controller.rejectContact(
+        contactDocId: relation.contactDocId,
+        childId: relation.childId,
+      );
+    }
+
+    await UnreadMessagesService().updateBadgeCount();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      if (!result['success']) {
+        _showErrorSnackBar(result['error']);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Contacto rechazado'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
         );
-      },
-    );
+        // Forzar recarga de datos para actualizar UI
+        await _loadData();
+      }
+    }
   }
 
-  Widget _buildBulkActionsBar() {
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
-      child: Row(
-        children: [
-          Expanded(
-            child: ElevatedButton.icon(
-              onPressed: _handleApproveSelected,
-              icon: Icon(Icons.check_circle, size: 18),
-              label: Text('Aprobar Seleccionadas'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.green,
-                foregroundColor: Colors.white,
+  Future<void> _handleRevoke(ChildRelation relation) async {
+    ReleaseLogger.log('🔄 [WhitelistScreen] _handleRevoke llamado: type=${relation.type}, contactDocId=${relation.contactDocId}', tag: 'WhitelistScreen');
+
+    // Si es un grupo aprobado, sacar al hijo del grupo
+    if (relation.type == 'group_v2' && relation.status == 'approved') {
+      await _handleRevokeGroupMembership(relation);
+      return;
+    }
+
+    List<String>? groupsToRemove;
+
+    // Verificar grupos compartidos (solo para contactos individuales)
+    final contactId = relation.data['contactId'] as String?;
+    if (contactId != null) {
+      try {
+        final sharedGroups = await _controller.getSharedGroups(
+          childId: relation.childId,
+          contactId: contactId,
+        );
+
+        if (sharedGroups.isNotEmpty) {
+          final shouldRemove = await _showSharedGroupsDialog(
+            childName: relation.childName,
+            sharedGroups: sharedGroups,
+          );
+
+          if (shouldRemove == null) {
+            ReleaseLogger.log('⏹️ [WhitelistScreen] Usuario canceló diálogo de grupos', tag: 'WhitelistScreen');
+            return; // Canceló
+          }
+
+          if (shouldRemove) {
+            groupsToRemove =
+                sharedGroups.map((g) => g['id'] as String).toList();
+          }
+        }
+      } catch (e) {
+        ReleaseLogger.error('Error verificando grupos: $e',
+            tag: 'WhitelistScreen');
+      }
+    }
+
+    // Feedback visual inmediato
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+              ),
+              SizedBox(width: 12),
+              Text('Revocando contacto...'),
+            ],
+          ),
+          duration: Duration(seconds: 2),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    }
+
+    ReleaseLogger.log('📤 [WhitelistScreen] Llamando revokeContact...', tag: 'WhitelistScreen');
+    final result = await _controller.revokeContact(
+      contactDocId: relation.contactDocId,
+      childId: relation.childId,
+      groupsToRemove: groupsToRemove,
+    );
+    ReleaseLogger.log('📥 [WhitelistScreen] revokeContact resultado: $result', tag: 'WhitelistScreen');
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      if (result['success']) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Contacto revocado exitosamente'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+        // Forzar recarga de datos para actualizar UI
+        await _loadData();
+      } else {
+        _showErrorSnackBar(result['error']);
+      }
+    }
+  }
+
+  /// Manejar revocación de membresía de grupo (sacar hijo del grupo)
+  Future<void> _handleRevokeGroupMembership(ChildRelation relation) async {
+    final groupId = relation.data['groupId'] as String?;
+    final groupName = relation.data['groupName'] as String? ?? 'el grupo';
+
+    if (groupId == null) {
+      ReleaseLogger.error('❌ [RevokeGroup] groupId no encontrado', tag: 'WhitelistScreen');
+      return;
+    }
+
+    // Mostrar diálogo de confirmación
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: Icon(
+          Icons.group_remove,
+          size: 48,
+          color: Colors.orange,
+        ),
+        title: Text('Sacar del grupo'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '¿Estás seguro de que quieres sacar a ${relation.childName} del grupo "$groupName"?',
+              textAlign: TextAlign.center,
+            ),
+            SizedBox(height: 12),
+            Text(
+              'Ya no podrá ver los mensajes ni participar en el grupo.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.grey[600],
+                fontSize: 13,
               ),
             ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text('Cancelar'),
           ),
-          SizedBox(width: 12),
-          IconButton(
-            onPressed: () => setState(() => _controller.selectedRequests.clear()),
-            icon: Icon(Icons.close),
-            color: Colors.red,
-            tooltip: 'Cancelar selección',
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.orange,
+              foregroundColor: Colors.white,
+            ),
+            child: Text('Sacar del grupo'),
           ),
         ],
       ),
     );
-  }
 
-  // Event handlers (llaman al controller)
+    if (confirm != true) return;
 
-  Future<void> _handleApproveSingleRequest(
-    String requestId,
-    String childId,
-    Map<String, dynamic> data,
-    String type,
-  ) async {
-    setState(() {}); // Actualizar UI para mostrar loader
+    // Feedback visual inmediato
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+              ),
+              SizedBox(width: 12),
+              Text('Sacando del grupo...'),
+            ],
+          ),
+          duration: Duration(seconds: 2),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    }
 
-    final result = await _controller.approveSingleRequest(
-      requestId: requestId,
-      childId: childId,
-      data: data,
-      type: type,
+    ReleaseLogger.log('📤 [RevokeGroup] Llamando revokeGroupMembership: groupId=$groupId, childId=${relation.childId}', tag: 'WhitelistScreen');
+    final result = await _controller.revokeGroupMembership(
+      groupId: groupId,
+      childId: relation.childId,
     );
 
-    setState(() {}); // Actualizar UI después de completar
-
-    // Actualizar badge del ícono de la app
-    await UnreadMessagesService().updateBadgeCount();
-
-    if (!result['success'] && mounted) {
-      _showErrorSnackBar(result['error']);
-    }
-  }
-
-  Future<void> _handleRejectSingleRequest(String requestId, String type) async {
-    final result = await _controller.rejectSingleRequest(
-      requestId: requestId,
-      type: type,
-    );
-
-    setState(() {});
-
-    // Actualizar badge del ícono de la app
-    await UnreadMessagesService().updateBadgeCount();
-
-    if (result['success'] && mounted) {
-      _showSuccessSnackBar('Solicitud rechazada');
-    } else if (!result['success'] && mounted) {
-      _showErrorSnackBar(result['error']);
-    }
-  }
-
-  Future<void> _handleRevokeApproval(
-    String requestId,
-    String childId,
-    String contactName,
-    String type,
-    Map<String, dynamic> data,
-  ) async {
-    List<String>? groupsToRemove;
-
-    // Solo verificar grupos compartidos si es un contacto
-    if (type == 'contact') {
-      // Obtener el contactId del teléfono
-      final contactPhone = data['contactPhone'] as String?;
-      if (contactPhone != null) {
-        try {
-          // Buscar el userId por teléfono
-          final userQuery = await FirebaseFirestore.instance
-              .collection('users')
-              .where('phoneNumber', isEqualTo: contactPhone)
-              .limit(1)
-              .get();
-
-          if (userQuery.docs.isNotEmpty) {
-            final contactId = userQuery.docs.first.id;
-
-            // Verificar si comparten grupos
-            final sharedGroups = await _controller.getSharedGroups(
-              childId: childId,
-              contactId: contactId,
-            );
-
-            if (sharedGroups.isNotEmpty) {
-              // Mostrar alerta de grupos compartidos
-              final shouldRemoveFromGroups = await _showSharedGroupsDialog(
-                childId: childId,
-                contactName: contactName,
-                sharedGroups: sharedGroups,
-              );
-
-              if (shouldRemoveFromGroups == null) {
-                return; // Usuario canceló
-              }
-
-              if (shouldRemoveFromGroups) {
-                groupsToRemove = sharedGroups.map((g) => g['id'] as String).toList();
-              }
-            }
-          }
-        } catch (e) {
-          ReleaseLogger.error('Error verificando grupos compartidos: $e', tag: 'WhitelistScreen');
-        }
+    if (mounted) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      if (result['success'] == true) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${relation.childName} fue removido del grupo'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+        // Forzar recarga de datos para actualizar UI
+        await _loadData();
+      } else {
+        _showErrorSnackBar(result['error'] ?? 'Error al sacar del grupo');
       }
     }
-
-    final confirmed = await _showConfirmDialog(
-      title: 'Revocar Aprobación',
-      message: '¿Deseas revocar la aprobación de "$contactName"?\n\nEsto bloqueará el chat entre ellos.',
-    );
-
-    if (confirmed != true) return;
-
-    setState(() {});
-
-    final result = await _controller.revokeApproval(
-      requestId: requestId,
-      childId: childId,
-      type: type,
-      data: data,
-      groupsToRemove: groupsToRemove,
-    );
-
-    setState(() {});
-
-    if (result['success'] && mounted) {
-      _showSuccessSnackBar('Aprobación revocada');
-    } else if (!result['success'] && mounted) {
-      _showErrorSnackBar(result['error']);
-    }
   }
 
-  Future<void> _handleReApproveRequest(
-    String requestId,
-    String childId,
-    Map<String, dynamic> data,
-    String type,
-  ) async {
-    setState(() {});
+  Future<void> _handleReApprove(ChildRelation relation) async {
+    // Feedback visual inmediato
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+              ),
+              SizedBox(width: 12),
+              Text('Habilitando contacto...'),
+            ],
+          ),
+          duration: Duration(seconds: 2),
+          backgroundColor: Colors.blue,
+        ),
+      );
+    }
 
-    final result = await _controller.reApproveRequest(
-      requestId: requestId,
-      childId: childId,
-      data: data,
-      type: type,
+    final result = await _controller.reApproveContact(
+      contactDocId: relation.contactDocId,
+      childId: relation.childId,
     );
 
-    setState(() {});
-
-    // Actualizar badge del ícono de la app
     await UnreadMessagesService().updateBadgeCount();
 
-    if (result['success'] && mounted) {
-      _showSuccessSnackBar('Solicitud re-aprobada');
-    } else if (!result['success'] && mounted) {
-      _showErrorSnackBar(result['error']);
+    if (mounted) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      if (result['success']) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Contacto habilitado exitosamente'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+        await _loadData();
+      } else {
+        _showErrorSnackBar(result['error']);
+      }
     }
   }
 
-  Future<void> _handleApproveSelected() async {
-    if (_controller.selectedRequests.isEmpty) return;
-
-    final confirmed = await _showConfirmDialog(
-      title: 'Aprobar solicitudes',
-      message: '¿Deseas aprobar ${_controller.selectedRequests.length} solicitud${_controller.selectedRequests.length > 1 ? 'es' : ''}?',
+  /// Abrir bottom sheet con detalle del contacto y moderación
+  void _showContactDetail(GroupedContact contact) {
+    ContactDetailSheet.show(
+      context: context,
+      contact: contact,
+      controller: _controller,
+      onApprove: (relation) async {
+        await _handleApprove(relation);
+      },
+      onReject: (relation) async {
+        await _handleReject(relation);
+      },
+      onRevoke: (relation) async {
+        await _handleRevoke(relation);
+      },
+      onReApprove: (relation) async {
+        await _handleReApprove(relation);
+      },
     );
-
-    if (confirmed != true) return;
-
-    // TODO: Implement bulk approval
-    _showInfoSnackBar('Funcionalidad en desarrollo');
   }
 
-  // Helper methods
+  // ═══════════════════════════════════════════════════════════════
+  // DIALOGS
+  // ═══════════════════════════════════════════════════════════════
 
   Future<bool?> _showSharedGroupsDialog({
-    required String childId,
-    required String contactName,
+    required String childName,
     required List<Map<String, dynamic>> sharedGroups,
   }) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -734,9 +941,10 @@ class _WhitelistScreenState extends State<WhitelistScreen>
     return showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        icon: Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 48),
+        icon:
+            Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 48),
         title: Text(
-          '⚠️ Grupos Compartidos Detectados',
+          'Grupos Compartidos',
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
         ),
         content: SingleChildScrollView(
@@ -745,60 +953,31 @@ class _WhitelistScreenState extends State<WhitelistScreen>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Tu hijo comparte ${sharedGroups.length} ${sharedGroups.length == 1 ? 'grupo' : 'grupos'} con $contactName:',
+                '$childName comparte ${sharedGroups.length} ${sharedGroups.length == 1 ? 'grupo' : 'grupos'} con este contacto:',
                 style: TextStyle(fontSize: 14),
               ),
               SizedBox(height: 12),
               ...sharedGroups.map((group) => Padding(
-                padding: EdgeInsets.only(bottom: 8),
-                child: Row(
-                  children: [
-                    Icon(Icons.group, size: 16, color: colorScheme.primary),
-                    SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        '${group['name']} (${group['memberCount']} miembros)',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              )),
-              SizedBox(height: 16),
-              Container(
-                padding: EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.orange.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
+                    padding: EdgeInsets.only(bottom: 8),
+                    child: Row(
                       children: [
-                        Icon(Icons.info_outline, size: 16, color: Colors.orange),
+                        Icon(Icons.group, size: 16, color: colorScheme.primary),
                         SizedBox(width: 8),
-                        Text(
-                          '¿Qué deseas hacer?',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13,
-                            color: Colors.orange.shade800,
+                        Expanded(
+                          child: Text(
+                            '${group['name']}',
+                            style: TextStyle(
+                                fontSize: 13, fontWeight: FontWeight.w500),
                           ),
                         ),
                       ],
                     ),
-                    SizedBox(height: 8),
-                    Text(
-                      'Aunque revoques el contacto, tu hijo podrá seguir comunicándose con $contactName a través de estos grupos.',
-                      style: TextStyle(fontSize: 12, height: 1.4),
-                    ),
-                  ],
-                ),
+                  )),
+              SizedBox(height: 12),
+              Text(
+                '¿Deseas sacar a $childName de estos grupos también?',
+                style:
+                    TextStyle(fontSize: 13, color: colorScheme.onSurfaceVariant),
               ),
             ],
           ),
@@ -810,158 +989,22 @@ class _WhitelistScreenState extends State<WhitelistScreen>
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: Text(
-              'Mantener en grupos',
-              style: TextStyle(color: Colors.orange),
-            ),
+            child: Text('Mantener en grupos'),
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: colorScheme.primary,
-            ),
-            child: Text('Sacar de grupos (Recomendado)'),
-          ),
-        ],
-        actionsPadding: EdgeInsets.all(16),
-      ),
-    );
-  }
-
-  Future<bool?> _showConfirmDialog({
-    required String title,
-    required String message,
-  }) {
-    return showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(title),
-        content: Text(message),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text('Cancelar'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
-            child: Text('Confirmar'),
+            child: Text('Sacar de grupos'),
           ),
         ],
       ),
     );
-  }
-
-  void _showSuccessSnackBar(String message) {
-    // Success feedback removed - user sees visual confirmation in the UI
   }
 
   void _showErrorSnackBar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('❌ $message'),
+        content: Text(message),
         backgroundColor: Colors.red,
-      ),
-    );
-  }
-
-  void _showInfoSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
-  }
-
-  Widget _buildModerationCard(BuildContext context) {
-    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
-    return GestureDetector(
-      onTap: () {
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (context) => const ChatModerationManagementScreen(),
-          ),
-        );
-      },
-      child: Container(
-        width: double.infinity,
-        padding: EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          gradient: isDarkMode
-              ? LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    Color(0xFF667eea), // Soft indigo
-                    Color(0xFF764ba2), // Deep purple
-                  ],
-                )
-              : null,
-          color: isDarkMode ? null : Colors.white,
-          border: isDarkMode
-              ? null
-              : Border.all(
-                  color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.2),
-                  width: 2,
-                ),
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: isDarkMode
-                  ? Color(0xFF667eea).withValues(alpha: 0.3)
-                  : Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
-              blurRadius: 12,
-              offset: Offset(0, 6),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            Container(
-              padding: EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: isDarkMode
-                    ? Colors.white.withValues(alpha: 0.2)
-                    : Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                Icons.psychology,
-                color: isDarkMode ? Colors.white : Theme.of(context).colorScheme.primary,
-                size: 28,
-              ),
-            ),
-            SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Moderación con IA',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: isDarkMode ? Colors.white : Theme.of(context).colorScheme.onSurface,
-                    ),
-                  ),
-                  SizedBox(height: 4),
-                  Text(
-                    'Gestiona la protección automática',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: isDarkMode
-                          ? Colors.white.withValues(alpha: 0.9)
-                          : Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Icon(
-              Icons.arrow_forward_ios,
-              color: isDarkMode ? Colors.white : Theme.of(context).colorScheme.primary,
-              size: 18,
-            ),
-          ],
-        ),
       ),
     );
   }

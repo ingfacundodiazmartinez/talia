@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
+import '../models/contact.dart';
 import '../services/chat_permission_service.dart';
 import '../services/block_service.dart';
 import '../utils/release_logger.dart';
@@ -71,43 +72,69 @@ class ChildContactsController {
     }
   }
 
-  /// Stream de solicitudes donde YO soy el hijo (mis padres deben aprobar)
-  Stream<QuerySnapshot> getMyContactRequestsStream() {
+  /// Stream de contactos donde MI aprobación está pendiente (mis padres deben aprobar)
+  /// Usa colección `contacts` con filtro client-side por approvals[userId].status
+  Stream<List<Contact>> getMyPendingContactsStream() {
     final userId = currentUserId;
     if (userId == null) {
       ReleaseLogger.error('Usuario no autenticado para obtener mis solicitudes', tag: 'ChildContacts');
-      return Stream.value(const []).cast<QuerySnapshot>();
+      return Stream.value([]);
     }
 
     try {
-      return _firestore
-          .collection('contact_requests')
-          .where('childId', isEqualTo: userId)
-          .where('status', isEqualTo: 'pending')
-          .snapshots();
+      return Contact.watchPendingForChild(userId);
     } catch (e) {
       ReleaseLogger.error('Error obteniendo stream de mis solicitudes: $e', tag: 'ChildContacts');
-      return Stream.value(const []).cast<QuerySnapshot>();
+      return Stream.value([]);
     }
   }
 
-  /// Stream de solicitudes donde YO soy el contacto (padres del otro deben aprobar)
-  Stream<QuerySnapshot> getOtherContactRequestsStream() {
+  /// Stream de contactos donde el OTRO usuario tiene aprobación pendiente (sus padres deben aprobar)
+  Stream<List<Contact>> getOtherPendingContactsStream() {
     final userId = currentUserId;
     if (userId == null) {
       ReleaseLogger.error('Usuario no autenticado para obtener otras solicitudes', tag: 'ChildContacts');
-      return Stream.value(const []).cast<QuerySnapshot>();
+      return Stream.value([]);
     }
 
     try {
-      return _firestore
-          .collection('contact_requests')
-          .where('contactId', isEqualTo: userId)
-          .where('status', isEqualTo: 'pending')
-          .snapshots();
+      return Contact.watchOtherPendingForChild(userId);
     } catch (e) {
       ReleaseLogger.error('Error obteniendo stream de otras solicitudes: $e', tag: 'ChildContacts');
-      return Stream.value(const []).cast<QuerySnapshot>();
+      return Stream.value([]);
+    }
+  }
+
+  /// Stream de contactos RECHAZADOS donde yo soy el child (mis padres rechazaron)
+  Stream<List<Contact>> getRejectedContactsStream() {
+    final userId = currentUserId;
+    if (userId == null) {
+      ReleaseLogger.error('Usuario no autenticado para obtener solicitudes rechazadas', tag: 'ChildContacts');
+      return Stream.value([]);
+    }
+
+    try {
+      return Contact.watchRejectedForChild(userId);
+    } catch (e) {
+      ReleaseLogger.error('Error obteniendo stream de solicitudes rechazadas: $e', tag: 'ChildContacts');
+      return Stream.value([]);
+    }
+  }
+
+  /// Stream de contactos SUGERIDOS (potential) - descubiertos en sync pero no solicitados aún
+  /// Estos contactos aparecen en sección "Sugeridos" y pueden solicitarse aprobación
+  Stream<List<Contact>> getPotentialContactsStream() {
+    final userId = currentUserId;
+    if (userId == null) {
+      ReleaseLogger.error('Usuario no autenticado para obtener contactos sugeridos', tag: 'ChildContacts');
+      return Stream.value([]);
+    }
+
+    try {
+      return Contact.watchPotentialForUser(userId);
+    } catch (e) {
+      ReleaseLogger.error('Error obteniendo stream de contactos sugeridos: $e', tag: 'ChildContacts');
+      return Stream.value([]);
     }
   }
 
@@ -193,27 +220,11 @@ class ChildContactsController {
     return getChatId(userId, contactId);
   }
 
-  /// Determinar el "otro usuario" en una solicitud de contacto
-  String getOtherUserId(Map<String, dynamic> requestData) {
+  /// Determinar el "otro usuario" en un contacto
+  String getOtherUserIdFromContact(Contact contact) {
     final userId = currentUserId;
     if (userId == null) return '';
-
-    final childId = requestData['childId'] as String;
-    final contactId = requestData['contactId'] as String;
-
-    return (childId == userId) ? contactId : childId;
-  }
-
-  /// Obtener nombre del "otro usuario" en una solicitud
-  String getOtherUserName(Map<String, dynamic> requestData) {
-    final userId = currentUserId;
-    if (userId == null) return 'Usuario';
-
-    final childId = requestData['childId'] as String;
-
-    return (childId == userId)
-        ? (requestData['contactName'] ?? 'Usuario')
-        : (requestData['childName'] ?? 'Usuario');
+    return contact.getOtherUserId(userId);
   }
 
   /// Filtrar contactos por búsqueda
@@ -227,65 +238,27 @@ class ChildContactsController {
     return blockedContacts.contains(contactId);
   }
 
-  /// Agrupar solicitudes pendientes por usuario
-  Map<String, List<QueryDocumentSnapshot>> groupPendingRequestsByUser(
-    List<QueryDocumentSnapshot> docs,
-  ) {
+  /// Agrupar contactos pendientes por otro usuario
+  Map<String, List<Contact>> groupPendingContactsByUser(List<Contact> contacts) {
     final userId = currentUserId;
     if (userId == null) return {};
 
-    final Map<String, List<QueryDocumentSnapshot>> groupedRequests = {};
+    final Map<String, List<Contact>> groupedContacts = {};
 
     try {
-      for (var doc in docs) {
-        final data = doc.data() as Map<String, dynamic>;
-        final otherUserId = getOtherUserId(data);
+      for (var contact in contacts) {
+        final otherUserId = contact.getOtherUserId(userId);
 
         if (otherUserId.isNotEmpty) {
-          if (!groupedRequests.containsKey(otherUserId)) {
-            groupedRequests[otherUserId] = [];
-          }
-          groupedRequests[otherUserId]!.add(doc);
+          groupedContacts.putIfAbsent(otherUserId, () => []);
+          groupedContacts[otherUserId]!.add(contact);
         }
       }
     } catch (e) {
-      ReleaseLogger.error('Error agrupando solicitudes pendientes: $e', tag: 'ChildContacts');
+      ReleaseLogger.error('Error agrupando contactos pendientes: $e', tag: 'ChildContacts');
     }
 
-    return groupedRequests;
-  }
-
-  /// Separar solicitudes en "mis padres" vs "padres del otro"
-  Map<String, List<Map<String, dynamic>>> categorizeRequests(
-    List<QueryDocumentSnapshot> requests,
-  ) {
-    final userId = currentUserId;
-    if (userId == null) {
-      return {'myParentRequests': [], 'otherParentRequests': []};
-    }
-
-    final myParentRequests = <Map<String, dynamic>>[];
-    final otherParentRequests = <Map<String, dynamic>>[];
-
-    try {
-      for (var request in requests) {
-        final data = request.data() as Map<String, dynamic>;
-        final requestChildId = data['childId'] as String;
-
-        if (requestChildId == userId) {
-          myParentRequests.add(data);
-        } else {
-          otherParentRequests.add(data);
-        }
-      }
-    } catch (e) {
-      ReleaseLogger.error('Error categorizando solicitudes: $e', tag: 'ChildContacts');
-    }
-
-    return {
-      'myParentRequests': myParentRequests,
-      'otherParentRequests': otherParentRequests,
-    };
+    return groupedContacts;
   }
 
   /// Crear mapa de nombres de padres por ID
@@ -310,18 +283,6 @@ class ChildContactsController {
 
   /// Validar que el usuario actual esté autenticado
   bool get isUserAuthenticated => currentUserId != null;
-
-  /// Validar datos de solicitud de contacto
-  bool isValidContactRequest(Map<String, dynamic> data) {
-    try {
-      return data.containsKey('childId') &&
-             data.containsKey('contactId') &&
-             data.containsKey('parentId');
-    } catch (e) {
-      ReleaseLogger.error('Error validando solicitud de contacto: $e', tag: 'ChildContacts');
-      return false;
-    }
-  }
 
   /// Limpiar recursos
   void dispose() {

@@ -12,6 +12,7 @@ import '../services/typing_indicator_service.dart';
 import '../utils/release_logger.dart';
 import '../services/sound_service.dart';
 import '../services/block_service.dart';
+import '../services/block_status_cache_service.dart';
 import '../services/chat/message_sending_service.dart';
 import '../services/chat/message_pagination_service.dart';
 import '../services/chat/message_actions_service.dart';
@@ -51,12 +52,14 @@ class ChatControllerOptimistic extends ChangeNotifier {
   final TypingIndicatorService _typingService;
   final SoundService _soundService;
   final BlockService _blockService;
+  final BlockStatusCacheService _blockStatusCache;
 
   // Subscripciones
   StreamSubscription? _notificationSubscription;
   StreamSubscription? _messagesSubscription;
   StreamSubscription? _isBlockedSubscription;
   StreamSubscription? _isBlockedBySubscription;
+  StreamSubscription? _chatBlockedSubscription;
 
   // Estado de carga
   bool _isLoading = false;
@@ -111,7 +114,8 @@ class ChatControllerOptimistic extends ChangeNotifier {
        _notificationService = notificationService ?? NotificationService(),
        _typingService = typingService ?? TypingIndicatorService(),
        _soundService = soundService ?? SoundService(),
-       _blockService = blockService ?? BlockService() {
+       _blockService = blockService ?? BlockService(),
+       _blockStatusCache = BlockStatusCacheService() {
     _controllerId = DateTime.now().millisecondsSinceEpoch.toString().substring(
       8,
     );
@@ -140,15 +144,47 @@ class ChatControllerOptimistic extends ChangeNotifier {
 
   /// Configurar listeners para estado de bloqueo
   void setupBlockListeners() {
+    // Listener directo al documento de chat
     _isBlockedSubscription = _blockService.isBlockedStream(contactId).listen((isBlocked) {
-      _isBlocked = isBlocked;
-      notifyListeners();
+      if (_isBlocked != isBlocked) {
+        ReleaseLogger.log('🔒[Controller-$_controllerId] isBlocked cambió: $_isBlocked -> $isBlocked', tag: 'ChatController');
+        _isBlocked = isBlocked;
+        notifyListeners();
+      }
     });
 
     _isBlockedBySubscription = _blockService.isBlockedByStream(contactId).listen((isBlockedBy) {
-      _isBlockedBy = isBlockedBy;
-      notifyListeners();
+      if (_isBlockedBy != isBlockedBy) {
+        ReleaseLogger.log('🔒[Controller-$_controllerId] isBlockedBy cambió: $_isBlockedBy -> $isBlockedBy', tag: 'ChatController');
+        _isBlockedBy = isBlockedBy;
+        notifyListeners();
+      }
     });
+
+    // Listener adicional al cache service para cambios globales (más robusto)
+    _chatBlockedSubscription = _blockStatusCache.blockStatusChanges.listen((change) {
+      if (change.contactId == contactId) {
+        ReleaseLogger.log('🔒[Controller-$_controllerId] BlockStatusCache detectó cambio para $contactId: ${change.isBlocked}', tag: 'ChatController');
+        // Forzar refresh del estado desde Firestore
+        _refreshBlockStatus();
+      }
+    });
+  }
+
+  /// Refresh block status from Firestore
+  Future<void> _refreshBlockStatus() async {
+    try {
+      final isBlocked = await _blockService.isBlocked(contactId);
+      final isBlockedBy = await _blockService.isBlockedBy(contactId);
+
+      if (_isBlocked != isBlocked || _isBlockedBy != isBlockedBy) {
+        _isBlocked = isBlocked;
+        _isBlockedBy = isBlockedBy;
+        notifyListeners();
+      }
+    } catch (e) {
+      ReleaseLogger.error('Error refreshing block status: $e', tag: 'ChatController');
+    }
   }
 
   /// Marcar el chat como leído
@@ -782,8 +818,16 @@ class ChatControllerOptimistic extends ChangeNotifier {
   }
 
   /// Stream del estado online del contacto
-  Stream<DocumentSnapshot> watchContactStatus() {
-    return _firestore.collection('users').doc(contactId).snapshots();
+  /// ✅ FIX: Maneja errores de permisos gracefully (ej: cuando se revoca un contacto)
+  Stream<DocumentSnapshot?> watchContactStatus() {
+    return _firestore
+        .collection('users')
+        .doc(contactId)
+        .snapshots()
+        .handleError((error) {
+          // Ignorar errores de permisos silenciosamente
+          return null;
+        });
   }
 
   /// Obtener datos del usuario actual para manejo de errores
@@ -811,6 +855,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
     _messagesSubscription?.cancel();
     _isBlockedSubscription?.cancel();
     _isBlockedBySubscription?.cancel();
+    _chatBlockedSubscription?.cancel();
     super.dispose();
   }
 }

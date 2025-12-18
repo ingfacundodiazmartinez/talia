@@ -77,16 +77,28 @@ class ProfileCompletionService {
   }
 
   // Check if phone number already exists
+  // ✅ FIX: Usa Cloud Function para evitar error de permisos con queries de usuarios
   Future<bool> isPhoneNumberDuplicate(String phoneNumber, String currentUserId) async {
-    final existingUsers = await FirebaseFirestore.instance
-        .collection('users')
-        .where('phone', isEqualTo: phoneNumber)
-        .get();
+    try {
+      final callable = FirebaseFunctions.instance.httpsCallable('checkPhoneDuplicate');
+      final result = await callable.call<Map<String, dynamic>>({
+        'phoneNumber': phoneNumber,
+      });
 
-    if (existingUsers.docs.isNotEmpty) {
-      return existingUsers.docs.any((doc) => doc.id != currentUserId);
+      final response = result.data;
+      final success = response['success'] as bool? ?? false;
+
+      if (!success) {
+        ReleaseLogger.error('Error verificando teléfono duplicado', tag: 'ProfileCompletion');
+        return false; // Asumir que no hay duplicado en caso de error
+      }
+
+      return response['isDuplicate'] as bool? ?? false;
+    } catch (e) {
+      ReleaseLogger.error('Error llamando checkPhoneDuplicate: $e', tag: 'ProfileCompletion');
+      // En caso de error, permitir continuar (la validación de duplicados no es crítica)
+      return false;
     }
-    return false;
   }
 
   // Complete user profile

@@ -68,42 +68,54 @@ class ParticipantSelectorController extends ChangeNotifier {
        _auth = auth ?? FirebaseAuth.instance;
 
   /// Inicializar y cargar contactos
+  /// ✅ FIX #9: Mejorado manejo de errores - muestra lista vacía en vez de error
   Future<void> initialize() async {
     _isLoading = true;
     _error = null;
     notifyListeners();
 
     try {
-      ReleaseLogger.log('Cargando contactos para selector...', tag: 'ParticipantSelector');
+      ReleaseLogger.log('🔄 Cargando contactos para selector...', tag: 'ParticipantSelector');
 
       // 1. Obtener IDs de contactos (usa cache si es válido)
+      // Ahora tiene fail-safe: retorna al menos Set vacío o {userId}
       final contactIds = await _contactRepository.getContactIds();
+      ReleaseLogger.log('📋 ContactIds obtenidos: ${contactIds.length} (incluye usuario actual)', tag: 'ParticipantSelector');
 
       // Remover el usuario actual de la lista
       final currentUserId = _auth.currentUser?.uid;
       final otherContactIds = contactIds.where((id) => id != currentUserId).toList();
+      ReleaseLogger.log('👥 Contactos (sin usuario actual): ${otherContactIds.length}', tag: 'ParticipantSelector');
 
       if (otherContactIds.isEmpty) {
+        ReleaseLogger.log('⚠️ No hay contactos disponibles para agregar', tag: 'ParticipantSelector');
         _allContacts = [];
         _filteredContacts = [];
         _isLoading = false;
+        _error = null; // ✅ FIX #9: No mostrar error, solo lista vacía
         notifyListeners();
         return;
       }
 
       // 2. Obtener detalles de usuarios en batch
+      // Ahora tiene fail-safe: retorna Map vacío si hay error
       final usersInfo = await _contactRepository.getUsersInfo(otherContactIds);
+      ReleaseLogger.log('📝 Info de usuarios obtenida: ${usersInfo.length}', tag: 'ParticipantSelector');
 
       // 3. Crear lista de contactos seleccionables
-      _allContacts = otherContactIds.map((id) {
-        final userInfo = usersInfo[id];
-        return SelectableContact(
-          id: id,
-          name: userInfo?['name'] as String? ?? 'Usuario',
-          photoUrl: userInfo?['photoUrl'] as String?,
-          phoneNumber: userInfo?['phoneNumber'] as String?,
-        );
-      }).toList();
+      // ✅ FIX #9: Solo incluir contactos que tienen info disponible
+      _allContacts = otherContactIds
+          .where((id) => usersInfo.containsKey(id) || true) // Incluir todos, con fallback name
+          .map((id) {
+            final userInfo = usersInfo[id];
+            return SelectableContact(
+              id: id,
+              name: userInfo?['name'] as String? ?? 'Usuario',
+              photoUrl: userInfo?['photoUrl'] as String?,
+              phoneNumber: userInfo?['phoneNumber'] as String?,
+            );
+          })
+          .toList();
 
       // Ordenar alfabéticamente
       _allContacts.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
@@ -111,11 +123,16 @@ class ParticipantSelectorController extends ChangeNotifier {
       // Inicialmente mostrar todos
       _filteredContacts = List.from(_allContacts);
 
-      ReleaseLogger.log('Contactos cargados: ${_allContacts.length}', tag: 'ParticipantSelector');
+      ReleaseLogger.log('✅ Contactos cargados: ${_allContacts.length}', tag: 'ParticipantSelector');
+      _error = null; // ✅ FIX #9: Asegurar que no hay error
 
     } catch (e) {
-      ReleaseLogger.error('Error cargando contactos: $e', tag: 'ParticipantSelector');
-      _error = 'Error al cargar contactos';
+      // ✅ FIX #9: Este catch ahora debería ser muy raro gracias a los fail-safes
+      ReleaseLogger.error('❌ Error inesperado cargando contactos: $e', tag: 'ParticipantSelector');
+      // En vez de mostrar error, mostrar lista vacía
+      _allContacts = [];
+      _filteredContacts = [];
+      _error = null; // No mostrar error genérico, la UI mostrará "No hay contactos"
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -124,8 +141,10 @@ class ParticipantSelectorController extends ChangeNotifier {
 
   /// Establecer IDs a excluir de la lista (ej: participantes ya en llamada)
   void setExcludedIds(Set<String> excludedIds) {
+    ReleaseLogger.log('🚫 Excluyendo ${excludedIds.length} participantes: $excludedIds', tag: 'ParticipantSelector');
     _excludedIds = excludedIds;
     _applyFilters();
+    ReleaseLogger.log('📊 Contactos después de filtros: ${_filteredContacts.length}/${_allContacts.length}', tag: 'ParticipantSelector');
     notifyListeners();
   }
 

@@ -2,25 +2,46 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'block_status_cache_service.dart';
 import 'stories/story_orchestrator.dart';
+import '../utils/release_logger.dart';
+
+/// Excepción lanzada cuando se intenta desbloquear un contacto bloqueado por un padre
+class ParentBlockedException implements Exception {
+  final String message;
+  ParentBlockedException([this.message = 'Este contacto fue bloqueado por tu padre/madre']);
+
+  @override
+  String toString() => message;
+}
 
 class BlockService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final BlockStatusCacheService _blockStatusCache = BlockStatusCacheService();
 
-  // Bloquear un contacto
+  /// Genera el chatId ordenado alfabéticamente
+  String _getChatId(String id1, String id2) {
+    final sorted = [id1, id2]..sort();
+    return '${sorted[0]}_${sorted[1]}';
+  }
+
+  // Bloquear un contacto - usa chats/{chatId}.isBlocked como fuente de verdad
   Future<void> blockContact(String contactId) async {
     final user = _auth.currentUser;
     if (user == null) throw Exception('Usuario no autenticado');
 
     try {
-      // Crear documento de bloqueo
-      await _firestore.collection('blocked_contacts').add({
-        'userId': user.uid,
-        'blockedUserId': contactId,
+      final chatId = _getChatId(user.uid, contactId);
+
+      // Actualizar el documento del chat con isBlocked
+      await _firestore.collection('chats').doc(chatId).set({
+        'isBlocked': true,
         'blockedAt': FieldValue.serverTimestamp(),
-        'createdAt': DateTime.now().toIso8601String(),
-      });
+        'blockedBy': user.uid,
+        'blockedReason': 'Bloqueado por usuario',
+        'participants': [user.uid, contactId],
+      }, SetOptions(merge: true));
+
+      ReleaseLogger.log('✅ Chat bloqueado: $chatId', tag: 'BlockService');
 
       // Notificar al cache service para triggear el refresh automático
       _blockStatusCache.updateBlockStatus(contactId, true);
@@ -29,27 +50,50 @@ class BlockService {
       await _notifyStoryPreloadService();
 
     } catch (e) {
+      ReleaseLogger.error('❌ Error bloqueando contacto: $e', tag: 'BlockService');
       throw Exception('Error bloqueando contacto: $e');
     }
   }
 
   // Desbloquear un contacto
+  // Solo permite desbloquear si el usuario actual fue quien bloqueó
+  // NO permite desbloquear si fue bloqueado por un padre
   Future<void> unblockContact(String contactId) async {
     final user = _auth.currentUser;
     if (user == null) throw Exception('Usuario no autenticado');
 
     try {
-      // Buscar el documento de bloqueo
-      final blockQuery = await _firestore
-          .collection('blocked_contacts')
-          .where('userId', isEqualTo: user.uid)
-          .where('blockedUserId', isEqualTo: contactId)
-          .get();
+      final chatId = _getChatId(user.uid, contactId);
 
-      // Eliminar todos los documentos encontrados
-      for (final doc in blockQuery.docs) {
-        await doc.reference.delete();
+      // Verificar el documento del chat
+      final chatRef = _firestore.collection('chats').doc(chatId);
+      final chatDoc = await chatRef.get();
+
+      if (chatDoc.exists) {
+        final data = chatDoc.data();
+        final blockedBy = data?['blockedBy'] as String?;
+        final blockedReason = data?['blockedReason'] as String?;
+
+        // Si fue bloqueado por un padre (parent_revoked), no permitir desbloquear
+        if (blockedReason == 'parent_revoked') {
+          throw ParentBlockedException();
+        }
+
+        // Solo permitir desbloquear si el usuario actual fue quien bloqueó
+        // o si es uno de los participantes del chat
+        final participants = List<String>.from(data?['participants'] ?? []);
+        if (blockedBy != null && blockedBy != user.uid && !participants.contains(blockedBy)) {
+          throw Exception('No tienes permiso para desbloquear este contacto');
+        }
+
+        await chatRef.update({
+          'isBlocked': false,
+          'unblockedAt': FieldValue.serverTimestamp(),
+          'unblockedBy': user.uid,
+        });
       }
+
+      ReleaseLogger.log('✅ Chat desbloqueado: $chatId', tag: 'BlockService');
 
       // Notificar al cache service para triggear el refresh automático
       _blockStatusCache.updateBlockStatus(contactId, false);
@@ -58,107 +102,125 @@ class BlockService {
       await _notifyStoryPreloadService();
 
     } catch (e) {
-      throw Exception('Error desbloqueando contacto: $e');
+      ReleaseLogger.error('❌ Error desbloqueando contacto: $e', tag: 'BlockService');
+      rethrow;
     }
   }
 
-  // Verificar si un contacto está bloqueado
+  // Verificar si un chat está bloqueado (por cualquier razón)
   Future<bool> isBlocked(String contactId) async {
     final user = _auth.currentUser;
     if (user == null) return false;
 
     try {
-      final blockQuery = await _firestore
-          .collection('blocked_contacts')
-          .where('userId', isEqualTo: user.uid)
-          .where('blockedUserId', isEqualTo: contactId)
-          .limit(1)
-          .get();
+      final chatId = _getChatId(user.uid, contactId);
+      final chatDoc = await _firestore.collection('chats').doc(chatId).get();
 
-      return blockQuery.docs.isNotEmpty;
+      if (!chatDoc.exists) return false;
+      return chatDoc.data()?['isBlocked'] == true;
     } catch (e) {
+      ReleaseLogger.error('Error verificando bloqueo: $e', tag: 'BlockService');
       return false;
     }
   }
 
-  // Stream para verificar si un contacto está bloqueado (en tiempo real)
+  /// Stream unificado para verificar si un chat está bloqueado
+  /// Verifica el campo isBlocked del documento chats/{chatId}
   Stream<bool> isBlockedStream(String contactId) {
     final user = _auth.currentUser;
     if (user == null) return Stream.value(false);
 
+    final chatId = _getChatId(user.uid, contactId);
+
     return _firestore
-        .collection('blocked_contacts')
-        .where('userId', isEqualTo: user.uid)
-        .where('blockedUserId', isEqualTo: contactId)
-        .limit(1)
+        .collection('chats')
+        .doc(chatId)
         .snapshots()
-        .map((snapshot) => snapshot.docs.isNotEmpty);
+        .map((snapshot) {
+          if (!snapshot.exists) return false;
+          return snapshot.data()?['isBlocked'] == true;
+        });
   }
 
   // Verificar si el usuario actual fue bloqueado por otro usuario
+  // (también usa el campo isBlocked del chat)
   Future<bool> isBlockedBy(String userId) async {
     final user = _auth.currentUser;
     if (user == null) return false;
 
     try {
-      final blockQuery = await _firestore
-          .collection('blocked_contacts')
-          .where('userId', isEqualTo: userId)
-          .where('blockedUserId', isEqualTo: user.uid)
-          .limit(1)
-          .get();
+      final chatId = _getChatId(user.uid, userId);
+      final chatDoc = await _firestore.collection('chats').doc(chatId).get();
 
-      return blockQuery.docs.isNotEmpty;
+      if (!chatDoc.exists) return false;
+
+      final data = chatDoc.data();
+      // Está bloqueado Y fue bloqueado por el otro usuario
+      return data?['isBlocked'] == true && data?['blockedBy'] == userId;
     } catch (e) {
       return false;
     }
   }
 
-  // Stream para verificar si el usuario actual fue bloqueado por otro usuario (en tiempo real)
+  /// Stream para verificar si el usuario actual fue bloqueado por otro usuario
   Stream<bool> isBlockedByStream(String userId) {
     final user = _auth.currentUser;
     if (user == null) return Stream.value(false);
 
+    final chatId = _getChatId(user.uid, userId);
+
     return _firestore
-        .collection('blocked_contacts')
-        .where('userId', isEqualTo: userId)
-        .where('blockedUserId', isEqualTo: user.uid)
-        .limit(1)
+        .collection('chats')
+        .doc(chatId)
         .snapshots()
-        .map((snapshot) => snapshot.docs.isNotEmpty);
+        .map((snapshot) {
+          if (!snapshot.exists) return false;
+          final data = snapshot.data();
+          // Está bloqueado Y fue bloqueado por el otro usuario
+          return data?['isBlocked'] == true && data?['blockedBy'] == userId;
+        });
   }
 
-  // Obtener lista de contactos bloqueados
+  // Obtener lista de contactos bloqueados (basado en chats.isBlocked)
   Stream<List<String>> getBlockedContactsStream() {
     final user = _auth.currentUser;
     if (user == null) return Stream.value([]);
 
+    // Buscar chats donde el usuario actual bloqueó a alguien
     return _firestore
-        .collection('blocked_contacts')
-        .where('userId', isEqualTo: user.uid)
+        .collection('chats')
+        .where('participants', arrayContains: user.uid)
+        .where('isBlocked', isEqualTo: true)
+        .where('blockedBy', isEqualTo: user.uid)
         .snapshots()
         .map((snapshot) {
-      return snapshot.docs
-          .map((doc) => doc.data()['blockedUserId'] as String)
-          .toList();
+      return snapshot.docs.map((doc) {
+        final participants = List<String>.from(doc.data()['participants'] ?? []);
+        // Retornar el otro participante (el bloqueado)
+        return participants.firstWhere((p) => p != user.uid, orElse: () => '');
+      }).where((id) => id.isNotEmpty).toList();
     });
   }
 
-  // Obtener lista de contactos bloqueados (Future)
+  // Obtener lista de contactos bloqueados (Future) - basado en chats.isBlocked
   Future<List<String>> getBlockedContacts() async {
     final user = _auth.currentUser;
     if (user == null) return [];
 
     try {
       final blockQuery = await _firestore
-          .collection('blocked_contacts')
-          .where('userId', isEqualTo: user.uid)
+          .collection('chats')
+          .where('participants', arrayContains: user.uid)
+          .where('isBlocked', isEqualTo: true)
+          .where('blockedBy', isEqualTo: user.uid)
           .get();
 
-      return blockQuery.docs
-          .map((doc) => doc.data()['blockedUserId'] as String)
-          .toList();
+      return blockQuery.docs.map((doc) {
+        final participants = List<String>.from(doc.data()['participants'] ?? []);
+        return participants.firstWhere((p) => p != user.uid, orElse: () => '');
+      }).where((id) => id.isNotEmpty).toList();
     } catch (e) {
+      ReleaseLogger.error('Error obteniendo contactos bloqueados: $e', tag: 'BlockService');
       return [];
     }
   }

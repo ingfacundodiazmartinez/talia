@@ -16,6 +16,7 @@ import '../services/audio_processing_service.dart';
 import '../services/message_cache_service.dart';
 import '../services/favorite_service.dart';  // ✅ NEW: For favorite tracking
 import '../services/media_compression_service.dart';
+import '../services/reaction_service.dart';  // ✅ NEW: For reactions
 import '../notification_service.dart';
 import '../utils/release_logger.dart';
 import 'package:uuid/uuid.dart';
@@ -45,6 +46,7 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   late final AudioProcessingService _audioService;
   late final NotificationService _notificationService;
   late final FavoriteService _favoriteService;  // ✅ NEW
+  late final ReactionService _reactionService;  // ✅ NEW: For reactions
 
   // Stream subscription management
   StreamSubscription<List<ChatMessage>>? _messagesSubscription;
@@ -52,6 +54,7 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   StreamSubscription<bool>? _isBlockedBySubscription;
   StreamSubscription? _notificationSubscription;
   StreamSubscription<Set<String>>? _favoritesSubscription;  // ✅ NEW
+  StreamSubscription<Map<String, Map<String, List<String>>>>? _reactionsSubscription;  // ✅ NEW
 
   // State
   List<ChatMessage> _messages = [];
@@ -117,6 +120,7 @@ class ChatControllerCacheFirst extends ChangeNotifier {
     _audioService = audioService ?? AudioProcessingService();
     _notificationService = notificationService ?? NotificationService();
     _favoriteService = FavoriteService();  // ✅ NEW
+    _reactionService = ReactionService();  // ✅ NEW: For reactions
   }
 
   /// Initialize the controller and start listening to messages
@@ -162,18 +166,26 @@ class ChatControllerCacheFirst extends ChangeNotifier {
       ReleaseLogger.error('Error en _loadFavorites: $e', tag: 'ChatController');
     }
 
-    try {
-      await markChatAsRead();
-    } catch (e) {
-      if (e.toString().contains('permission-denied')) {
-        ReleaseLogger.warning('Sin permisos para marcar chat como leído (¿usuario no es participante?)', tag: 'ChatController');
-      } else {
-        ReleaseLogger.error('Error en markChatAsRead: $e', tag: 'ChatController');
-      }
-    }
+    // ✅ NEW: Start listening to reactions from subcollection
+    _startListeningToReactions();
 
     _isInitialized = true;
     _hasLoadedInitialMessages = true;
+
+    // ✅ FIX: Delay markChatAsRead() para que se ejecute DESPUÉS de que los mensajes
+    // se rendericen en el UI. Esto evita que el mensaje aparezca como "leído"
+    // antes de que la burbuja sea visible en pantalla.
+    Future.delayed(const Duration(milliseconds: 1500), () async {
+      try {
+        await markChatAsRead();
+      } catch (e) {
+        if (e.toString().contains('permission-denied')) {
+          ReleaseLogger.warning('Sin permisos para marcar chat como leído (¿usuario no es participante?)', tag: 'ChatController');
+        } else {
+          ReleaseLogger.error('Error en markChatAsRead: $e', tag: 'ChatController');
+        }
+      }
+    });
 
     // ✅ FIX: Safety timeout - if stream hasn't emitted after 5 seconds, stop loading
     // This prevents infinite spinner if cache is empty and Firestore fails
@@ -261,6 +273,79 @@ class ChatControllerCacheFirst extends ChangeNotifier {
     } catch (e) {
       ReleaseLogger.error('Error refreshing favorites: $e');
     }
+  }
+
+  /// ✅ NEW: Start listening to reactions stream
+  /// Las reacciones vienen de la subcollection separada y se vinculan
+  /// a los mensajes por messageId (funciona aunque el mensaje se elimine de Firestore)
+  void _startListeningToReactions() {
+    _reactionsSubscription?.cancel();
+
+    _reactionsSubscription = _reactionService.watchReactions(
+      chatId: chatId,
+      isGroup: isGroup,
+    ).listen(
+      (reactionsMap) {
+        // reactionsMap: {messageId: {emoji: [userId1, userId2, ...]}}
+        _updateMessagesWithReactions(reactionsMap);
+      },
+      onError: (error) {
+        ReleaseLogger.error('Error in reactions stream for chat $chatId: $error');
+      },
+    );
+  }
+
+  /// ✅ NEW: Update cached messages with reactions from subcollection
+  void _updateMessagesWithReactions(Map<String, Map<String, List<String>>> reactionsMap) {
+    if (reactionsMap.isEmpty && _messages.every((m) => m.reactions == null || m.reactions!.isEmpty)) {
+      return; // No changes needed
+    }
+
+    bool hasChanges = false;
+
+    for (int i = 0; i < _messages.length; i++) {
+      final message = _messages[i];
+      final messageReactions = reactionsMap[message.id];
+
+      // Convertir a formato esperado por ChatMessage.reactions
+      final Map<String, dynamic>? newReactions = messageReactions != null && messageReactions.isNotEmpty
+          ? messageReactions.map((emoji, userIds) => MapEntry(emoji, userIds))
+          : null;
+
+      // Comparar si hay cambios
+      final currentReactions = message.reactions;
+      final reactionsChanged = _reactionsAreDifferent(currentReactions, newReactions);
+
+      if (reactionsChanged) {
+        _messages[i] = message.copyWith(reactions: newReactions);
+        hasChanges = true;
+      }
+    }
+
+    if (hasChanges) {
+      notifyListeners();
+      ReleaseLogger.log('✅ [Reactions] Updated reactions for chat $chatId');
+    }
+  }
+
+  /// ✅ Helper: Compare two reaction maps
+  bool _reactionsAreDifferent(Map<String, dynamic>? a, Map<String, dynamic>? b) {
+    if (a == null && b == null) return false;
+    if (a == null || b == null) return true;
+    if (a.length != b.length) return true;
+
+    for (final key in a.keys) {
+      if (!b.containsKey(key)) return true;
+      final aList = a[key] as List?;
+      final bList = b[key] as List?;
+      if (aList == null && bList == null) continue;
+      if (aList == null || bList == null) return true;
+      if (aList.length != bList.length) return true;
+      for (int i = 0; i < aList.length; i++) {
+        if (aList[i] != bList[i]) return true;
+      }
+    }
+    return false;
   }
 
   /// Start listening to messages stream (CACHE-FIRST)
@@ -388,6 +473,75 @@ class ChatControllerCacheFirst extends ChangeNotifier {
         ReleaseLogger.error('Failed to send text message to chat $chatId: $e');
         rethrow;
       }
+    }
+  }
+
+  /// Retry sending a failed message (keeps same position in chat)
+  ///
+  /// Flow:
+  /// 1. Find the failed message
+  /// 2. Update status to "sending"
+  /// 3. Try to send via orchestrator
+  /// 4. If success: message will be updated via stream
+  /// 5. If error: update status back to "error"
+  Future<void> retryMessage(String messageId) async {
+    // 1. Find the failed message
+    final messageIndex = _messages.indexWhere((m) => m.id == messageId);
+    if (messageIndex == -1) {
+      ReleaseLogger.error('Cannot retry message: not found $messageId');
+      return;
+    }
+
+    final failedMessage = _messages[messageIndex];
+
+    // Only retry messages with error status or sending status (timeout)
+    if (failedMessage.status != MessageStatus.error &&
+        failedMessage.status != MessageStatus.sending) {
+      ReleaseLogger.warning('Cannot retry message with status ${failedMessage.status}');
+      return;
+    }
+
+    // 2. Update to "sending" state
+    final sendingMessage = failedMessage.copyWith(
+      status: MessageStatus.sending,
+      localTimestamp: DateTime.now(), // Reset timestamp for new timeout
+    );
+
+    _messages[messageIndex] = sendingMessage;
+    await MessageCacheService().updateMessage(chatId, sendingMessage);
+    notifyListeners();
+
+    ReleaseLogger.log('🔄 Retrying message ${messageId.substring(0, 8)}...');
+
+    try {
+      // 3. Send to backend via orchestrator
+      if (failedMessage.text != null && failedMessage.text!.isNotEmpty) {
+        await _orchestrator.sendMessage(
+          chatId: chatId,
+          content: failedMessage.text!,
+          type: MessageType.text,
+          replyTo: failedMessage.replyTo,
+          metadata: {'localId': messageId}, // Use same ID for correlation
+        );
+
+        // Success - message will be updated via stream with real ID
+        ReleaseLogger.log('✅ Message retry successful for ${messageId.substring(0, 8)}...');
+      }
+      // TODO: Handle retry for media messages (image, video, audio)
+    } catch (e) {
+      // 4. Error - update status back to error
+      final errorMessage = sendingMessage.copyWith(
+        status: MessageStatus.error,
+      );
+
+      final currentIndex = _messages.indexWhere((m) => m.id == messageId);
+      if (currentIndex != -1) {
+        _messages[currentIndex] = errorMessage;
+        await MessageCacheService().updateMessage(chatId, errorMessage);
+        notifyListeners();
+      }
+
+      ReleaseLogger.error('❌ Message retry failed for ${messageId.substring(0, 8)}...: $e');
     }
   }
 
@@ -919,6 +1073,7 @@ class ChatControllerCacheFirst extends ChangeNotifier {
     _isBlockedBySubscription?.cancel();
     _notificationSubscription?.cancel();
     _favoritesSubscription?.cancel();  // ✅ NEW
+    _reactionsSubscription?.cancel();  // ✅ NEW: Cancel reactions stream
 
     // Clear state
     _messages.clear();

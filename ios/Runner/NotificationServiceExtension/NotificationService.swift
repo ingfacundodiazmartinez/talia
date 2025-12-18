@@ -24,8 +24,9 @@ class NotificationService: UNNotificationServiceExtension {
         let senderName = bestAttemptContent.userInfo["senderName"] as? String ?? "Usuario"
         let chatId = bestAttemptContent.userInfo["chatId"] as? String ?? senderId
 
-        // Intentar obtener foto del cache primero
-        if let cachedImage = TaliaPhotoCache.getCachedPhoto(userId: senderId) {
+        // ✅ FIX: Usar getCachedPhotoIfUrlMatches para detectar fotos actualizadas
+        // Si la URL cambió, retorna nil y fuerza re-descarga
+        if let cachedImage = TaliaPhotoCache.getCachedPhotoIfUrlMatches(userId: senderId, currentUrl: senderPhotoUrl) {
             createCommunicationNotification(
                 content: bestAttemptContent,
                 senderName: senderName,
@@ -34,13 +35,13 @@ class NotificationService: UNNotificationServiceExtension {
                 image: cachedImage
             )
         } else if let photoUrl = senderPhotoUrl, !photoUrl.isEmpty, photoUrl != "null" {
-            // Descargar si no está en cache
+            // Descargar si no está en cache O si la URL cambió
             downloadImage(from: photoUrl) { [weak self] imageData in
                 guard let self = self else { return }
 
                 if let imageData = imageData, let image = UIImage(data: imageData) {
-                    // Guardar en cache para próxima vez
-                    TaliaPhotoCache.savePhoto(userId: senderId, image: image)
+                    // ✅ FIX: Guardar en cache CON la URL para futura comparación
+                    TaliaPhotoCache.savePhoto(userId: senderId, image: image, photoUrl: photoUrl)
 
                     self.createCommunicationNotification(
                         content: bestAttemptContent,

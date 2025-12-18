@@ -68,7 +68,13 @@ class BlockStatusCacheService {
     return _isBlockedBetween(contactId, userId);
   }
 
-  /// Verifica bloqueo entre dos usuarios
+  /// Genera el chatId ordenado alfabéticamente
+  String _getChatId(String id1, String id2) {
+    final sorted = [id1, id2]..sort();
+    return '${sorted[0]}_${sorted[1]}';
+  }
+
+  /// Verifica bloqueo entre dos usuarios (usando chats.isBlocked como fuente de verdad)
   Future<bool> _isBlockedBetween(String blockerId, String blockedId) async {
     try {
       final cacheKey = '${blockerId}_$blockedId';
@@ -83,18 +89,19 @@ class BlockStatusCacheService {
         }
       }
 
-      // Consultar Firestore
+      // Consultar Firestore - usando chats.isBlocked como fuente de verdad
       if (kDebugMode) {
       }
 
-      final snapshot = await _firestore
-          .collection('blocked_contacts')
-          .where('userId', isEqualTo: blockerId)
-          .where('blockedUserId', isEqualTo: blockedId)
-          .limit(1)
-          .get();
+      final chatId = _getChatId(blockerId, blockedId);
+      final chatDoc = await _firestore.collection('chats').doc(chatId).get();
 
-      final isBlocked = snapshot.docs.isNotEmpty;
+      bool isBlocked = false;
+      if (chatDoc.exists) {
+        final data = chatDoc.data();
+        // Está bloqueado si isBlocked=true Y fue bloqueado por blockerId
+        isBlocked = data?['isBlocked'] == true && data?['blockedBy'] == blockerId;
+      }
 
       // Guardar en caché
       _cacheBlockStatus(cacheKey, isBlocked);
@@ -112,7 +119,7 @@ class BlockStatusCacheService {
     }
   }
 
-  /// Pre-carga estados de bloqueo para múltiples contactos
+  /// Pre-carga estados de bloqueo para múltiples contactos (usando chats.isBlocked)
   Future<void> preloadBlockStatuses(List<String> contactIds) async {
     final userId = _auth.currentUser?.uid;
     if (userId == null) return;
@@ -137,15 +144,19 @@ class BlockStatusCacheService {
         return;
       }
 
-      // Consultar todos los bloqueos del usuario de una vez
+      // Consultar chats bloqueados por el usuario actual
       final blockedSnapshot = await _firestore
-          .collection('blocked_contacts')
-          .where('userId', isEqualTo: userId)
+          .collection('chats')
+          .where('participants', arrayContains: userId)
+          .where('isBlocked', isEqualTo: true)
+          .where('blockedBy', isEqualTo: userId)
           .get();
 
-      final blockedIds = blockedSnapshot.docs
-          .map((doc) => doc.data()['blockedUserId'] as String)
-          .toSet();
+      // Extraer IDs de contactos bloqueados
+      final blockedIds = blockedSnapshot.docs.map((doc) {
+        final participants = List<String>.from(doc.data()['participants'] ?? []);
+        return participants.firstWhere((p) => p != userId, orElse: () => '');
+      }).where((id) => id.isNotEmpty).toSet();
 
       // Actualizar caché para todos los contactIds
       for (final contactId in contactIds) {
@@ -260,16 +271,17 @@ class BlockStatusCacheService {
   }
 
   /// Inicia el listener de Firestore para el usuario actual
+  /// Escucha cambios en chats donde el usuario es participante y hay cambios de bloqueo
   void _startFirestoreListener(String userId) {
     _stopFirestoreListener(); // Detener listener anterior si existe
 
     if (kDebugMode) {
     }
 
-    // Escuchar cambios donde YO soy bloqueado por otros (blockedUserId == userId)
+    // Escuchar cambios en chats donde el usuario participa
     _firestoreSubscription = _firestore
-        .collection('blocked_contacts')
-        .where('blockedUserId', isEqualTo: userId)
+        .collection('chats')
+        .where('participants', arrayContains: userId)
         .snapshots()
         .listen(
       (snapshot) {
@@ -277,21 +289,36 @@ class BlockStatusCacheService {
           final data = change.doc.data();
           if (data == null) continue;
 
-          final blockerUserId = data['userId'] as String?;
-          if (blockerUserId == null) continue;
+          final isBlocked = data['isBlocked'] == true;
+          final blockedBy = data['blockedBy'] as String?;
+          final participants = List<String>.from(data['participants'] ?? []);
+
+          // Obtener el otro participante
+          final otherUserId = participants.firstWhere(
+            (p) => p != userId,
+            orElse: () => '',
+          );
+          if (otherUserId.isEmpty) continue;
 
           switch (change.type) {
             case DocumentChangeType.added:
-              // Alguien me bloqueó
-              handleBlockStatusChange(blockerUserId, true, isBlockedBy: true);
+            case DocumentChangeType.modified:
+              if (isBlocked && blockedBy != null) {
+                if (blockedBy == userId) {
+                  // Yo bloqueé a alguien
+                  handleBlockStatusChange(otherUserId, true, isBlockedBy: false);
+                } else {
+                  // Alguien me bloqueó
+                  handleBlockStatusChange(otherUserId, true, isBlockedBy: true);
+                }
+              } else if (!isBlocked) {
+                // El chat ya no está bloqueado
+                handleBlockStatusChange(otherUserId, false, isBlockedBy: false);
+              }
               break;
             case DocumentChangeType.removed:
-              // Alguien me desbloqueó
-              handleBlockStatusChange(blockerUserId, false, isBlockedBy: true);
-              break;
-            case DocumentChangeType.modified:
-              // Cambio en documento existente (raro, pero manejar)
-              handleBlockStatusChange(blockerUserId, true, isBlockedBy: true);
+              // Chat eliminado - no hay bloqueo
+              handleBlockStatusChange(otherUserId, false, isBlockedBy: false);
               break;
           }
         }

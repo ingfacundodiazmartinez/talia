@@ -65,6 +65,25 @@ class RingtoneService {
     }
   }
 
+  /// ✅ FIX: Reproducir busy tone (cuando el destinatario está ocupado)
+  /// Es un tono rápido y repetitivo "beep-beep-beep"
+  Future<void> playBusyTone() async {
+    if (_isPlaying) return;
+
+    try {
+      await _ensurePlayer();
+
+      // Usar busy tone (tono de ocupado)
+      await _player!.setVolume(0.6);
+      await _player!.play(AssetSource('sounds/busy.mp3'));
+      _isPlaying = true;
+
+      ReleaseLogger.log('Busy tone started', tag: 'RingtoneService');
+    } catch (e) {
+      ReleaseLogger.error('Error playing busy tone: $e', tag: 'RingtoneService');
+    }
+  }
+
   /// Reproducir tono de conexión exitosa (corto, no loop)
   Future<void> playConnectedTone() async {
     try {

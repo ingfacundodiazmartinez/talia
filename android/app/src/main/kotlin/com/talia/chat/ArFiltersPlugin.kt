@@ -134,10 +134,28 @@ class ArFiltersPlugin : FlutterPlugin, MethodCallHandler, StreamHandler, Activit
         Log.d(TAG, "🎭 Inicializando DeepAR con license key: ${licenseKey.take(10)}...")
 
         try {
+            // ✅ FIX: Si DeepAR ya está inicializado, solo despausarlo
+            // No crear nueva instancia porque el SDK no se reinicializa correctamente
+            if (deepAR != null && isInitialized) {
+                Log.d(TAG, "♻️ DeepAR ya inicializado, reutilizando instancia existente")
+                deepAR?.setPaused(false)
+                Log.d(TAG, "▶️ DeepAR despausado")
+
+                // Limpiar filtro actual para empezar limpio
+                deepAR?.switchEffect("effect", "")
+                currentFilter = null
+                Log.d(TAG, "🧹 Filtro actual limpiado")
+
+                // Enviar evento de inicialización
+                sendEvent("initialized", mapOf("success" to true, "reused" to true))
+                result.success(true)
+                return
+            }
+
             // Crear instancia de DeepAR si no existe
             if (deepAR == null) {
                 deepAR = DeepAR(context)
-                Log.d(TAG, "✅ DeepAR instance creada")
+                Log.d(TAG, "✅ DeepAR instance creada (nueva)")
             }
 
             deepAR?.setLicenseKey(licenseKey)
@@ -435,25 +453,42 @@ class ArFiltersPlugin : FlutterPlugin, MethodCallHandler, StreamHandler, Activit
 
     private fun handleDispose(call: MethodCall, result: Result) {
         try {
-            Log.d(TAG, "🗑️ Disposing DeepAR resources")
+            Log.d(TAG, "🗑️ Disposing DeepAR resources (manteniendo SDK vivo)")
 
             if (isRecording) {
                 deepAR?.stopVideoRecording()
+                isRecording = false
             }
 
-            // CRÍTICO: Detener la cámara ANTES de liberar DeepAR
-            // para evitar que siga enviando frames a un DeepAR ya liberado
+            // ✅ FIX: Detener la cámara pero NO liberar DeepAR
+            // El SDK de DeepAR no se reinicializa correctamente después de release()
+            // Mantenerlo vivo permite reutilizarlo en la próxima sesión
             cameraController?.stopCamera()
             cameraController = null
             Log.d(TAG, "⏹️ Camera controller detenido y limpiado")
 
-            deepAR?.release()
-            deepAR = null
+            // Pausar DeepAR pero NO liberarlo
+            deepAR?.setPaused(true)
+            Log.d(TAG, "⏸️ DeepAR pausado (NO liberado)")
+
+            // Limpiar la superficie de renderizado actual
+            try {
+                deepAR?.setRenderSurface(null, 0, 0)
+                Log.d(TAG, "🧹 Superficie de renderizado limpiada")
+            } catch (e: Exception) {
+                Log.w(TAG, "⚠️ Error limpiando superficie: ${e.message}")
+            }
+
+            // NO liberar DeepAR - mantenerlo para reutilización
+            // deepAR?.release()  // ❌ COMENTADO
+            // deepAR = null      // ❌ COMENTADO
+
             currentARView = null
-            isInitialized = false
+            // isInitialized = false  // ❌ MANTENER true para reutilización
             currentFilter = null
             isCaptureStarted = false
 
+            Log.d(TAG, "✅ Dispose completado (DeepAR sigue vivo, isInitialized=$isInitialized)")
             result.success(null)
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error disposing: ${e.message}", e)

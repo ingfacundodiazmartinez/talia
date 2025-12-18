@@ -435,6 +435,14 @@ exports.moderateMessage = onDocumentCreated(
 
     console.log(`🔍 Nuevo mensaje para moderar: ${messageId} en chat ${chatId}`);
 
+    // ✅ DEBUG: Detectar si es respuesta a historia
+    const isStoryReply = messageData.replyTo?.type === 'story_reply';
+    if (isStoryReply) {
+      console.log(`📖 [StoryReply-Moderation] Detectada respuesta a historia`);
+      console.log(`📖 [StoryReply-Moderation] StoryId: ${messageData.replyTo?.storyId}`);
+      console.log(`📖 [StoryReply-Moderation] Texto: "${(messageData.text || '').substring(0, 50)}..."`);
+    }
+
     const db = getFirestore();
 
     try {
@@ -609,6 +617,9 @@ exports.moderateMessage = onDocumentCreated(
       // Determinar si necesitamos análisis de IA
       if (!moderationEnabled) {
         console.log(`✅ Moderación desactivada (tipo: ${moderationType}) - aprobando automáticamente`);
+        if (isStoryReply) {
+          console.log(`📖 [StoryReply-Moderation] Sin moderación - aprobando respuesta a historia`);
+        }
         moderationReason = "Sin moderación activa";
 
         // Actualizar mensaje como aprobado
@@ -622,6 +633,9 @@ exports.moderateMessage = onDocumentCreated(
         // El anti-duplicados en Flutter manejará el caso de foreground
       } else {
         console.log(`🔒 Moderación activa (tipo: ${moderationType}, nivel: ${moderationLevel})`);
+        if (isStoryReply) {
+          console.log(`📖 [StoryReply-Moderation] CON moderación activa - analizando respuesta a historia`);
+        }
 
       // 4. Obtener información de los participantes (edades y ubicaciones)
       const participantsAges = [];
@@ -754,11 +768,20 @@ exports.moderateMessage = onDocumentCreated(
             moderationReason = analysis.reason;
             moderationSeverity = analysis.severity;
             console.log(`✅ Mensaje aprobado (severity: ${analysis.severity}, level: ${moderationLevel})`);
+            if (isStoryReply) {
+              console.log(`📖 [StoryReply-Moderation] ✅ Respuesta a historia APROBADA por Gemini`);
+            }
           } else {
             // Mensaje bloqueado
             moderationStatus = "blocked";
             moderationReason = analysis.reason;
             moderationSeverity = analysis.severity;
+
+            if (isStoryReply) {
+              console.log(`📖 [StoryReply-Moderation] ⚠️ Respuesta a historia BLOQUEADA`);
+              console.log(`📖 [StoryReply-Moderation] Razón: ${analysis.reason}`);
+              console.log(`📖 [StoryReply-Moderation] Severidad: ${analysis.severity}`);
+            }
 
             if (analysis.severity === "low") {
               notificationTitle = "⚠️ Contenido cuestionable bloqueado";
@@ -801,11 +824,11 @@ exports.moderateMessage = onDocumentCreated(
 
       // 6. Crear notificación de chat si el mensaje fue APROBADO
       if (receiverId && moderationStatus === "approved") {
-        // ✅ NO enviar notificaciones para mensajes de llamadas contestadas
-        // Solo enviar notificaciones para llamadas perdidas
+        // ✅ NO procesar mensajes de llamadas - ya los maneja onCallV2Updated
+        // Esto evita sobrescribir el lastMessage con texto vacío
         const messageTypeFromData = messageData.type;
-        if (messageTypeFromData === "answered_call") {
-          console.log(`⏭️ Skipping notification for answered_call message`);
+        if (messageTypeFromData === "answered_call" || messageTypeFromData === "missed_call") {
+          console.log(`⏭️ Skipping moderation processing for ${messageTypeFromData} message (handled by onCallV2Updated)`);
           return;
         }
 
@@ -838,6 +861,9 @@ exports.moderateMessage = onDocumentCreated(
         });
 
         console.log(`✅ Push enviado directamente a ${receiverId} (mensaje aprobado)`);
+        if (isStoryReply) {
+          console.log(`📖 [StoryReply-Moderation] ✅ Push enviado para respuesta a historia`);
+        }
 
         // ✅ SINCRONIZACIÓN: Actualizar lastMessage inmediatamente después de notificación
         try {

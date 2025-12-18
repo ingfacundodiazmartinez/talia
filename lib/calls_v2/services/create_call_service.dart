@@ -75,6 +75,19 @@ class CreateCallService {
       final channelName = data['channelName'] as String?;
       final agoraUid = data['agoraUid'] as int?;
 
+      // ✅ FIX: Handle busy participants
+      final busyParticipants = (data['busyParticipants'] as List<dynamic>?)
+          ?.map((e) => e.toString())
+          .toList() ?? [];
+      final allParticipantsBusy = data['allParticipantsBusy'] as bool? ?? false;
+
+      if (busyParticipants.isNotEmpty) {
+        ReleaseLogger.log(
+          'Busy participants detected: $busyParticipants, allBusy: $allParticipantsBusy',
+          tag: _tag,
+        );
+      }
+
       if (callId == null || token == null || channelName == null || agoraUid == null) {
         return ServiceResponse.error(
           'Missing required fields in response',
@@ -92,6 +105,8 @@ class CreateCallService {
         'token': token,
         'channelName': channelName,
         'agoraUid': agoraUid,
+        'busyParticipants': busyParticipants,
+        'allParticipantsBusy': allParticipantsBusy,
       });
     } catch (e) {
       ReleaseLogger.error('Error creating call: $e', tag: _tag);

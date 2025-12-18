@@ -1,20 +1,102 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../../models/chat_message.dart';
 
 /// Widget que muestra el timestamp de un mensaje con iconos de estado
-class MessageTimestamp extends StatelessWidget {
+///
+/// ✅ StatefulWidget para manejar el timeout automático de mensajes pending
+class MessageTimestamp extends StatefulWidget {
   final String time;
   final bool isMe;
   final MessageStatus? status;
-  final bool isFavorite;  // ✅ NEW: Indicador de favorito
+  final bool isFavorite;
+  final DateTime? localTimestamp;
+  final VoidCallback? onRetry;
+
+  // Timeout de 30 segundos para mensajes en status sending
+  static const Duration sendingTimeout = Duration(seconds: 30);
 
   const MessageTimestamp({
     super.key,
     required this.time,
     required this.isMe,
     this.status,
-    this.isFavorite = false,  // ✅ NEW: Default false
+    this.isFavorite = false,
+    this.localTimestamp,
+    this.onRetry,
   });
+
+  @override
+  State<MessageTimestamp> createState() => _MessageTimestampState();
+}
+
+class _MessageTimestampState extends State<MessageTimestamp> {
+  Timer? _timeoutTimer;
+  bool _hasTimedOut = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _setupTimeoutTimer();
+  }
+
+  @override
+  void didUpdateWidget(MessageTimestamp oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Si el status cambió, reconfigurar el timer
+    if (oldWidget.status != widget.status ||
+        oldWidget.localTimestamp != widget.localTimestamp) {
+      _cancelTimer();
+      _hasTimedOut = false;
+      _setupTimeoutTimer();
+    }
+  }
+
+  @override
+  void dispose() {
+    _cancelTimer();
+    super.dispose();
+  }
+
+  void _cancelTimer() {
+    _timeoutTimer?.cancel();
+    _timeoutTimer = null;
+  }
+
+  void _setupTimeoutTimer() {
+    // Solo configurar timer si el mensaje está en status sending
+    if (widget.status != MessageStatus.sending || widget.localTimestamp == null) {
+      return;
+    }
+
+    final elapsed = DateTime.now().difference(widget.localTimestamp!);
+
+    // Si ya pasó el timeout, marcar inmediatamente
+    if (elapsed >= MessageTimestamp.sendingTimeout) {
+      _hasTimedOut = true;
+      return;
+    }
+
+    // Calcular cuánto falta para el timeout
+    final remaining = MessageTimestamp.sendingTimeout - elapsed;
+
+    // Configurar timer para cuando expire
+    _timeoutTimer = Timer(remaining, () {
+      if (mounted) {
+        setState(() {
+          _hasTimedOut = true;
+        });
+      }
+    });
+  }
+
+  /// Obtiene el status efectivo (considerando timeout)
+  MessageStatus get _effectiveStatus {
+    if (_hasTimedOut && widget.status == MessageStatus.sending) {
+      return MessageStatus.error;
+    }
+    return widget.status ?? MessageStatus.sent;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -25,28 +107,28 @@ class MessageTimestamp extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // ✅ NEW: Mostrar estrella de favorito antes del tiempo
-          if (isFavorite) ...[
+          // Mostrar estrella de favorito antes del tiempo
+          if (widget.isFavorite) ...[
             Icon(
               Icons.star_rounded,
               size: 12,
-              color: isMe
+              color: widget.isMe
                   ? Colors.amber.shade300
                   : Colors.amber.shade600,
             ),
             const SizedBox(width: 3),
           ],
           Text(
-            time,
+            widget.time,
             style: TextStyle(
-              color: isMe
+              color: widget.isMe
                   ? Colors.white.withValues(alpha: 0.9)
                   : colorScheme.onSurfaceVariant,
               fontSize: 11,
             ),
           ),
           // Mostrar iconos de estado solo para mensajes propios
-          if (isMe && status != null) ...[
+          if (widget.isMe && widget.status != null) ...[
             const SizedBox(width: 4),
             _buildStatusIcon(),
           ],
@@ -57,12 +139,13 @@ class MessageTimestamp extends StatelessWidget {
 
   Widget _buildStatusIcon() {
     // Para mensajes propios, usar blanco con diferentes opacidades
-    // Esto contrasta bien con el fondo de la burbuja (primary color)
-    final iconColor = isMe
+    final iconColor = widget.isMe
         ? Colors.white.withValues(alpha: 0.85)
         : Colors.grey.shade600;
 
-    switch (status!) {
+    final effectiveStatus = _effectiveStatus;
+
+    switch (effectiveStatus) {
       case MessageStatus.sending:
         // Spinner para mensaje enviando
         return SizedBox(
@@ -71,7 +154,7 @@ class MessageTimestamp extends StatelessWidget {
           child: CircularProgressIndicator(
             strokeWidth: 1.5,
             valueColor: AlwaysStoppedAnimation<Color>(
-              isMe ? Colors.white.withValues(alpha: 0.7) : Colors.grey,
+              widget.isMe ? Colors.white.withValues(alpha: 0.7) : Colors.grey,
             ),
           ),
         );
@@ -94,10 +177,27 @@ class MessageTimestamp extends StatelessWidget {
         );
 
       case MessageStatus.error:
-        return Icon(
-          Icons.error_outline,
-          size: 14,
-          color: isMe ? Colors.white.withValues(alpha: 0.9) : Colors.red,
+        // Icono de error con opción de reenviar
+        return GestureDetector(
+          onTap: widget.onRetry,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.error_outline,
+                size: 14,
+                color: widget.isMe ? Colors.red.shade200 : Colors.red,
+              ),
+              if (widget.onRetry != null) ...[
+                const SizedBox(width: 4),
+                Icon(
+                  Icons.refresh,
+                  size: 14,
+                  color: widget.isMe ? Colors.white.withValues(alpha: 0.9) : Colors.red,
+                ),
+              ],
+            ],
+          ),
         );
     }
   }

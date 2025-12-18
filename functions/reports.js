@@ -1146,6 +1146,28 @@ exports.onPendingReportCreated = onDocumentCreated(
       try {
         const parentDoc = await db.collection("users").doc(parentId).get();
         if (parentDoc.exists && parentDoc.data().fcmToken) {
+          // ✅ Fetch user notification preferences
+          let notificationPrefs = { soundEnabled: true, vibrationEnabled: true };
+          try {
+            const prefsDoc = await db.collection("notification_preferences").doc(parentId).get();
+            if (prefsDoc.exists) {
+              notificationPrefs.soundEnabled = prefsDoc.data().soundEnabled !== false;
+              notificationPrefs.vibrationEnabled = prefsDoc.data().vibrationEnabled !== false;
+            }
+          } catch (e) { /* use defaults */ }
+
+          // ✅ Select channel based on combination of sound/vibration preferences
+          let channelId;
+          if (notificationPrefs.soundEnabled && notificationPrefs.vibrationEnabled) {
+            channelId = "talia_sound_vibration";
+          } else if (notificationPrefs.soundEnabled && !notificationPrefs.vibrationEnabled) {
+            channelId = "talia_sound_only";
+          } else if (!notificationPrefs.soundEnabled && notificationPrefs.vibrationEnabled) {
+            channelId = "talia_vibration_only";
+          } else {
+            channelId = "talia_silent";
+          }
+
           const messaging = getMessaging();
           await messaging.send({
             token: parentDoc.data().fcmToken,
@@ -1162,7 +1184,7 @@ exports.onPendingReportCreated = onDocumentCreated(
             android: {
               priority: "high",
               notification: {
-                channelId: "reports",
+                channelId: channelId,
                 clickAction: "FLUTTER_NOTIFICATION_CLICK",
               },
             },
@@ -1175,7 +1197,7 @@ exports.onPendingReportCreated = onDocumentCreated(
                     body: `El reporte de ${childName} ya está disponible`,
                   },
                   badge: 1,
-                  sound: "default",
+                  ...(notificationPrefs.soundEnabled && { sound: "default" }),
                 },
               },
             },

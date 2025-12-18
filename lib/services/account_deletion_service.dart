@@ -45,7 +45,7 @@ class AccountDeletionService {
       // Eliminar documento del usuario
       batch.delete(_firestore.collection('users').doc(userId));
 
-      // Eliminar de contactos
+      // Eliminar de contactos (colección unificada)
       final contactsQuery = await _firestore
           .collection('contacts')
           .where('users', arrayContains: userId)
@@ -78,15 +78,6 @@ class AccountDeletionService {
           .where('userId', isEqualTo: userId)
           .get();
       for (var doc in reportsQuery.docs) {
-        batch.delete(doc.reference);
-      }
-
-      // Eliminar solicitudes de contacto
-      final contactRequestsQuery = await _firestore
-          .collection('contact_requests')
-          .where('childId', isEqualTo: userId)
-          .get();
-      for (var doc in contactRequestsQuery.docs) {
         batch.delete(doc.reference);
       }
 

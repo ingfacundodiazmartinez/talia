@@ -15,6 +15,210 @@ const { normalizePhone, hashPhone } = require("./phone-utils");
 // USER PROFILE
 // ═══════════════════════════════════════════════════════════════
 
+/**
+ * ═══════════════════════════════════════════════════════════════
+ * CHECK PHONE DUPLICATE
+ * ═══════════════════════════════════════════════════════════════
+ *
+ * Verifica si un número de teléfono ya está registrado en otra cuenta.
+ * Necesario porque las Firestore rules no permiten queries sobre usuarios
+ * de otros usuarios desde el cliente.
+ */
+exports.checkPhoneDuplicate = onCall(
+  {
+    region: "us-central1",
+    timeoutSeconds: 30,
+    memory: "128MiB",
+    // ✅ Acceso público para Cloud Run Gen 2
+    invoker: "public",
+  },
+  async (request) => {
+    const { auth, data } = request;
+    const db = getFirestore();
+
+    // 1. Verificar autenticación
+    if (!auth) {
+      throw new HttpsError("unauthenticated", "Debe iniciar sesión");
+    }
+
+    const userId = auth.uid;
+    const { phoneNumber } = data;
+
+    if (!phoneNumber || typeof phoneNumber !== "string") {
+      throw new HttpsError("invalid-argument", "El número de teléfono es requerido");
+    }
+
+    console.log(`🔍 [checkPhoneDuplicate] Verificando: ${phoneNumber} para usuario ${userId}`);
+
+    try {
+      // 2. Buscar usuarios con este número de teléfono
+      const existingUsers = await db
+        .collection("users")
+        .where("phone", "==", phoneNumber)
+        .limit(2) // Solo necesitamos saber si hay al menos uno diferente
+        .get();
+
+      // 3. Verificar si alguno de los resultados es de otro usuario
+      let isDuplicate = false;
+      for (const doc of existingUsers.docs) {
+        if (doc.id !== userId) {
+          isDuplicate = true;
+          console.log(`⚠️ [checkPhoneDuplicate] Teléfono ya en uso por otro usuario`);
+          break;
+        }
+      }
+
+      if (!isDuplicate) {
+        console.log(`✅ [checkPhoneDuplicate] Teléfono disponible`);
+      }
+
+      return {
+        success: true,
+        isDuplicate,
+      };
+    } catch (error) {
+      console.error(`❌ [checkPhoneDuplicate] Error:`, error);
+      throw new HttpsError("internal", `Error verificando teléfono: ${error.message}`);
+    }
+  }
+);
+
+/**
+ * ═══════════════════════════════════════════════════════════════
+ * GENERATE USER CODE
+ * ═══════════════════════════════════════════════════════════════
+ *
+ * Genera o recupera el código de contacto de un usuario.
+ * Necesario porque las Firestore rules no permiten queries sobre
+ * user_codes de otros usuarios para verificar unicidad.
+ */
+exports.generateUserCode = onCall(
+  {
+    region: "us-central1",
+    timeoutSeconds: 30,
+    memory: "128MiB",
+    // ✅ Acceso público para Cloud Run Gen 2
+    invoker: "public",
+  },
+  async (request) => {
+    const { auth } = request;
+    const db = getFirestore();
+
+    // 1. Verificar autenticación
+    if (!auth) {
+      throw new HttpsError("unauthenticated", "Debe iniciar sesión");
+    }
+
+    const userId = auth.uid;
+    console.log(`🔑 [generateUserCode] Generando código para usuario ${userId}`);
+
+    try {
+      // 2. Verificar si ya tiene un código activo
+      const existingCodeDoc = await db.collection("user_codes").doc(userId).get();
+
+      if (existingCodeDoc.exists && existingCodeDoc.data().isActive === true) {
+        const data = existingCodeDoc.data();
+        const existingCode = data.code;
+        const expiresAtTimestamp = data.expiresAt;
+
+        // Verificar si el código ha expirado
+        if (expiresAtTimestamp && expiresAtTimestamp.toMillis() < Date.now()) {
+          console.log(`⏰ [generateUserCode] Código existente expirado, generando nuevo...`);
+          // El código expiró, continuar para generar uno nuevo
+        } else {
+          console.log(`✅ [generateUserCode] Código existente válido: ${existingCode}`);
+          return {
+            success: true,
+            code: existingCode,
+            isNew: false,
+            expiresAt: expiresAtTimestamp ? expiresAtTimestamp.toMillis() : null,
+          };
+        }
+      }
+
+      // 3. Generar nuevo código único
+      let code;
+      let isUnique = false;
+      let attempts = 0;
+
+      while (!isUnique && attempts < 10) {
+        code = generateRandomCode();
+
+        // Verificar si el código ya existe (con permisos admin)
+        const existingCodes = await db
+          .collection("user_codes")
+          .where("code", "==", code)
+          .where("isActive", "==", true)
+          .limit(1)
+          .get();
+
+        if (existingCodes.empty) {
+          isUnique = true;
+        } else {
+          attempts++;
+          console.log(`⚠️ [generateUserCode] Código ${code} ya existe, intentando de nuevo...`);
+        }
+      }
+
+      if (!isUnique) {
+        throw new HttpsError("internal", "No se pudo generar un código único");
+      }
+
+      // 4. Guardar el nuevo código con TTL de 5 minutos
+      const now = Date.now();
+      const fiveMinutesMs = 5 * 60 * 1000;
+      const expiresAt = Timestamp.fromMillis(now + fiveMinutesMs);
+      const deleteAt = Timestamp.fromMillis(now + fiveMinutesMs);
+
+      await db.collection("user_codes").doc(userId).set({
+        code,
+        userId,
+        createdAt: FieldValue.serverTimestamp(),
+        expiresAt: expiresAt,  // Para mostrar en UI
+        deleteAt: deleteAt,    // TTL para Firestore
+        isActive: true,
+      });
+
+      console.log(`✅ [generateUserCode] Nuevo código generado: ${code} (expira en 5 min)`);
+
+      return {
+        success: true,
+        code,
+        isNew: true,
+        expiresAt: expiresAt.toMillis(), // Timestamp en milisegundos para UI
+      };
+    } catch (error) {
+      console.error(`❌ [generateUserCode] Error:`, error);
+      if (error instanceof HttpsError) {
+        throw error;
+      }
+      throw new HttpsError("internal", `Error generando código: ${error.message}`);
+    }
+  }
+);
+
+/**
+ * Genera un código aleatorio en formato TALIA-ABC123
+ */
+function generateRandomCode() {
+  const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const numbers = "0123456789";
+
+  let code = "TALIA-";
+
+  // 3 letras aleatorias
+  for (let i = 0; i < 3; i++) {
+    code += letters.charAt(Math.floor(Math.random() * letters.length));
+  }
+
+  // 3 números aleatorios
+  for (let i = 0; i < 3; i++) {
+    code += numbers.charAt(Math.floor(Math.random() * numbers.length));
+  }
+
+  return code;
+}
+
 exports.updateUserProfile = onCall(
   {
     region: "us-central1",
@@ -160,26 +364,35 @@ exports.onUserRegistered = onDocumentCreated(
         return;
       }
 
-      // Buscar usuarios parent/adult que tengan este número hasheado en su lista de contactos
-      // NOTA: devicePhoneHashes es el array de hashes de contactos sincronizados desde el dispositivo
-      const usersWithContact = await db
+      // IMPORTANTE: Guardar phoneHash en el documento del usuario si no existe
+      // Esto es necesario para que otros usuarios puedan encontrar a este usuario
+      // cuando sincronicen sus contactos
+      if (!userData.phoneHash) {
+        console.log(`   💾 Guardando phoneHash en documento del usuario...`);
+        await db.collection("users").doc(userId).update({
+          phoneHash: newUserPhoneHash,
+        });
+        console.log(`   ✅ phoneHash guardado`);
+      }
+
+      // ═══════════════════════════════════════════════════════════════
+      // PARTE 1: Buscar usuarios parent/adult (auto-aprobar)
+      // ═══════════════════════════════════════════════════════════════
+      const adultsWithContact = await db
         .collection("users")
         .where("devicePhoneHashes", "array-contains", newUserPhoneHash)
         .where("role", "in", ["parent", "adult"])
         .get();
 
-      console.log(`   👥 ${usersWithContact.size} usuarios tienen este número agendado`);
-
-      if (usersWithContact.empty) {
-        console.log("   ℹ️ Nadie tiene este usuario en sus contactos aún");
-        return;
-      }
+      console.log(`   👥 ${adultsWithContact.size} adultos/padres tienen este número agendado`);
 
       // Crear relaciones de contacto bilaterales automáticamente
       const batch = db.batch();
       let relationsCreated = 0;
+      let potentialCreated = 0;
 
-      for (const userDoc of usersWithContact.docs) {
+      // Procesar adultos/padres (auto-aprobar)
+      for (const userDoc of adultsWithContact.docs) {
         const contactUserId = userDoc.id;
         const contactUserData = userDoc.data();
 
@@ -203,7 +416,7 @@ exports.onUserRegistered = onDocumentCreated(
           status: "approved",
           createdAt: FieldValue.serverTimestamp(),
           autoCreated: true,
-          source: "auto_device_sync_registration", // Marca específica para sync en registro
+          source: "auto_device_sync_registration",
           user1Name: users[0] === userId ? userName : contactUserData.name || "Usuario",
           user2Name: users[1] === userId ? userName : contactUserData.name || "Usuario",
         });
@@ -213,14 +426,14 @@ exports.onUserRegistered = onDocumentCreated(
         const chatRef = db.collection("chats").doc(chatId);
         batch.set(chatRef, {
           users: users,
-          participants: users, // ✅ FIX: Campo requerido por Firestore rules para permisos
-          visible: false, // Invisible hasta que se envíe el primer mensaje
+          participants: users,
+          visible: false,
           createdAt: FieldValue.serverTimestamp(),
           lastMessage: null,
           lastMessageTime: FieldValue.serverTimestamp(),
           source: "auto_device_sync_registration",
-          isValidChat: true, // ✅ Marcar como chat válido
-        }, { merge: true }); // merge: true para no sobreescribir si ya existe
+          isValidChat: true,
+        }, { merge: true });
 
         relationsCreated++;
 
@@ -252,10 +465,100 @@ exports.onUserRegistered = onDocumentCreated(
         }
       }
 
+      // ═══════════════════════════════════════════════════════════════
+      // PARTE 2: Buscar usuarios child (crear potential)
+      // ═══════════════════════════════════════════════════════════════
+      const childrenWithContact = await db
+        .collection("users")
+        .where("devicePhoneHashes", "array-contains", newUserPhoneHash)
+        .where("role", "==", "child")
+        .get();
+
+      console.log(`   👶 ${childrenWithContact.size} niños tienen este número agendado`);
+
+      // Procesar niños (crear potential si tienen padre vinculado)
+      for (const userDoc of childrenWithContact.docs) {
+        const childUserId = userDoc.id;
+        const childUserData = userDoc.data();
+
+        console.log(`   💡 Verificando ${childUserData.name} (${childUserId}) para potential...`);
+
+        // Verificar si el niño tiene padres vinculados
+        const parentLinks = await db
+          .collection("parent_children")
+          .where("childId", "==", childUserId)
+          .where("status", "==", "approved")
+          .get();
+
+        const hasLinkedParents = !parentLinks.empty;
+
+        // Crear documento de contacto
+        const users = [userId, childUserId].sort();
+        const contactId = `${users[0]}_${users[1]}`;
+        const contactRef = db.collection("contacts").doc(contactId);
+
+        // Verificar que no exista ya el contacto
+        const existingContact = await contactRef.get();
+        if (existingContact.exists) {
+          console.log(`   ⏭️ Contacto ${contactId} ya existe, saltando`);
+          continue;
+        }
+
+        if (hasLinkedParents) {
+          // Niño con padre → crear contacto POTENTIAL
+          const phonesMap = {};
+          if (userPhone) {
+            phonesMap[userId] = userPhone;
+          }
+          if (childUserData.phone) {
+            phonesMap[childUserId] = childUserData.phone;
+          }
+
+          batch.set(contactRef, {
+            users: users,
+            status: "potential",
+            createdAt: FieldValue.serverTimestamp(),
+            autoCreated: true,
+            source: "auto_device_sync_registration",
+            phones: phonesMap,
+          });
+          potentialCreated++;
+          console.log(`   💡 Contacto POTENTIAL creado: ${userName} <-> ${childUserData.name}`);
+        } else {
+          // Niño sin padre → auto-aprobar
+          batch.set(contactRef, {
+            users: users,
+            status: "approved",
+            createdAt: FieldValue.serverTimestamp(),
+            autoCreated: true,
+            source: "auto_device_sync_registration",
+            user1Name: users[0] === userId ? userName : childUserData.name || "Usuario",
+            user2Name: users[1] === userId ? userName : childUserData.name || "Usuario",
+          });
+
+          // Crear chat invisible
+          const chatId = users.join("_");
+          const chatRef = db.collection("chats").doc(chatId);
+          batch.set(chatRef, {
+            users: users,
+            participants: users,
+            visible: false,
+            createdAt: FieldValue.serverTimestamp(),
+            lastMessage: null,
+            lastMessageTime: FieldValue.serverTimestamp(),
+            source: "auto_device_sync_registration",
+            isValidChat: true,
+          }, { merge: true });
+
+          relationsCreated++;
+          console.log(`   ✅ Contacto auto-aprobado: ${userName} <-> ${childUserData.name} (niño sin padre)`);
+        }
+      }
+
       // Ejecutar batch
       await batch.commit();
 
-      console.log(`   ✅ ${relationsCreated} relaciones de contacto creadas automáticamente`);
+      console.log(`   ✅ ${relationsCreated} relaciones aprobadas + ${potentialCreated} potenciales creadas`);
       console.log(`   ✅ Sincronización completada para ${userName}\n`);
     } catch (error) {
       console.error("❌ [ContactsSync] Error en sincronización automática:", error);

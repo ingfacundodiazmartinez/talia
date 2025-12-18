@@ -266,11 +266,15 @@ class _ChatAppBarState extends State<ChatAppBar> {
                         ),
                       );
                     }
+                  } on ParentBlockedException {
+                    if (context.mounted) {
+                      _showParentBlockedDialog(context);
+                    }
                   } catch (e) {
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
-                          content: Text('Error al desbloquear: $e'),
+                          content: Text('Error al desbloquear contacto'),
                           backgroundColor: Colors.red,
                         ),
                       );
@@ -353,6 +357,44 @@ class _ChatAppBarState extends State<ChatAppBar> {
           },
         ),
       ],
+    );
+  }
+
+  void _showParentBlockedDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: Icon(
+          Icons.family_restroom,
+          size: 48,
+          color: Colors.orange,
+        ),
+        title: Text('Contacto bloqueado'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Este contacto fue bloqueado por tu padre o madre.',
+              textAlign: TextAlign.center,
+            ),
+            SizedBox(height: 12),
+            Text(
+              'Solo ellos pueden desbloquearlo desde su aplicación.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.grey[600],
+                fontSize: 13,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Entendido'),
+          ),
+        ],
+      ),
     );
   }
 }

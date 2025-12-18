@@ -92,6 +92,10 @@ class MessageBubble extends StatefulWidget {
   final bool isFavorite;
   final VoidCallback? onFavoriteToggled;  // ✅ Callback para refrescar favoritos
 
+  // ✅ NEW: Para timeout de mensajes pending y reenvío
+  final DateTime? localTimestamp;
+  final VoidCallback? onRetry;
+
   const MessageBubble({
     super.key,
     required this.messageId,
@@ -134,6 +138,8 @@ class MessageBubble extends StatefulWidget {
     this.onViewMessageInfo,
     this.isFavorite = false,  // ✅ NEW: Default false
     this.onFavoriteToggled,  // ✅ Callback para refrescar favoritos
+    this.localTimestamp,  // ✅ NEW: Para timeout de mensajes pending
+    this.onRetry,  // ✅ NEW: Callback para reenviar mensaje fallido
   });
 
   @override
@@ -484,7 +490,9 @@ class _MessageBubbleState extends State<MessageBubble>
                                                   time: widget.time,
                                                   isMe: widget.isMe,
                                                   status: widget.status,
-                                                  isFavorite: widget.isFavorite,  // ✅ NEW
+                                                  isFavorite: widget.isFavorite,
+                                                  localTimestamp: widget.localTimestamp,  // ✅ NEW: Para timeout
+                                                  onRetry: widget.onRetry,  // ✅ NEW: Para reenviar
                                                 ),
                                               ],
                                             ],

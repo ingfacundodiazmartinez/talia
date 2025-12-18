@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import '../../../utils/release_logger.dart';
 
 /// Repository para acceso a datos de contactos y relaciones padre-hijo
 ///
@@ -34,9 +35,12 @@ class ContactRepository {
   /// 1. Contactos aprobados bidireccionales
   /// 2. Hijos vinculados (si es padre)
   /// 3. Padres vinculados (si es hijo)
+  ///
+  /// ✅ FIX #9: Mejorada resiliencia - no falla si una fuente tiene error
   Future<Set<String>> getContactIds() async {
     final user = _auth.currentUser;
     if (user == null) {
+      ReleaseLogger.warning('getContactIds: Usuario no autenticado', tag: 'ContactRepository');
       return {};
     }
 
@@ -48,34 +52,44 @@ class ContactRepository {
     try {
       final contactIds = <String>{};
 
-      // 1. Obtener contactos aprobados
+      // 1. Obtener contactos aprobados (con fail-safe interno)
       final approvedContacts = await _getApprovedContacts(user.uid);
       contactIds.addAll(approvedContacts);
+      ReleaseLogger.log('📋 Contactos aprobados: ${approvedContacts.length}', tag: 'ContactRepository');
 
-      // 2. Obtener hijos vinculados (si es padre)
+      // 2. Obtener hijos vinculados (si es padre) - con timeout
       final linkedChildren = await _getLinkedChildren(
         user.uid,
-      ).timeout(Duration(seconds: 10), onTimeout: () => <String>{});
+      ).timeout(const Duration(seconds: 10), onTimeout: () => <String>{});
       contactIds.addAll(linkedChildren);
+      if (linkedChildren.isNotEmpty) {
+        ReleaseLogger.log('👶 Hijos vinculados: ${linkedChildren.length}', tag: 'ContactRepository');
+      }
 
-      // 3. Obtener padres vinculados (si es hijo)
+      // 3. Obtener padres vinculados (si es hijo) - con timeout
       final linkedParents = await _getLinkedParents(
         user.uid,
-      ).timeout(Duration(seconds: 10), onTimeout: () => <String>{});
+      ).timeout(const Duration(seconds: 10), onTimeout: () => <String>{});
       contactIds.addAll(linkedParents);
+      if (linkedParents.isNotEmpty) {
+        ReleaseLogger.log('👨‍👩‍👧 Padres vinculados: ${linkedParents.length}', tag: 'ContactRepository');
+      }
 
       // CRÍTICO: Agregar el usuario actual para que pueda ver sus propias historias
       contactIds.add(user.uid);
 
-      // 4. Filtrar contactos bloqueados (bidireccional)
+      // 4. Filtrar contactos bloqueados (bidireccional) - con fail-safe interno
       final nonBlockedContacts = await _filterOutBlockedContacts(contactIds);
 
       // Actualizar cache
       _updateCache(nonBlockedContacts);
 
+      ReleaseLogger.log('✅ Total contactos: ${nonBlockedContacts.length}', tag: 'ContactRepository');
       return nonBlockedContacts;
     } catch (e) {
-      throw Exception('Error obteniendo contactos: $e');
+      // ✅ FIX #9: Fail-safe final - retornar al menos el usuario actual
+      ReleaseLogger.error('Error obteniendo contactos: $e', tag: 'ContactRepository');
+      return {user.uid};
     }
   }
 
@@ -109,6 +123,7 @@ class ContactRepository {
   // ═══════════════════════════════════════════════════════════════
 
   /// Obtener contactos aprobados bidireccionales
+  /// ✅ FIX #9: Agregado timeout y fail-safe para evitar error persistente
   Future<Set<String>> _getApprovedContacts(String userId) async {
     try {
       final contactIds = <String>{};
@@ -117,7 +132,11 @@ class ContactRepository {
           .collection('contacts')
           .where('users', arrayContains: userId)
           .where('status', isEqualTo: 'approved')
-          .get();
+          .get()
+          .timeout(
+            const Duration(seconds: 15),
+            onTimeout: () => throw TimeoutException('Timeout obteniendo contactos'),
+          );
 
       // Extraer los IDs de los otros usuarios
       for (final contactDoc in contactsSnapshot.docs) {
@@ -134,7 +153,9 @@ class ContactRepository {
 
       return contactIds;
     } catch (e) {
-      throw Exception('Error obteniendo contactos aprobados: $e');
+      // ✅ FIX #9: Fail-safe - retornar vacío en lugar de lanzar
+      // Esto permite que el flujo continúe con linked children/parents
+      return <String>{};
     }
   }
 
@@ -171,6 +192,7 @@ class ContactRepository {
   // ═══════════════════════════════════════════════════════════════
 
   /// Obtener hijos vinculados de un padre
+  /// ✅ FIX #9: Fail-safe - retorna vacío en error
   Future<Set<String>> _getLinkedChildren(String parentId) async {
     try {
       final userDoc = await _firestore.collection('users').doc(parentId).get();
@@ -186,36 +208,37 @@ class ContactRepository {
 
       return linkedChildrenIds.toSet();
     } catch (e) {
-      throw Exception('Error obteniendo hijos vinculados: $e');
+      // ✅ FIX #9: Fail-safe - retornar vacío en lugar de lanzar
+      ReleaseLogger.warning('Error obteniendo hijos vinculados: $e', tag: 'ContactRepository');
+      return {};
     }
   }
 
   /// Obtener padres vinculados de un hijo
+  /// ✅ FIX: Usa parent_children en lugar de users.linkedChildrenIds (permisos)
   Future<Set<String>> _getLinkedParents(String childId) async {
     try {
-      final parentsSnapshot = await _firestore
-          .collection('users')
-          .where('linkedChildrenIds', arrayContains: childId)
+      final linksSnapshot = await _firestore
+          .collection('parent_children')
+          .where('childId', isEqualTo: childId)
+          .where('status', isEqualTo: 'approved')
           .get();
 
-      return parentsSnapshot.docs.map((doc) => doc.id).toSet();
+      return linksSnapshot.docs
+          .map((doc) => doc.data()['parentId'] as String)
+          .toSet();
     } catch (e) {
-      throw Exception('Error obteniendo padres vinculados: $e');
+      ReleaseLogger.warning('Error obteniendo padres vinculados: $e', tag: 'ContactRepository');
+      return {};
     }
   }
 
   /// OPTIMIZACIÓN: Obtener padres vinculados para múltiples hijos en batch
   ///
-  /// En lugar de hacer N queries individuales, usa múltiples queries arrayContains
-  /// pero las hace en paralelo para mejorar performance.
+  /// ✅ FIX: Usa parent_children en lugar de users.linkedChildrenIds (permisos)
   ///
   /// PERFORMANCE:
-  /// - Antes: N queries secuenciales = O(N) tiempo
-  /// - Ahora: N queries en paralelo = O(1) tiempo (limitado por la query más lenta)
-  ///
-  /// TRADE-OFF:
-  /// - Más queries simultáneas a Firestore
-  /// - Pero mucho más rápido en tiempo de respuesta total
+  /// - Ejecuta queries en paralelo para mejor tiempo de respuesta
   Future<Map<String, Set<String>>> getBatchLinkedParents(
     List<String> childIds,
   ) async {
@@ -235,14 +258,17 @@ class ContactRepository {
 
       // OPTIMIZACIÓN: Ejecutar todas las queries en paralelo usando Future.wait
       final futures = uniqueChildIds.map((childId) async {
-        final parentsSnapshot = await _firestore
-            .collection('users')
-            .where('linkedChildrenIds', arrayContains: childId)
+        final linksSnapshot = await _firestore
+            .collection('parent_children')
+            .where('childId', isEqualTo: childId)
+            .where('status', isEqualTo: 'approved')
             .get();
 
         return {
           'childId': childId,
-          'parents': parentsSnapshot.docs.map((doc) => doc.id).toSet(),
+          'parents': linksSnapshot.docs
+              .map((doc) => doc.data()['parentId'] as String)
+              .toSet(),
         };
       });
 
@@ -277,12 +303,16 @@ class ContactRepository {
   }
 
   /// Stream de padres vinculados
+  /// ✅ FIX: Usa parent_children en lugar de users.linkedChildrenIds (permisos)
   Stream<Set<String>> getLinkedParentsStream(String childId) {
     return _firestore
-        .collection('users')
-        .where('linkedChildrenIds', arrayContains: childId)
+        .collection('parent_children')
+        .where('childId', isEqualTo: childId)
+        .where('status', isEqualTo: 'approved')
         .snapshots()
-        .map((snapshot) => snapshot.docs.map((doc) => doc.id).toSet());
+        .map((snapshot) => snapshot.docs
+            .map((doc) => doc.data()['parentId'] as String)
+            .toSet());
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -303,6 +333,7 @@ class ContactRepository {
   }
 
   /// Obtener información de múltiples usuarios
+  /// ✅ FIX #9: Agregado timeout y fail-safe para evitar error persistente
   Future<Map<String, Map<String, dynamic>>> getUsersInfo(
     List<String> userIds,
   ) async {
@@ -315,21 +346,38 @@ class ContactRepository {
       for (int i = 0; i < userIds.length; i += 10) {
         final chunk = userIds.skip(i).take(10).toList();
 
-        final snapshot = await _firestore
-            .collection('users')
-            .where(FieldPath.documentId, whereIn: chunk)
-            .get();
+        try {
+          final snapshot = await _firestore
+              .collection('users')
+              .where(FieldPath.documentId, whereIn: chunk)
+              .get()
+              .timeout(
+                const Duration(seconds: 10),
+                onTimeout: () => throw TimeoutException('Timeout obteniendo usuarios'),
+              );
 
-        for (final doc in snapshot.docs) {
-          if (doc.exists) {
-            usersInfo[doc.id] = doc.data();
+          for (final doc in snapshot.docs) {
+            if (doc.exists) {
+              usersInfo[doc.id] = doc.data();
+            }
           }
+        } catch (chunkError) {
+          // ✅ FIX #9: Continuar con siguiente chunk en vez de fallar completamente
+          ReleaseLogger.warning(
+            'Error obteniendo chunk de usuarios: $chunkError',
+            tag: 'ContactRepository',
+          );
         }
       }
 
       return usersInfo;
     } catch (e) {
-      throw Exception('Error obteniendo información de usuarios: $e');
+      // ✅ FIX #9: Fail-safe - retornar vacío en lugar de lanzar
+      ReleaseLogger.error(
+        'Error obteniendo información de usuarios: $e',
+        tag: 'ContactRepository',
+      );
+      return {};
     }
   }
 
@@ -453,37 +501,47 @@ class ContactRepository {
 
       return nonBlockedContacts;
     } catch (e) {
-      // En caso de error, devolver la lista original (fail-safe)
-      throw Exception('Error filtrando contactos bloqueados: $e');
+      // ✅ FIX: En caso de error, devolver la lista original (fail-safe) en lugar de lanzar
+      // Esto previene que la lista de contactos aparezca vacía por errores en blocked_contacts
+      return contactIds;
     }
   }
 
-  /// Obtener IDs de contactos bloqueados por el usuario
+  /// Obtener IDs de contactos bloqueados por el usuario (usando chats.isBlocked)
   Future<Set<String>> _getBlockedContactIds(String userId) async {
     try {
       final blockSnapshot = await _firestore
-          .collection('blocked_contacts')
-          .where('userId', isEqualTo: userId)
+          .collection('chats')
+          .where('participants', arrayContains: userId)
+          .where('isBlocked', isEqualTo: true)
+          .where('blockedBy', isEqualTo: userId)
           .get();
 
-      return blockSnapshot.docs
-          .map((doc) => doc.data()['blockedUserId'] as String)
-          .toSet();
+      return blockSnapshot.docs.map((doc) {
+        final participants = List<String>.from(doc.data()['participants'] ?? []);
+        return participants.firstWhere((p) => p != userId, orElse: () => '');
+      }).where((id) => id.isNotEmpty).toSet();
     } catch (e) {
       throw Exception('Error obteniendo contactos bloqueados: $e');
     }
   }
 
-  /// Obtener IDs de contactos que han bloqueado al usuario
+  /// Obtener IDs de contactos que han bloqueado al usuario (usando chats.isBlocked)
   Future<Set<String>> _getContactsWhoBlockedUser(String userId) async {
     try {
       final blockSnapshot = await _firestore
-          .collection('blocked_contacts')
-          .where('blockedUserId', isEqualTo: userId)
+          .collection('chats')
+          .where('participants', arrayContains: userId)
+          .where('isBlocked', isEqualTo: true)
           .get();
 
+      // Filtrar para encontrar chats donde el otro usuario me bloqueó
       return blockSnapshot.docs
-          .map((doc) => doc.data()['userId'] as String)
+          .where((doc) {
+            final blockedBy = doc.data()['blockedBy'] as String?;
+            return blockedBy != null && blockedBy != userId;
+          })
+          .map((doc) => doc.data()['blockedBy'] as String)
           .toSet();
     } catch (e) {
       throw Exception('Error obteniendo contactos que me bloquearon: $e');

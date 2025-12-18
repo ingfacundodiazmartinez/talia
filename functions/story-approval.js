@@ -74,29 +74,33 @@ exports.approveStory = onCall({
       // Actualizar historia
       transaction.update(storyRef, updateData);
 
-      // Actualizar approval_request a completado
-      const approvalRequestQuery = await db
+      // ✅ FIX: Actualizar TODOS los approval_requests pendientes para esta historia
+      // Cuando un padre aprueba, los requests de otros padres también se resuelven
+      const allApprovalRequestsQuery = await db
         .collection('story_approval_requests')
         .where('storyId', '==', storyId)
-        .where('parentId', '==', auth.uid)
         .where('status', '==', 'pending')
-        .limit(1)
         .get();
 
-      if (!approvalRequestQuery.empty) {
-        const approvalRequestRef = approvalRequestQuery.docs[0].ref;
-        transaction.update(approvalRequestRef, {
+      for (const requestDoc of allApprovalRequestsQuery.docs) {
+        const isCurrentParent = requestDoc.data().parentId === auth.uid;
+        transaction.update(requestDoc.ref, {
           status: 'approved',
           resolvedAt: FieldValue.serverTimestamp(),
           resolvedBy: auth.uid,
+          // Marcar si fue resuelto por otro padre
+          ...(isCurrentParent ? {} : { resolvedByOtherParent: true }),
         });
       }
+
+      console.log(`✅ [ApproveStory] Actualizados ${allApprovalRequestsQuery.size} approval requests para historia ${storyId}`);
     });
 
     // 6. Crear notificación para el hijo
+    // ✅ FIX #10: Use 'story_approved' type to match Flutter notification handler
     await createNotification({
       userId: storyData.userId,
-      type: 'story_approval',
+      type: 'story_approved',
       title: '✅ Historia aprobada',
       message: 'Tu historia ha sido aprobada y ya está disponible para tus contactos',
       data: {
@@ -190,29 +194,33 @@ exports.rejectStory = onCall({
       // Actualizar historia
       transaction.update(storyRef, updateData);
 
-      // Actualizar approval_request a completado
-      const approvalRequestQuery = await db
+      // ✅ FIX: Actualizar TODOS los approval_requests pendientes para esta historia
+      // Cuando un padre rechaza, los requests de otros padres también se resuelven
+      const allApprovalRequestsQuery = await db
         .collection('story_approval_requests')
         .where('storyId', '==', storyId)
-        .where('parentId', '==', auth.uid)
         .where('status', '==', 'pending')
-        .limit(1)
         .get();
 
-      if (!approvalRequestQuery.empty) {
-        const approvalRequestRef = approvalRequestQuery.docs[0].ref;
-        transaction.update(approvalRequestRef, {
+      for (const requestDoc of allApprovalRequestsQuery.docs) {
+        const isCurrentParent = requestDoc.data().parentId === auth.uid;
+        transaction.update(requestDoc.ref, {
           status: 'rejected',
           resolvedAt: FieldValue.serverTimestamp(),
           resolvedBy: auth.uid,
+          // Marcar si fue resuelto por otro padre
+          ...(isCurrentParent ? {} : { resolvedByOtherParent: true }),
         });
       }
+
+      console.log(`✅ [RejectStory] Actualizados ${allApprovalRequestsQuery.size} approval requests para historia ${storyId}`);
     });
 
     // 6. Crear notificación para el hijo
+    // ✅ FIX #10: Use 'story_rejected' type to match Flutter notification handler
     await createNotification({
       userId: storyData.userId,
-      type: 'story_rejection',
+      type: 'story_rejected',
       title: '❌ Historia rechazada',
       message: reason ? `Tu historia fue rechazada. Motivo: ${reason}` : 'Tu historia fue rechazada',
       data: {
@@ -349,9 +357,11 @@ async function createNotification({ userId, type, title, message, data }) {
       userId: userId,
       type: type,
       title: title,
+      body: message, // ✅ FIX #10: Use 'body' for consistency with FCM
       message: message,
       data: data,
       read: false,
+      pushSent: false, // ✅ FIX #10: Enable push notification via sendNotificationOnCreate trigger
       createdAt: FieldValue.serverTimestamp(),
       expiresAt: FieldValue.serverTimestamp(),
     };
@@ -427,16 +437,43 @@ exports.createStory = onCall({
     if (userData.role === 'parent') {
       initialStatus = 'approved'; // Padres no necesitan aprobación
     } else if (userData.role === 'child') {
-      // Hijos: solo pending si tienen padres vinculados, sino approved
-      // Buscar si algún padre tiene este hijo en su linkedChildrenIds
+      // Hijos: verificar si tienen padres vinculados Y si alguno tiene auto-aprobación habilitada
       const parentsQuery = await db
         .collection('users')
         .where('linkedChildrenIds', 'array-contains', auth.uid)
-        .limit(1)
         .get();
 
       const hasLinkedParents = !parentsQuery.empty;
-      initialStatus = hasLinkedParents ? 'pending' : 'approved';
+
+      if (!hasLinkedParents) {
+        initialStatus = 'approved'; // Sin padres vinculados = aprobación directa
+      } else {
+        // ✅ FIX #13: Verificar si ALGÚN padre tiene auto-aprobación habilitada
+        let anyParentHasAutoApprove = false;
+
+        for (const parentDoc of parentsQuery.docs) {
+          const parentId = parentDoc.id;
+          const parentSettingsDoc = await db
+            .collection('parent_settings')
+            .doc(parentId)
+            .get();
+
+          if (parentSettingsDoc.exists) {
+            const settings = parentSettingsDoc.data();
+            if (settings.autoApproveRequests === true) {
+              anyParentHasAutoApprove = true;
+              console.log(`✅ [CreateStory] Parent ${parentId} tiene auto-aprobación habilitada`);
+              break;
+            }
+          }
+        }
+
+        initialStatus = anyParentHasAutoApprove ? 'approved' : 'pending';
+
+        if (anyParentHasAutoApprove) {
+          console.log(`✅ [CreateStory] Auto-aprobación aplicada: historia aprobada directamente`);
+        }
+      }
     } else {
       initialStatus = 'approved'; // Default seguro para usuarios sin rol específico
     }
@@ -508,7 +545,7 @@ exports.createStory = onCall({
       status: initialStatus,
       createdAt: FieldValue.serverTimestamp(),
       expiresAt: expiresAt,
-      viewedBy: {},
+      viewedBy: [], // ✅ FIX #7: Must be array for FieldValue.arrayUnion to work
       visibility: 'temporary',
       replies: [],
       availableFor: availableFor, // IDs de usuarios que pueden ver esta historia

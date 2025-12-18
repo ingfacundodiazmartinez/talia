@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import '../models/character.dart';
+import '../utils/release_logger.dart';
 
 /// Servicio para gestionar personajes y transformaciones con IA
 class CharacterService {
@@ -13,19 +14,119 @@ class CharacterService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseFunctions _functions = FirebaseFunctions.instance;
 
-  /// Obtener todos los personajes habilitados ordenados
-  Future<List<Character>> getEnabledCharacters() async {
-    try {
-      final snapshot = await _firestore
-          .collection('characters')
-          .where('enabled', isEqualTo: true)
-          .orderBy('order')
-          .get();
+  // ✅ Cache de personajes para evitar queries repetidas
+  List<Character>? _cachedCharacters;
+  DateTime? _cacheTimestamp;
+  static const _cacheDuration = Duration(minutes: 5);
 
-      return snapshot.docs.map((doc) => Character.fromFirestore(doc)).toList();
+  // ✅ Flag para pre-carga en progreso
+  bool _isPreloading = false;
+
+  /// Pre-cargar personajes al inicio de la app (llamar desde main.dart)
+  /// Esto evita el problema de personajes vacíos al abrir face-swap rápidamente
+  Future<void> preloadCharacters() async {
+    if (_isPreloading) {
+      ReleaseLogger.log('⏳ Pre-carga de personajes ya en progreso...', tag: 'CharacterService');
+      return;
+    }
+
+    _isPreloading = true;
+    ReleaseLogger.log('🎭 Pre-cargando personajes...', tag: 'CharacterService');
+
+    try {
+      final characters = await _fetchCharactersWithRetry();
+      _cachedCharacters = characters;
+      _cacheTimestamp = DateTime.now();
+      ReleaseLogger.log('✅ ${characters.length} personajes pre-cargados', tag: 'CharacterService');
     } catch (e) {
+      ReleaseLogger.error('❌ Error pre-cargando personajes: $e', tag: 'CharacterService');
+    } finally {
+      _isPreloading = false;
+    }
+  }
+
+  /// Obtener todos los personajes habilitados ordenados
+  /// Con retry automático y caché para evitar fallos transitorios
+  Future<List<Character>> getEnabledCharacters() async {
+    // ✅ Si hay caché válido, usarlo inmediatamente
+    if (_cachedCharacters != null && _cacheTimestamp != null) {
+      final cacheAge = DateTime.now().difference(_cacheTimestamp!);
+      if (cacheAge < _cacheDuration) {
+        ReleaseLogger.log('📦 Usando caché de ${_cachedCharacters!.length} personajes (edad: ${cacheAge.inSeconds}s)', tag: 'CharacterService');
+        return _cachedCharacters!;
+      }
+    }
+
+    // ✅ Fetch con retry
+    try {
+      final characters = await _fetchCharactersWithRetry();
+
+      // Actualizar caché
+      _cachedCharacters = characters;
+      _cacheTimestamp = DateTime.now();
+
+      return characters;
+    } catch (e) {
+      ReleaseLogger.error('❌ Error obteniendo personajes después de reintentos: $e', tag: 'CharacterService');
+
+      // Si hay caché (aunque esté viejo), usarlo como fallback
+      if (_cachedCharacters != null && _cachedCharacters!.isNotEmpty) {
+        ReleaseLogger.log('⚠️ Usando caché antiguo como fallback (${_cachedCharacters!.length} personajes)', tag: 'CharacterService');
+        return _cachedCharacters!;
+      }
+
       return [];
     }
+  }
+
+  /// Fetch de personajes con retry automático para errores transitorios
+  Future<List<Character>> _fetchCharactersWithRetry({int maxRetries = 3}) async {
+    int attempt = 0;
+    Object? lastError;
+
+    while (attempt < maxRetries) {
+      try {
+        attempt++;
+        ReleaseLogger.log('🔄 Intentando cargar personajes (intento $attempt/$maxRetries)...', tag: 'CharacterService');
+
+        final snapshot = await _firestore
+            .collection('characters')
+            .where('enabled', isEqualTo: true)
+            .orderBy('order')
+            .get();
+
+        final characters = snapshot.docs.map((doc) => Character.fromFirestore(doc)).toList();
+        ReleaseLogger.log('✅ ${characters.length} personajes cargados exitosamente', tag: 'CharacterService');
+        return characters;
+
+      } catch (e) {
+        lastError = e;
+        ReleaseLogger.error('⚠️ Error en intento $attempt: $e', tag: 'CharacterService');
+
+        // No reintentar si es error de permisos
+        if (e.toString().contains('permission-denied') ||
+            e.toString().contains('PERMISSION_DENIED')) {
+          ReleaseLogger.error('🚫 Error de permisos - no se reintentará', tag: 'CharacterService');
+          break;
+        }
+
+        // Esperar antes de reintentar (backoff exponencial)
+        if (attempt < maxRetries) {
+          final delay = Duration(milliseconds: 500 * attempt);
+          ReleaseLogger.log('⏳ Esperando ${delay.inMilliseconds}ms antes de reintentar...', tag: 'CharacterService');
+          await Future.delayed(delay);
+        }
+      }
+    }
+
+    throw lastError ?? Exception('Error desconocido cargando personajes');
+  }
+
+  /// Invalidar caché (útil para forzar recarga)
+  void invalidateCache() {
+    _cachedCharacters = null;
+    _cacheTimestamp = null;
+    ReleaseLogger.log('🗑️ Caché de personajes invalidado', tag: 'CharacterService');
   }
 
   /// Obtener personajes por categoría

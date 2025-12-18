@@ -596,12 +596,23 @@ class StoryCameraController {
             tag: 'StoryCameraController',
           );
 
-          // Inicializar DeepAR
-          await _deepARService.initialize(licenseKey: licenseKey);
+          // ✅ FIX #6 (v4): NO forzar dispose antes de inicializar
+          // El SDK de DeepAR no se reinicializa correctamente después de release()
+          // El lado nativo ahora mantiene DeepAR vivo y lo reutiliza
+          // Solo necesitamos llamar a initialize() que detectará si ya está listo
+          ReleaseLogger.log('🎭 Inicializando DeepAR desde cero...', tag: 'StoryCameraController');
+          final initResult = await _deepARService.initialize(licenseKey: licenseKey);
+
+          if (!initResult) {
+            ReleaseLogger.error('❌ Fallo al inicializar DeepAR', tag: 'StoryCameraController');
+            onError?.call('Error inicializando filtros AR');
+            return;
+          }
+
           _deepARReinitCounter++;
           _isDeepARInitialized = true;
           _hasCleanedUpDeepAR = false; // ✅ Resetear flag para permitir cleanup futuro
-          ReleaseLogger.log('✅ DeepAR initialized successfully', tag: 'StoryCameraController');
+          ReleaseLogger.log('✅ DeepAR initialized successfully (reinit #$_deepARReinitCounter)', tag: 'StoryCameraController');
 
           // Notificar UI para que se actualice con DeepAR view
           onCameraInitialized?.call();
@@ -1503,7 +1514,18 @@ class StoryCameraController {
 
     _recordingTimer?.cancel();
     _cameraController?.dispose();
-    _deepARService.dispose();
+
+    // ✅ FIX #6 (v4): NO liberar DeepAR en dispose del controller
+    // El SDK de DeepAR no se reinicializa correctamente después de release()
+    // Lo mantenemos vivo en el lado nativo para reutilización
+    // Solo pausamos y limpiamos recursos locales
+    if (_isDeepARInitialized) {
+      ReleaseLogger.log('🧹 Dispose: Pausando DeepAR (manteniéndolo vivo para reutilización)', tag: 'StoryCameraController');
+      // Solo detener la cámara, no liberar DeepAR
+      _deepARService.stopCamera();
+    } else {
+      ReleaseLogger.log('🧹 Dispose: DeepAR no estaba inicializado', tag: 'StoryCameraController');
+    }
 
     // ❌ NO HACER: _uploadProgressService.dispose();
     // ✅ CORRECTO: StoryUploadProgressService es un singleton global,

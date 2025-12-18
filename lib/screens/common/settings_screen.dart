@@ -1,35 +1,9 @@
 import 'package:flutter/material.dart';
-import '../../services/theme_service.dart';
 import 'privacy_security_screen.dart';
 import '../../screens/notifications/notification_settings_screen.dart';
 
-class SettingsScreen extends StatefulWidget {
+class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
-
-  @override
-  State<SettingsScreen> createState() => _SettingsScreenState();
-}
-
-class _SettingsScreenState extends State<SettingsScreen> {
-  final ThemeService _themeService = ThemeService();
-
-  @override
-  void initState() {
-    super.initState();
-    _themeService.addListener(_onThemeChanged);
-  }
-
-  @override
-  void dispose() {
-    _themeService.removeListener(_onThemeChanged);
-    super.dispose();
-  }
-
-  void _onThemeChanged() {
-    if (mounted) {
-      setState(() {});
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -41,49 +15,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       body: ListView(
         children: [
-          // Sección de Apariencia
-          Padding(
-            padding: EdgeInsets.all(16),
-            child: Text(
-              'Apariencia',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: colorScheme.onSurface,
-              ),
-            ),
-          ),
-          SwitchListTile(
-            secondary: Icon(
-              _themeService.isDarkMode ? Icons.dark_mode : Icons.light_mode,
-              color: colorScheme.primary,
-            ),
-            title: Text(
-              'Modo Oscuro',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
-                color: colorScheme.onSurface,
-              ),
-            ),
-            subtitle: Text(
-              _themeService.isDarkMode
-                  ? 'Desactivar para usar tema claro'
-                  : 'Activar para reducir fatiga visual',
-              style: TextStyle(
-                fontSize: 14,
-                color: colorScheme.onSurfaceVariant,
-              ),
-            ),
-            value: _themeService.isDarkMode,
-            activeThumbColor: colorScheme.primary,
-            onChanged: (bool value) async {
-              await _themeService.toggleTheme();
-            },
-          ),
-          Divider(),
-
-          // Sección de Notificaciones (placeholder)
+          // Sección de Notificaciones
           Padding(
             padding: EdgeInsets.all(16),
             child: Text(

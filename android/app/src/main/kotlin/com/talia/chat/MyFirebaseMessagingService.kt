@@ -29,9 +29,22 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
 
     companion object {
         private const val TAG = "FCMService"
+        // ✅ 4 canales para todas las combinaciones de sonido/vibración
+        private const val CHANNEL_SOUND_VIBRATION = "talia_sound_vibration"      // Sound + Vibration
+        private const val CHANNEL_SOUND_ONLY = "talia_sound_only"                // Sound only
+        private const val CHANNEL_VIBRATION_ONLY = "talia_vibration_only"        // Vibration only
+        private const val CHANNEL_SILENT = "talia_silent"                        // No sound, no vibration
+
+        // Legacy channels (mantener para compatibilidad)
         private const val CHANNEL_ID = "high_importance_channel"
+        private const val CHANNEL_ID_SILENT = "silent_channel"
         private const val CHANNEL_NAME = "Notificaciones Importantes"
+        private const val CHANNEL_NAME_SILENT = "Notificaciones Silenciosas"
         private const val PHOTO_CACHE_CHANNEL = "com.talia.chat/photo_cache"
+
+        // ✅ Keys de SharedPreferences (sincronizadas con Flutter)
+        private const val SOUND_ENABLED_KEY = "flutter.notification_sound_enabled"
+        private const val VIBRATION_ENABLED_KEY = "flutter.notification_vibration_enabled"
 
         /**
          * ✅ UNIFIED: Mostrar notificación usando cache de fotos proactivo
@@ -210,6 +223,7 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         /**
          * ✅ UNIFIED: Build and show notification (used by both foreground and background)
          * Eliminates duplication between showNotificationFromForeground() and onMessageReceived()
+         * Respeta las preferencias de sonido/vibración del usuario
          */
         private fun buildAndShowNotification(
             context: Context,
@@ -221,6 +235,24 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             pendingIntent: PendingIntent,
             notificationId: Int = 0
         ) {
+            // ✅ Leer preferencias de sonido/vibración desde SharedPreferences
+            val sharedPrefs = context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+            val soundEnabled = sharedPrefs.getBoolean(SOUND_ENABLED_KEY, true)
+            val vibrationEnabled = sharedPrefs.getBoolean(VIBRATION_ENABLED_KEY, true)
+            Log.d(TAG, "🔔 [Prefs] sound=$soundEnabled, vibration=$vibrationEnabled")
+
+            // ✅ Crear canales apropiados
+            createNotificationChannelsStatic(context)
+
+            // ✅ Seleccionar canal basado en la COMBINACIÓN de preferencias
+            val channelId = when {
+                soundEnabled && vibrationEnabled -> CHANNEL_SOUND_VIBRATION
+                soundEnabled && !vibrationEnabled -> CHANNEL_SOUND_ONLY
+                !soundEnabled && vibrationEnabled -> CHANNEL_VIBRATION_ONLY
+                else -> CHANNEL_SILENT
+            }
+            Log.d(TAG, "🔔 [Channel] Usando canal: $channelId")
+
             val shortcutId = "chat_$senderId"
 
             // Create Person
@@ -260,14 +292,22 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                 .setGroupConversation(false)
                 .addMessage(body, System.currentTimeMillis(), sender)
 
-            // Create notification
-            val notificationBuilder = NotificationCompat.Builder(context, CHANNEL_ID)
+            // Create notification con el canal seleccionado
+            val notificationBuilder = NotificationCompat.Builder(context, channelId)
                 .setSmallIcon(R.drawable.ic_notification)
                 .setShortcutId(shortcutId)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setAutoCancel(true)
                 .setContentIntent(pendingIntent)
                 .setStyle(messagingStyle)
+
+            // ✅ Aplicar configuración de sonido/vibración individualmente
+            if (!soundEnabled) {
+                notificationBuilder.setSound(null)
+            }
+            if (!vibrationEnabled) {
+                notificationBuilder.setVibrate(null)
+            }
 
             // Add large icon if photo is available
             if (circularBitmap != null) {
@@ -281,7 +321,114 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             // ✅ Usar ID consistente para poder cancelar después (auto-dismiss cuando usuario entra al chat)
             val finalId = if (notificationId != 0) notificationId else System.currentTimeMillis().toInt()
             notificationManager.notify(finalId, notificationBuilder.build())
-            Log.d(TAG, "✅ Notificación mostrada con id=$finalId")
+            Log.d(TAG, "✅ Notificación mostrada con id=$finalId (canal=$channelId)")
+        }
+
+        /**
+         * ✅ Crear todos los canales de notificación necesarios
+         * 4 canales para todas las combinaciones de sonido/vibración
+         */
+        private fun createNotificationChannelsStatic(context: Context) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+                // ═══════════════════════════════════════════════════════════════
+                // 4 CANALES PARA COMBINACIONES DE SONIDO/VIBRACIÓN
+                // ═══════════════════════════════════════════════════════════════
+
+                // 1. Canal con sonido Y vibración
+                val channelSoundVibration = NotificationChannel(
+                    CHANNEL_SOUND_VIBRATION,
+                    "Mensajes (Sonido y Vibración)",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "Notificaciones con sonido y vibración"
+                    enableVibration(true)
+                    enableLights(true)
+                }
+                notificationManager.createNotificationChannel(channelSoundVibration)
+
+                // 2. Canal solo con sonido (sin vibración)
+                val channelSoundOnly = NotificationChannel(
+                    CHANNEL_SOUND_ONLY,
+                    "Mensajes (Solo Sonido)",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "Notificaciones con sonido pero sin vibración"
+                    enableVibration(false)
+                    vibrationPattern = null
+                    enableLights(true)
+                }
+                notificationManager.createNotificationChannel(channelSoundOnly)
+
+                // 3. Canal solo con vibración (sin sonido)
+                val channelVibrationOnly = NotificationChannel(
+                    CHANNEL_VIBRATION_ONLY,
+                    "Mensajes (Solo Vibración)",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "Notificaciones con vibración pero sin sonido"
+                    enableVibration(true)
+                    setSound(null, null)
+                    enableLights(true)
+                }
+                notificationManager.createNotificationChannel(channelVibrationOnly)
+
+                // 4. Canal silencioso (sin sonido ni vibración)
+                val channelSilent = NotificationChannel(
+                    CHANNEL_SILENT,
+                    "Mensajes Silenciosos",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "Notificaciones sin sonido ni vibración"
+                    enableVibration(false)
+                    vibrationPattern = null
+                    setSound(null, null)
+                    enableLights(true)
+                }
+                notificationManager.createNotificationChannel(channelSilent)
+
+                // ═══════════════════════════════════════════════════════════════
+                // LEGACY CHANNELS (para compatibilidad)
+                // ═══════════════════════════════════════════════════════════════
+
+                val channelLegacy = NotificationChannel(
+                    CHANNEL_ID,
+                    CHANNEL_NAME,
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "Notificaciones con sonido y vibración (legacy)"
+                    enableVibration(true)
+                    enableLights(true)
+                }
+                notificationManager.createNotificationChannel(channelLegacy)
+
+                val channelLegacySilent = NotificationChannel(
+                    CHANNEL_ID_SILENT,
+                    CHANNEL_NAME_SILENT,
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "Notificaciones sin sonido ni vibración (legacy)"
+                    enableVibration(false)
+                    setSound(null, null)
+                    enableLights(true)
+                }
+                notificationManager.createNotificationChannel(channelLegacySilent)
+
+                // Canal de mensajes con sonido (Cloud Functions legacy)
+                val channelTaliaMessages = NotificationChannel(
+                    "talia_messages",
+                    "Mensajes de Talia",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "Notificaciones de mensajes con sonido (legacy)"
+                    enableVibration(true)
+                    enableLights(true)
+                }
+                notificationManager.createNotificationChannel(channelTaliaMessages)
+
+                Log.d(TAG, "✅ Canales de notificación creados: $CHANNEL_SOUND_VIBRATION, $CHANNEL_SOUND_ONLY, $CHANNEL_VIBRATION_ONLY, $CHANNEL_SILENT + legacy")
+            }
         }
 
         /**
@@ -302,15 +449,8 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         }
 
         private fun createNotificationChannelStatic(context: Context) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val channel = NotificationChannel(
-                    CHANNEL_ID,
-                    CHANNEL_NAME,
-                    NotificationManager.IMPORTANCE_HIGH
-                )
-                val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                notificationManager.createNotificationChannel(channel)
-            }
+            // ✅ Delegar al método unificado que crea ambos canales
+            createNotificationChannelsStatic(context)
         }
 
         /**
@@ -397,7 +537,8 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                      type == "emergency_call" ||
                      type == "incoming_call" ||          // V2 call system
                      type == "group_video_call" ||
-                     type == "group_audio_call"
+                     type == "group_audio_call" ||
+                     type == "call_cancelled"            // ✅ FIX: También filtrar cancelaciones
 
         if (isCall) {
             Log.e(TAG, "📞 Llamada detectada ($type) - delegando a Flutter background handler")
@@ -604,20 +745,8 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
     }
 
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                CHANNEL_NAME,
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = "Canal para notificaciones importantes de Talia"
-                enableVibration(true)
-                enableLights(true)
-            }
-
-            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            notificationManager.createNotificationChannel(channel)
-        }
+        // ✅ Delegar al método estático unificado que crea ambos canales
+        createNotificationChannelsStatic(this)
     }
 
     /**

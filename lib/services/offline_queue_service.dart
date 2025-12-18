@@ -246,29 +246,42 @@ class OfflineQueueService {
     logger.info('Creando emergencia desde cola offline', tag: 'Offline');
   }
 
+  /// Genera el chatId ordenado alfabéticamente
+  String _getChatId(String id1, String id2) {
+    final sorted = [id1, id2]..sort();
+    return '${sorted[0]}_${sorted[1]}';
+  }
+
   Future<void> _blockUser(Map<String, dynamic> data) async {
     final userId = data['userId'] as String;
     final blockedUserId = data['blockedUserId'] as String;
 
-    await FirebaseFirestore.instance.collection('blocked_contacts').add({
-      'userId': userId,
-      'blockedUserId': blockedUserId,
+    // Usar chats.isBlocked como fuente de verdad unificada
+    final chatId = _getChatId(userId, blockedUserId);
+    await FirebaseFirestore.instance.collection('chats').doc(chatId).set({
+      'isBlocked': true,
       'blockedAt': FieldValue.serverTimestamp(),
-    });
+      'blockedBy': userId,
+      'blockedReason': 'Bloqueado por usuario',
+      'participants': [userId, blockedUserId],
+    }, SetOptions(merge: true));
   }
 
   Future<void> _unblockUser(Map<String, dynamic> data) async {
     final userId = data['userId'] as String;
     final blockedUserId = data['blockedUserId'] as String;
 
-    final docs = await FirebaseFirestore.instance
-        .collection('blocked_contacts')
-        .where('userId', isEqualTo: userId)
-        .where('blockedUserId', isEqualTo: blockedUserId)
-        .get();
+    // Usar chats.isBlocked como fuente de verdad unificada
+    final chatId = _getChatId(userId, blockedUserId);
+    final chatRef = FirebaseFirestore.instance.collection('chats').doc(chatId);
+    final chatDoc = await chatRef.get();
 
-    for (final doc in docs.docs) {
-      await doc.reference.delete();
+    if (chatDoc.exists) {
+      await chatRef.update({
+        'isBlocked': false,
+        'unblockedAt': FieldValue.serverTimestamp(),
+        'unblockedBy': userId,
+      });
     }
   }
 

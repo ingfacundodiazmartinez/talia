@@ -92,6 +92,10 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
   final bool _showControls = true; // Always visible
   String? _actualCallId; // Actual callId after creation
 
+  // ✅ FIX: Busy state handling
+  bool _isRecipientBusy = false;
+  Timer? _busyAutoEndTimer;
+
   // Participants
   final Set<int> _remoteUsers = {};
   int? _localUid;
@@ -522,7 +526,41 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
       _actualCallId = result.data!['callId'] as String;
       _localUid = result.data!['agoraUid'] as int?;
 
-      ReleaseLogger.log('Call created: $_actualCallId, UID: $_localUid', tag: _tag);
+      // ✅ FIX: Check if recipient is busy
+      final allParticipantsBusy = result.data!['allParticipantsBusy'] as bool? ?? false;
+      final busyParticipants = result.data!['busyParticipants'] as List<dynamic>? ?? [];
+
+      ReleaseLogger.log('Call created: $_actualCallId, UID: $_localUid, busy: $allParticipantsBusy', tag: _tag);
+
+      if (allParticipantsBusy && busyParticipants.isNotEmpty) {
+        // ✅ Recipient is busy - show busy tone and auto-end
+        ReleaseLogger.log('📵 Recipient is busy, showing busy state', tag: _tag);
+        setState(() {
+          _isRecipientBusy = true;
+          _isCreatingCall = false;
+        });
+
+        // Play busy tone instead of ringback
+        await _ringtoneService.playBusyTone();
+
+        // Auto-end after 5 seconds
+        _busyAutoEndTimer = Timer(const Duration(seconds: 5), () {
+          if (mounted && _isRecipientBusy) {
+            ReleaseLogger.log('📵 Auto-ending call after busy timeout', tag: _tag);
+            _endCall();
+          }
+        });
+
+        // Still watch the call in case it's answered from another device
+        _callSubscription = _callController.watchCall(_actualCallId!).listen(
+          (call) {
+            if (call?.endedAt != null && mounted) {
+              Navigator.of(context, rootNavigator: true).pop();
+            }
+          },
+        );
+        return;
+      }
 
       // ✅ Start ringback tone while waiting for remote user to answer
       await _ringtoneService.playRingbackTone();
@@ -632,7 +670,7 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
           });
           ReleaseLogger.log('User joined: $remoteUid', tag: _tag);
         },
-        onUserOffline: (RtcConnection connection, int remoteUid, UserOfflineReasonType reason) {
+        onUserOffline: (RtcConnection connection, int remoteUid, UserOfflineReasonType reason) async {
           ReleaseLogger.log('User offline: $remoteUid, reason: ${reason.name}', tag: _tag);
 
           // ✅ FIX: Prevent duplicate end call processing
@@ -648,21 +686,16 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
           });
 
           // ✅ FIX: For 1:1 calls, when the remote user leaves, close the screen
-          // Don't wait for Firestore update - provides immediate feedback
           final isGroupCall = widget.isGroup ?? _callController.currentCall?.isGroup ?? false;
           if (!isGroupCall && _remoteUsers.isEmpty) {
-            _isEnding = true; // Mark as ending to prevent duplicates
-            ReleaseLogger.log('📞 1:1 call - remote user left, ending call', tag: _tag);
+            ReleaseLogger.log('📞 1:1 call - remote user left, ending call properly', tag: _tag);
 
-            // NOTE: We do NOT call CallKitSyncService().endCallKitIfExists() here
-            // It can cause native iOS crash. CallKit auto-cleans when audio session ends.
-
-            // End call in Firestore and leave channel
-            _callController.endCall();
-
-            if (mounted) {
-              Navigator.of(context, rootNavigator: true).pop();
-            }
+            // ✅ FIX #3: Use _endCall() which:
+            // 1. Sets _isEnding flag to prevent duplicates
+            // 2. AWAITS Firestore update (sync between devices)
+            // 3. Handles CallKit cleanup via native channel
+            // 4. Pops the screen AFTER cleanup completes
+            await _endCall();
           }
         },
         onConnectionLost: (RtcConnection connection) {
@@ -1336,6 +1369,103 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
     _createCallInBackground();
   }
 
+  /// ✅ FIX: Build busy screen when recipient is in another call
+  Widget _buildBusyScreen() {
+    final isVideo = widget.isVideo ?? false;
+
+    return Scaffold(
+      backgroundColor: isVideo ? Colors.black : Colors.grey[900],
+      body: SafeArea(
+        child: Stack(
+          children: [
+            // Show camera preview in background for video calls
+            if (isVideo && _agoraEngine.engine != null)
+              Center(
+                child: AgoraVideoView(
+                  controller: VideoViewController(
+                    rtcEngine: _agoraEngine.engine!,
+                    canvas: const VideoCanvas(uid: 0),
+                  ),
+                ),
+              ),
+            // Semi-transparent overlay
+            Container(
+              color: Colors.black.withOpacity(0.7),
+            ),
+            // Busy message
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(32.0),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    // Busy icon with animation
+                    Container(
+                      padding: const EdgeInsets.all(20),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.withOpacity(0.2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.phone_disabled,
+                        color: Colors.orange,
+                        size: 64,
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    const Text(
+                      'Ocupado',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 28,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'El contacto está en otra llamada',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 16,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 32),
+                    // End call button
+                    ElevatedButton.icon(
+                      onPressed: _endCall,
+                      icon: const Icon(Icons.call_end),
+                      label: const Text('Terminar'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 32,
+                          vertical: 16,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(30),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'La llamada terminará automáticamente',
+                      style: TextStyle(
+                        color: Colors.white54,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isInitializing) {
@@ -1360,6 +1490,11 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
     // Show error with retry button if call creation failed
     if (_createError != null) {
       return _buildErrorWithRetry();
+    }
+
+    // ✅ FIX: Show busy state when recipient is in another call
+    if (_isRecipientBusy) {
+      return _buildBusyScreen();
     }
 
     final isVideo = _callController.currentCall?.isVideo ?? widget.isVideo ?? false;
@@ -1466,6 +1601,9 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
   @override
   void dispose() {
     ReleaseLogger.log('🗑️ [AgoraCallScreen] Disposing screen...', tag: _tag);
+
+    // ✅ FIX: Cancel busy auto-end timer
+    _busyAutoEndTimer?.cancel();
 
     // ✅ Stop and dispose ringtone service
     _ringtoneService.dispose();

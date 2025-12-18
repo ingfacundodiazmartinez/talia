@@ -55,8 +55,16 @@ class UserRepository {
   }
 
   /// Stream de cambios en un usuario (para estado online, foto, etc)
-  Stream<DocumentSnapshot> watchUser(String userId) {
-    return _firestore.collection('users').doc(userId).snapshots();
+  /// ✅ FIX: Maneja errores de permisos gracefully (ej: cuando se revoca un contacto)
+  Stream<DocumentSnapshot?> watchUser(String userId) {
+    return _firestore
+        .collection('users')
+        .doc(userId)
+        .snapshots()
+        .handleError((error) {
+          // Ignorar errores de permisos silenciosamente
+          return null;
+        });
   }
 
   /// Actualizar estado online del usuario

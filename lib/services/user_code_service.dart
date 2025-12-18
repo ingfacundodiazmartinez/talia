@@ -1,7 +1,10 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:math';
+
+import '../utils/release_logger.dart';
 
 class UserCodeService {
   static final UserCodeService _instance = UserCodeService._internal();
@@ -11,59 +14,104 @@ class UserCodeService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
-  /// Generar un código único para un usuario
-  Future<String> generateUserCode(String userId) async {
+  // Cache key prefix
+  static const String _cacheKeyPrefix = 'user_code_';
+
+  /// Generar u obtener el código de un usuario
+  /// ✅ FIX: Usa Cloud Function para evitar error de permisos con queries de user_codes
+  /// Retorna un record con el código y la fecha de expiración
+  Future<({String code, DateTime? expiresAt})> generateUserCode(String userId) async {
     try {
-      String code;
-      bool isUnique = false;
-      int attempts = 0;
+      final callable = FirebaseFunctions.instance.httpsCallable('generateUserCode');
+      final result = await callable.call<Map<String, dynamic>>({});
 
-      // Intentar hasta 5 veces generar un código único
-      while (!isUnique && attempts < 5) {
-        code = _generateRandomCode();
+      final response = result.data;
+      final success = response['success'] as bool? ?? false;
 
-        // Verificar si el código ya existe
-        final existingCode = await _firestore
-            .collection('user_codes')
-            .where('code', isEqualTo: code)
-            .limit(1)
-            .get();
-
-        if (existingCode.docs.isEmpty) {
-          // Código único encontrado, guardarlo
-          await _firestore.collection('user_codes').doc(userId).set({
-            'code': code,
-            'userId': userId,
-            'createdAt': FieldValue.serverTimestamp(),
-            'isActive': true,
-          });
-
-          return code;
-        }
-
-        attempts++;
+      if (!success) {
+        throw Exception('Error generando código de usuario');
       }
 
-      throw Exception('No se pudo generar un código único después de 5 intentos');
+      final code = response['code'] as String;
+      final expiresAtMillis = response['expiresAt'] as int?;
+      final expiresAt = expiresAtMillis != null
+          ? DateTime.fromMillisecondsSinceEpoch(expiresAtMillis)
+          : null;
+
+      return (code: code, expiresAt: expiresAt);
     } catch (e) {
       rethrow;
     }
   }
 
   /// Obtener el código de un usuario (generar si no existe)
-  Future<String> getUserCode(String userId) async {
+  /// ✅ FIX: Usa Cloud Function para manejar la generación de forma segura
+  /// Retorna un record con el código y la fecha de expiración
+  Future<({String code, DateTime? expiresAt})> getUserCode(String userId) async {
     try {
-      // Verificar si ya tiene un código
+      // 1. Intentar leer el código existente de Firestore
       final codeDoc = await _firestore.collection('user_codes').doc(userId).get();
 
       if (codeDoc.exists && codeDoc.data()?['isActive'] == true) {
-        return codeDoc.data()!['code'];
+        final data = codeDoc.data()!;
+        final code = data['code'] as String;
+        final expiresAtTimestamp = data['expiresAt'] as Timestamp?;
+
+        // Verificar si el código ha expirado
+        if (expiresAtTimestamp != null) {
+          final expiresAt = expiresAtTimestamp.toDate();
+          if (expiresAt.isAfter(DateTime.now())) {
+            ReleaseLogger.log('[UserCodeService] Código válido encontrado en Firestore', tag: 'UserCode');
+            return (code: code, expiresAt: expiresAt);
+          }
+        }
       }
 
-      // Si no tiene código o está inactivo, generar uno nuevo
-      return await generateUserCode(userId);
+      // 2. Si no tiene código o expiró, generar uno nuevo via Cloud Function
+      final result = await generateUserCode(userId);
+      ReleaseLogger.log('[UserCodeService] Nuevo código generado', tag: 'UserCode');
+      return result;
     } catch (e) {
-      rethrow;
+      ReleaseLogger.error('[UserCodeService] Error obteniendo código: $e', tag: 'UserCode');
+      // Si falla la lectura directa, intentar via Cloud Function
+      try {
+        final result = await generateUserCode(userId);
+        return result;
+      } catch (e2) {
+        ReleaseLogger.error('[UserCodeService] Error generando código: $e2', tag: 'UserCode');
+        rethrow;
+      }
+    }
+  }
+
+  /// Obtener código desde cache local
+  Future<String?> _getCachedCode(String userId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString('$_cacheKeyPrefix$userId');
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Guardar código en cache local
+  Future<void> _cacheCode(String userId, String code) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('$_cacheKeyPrefix$userId', code);
+      ReleaseLogger.log('[UserCodeService] Código guardado en cache local', tag: 'UserCode');
+    } catch (e) {
+      // Ignorar errores de cache
+    }
+  }
+
+  /// Limpiar cache de código (usado al regenerar)
+  Future<void> _clearCachedCode(String userId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('$_cacheKeyPrefix$userId');
+    } catch (e) {
+      // Ignorar errores de cache
     }
   }
 
@@ -102,23 +150,32 @@ class UserCodeService {
   }
 
   /// Regenerar código de usuario
-  Future<String> regenerateUserCode(String userId) async {
+  Future<({String code, DateTime? expiresAt})> regenerateUserCode(String userId) async {
     try {
+      // Limpiar cache local primero
+      await _clearCachedCode(userId);
+
       // Desactivar código actual
-      await _firestore.collection('user_codes').doc(userId).update({
-        'isActive': false,
-        'deactivatedAt': FieldValue.serverTimestamp(),
-      });
+      try {
+        await _firestore.collection('user_codes').doc(userId).update({
+          'isActive': false,
+          'deactivatedAt': FieldValue.serverTimestamp(),
+        });
+      } catch (e) {
+        // Ignorar si el documento no existe
+      }
 
       // Generar nuevo código
-      return await generateUserCode(userId);
+      final result = await generateUserCode(userId);
+
+      return result;
     } catch (e) {
       rethrow;
     }
   }
 
   /// Obtener código del usuario actual
-  Future<String> getCurrentUserCode() async {
+  Future<({String code, DateTime? expiresAt})> getCurrentUserCode() async {
     final userId = _auth.currentUser?.uid;
     if (userId == null) throw Exception('Usuario no autenticado');
 

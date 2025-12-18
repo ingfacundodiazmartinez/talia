@@ -126,6 +126,7 @@ class ChatRepository {
   }
 
   /// Stream de grupos del usuario actual
+  /// ✅ handleError evita crashes cuando el usuario es removido de un grupo
   Stream<QuerySnapshot> watchUserGroups() {
     final currentUserId = _auth.currentUser?.uid;
     if (currentUserId == null) {
@@ -136,7 +137,10 @@ class ChatRepository {
         .collection('groups')
         .where('members', arrayContains: currentUserId)
         .orderBy('lastActivity', descending: true)
-        .snapshots();
+        .snapshots()
+        .handleError((error) {
+          // Ignorar errores de permisos cuando el usuario es removido de grupos
+        });
   }
 
   /// Obtener chat por ID

@@ -642,6 +642,9 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
       isGroupChat: true,
       senderPhotoURL: message.senderPhotoURL,
       contactName: widget.groupName,
+      // ✅ FIX #8: Pass forwarded message fields to MessageBubble
+      isForwarded: message.isForwarded,
+      originalContactName: message.originalContactName,
       isFavorite: _favoriteMessageIds.contains(message.id),
       onFavoriteToggled: () {
         // Force rebuild to update favorite indicator

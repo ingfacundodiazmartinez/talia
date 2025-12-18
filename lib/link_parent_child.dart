@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -24,11 +25,62 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
   String? _linkCode;
   bool _isGenerating = false;
   DateTime? _expiryTime;
+  Timer? _countdownTimer;
+  Duration _timeRemaining = Duration.zero;
 
   @override
   void initState() {
     super.initState();
     _checkExistingCode();
+  }
+
+  @override
+  void dispose() {
+    _countdownTimer?.cancel();
+    super.dispose();
+  }
+
+  void _startCountdownTimer() {
+    _countdownTimer?.cancel();
+
+    if (_expiryTime == null) {
+      setState(() {
+        _timeRemaining = Duration.zero;
+      });
+      return;
+    }
+
+    _updateTimeRemaining();
+
+    _countdownTimer = Timer.periodic(Duration(seconds: 1), (_) {
+      _updateTimeRemaining();
+    });
+  }
+
+  void _updateTimeRemaining() {
+    if (_expiryTime == null) return;
+
+    final now = DateTime.now();
+    final remaining = _expiryTime!.difference(now);
+
+    setState(() {
+      _timeRemaining = remaining.isNegative ? Duration.zero : remaining;
+    });
+
+    // Si expiró, limpiar el código
+    if (remaining.isNegative) {
+      _countdownTimer?.cancel();
+      setState(() {
+        _linkCode = null;
+        _expiryTime = null;
+      });
+    }
+  }
+
+  Color _getExpirationColor() {
+    if (_timeRemaining.inSeconds <= 0) return Colors.red;
+    if (_timeRemaining.inMinutes < 1) return Colors.orange;
+    return Colors.green;
   }
 
   Future<void> _checkExistingCode() async {
@@ -52,6 +104,7 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
             _linkCode = data['code'];
             _expiryTime = expiry;
           });
+          _startCountdownTimer();
         }
       }
     } catch (e) {
@@ -79,7 +132,8 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
 
       // Generar código de 6 dígitos
       final code = _generateRandomCode();
-      final expiresAt = DateTime.now().add(Duration(hours: 24));
+      final expiresAt = DateTime.now().add(Duration(minutes: 5));
+      final deleteAt = DateTime.now().add(Duration(minutes: 5)); // TTL para Firestore
 
       // Guardar en Firestore
       await _firestore.collection('link_codes').add({
@@ -89,6 +143,7 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
         'isActive': true,
         'createdAt': FieldValue.serverTimestamp(),
         'expiresAt': Timestamp.fromDate(expiresAt),
+        'deleteAt': Timestamp.fromDate(deleteAt), // TTL: 5 minutos
         'used': false,
       });
 
@@ -96,6 +151,7 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
         _linkCode = code;
         _expiryTime = expiresAt;
       });
+      _startCountdownTimer();
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('❌ Error: $e'), backgroundColor: Colors.red),
@@ -122,19 +178,15 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
     }
   }
 
-  String _getTimeRemaining() {
-    if (_expiryTime == null) return '';
+  String _formatTimeRemaining() {
+    if (_timeRemaining.inSeconds <= 0) return 'Expirado';
 
-    final now = DateTime.now();
-    final difference = _expiryTime!.difference(now);
-
-    if (difference.isNegative) return 'Expirado';
-
-    final hours = difference.inHours;
-    final minutes = difference.inMinutes.remainder(60);
-
-    return 'Expira en ${hours}h ${minutes}m';
+    final minutes = _timeRemaining.inMinutes;
+    final seconds = _timeRemaining.inSeconds.remainder(60);
+    return '${minutes}m ${seconds.toString().padLeft(2, '0')}s';
   }
+
+  bool get _isExpired => _timeRemaining.inSeconds <= 0;
 
   @override
   Widget build(BuildContext context) {
@@ -207,6 +259,49 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
                 SizedBox(height: 40),
 
                 if (_linkCode != null) ...[
+                  // Countdown banner
+                  Container(
+                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: _getExpirationColor().withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: _getExpirationColor().withValues(alpha: 0.5)),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          _isExpired ? Icons.timer_off : Icons.timer,
+                          color: _getExpirationColor(),
+                          size: 20,
+                        ),
+                        SizedBox(width: 8),
+                        Text(
+                          _isExpired ? 'Codigo expirado' : 'Expira en: ${_formatTimeRemaining()}',
+                          style: TextStyle(
+                            color: _getExpirationColor(),
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                        ),
+                        if (_isExpired) ...[
+                          SizedBox(width: 12),
+                          TextButton(
+                            onPressed: _generateLinkCode,
+                            style: TextButton.styleFrom(
+                              foregroundColor: _getExpirationColor(),
+                              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                            ),
+                            child: Text('Regenerar'),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+
+                  SizedBox(height: 16),
+
+                  // Code display card
                   Container(
                     padding: EdgeInsets.all(24),
                     decoration: BoxDecoration(
@@ -230,28 +325,40 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
                               ),
                             ],
                     ),
-                    child: Column(
+                    child: Stack(
+                      alignment: Alignment.center,
                       children: [
-                        FittedBox(
-                          fit: BoxFit.scaleDown,
-                          child: Text(
-                            _linkCode!.split('').join(' '),
-                            style: TextStyle(
-                              fontSize: 48,
-                              fontWeight: FontWeight.bold,
-                              color: colorScheme.primary,
-                              letterSpacing: 8,
+                        Opacity(
+                          opacity: _isExpired ? 0.3 : 1.0,
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              _linkCode!.split('').join(' '),
+                              style: TextStyle(
+                                fontSize: 48,
+                                fontWeight: FontWeight.bold,
+                                color: colorScheme.primary,
+                                letterSpacing: 8,
+                                decoration: _isExpired ? TextDecoration.lineThrough : null,
+                              ),
                             ),
                           ),
                         ),
-                        SizedBox(height: 16),
-                        Text(
-                          _getTimeRemaining(),
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: colorScheme.onSurfaceVariant,
+                        if (_isExpired)
+                          Container(
+                            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.red,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              'EXPIRADO',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
                           ),
-                        ),
                       ],
                     ),
                   ),
@@ -262,12 +369,12 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       OutlinedButton.icon(
-                        onPressed: _copyToClipboard,
+                        onPressed: _isExpired ? null : _copyToClipboard,
                         icon: Icon(Icons.copy),
                         label: Text('Copiar'),
                         style: OutlinedButton.styleFrom(
                           foregroundColor: colorScheme.primary,
-                          side: BorderSide(color: colorScheme.primary),
+                          side: BorderSide(color: _isExpired ? Colors.grey : colorScheme.primary),
                           padding: EdgeInsets.symmetric(
                             horizontal: 24,
                             vertical: 12,
@@ -341,7 +448,7 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
                       SizedBox(width: 12),
                       Expanded(
                         child: Text(
-                          'El código expira en 24 horas y solo puede usarse una vez',
+                          'El codigo expira en 5 minutos y solo puede usarse una vez',
                           style: TextStyle(
                             fontSize: 14,
                             color: isDarkMode

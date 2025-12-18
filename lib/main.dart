@@ -26,6 +26,7 @@ import 'services/two_factor_session_service.dart';
 import 'services/app_config_service.dart';
 import 'services/message_cache_service.dart';
 import 'services/dashboard_cache_service.dart';
+import 'services/notification_cache_service.dart';
 import 'services/device_session_service.dart';
 import 'services/online_status_service.dart';
 import 'services/screenshot_protection_service.dart';
@@ -41,11 +42,14 @@ import 'services/permission_sync_service.dart';
 import 'services/offline_queue_service.dart';
 import 'services/accessibility_service.dart';
 import 'services/stickers_service.dart';
+import 'services/character_service.dart';
 import 'services/unread_messages_service.dart';
 import 'services/ad_service.dart';
 import 'services/story_service_refactored.dart';
 import 'services/contact_photo_cache_service.dart';
 import 'services/deep_link_service.dart';
+import 'calls_v2/services/agora_engine_service.dart';
+import 'calls_v2/config/agora_config.dart';
 import 'dart:async';
 import 'utils/release_logger.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -112,6 +116,9 @@ void main() async {
     ReleaseLogger.log('✅ Firebase ya estaba inicializado', tag: 'MainApp');
   }
 
+  // ✅ Cargar Agora App ID desde Firebase Remote Config
+  await AgoraConfig.initialize();
+
   // 🚨 CRITICAL: Registrar background handler DESPUÉS de Firebase.initializeApp
   // ANTES de runApp() para que funcione correctamente
   //
@@ -134,6 +141,17 @@ void main() async {
   } catch (e) {
     ReleaseLogger.error(
       '❌ Error inicializando DashboardCacheService: $e',
+      tag: 'MainApp',
+    );
+  }
+
+  // ✅ Inicializar NotificationCacheService para cache local de alertas
+  try {
+    await NotificationCacheService().initialize();
+    ReleaseLogger.log('✅ NotificationCacheService inicializado', tag: 'MainApp');
+  } catch (e) {
+    ReleaseLogger.error(
+      '❌ Error inicializando NotificationCacheService: $e',
       tag: 'MainApp',
     );
   }
@@ -179,6 +197,9 @@ void main() async {
         'StoryService inicializado manualmente',
         tag: 'MainApp',
       );
+
+      // Pre-cargar Native Ad para stories (no bloquea)
+      AdService().preloadStoryNativeAd();
     } catch (e) {
       ReleaseLogger.error(
         'Error inicializando StoryService manualmente: $e',
@@ -337,7 +358,7 @@ void main() async {
     tag: 'MainApp',
   );
 
-  // Pre-cargar stickers en segundo plano (sin bloquear la app)
+  // Pre-cargar stickers y personajes en segundo plano (sin bloquear la app)
   StickersService()
       .preloadStickers()
       .then((_) {
@@ -346,6 +367,19 @@ void main() async {
       .catchError((e) {
         ReleaseLogger.log(
           '⚠️ Error pre-cargando stickers: $e (continuando...)',
+        );
+      });
+
+  // ✅ Pre-cargar personajes para face-swap (evita lista vacía al abrir rápido)
+  CharacterService()
+      .preloadCharacters()
+      .then((_) {
+        ReleaseLogger.log('✅ Personajes pre-cargados en segundo plano', tag: 'MainApp');
+      })
+      .catchError((e) {
+        ReleaseLogger.log(
+          '⚠️ Error pre-cargando personajes: $e (continuando...)',
+          tag: 'MainApp',
         );
       });
 
@@ -735,25 +769,54 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
     );
 
     // V2 NAVIGATION: Shared navigation callback for both iOS and Android
+    // ✅ FIX #1: Código defensivo para evitar crash al contestar desde lock screen
     final navigateToCall = (String callId, {bool isIncoming = false}) {
       ReleaseLogger.log(
         '🚀 [Main] Navigating to AgoraCallScreen: $callId (incoming: $isIncoming)',
         tag: 'Main',
       );
 
-      // Navigate using CallServiceWrapper which returns AgoraCallScreen for V2
-      final callScreen = CallServiceWrapper().getCallScreen(
-        callId: callId,
-        isIncoming: isIncoming,
-      );
+      try {
+        // ✅ FIX #1: Verificar que el Navigator esté disponible antes de navegar
+        final navigatorState = _navigatorKey.currentState;
+        if (navigatorState == null) {
+          ReleaseLogger.error(
+            '❌ [Main] Navigator not available - deferring navigation',
+            tag: 'Main',
+          );
+          // Diferir navegación hasta que el widget tree esté listo
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _safeNavigateToCall(callId, isIncoming: isIncoming);
+          });
+          return;
+        }
 
-      _navigatorKey.currentState?.push(
-        MaterialPageRoute(
-          builder: (context) => callScreen,
-        ),
-      );
+        // Navigate using CallServiceWrapper which returns AgoraCallScreen for V2
+        final callScreen = CallServiceWrapper().getCallScreen(
+          callId: callId,
+          isIncoming: isIncoming,
+        );
 
-      ReleaseLogger.log('✅ [Main] Navigation to AgoraCallScreen completed', tag: 'Main');
+        navigatorState.push(
+          MaterialPageRoute(
+            builder: (context) => callScreen,
+          ),
+        );
+
+        ReleaseLogger.log('✅ [Main] Navigation to AgoraCallScreen completed', tag: 'Main');
+      } catch (e, stackTrace) {
+        // ✅ FIX #1: Capturar cualquier error y diferir navegación
+        ReleaseLogger.error(
+          '❌ [Main] Error navigating to call screen: $e',
+          tag: 'Main',
+        );
+        ReleaseLogger.error('Stack trace: $stackTrace', tag: 'Main');
+
+        // Intentar diferir la navegación
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _safeNavigateToCall(callId, isIncoming: isIncoming);
+        });
+      }
     };
 
     // Configure iOS path (VoIPService)
@@ -766,6 +829,61 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
       '✅ [Main] V2 navigation callbacks configured for both platforms',
       tag: 'Main',
     );
+  }
+
+  /// ✅ FIX #1: Safe navigation with retry for calls from lock screen
+  /// This handles cases where the Navigator isn't immediately available
+  int _navigationRetryCount = 0;
+  static const int _maxNavigationRetries = 3;
+
+  void _safeNavigateToCall(String callId, {bool isIncoming = false}) {
+    try {
+      ReleaseLogger.log(
+        '🔄 [Main] Safe navigation attempt ${_navigationRetryCount + 1} for: $callId',
+        tag: 'Main',
+      );
+
+      final navigatorState = _navigatorKey.currentState;
+      if (navigatorState == null) {
+        _navigationRetryCount++;
+        if (_navigationRetryCount < _maxNavigationRetries) {
+          ReleaseLogger.log(
+            '⏳ [Main] Navigator still not ready, scheduling retry...',
+            tag: 'Main',
+          );
+          // Esperar un poco más y reintentar
+          Future.delayed(const Duration(milliseconds: 500), () {
+            _safeNavigateToCall(callId, isIncoming: isIncoming);
+          });
+        } else {
+          ReleaseLogger.error(
+            '❌ [Main] Max navigation retries reached, call may not display',
+            tag: 'Main',
+          );
+          _navigationRetryCount = 0;
+        }
+        return;
+      }
+
+      // Reset retry count on success
+      _navigationRetryCount = 0;
+
+      final callScreen = CallServiceWrapper().getCallScreen(
+        callId: callId,
+        isIncoming: isIncoming,
+      );
+
+      navigatorState.push(
+        MaterialPageRoute(
+          builder: (context) => callScreen,
+        ),
+      );
+
+      ReleaseLogger.log('✅ [Main] Safe navigation completed', tag: 'Main');
+    } catch (e) {
+      ReleaseLogger.error('❌ [Main] Safe navigation failed: $e', tag: 'Main');
+      _navigationRetryCount = 0;
+    }
   }
 
   @override
@@ -785,10 +903,27 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       NotificationService().notifyAppResumed();
 
+      // ✅ AGORA WATCHDOG: Notificar que la app volvió a foreground
+      AgoraEngineService().onAppForeground();
+
       // Sincronizar permisos para usuarios hijo
       if (_currentUserRole == 'child') {
         PermissionSyncService().syncPermissions();
       }
+
+      // ✅ FIX: Refrescar stream de historias al volver al foreground
+      // Esto asegura que las nuevas historias aparezcan sin reiniciar la app
+      ReleaseLogger.log('📱 App resumed - refreshing story stream...', tag: 'AppLifecycle');
+      StoryService().forceRefreshCache().then((_) {
+        ReleaseLogger.log('✅ Story stream refreshed', tag: 'AppLifecycle');
+      }).catchError((e) {
+        ReleaseLogger.error('⚠️ Error refreshing story stream: $e', tag: 'AppLifecycle');
+      });
+    } else if (state == AppLifecycleState.paused ||
+               state == AppLifecycleState.inactive) {
+      // ✅ AGORA WATCHDOG: Notificar que la app va a background
+      // Esto activa un watchdog más agresivo para evitar llamadas huérfanas
+      AgoraEngineService().onAppBackground();
     }
   }
 
@@ -828,6 +963,8 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
             .startBackgroundCacheUpdates()
             .then((_) {
               ReleaseLogger.log('✅Stream background de historias iniciado');
+              // Pre-cargar Native Ad para stories (no bloquea)
+              AdService().preloadStoryNativeAd();
             })
             .catchError((e) {
               ReleaseLogger.log(
@@ -1207,7 +1344,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
                     // Usuario verificado, continuar con navegación normal
                     if (role == 'parent') {
                       ReleaseLogger.log('👔 Redirigiendo a ParentMainShell');
-                      return ParentMainShell();
+                      return ParentMainShell(key: ParentMainShell.shellKey);
                     } else {
                       ReleaseLogger.log(
                         '👶 Redirigiendo a ChildMainShell (role: $role)',
@@ -1223,7 +1360,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
               // Redirigir según el rol: solo 'parent' va a ParentMainShell, el resto va a ChildMainShell
               if (role == 'parent') {
                 ReleaseLogger.log('👔 Redirigiendo a ParentMainShell');
-                return ParentMainShell();
+                return ParentMainShell(key: ParentMainShell.shellKey);
               } else {
                 ReleaseLogger.log(
                   '👶 Redirigiendo a ChildMainShell (role: $role)',

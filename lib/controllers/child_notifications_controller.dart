@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import 'package:flutter/material.dart';
 import '../utils/release_logger.dart';
+import '../services/notification_cache_service.dart';
 
 /// Controller para la pantalla de notificaciones de un hijo específico
 ///
@@ -19,11 +20,12 @@ class ChildNotificationsController {
   // Servicios privados
   final FirebaseFirestore _firestore;
   final firebase_auth.FirebaseAuth _auth;
+  final NotificationCacheService _cacheService;
 
   // Estado interno
   String? _currentUserId;
 
-  // Paginación
+  // Paginación (para compatibilidad con streams de Firestore durante transición)
   static const int _pageSize = 20;
   DocumentSnapshot? _lastDocument;
   bool _isLoadingMore = false;
@@ -33,20 +35,28 @@ class ChildNotificationsController {
   // Tracking de notificaciones marcadas como leídas
   final Set<String> _markedAsRead = {};
 
+  // Cache de notificaciones locales
+  List<Map<String, dynamic>> _cachedNotifications = [];
+  bool _isSyncing = false;
+
   /// Constructor
   ChildNotificationsController({
     required this.childId,
     required this.childName,
     FirebaseFirestore? firestore,
     firebase_auth.FirebaseAuth? auth,
+    NotificationCacheService? cacheService,
   }) : _firestore = firestore ?? FirebaseFirestore.instance,
-       _auth = auth ?? firebase_auth.FirebaseAuth.instance;
+       _auth = auth ?? firebase_auth.FirebaseAuth.instance,
+       _cacheService = cacheService ?? NotificationCacheService();
 
   // Getters
   String? get currentUserId => _currentUserId ?? _auth.currentUser?.uid;
   bool get isLoadingMore => _isLoadingMore;
   bool get hasMoreData => _hasMoreData;
+  bool get isSyncing => _isSyncing;
   List<DocumentSnapshot> get notifications => List.unmodifiable(_notifications);
+  List<Map<String, dynamic>> get cachedNotifications => List.unmodifiable(_cachedNotifications);
 
   /// Inicializar el controller
   void initialize() {
@@ -61,6 +71,199 @@ class ChildNotificationsController {
       ReleaseLogger.error('Error inicializando ChildNotificationsController: $e', tag: 'ChildNotifications');
     }
   }
+
+  // ═══════════════════════════════════════════════════════════════
+  // MÉTODOS DE CACHE LOCAL (NUEVA ARQUITECTURA)
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Sincronizar notificaciones de Firestore al cache local
+  ///
+  /// Flujo simplificado (sin eliminación manual - TTL se encarga):
+  /// 1. Leer notificaciones de Firestore
+  /// 2. Cachear localmente las nuevas
+  /// 3. Retornar lista desde cache local
+  ///
+  /// Nota: Las notificaciones se eliminan automáticamente por TTL (deleteAt)
+  /// configurado en Cloud Functions. No eliminamos manualmente para evitar
+  /// el doble de escrituras en Firestore.
+  Future<List<Map<String, dynamic>>> syncAndGetNotifications() async {
+    if (_isSyncing) {
+      ReleaseLogger.log('Ya sincronizando, retornando cache actual', tag: 'ChildNotifications');
+      return getNotificationsFromCache();
+    }
+
+    _isSyncing = true;
+    try {
+      final userId = currentUserId;
+      if (userId == null) {
+        ReleaseLogger.warning('Usuario no autenticado para sync', tag: 'ChildNotifications');
+        return getNotificationsFromCache();
+      }
+
+      ReleaseLogger.log('Iniciando sync de notificaciones para $childName...', tag: 'ChildNotifications');
+
+      // 1. Leer notificaciones de Firestore
+      final firestoreSnapshot = await _firestore
+          .collection('notifications')
+          .where('userId', isEqualTo: userId)
+          .orderBy('createdAt', descending: true)
+          .limit(100)
+          .get();
+
+      ReleaseLogger.log('Encontradas ${firestoreSnapshot.docs.length} notificaciones en Firestore', tag: 'ChildNotifications');
+
+      int cachedCount = 0;
+
+      // 2. Procesar cada notificación - solo cachear, NO eliminar
+      for (final doc in firestoreSnapshot.docs) {
+        final data = doc.data();
+        final notificationId = doc.id;
+
+        // Verificar si ya está cacheada
+        if (_cacheService.isNotificationCached(userId, notificationId)) {
+          // Ya cacheada, skip (TTL eliminará de Firestore automáticamente)
+          continue;
+        }
+
+        // Cachear la notificación
+        final saved = await _cacheService.saveNotification(
+          notificationId: notificationId,
+          userId: userId,
+          type: data['type'] as String? ?? 'unknown',
+          title: data['title'] as String? ?? '',
+          body: data['body'] as String? ?? '',
+          data: data['data'] as Map<String, dynamic>?,
+          priority: data['priority'] as String?,
+          childId: data['childId'] as String? ?? (data['data'] as Map<String, dynamic>?)?['childId'] as String?,
+        );
+
+        if (saved) {
+          cachedCount++;
+        }
+      }
+
+      ReleaseLogger.log('Sync completado: $cachedCount nuevas notificaciones cacheadas', tag: 'ChildNotifications');
+
+      // 3. Retornar desde cache local
+      return getNotificationsFromCache();
+    } catch (e) {
+      ReleaseLogger.error('Error en sync de notificaciones: $e', tag: 'ChildNotifications');
+      // En caso de error, retornar lo que tengamos en cache
+      return getNotificationsFromCache();
+    } finally {
+      _isSyncing = false;
+    }
+  }
+
+  /// Obtener notificaciones del cache local filtradas por hijo
+  List<Map<String, dynamic>> getNotificationsFromCache() {
+    final userId = currentUserId;
+    if (userId == null) {
+      ReleaseLogger.warning('Usuario no autenticado para obtener cache', tag: 'ChildNotifications');
+      return [];
+    }
+
+    // Obtener notificaciones filtradas por este hijo
+    final notifications = _cacheService.getNotificationsForChild(userId, childId);
+
+    // Filtrar notificaciones de chat (solo queremos alertas/solicitudes)
+    final filteredNotifications = notifications.where((notif) {
+      final type = notif['type'] as String?;
+      return type != 'chat_message' && type != 'group_message';
+    }).toList();
+
+    ReleaseLogger.log('Cache local: ${filteredNotifications.length} notificaciones para $childName', tag: 'ChildNotifications');
+
+    _cachedNotifications = filteredNotifications;
+    return filteredNotifications;
+  }
+
+  /// Obtener conteo de no leídas del cache
+  int getUnreadCountFromCache() {
+    final userId = currentUserId;
+    if (userId == null) return 0;
+
+    return _cacheService.getUnreadCountForChild(userId, childId);
+  }
+
+  /// Marcar notificación como leída en cache local
+  Future<bool> markAsReadInCache(String notificationId) async {
+    final userId = currentUserId;
+    if (userId == null) return false;
+
+    final success = await _cacheService.markAsRead(userId, notificationId);
+    if (success) {
+      _markedAsRead.add(notificationId);
+      // Actualizar cache local
+      getNotificationsFromCache();
+    }
+    return success;
+  }
+
+  /// Marcar todas las notificaciones del hijo como leídas en cache
+  Future<int> markAllAsReadInCache() async {
+    final userId = currentUserId;
+    if (userId == null) return 0;
+
+    final count = await _cacheService.markAllAsReadForChild(userId, childId);
+    if (count > 0) {
+      // Actualizar cache local
+      getNotificationsFromCache();
+    }
+    return count;
+  }
+
+  /// Separar notificaciones cacheadas en leídas y no leídas
+  Map<String, List<Map<String, dynamic>>> separateCachedReadUnread() {
+    final notifications = getNotificationsFromCache();
+
+    final unreadNotifications = notifications.where((notif) {
+      return notif['read'] != true;
+    }).toList();
+
+    final readNotifications = notifications.where((notif) {
+      return notif['read'] == true;
+    }).toList();
+
+    ReleaseLogger.log('Cache separado: ${unreadNotifications.length} no leídas, ${readNotifications.length} leídas', tag: 'ChildNotifications');
+
+    return {
+      'unread': unreadNotifications,
+      'read': readNotifications,
+    };
+  }
+
+  /// Formatear timestamp desde cache (milliseconds)
+  String formatCachedTimestamp(int milliseconds) {
+    try {
+      final date = DateTime.fromMillisecondsSinceEpoch(milliseconds);
+      final now = DateTime.now();
+      final difference = now.difference(date);
+
+      if (difference.inDays == 0) {
+        if (difference.inHours == 0) {
+          if (difference.inMinutes == 0) {
+            return 'Ahora';
+          }
+          return 'Hace ${difference.inMinutes} min';
+        }
+        return 'Hace ${difference.inHours}h';
+      } else if (difference.inDays == 1) {
+        return 'Ayer ${_formatTime(date)}';
+      } else if (difference.inDays < 7) {
+        return 'Hace ${difference.inDays} días';
+      } else {
+        return _formatDate(date);
+      }
+    } catch (e) {
+      ReleaseLogger.error('Error formateando timestamp cacheado: $e', tag: 'ChildNotifications');
+      return 'Fecha desconocida';
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // MÉTODOS DE FIRESTORE (LEGACY - PARA COMPATIBILIDAD)
+  // ═══════════════════════════════════════════════════════════════
 
   /// Stream principal de notificaciones (primeras 50)
   Stream<QuerySnapshot> getNotificationsStream() {

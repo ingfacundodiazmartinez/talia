@@ -7,7 +7,7 @@ import '../../../../services/dashboard_cache_service.dart';
 import '../../../../services/permission_sync_service.dart';
 import '../../../../widgets/synced_user_widgets.dart';
 import '../../../child_location_screen.dart';
-import '../../contacts/child_contacts_filter_screen.dart';
+import '../../parent_main_shell.dart';
 import '../../../story_approval_screen.dart';
 import 'child_notifications_screen.dart';
 
@@ -299,14 +299,7 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
             color: Colors.blue,
             isDarkMode: isDarkMode,
             onTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (context) => ChildContactsFilterScreen(
-                    childId: child.id,
-                    childName: child.name,
-                  ),
-                ),
-              );
+              ParentMainShell.navigateToWhitelistWithFilter(child.id);
             },
           ),
         ),

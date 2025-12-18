@@ -101,10 +101,24 @@ class VoIPService {
   }
 
   /// End CallKit UI for a specific call
+  /// ✅ FIX: Use native method channel instead of FlutterCallkitIncoming
+  /// The CallKit was shown natively in AppDelegate with a different UUID,
+  /// so we need to use the native endCallKit method that has the UUID mapping
   Future<void> _endCallKitUI(String callId) async {
     try {
-      await FlutterCallkitIncoming.endCall(callId);
-      await FlutterCallkitIncoming.endAllCalls();
+      ReleaseLogger.log('📵 [VoIP] Cerrando CallKit UI para $callId via native channel', tag: 'VoIPService');
+
+      // ✅ FIX: Use native method channel that has the UUID mapping
+      await _voipChannel.invokeMethod('endCallKit', {'callId': callId});
+
+      // Also try the plugin as fallback (for calls shown via plugin)
+      try {
+        await FlutterCallkitIncoming.endCall(callId);
+        await FlutterCallkitIncoming.endAllCalls();
+      } catch (e) {
+        // Ignore - the native channel should have handled it
+      }
+
       ReleaseLogger.log('✅ [VoIP] CallKit UI cerrado para $callId', tag: 'VoIPService');
     } catch (e) {
       ReleaseLogger.error('❌ [VoIP] Error cerrando CallKit UI: $e', tag: 'VoIPService');
@@ -325,6 +339,20 @@ class VoIPService {
         final String callId = data['callId'] as String;
         ReleaseLogger.log('📹 [VoIP] Video call ready notification from iOS: $callId', tag: 'VoIPService');
         await _handleVideoCallReady(callId);
+        break;
+
+      case 'onCallCancelled':
+        // ✅ FIX: Handle call cancellation from VoIP push
+        // This is sent by the server when the caller cancels before receiver answers
+        final Map<dynamic, dynamic> data = call.arguments as Map<dynamic, dynamic>;
+        final String callId = data['callId'] as String;
+        ReleaseLogger.log('📵 [VoIP] Llamada cancelada desde VoIP push: $callId', tag: 'VoIPService');
+
+        // Cancel any listener for this call
+        _cancelIncomingCallListener(callId);
+
+        // Unmark from VoIP tracking
+        unmarkVoIPCall(callId);
         break;
 
       default:

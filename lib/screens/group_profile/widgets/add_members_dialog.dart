@@ -4,7 +4,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../../services/chat_permission_service.dart';
 import '../../../services/contact_alias_service.dart';
-import '../../../services/group_invitation_service.dart';
+import '../../../groups/services/group_service.dart';
+import '../../../utils/release_logger.dart';
 import 'group_profile_constants.dart';
 
 class AddMembersDialog extends StatefulWidget {
@@ -23,7 +24,7 @@ class AddMembersDialog extends StatefulWidget {
 
 class _AddMembersDialogState extends State<AddMembersDialog> {
   final ChatPermissionService _permissionService = ChatPermissionService();
-  final GroupInvitationService _invitationService = GroupInvitationService();
+  final GroupService _groupService = GroupService();
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final ContactAliasService _aliasService = ContactAliasService();
@@ -31,7 +32,6 @@ class _AddMembersDialogState extends State<AddMembersDialog> {
   List<ContactInfo> _availableContacts = [];
   final Set<String> _selectedContactIds = {};
   bool _isLoading = true;
-  bool _isAdding = false;
 
   @override
   void initState() {
@@ -42,16 +42,27 @@ class _AddMembersDialogState extends State<AddMembersDialog> {
   Future<void> _loadAvailableContacts() async {
     try {
       final currentUserId = _auth.currentUser?.uid;
-      if (currentUserId == null) return;
+      if (currentUserId == null) {
+        ReleaseLogger.error('AddMembersDialog: currentUserId is null', tag: 'AddMembersDialog');
+        return;
+      }
+
+      ReleaseLogger.log('AddMembersDialog: Loading contacts for user $currentUserId', tag: 'AddMembersDialog');
+      ReleaseLogger.log('AddMembersDialog: Current members: ${widget.currentMembers}', tag: 'AddMembersDialog');
 
       final bidirectionalContactIds =
           await _permissionService.getBidirectionallyApprovedContacts(currentUserId);
+
+      ReleaseLogger.log('AddMembersDialog: Found ${bidirectionalContactIds.length} bidirectional contacts: $bidirectionalContactIds', tag: 'AddMembersDialog');
 
       final contacts = <ContactInfo>[];
 
       for (final contactId in bidirectionalContactIds) {
         // Excluir contactos que ya están en el grupo
-        if (widget.currentMembers.contains(contactId)) continue;
+        if (widget.currentMembers.contains(contactId)) {
+          ReleaseLogger.log('AddMembersDialog: Skipping $contactId (already in group)', tag: 'AddMembersDialog');
+          continue;
+        }
 
         final userDoc = await _firestore.collection('users').doc(contactId).get();
         final userData = userDoc.data();
@@ -72,60 +83,51 @@ class _AddMembersDialogState extends State<AddMembersDialog> {
         }
       }
 
+      ReleaseLogger.log('AddMembersDialog: Loaded ${contacts.length} available contacts', tag: 'AddMembersDialog');
+
       setState(() {
         _availableContacts = contacts;
         _isLoading = false;
       });
-    } catch (e) {
-      // Error loading contacts - silent
+    } catch (e, stackTrace) {
+      ReleaseLogger.error('AddMembersDialog: Error loading contacts: $e', tag: 'AddMembersDialog');
+      ReleaseLogger.error('AddMembersDialog: Stack trace: $stackTrace', tag: 'AddMembersDialog');
       setState(() => _isLoading = false);
     }
   }
 
   Future<void> _addSelectedMembers() async {
-    if (_selectedContactIds.isEmpty) return;
+    ReleaseLogger.log('AddMembersDialog: _addSelectedMembers() CALLED', tag: 'AddMembersDialog');
 
-    setState(() => _isAdding = true);
-
-    try {
-      int successCount = 0;
-      int invitationCount = 0;
-
-      for (final contactId in _selectedContactIds) {
-        // Crear invitación (el servicio detectará si requiere aprobaciones)
-        final result = await _invitationService.createGroupInvitation(
-          groupId: widget.groupId,
-          invitedChildId: contactId,
-        );
-
-        if (result['success']) {
-          if (result['requiresApprovals'] == true) {
-            invitationCount++;
-          } else {
-            successCount++;
-          }
-        }
-      }
-
-      if (mounted) {
-        // Invitaciones enviadas - sin mensaje
-        Navigator.pop(context, true);
-      }
-    } catch (e) {
-      // Error adding members
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al agregar miembros: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isAdding = false);
-      }
+    if (_selectedContactIds.isEmpty) {
+      ReleaseLogger.log('AddMembersDialog: No contacts selected - returning early', tag: 'AddMembersDialog');
+      return;
     }
+
+    final selectedIds = _selectedContactIds.toList();
+    final selectedCount = selectedIds.length;
+    final groupId = widget.groupId;
+
+    ReleaseLogger.log('AddMembersDialog: Adding $selectedCount members to group $groupId', tag: 'AddMembersDialog');
+
+    // Obtener los contactos seleccionados para retornarlos (UI optimista)
+    final selectedContacts = _availableContacts
+        .where((c) => _selectedContactIds.contains(c.id))
+        .toList();
+
+    // ✅ OPTIMISTIC: Cerrar diálogo inmediatamente y retornar los contactos
+    Navigator.pop(context, selectedContacts);
+
+    // Ejecutar operación en background (fire-and-forget)
+    _groupService.addMembers(
+      groupId: groupId,
+      memberIds: selectedIds,
+    ).then((result) {
+      ReleaseLogger.log('AddMembersDialog: Result: success=${result.success}, added=${result.addedCount}, pending=${result.pendingCount}', tag: 'AddMembersDialog');
+    }).catchError((e, stackTrace) {
+      ReleaseLogger.error('AddMembersDialog: Exception: $e', tag: 'AddMembersDialog');
+      ReleaseLogger.error('AddMembersDialog: StackTrace: $stackTrace', tag: 'AddMembersDialog');
+    });
   }
 
   @override
@@ -216,7 +218,7 @@ class _AddMembersDialogState extends State<AddMembersDialog> {
 
     return Expanded(
       child: ListView.builder(
-        shrinkWrap: true,
+        physics: const ClampingScrollPhysics(),
         itemCount: _availableContacts.length,
         itemBuilder: (context, index) {
           final contact = _availableContacts[index];
@@ -313,12 +315,12 @@ class _AddMembersDialogState extends State<AddMembersDialog> {
                 ),
               if (isSmallScreen) SizedBox(width: 8),
               TextButton(
-                onPressed: _isAdding ? null : () => Navigator.pop(context),
+                onPressed: () => Navigator.pop(context),
                 child: Text('Cancelar'),
               ),
               SizedBox(width: 8),
               ElevatedButton(
-                onPressed: _isAdding || _selectedContactIds.isEmpty
+                onPressed: _selectedContactIds.isEmpty
                     ? null
                     : _addSelectedMembers,
                 style: ElevatedButton.styleFrom(
@@ -328,16 +330,7 @@ class _AddMembersDialogState extends State<AddMembersDialog> {
                     borderRadius: BorderRadius.circular(8),
                   ),
                 ),
-                child: _isAdding
-                    ? SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation(Colors.white),
-                        ),
-                      )
-                    : Text('Agregar'),
+                child: Text('Agregar'),
               ),
             ],
           ),

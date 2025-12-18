@@ -80,8 +80,10 @@ import Intents  // ✅ Necesario para INPerson e INImage
         }
 
         let data = photoBytes.data
-        TaliaPhotoCache.savePhotoData(userId: userId, data: data)
-        NSLog("✅ [PhotoCache] Saved photo to App Group for: \(userId) (\(data.count) bytes)")
+        // ✅ FIX: Also pass photoUrl for cache invalidation
+        let photoUrl = args["photoUrl"] as? String
+        TaliaPhotoCache.savePhotoData(userId: userId, data: data, photoUrl: photoUrl)
+        NSLog("✅ [PhotoCache] Saved photo to App Group for: \(userId) (\(data.count) bytes, url: \(photoUrl?.prefix(30) ?? "nil")...)")
         result(true)
       } else {
         result(FlutterMethodNotImplemented)
@@ -457,8 +459,9 @@ import Intents  // ✅ Necesario para INPerson e INImage
         let chatId = args["chatId"] as? String ?? senderId
         let isGroup = args["isGroup"] as? Bool ?? false
         let senderPhotoUrl = args["senderPhotoUrl"] as? String
+        let playSound = args["playSound"] as? Bool ?? true // ✅ FIX #8: Obtener preferencia de sonido
 
-        NSLog("⚡ [Notifications] Mostrando notificación instantánea de: \(senderName)")
+        NSLog("⚡ [Notifications] Mostrando notificación instantánea de: \(senderName), playSound: \(playSound)")
         if let photoUrl = senderPhotoUrl, !photoUrl.isEmpty {
           NSLog("📷 [Notifications] URL de foto recibida: \(photoUrl)")
         }
@@ -470,7 +473,8 @@ import Intents  // ✅ Necesario para INPerson e INImage
           senderId: senderId,
           chatId: chatId,
           isGroup: isGroup,
-          senderPhotoUrl: senderPhotoUrl
+          senderPhotoUrl: senderPhotoUrl,
+          playSound: playSound // ✅ FIX #8: Pasar preferencia de sonido
         ) { success in
           result(success)
         }
@@ -510,12 +514,14 @@ import Intents  // ✅ Necesario para INPerson e INImage
     chatId: String,
     isGroup: Bool,
     senderPhotoUrl: String?,
+    playSound: Bool = true, // ✅ FIX #8: Parámetro para controlar sonido
     completion: @escaping (Bool) -> Void
   ) {
     let content = UNMutableNotificationContent()
     content.title = senderName
     content.body = messageText
-    content.sound = .default
+    // ✅ FIX #8: Solo reproducir sonido si está habilitado en preferencias
+    content.sound = playSound ? .default : nil
     content.badge = 1
     content.threadIdentifier = chatId
 
@@ -765,6 +771,38 @@ import Intents  // ✅ Necesario para INPerson e INImage
     }
 
     let payloadDict = payload.dictionaryPayload
+
+    // ✅ FIX: Handle call_cancelled push to close CallKit
+    if let pushType = payloadDict["type"] as? String, pushType == "call_cancelled" {
+      NSLog("📵 [VoIP] Call cancelled push received")
+      if let callId = payloadDict["callId"] as? String {
+        NSLog("📵 [VoIP] Closing CallKit for cancelled call: \(callId)")
+
+        // Find and end the CallKit call
+        if let existingUUID = self.firestoreIDToCallUUID[callId] {
+          NSLog("📵 [VoIP] Found UUID for callId \(callId): \(existingUUID.uuidString)")
+          self.callProvider.reportCall(with: existingUUID, endedAt: Date(), reason: .remoteEnded)
+
+          // Clean up mappings
+          self.callUUIDToFirestoreID.removeValue(forKey: existingUUID)
+          self.firestoreIDToCallUUID.removeValue(forKey: callId)
+
+          NSLog("✅ [VoIP] CallKit closed for cancelled call \(callId)")
+        } else {
+          NSLog("⚠️ [VoIP] No UUID found for cancelled callId: \(callId)")
+        }
+
+        // Notify Flutter about cancellation
+        DispatchQueue.main.async {
+          if let controller = self.window?.rootViewController as? FlutterViewController {
+            let channel = FlutterMethodChannel(name: "com.talia.chat/voip", binaryMessenger: controller.binaryMessenger)
+            channel.invokeMethod("onCallCancelled", arguments: ["callId": callId])
+          }
+        }
+      }
+      completion()
+      return
+    }
 
     guard let callId = payloadDict["callId"] as? String,
           let callerId = payloadDict["callerId"] as? String,

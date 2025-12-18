@@ -1,10 +1,13 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:app_tracking_transparency/app_tracking_transparency.dart';
 import 'subscription_service.dart';
+import 'app_config_service.dart';
 import '../utils/release_logger.dart';
 
 /// Servicio para gestionar anuncios con cumplimiento COPPA y Premium
@@ -50,23 +53,14 @@ class AdService {
   static const String _prodIosInterstitialAdUnitId =
       'ca-app-pub-5189779496074211/8559745396';
 
-  // Production Rewarded Video Ad Unit IDs (Talia - Reportes)
-  static const String _prodAndroidRewardedAdUnitId =
-      'ca-app-pub-5189779496074211/6223587981';
-  static const String _prodIosRewardedAdUnitId =
-      'ca-app-pub-5189779496074211/3792865761';
+  // Production Native Ad Unit IDs
+  static const String _prodAndroidNativeAdUnitId =
+      'ca-app-pub-5189779496074211/8120568482';
+  static const String _prodIosNativeAdUnitId =
+      'ca-app-pub-5189779496074211/1690891506';
 
-  // 🔒 SECURE NATIVE AD CONFIGURATION - Use environment variables for production
-  static const String _prodAndroidNativeAdUnitId = String.fromEnvironment(
-    'ADMOB_ANDROID_NATIVE_AD_UNIT_ID',
-    defaultValue:
-        _testAndroidNativeAdUnitId, // Fallback to test ID if not configured
-  );
-  static const String _prodIosNativeAdUnitId = String.fromEnvironment(
-    'ADMOB_IOS_NATIVE_AD_UNIT_ID',
-    defaultValue:
-        _testIosNativeAdUnitId, // Fallback to test ID if not configured
-  );
+  // Rewarded Ad Unit IDs se obtienen desde AppConfigService (Remote Config)
+  final AppConfigService _appConfigService = AppConfigService();
 
   InterstitialAd? _interstitialAd;
   bool _isAdLoaded = false;
@@ -77,8 +71,50 @@ class AdService {
   bool _isRewardedAdLoaded = false;
   bool _isRewardedAdShowing = false;
 
+  // Pre-cached Native Ad para stories (se carga al iniciar sesión)
+  NativeAd? _cachedNativeAd;
+  bool _isCachedNativeAdLoaded = false;
+  bool _isPreloadingNativeAd = false;
+
+  // Retry logic para Native Ads (fill rate issues)
+  int _nativeAdRetryAttempts = 0;
+  static const int _maxNativeAdRetries = 3;
+  static const List<int> _retryDelaysSeconds = [5, 15, 30]; // Backoff exponencial
+
   // Estado de inicialización
   bool _isInitialized = false;
+
+  /// Solicitar permiso de App Tracking Transparency (iOS 14.5+)
+  /// Requerido antes de mostrar ads personalizados en iOS
+  Future<void> _requestTrackingAuthorization() async {
+    try {
+      // Primero verificar el estado actual
+      final status = await AppTrackingTransparency.trackingAuthorizationStatus;
+      ReleaseLogger.log(
+        '📱 [AdService] ATT status actual: $status',
+        tag: 'AdService',
+      );
+
+      // Solo solicitar si no se ha determinado aún
+      if (status == TrackingStatus.notDetermined) {
+        // Esperar un momento para asegurar que la UI esté lista
+        await Future.delayed(const Duration(milliseconds: 500));
+
+        final newStatus =
+            await AppTrackingTransparency.requestTrackingAuthorization();
+        ReleaseLogger.log(
+          '📱 [AdService] ATT nuevo status después de solicitar: $newStatus',
+          tag: 'AdService',
+        );
+      }
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [AdService] Error solicitando ATT: $e',
+        tag: 'AdService',
+      );
+      // Continuar aunque falle - ads pueden funcionar sin personalización
+    }
+  }
 
   /// Inicializar AdMob SDK
   Future<void> initialize() async {
@@ -88,6 +124,11 @@ class AdService {
     }
 
     try {
+      // ✅ iOS: Solicitar App Tracking Transparency antes de inicializar ads
+      if (Platform.isIOS) {
+        await _requestTrackingAuthorization();
+      }
+
       ReleaseLogger.log(
         '📢 [AdService] Inicializando AdMob SDK...',
         tag: 'AdService',
@@ -205,67 +246,35 @@ class AdService {
     }
   }
 
-  /// Obtener el Ad Unit ID correcto según la plataforma, entorno y tipo de ad
+  /// Obtener el Ad Unit ID correcto según la plataforma y tipo de ad
+  /// Usa IDs de producción hardcodeados para mayor seguridad
   String _getAdUnitId({bool isNativeAd = false}) {
-    const bool useTestAds = false;
-
-    if (useTestAds) {
-      // Testing mode - usar test IDs
-      ReleaseLogger.log(
-        '📢 [AdService] Usando TEST Ad IDs (cuenta AdMob no aprobada aún)',
-        tag: 'AdService',
-      );
-      if (isNativeAd) {
-        if (defaultTargetPlatform == TargetPlatform.android) {
-          return _testAndroidNativeAdUnitId;
-        } else if (defaultTargetPlatform == TargetPlatform.iOS) {
-          return _testIosNativeAdUnitId;
-        }
-      } else {
-        if (defaultTargetPlatform == TargetPlatform.android) {
-          return _testAndroidInterstitialAdUnitId;
-        } else if (defaultTargetPlatform == TargetPlatform.iOS) {
-          return _testIosInterstitialAdUnitId;
-        }
+    if (isNativeAd) {
+      // Native Ads: Usar IDs de producción
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        ReleaseLogger.log(
+          '📢 [AdService] Android Native Ad ID: $_prodAndroidNativeAdUnitId',
+          tag: 'AdService',
+        );
+        return _prodAndroidNativeAdUnitId;
+      } else if (defaultTargetPlatform == TargetPlatform.iOS) {
+        // ✅ Usar Production ID - fill rate puede ser bajo inicialmente
+        ReleaseLogger.log(
+          '📢 [AdService] iOS Native Ad ID (PROD): $_prodIosNativeAdUnitId',
+          tag: 'AdService',
+        );
+        return _prodIosNativeAdUnitId;
       }
+      return _testAndroidNativeAdUnitId; // Fallback
     } else {
-      // Production mode - usar production IDs
-      ReleaseLogger.log(
-        '📢 [AdService] Usando PRODUCTION Ad IDs',
-        tag: 'AdService',
-      );
-      if (isNativeAd) {
-        if (defaultTargetPlatform == TargetPlatform.android) {
-          // ⚠️ REVENUE WARNING: Check if using fallback test ID
-          if (_prodAndroidNativeAdUnitId == _testAndroidNativeAdUnitId) {
-            ReleaseLogger.error(
-              '💸 REVENUE LOSS: Using test Native Ad ID in production! Configure ADMOB_ANDROID_NATIVE_AD_UNIT_ID',
-              tag: 'AdService',
-            );
-          }
-          return _prodAndroidNativeAdUnitId;
-        } else if (defaultTargetPlatform == TargetPlatform.iOS) {
-          // ⚠️ REVENUE WARNING: Check if using fallback test ID
-          if (_prodIosNativeAdUnitId == _testIosNativeAdUnitId) {
-            ReleaseLogger.error(
-              '💸 REVENUE LOSS: Using test Native Ad ID in production! Configure ADMOB_IOS_NATIVE_AD_UNIT_ID',
-              tag: 'AdService',
-            );
-          }
-          return _prodIosNativeAdUnitId;
-        }
-      } else {
-        if (defaultTargetPlatform == TargetPlatform.android) {
-          return _prodAndroidInterstitialAdUnitId;
-        } else if (defaultTargetPlatform == TargetPlatform.iOS) {
-          return _prodIosInterstitialAdUnitId;
-        }
+      // Interstitial Ads: Usar IDs de producción
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        return _prodAndroidInterstitialAdUnitId;
+      } else if (defaultTargetPlatform == TargetPlatform.iOS) {
+        return _prodIosInterstitialAdUnitId;
       }
+      return _testAndroidInterstitialAdUnitId; // Fallback
     }
-
-    return isNativeAd
-        ? _testAndroidNativeAdUnitId
-        : _testAndroidInterstitialAdUnitId; // Fallback
   }
 
   /// Cargar un anuncio intersticial
@@ -484,10 +493,212 @@ class AdService {
     _interstitialAd = null;
     _isAdLoaded = false;
     _isAdShowing = false;
+    _cachedNativeAd?.dispose();
+    _cachedNativeAd = null;
+    _isCachedNativeAdLoaded = false;
   }
 
   /// Verificar si hay un ad listo para mostrar
   bool get isAdReady => _isAdLoaded && _interstitialAd != null && !_isAdShowing;
+
+  /// Verificar si hay un Native Ad pre-cargado listo
+  bool get isNativeAdReady => _isCachedNativeAdLoaded && _cachedNativeAd != null;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // NATIVE ADS - Pre-carga al iniciar sesión para stories
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /// Pre-cargar Native Ad al iniciar sesión
+  /// Llamar desde main.dart cuando el usuario se autentica
+  /// Incluye retry logic con backoff exponencial para fill rate bajo
+  Future<void> preloadStoryNativeAd({bool isRetry = false}) async {
+    if (_isPreloadingNativeAd || _isCachedNativeAdLoaded) {
+      ReleaseLogger.log(
+        '📢 [AdService] Native Ad ya está cargando o cargado',
+        tag: 'AdService',
+      );
+      return;
+    }
+
+    if (!_isInitialized) {
+      await initialize();
+    }
+
+    // Verificar COPPA + Premium
+    final canShow = await _canShowAds();
+    if (!canShow) {
+      ReleaseLogger.log(
+        '🚫 [AdService] Usuario no puede ver ads, NO pre-cargar Native Ad',
+        tag: 'AdService',
+      );
+      return;
+    }
+
+    // Si no es retry, resetear contador
+    if (!isRetry) {
+      _nativeAdRetryAttempts = 0;
+    }
+
+    _isPreloadingNativeAd = true;
+
+    try {
+      final adUnitId = _getAdUnitId(isNativeAd: true);
+      final platform = defaultTargetPlatform == TargetPlatform.iOS ? 'iOS' : 'Android';
+      ReleaseLogger.log(
+        '🚀 [AdService] Pre-cargando Native Ad para stories... (Platform: $platform, AdUnitId: $adUnitId, Intento: ${_nativeAdRetryAttempts + 1}/$_maxNativeAdRetries)',
+        tag: 'AdService',
+      );
+
+      _cachedNativeAd = NativeAd(
+        adUnitId: _getAdUnitId(isNativeAd: true),
+        listener: NativeAdListener(
+          onAdLoaded: (ad) {
+            final platform = defaultTargetPlatform == TargetPlatform.iOS ? 'iOS' : 'Android';
+            ReleaseLogger.log(
+              '✅ [AdService] Native Ad PRE-CARGADO exitosamente en $platform',
+              tag: 'AdService',
+            );
+            _isCachedNativeAdLoaded = true;
+            _isPreloadingNativeAd = false;
+            _nativeAdRetryAttempts = 0; // Reset on success
+          },
+          onAdFailedToLoad: (ad, error) {
+            final platform = defaultTargetPlatform == TargetPlatform.iOS ? 'iOS' : 'Android';
+            ReleaseLogger.error(
+              '❌ [AdService] Error pre-cargando Native Ad en $platform: code=${error.code}, domain=${error.domain}, message=${error.message}',
+              tag: 'AdService',
+            );
+            ad.dispose();
+            _cachedNativeAd = null;
+            _isCachedNativeAdLoaded = false;
+            _isPreloadingNativeAd = false;
+
+            // ✅ Retry logic con backoff exponencial (para fill rate bajo)
+            _scheduleNativeAdRetry();
+          },
+          onAdClicked: (ad) {
+            ReleaseLogger.log(
+              '👆 [AdService] Native Ad clicked',
+              tag: 'AdService',
+            );
+          },
+          onAdImpression: (ad) {
+            ReleaseLogger.log(
+              '👁️ [AdService] Native Ad impression registrada',
+              tag: 'AdService',
+            );
+          },
+        ),
+        request: const AdRequest(),
+        nativeTemplateStyle: NativeTemplateStyle(
+          templateType: TemplateType.medium,
+          mainBackgroundColor: Color(0xFFFFFFFF),
+          cornerRadius: 16.0,
+          callToActionTextStyle: NativeTemplateTextStyle(
+            textColor: Colors.white,
+            backgroundColor: Color(0xFF6A1B9A),
+            style: NativeTemplateFontStyle.bold,
+            size: 14.0,
+          ),
+          primaryTextStyle: NativeTemplateTextStyle(
+            textColor: Colors.black87,
+            backgroundColor: Colors.transparent,
+            style: NativeTemplateFontStyle.bold,
+            size: 16.0,
+          ),
+          secondaryTextStyle: NativeTemplateTextStyle(
+            textColor: Colors.black54,
+            backgroundColor: Colors.transparent,
+            style: NativeTemplateFontStyle.normal,
+            size: 14.0,
+          ),
+          tertiaryTextStyle: NativeTemplateTextStyle(
+            textColor: Colors.black45,
+            backgroundColor: Colors.transparent,
+            style: NativeTemplateFontStyle.normal,
+            size: 12.0,
+          ),
+        ),
+      );
+
+      await _cachedNativeAd!.load();
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [AdService] Excepción pre-cargando Native Ad: $e',
+        tag: 'AdService',
+      );
+      _isPreloadingNativeAd = false;
+
+      // También programar retry en caso de excepción
+      _scheduleNativeAdRetry();
+    }
+  }
+
+  /// Programar retry de Native Ad con backoff exponencial
+  void _scheduleNativeAdRetry() {
+    if (_nativeAdRetryAttempts >= _maxNativeAdRetries) {
+      final platform = defaultTargetPlatform == TargetPlatform.iOS ? 'iOS' : 'Android';
+      ReleaseLogger.log(
+        '⚠️ [AdService] Máximo de reintentos alcanzado para Native Ad en $platform. Se reintentará cuando el usuario vea stories.',
+        tag: 'AdService',
+      );
+      return;
+    }
+
+    final delaySeconds = _retryDelaysSeconds[_nativeAdRetryAttempts];
+    _nativeAdRetryAttempts++;
+
+    ReleaseLogger.log(
+      '🔄 [AdService] Programando reintento ${_nativeAdRetryAttempts}/$_maxNativeAdRetries de Native Ad en $delaySeconds segundos...',
+      tag: 'AdService',
+    );
+
+    Future.delayed(Duration(seconds: delaySeconds), () {
+      if (!_isCachedNativeAdLoaded && !_isPreloadingNativeAd) {
+        preloadStoryNativeAd(isRetry: true);
+      }
+    });
+  }
+
+  /// Obtener el Native Ad pre-cargado (y marcarlo como usado)
+  /// Retorna null si no está disponible
+  NativeAd? consumeCachedNativeAd() {
+    final platform = defaultTargetPlatform == TargetPlatform.iOS ? 'iOS' : 'Android';
+
+    if (!_isCachedNativeAdLoaded || _cachedNativeAd == null) {
+      ReleaseLogger.log(
+        '⚠️ [AdService] consumeCachedNativeAd: No hay ad disponible en $platform (loaded=$_isCachedNativeAdLoaded, ad=${_cachedNativeAd != null})',
+        tag: 'AdService',
+      );
+      return null;
+    }
+
+    ReleaseLogger.log(
+      '🎯 [AdService] consumeCachedNativeAd: Entregando ad pre-cargado en $platform',
+      tag: 'AdService',
+    );
+
+    final ad = _cachedNativeAd;
+    // Limpiar cache y pre-cargar el siguiente
+    _cachedNativeAd = null;
+    _isCachedNativeAdLoaded = false;
+
+    // Pre-cargar el siguiente ad en background
+    preloadStoryNativeAd();
+
+    return ad;
+  }
+
+  /// Debug: Obtener estado actual del Native Ad pre-cargado
+  Map<String, dynamic> getNativeAdDebugInfo() {
+    return {
+      'platform': defaultTargetPlatform == TargetPlatform.iOS ? 'iOS' : 'Android',
+      'isPreloading': _isPreloadingNativeAd,
+      'isCachedLoaded': _isCachedNativeAdLoaded,
+      'hasCachedAd': _cachedNativeAd != null,
+      'isReady': isNativeAdReady,
+    };
+  }
 
   /// Crear un Native Ad para el feed de historias
   /// Retorna null si el usuario no puede ver ads (COPPA compliance + Premium)
@@ -601,45 +812,23 @@ class AdService {
   // REWARDED VIDEO ADS - Para desbloquear reportes y features premium
   // ═══════════════════════════════════════════════════════════════════════════
 
-  /// Obtener el Ad Unit ID para Rewarded Video
+  /// Obtener el Ad Unit ID para Rewarded Video desde Remote Config
   String _getRewardedAdUnitId() {
-    // TODO: Cambiar a false cuando la app esté publicada en las tiendas
-    const bool useTestAds = true;
-
-    if (useTestAds) {
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      final adId = _appConfigService.admobAndroidRewardedAdId;
       ReleaseLogger.log(
-        '🎬 [AdService] Usando TEST Rewarded Ad IDs',
+        '🎬 [AdService] Android Rewarded Ad ID: $adId',
         tag: 'AdService',
       );
-      if (defaultTargetPlatform == TargetPlatform.android) {
-        return _testAndroidRewardedAdUnitId;
-      } else if (defaultTargetPlatform == TargetPlatform.iOS) {
-        return _testIosRewardedAdUnitId;
-      }
-    } else {
+      return adId;
+    } else if (defaultTargetPlatform == TargetPlatform.iOS) {
+      final adId = _appConfigService.admobIosRewardedAdId;
       ReleaseLogger.log(
-        '🎬 [AdService] Usando PRODUCTION Rewarded Ad IDs',
+        '🎬 [AdService] iOS Rewarded Ad ID: $adId',
         tag: 'AdService',
       );
-      if (defaultTargetPlatform == TargetPlatform.android) {
-        if (_prodAndroidRewardedAdUnitId == _testAndroidRewardedAdUnitId) {
-          ReleaseLogger.error(
-            '💸 REVENUE LOSS: Using test Rewarded Ad ID in production! Configure ADMOB_ANDROID_REWARDED_AD_UNIT_ID',
-            tag: 'AdService',
-          );
-        }
-        return _prodAndroidRewardedAdUnitId;
-      } else if (defaultTargetPlatform == TargetPlatform.iOS) {
-        if (_prodIosRewardedAdUnitId == _testIosRewardedAdUnitId) {
-          ReleaseLogger.error(
-            '💸 REVENUE LOSS: Using test Rewarded Ad ID in production! Configure ADMOB_IOS_REWARDED_AD_UNIT_ID',
-            tag: 'AdService',
-          );
-        }
-        return _prodIosRewardedAdUnitId;
-      }
+      return adId;
     }
-
     return _testAndroidRewardedAdUnitId; // Fallback
   }
 

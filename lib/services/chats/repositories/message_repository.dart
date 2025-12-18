@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../../../models/chat_message.dart';
+import '../../../utils/release_logger.dart';
 
 /// Repository especializado para operaciones de mensajes en Firestore
 ///
@@ -59,6 +60,12 @@ class MessageRepository {
     try {
       final collection = isGroup ? 'groups_v2' : 'chats';
 
+      // ✅ FIX: Verificar si el chat document existe antes de intentar actualizarlo
+      // Solo Cloud Functions pueden crear chats, así que si no existe, solo creamos el mensaje
+      final chatRef = _firestore.collection(collection).doc(chatId);
+      final chatDoc = await chatRef.get();
+      final chatExists = chatDoc.exists;
+
       // ✅ Usar batch write para operación atómica
       final batch = _firestore.batch();
 
@@ -70,57 +77,67 @@ class MessageRepository {
           .doc(); // Genera ID automáticamente
 
       final messageId = messageRef.id;
-      batch.set(messageRef, message.toMap());
+
+      // ✅ FIX: Usar serverTimestamp para ordenamiento correcto
+      // El timestamp local se ignora y el servidor genera el timestamp real
+      final messageData = message.toMap();
+      messageData['timestamp'] = FieldValue.serverTimestamp();
+
+      batch.set(messageRef, messageData);
 
       // 2. Actualizar chat document con metadata del mensaje
-      final now = Timestamp.fromDate(DateTime.now());
-      final chatRef = _firestore.collection(collection).doc(chatId);
+      // ✅ FIX: Solo actualizar si el documento existe (para evitar permission-denied en create)
+      if (chatExists) {
+        // Extraer texto preview (máximo 100 caracteres)
+        // ✅ FIX: Usar type como criterio principal para media, URL como fallback
+        String messagePreview = '';
+        final messageType = message.type ?? 'text';
 
-      // Extraer texto preview (máximo 100 caracteres)
-      // ✅ FIX: Usar type como criterio principal para media, URL como fallback
-      String messagePreview = '';
-      final messageType = message.type ?? 'text';
+        if (message.text != null && message.text!.isNotEmpty) {
+          messagePreview = message.text!.length > 100
+              ? '${message.text!.substring(0, 97)}...'
+              : message.text!;
+        } else if (messageType == 'image' || message.imageUrl != null) {
+          messagePreview = '📷 Imagen';
+        } else if (messageType == 'video' || message.videoUrl != null) {
+          messagePreview = '🎥 Video';
+        } else if (messageType == 'audio' || message.audioUrl != null) {
+          messagePreview = '🎤 Audio';
+        } else if (messageType == 'missed_call') {
+          // ✅ FIX: Manejar llamadas perdidas
+          final isVideo = message.callType == 'video';
+          messagePreview = isVideo ? '📹 Videollamada perdida' : '📞 Llamada perdida';
+        } else if (messageType == 'answered_call') {
+          // ✅ FIX: Manejar llamadas contestadas
+          final isVideo = message.callType == 'video';
+          messagePreview = isVideo ? '📹 Videollamada' : '📞 Llamada';
+        }
 
-      if (message.text != null && message.text!.isNotEmpty) {
-        messagePreview = message.text!.length > 100
-            ? '${message.text!.substring(0, 97)}...'
-            : message.text!;
-      } else if (messageType == 'image' || message.imageUrl != null) {
-        messagePreview = '📷 Imagen';
-      } else if (messageType == 'video' || message.videoUrl != null) {
-        messagePreview = '🎥 Video';
-      } else if (messageType == 'audio' || message.audioUrl != null) {
-        messagePreview = '🎤 Audio';
-      } else if (messageType == 'missed_call') {
-        // ✅ FIX: Manejar llamadas perdidas
-        final isVideo = message.callType == 'video';
-        messagePreview = isVideo ? '📹 Videollamada perdida' : '📞 Llamada perdida';
-      } else if (messageType == 'answered_call') {
-        // ✅ FIX: Manejar llamadas contestadas
-        final isVideo = message.callType == 'video';
-        messagePreview = isVideo ? '📹 Videollamada' : '📞 Llamada';
+        final chatUpdateData = {
+          'lastMessage': messagePreview,
+          'lastMessageType': messageType, // ✅ NEW: Guardar tipo para notificaciones
+          'lastMessageAt': FieldValue.serverTimestamp(), // ✅ FIX: Usar serverTimestamp
+          'lastMessageTime': FieldValue.serverTimestamp(), // ✅ FIX: Usar serverTimestamp
+          'lastMessageSender': currentUserId,
+          'lastMessageId': messageId, // ✅ CRÍTICO: Para anti-duplicados Stream Detector vs FCM
+          'updatedAt': FieldValue.serverTimestamp(), // ✅ FIX: Usar serverTimestamp
+        };
+
+        batch.update(chatRef, chatUpdateData);
       }
-
-      final chatUpdateData = {
-        'lastMessage': messagePreview,
-        'lastMessageType': messageType, // ✅ NEW: Guardar tipo para notificaciones
-        'lastMessageAt': now,
-        'lastMessageTime': now, // Legacy compatibility
-        'lastMessageSender': currentUserId,
-        'lastMessageId': messageId, // ✅ CRÍTICO: Para anti-duplicados Stream Detector vs FCM
-        'updatedAt': now,
-      };
-
-      batch.set(chatRef, chatUpdateData, SetOptions(merge: true));
 
       // 3. Commit batch (atómico)
       await batch.commit();
 
-      print('✅ [MessageRepository] Mensaje creado Y chat actualizado con lastMessageId: $messageId');
+      if (!chatExists) {
+        ReleaseLogger.warning('Chat document no existía - mensaje creado sin actualizar metadata', tag: 'MessageRepository');
+      }
+
+      ReleaseLogger.log('✅ Mensaje creado${chatExists ? " Y chat actualizado" : ""} con ID: $messageId', tag: 'MessageRepository');
 
       return messageId;
     } catch (e) {
-      print('❌ [MessageRepository] Error creando mensaje optimista: $e');
+      ReleaseLogger.error('Error creando mensaje optimista: $e', tag: 'MessageRepository');
       throw Exception('Error creando mensaje optimista: $e');
     }
   }

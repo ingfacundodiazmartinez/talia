@@ -6,7 +6,54 @@ import '../models/chat_message.dart';
 class MessageStatusHelper {
   static final FirebaseAuth _auth = FirebaseAuth.instance;
 
+  /// ✅ V2 ARCHITECTURE: Calcula el MessageStatus usando lastOpenedAt del chat doc
+  ///
+  /// Para chats 1-1:
+  /// - seen: message.timestamp < lastOpenedAt_{recipient}
+  /// - delivered: message.timestamp < lastReceivedAt_{recipient}
+  /// - sent: tiene timestamp del servidor
+  /// - sending: no tiene timestamp
+  ///
+  /// [messageTimestamp] - Timestamp del mensaje
+  /// [senderId] - ID del remitente del mensaje
+  /// [recipientLastOpenedAt] - lastOpenedAt del recipient (del chat document)
+  /// [recipientLastReceivedAt] - lastReceivedAt del recipient (del chat document)
+  static MessageStatus calculateStatusV2({
+    required DateTime? messageTimestamp,
+    required String senderId,
+    DateTime? recipientLastOpenedAt,
+    DateTime? recipientLastReceivedAt,
+  }) {
+    final currentUserId = _auth.currentUser?.uid;
+    if (currentUserId == null) return MessageStatus.sent;
+
+    // Si no es mi mensaje, siempre es "sent"
+    if (senderId != currentUserId) {
+      return MessageStatus.sent;
+    }
+
+    // Sin timestamp del servidor = aún enviando
+    if (messageTimestamp == null) {
+      return MessageStatus.sending;
+    }
+
+    // Verificar si fue visto (mensaje antes de lastOpenedAt del recipient)
+    if (recipientLastOpenedAt != null && messageTimestamp.isBefore(recipientLastOpenedAt)) {
+      return MessageStatus.seen;
+    }
+
+    // Verificar si fue entregado (mensaje antes de lastReceivedAt del recipient)
+    if (recipientLastReceivedAt != null && messageTimestamp.isBefore(recipientLastReceivedAt)) {
+      return MessageStatus.delivered;
+    }
+
+    // Tiene timestamp pero aún no entregado/visto
+    return MessageStatus.sent;
+  }
+
   /// Calcula el MessageStatus basado en los campos del mensaje
+  ///
+  /// ⚠️ LEGACY: Este método usa readBy[]. Para chats 1-1, usar calculateStatusV2.
   ///
   /// Lógica:
   /// 1. Si es mensaje propio:

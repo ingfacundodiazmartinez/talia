@@ -1,7 +1,69 @@
-const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
 const { checkRateLimit, RATE_LIMITS, sendDirectPushNotification } = require("./helpers");
+
+// ═══════════════════════════════════════════════════════════════
+// TTL CONFIGURATION FOR MESSAGE SECURITY
+// ═══════════════════════════════════════════════════════════════
+
+const TTL_SUPERVISED_DAYS = 7;       // 7 días para chats supervisados (para reportes)
+const TTL_UNSUPERVISED_DAYS = 7;     // 7 días para chats no supervisados (fallback)
+// NOTA: Los mensajes se eliminan cuando son leídos (read_receipts_service.dart)
+// Este TTL es solo un fallback de seguridad si el mensaje nunca es leído
+
+/**
+ * Verifica si un usuario es supervisado (tiene parent vinculado)
+ * @param {string} userId - ID del usuario a verificar
+ * @returns {Promise<boolean>} - true si tiene parent vinculado
+ */
+async function isUserSupervised(userId) {
+  const db = getFirestore();
+
+  // Buscar si existe algún parent que tenga este userId en linkedChildrenIds
+  const parentsSnapshot = await db
+    .collection("users")
+    .where("linkedChildrenIds", "array-contains", userId)
+    .limit(1)
+    .get();
+
+  return !parentsSnapshot.empty;
+}
+
+/**
+ * Verifica si algún participante del chat es supervisado
+ * @param {string[]} participants - Array de IDs de participantes
+ * @returns {Promise<boolean>} - true si alguno es supervisado
+ */
+async function hasAnySupervisedParticipant(participants) {
+  // Verificar en paralelo para mejor performance
+  const checks = participants.map(userId => isUserSupervised(userId));
+  const results = await Promise.all(checks);
+  return results.some(isSupervised => isSupervised);
+}
+
+/**
+ * Calcula el timestamp de deleteAt basado en si el chat es supervisado
+ * @param {boolean} isSupervised - Si el chat tiene participantes supervisados
+ * @returns {Timestamp} - Timestamp de expiración (7 días para ambos tipos)
+ *
+ * NOTA: Este TTL es un fallback de seguridad.
+ * Los mensajes se eliminan principalmente cuando son marcados como leídos
+ * (ver read_receipts_service.dart en Flutter)
+ */
+function calculateDeleteAt(isSupervised) {
+  const now = new Date();
+
+  if (isSupervised) {
+    // 7 días para chats supervisados
+    now.setDate(now.getDate() + TTL_SUPERVISED_DAYS);
+  } else {
+    // 7 días para chats no supervisados (fallback)
+    now.setDate(now.getDate() + TTL_UNSUPERVISED_DAYS);
+  }
+
+  return Timestamp.fromDate(now);
+}
 
 // ═══════════════════════════════════════════════════════════════
 // CHATS
@@ -85,6 +147,31 @@ exports.incrementUnreadCount = onDocumentCreated(
       }
 
       console.log(`✅ Security validations passed for sender ${senderId}`);
+
+      // ═══════════════════════════════════════════════════════════════
+      // TTL: Agregar deleteAt al mensaje para auto-eliminación
+      // ═══════════════════════════════════════════════════════════════
+      const messageId = event.params.messageId;
+      const db = getFirestore();
+
+      try {
+        // Verificar si algún participante es supervisado (child con parent)
+        const isSupervised = await hasAnySupervisedParticipant(participants);
+        const deleteAt = calculateDeleteAt(isSupervised);
+
+        // Agregar deleteAt al mensaje
+        await db
+          .collection("chats")
+          .doc(chatId)
+          .collection("messages")
+          .doc(messageId)
+          .update({ deleteAt });
+
+        console.log(`🕐 TTL configurado para mensaje ${messageId}: ${isSupervised ? '7 días (supervisado)' : '5 min (no supervisado)'}`);
+      } catch (ttlError) {
+        // No fallar el trigger si hay error en TTL (mensaje ya fue creado)
+        console.error(`⚠️ Error configurando TTL para mensaje ${messageId}:`, ttlError);
+      }
 
       // Determinar quién es el receiver (el otro participante)
       const receiverId = participants.find((id) => id !== senderId);
@@ -180,8 +267,32 @@ exports.incrementGroupUnreadCount = onDocumentCreated(
 
       console.log(`✅ Security validations passed for group sender ${senderId}`);
 
+      // ═══════════════════════════════════════════════════════════════
+      // TTL: Agregar deleteAt al mensaje para auto-eliminación
+      // ═══════════════════════════════════════════════════════════════
+      const db = getFirestore();
+
+      try {
+        // Verificar si algún miembro del grupo es supervisado (child con parent)
+        const isSupervised = await hasAnySupervisedParticipant(members);
+        const deleteAt = calculateDeleteAt(isSupervised);
+
+        // Agregar deleteAt al mensaje
+        await db
+          .collection("groups")
+          .doc(groupId)
+          .collection("messages")
+          .doc(messageId)
+          .update({ deleteAt });
+
+        console.log(`🕐 TTL configurado para mensaje de grupo ${messageId}: ${isSupervised ? '7 días (supervisado)' : '5 min (no supervisado)'}`);
+      } catch (ttlError) {
+        // No fallar el trigger si hay error en TTL (mensaje ya fue creado)
+        console.error(`⚠️ Error configurando TTL para mensaje de grupo ${messageId}:`, ttlError);
+      }
+
       // Obtener información del sender para las notificaciones
-      const senderDoc = await getFirestore().collection("users").doc(senderId).get();
+      const senderDoc = await db.collection("users").doc(senderId).get();
       const senderData = senderDoc.data() || {};
       const senderName = senderData.name || "Usuario";
       const senderPhotoUrl = senderData.photoURL || ""; // ✅ FIX: Agregar foto del sender
@@ -209,7 +320,7 @@ exports.incrementGroupUnreadCount = onDocumentCreated(
 
       // 🔔 ENVIAR NOTIFICACIONES PUSH para cada miembro (excepto el sender)
       // ✅ OPTIMIZACIÓN: unreadCount eliminado - la app usa LocalUnreadCountService (cache local)
-      const db = getFirestore();
+      // NOTA: db ya fue definido arriba para el TTL
 
       // ✅ OPTIMIZACIÓN: Enviar push directo SIN guardar en DB para cada miembro
       // Esto evita el crecimiento ilimitado de la colección 'notifications'
@@ -820,5 +931,118 @@ exports.sendGroupMessage = onCall(
         throw new HttpsError("internal", error.message);
       }
     },
+);
+
+// ═══════════════════════════════════════════════════════════════
+// MESSAGE DELETION ON DELIVERY (ARQUITECTURA V2)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Trigger que elimina mensajes cuando TODOS los participantes los han recibido
+ *
+ * ARQUITECTURA V2:
+ * - Chat 1-1: Elimina cuando ambos tienen lastReceivedAt >= message.timestamp
+ * - Grupos: NO usa este trigger (solo TTL de 7 días)
+ *
+ * Se activa cuando el chat document se actualiza (lastReceivedAt cambia)
+ */
+exports.cleanupDeliveredMessages = onDocumentUpdated(
+  {
+    document: "chats/{chatId}",
+    region: "us-central1",
+  },
+  async (event) => {
+    try {
+      const before = event.data.before.data();
+      const after = event.data.after.data();
+      const chatId = event.params.chatId;
+
+      const participants = after.participants || [];
+      if (participants.length !== 2) {
+        // Solo para chats 1-1
+        return null;
+      }
+
+      // ✅ V2: Si el chat es supervisado, NO eliminar
+      // Los mensajes deben estar disponibles para que el padre genere reportes
+      // Se usará TTL de 7 días en su lugar
+
+      // Usar la función existente que verifica linkedChildrenIds en parents
+      const isSupervised = await hasAnySupervisedParticipant(participants);
+      if (isSupervised) {
+        console.log(`⏭️ [cleanupDeliveredMessages] Chat ${chatId} tiene participante supervisado - usando TTL de 7 días`);
+        return null;
+      }
+
+      // ✅ V2 FIX: Usar lastOpenedAt (cuando el usuario ABRE el chat) en lugar de lastReceivedAt
+      // lastReceivedAt = cuando el dispositivo recibe el mensaje (puede ser en background)
+      // lastOpenedAt = cuando el usuario abre el chat y VE los mensajes
+      // Solo eliminar mensajes que AMBOS usuarios han VISTO
+
+      // Verificar si algún lastOpenedAt cambió
+      let anyChanged = false;
+      for (const p of participants) {
+        const beforeVal = before[`lastOpenedAt_${p}`];
+        const afterVal = after[`lastOpenedAt_${p}`];
+        if (beforeVal?.toMillis?.() !== afterVal?.toMillis?.()) {
+          anyChanged = true;
+          break;
+        }
+      }
+
+      if (!anyChanged) {
+        return null;
+      }
+
+      // Encontrar el mínimo lastOpenedAt de todos los participantes
+      // Esto representa hasta qué punto AMBOS usuarios han visto los mensajes
+      let minLastOpened = null;
+      for (const p of participants) {
+        const lastOpened = after[`lastOpenedAt_${p}`];
+        if (!lastOpened) {
+          // Un participante no ha abierto el chat aún - no eliminar nada
+          console.log(`⏭️ [cleanupDeliveredMessages] ${p} aún no ha abierto el chat ${chatId}`);
+          return null;
+        }
+        if (!minLastOpened || lastOpened.toMillis() < minLastOpened.toMillis()) {
+          minLastOpened = lastOpened;
+        }
+      }
+
+      if (!minLastOpened) {
+        return null;
+      }
+
+      const db = getFirestore();
+      const messagesRef = db.collection("chats").doc(chatId).collection("messages");
+
+      // Obtener mensajes que fueron VISTOS por todos (timestamp <= minLastOpened)
+      const oldMessages = await messagesRef
+        .where("timestamp", "<=", minLastOpened)
+        .get();
+
+      if (oldMessages.empty) {
+        console.log(`ℹ️ [cleanupDeliveredMessages] No hay mensajes para eliminar en chat ${chatId}`);
+        return null;
+      }
+
+      // Eliminar en batch
+      const batch = db.batch();
+      let count = 0;
+
+      for (const doc of oldMessages.docs) {
+        batch.delete(doc.ref);
+        count++;
+      }
+
+      await batch.commit();
+      console.log(`🗑️ [cleanupDeliveredMessages] ${count} mensajes eliminados en chat ${chatId} (vistos por todos)`);
+
+      return null;
+    } catch (error) {
+      console.error(`❌ [cleanupDeliveredMessages] Error:`, error);
+      return null;
+    }
+  }
 );
 

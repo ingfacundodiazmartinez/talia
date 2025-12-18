@@ -95,6 +95,16 @@ class _NavigatorObserver extends NavigatorObserver {
 class ParentMainShell extends StatefulWidget {
   const ParentMainShell({super.key});
 
+  /// GlobalKey para acceder al estado del shell desde otros widgets
+  static final GlobalKey<_ParentMainShellState> shellKey =
+      GlobalKey<_ParentMainShellState>();
+
+  /// Navegar al tab de whitelist con un filtro de hijo específico
+  static void navigateToWhitelistWithFilter(String childId) {
+    WhitelistScreen.setChildFilter(childId);
+    shellKey.currentState?._navigateToTab(3);
+  }
+
   @override
   State<ParentMainShell> createState() => _ParentMainShellState();
 }
@@ -102,6 +112,13 @@ class ParentMainShell extends StatefulWidget {
 class _ParentMainShellState extends State<ParentMainShell> {
   // ✅ CORRECTO: Solo estado UI y controller
   int _selectedIndex = 0;
+
+  /// Navegar a un tab específico
+  void _navigateToTab(int index) {
+    if (mounted) {
+      setState(() => _selectedIndex = index);
+    }
+  }
   late ParentMainShellController _controller;
 
   // ✅ OPTIMIZACIÓN: Stream combinado para evitar 5 StreamBuilders anidados
@@ -624,6 +641,8 @@ class _ParentMainShellState extends State<ParentMainShell> {
     int totalUnreadMessages,
     int whitelistBadgeCount,
   ) {
+    // Ya no necesitamos padding extra - selectedFontSize: 0 maneja el centrado
+
     return Container(
       decoration: BoxDecoration(
         boxShadow: [
@@ -642,27 +661,18 @@ class _ParentMainShellState extends State<ParentMainShell> {
         unselectedItemColor: colorScheme.onSurfaceVariant,
         showSelectedLabels: showLabels,
         showUnselectedLabels: showLabels,
+        // Eliminar espacio de labels cuando no se muestran
+        selectedFontSize: showLabels ? 14 : 0,
+        unselectedFontSize: showLabels ? 12 : 0,
         items: [
           BottomNavigationBarItem(
-            icon: _buildIconWithBadge(
-              Icons.dashboard_outlined,
-              dashboardBadgeCount, // ✅ Historias pendientes + emergencias no resueltas
-            ),
-            activeIcon: _buildIconWithBadge(
-              Icons.dashboard,
-              dashboardBadgeCount,
-            ),
+            icon: _buildIconWithBadge(Icons.dashboard_outlined, dashboardBadgeCount),
+            activeIcon: _buildIconWithBadge(Icons.dashboard, dashboardBadgeCount),
             label: 'Dashboard',
           ),
           BottomNavigationBarItem(
-            icon: _buildIconWithBadge(
-              Icons.chat_bubble_outline,
-              totalUnreadMessages, // ✅ Chats no leídos
-            ),
-            activeIcon: _buildIconWithBadge(
-              Icons.chat_bubble,
-              totalUnreadMessages,
-            ),
+            icon: _buildIconWithBadge(Icons.chat_bubble_outline, totalUnreadMessages),
+            activeIcon: _buildIconWithBadge(Icons.chat_bubble, totalUnreadMessages),
             label: 'Chats',
           ),
           BottomNavigationBarItem(
@@ -671,14 +681,8 @@ class _ParentMainShellState extends State<ParentMainShell> {
             label: 'Contactos',
           ),
           BottomNavigationBarItem(
-            icon: _buildIconWithBadge(
-              Icons.shield_outlined,
-              whitelistBadgeCount, // ✅ Solicitudes de contacto pendientes
-            ),
-            activeIcon: _buildIconWithBadge(
-              Icons.shield,
-              whitelistBadgeCount,
-            ),
+            icon: _buildIconWithBadge(Icons.shield_outlined, whitelistBadgeCount),
+            activeIcon: _buildIconWithBadge(Icons.shield, whitelistBadgeCount),
             label: 'Lista Blanca',
           ),
           BottomNavigationBarItem(

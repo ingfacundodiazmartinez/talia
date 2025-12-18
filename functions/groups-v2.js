@@ -83,6 +83,23 @@ async function createApprovalRequest(
   creatorData,
   members
 ) {
+  // ✅ Check if request already exists to prevent duplicates
+  const existingRequest = await db
+    .collection("group_approval_requests")
+    .where("groupId", "==", groupId)
+    .where("childId", "==", childId)
+    .where("parentId", "==", parentId)
+    .where("status", "==", "pending")
+    .limit(1)
+    .get();
+
+  if (!existingRequest.empty) {
+    console.log(
+      `ℹ️ [createApprovalRequest] Request already exists for group=${groupId}, child=${childId}, parent=${parentId}`
+    );
+    return existingRequest.docs[0].id; // Return existing request ID
+  }
+
   const now = admin.firestore.Timestamp.now();
   const expiresAt = admin.firestore.Timestamp.fromDate(
     new Date(Date.now() + APPROVAL_EXPIRY_DAYS * 24 * 60 * 60 * 1000)
@@ -1016,16 +1033,6 @@ exports.leaveGroupV2 = onCall(
         throw new HttpsError("failed-precondition", "No eres miembro de este grupo");
       }
 
-      // Check if user is the only admin
-      if (groupData.admins?.includes(userId) && groupData.admins.length === 1) {
-        if (groupData.members.length > 1) {
-          throw new HttpsError(
-            "failed-precondition",
-            "Debes transferir el rol de administrador antes de abandonar el grupo"
-          );
-        }
-      }
-
       // If user is the last member, delete the group entirely
       if (groupData.members.length === 1) {
         await db.collection("groups_v2").doc(groupId).delete();
@@ -1042,8 +1049,45 @@ exports.leaveGroupV2 = onCall(
         updatedAt: now,
       };
 
+      // ✅ FIX: Si el usuario es el único admin y hay otros miembros, promover a otro miembro
       if (groupData.admins?.includes(userId)) {
         updates.admins = admin.firestore.FieldValue.arrayRemove(userId);
+
+        // Si era el único admin, promover a otro miembro
+        if (groupData.admins.length === 1 && groupData.members.length > 1) {
+          // Buscar el miembro más antiguo (por joinedAt) excluyendo al que se va
+          const otherMembers = groupData.members.filter((m) => m !== userId);
+          let newAdminId = null;
+
+          // Intentar encontrar el miembro más antiguo usando memberDetails.joinedAt
+          if (groupData.memberDetails) {
+            let oldestJoinedAt = null;
+            for (const memberId of otherMembers) {
+              const memberDetail = groupData.memberDetails[memberId];
+              if (memberDetail?.joinedAt) {
+                const joinedAt = memberDetail.joinedAt.toDate
+                  ? memberDetail.joinedAt.toDate()
+                  : new Date(memberDetail.joinedAt);
+                if (!oldestJoinedAt || joinedAt < oldestJoinedAt) {
+                  oldestJoinedAt = joinedAt;
+                  newAdminId = memberId;
+                }
+              }
+            }
+          }
+
+          // Si no encontramos por fecha, elegir al primero de la lista (orden arbitrario)
+          if (!newAdminId && otherMembers.length > 0) {
+            newAdminId = otherMembers[0];
+            console.log(`⚠️ [leaveGroupV2] No se encontró joinedAt, eligiendo primer miembro: ${newAdminId}`);
+          }
+
+          if (newAdminId) {
+            updates.admins = [newAdminId]; // Reemplazar array de admins con el nuevo admin
+            updates[`memberDetails.${newAdminId}.role`] = "admin";
+            console.log(`👑 [leaveGroupV2] Promoviendo a ${newAdminId} como nuevo admin del grupo ${groupId}`);
+          }
+        }
       }
 
       await db.collection("groups_v2").doc(groupId).update(updates);

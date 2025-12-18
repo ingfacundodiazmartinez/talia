@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../../controllers/child_notifications_controller.dart';
 import '../../../../groups/groups.dart';
 import '../../../story_approval_screen.dart';
 import '../../contacts/child_contacts_filter_screen.dart';
 import '../../../../services/notification_tracking_service.dart';
+import '../../../../utils/release_logger.dart';
 
 /// Pantalla que muestra todas las notificaciones/alertas de un hijo específico
 ///
@@ -32,6 +32,11 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
   late final ChildNotificationsController _controller;
   final ScrollController _scrollController = ScrollController();
 
+  // Estado para cache-based architecture
+  bool _isLoading = true;
+  bool _hasError = false;
+  String _errorMessage = '';
+
   @override
   void initState() {
     super.initState();
@@ -55,10 +60,39 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
       contextId: widget.childId,
     );
 
-    // Marcar todas las notificaciones como leídas al entrar a la pantalla
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _markAllAsRead(showSnackbar: false);
-    });
+    // Sincronizar notificaciones y cargar desde cache
+    _syncAndLoadNotifications();
+  }
+
+  /// Sincronizar notificaciones de Firestore al cache y cargar
+  Future<void> _syncAndLoadNotifications() async {
+    try {
+      setState(() {
+        _isLoading = true;
+        _hasError = false;
+      });
+
+      // Sincronizar: Firestore -> Cache local -> Delete de Firestore
+      await _controller.syncAndGetNotifications();
+
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+
+        // Marcar todas como leídas después de sincronizar
+        _markAllAsRead(showSnackbar: false);
+      }
+    } catch (e) {
+      ReleaseLogger.error('Error sincronizando notificaciones: $e', tag: 'ChildNotifications');
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _hasError = true;
+          _errorMessage = e.toString();
+        });
+      }
+    }
   }
 
   @override
@@ -103,306 +137,273 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
         title: Text('Alertas de ${widget.childName}'),
         backgroundColor: Color(0xFF9D7FE8),
         foregroundColor: Colors.white,
+        actions: [
+          // Botón de refresh para sincronizar manualmente
+          IconButton(
+            icon: Icon(Icons.refresh),
+            onPressed: _controller.isSyncing ? null : _syncAndLoadNotifications,
+            tooltip: 'Actualizar',
+          ),
+        ],
       ),
-      body: StreamBuilder<QuerySnapshot>(
-        stream: _controller.getNotificationsStream(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting && _controller.notifications.isEmpty) {
-            return Center(
-              child: CircularProgressIndicator(
-                color: Color(0xFF9D7FE8),
+      body: _buildBody(),
+    );
+  }
+
+  Widget _buildBody() {
+    // Estado de carga inicial
+    if (_isLoading) {
+      return Center(
+        child: CircularProgressIndicator(
+          color: Color(0xFF9D7FE8),
+        ),
+      );
+    }
+
+    // Estado de error
+    if (_hasError) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.error_outline, size: 48, color: Colors.red),
+            SizedBox(height: 16),
+            Text('Error al cargar notificaciones'),
+            SizedBox(height: 8),
+            Text(
+              _errorMessage,
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+              textAlign: TextAlign.center,
+            ),
+            SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: _syncAndLoadNotifications,
+              child: Text('Reintentar'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Obtener notificaciones del cache
+    final separatedNotifications = _controller.separateCachedReadUnread();
+    final unreadNotifications = separatedNotifications['unread']!;
+    final readNotifications = separatedNotifications['read']!;
+
+    // Combinar: NO LEÍDAS primero, luego LEÍDAS
+    final childNotifications = [...unreadNotifications, ...readNotifications];
+
+    _controller.logDebugInfo('Cache: ${childNotifications.length} notificaciones para ${widget.childName}');
+
+    // Estado vacío
+    if (childNotifications.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.notifications_none,
+              size: 64,
+              color: Colors.grey[400],
+            ),
+            SizedBox(height: 16),
+            Text(
+              'No hay notificaciones',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
               ),
-            );
-          }
-
-          if (snapshot.hasError) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.error_outline, size: 48, color: Colors.red),
-                  SizedBox(height: 16),
-                  Text('Error al cargar notificaciones'),
-                  SizedBox(height: 8),
-                  Text(
-                    snapshot.error.toString(),
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
+            ),
+            SizedBox(height: 8),
+            Text(
+              'Las notificaciones de ${widget.childName} aparecerán aquí',
+              style: TextStyle(
+                fontSize: 14,
+                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
               ),
-            );
-          }
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      );
+    }
 
-          // Combinar notificaciones del stream inicial con las cargadas por paginación
-          final firstPageDocs = snapshot.data?.docs ?? [];
-          final allDocs = [...firstPageDocs, ..._controller.notifications.where((doc) {
-            return !firstPageDocs.any((firstDoc) => firstDoc.id == doc.id);
-          })];
-
-          _controller.logDebugInfo('Total documentos: ${allDocs.length}, Buscando notificaciones para childId: ${widget.childId}');
-
-          // Filtrar solo las notificaciones relacionadas a este hijo
-          final allChildNotifications = _controller.filterNotificationsForChild(allDocs);
-
-          // ✅ Separar notificaciones leídas y no leídas
-          final separatedNotifications = _controller.separateReadUnread(allChildNotifications);
-          final unreadNotifications = separatedNotifications['unread']!;
-          final readNotifications = separatedNotifications['read']!;
-
-          // ✅ Combinar: NO LEÍDAS primero, luego LEÍDAS
-          final childNotifications = [...unreadNotifications, ...readNotifications];
-
-          // Ya vienen ordenadas por timestamp desde Firestore
-
-          if (childNotifications.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    Icons.notifications_none,
-                    size: 64,
-                    color: Colors.grey[400],
-                  ),
-                  SizedBox(height: 16),
-                  Text(
-                    'No hay notificaciones',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                      color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
-                    ),
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    'Las notificaciones de ${widget.childName} aparecerán aquí',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ),
-            );
-          }
-
-          return ListView.builder(
-            controller: _scrollController,
-            padding: EdgeInsets.all(16),
-            itemCount: childNotifications.length + (_controller.hasMoreData ? 1 : 0),
-            itemBuilder: (context, index) {
-              if (index == childNotifications.length) {
-                // Loading indicator al final
-                return Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Center(
-                    child: CircularProgressIndicator(
-                      color: Color(0xFF9D7FE8),
-                    ),
-                  ),
-                );
-              }
-
-              // ✅ Agregar separador entre notificaciones no leídas y leídas
-              if (index == unreadNotifications.length && unreadNotifications.isNotEmpty && readNotifications.isNotEmpty) {
-                return Column(
-                  children: [
-                    Padding(
-                      padding: EdgeInsets.symmetric(vertical: 16),
-                      child: Row(
-                        children: [
-                          Expanded(child: Divider(thickness: 1)),
-                          Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 12),
-                            child: Text(
-                              'LEÍDAS',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
-                                letterSpacing: 1.2,
-                              ),
-                            ),
+    // Lista de notificaciones desde cache
+    return RefreshIndicator(
+      onRefresh: _syncAndLoadNotifications,
+      color: Color(0xFF9D7FE8),
+      child: ListView.builder(
+        controller: _scrollController,
+        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        itemCount: childNotifications.length,
+        itemBuilder: (context, index) {
+          // Agregar separador entre notificaciones no leídas y leídas
+          if (index == unreadNotifications.length && unreadNotifications.isNotEmpty && readNotifications.isNotEmpty) {
+            return Column(
+              children: [
+                Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: Row(
+                    children: [
+                      Expanded(child: Divider(thickness: 0.5, color: Colors.grey.shade300)),
+                      Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 8),
+                        child: Text(
+                          'Anteriores',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                            color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
                           ),
-                          Expanded(child: Divider(thickness: 1)),
-                        ],
+                        ),
                       ),
-                    ),
-                    _buildNotificationCard(
-                      childNotifications[index].id,
-                      childNotifications[index].data() as Map<String, dynamic>,
-                    ),
-                  ],
-                );
-              }
+                      Expanded(child: Divider(thickness: 0.5, color: Colors.grey.shade300)),
+                    ],
+                  ),
+                ),
+                _buildCachedNotificationCard(childNotifications[index]),
+              ],
+            );
+          }
 
-              final notification = childNotifications[index];
-              final data = notification.data() as Map<String, dynamic>;
-              return _buildNotificationCard(notification.id, data);
-            },
-          );
+          return _buildCachedNotificationCard(childNotifications[index]);
         },
       ),
     );
   }
 
-  Widget _buildNotificationCard(String notificationId, Map<String, dynamic> data) {
+  /// Build notification card from cached data
+  Widget _buildCachedNotificationCard(Map<String, dynamic> data) {
+    final notificationId = data['id'] as String? ?? '';
     final isRead = data['read'] as bool? ?? false;
     final type = data['type'] as String? ?? 'general';
     final title = data['title'] as String? ?? 'Notificación';
     final body = data['body'] as String? ?? '';
-    final timestamp = data['timestamp'] as Timestamp?;
+    final createdAt = data['createdAt'] as int?;
     final priority = data['priority'] as String? ?? 'normal';
     final notifData = data['data'] as Map<String, dynamic>? ?? {};
 
     // Determinar color e icono según tipo y prioridad
     final notifStyle = _controller.getNotificationStyle(type, priority);
     final colorScheme = Theme.of(context).colorScheme;
-    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
     return Opacity(
-      opacity: isRead ? 0.6 : 1.0, // ✅ Notificaciones leídas con opacidad reducida
+      opacity: isRead ? 0.7 : 1.0,
       child: Card(
-        margin: EdgeInsets.only(bottom: 12),
-        elevation: isRead ? 0 : 3,
-        color: isDarkMode
-            ? (isRead ? colorScheme.surfaceContainerHighest.withValues(alpha: 0.5) : colorScheme.surfaceContainer)
-            : (isRead ? colorScheme.surface.withValues(alpha: 0.7) : colorScheme.surfaceContainerHighest),
+        margin: EdgeInsets.only(bottom: 8),
+        elevation: isRead ? 0 : 1,
+        color: isRead ? colorScheme.surface : colorScheme.surfaceContainerHighest,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(10),
           side: BorderSide(
-            color: isRead
-                ? (isDarkMode ? colorScheme.outline.withValues(alpha: 0.2) : Colors.grey.shade200)
-                : notifStyle.color.withValues(alpha: isDarkMode ? 0.5 : 0.3),
-            width: isRead ? 1 : 2,
+            color: isRead ? Colors.grey.shade200 : notifStyle.color.withValues(alpha: 0.3),
+            width: isRead ? 0.5 : 1,
           ),
         ),
-      child: InkWell(
-        onTap: () => _handleNotificationTap(notificationId, type, notifData, isRead),
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    padding: EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: notifStyle.color.withValues(alpha: isDarkMode ? 0.2 : 0.1),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      notifStyle.icon,
-                      color: notifStyle.color,
-                      size: 20,
-                    ),
-                  ),
-                  SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          notifStyle.label,
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: notifStyle.color,
-                          ),
-                        ),
-                        if (timestamp != null) ...[
-                          SizedBox(height: 4),
+        child: InkWell(
+          onTap: () => _handleCachedNotificationTap(notificationId, type, notifData, isRead),
+          borderRadius: BorderRadius.circular(10),
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Icono compacto
+                Icon(
+                  notifStyle.icon,
+                  color: notifStyle.color,
+                  size: 22,
+                ),
+                SizedBox(width: 10),
+                // Contenido principal
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Primera línea: Label + timestamp
+                      Row(
+                        children: [
                           Text(
-                            _controller.formatTimestamp(timestamp),
+                            notifStyle.label,
                             style: TextStyle(
                               fontSize: 12,
-                              color: colorScheme.onSurface.withValues(alpha: 0.6),
+                              fontWeight: FontWeight.w600,
+                              color: notifStyle.color,
                             ),
                           ),
+                          Spacer(),
+                          if (createdAt != null)
+                            Text(
+                              _controller.formatCachedTimestamp(createdAt),
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: colorScheme.onSurface.withValues(alpha: 0.5),
+                              ),
+                            ),
+                          // Indicador de no leída (punto)
+                          if (!isRead) ...[
+                            SizedBox(width: 6),
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: notifStyle.color,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                          ],
                         ],
-                      ],
-                    ),
-                  ),
-                  if (!isRead)
-                    Container(
-                      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: Color(0xFF9D7FE8),
-                        borderRadius: BorderRadius.circular(12),
                       ),
-                      child: Text(
-                        'NUEVA',
+                      SizedBox(height: 4),
+                      // Título y body combinados
+                      Text(
+                        body.isNotEmpty ? body : title,
                         style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: isRead ? FontWeight.normal : FontWeight.w500,
+                          color: colorScheme.onSurface.withValues(alpha: 0.9),
                         ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                    ),
+                    ],
+                  ),
+                ),
+                // Flecha de acción sutil
+                if (_controller.hasAction(type)) ...[
+                  SizedBox(width: 8),
+                  Icon(
+                    Icons.chevron_right,
+                    color: colorScheme.onSurface.withValues(alpha: 0.3),
+                    size: 20,
+                  ),
                 ],
-              ),
-              SizedBox(height: 12),
-              Text(
-                title,
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                  color: colorScheme.onSurface,
-                ),
-              ),
-              if (body.isNotEmpty) ...[
-                SizedBox(height: 6),
-                Text(
-                  body,
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: colorScheme.onSurface.withValues(alpha: 0.8),
-                    fontWeight: isRead ? FontWeight.normal : FontWeight.w500,
-                  ),
-                ),
               ],
-              // Botón de acción si aplica
-              if (_controller.hasAction(type)) ...[
-                SizedBox(height: 12),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: TextButton.icon(
-                    onPressed: () => _handleNotificationAction(type, notifData),
-                    icon: Icon(Icons.arrow_forward, size: 16),
-                    label: Text(_controller.getActionLabel(type)),
-                    style: TextButton.styleFrom(
-                      foregroundColor: notifStyle.color,
-                    ),
-                  ),
-                ),
-              ],
-            ],
+            ),
           ),
         ),
       ),
-      ), // Cierre del Opacity
     );
   }
 
-
-  Future<void> _handleNotificationTap(
+  Future<void> _handleCachedNotificationTap(
     String notificationId,
     String type,
     Map<String, dynamic> notifData,
     bool isRead,
   ) async {
-    // SIEMPRE marcar como leída al tocar (incluso si ya está marcada)
-    // Esto asegura que se marca al visualizar
-    await _controller.markAsRead(notificationId);
+    // Marcar como leída en cache local
+    await _controller.markAsReadInCache(notificationId);
+
+    // Actualizar UI
+    if (mounted) {
+      setState(() {});
+    }
 
     // Navegar según el tipo
     _handleNotificationAction(type, notifData);
   }
-
 
   void _handleNotificationAction(String type, Map<String, dynamic> notifData) {
     switch (type) {
@@ -450,10 +451,23 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
   }
 
   Future<void> _markAllAsRead({bool showSnackbar = true}) async {
-    final markedCount = await _controller.markAllAsRead();
+    // 1. Marcar en cache local (para UI instantánea)
+    final markedCount = await _controller.markAllAsReadInCache();
 
-    if (mounted && showSnackbar) {
-      if (markedCount > 0) {
+    // 2. ✅ FIX: También marcar en Firestore (para que el badge se actualice)
+    // Ejecutar en background sin esperar para no bloquear UI
+    _controller.markAllAsRead().then((firestoreCount) {
+      ReleaseLogger.log(
+        '✅ Notificaciones marcadas en Firestore: $firestoreCount',
+        tag: 'ChildNotifications',
+      );
+    });
+
+    // Actualizar UI
+    if (mounted) {
+      setState(() {});
+
+      if (showSnackbar && markedCount > 0) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('$markedCount notificación${markedCount > 1 ? 'es' : ''} marcada${markedCount > 1 ? 's' : ''} como leída${markedCount > 1 ? 's' : ''}'),

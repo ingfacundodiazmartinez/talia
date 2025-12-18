@@ -404,6 +404,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           },
           deepARService: DeepARService(),
           isDeepARInitialized: _controller.isDeepARInitialized,
+          reinitCounter: _controller.deepARReinitCounter, // ✅ FIX #6: Pasar contador para forzar recreación del platform view
         );
       } else {
         // DeepAR está inicializando

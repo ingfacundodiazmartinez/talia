@@ -139,20 +139,44 @@ class ChatPermissionService {
   }
 
   /// Verificar si el padre de un niño ha aprobado un contacto específico
+  /// Busca en la colección contacts unificada y verifica el mapa de approvals
   Future<bool> _hasParentApproval({
     required String childId,
     required String contactId,
   }) async {
     try {
-      // Buscar contact_request para el usuario (childId) y verificar si está approved
-      final contactRequestQuery = await _firestore
-          .collection('contact_requests')
-          .where('userId', isEqualTo: childId)
-          .where('contactId', isEqualTo: contactId)
-          .where('status', isEqualTo: 'approved')
+      // Generar el ID del documento de contacto (ordenado alfabéticamente)
+      final users = [childId, contactId]..sort();
+      final contactDocId = '${users[0]}_${users[1]}';
+
+      // Buscar el documento de contacto
+      final contactDoc = await _firestore
+          .collection('contacts')
+          .doc(contactDocId)
           .get();
 
-      return contactRequestQuery.docs.isNotEmpty;
+      if (!contactDoc.exists) {
+        return false;
+      }
+
+      final data = contactDoc.data()!;
+      final status = data['status'] as String? ?? '';
+
+      // Si el status global es approved, está aprobado para ambos
+      if (status == 'approved') {
+        return true;
+      }
+
+      // Si es pending, verificar el mapa de approvals para este hijo específico
+      if (status == 'pending') {
+        final approvals = Map<String, dynamic>.from(data['approvals'] ?? {});
+        final childApproval = approvals[childId] as Map<String, dynamic>?;
+        if (childApproval != null) {
+          return childApproval['status'] == 'approved';
+        }
+      }
+
+      return false;
     } catch (e) {
       return false;
     }

@@ -42,15 +42,21 @@ class ContactsSyncService {
   /// - Solo llama a Cloud Function si hay cambios
   /// - force=true salta la verificación de cambios y siempre llama a CF
   Future<void> syncContacts({bool force = false}) async {
+    // ignore: avoid_print
+    print('🔄🔄🔄 [ContactsSync] syncContacts() INICIADO force=$force');
     ReleaseLogger.log('🔄 syncContacts() llamado (force=$force)', tag: 'ContactsSync');
 
     // Evitar syncs concurrentes
     if (_isSyncing) {
+      // ignore: avoid_print
+      print('⏭️⏭️⏭️ [ContactsSync] Sync ya en progreso, SALTANDO');
       ReleaseLogger.log('⏭️ Sync ya en progreso, saltando', tag: 'ContactsSync');
       return;
     }
 
     _isSyncing = true;
+    // ignore: avoid_print
+    print('🔒🔒🔒 [ContactsSync] _isSyncing = true');
     ReleaseLogger.log('🔒 _isSyncing = true', tag: 'ContactsSync');
 
     try {
@@ -64,19 +70,26 @@ class ContactsSyncService {
       }
       ReleaseLogger.log('👤 Usuario: ${currentUser.uid}', tag: 'ContactsSync');
 
-      // 1. Verificar permiso de contactos (no solicitar automáticamente)
+      // 1. Verificar permiso de contactos
       ReleaseLogger.log('📋 Verificando permiso de contactos...', tag: 'ContactsSync');
       bool hasPermission = false;
       try {
         hasPermission = await _deviceContacts.hasPermission();
         ReleaseLogger.log('📋 hasPermission: $hasPermission', tag: 'ContactsSync');
+
+        // Si no tiene permiso, solicitarlo (primera vez)
+        if (!hasPermission) {
+          ReleaseLogger.log('📋 Solicitando permiso de contactos...', tag: 'ContactsSync');
+          hasPermission = await _deviceContacts.requestPermission();
+          ReleaseLogger.log('📋 Permiso después de solicitar: $hasPermission', tag: 'ContactsSync');
+        }
       } catch (e) {
-        ReleaseLogger.log('❌ Error verificando permisos: $e', tag: 'ContactsSync');
+        ReleaseLogger.log('❌ Error verificando/solicitando permisos: $e', tag: 'ContactsSync');
         return;
       }
 
       if (!hasPermission) {
-        ReleaseLogger.log('⏭️ Sin permiso de contactos, saltando sync', tag: 'ContactsSync');
+        ReleaseLogger.log('⏭️ Permiso de contactos denegado, saltando sync', tag: 'ContactsSync');
         return;
       }
 

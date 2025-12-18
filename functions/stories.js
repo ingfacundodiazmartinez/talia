@@ -21,66 +21,86 @@ const RATE_LIMITS = {
 /**
  * SECURITY: Rate limiting para respuestas a historias
  * Previene spam y abuso de la función replyToStory
+ *
+ * ✅ SIMPLIFICADO: Usa documento de contador en lugar de query compleja
+ * para evitar necesidad de índices compuestos
  */
 async function checkStoryReplyRateLimit(userId) {
   console.log(`🔒 [RateLimit] Verificando límites de respuestas para: ${userId}`);
 
-  // Verificar límite diario (últimas 24 horas)
-  const twentyFourHoursAgo = new Date();
-  twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
+  const now = new Date();
+  const rateLimitRef = db.collection('rate_limits').doc(`story_reply_${userId}`);
 
-  // Contar mensajes tipo story_reply del usuario en las últimas 24h
-  // Usamos una query en chats donde el usuario es participante
-  const userChatsQuery = await db
-    .collection('chats')
-    .where('participants', 'array-contains', userId)
-    .get();
+  try {
+    const rateLimitDoc = await rateLimitRef.get();
 
-  let dailyCount = 0;
-  let hourlyCount = 0;
-  const oneHourAgo = new Date();
-  oneHourAgo.setHours(oneHourAgo.getHours() - 1);
+    if (rateLimitDoc.exists) {
+      const data = rateLimitDoc.data();
+      const lastReset = data.lastReset?.toDate?.() || new Date(0);
+      const hourlyReset = data.hourlyReset?.toDate?.() || new Date(0);
 
-  // Contamos respuestas a historias en todos los chats del usuario
-  for (const chatDoc of userChatsQuery.docs) {
-    const messagesQuery = await db
-      .collection('chats')
-      .doc(chatDoc.id)
-      .collection('messages')
-      .where('senderId', '==', userId)
-      .where('replyTo.type', '==', 'story_reply')
-      .where('timestamp', '>', twentyFourHoursAgo)
-      .orderBy('timestamp', 'desc')
-      .limit(RATE_LIMITS.STORY_REPLIES_PER_DAY + 1)
-      .get();
+      // Resetear contador diario si pasaron 24 horas
+      const hoursSinceReset = (now - lastReset) / (1000 * 60 * 60);
+      if (hoursSinceReset >= 24) {
+        await rateLimitRef.set({
+          dailyCount: 0,
+          hourlyCount: 0,
+          lastReset: now,
+          hourlyReset: now,
+        });
+        console.log(`🔄 [RateLimit] Contadores reseteados (24h)`);
+      } else {
+        // Resetear contador horario si pasó 1 hora
+        const hoursSinceHourlyReset = (now - hourlyReset) / (1000 * 60 * 60);
+        if (hoursSinceHourlyReset >= 1) {
+          await rateLimitRef.update({
+            hourlyCount: 0,
+            hourlyReset: now,
+          });
+        }
 
-    for (const msgDoc of messagesQuery.docs) {
-      const msgData = msgDoc.data();
-      const msgTime = msgData.timestamp?.toDate?.() || new Date();
+        // Verificar límites
+        const dailyCount = data.dailyCount || 0;
+        const hourlyCount = hoursSinceHourlyReset >= 1 ? 0 : (data.hourlyCount || 0);
 
-      dailyCount++;
-      if (msgTime > oneHourAgo) {
-        hourlyCount++;
+        if (dailyCount >= RATE_LIMITS.STORY_REPLIES_PER_DAY) {
+          console.error(`❌ [RateLimit] Usuario ${userId} excedió límite diario: ${dailyCount}/${RATE_LIMITS.STORY_REPLIES_PER_DAY}`);
+          throw new HttpsError('resource-exhausted',
+            `Has excedido el límite de ${RATE_LIMITS.STORY_REPLIES_PER_DAY} respuestas a historias por día.`);
+        }
+
+        if (hourlyCount >= RATE_LIMITS.STORY_REPLIES_PER_HOUR) {
+          console.error(`❌ [RateLimit] Usuario ${userId} excedió límite horario: ${hourlyCount}/${RATE_LIMITS.STORY_REPLIES_PER_HOUR}`);
+          throw new HttpsError('resource-exhausted',
+            `Has excedido el límite de ${RATE_LIMITS.STORY_REPLIES_PER_HOUR} respuestas a historias por hora.`);
+        }
+
+        console.log(`✅ [RateLimit] Usuario dentro de límites: ${dailyCount}/${RATE_LIMITS.STORY_REPLIES_PER_DAY} diarias, ${hourlyCount}/${RATE_LIMITS.STORY_REPLIES_PER_HOUR} por hora`);
       }
     }
-
-    // Early exit si ya excedimos
-    if (dailyCount >= RATE_LIMITS.STORY_REPLIES_PER_DAY) break;
+    // Si no existe el documento, es la primera vez - no hay límite que verificar
+  } catch (error) {
+    // Si hay error leyendo rate limit, permitir la operación para no bloquear usuarios
+    console.warn(`⚠️ [RateLimit] Error verificando límites: ${error.message}`);
   }
+}
 
-  if (dailyCount >= RATE_LIMITS.STORY_REPLIES_PER_DAY) {
-    console.error(`❌ [RateLimit] Usuario ${userId} excedió límite diario: ${dailyCount}/${RATE_LIMITS.STORY_REPLIES_PER_DAY}`);
-    throw new HttpsError('resource-exhausted',
-      `Has excedido el límite de ${RATE_LIMITS.STORY_REPLIES_PER_DAY} respuestas a historias por día.`);
+/**
+ * Incrementar contador de rate limit después de enviar respuesta exitosa
+ */
+async function incrementStoryReplyCount(userId) {
+  const rateLimitRef = db.collection('rate_limits').doc(`story_reply_${userId}`);
+
+  try {
+    await rateLimitRef.set({
+      dailyCount: FieldValue.increment(1),
+      hourlyCount: FieldValue.increment(1),
+      lastReset: FieldValue.serverTimestamp(),
+      hourlyReset: FieldValue.serverTimestamp(),
+    }, { merge: true });
+  } catch (error) {
+    console.warn(`⚠️ [RateLimit] Error incrementando contador: ${error.message}`);
   }
-
-  if (hourlyCount >= RATE_LIMITS.STORY_REPLIES_PER_HOUR) {
-    console.error(`❌ [RateLimit] Usuario ${userId} excedió límite horario: ${hourlyCount}/${RATE_LIMITS.STORY_REPLIES_PER_HOUR}`);
-    throw new HttpsError('resource-exhausted',
-      `Has excedido el límite de ${RATE_LIMITS.STORY_REPLIES_PER_HOUR} respuestas a historias por hora.`);
-  }
-
-  console.log(`✅ [RateLimit] Usuario dentro de límites: ${dailyCount}/${RATE_LIMITS.STORY_REPLIES_PER_DAY} diarias, ${hourlyCount}/${RATE_LIMITS.STORY_REPLIES_PER_HOUR} por hora`);
 }
 
 /**
@@ -232,12 +252,14 @@ exports.likeStory = onCall(
         throw new HttpsError("permission-denied", "No tienes permiso para dar like a esta historia");
       }
 
-      // 7. Agregar like a la historia
+      // 7. Agregar like a la historia Y marcar como vista
+      // ✅ FIX: También agregar a viewedBy para que la historia no vuelva a aparecer como no vista
       await db.collection("stories").doc(storyId).update({
-        likedBy: FieldValue.arrayUnion(userId)
+        likedBy: FieldValue.arrayUnion(userId),
+        viewedBy: FieldValue.arrayUnion(userId)
       });
 
-      console.log(`✅ [LikeStory] Like agregado a historia ${storyId} por ${userId}`);
+      console.log(`✅ [LikeStory] Like agregado y marcada como vista: historia ${storyId} por ${userId}`);
 
       // 8. Enviar mensaje de like al chat
       await sendLikeMessage(userId, storyOwnerId, storyData, storyId);
@@ -517,7 +539,7 @@ exports.replyToStory = onCall(
       };
 
       // 7. CREAR MENSAJE EN FIRESTORE (esto activará moderateMessage automáticamente)
-      // IMPORTANTE: NO usar MessageSendingService para que pase por moderación
+      // IMPORTANTE: El mensaje pasa por moderación normal
 
       // ✅ TTL: deleteAt = now + 7 días (para auto-eliminación via Firestore TTL Policy)
       const messageNow = new Date();
@@ -550,11 +572,18 @@ exports.replyToStory = onCall(
       }
 
       // ESCRIBIR MENSAJE A FIRESTORE (trigger moderateMessage se activará automáticamente)
+      console.log(`📝 [StoryReply] Creando mensaje en chat ${chatId}...`);
+      console.log(`📝 [StoryReply] Sender: ${userId}, Receiver (story owner): ${storyOwnerId}`);
+      console.log(`📝 [StoryReply] Texto: "${messageText.substring(0, 50)}..."`);
+
       const messageRef = await db
         .collection("chats")
         .doc(chatId)
         .collection("messages")
         .add(messageData);
+
+      console.log(`✅ [StoryReply] Mensaje creado: ${messageRef.id}`);
+      console.log(`📌 [StoryReply] IMPORTANTE: El trigger moderateMessage debería activarse ahora`);
 
       // ✅ FIX: Actualizar lastMessage inmediatamente para que B vea el chat
       // El trigger moderateMessage también lo actualizará después de procesar
@@ -599,6 +628,9 @@ exports.replyToStory = onCall(
         // No bloquear si falla - el mensaje ya se envió al chat
         console.warn(`⚠️ [StoryReply] Error guardando reply en story (no crítico):`, replyError.message);
       }
+
+      // Incrementar contador de rate limit después de éxito
+      await incrementStoryReplyCount(userId);
 
       return {
         success: true,

@@ -79,15 +79,18 @@ class UserRoleService {
   }
 
   /// Obtiene todos los padres vinculados a un usuario
-  /// ⚠️ CORREGIDO: Busca en users donde linkedChildrenIds contenga userId
+  /// ✅ FIX: Usa parent_children en lugar de users.linkedChildrenIds (permisos)
   Future<List<String>> getLinkedParents(String userId) async {
     try {
-      final usersSnapshot = await _firestore
-          .collection('users')
-          .where('linkedChildrenIds', arrayContains: userId)
+      final linksSnapshot = await _firestore
+          .collection('parent_children')
+          .where('childId', isEqualTo: userId)
+          .where('status', isEqualTo: 'approved')
           .get();
 
-      return usersSnapshot.docs.map((doc) => doc.id).toList();
+      return linksSnapshot.docs
+          .map((doc) => doc.data()['parentId'] as String)
+          .toList();
     } catch (e) {
       return [];
     }

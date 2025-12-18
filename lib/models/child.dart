@@ -194,20 +194,38 @@ class Child extends User {
   }
 
   /// Obtiene los padres vinculados del hijo
-  /// ⚠️ CORREGIDO: Busca en users donde linkedChildrenIds contenga este childId
+  /// ✅ FIX: Usa parent_children en lugar de users.linkedChildrenIds (permisos)
   Future<List<Map<String, dynamic>>> getParents() async {
     try {
-      final usersSnapshot = await FirebaseFirestore.instance
-          .collection('users')
-          .where('linkedChildrenIds', arrayContains: id)
+      // 1. Obtener parentIds desde parent_children
+      final linksSnapshot = await FirebaseFirestore.instance
+          .collection('parent_children')
+          .where('childId', isEqualTo: id)
+          .where('status', isEqualTo: 'approved')
           .get();
 
+      final parentIds = linksSnapshot.docs
+          .map((doc) => doc.data()['parentId'] as String)
+          .toList();
+
+      if (parentIds.isEmpty) {
+        return [];
+      }
+
+      // 2. Obtener datos de cada padre
       List<Map<String, dynamic>> parents = [];
 
-      for (var doc in usersSnapshot.docs) {
-        final parentData = doc.data();
-        parentData['id'] = doc.id;
-        parents.add(parentData);
+      for (var parentId in parentIds) {
+        final parentDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(parentId)
+            .get();
+
+        if (parentDoc.exists) {
+          final parentData = parentDoc.data()!;
+          parentData['id'] = parentDoc.id;
+          parents.add(parentData);
+        }
       }
 
       return parents;

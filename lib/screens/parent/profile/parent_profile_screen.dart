@@ -1,18 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:provider/provider.dart';
 import 'edit_profile_screen.dart';
 import '../../common/privacy_security_screen.dart';
 import '../../common/help_support_screen.dart';
 import '../../common/privacy_policy_screen.dart';
 import '../../common/settings_screen.dart';
 import '../../premium/premium_screen.dart';
-import '../../../theme_service.dart';
 import '../../../controllers/profile_controller.dart';
 import '../../../models/parent.dart';
 import '../../../services/subscription_service.dart';
 import '../../../widgets/profile/profile_header_widget.dart';
 import '../../../widgets/profile/children_list_widget.dart';
 import '../../../utils/release_logger.dart';
+import '../../../theme_service.dart';
 
 class ParentProfileScreen extends StatefulWidget {
   const ParentProfileScreen({super.key});
@@ -98,13 +99,13 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
                 title: 'Editar Perfil',
                 onTap: () => _navigateToEditProfile(),
               ),
-              _buildThemeSetting(),
               _buildProfileOption(
                 icon: Icons.security,
                 title: 'Privacidad y Seguridad',
                 onTap: () => _navigateToPrivacySecurity(),
               ),
               _buildAutoApprovalSetting(),
+              _buildDarkModeSetting(),
               _buildProfileOption(
                 icon: Icons.notifications,
                 title: 'Notificaciones',
@@ -359,9 +360,9 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
     );
   }
 
-  Widget _buildThemeSetting() {
-    final themeService = ThemeService();
+  Widget _buildDarkModeSetting() {
     final colorScheme = Theme.of(context).colorScheme;
+    final themeService = context.watch<ThemeService>();
 
     return Container(
       margin: EdgeInsets.only(bottom: 8),
@@ -371,7 +372,7 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
           color: colorScheme.primary,
         ),
         title: Text(
-          'Tema de la Aplicación',
+          'Modo oscuro',
           style: TextStyle(
             color: colorScheme.onSurface,
             fontWeight: FontWeight.w500,
@@ -379,13 +380,16 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
         ),
         subtitle: Text(
           themeService.isDarkMode
-              ? 'Modo oscuro activado'
-              : 'Modo claro activado',
-          style: TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant),
+              ? 'Tema oscuro activado'
+              : 'Tema claro activado',
+          style: TextStyle(
+            fontSize: 12,
+            color: colorScheme.onSurfaceVariant,
+          ),
         ),
         trailing: Switch(
           value: themeService.isDarkMode,
-          onChanged: _toggleTheme,
+          onChanged: (enabled) => themeService.toggleDarkMode(enabled),
           activeThumbColor: colorScheme.primary,
         ),
         shape: RoundedRectangleBorder(
@@ -460,26 +464,6 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
           ),
         );
       }
-    }
-  }
-
-  Future<void> _toggleTheme(bool value) async {
-    final themeService = ThemeService();
-    await themeService.toggleTheme();
-    setState(() {});
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            themeService.isDarkMode
-                ? 'Modo oscuro activado'
-                : 'Modo claro activado',
-          ),
-          backgroundColor: Theme.of(context).colorScheme.primary,
-          duration: Duration(seconds: 1),
-        ),
-      );
     }
   }
 

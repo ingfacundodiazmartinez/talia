@@ -1,4 +1,4 @@
-const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/firestore");
+const { onDocumentCreated, onDocumentDeleted, onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
@@ -589,8 +589,186 @@ exports.onParentChildLinkCreated = onDocumentCreated(
       } else {
         console.log(`ℹ️ [OnLinkCreated] ${childId} ya estaba en linkedChildrenIds`);
       }
+
+      // ✅ Actualizar linkedParentIds del niño
+      const childRef = db.collection("users").doc(childId);
+      await childRef.update({
+        linkedParentIds: FieldValue.arrayUnion(parentId),
+        parentId: parentId, // También actualizar parentId principal
+      });
+      console.log(`✅ [OnLinkCreated] Agregado ${parentId} a linkedParentIds de ${childId}`);
+
+      // ✅ Actualizar parentViewers en todos los contactos existentes del niño
+      const contactsSnapshot = await db.collection("contacts")
+        .where("users", "array-contains", childId)
+        .get();
+
+      if (!contactsSnapshot.empty) {
+        const batch = db.batch();
+        let updatedCount = 0;
+
+        for (const contactDoc of contactsSnapshot.docs) {
+          const contactData = contactDoc.data();
+          const currentParentViewers = contactData.parentViewers || [];
+
+          if (!currentParentViewers.includes(parentId)) {
+            batch.update(contactDoc.ref, {
+              parentViewers: FieldValue.arrayUnion(parentId),
+            });
+            updatedCount++;
+          }
+        }
+
+        if (updatedCount > 0) {
+          await batch.commit();
+          console.log(`✅ [OnLinkCreated] Actualizado parentViewers en ${updatedCount} contactos de ${childId}`);
+        }
+      }
     } catch (error) {
       console.error("❌ [OnLinkCreated] Error:", error);
+    }
+  },
+);
+
+/**
+ * Trigger cuando se actualiza un vínculo padre-hijo
+ * Actualiza linkedChildrenIds del padre cuando el status cambia a "approved"
+ */
+exports.onParentChildLinkUpdated = onDocumentUpdated(
+  {
+    document: "parent_children/{linkId}",
+    region: "us-central1",
+  },
+  async (event) => {
+    const beforeData = event.data.before.data();
+    const afterData = event.data.after.data();
+
+    if (!beforeData || !afterData) return;
+
+    const parentId = afterData.parentId;
+    const childId = afterData.childId;
+    const beforeStatus = beforeData.status;
+    const afterStatus = afterData.status;
+
+    // Solo actuar si el status cambió a "approved"
+    if (beforeStatus === afterStatus) {
+      return;
+    }
+
+    console.log(`🔗 [OnLinkUpdated] Vínculo actualizado: ${parentId} -> ${childId}, status: ${beforeStatus} -> ${afterStatus}`);
+
+    const db = getFirestore();
+
+    if (afterStatus === "approved") {
+      // Agregar childId a linkedChildrenIds del padre
+      try {
+        const userRef = db.collection("users").doc(parentId);
+        const userDoc = await userRef.get();
+
+        if (!userDoc.exists) {
+          console.warn(`⚠️ [OnLinkUpdated] Usuario ${parentId} no existe`);
+          return;
+        }
+
+        const userData = userDoc.data();
+        const currentLinkedChildren = userData.linkedChildrenIds || [];
+
+        if (!currentLinkedChildren.includes(childId)) {
+          await userRef.update({
+            linkedChildrenIds: FieldValue.arrayUnion(childId),
+            linkedChildrenIdsUpdatedAt: FieldValue.serverTimestamp(),
+          });
+
+          console.log(`✅ [OnLinkUpdated] Agregado ${childId} a linkedChildrenIds de ${parentId}`);
+        } else {
+          console.log(`ℹ️ [OnLinkUpdated] ${childId} ya estaba en linkedChildrenIds`);
+        }
+
+        // ✅ Actualizar linkedParentIds del niño
+        const childRef = db.collection("users").doc(childId);
+        await childRef.update({
+          linkedParentIds: FieldValue.arrayUnion(parentId),
+          parentId: parentId,
+        });
+        console.log(`✅ [OnLinkUpdated] Agregado ${parentId} a linkedParentIds de ${childId}`);
+
+        // ✅ Actualizar parentViewers en todos los contactos existentes del niño
+        const contactsSnapshot = await db.collection("contacts")
+          .where("users", "array-contains", childId)
+          .get();
+
+        if (!contactsSnapshot.empty) {
+          const batch = db.batch();
+          let updatedCount = 0;
+
+          for (const contactDoc of contactsSnapshot.docs) {
+            const contactData = contactDoc.data();
+            const currentParentViewers = contactData.parentViewers || [];
+
+            if (!currentParentViewers.includes(parentId)) {
+              batch.update(contactDoc.ref, {
+                parentViewers: FieldValue.arrayUnion(parentId),
+              });
+              updatedCount++;
+            }
+          }
+
+          if (updatedCount > 0) {
+            await batch.commit();
+            console.log(`✅ [OnLinkUpdated] Actualizado parentViewers en ${updatedCount} contactos de ${childId}`);
+          }
+        }
+      } catch (error) {
+        console.error("❌ [OnLinkUpdated] Error agregando a linkedChildrenIds:", error);
+      }
+    } else if (beforeStatus === "approved" && afterStatus !== "approved") {
+      // Remover childId de linkedChildrenIds del padre si el status ya no es approved
+      try {
+        const userRef = db.collection("users").doc(parentId);
+
+        await userRef.update({
+          linkedChildrenIds: FieldValue.arrayRemove(childId),
+          linkedChildrenIdsUpdatedAt: FieldValue.serverTimestamp(),
+        });
+
+        console.log(`✅ [OnLinkUpdated] Removido ${childId} de linkedChildrenIds de ${parentId} (status: ${afterStatus})`);
+
+        // ✅ Remover parentId de linkedParentIds del niño
+        const childRef = db.collection("users").doc(childId);
+        await childRef.update({
+          linkedParentIds: FieldValue.arrayRemove(parentId),
+        });
+        console.log(`✅ [OnLinkUpdated] Removido ${parentId} de linkedParentIds de ${childId}`);
+
+        // ✅ Remover padre de parentViewers en contactos del niño
+        const contactsSnapshot = await db.collection("contacts")
+          .where("users", "array-contains", childId)
+          .get();
+
+        if (!contactsSnapshot.empty) {
+          const batch = db.batch();
+          let updatedCount = 0;
+
+          for (const contactDoc of contactsSnapshot.docs) {
+            const contactData = contactDoc.data();
+            const currentParentViewers = contactData.parentViewers || [];
+
+            if (currentParentViewers.includes(parentId)) {
+              batch.update(contactDoc.ref, {
+                parentViewers: FieldValue.arrayRemove(parentId),
+              });
+              updatedCount++;
+            }
+          }
+
+          if (updatedCount > 0) {
+            await batch.commit();
+            console.log(`✅ [OnLinkUpdated] Removido parentViewers de ${updatedCount} contactos de ${childId}`);
+          }
+        }
+      } catch (error) {
+        console.error("❌ [OnLinkUpdated] Error removiendo de linkedChildrenIds:", error);
+      }
     }
   },
 );
@@ -626,6 +804,40 @@ exports.onParentChildLinkDeleted = onDocumentDeleted(
       });
 
       console.log(`✅ [OnLinkDeleted] Removido ${childId} de linkedChildrenIds de ${parentId}`);
+
+      // ✅ Remover parentId de linkedParentIds del niño
+      const childRef = db.collection("users").doc(childId);
+      await childRef.update({
+        linkedParentIds: FieldValue.arrayRemove(parentId),
+      });
+      console.log(`✅ [OnLinkDeleted] Removido ${parentId} de linkedParentIds de ${childId}`);
+
+      // ✅ Remover padre de parentViewers en contactos del niño
+      const contactsSnapshot = await db.collection("contacts")
+        .where("users", "array-contains", childId)
+        .get();
+
+      if (!contactsSnapshot.empty) {
+        const batch = db.batch();
+        let updatedCount = 0;
+
+        for (const contactDoc of contactsSnapshot.docs) {
+          const contactData = contactDoc.data();
+          const currentParentViewers = contactData.parentViewers || [];
+
+          if (currentParentViewers.includes(parentId)) {
+            batch.update(contactDoc.ref, {
+              parentViewers: FieldValue.arrayRemove(parentId),
+            });
+            updatedCount++;
+          }
+        }
+
+        if (updatedCount > 0) {
+          await batch.commit();
+          console.log(`✅ [OnLinkDeleted] Removido parentViewers de ${updatedCount} contactos de ${childId}`);
+        }
+      }
     } catch (error) {
       console.error("❌ [OnLinkDeleted] Error:", error);
     }
@@ -779,4 +991,236 @@ exports.requestChildLocation = onCall(
     }
   }
 );
+
+/**
+ * Cloud Function: Child de 18+ años solicita desvinculación
+ * El child envía una solicitud a sus padres para que decidan si desvincularlo.
+ * NO desvincula automáticamente - el padre debe aprobar manualmente.
+ */
+/**
+ * Cloud Function ligera para asegurar que linkedChildrenIds esté poblado
+ * Usa privilegios admin para auto-reparar vínculos antiguos
+ * Es rápida porque solo hace una verificación y una escritura si es necesario
+ */
+exports.ensureLinkedChildrenIds = onCall({
+  cors: true,
+  consumeAppCheckToken: true,
+}, async (request) => {
+  const db = getFirestore();
+
+  try {
+    // 1. Validar autenticación
+    if (!request.auth) {
+      console.error("❌ [ensureLinkedChildrenIds] Usuario no autenticado");
+      throw new HttpsError("unauthenticated", "Usuario no autenticado");
+    }
+
+    const parentId = request.auth.uid;
+    const { childId } = request.data;
+
+    console.log(`📋 [ensureLinkedChildrenIds] parentId=${parentId}, childId=${childId}`);
+
+    if (!childId) {
+      console.error("❌ [ensureLinkedChildrenIds] childId no proporcionado");
+      throw new HttpsError("invalid-argument", "childId es requerido");
+    }
+
+    // 2. Verificar si ya está en linkedChildrenIds
+    const parentDoc = await db.collection("users").doc(parentId).get();
+    if (!parentDoc.exists) {
+      console.error(`❌ [ensureLinkedChildrenIds] Usuario ${parentId} no existe`);
+      throw new HttpsError("not-found", "Usuario no encontrado");
+    }
+
+    const linkedChildrenIds = parentDoc.data().linkedChildrenIds || [];
+    console.log(`📋 [ensureLinkedChildrenIds] linkedChildrenIds actuales: ${JSON.stringify(linkedChildrenIds)}`);
+
+    if (linkedChildrenIds.includes(childId)) {
+      console.log(`✅ [ensureLinkedChildrenIds] ${childId} ya está en linkedChildrenIds`);
+      return { success: true, alreadyConfigured: true };
+    }
+
+    // 3. Verificar que existe vínculo aprobado
+    const linkId = `${parentId}_${childId}`;
+    console.log(`📋 [ensureLinkedChildrenIds] Buscando vínculo: ${linkId}`);
+    const linkDoc = await db.collection("parent_children").doc(linkId).get();
+
+    if (!linkDoc.exists) {
+      console.error(`❌ [ensureLinkedChildrenIds] Vínculo ${linkId} no existe`);
+      throw new HttpsError("permission-denied", "No existe vínculo aprobado con este hijo");
+    }
+
+    const linkStatus = linkDoc.data().status;
+    console.log(`📋 [ensureLinkedChildrenIds] Vínculo status: ${linkStatus}`);
+
+    if (linkStatus !== "approved") {
+      console.error(`❌ [ensureLinkedChildrenIds] Vínculo ${linkId} no está aprobado (status: ${linkStatus})`);
+      throw new HttpsError("permission-denied", "No existe vínculo aprobado con este hijo");
+    }
+
+    // 4. Auto-reparar linkedChildrenIds con privilegios admin
+    console.log(`🔧 [ensureLinkedChildrenIds] Reparando linkedChildrenIds...`);
+    await db.collection("users").doc(parentId).update({
+      linkedChildrenIds: FieldValue.arrayUnion(childId),
+      linkedChildrenIdsUpdatedAt: FieldValue.serverTimestamp(),
+    });
+
+    // 5. Verificar que la escritura se completó
+    const verifyDoc = await db.collection("users").doc(parentId).get();
+    const verifiedIds = verifyDoc.data().linkedChildrenIds || [];
+
+    if (!verifiedIds.includes(childId)) {
+      console.error(`❌ [ensureLinkedChildrenIds] Verificación falló - childId no está en linkedChildrenIds después de update`);
+      throw new HttpsError("internal", "Error verificando la escritura");
+    }
+
+    console.log(`✅ [ensureLinkedChildrenIds] Reparado y verificado: ${childId} agregado a linkedChildrenIds de ${parentId}`);
+    console.log(`📋 [ensureLinkedChildrenIds] linkedChildrenIds finales: ${JSON.stringify(verifiedIds)}`);
+
+    return { success: true, repaired: true };
+  } catch (error) {
+    console.error(`❌ [ensureLinkedChildrenIds] Error:`, error);
+
+    if (error instanceof HttpsError) {
+      throw error;
+    }
+
+    throw new HttpsError("internal", `Error asegurando linkedChildrenIds: ${error.message}`);
+  }
+});
+
+exports.requestUnlink = onCall({
+  cors: true,
+  consumeAppCheckToken: true,
+}, async (request) => {
+  const db = getFirestore();
+  const messaging = getMessaging();
+
+  try {
+    // 1. Validar autenticación
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Usuario no autenticado");
+    }
+
+    const childId = request.auth.uid;
+    console.log(`📋 Solicitud de desvinculación del child: ${childId}`);
+
+    // 2. Obtener datos del child
+    const childDoc = await db.collection("users").doc(childId).get();
+    if (!childDoc.exists) {
+      throw new HttpsError("not-found", "Usuario no encontrado");
+    }
+
+    const childData = childDoc.data();
+    const childName = childData.name || "Usuario";
+
+    // 3. Verificar que el child tenga 18+ años
+    if (!childData.birthDate) {
+      throw new HttpsError("failed-precondition", "Fecha de nacimiento no registrada");
+    }
+
+    const birthDate = childData.birthDate.toDate();
+    const today = new Date();
+    let age = today.getFullYear() - birthDate.getFullYear();
+    const monthDiff = today.getMonth() - birthDate.getMonth();
+    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+      age--;
+    }
+
+    if (age < 18) {
+      throw new HttpsError(
+        "failed-precondition",
+        `Debes tener 18 años o más para solicitar la desvinculación. Tu edad actual: ${age} años.`
+      );
+    }
+
+    console.log(`✅ Child tiene ${age} años - puede solicitar desvinculación`);
+
+    // 4. Obtener padres vinculados
+    const parentLinks = await db.collection("parent_children")
+      .where("childId", "==", childId)
+      .where("status", "==", "approved")
+      .get();
+
+    if (parentLinks.empty) {
+      throw new HttpsError("failed-precondition", "No tienes padres vinculados");
+    }
+
+    const parentIds = parentLinks.docs.map(doc => doc.data().parentId);
+    console.log(`📋 Enviando solicitud a ${parentIds.length} padre(s)`);
+
+    // 5. Enviar notificación a cada padre
+    const notificationPromises = parentIds.map(async (parentId) => {
+      // Crear notificación en Firestore
+      await db.collection("notifications").add({
+        userId: parentId,
+        type: "unlink_request",
+        title: `${childName} solicita desvinculación`,
+        body: `Tu hijo/a de ${age} años solicita ser desvinculado. Puedes aprobarlo desde tu perfil.`,
+        data: {
+          childId: childId,
+          childName: childName,
+          childAge: age,
+          requestType: "unlink",
+        },
+        pushSent: false,
+        createdAt: FieldValue.serverTimestamp(),
+        read: false,
+      });
+
+      // Intentar enviar push notification
+      const parentDoc = await db.collection("users").doc(parentId).get();
+      const parentData = parentDoc.data();
+      const parentToken = parentData?.fcmToken;
+
+      if (parentToken) {
+        try {
+          await messaging.send({
+            token: parentToken,
+            notification: {
+              title: `${childName} solicita desvinculación`,
+              body: `Tu hijo/a de ${age} años solicita ser desvinculado.`,
+            },
+            data: {
+              type: "unlink_request",
+              childId: childId,
+            },
+            android: {
+              priority: "high",
+              notification: {
+                channelId: "talia_sound_vibration",
+              },
+            },
+            apns: {
+              headers: { "apns-priority": "10" },
+              payload: { aps: { sound: "default" } },
+            },
+          });
+          console.log(`📬 Push notification enviada a padre ${parentId}`);
+        } catch (pushError) {
+          console.error(`⚠️ Error enviando push a ${parentId}:`, pushError.message);
+        }
+      }
+    });
+
+    await Promise.all(notificationPromises);
+
+    console.log(`✅ Solicitud de desvinculación enviada a ${parentIds.length} padre(s)`);
+
+    return {
+      success: true,
+      message: "Se ha notificado a tus padres. Ellos decidirán si desvincularte.",
+      parentCount: parentIds.length,
+    };
+
+  } catch (error) {
+    console.error(`❌ [requestUnlink] Error:`, error);
+
+    if (error instanceof HttpsError) {
+      throw error;
+    }
+
+    throw new HttpsError("internal", `Error solicitando desvinculación: ${error.message}`);
+  }
+});
 

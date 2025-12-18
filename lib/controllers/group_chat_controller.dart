@@ -70,6 +70,9 @@ class GroupChatController extends ChangeNotifier {
   final Map<String, String> _userPhotos = {};
   List<String> _memberIds = [];
 
+  // ✅ FIX: Flag para ignorar errores después de dispose (ej: salir del grupo)
+  bool _isDisposed = false;
+
   GroupChatController({
     required this.groupId,
     required this.groupName,
@@ -147,8 +150,16 @@ class GroupChatController extends ChangeNotifier {
         chatId: groupId,
         isGroupChat: true,
       ).listen((ids) {
+        if (_isDisposed) return;
         _favoriteIds = ids;
         notifyListeners();
+      }, onError: (error) {
+        // ✅ FIX: Ignorar errores de permisos (ocurre cuando el usuario sale del grupo)
+        if (_isDisposed || _isPermissionError(error)) {
+          _favoritesSubscription?.cancel();
+          return;
+        }
+        ReleaseLogger.error('Error en stream de favoritos: $error', tag: 'GroupChatController');
       });
 
       notifyListeners();
@@ -179,10 +190,25 @@ class GroupChatController extends ChangeNotifier {
       isGroup: true,
       limit: messagesPerPage,
     ).listen((snapshot) {
+      if (_isDisposed) return;
       _handleMessagesSnapshot(snapshot);
     }, onError: (error) {
+      // ✅ FIX: Ignorar errores de permisos (ocurre cuando el usuario sale del grupo)
+      if (_isDisposed || _isPermissionError(error)) {
+        _messagesSubscription?.cancel();
+        return;
+      }
       ReleaseLogger.error('Error en stream de mensajes del grupo: $error', tag: 'GroupChatController');
     });
+  }
+
+  /// ✅ Helper: Check if error is a permission error (expected when leaving group)
+  bool _isPermissionError(dynamic error) {
+    final errorStr = error.toString().toLowerCase();
+    return errorStr.contains('permission') ||
+           errorStr.contains('permission_denied') ||
+           errorStr.contains('permission-denied') ||
+           errorStr.contains('insufficient');
   }
 
   /// ✅ OPTIMISTIC: Procesar snapshot de mensajes y actualizar lista
@@ -214,11 +240,16 @@ class GroupChatController extends ChangeNotifier {
     _messages.addAll(_pendingMessages);
     _messages.addAll(firestoreMessages);
 
-    // Ordenar por timestamp descendente (más recientes primero)
+    // ✅ V4: Ordenar por timestamp del servidor SIEMPRE
+    // Mensajes sin timestamp (pending) van al principio (más recientes)
     _messages.sort((a, b) {
-      final aTime = a.timestamp?.toDate() ?? a.localTimestamp ?? DateTime.now();
-      final bTime = b.timestamp?.toDate() ?? b.localTimestamp ?? DateTime.now();
-      return bTime.compareTo(aTime);
+      // Mensajes sin timestamp del servidor van primero (son los más recientes/pending)
+      if (a.timestamp == null && b.timestamp == null) return 0;
+      if (a.timestamp == null) return -1; // a va primero (más reciente)
+      if (b.timestamp == null) return 1;  // b va primero (más reciente)
+
+      // Ambos tienen timestamp del servidor - ordenar descendente
+      return b.timestamp!.compareTo(a.timestamp!);
     });
 
     // ✅ FIX: Marcar mensajes como leídos cuando llegan mensajes de otros usuarios
@@ -718,8 +749,9 @@ class GroupChatController extends ChangeNotifier {
   /// Limpiar recursos
   @override
   void dispose() {
+    _isDisposed = true;  // ✅ FIX: Marcar como disposed PRIMERO para ignorar errores pendientes
     _messagesSubscription?.cancel();
-    _favoritesSubscription?.cancel();  // ✅ NEW: Limpiar favoritos
+    _favoritesSubscription?.cancel();
     stopTyping();
     super.dispose();
   }

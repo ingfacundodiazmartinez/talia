@@ -157,20 +157,41 @@ class StoryStreamManager {
   /// - Sin chunking ni límite de 10 contactos
   Stream<List<UserStories>> getStoriesFromWhitelist() async* {
     _activeStreamCount++;
+    ReleaseLogger.log(
+      '📡 [StoryStreamManager] getStoriesFromWhitelist called, active streams: $_activeStreamCount',
+      tag: 'StoryStreamManager',
+    );
 
     try {
       final currentUserId = _storyRepository.currentUserId;
       if (currentUserId == null) {
+        ReleaseLogger.log(
+          '⚠️ [StoryStreamManager] No current user ID in getStoriesFromWhitelist, yielding empty',
+          tag: 'StoryStreamManager',
+        );
         yield [];
         return;
       }
 
+      ReleaseLogger.log(
+        '✅ [StoryStreamManager] Current user ID: $currentUserId',
+        tag: 'StoryStreamManager',
+      );
+
       // ✅ Query optimizada: usa availableFor en lugar de whereIn con chunks
       yield* _createOptimizedFirestoreStream(currentUserId);
     } catch (e) {
+      ReleaseLogger.error(
+        '❌ [StoryStreamManager] Error en getStoriesFromWhitelist: $e',
+        tag: 'StoryStreamManager',
+      );
       throw Exception('Error en stream de historias: $e');
     } finally {
       _activeStreamCount--;
+      ReleaseLogger.log(
+        '📡 [StoryStreamManager] getStoriesFromWhitelist finished, active streams: $_activeStreamCount',
+        tag: 'StoryStreamManager',
+      );
     }
   }
 
@@ -186,8 +207,17 @@ class StoryStreamManager {
   /// Iniciar background streams para actualizar cache automáticamente
   Future<void> startBackgroundStreams() async {
     if (_isBackgroundStreamActive) {
+      ReleaseLogger.log(
+        '⚠️ [StoryStreamManager] Background stream already active, skipping',
+        tag: 'StoryStreamManager',
+      );
       return;
     }
+
+    ReleaseLogger.log(
+      '🚀 [StoryStreamManager] Starting background streams...',
+      tag: 'StoryStreamManager',
+    );
 
     try {
       // Stream que mantiene cache actualizado
@@ -234,14 +264,25 @@ class StoryStreamManager {
   }
 
   /// Forzar refresh inmediato
+  /// ✅ FIX: Siempre reinicia el stream, no solo si estaba activo
   Future<void> forceRefresh() async {
+    ReleaseLogger.log(
+      '🔄 [StoryStreamManager] forceRefresh called, wasActive: $_isBackgroundStreamActive',
+      tag: 'StoryStreamManager',
+    );
+
     _contactRepository.invalidateContactsCache();
     _cacheManager.invalidateCache();
+    invalidateParentChildCache();
 
-    if (_isBackgroundStreamActive) {
-      stopBackgroundStreams();
-      await startBackgroundStreams();
-    }
+    // Siempre detener y reiniciar el stream
+    stopBackgroundStreams();
+    await startBackgroundStreams();
+
+    ReleaseLogger.log(
+      '✅ [StoryStreamManager] forceRefresh completed, isActive: $_isBackgroundStreamActive',
+      tag: 'StoryStreamManager',
+    );
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -257,12 +298,27 @@ class StoryStreamManager {
   Stream<List<UserStories>> _createOptimizedFirestoreStream(
     String currentUserId,
   ) async* {
+    ReleaseLogger.log(
+      '🔍 [StoryStreamManager] Creating optimized stream for userId: $currentUserId',
+      tag: 'StoryStreamManager',
+    );
+
     // Query simple: historias donde currentUserId está en availableFor
     await for (final stories in _storyRepository.getStoriesAvailableForUser(currentUserId)) {
+      ReleaseLogger.log(
+        '📥 [StoryStreamManager] Received ${stories.length} stories from repository',
+        tag: 'StoryStreamManager',
+      );
+
       // Procesar y agrupar historias
       final userStoriesList = await _processAndGroupStories(
         stories,
         [], // Ya no necesitamos contactIds para filtrar
+      );
+
+      ReleaseLogger.log(
+        '📤 [StoryStreamManager] Processed into ${userStoriesList.length} UserStories groups',
+        tag: 'StoryStreamManager',
       );
 
       yield userStoriesList;
@@ -356,8 +412,17 @@ class StoryStreamManager {
   Future<List<Story>> _filterStoriesByVisibilityRules(List<Story> stories) async {
     final currentUserId = _storyRepository.currentUserId;
     if (currentUserId == null) {
+      ReleaseLogger.log(
+        '⚠️ [StoryStreamManager] No current user ID, returning empty list',
+        tag: 'StoryStreamManager',
+      );
       return [];
     }
+
+    ReleaseLogger.log(
+      '🔍 [StoryStreamManager] Filtering ${stories.length} stories by visibility rules for user: $currentUserId',
+      tag: 'StoryStreamManager',
+    );
 
     // OPTIMIZACIÓN: Obtener TODAS las relaciones padre-hijo de una vez
     final parentChildRelations = await _getBatchParentChildRelations(stories);
@@ -366,6 +431,9 @@ class StoryStreamManager {
     final blockStatuses = await _getBatchBlockStatuses(stories, currentUserId);
 
     final filteredStories = <Story>[];
+    int blockedCount = 0;
+    int parentOnlyCount = 0;
+    int otherCount = 0;
 
     for (final story in stories) {
       final canSeeStory = _canUserSeeStoryOptimized(
@@ -376,8 +444,23 @@ class StoryStreamManager {
       );
       if (canSeeStory) {
         filteredStories.add(story);
+      } else {
+        // Log why story was filtered out
+        final isBlocked = blockStatuses[story.userId] ?? false;
+        if (isBlocked) {
+          blockedCount++;
+        } else if (story.status == StoryStatus.pending || story.status == StoryStatus.rejected) {
+          parentOnlyCount++;
+        } else {
+          otherCount++;
+        }
       }
     }
+
+    ReleaseLogger.log(
+      '📊 [StoryStreamManager] Visibility filter result: ${filteredStories.length} passed, ${blockedCount} blocked, ${parentOnlyCount} parent-only, ${otherCount} other',
+      tag: 'StoryStreamManager',
+    );
 
     return filteredStories;
   }

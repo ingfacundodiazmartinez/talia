@@ -1,7 +1,4 @@
-import 'dart:async';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:uuid/uuid.dart';
 
 import '../repositories/story_repository.dart';
@@ -54,9 +51,11 @@ class StoryViewingService {
 
   /// Responder a historia
   ///
-  /// LÓGICA (igual que mensajes):
-  /// - Si NO hay moderación → Escribe directo a Firestore
-  /// - Si hay moderación → Usa Cloud Function
+  /// 🔒 SEGURIDAD: SIEMPRE usa Cloud Function para:
+  /// - Validar userId == auth.uid (previene spoofing)
+  /// - Validar permisos de contacto
+  /// - Aplicar rate limiting
+  /// - Pasar por moderación automática
   Future<void> replyToStory({
     required String storyId,
     required String replyText,
@@ -75,13 +74,9 @@ class StoryViewingService {
 
       final replyMediaUrl = await _uploadMediaIfNeeded(replyMediaPath, currentUserId);
       final localId = const Uuid().v4();
-      final needsModeration = await _checkModerationEnabled(currentUserId, story.userId);
 
-      if (needsModeration) {
-        await _replyViaCloudFunction(storyId, replyText, replyMediaUrl, replyMediaType, localId);
-      } else {
-        await _replyDirectToFirestore(storyId, story, currentUserId, replyText, replyMediaUrl, replyMediaType, localId);
-      }
+      // 🔒 SIEMPRE usar Cloud Function (Firestore rules bloquean escritura directa)
+      await _replyViaCloudFunction(storyId, replyText, replyMediaUrl, replyMediaType, localId);
     } catch (e) {
       ReleaseLogger.error('Error respondiendo historia: $e', tag: 'StoryReply');
       _handleReplyError(e);
@@ -98,50 +93,10 @@ class StoryViewingService {
     );
   }
 
-  /// Verificar si hay moderación activada para este contacto
-  Future<bool> _checkModerationEnabled(String senderId, String receiverId) async {
-    try {
-      final firestore = FirebaseFirestore.instance;
-      final sortedUsers = [senderId, receiverId]..sort();
-
-      // Verificar en chat
-      final chatMod = await _checkChatModeration(firestore, sortedUsers);
-      if (chatMod) return true;
-
-      // Verificar en contacto
-      return await _checkContactModeration(firestore, sortedUsers, receiverId);
-    } catch (e) {
-      ReleaseLogger.warning('Error verificando moderación: $e', tag: 'StoryReply');
-      return true; // Por seguridad, usar Cloud Function si hay error
-    }
-  }
-
-  Future<bool> _checkChatModeration(FirebaseFirestore firestore, List<String> sortedUsers) async {
-    final chatQuery = await firestore
-        .collection('chats')
-        .where('participants', isEqualTo: sortedUsers)
-        .limit(1)
-        .get();
-    if (chatQuery.docs.isEmpty) return false;
-    return chatQuery.docs.first.data()['moderationEnabled'] == true;
-  }
-
-  Future<bool> _checkContactModeration(FirebaseFirestore firestore, List<String> sortedUsers, String receiverId) async {
-    final contactQuery = await firestore
-        .collection('contacts')
-        .where('users', isEqualTo: sortedUsers)
-        .limit(1)
-        .get();
-    if (contactQuery.docs.isEmpty) return false;
-
-    final moderationSettings = contactQuery.docs.first.data()['moderationSettings'] as Map<String, dynamic>?;
-    final receiverSettings = moderationSettings?[receiverId] as Map<String, dynamic>?;
-    return receiverSettings?['enabled'] == true;
-  }
-
-  /// Responder via Cloud Function (con moderación)
+  /// Responder via Cloud Function (seguro y con moderación)
+  /// La Cloud Function ya guarda el reply en el story document
   Future<void> _replyViaCloudFunction(String storyId, String replyText, String? mediaUrl, String? mediaType, String localId) async {
-    ReleaseLogger.log('🔒 [StoryReply] Usando Cloud Function (moderación activa)', tag: 'StoryReply');
+    ReleaseLogger.log('🔒 [StoryReply] Usando Cloud Function', tag: 'StoryReply');
     final result = await _functions.httpsCallable('replyToStory').call({
       'storyId': storyId,
       'replyText': replyText.trim(),
@@ -152,104 +107,7 @@ class StoryViewingService {
     if ((result.data as Map<String, dynamic>)['success'] != true) {
       throw Exception('Cloud Function falló');
     }
-
-    // ✅ FIX Issue 2: También guardar respuesta en el documento de la historia
-    // para que el owner pueda verla en el visor
-    try {
-      final userInfo = await _getCurrentUserInfo();
-      await _storyRepository.addReply(
-        storyId: storyId,
-        userId: userInfo['userId']!,
-        userName: userInfo['userName']!,
-        userPhotoURL: userInfo['userPhotoURL'],
-        text: replyText.trim(),
-      );
-      ReleaseLogger.log('✅ [StoryReply] Respuesta guardada en story document', tag: 'StoryReply');
-    } catch (e) {
-      // No lanzar excepción - el mensaje ya se envió al chat
-      ReleaseLogger.warning('⚠️ [StoryReply] No se pudo guardar en story: $e', tag: 'StoryReply');
-    }
-  }
-
-  /// Responder directo a Firestore (sin moderación)
-  Future<void> _replyDirectToFirestore(String storyId, dynamic story, String senderId, String replyText, String? mediaUrl, String? mediaType, String localId) async {
-    ReleaseLogger.log('⚡ [StoryReply] Escribiendo directo a Firestore', tag: 'StoryReply');
-    final firestore = FirebaseFirestore.instance;
-    final chatId = await _getOrCreateChat(firestore, senderId, story.userId);
-    final messageData = _buildMessageData(story, storyId, senderId, replyText, mediaUrl, mediaType, localId);
-
-    await firestore.collection('chats').doc(chatId).collection('messages').add(messageData);
-    await _updateChatLastMessage(firestore, chatId, senderId, replyText);
-    await _storyRepository.markAsViewed(storyId, senderId);
-
-    // ✅ FIX Issue 2: También guardar respuesta en el documento de la historia
-    // para que el owner pueda verla en el visor
-    try {
-      final userInfo = await _getCurrentUserInfo();
-      await _storyRepository.addReply(
-        storyId: storyId,
-        userId: userInfo['userId']!,
-        userName: userInfo['userName']!,
-        userPhotoURL: userInfo['userPhotoURL'],
-        text: replyText.trim(),
-      );
-      ReleaseLogger.log('✅ [StoryReply] Respuesta guardada en story document', tag: 'StoryReply');
-    } catch (e) {
-      // No lanzar excepción - el mensaje ya se envió al chat
-      ReleaseLogger.warning('⚠️ [StoryReply] No se pudo guardar en story: $e', tag: 'StoryReply');
-    }
-  }
-
-  Future<String> _getOrCreateChat(FirebaseFirestore firestore, String userId1, String userId2) async {
-    final sortedUsers = [userId1, userId2]..sort();
-    final chatQuery = await firestore.collection('chats').where('participants', isEqualTo: sortedUsers).limit(1).get();
-
-    if (chatQuery.docs.isNotEmpty) return chatQuery.docs.first.id;
-
-    final newChat = await firestore.collection('chats').add({
-      'participants': sortedUsers,
-      'createdAt': FieldValue.serverTimestamp(),
-      'lastMessage': '',
-      'lastMessageTime': null,
-      'lastMessageSender': null,
-    });
-    return newChat.id;
-  }
-
-  Map<String, dynamic> _buildMessageData(dynamic story, String storyId, String senderId, String replyText, String? mediaUrl, String? mediaType, String localId) {
-    // ✅ TTL: deleteAt = now + 7 días (para auto-eliminación via Firestore TTL Policy)
-    final deleteAt = DateTime.now().add(const Duration(days: 7));
-
-    final data = <String, dynamic>{
-      'senderId': senderId,
-      'text': '📖 Respuesta a historia: ${replyText.trim()}',
-      'type': 'text',
-      'timestamp': FieldValue.serverTimestamp(),
-      'deleteAt': Timestamp.fromDate(deleteAt), // ✅ TTL: Firestore eliminará automáticamente
-      'isRead': false,
-      'localId': localId,
-      'replyTo': {
-        'type': 'story_reply',
-        'storyId': storyId,
-        'storyUserId': story.userId,
-        'storyUserName': story.userName ?? 'Usuario',
-        'storyMediaUrl': story.mediaUrl ?? '',
-        'storyCaption': story.caption ?? '',
-        'storyCreatedAt': story.createdAt?.toIso8601String() ?? DateTime.now().toIso8601String(),
-      },
-    };
-    if (mediaUrl != null && mediaType != null) {
-      data['${mediaType}Url'] = mediaUrl;
-    }
-    return data;
-  }
-
-  Future<void> _updateChatLastMessage(FirebaseFirestore firestore, String chatId, String senderId, String replyText) async {
-    await firestore.collection('chats').doc(chatId).update({
-      'lastMessage': '📖 Respuesta a historia: ${replyText.trim()}',
-      'lastMessageTime': FieldValue.serverTimestamp(),
-      'lastMessageSender': senderId,
-    });
+    ReleaseLogger.log('✅ [StoryReply] Respuesta enviada via Cloud Function', tag: 'StoryReply');
   }
 
   Never _handleReplyError(dynamic e) {
@@ -257,38 +115,6 @@ class StoryViewingService {
     if (e.toString().contains('not-found')) throw Exception('Historia no encontrada');
     if (e.toString().contains('invalid-argument')) throw Exception('Datos de respuesta inválidos');
     throw e;
-  }
-
-  /// ✅ FIX Issue 2: Obtener información del usuario actual para replies
-  Future<Map<String, String?>> _getCurrentUserInfo() async {
-    final currentUser = FirebaseAuth.instance.currentUser;
-    if (currentUser == null) throw Exception('Usuario no autenticado');
-
-    String? userName = currentUser.displayName;
-    String? userPhotoURL = currentUser.photoURL;
-
-    // Si no hay displayName en Auth, buscar en Firestore
-    if (userName == null || userName.isEmpty) {
-      try {
-        final userDoc = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(currentUser.uid)
-            .get();
-        if (userDoc.exists) {
-          userName = userDoc.data()?['name'] as String? ?? 'Usuario';
-          userPhotoURL ??= userDoc.data()?['photoURL'] as String?;
-        }
-      } catch (e) {
-        ReleaseLogger.warning('⚠️ No se pudo obtener nombre de Firestore: $e', tag: 'StoryReply');
-        userName = 'Usuario';
-      }
-    }
-
-    return {
-      'userId': currentUser.uid,
-      'userName': userName ?? 'Usuario',
-      'userPhotoURL': userPhotoURL,
-    };
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -354,62 +180,6 @@ class StoryViewingService {
     } catch (e) {
       ReleaseLogger.error('Error quitando like de historia: $e', tag: 'StoryLike');
       throw Exception('Error quitando like de historia: $e');
-    }
-  }
-
-  /// Enviar mensaje de like al chat del owner
-  Future<void> _sendLikeMessage(dynamic story, String senderId) async {
-    try {
-      final firestore = FirebaseFirestore.instance;
-      final chatId = await _getOrCreateChat(firestore, senderId, story.userId);
-      final localId = const Uuid().v4();
-
-      // ✅ TTL: deleteAt = now + 7 días
-      final deleteAt = DateTime.now().add(const Duration(days: 7));
-
-      // ✅ FIX: Obtener el nombre del owner de la historia desde Firestore
-      String storyOwnerName = story.userName ?? '';
-      if (storyOwnerName.isEmpty || storyOwnerName == 'Usuario') {
-        try {
-          final ownerDoc = await firestore.collection('users').doc(story.userId).get();
-          if (ownerDoc.exists) {
-            storyOwnerName = ownerDoc.data()?['name'] ?? 'Usuario';
-          }
-        } catch (e) {
-          storyOwnerName = 'Usuario';
-        }
-      }
-
-      final messageData = {
-        'senderId': senderId,
-        'text': '❤️ Me gustó tu historia',
-        'type': 'text',
-        'timestamp': FieldValue.serverTimestamp(),
-        'deleteAt': Timestamp.fromDate(deleteAt),
-        'isRead': false,
-        'localId': localId,
-        'replyTo': {
-          'type': 'story_like',
-          'storyId': story.id,
-          'storyUserId': story.userId,
-          'storyUserName': storyOwnerName,
-          'storyMediaUrl': story.mediaUrl ?? '',
-          'storyCaption': story.caption ?? '',
-          'storyCreatedAt': story.createdAt?.toIso8601String() ?? DateTime.now().toIso8601String(),
-        },
-      };
-
-      await firestore.collection('chats').doc(chatId).collection('messages').add(messageData);
-      await firestore.collection('chats').doc(chatId).update({
-        'lastMessage': '❤️ Me gustó tu historia',
-        'lastMessageTime': FieldValue.serverTimestamp(),
-        'lastMessageSender': senderId,
-      });
-
-      ReleaseLogger.log('✅ Mensaje de like enviado al chat $chatId', tag: 'StoryLike');
-    } catch (e) {
-      ReleaseLogger.error('Error enviando mensaje de like: $e', tag: 'StoryLike');
-      // No lanzar excepción - el like ya se guardó
     }
   }
 }

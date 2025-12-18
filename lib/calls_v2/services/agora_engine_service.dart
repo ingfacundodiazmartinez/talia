@@ -3,6 +3,7 @@
 /// This service manages the Agora RTC Engine singleton and provides
 /// methods for joining/leaving channels and controlling media streams.
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
@@ -26,6 +27,12 @@ class AgoraEngineService {
   bool _isAudioEnabled = true;
   bool _isVideoEnabled = true;
   bool _isFrontCamera = true;
+
+  // ✅ WATCHDOG: Prevenir llamadas huérfanas en background
+  Timer? _watchdogTimer;
+  DateTime? _lastActivityTime;
+  static const Duration _watchdogTimeout = Duration(minutes: 2);
+  static const Duration _watchdogCheckInterval = Duration(seconds: 30);
 
   // Getters for state
   bool get isInitialized => _isInitialized;
@@ -172,6 +179,10 @@ class AgoraEngineService {
       _currentChannel = channelName;
       _currentUid = uid;
       _isVideoEnabled = isVideo;
+
+      // ✅ Iniciar watchdog para detectar llamadas huérfanas
+      _startWatchdog();
+
       ReleaseLogger.log('AgoraEngineService: ✅ Joined channel $channelName with UID $uid');
       return ServiceResponse.success(null);
     } catch (e) {
@@ -199,6 +210,9 @@ class AgoraEngineService {
       ReleaseLogger.log('AgoraEngineService: 📤 Calling engine.stopPreview()...');
       await _engine!.stopPreview();
       ReleaseLogger.log('AgoraEngineService: ✅ engine.stopPreview() completed');
+
+      // ✅ Detener watchdog
+      _stopWatchdog();
 
       _isInChannel = false;
       _currentChannel = null;
@@ -289,6 +303,8 @@ class AgoraEngineService {
   /// Dispose the engine and clean up resources
   Future<void> dispose() async {
     try {
+      _stopWatchdog();
+
       if (_isInChannel) {
         await leaveChannel();
       }
@@ -307,6 +323,144 @@ class AgoraEngineService {
     } catch (e) {
       ReleaseLogger.error('AgoraEngineService: Error during dispose', error: e);
     }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ✅ WATCHDOG: Prevenir llamadas Agora huérfanas en background
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /// Iniciar watchdog cuando se une a un canal
+  void _startWatchdog() {
+    _stopWatchdog(); // Cancelar cualquier watchdog existente
+    _lastActivityTime = DateTime.now();
+
+    _watchdogTimer = Timer.periodic(_watchdogCheckInterval, (_) {
+      _checkWatchdog();
+    });
+
+    ReleaseLogger.log(
+      'AgoraEngineService: 🐕 Watchdog started - timeout: ${_watchdogTimeout.inMinutes} min',
+    );
+  }
+
+  /// Detener watchdog
+  void _stopWatchdog() {
+    _watchdogTimer?.cancel();
+    _watchdogTimer = null;
+    _lastActivityTime = null;
+  }
+
+  /// Reiniciar watchdog (llamar cuando hay actividad)
+  void resetWatchdog() {
+    if (_isInChannel) {
+      _lastActivityTime = DateTime.now();
+    }
+  }
+
+  /// Verificar si la llamada debe cerrarse por inactividad
+  void _checkWatchdog() {
+    if (!_isInChannel || _lastActivityTime == null) {
+      _stopWatchdog();
+      return;
+    }
+
+    final inactiveTime = DateTime.now().difference(_lastActivityTime!);
+    if (inactiveTime > _watchdogTimeout) {
+      ReleaseLogger.log(
+        'AgoraEngineService: 🐕⚠️ Watchdog timeout! Inactive for ${inactiveTime.inSeconds}s - forcing cleanup',
+      );
+      forceCleanup();
+    }
+  }
+
+  /// Forzar limpieza de Agora (llamar cuando la llamada queda en estado inconsistente)
+  Future<void> forceCleanup() async {
+    ReleaseLogger.log(
+      'AgoraEngineService: 🧹 Force cleanup called - isInChannel: $_isInChannel, engine: ${_engine != null}',
+    );
+
+    _stopWatchdog();
+
+    try {
+      if (_engine != null) {
+        // Intentar dejar el canal primero
+        if (_isInChannel) {
+          try {
+            await _engine!.leaveChannel();
+            ReleaseLogger.log('AgoraEngineService: 🧹 Left channel during cleanup');
+          } catch (e) {
+            ReleaseLogger.error('AgoraEngineService: Error leaving channel during cleanup: $e');
+          }
+        }
+
+        // Detener preview
+        try {
+          await _engine!.stopPreview();
+        } catch (e) {
+          // Ignorar error de stopPreview
+        }
+
+        // Deshabilitar audio/video
+        try {
+          await _engine!.disableAudio();
+          await _engine!.disableVideo();
+        } catch (e) {
+          // Ignorar errores
+        }
+      }
+    } catch (e) {
+      ReleaseLogger.error('AgoraEngineService: Error during force cleanup: $e');
+    } finally {
+      // Resetear estado local
+      _isInChannel = false;
+      _currentChannel = null;
+      _currentUid = null;
+      _isAudioEnabled = true;
+      _isVideoEnabled = true;
+
+      ReleaseLogger.log('AgoraEngineService: 🧹 Force cleanup completed');
+    }
+  }
+
+  /// Llamar cuando la app va a background
+  /// Si hay una llamada activa, inicia un timer más agresivo
+  void onAppBackground() {
+    if (!_isInChannel) return;
+
+    ReleaseLogger.log(
+      'AgoraEngineService: 📱⬇️ App going to background with active call',
+    );
+
+    // Reiniciar watchdog con timeout más corto para background
+    _stopWatchdog();
+    _lastActivityTime = DateTime.now();
+
+    // En background, verificar más frecuentemente (cada 10 segundos)
+    _watchdogTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      final inactiveTime = DateTime.now().difference(_lastActivityTime!);
+      // Timeout más corto en background: 30 segundos
+      if (inactiveTime > const Duration(seconds: 30)) {
+        ReleaseLogger.log(
+          'AgoraEngineService: 🐕⚠️ Background watchdog timeout! Forcing cleanup',
+        );
+        forceCleanup();
+      }
+    });
+  }
+
+  /// Llamar cuando la app vuelve a foreground
+  void onAppForeground() {
+    if (!_isInChannel) {
+      _stopWatchdog();
+      return;
+    }
+
+    ReleaseLogger.log(
+      'AgoraEngineService: 📱⬆️ App returning to foreground with active call',
+    );
+
+    // Restaurar watchdog normal
+    _startWatchdog();
   }
 
   /// Request necessary permissions

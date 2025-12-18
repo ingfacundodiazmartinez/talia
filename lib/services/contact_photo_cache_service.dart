@@ -467,7 +467,8 @@ class ContactPhotoCacheService {
         );
 
         // ✅ iOS: También notificar al AppDelegate para que actualice App Group
-        _notifyNativePhotoUpdate(userId, response.bodyBytes);
+        // ✅ FIX: Pasar también photoUrl para invalidación de cache en NSE
+        _notifyNativePhotoUpdate(userId, response.bodyBytes, photoUrl);
       } else {
         ReleaseLogger.error(
           '❌ [PhotoCache] Failed to download photo for $userId: ${response.statusCode}'
@@ -479,13 +480,15 @@ class ContactPhotoCacheService {
   }
 
   /// Notify native code (iOS AppDelegate) about photo cache updates
-  void _notifyNativePhotoUpdate(String userId, Uint8List photoBytes) async {
+  /// ✅ FIX: Also pass photoUrl for cache invalidation (detect photo changes in NSE)
+  void _notifyNativePhotoUpdate(String userId, Uint8List photoBytes, String? photoUrl) async {
     try {
       await _channel.invokeMethod('photoUpdated', {
         'userId': userId,
         'photoBytes': photoBytes,
+        'photoUrl': photoUrl,  // ✅ FIX: Include URL for NSE cache invalidation
       });
-      ReleaseLogger.log('📱 [PhotoCache] Notified native code about photo update for: $userId');
+      ReleaseLogger.log('📱 [PhotoCache] Notified native code about photo update for: $userId (url: ${photoUrl?.substring(0, 30) ?? "null"}...)');
     } catch (e) {
       // Android doesn't need this, so silently ignore
       ReleaseLogger.log('ℹ️ [PhotoCache] Native notification not available (Android): $e');

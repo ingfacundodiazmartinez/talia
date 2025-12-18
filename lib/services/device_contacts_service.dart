@@ -23,17 +23,26 @@ class DeviceContactsService {
   }
 
   /// Verifica si ya se tiene permiso (sin mostrar diálogo)
+  /// Usa flutter_contacts para consistencia en iOS
   Future<bool> hasPermission() async {
-    final status = await Permission.contacts.status;
-    return status.isGranted;
+    // En iOS, permission_handler y flutter_contacts pueden reportar estados diferentes
+    // Usamos flutter_contacts para consistencia
+    try {
+      // Intentar verificar con flutter_contacts primero (más confiable en iOS)
+      final contacts = await FlutterContacts.getContacts(withProperties: false, withPhoto: false);
+      // Si no lanza excepción, tenemos permiso
+      return true;
+    } catch (e) {
+      // Si falla, verificar con permission_handler como fallback
+      final status = await Permission.contacts.status;
+      return status.isGranted;
+    }
   }
 
   /// Obtiene todos los contactos del dispositivo
   Future<List<Contact>> getDeviceContacts() async {
-    if (!await hasPermission()) {
-      throw Exception('No se tiene permiso para acceder a contactos');
-    }
-
+    // No verificamos permiso aquí - el llamador ya lo verificó
+    // Esto evita inconsistencias entre permission_handler y flutter_contacts
     return await FlutterContacts.getContacts(
       withProperties: true,
       withPhoto: false,

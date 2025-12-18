@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../models/chat_message.dart';
@@ -29,16 +30,23 @@ class _ForwardMessagesScreenState extends State<ForwardMessagesScreen> {
   final Set<String> _selectedChatIds = {};
   final Set<String> _selectedGroupIds = {};
   bool _isForwarding = false;
+  // ✅ FIX #3: StreamSubscription para escuchar cambios de loading
+  late final StreamSubscription<bool> _loadingSubscription;
 
   @override
   void initState() {
     super.initState();
     _controller = ForwardMessagesController();
+    // ✅ FIX #3: Escuchar cambios en el estado de carga para actualizar UI
+    _loadingSubscription = _controller.isLoadingStream.listen((isLoading) {
+      if (mounted) setState(() {});
+    });
     _controller.initialize(originalChatId: widget.originalChatId);
   }
 
   @override
   void dispose() {
+    _loadingSubscription.cancel(); // ✅ FIX #3: Cancelar suscripción
     _controller.dispose();
     super.dispose();
   }

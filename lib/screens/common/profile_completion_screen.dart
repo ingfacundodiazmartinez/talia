@@ -247,7 +247,7 @@ class _ProfileCompletionScreenState extends State<ProfileCompletionScreen>
   void _navigateToMainScreen(String role) {
     if (role == 'parent') {
       Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (context) => ParentMainShell()),
+        MaterialPageRoute(builder: (context) => ParentMainShell(key: ParentMainShell.shellKey)),
         (route) => false,
       );
     } else {

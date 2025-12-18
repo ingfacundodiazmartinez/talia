@@ -1,3 +1,4 @@
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import '../../services/notification_preferences_service.dart';
 import 'do_not_disturb_settings_screen.dart';
@@ -112,26 +113,33 @@ class _NotificationSettingsScreenState
               SizedBox(height: 32),
 
               // Sección: Sonido y Vibración
-              _buildSectionTitle('Sonido y Vibración', colorScheme),
+              _buildSectionTitle(
+                Platform.isIOS ? 'Sonido' : 'Sonido y Vibración',
+                colorScheme,
+              ),
               SizedBox(height: 12),
 
               _buildSwitchOption(
                 icon: Icons.volume_up,
                 title: 'Sonido de Notificación',
-                subtitle: 'Reproducir sonido al recibir notificaciones',
+                subtitle: Platform.isIOS
+                    ? 'Reproducir sonido y vibrar al recibir notificaciones'
+                    : 'Reproducir sonido al recibir notificaciones',
                 value: prefs['soundEnabled'] ?? true,
                 onChanged: (value) => _updatePref('soundEnabled', value),
                 colorScheme: colorScheme,
               ),
 
-              _buildSwitchOption(
-                icon: Icons.vibration,
-                title: 'Vibración',
-                subtitle: 'Vibrar al recibir notificaciones',
-                value: prefs['vibrationEnabled'] ?? true,
-                onChanged: (value) => _updatePref('vibrationEnabled', value),
-                colorScheme: colorScheme,
-              ),
+              // Solo mostrar vibración en Android (iOS no permite control independiente)
+              if (Platform.isAndroid)
+                _buildSwitchOption(
+                  icon: Icons.vibration,
+                  title: 'Vibración',
+                  subtitle: 'Vibrar al recibir notificaciones',
+                  value: prefs['vibrationEnabled'] ?? true,
+                  onChanged: (value) => _updatePref('vibrationEnabled', value),
+                  colorScheme: colorScheme,
+                ),
 
               SizedBox(height: 32),
 

@@ -2,10 +2,16 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show TimeOfDay;
+import 'package:shared_preferences/shared_preferences.dart';
+import '../utils/release_logger.dart';
 
 class NotificationPreferencesService {
   late final FirebaseFirestore _firestore;
   late final FirebaseAuth _auth;
+
+  // ✅ Keys para SharedPreferences (leídas por Android native service)
+  static const String _soundEnabledKey = 'flutter.notification_sound_enabled';
+  static const String _vibrationEnabledKey = 'flutter.notification_vibration_enabled';
 
   NotificationPreferencesService({
     FirebaseFirestore? firestore,
@@ -53,11 +59,32 @@ class NotificationPreferencesService {
           .get();
 
       if (doc.exists) {
-        return doc.data() ?? defaultPreferences();
+        final prefs = doc.data() ?? defaultPreferences();
+        // ✅ Cachear en SharedPreferences para que Android native las lea
+        await _cachePreferencesForNative(prefs);
+        return prefs;
       }
       return defaultPreferences();
     } catch (e) {
       return defaultPreferences();
+    }
+  }
+
+  /// ✅ Cachear preferencias en SharedPreferences para el servicio nativo Android
+  Future<void> _cachePreferencesForNative(Map<String, dynamic> prefs) async {
+    try {
+      final sharedPrefs = await SharedPreferences.getInstance();
+      await sharedPrefs.setBool(_soundEnabledKey, prefs['soundEnabled'] ?? true);
+      await sharedPrefs.setBool(_vibrationEnabledKey, prefs['vibrationEnabled'] ?? true);
+      ReleaseLogger.log(
+        '💾 [NotificationPrefs] Cacheadas para Android: sound=${prefs['soundEnabled']}, vibration=${prefs['vibrationEnabled']}',
+        tag: 'NotificationPreferencesService',
+      );
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [NotificationPrefs] Error cacheando preferencias: $e',
+        tag: 'NotificationPreferencesService',
+      );
     }
   }
 
@@ -96,6 +123,20 @@ class NotificationPreferencesService {
             key: value,
             'updatedAt': FieldValue.serverTimestamp(),
           }, SetOptions(merge: true));
+
+      // ✅ Actualizar cache de SharedPreferences si es sound/vibration
+      if (key == 'soundEnabled' || key == 'vibrationEnabled') {
+        final sharedPrefs = await SharedPreferences.getInstance();
+        if (key == 'soundEnabled') {
+          await sharedPrefs.setBool(_soundEnabledKey, value as bool);
+        } else {
+          await sharedPrefs.setBool(_vibrationEnabledKey, value as bool);
+        }
+        ReleaseLogger.log(
+          '💾 [NotificationPrefs] Actualizada $key=$value en cache nativo',
+          tag: 'NotificationPreferencesService',
+        );
+      }
     } catch (e) {
       throw Exception('Error al actualizar preferencia');
     }
@@ -111,6 +152,9 @@ class NotificationPreferencesService {
           .collection('notification_preferences')
           .doc(_currentUserId)
           .set(preferences, SetOptions(merge: true));
+
+      // ✅ Actualizar cache de SharedPreferences si incluye sound/vibration
+      await _cachePreferencesForNative(preferences);
     } catch (e) {
       throw Exception('Error al actualizar preferencias');
     }

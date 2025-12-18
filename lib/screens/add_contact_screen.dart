@@ -45,6 +45,7 @@ class _AddContactScreenState extends State<AddContactScreen>
   bool _isLoading = false;
   String? _errorMessage;
   String? _userCode;
+  DateTime? _codeExpiresAt;
   bool _isLoadingMyCode = true;
 
   @override
@@ -64,9 +65,10 @@ class _AddContactScreenState extends State<AddContactScreen>
 
   Future<void> _loadUserCode() async {
     try {
-      final code = await _controller.getCurrentUserCode();
+      final result = await _controller.getCurrentUserCode();
       setState(() {
-        _userCode = code;
+        _userCode = result.code;
+        _codeExpiresAt = result.expiresAt;
         _isLoadingMyCode = false;
       });
     } catch (e) {
@@ -129,15 +131,17 @@ class _AddContactScreenState extends State<AddContactScreen>
       });
 
       try {
-        final newCode = await _controller.regenerateCurrentUserCode();
+        final result = await _controller.regenerateCurrentUserCode();
         setState(() {
-          _userCode = newCode;
+          _userCode = result.code;
+          _codeExpiresAt = result.expiresAt;
           _isLoadingMyCode = false;
         });
       } catch (e) {
         setState(() {
           _isLoadingMyCode = false;
         });
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Error regenerando codigo: $e'),
@@ -226,10 +230,12 @@ class _AddContactScreenState extends State<AddContactScreen>
         children: [
           MyCodeTab(
             userCode: _userCode,
+            expiresAt: _codeExpiresAt,
             isLoading: _isLoadingMyCode,
             onRetry: _loadUserCode,
             onCopy: _copyCode,
             onShare: _shareCode,
+            onRegenerate: _regenerateCode,
           ),
           QRScannerTab(
             onScanned: _handleQRScanned,

@@ -85,8 +85,21 @@ abstract class BaseChatsController {
   }
 
   /// Stream de datos de un usuario específico
-  Stream<DocumentSnapshot> getUserDataStream(String targetUserId) {
-    return _firestore.collection('users').doc(targetUserId).snapshots(includeMetadataChanges: false);
+  /// ✅ FIX: Maneja errores de permisos gracefully (ej: cuando se revoca un contacto)
+  Stream<DocumentSnapshot?> getUserDataStream(String targetUserId) {
+    return _firestore
+        .collection('users')
+        .doc(targetUserId)
+        .snapshots(includeMetadataChanges: false)
+        .handleError((error) {
+          // Ignorar errores de permisos silenciosamente
+          // Esto ocurre cuando un contacto es revocado y ya no tenemos acceso
+          ReleaseLogger.log(
+            'Stream de usuario $targetUserId cerrado (sin permisos)',
+            tag: 'BaseChats',
+          );
+          return null;
+        });
   }
 
   /// Obtener datos de usuario (una vez)

@@ -86,6 +86,11 @@ class MessageCacheService {
         'moderationStatus': message.moderationStatus?.name,
         'moderationReason': message.moderationReason,
         'originalText': message.originalText,
+        // ✅ FIX #8: Campos de reenvío
+        'isForwarded': message.isForwarded,
+        'originalSenderId': message.originalSenderId,
+        'originalChatId': message.originalChatId,
+        'originalContactName': message.originalContactName,
       };
 
       await _messagesBox!.put(key, data);
@@ -110,9 +115,18 @@ class MessageCacheService {
       }
 
       final entries = <String, Map<String, dynamic>>{};
+      final now = DateTime.now().millisecondsSinceEpoch;
 
       for (final message in messages) {
         final key = '${chatId}_${message.id}';
+
+        // ✅ V2: Preservar localSavedAt si el mensaje ya existe en cache
+        int? existingLocalSavedAt;
+        final existingData = _messagesBox!.get(key) as Map<dynamic, dynamic>?;
+        if (existingData != null) {
+          existingLocalSavedAt = existingData['localSavedAt'] as int?;
+        }
+
         entries[key] = {
           'id': message.id,
           'senderId': message.senderId,
@@ -122,6 +136,7 @@ class MessageCacheService {
           'audioUrl': message.audioUrl,
           'timestamp': message.timestamp?.millisecondsSinceEpoch,
           'localTimestamp': message.localTimestamp?.millisecondsSinceEpoch,
+          'localSavedAt': existingLocalSavedAt ?? now,
           'isRead': message.isRead,
           'replyTo': message.replyTo,
           'reactions': message.reactions,
@@ -133,6 +148,11 @@ class MessageCacheService {
           'moderationStatus': message.moderationStatus?.name,
           'moderationReason': message.moderationReason,
           'originalText': message.originalText,
+          // ✅ FIX #8: Campos de reenvío
+          'isForwarded': message.isForwarded,
+          'originalSenderId': message.originalSenderId,
+          'originalChatId': message.originalChatId,
+          'originalContactName': message.originalContactName,
         };
       }
 
@@ -144,32 +164,57 @@ class MessageCacheService {
   }
 
   /// Recuperar mensajes del cache para un chat
-  /// ✅ FIX: Deduplicación por ID para evitar mensajes duplicados
+  /// ✅ FIX: Deduplicación por ID y localId para evitar mensajes duplicados
+  /// ✅ V3: Ordenar por timestamp del servidor (orden cronológico real)
   Future<List<ChatMessage>> getMessages(String chatId) async {
     if (_messagesBox == null) return [];
 
     try {
       final messages = <ChatMessage>[];
-      final seenIds = <String>{};  // ✅ Track IDs vistos para deduplicar
+      final seenIds = <String>{};
+      final seenLocalIds = <String>{};
       final keys = _messagesBox!.keys.where((key) => key.toString().startsWith(chatId));
 
+      // Primera pasada: recolectar localIds de mensajes confirmados (de Firestore)
       for (final key in keys) {
         final data = _messagesBox!.get(key) as Map<dynamic, dynamic>?;
         if (data != null) {
-          final msg = _messageFromCacheData(data);
-          // ✅ Solo añadir si no hemos visto este ID
-          if (!seenIds.contains(msg.id)) {
-            messages.add(msg);
-            seenIds.add(msg.id);
+          final localId = data['localId'] as String?;
+          if (localId != null) {
+            seenLocalIds.add(localId);
           }
         }
       }
 
-      // Ordenar por timestamp (más reciente primero)
+      // Segunda pasada: construir lista sin duplicados
+      for (final key in keys) {
+        final data = _messagesBox!.get(key) as Map<dynamic, dynamic>?;
+        if (data != null) {
+          final msgId = data['id'] as String?;
+          if (msgId == null) continue;
+
+          // Skip si ya vimos este ID
+          if (seenIds.contains(msgId)) continue;
+
+          // Skip si es mensaje optimista que ya tiene versión confirmada
+          if (seenLocalIds.contains(msgId)) continue;
+
+          final msg = _messageFromCacheData(data);
+          messages.add(msg);
+          seenIds.add(msgId);
+        }
+      }
+
+      // ✅ V4: Ordenar por timestamp del servidor SIEMPRE
+      // Mensajes sin timestamp (pending) van al principio (más recientes)
       messages.sort((a, b) {
-        final aTime = a.effectiveTimestamp;
-        final bTime = b.effectiveTimestamp;
-        return bTime.compareTo(aTime);
+        // Mensajes sin timestamp del servidor van primero (son los más recientes/pending)
+        if (a.timestamp == null && b.timestamp == null) return 0;
+        if (a.timestamp == null) return -1; // a va primero (más reciente)
+        if (b.timestamp == null) return 1;  // b va primero (más reciente)
+
+        // Ambos tienen timestamp del servidor - ordenar descendente
+        return b.timestamp!.compareTo(a.timestamp!);
       });
 
       return messages;
@@ -230,6 +275,11 @@ class MessageCacheService {
         'moderationStatus': message.moderationStatus?.name,
         'moderationReason': message.moderationReason,
         'originalText': message.originalText,
+        // ✅ FIX #8: Campos de reenvío
+        'isForwarded': message.isForwarded,
+        'originalSenderId': message.originalSenderId,
+        'originalChatId': message.originalChatId,
+        'originalContactName': message.originalContactName,
       };
 
       await _messagesBox!.put(key, data);
@@ -314,6 +364,11 @@ class MessageCacheService {
       moderationStatus: _parseModerationStatus(data['moderationStatus'] as String?),
       moderationReason: data['moderationReason'] as String?,
       originalText: data['originalText'] as String?,
+      // ✅ FIX #8: Campos de reenvío
+      isForwarded: data['isForwarded'] as bool? ?? false,
+      originalSenderId: data['originalSenderId'] as String?,
+      originalChatId: data['originalChatId'] as String?,
+      originalContactName: data['originalContactName'] as String?,
     );
   }
 

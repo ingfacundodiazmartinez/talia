@@ -1,17 +1,20 @@
 import 'package:flutter/material.dart';
 import '../../services/deepar_service.dart';
+import '../../utils/release_logger.dart';
 
 /// Widget separado para manejar DeepAR de forma completamente aislada
 class DeepARCameraView extends StatefulWidget {
   final bool isDeepARInitialized;
   final DeepARService deepARService;
   final VoidCallback onInitialized;
+  final int reinitCounter; // ✅ FIX #6: Contador para forzar recreación del platform view
 
   const DeepARCameraView({
     super.key,
     required this.isDeepARInitialized,
     required this.deepARService,
     required this.onInitialized,
+    this.reinitCounter = 0,
   });
 
   @override
@@ -21,21 +24,42 @@ class DeepARCameraView extends StatefulWidget {
 class _DeepARCameraViewState extends State<DeepARCameraView> {
   bool _isInitializing = false;
   bool _hasInitialized = false;
-  bool _cameraStarted = false; // Nuevo flag para evitar reinicios innecesarios
+  bool _cameraStarted = false;
 
   // IMPORTANTE: NO usar key - dejar que Flutter/iOS maneje la vista
   // La vista nativa se mantiene viva y solo cambiamos sus parámetros
 
   @override
+  void initState() {
+    super.initState();
+    ReleaseLogger.log('🎬 DeepARCameraView: initState (reinit: ${widget.reinitCounter})', tag: 'DeepARCameraView');
+  }
+
+  @override
   void dispose() {
-    print('🗑️ DeepARCameraView: dispose');
+    ReleaseLogger.log('🗑️ DeepARCameraView: dispose (reinit: ${widget.reinitCounter})', tag: 'DeepARCameraView');
     // NO limpiar aquí porque el widget se recrea en cada setState del parent
     super.dispose();
   }
 
   void _onPlatformViewCreated(int viewId) {
-    print('🎯 DeepARCameraView: Preview creado con viewId: $viewId');
-    // Swift ahora maneja automáticamente el inicio de la cámara
+    ReleaseLogger.log('🎯 DeepARCameraView: Preview creado con viewId: $viewId (reinit: ${widget.reinitCounter})', tag: 'DeepARCameraView');
+
+    // ✅ FIX #6 (v3): Siempre iniciar la cámara cuando se crea un nuevo platform view
+    // El platform view solo se crea cuando hay un nuevo key, lo que significa reinicialización
+    _cameraStarted = false; // Reset para asegurar que se inicie
+
+    if (widget.isDeepARInitialized) {
+      // ✅ FIX #6 (v3): Dar tiempo suficiente para que el platform view nativo se estabilice
+      // 500ms es más seguro que 300ms para asegurar que Android complete la configuración
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted && widget.isDeepARInitialized && !_cameraStarted) {
+          _cameraStarted = true;
+          widget.deepARService.startCamera();
+          ReleaseLogger.log('▶️ DeepARCameraView: Cámara iniciada después de delay (reinit: ${widget.reinitCounter})', tag: 'DeepARCameraView');
+        }
+      });
+    }
   }
 
   @override
@@ -50,6 +74,27 @@ class _DeepARCameraViewState extends State<DeepARCameraView> {
   @override
   void didUpdateWidget(DeepARCameraView oldWidget) {
     super.didUpdateWidget(oldWidget);
+
+    // ✅ FIX #6 (v3): Detectar cambios en reinitCounter para reiniciar la cámara
+    if (widget.reinitCounter != oldWidget.reinitCounter) {
+      ReleaseLogger.log(
+        '🔄 DeepARCameraView: reinitCounter cambió de ${oldWidget.reinitCounter} a ${widget.reinitCounter}',
+        tag: 'DeepARCameraView',
+      );
+      _cameraStarted = false;
+
+      // Si DeepAR ya está inicializado, reiniciar la cámara
+      if (widget.isDeepARInitialized) {
+        Future.delayed(const Duration(milliseconds: 300), () {
+          if (mounted && widget.isDeepARInitialized && !_cameraStarted) {
+            _cameraStarted = true;
+            widget.deepARService.startCamera();
+            ReleaseLogger.log('▶️ DeepARCameraView: Cámara reiniciada por cambio de reinitCounter', tag: 'DeepARCameraView');
+          }
+        });
+      }
+    }
+
     // Inicializar si aún no se ha hecho
     if (!widget.isDeepARInitialized && !_isInitializing && !_hasInitialized) {
       _initializeDeepAR();
@@ -65,7 +110,7 @@ class _DeepARCameraViewState extends State<DeepARCameraView> {
     });
 
     try {
-      print('🎭 DeepARCameraView: Inicializando DeepAR...');
+      ReleaseLogger.log('🎭 DeepARCameraView: Inicializando DeepAR...', tag: 'DeepARCameraView');
 
       // License keys específicas por plataforma - NECESITAS OBTENER KEYS VÁLIDAS DE https://developer.deepar.ai/
       // Estas keys son de demostración y pueden haber expirado
@@ -87,13 +132,13 @@ class _DeepARCameraViewState extends State<DeepARCameraView> {
         licenseKey = iosLicenseKey.contains('YOUR_VALID')
             ? iosLicenseKeyDemo
             : iosLicenseKey;
-        print('📱 Usando license key de iOS (puede ser demo)');
+        ReleaseLogger.log('📱 Usando license key de iOS', tag: 'DeepARCameraView');
       } else if (Theme.of(context).platform == TargetPlatform.android) {
         // Usar key válida si está disponible, sino usar la de demo
         licenseKey = androidLicenseKey.contains('YOUR_VALID')
             ? androidLicenseKeyDemo
             : androidLicenseKey;
-        print('🤖 Usando license key de Android (puede ser demo)');
+        ReleaseLogger.log('🤖 Usando license key de Android', tag: 'DeepARCameraView');
       } else {
         throw Exception('Plataforma no soportada para DeepAR');
       }
@@ -105,12 +150,12 @@ class _DeepARCameraViewState extends State<DeepARCameraView> {
       if (result && mounted) {
         widget.onInitialized();
         _cameraStarted = true; // Marcar que la cámara está iniciada
-        print('✅ DeepARCameraView: DeepAR inicializado exitosamente');
+        ReleaseLogger.log('✅ DeepARCameraView: DeepAR inicializado exitosamente', tag: 'DeepARCameraView');
       } else {
-        print('❌ DeepARCameraView: Error inicializando DeepAR');
+        ReleaseLogger.error('❌ DeepARCameraView: Error inicializando DeepAR', tag: 'DeepARCameraView');
       }
     } catch (e) {
-      print('❌ DeepARCameraView: Excepción inicializando DeepAR: $e');
+      ReleaseLogger.error('❌ DeepARCameraView: Excepción inicializando DeepAR: $e', tag: 'DeepARCameraView');
     } finally {
       if (mounted) {
         setState(() {
@@ -123,9 +168,12 @@ class _DeepARCameraViewState extends State<DeepARCameraView> {
   @override
   Widget build(BuildContext context) {
     if (widget.isDeepARInitialized) {
-      // ✅ Usar Center para centrar el DeepAR preview sin causar problemas de rendering
+      // ✅ FIX #6: Usar ValueKey con reinitCounter para forzar recreación
+      // del platform view nativo después de reinicializaciones de DeepAR.
+      // Sin esto, Android puede reutilizar un platform view corrupto.
       return Center(
         child: DeepARPreview(
+          key: ValueKey('deepar_preview_${widget.reinitCounter}'),
           width: MediaQuery.of(context).size.width,
           height: MediaQuery.of(context).size.height,
           onPlatformViewCreated: _onPlatformViewCreated,

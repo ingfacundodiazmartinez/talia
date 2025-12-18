@@ -15,6 +15,9 @@ class _ContactWithModeration {
   bool moderationEnabled;
   String moderationLevel;
   int blockedCount;
+  int messageCount;
+  bool hasMessages;
+  String status;
 
   _ContactWithModeration({
     required this.contactId,
@@ -25,6 +28,9 @@ class _ContactWithModeration {
     this.moderationEnabled = false,
     this.moderationLevel = 'high',
     this.blockedCount = 0,
+    this.messageCount = 0,
+    this.hasMessages = false,
+    this.status = 'approved',
   });
 }
 
@@ -134,6 +140,11 @@ class _ChatModerationManagementScreenState
       for (final contactData in contactsList) {
         // Convertir cada contacto a Map<String, dynamic>
         final map = Map<String, dynamic>.from(contactData as Map);
+        final status = map['status'] as String? ?? 'approved';
+
+        // Solo mostrar contactos que no estén revocados
+        if (status == 'revoked') continue;
+
         contacts.add(_ContactWithModeration(
           contactId: map['contactId'] as String,
           childId: map['childId'] as String,
@@ -143,6 +154,9 @@ class _ChatModerationManagementScreenState
           moderationEnabled: map['moderationEnabled'] as bool? ?? false,
           moderationLevel: map['moderationLevel'] as String? ?? 'high',
           blockedCount: (map['blockedCount'] as num?)?.toInt() ?? 0,
+          messageCount: (map['messageCount'] as num?)?.toInt() ?? 0,
+          hasMessages: map['hasMessages'] as bool? ?? false,
+          status: status,
         ));
       }
 
@@ -168,11 +182,6 @@ class _ChatModerationManagementScreenState
         );
       }
     }
-  }
-
-  String _generateChatId(String userId1, String userId2) {
-    final sortedIds = [userId1, userId2]..sort();
-    return '${sortedIds[0]}_${sortedIds[1]}';
   }
 
   /// Filtrar contactos localmente
@@ -600,11 +609,44 @@ class _ChatModerationManagementScreenState
                       fontWeight: FontWeight.bold,
                     ),
                   ),
+                if (contact.hasMessages)
+                  Text(
+                    '${contact.messageCount} mensaje${contact.messageCount > 1 ? 's' : ''} en el chat',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
               ],
             ),
-            trailing: Switch(
-              value: contact.moderationEnabled,
-              onChanged: (value) => _toggleModeration(contact, value),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Switch(
+                  value: contact.moderationEnabled,
+                  onChanged: (value) => _toggleModeration(contact, value),
+                ),
+                PopupMenuButton<String>(
+                  icon: Icon(Icons.more_vert, color: colorScheme.onSurfaceVariant),
+                  onSelected: (value) {
+                    if (value == 'revoke') {
+                      _showRevokeConfirmation(contact, colorScheme);
+                    }
+                  },
+                  itemBuilder: (context) => [
+                    PopupMenuItem(
+                      value: 'revoke',
+                      child: Row(
+                        children: [
+                          Icon(Icons.block, color: Colors.red, size: 20),
+                          const SizedBox(width: 8),
+                          const Text('Revocar contacto', style: TextStyle(color: Colors.red)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
             onTap: () {
               Navigator.pushNamed(
@@ -763,6 +805,174 @@ class _ChatModerationManagementScreenState
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  /// Mostrar diálogo de confirmación para revocar contacto
+  Future<void> _showRevokeConfirmation(_ContactWithModeration contact, ColorScheme colorScheme) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.red, size: 28),
+            const SizedBox(width: 8),
+            const Expanded(child: Text('Revocar contacto')),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '¿Estás seguro de que quieres revocar el contacto de tu hijo con ${contact.name}?',
+              style: const TextStyle(fontSize: 15),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.red.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Esto hará que:',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                  ),
+                  const SizedBox(height: 8),
+                  _buildWarningItem('El chat se bloqueará completamente'),
+                  _buildWarningItem('Tu hijo no podrá enviar mensajes'),
+                  _buildWarningItem('${contact.name} no podrá enviar mensajes'),
+                  _buildWarningItem('Ambos recibirán una notificación'),
+                ],
+              ),
+            ),
+            if (contact.hasMessages) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.chat_bubble_outline, color: Colors.orange[700], size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Este chat tiene ${contact.messageCount} mensaje${contact.messageCount > 1 ? 's' : ''}',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Colors.orange[800],
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Revocar'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await _revokeContact(contact);
+    }
+  }
+
+  Widget _buildWarningItem(String text) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 4, top: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('• ', style: TextStyle(fontSize: 13, color: Colors.red)),
+          Expanded(
+            child: Text(text, style: const TextStyle(fontSize: 12)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Revocar contacto llamando a la Cloud Function
+  Future<void> _revokeContact(_ContactWithModeration contact) async {
+    // Mostrar loading
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      final callable = FirebaseFunctions.instance.httpsCallable('revokeChildContact');
+      final result = await callable.call({
+        'childId': contact.childId,
+        'contactId': contact.contactId,
+      });
+
+      // Cerrar loading
+      if (mounted) Navigator.pop(context);
+
+      final data = Map<String, dynamic>.from(result.data as Map);
+      final success = data['success'] as bool? ?? false;
+      final contactName = data['contactName'] as String? ?? contact.name;
+
+      if (!mounted) return;
+
+      if (success) {
+        // Remover contacto de la lista local
+        setState(() {
+          _contactsByChild[contact.childId]?.removeWhere((c) => c.contactId == contact.contactId);
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Contacto con $contactName revocado'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      } else {
+        final message = data['message'] as String? ?? 'Error desconocido';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message), backgroundColor: Colors.red),
+        );
+      }
+    } catch (e) {
+      // Cerrar loading si está abierto
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+
+      ReleaseLogger.error('Error revocando contacto: $e', tag: 'ChatModerationScreen');
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al revocar contacto: $e'),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     }

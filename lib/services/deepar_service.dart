@@ -344,6 +344,57 @@ class DeepARService {
       ReleaseLogger.log('✅ [dispose] Flag _isDisposing reseteado, listo para nueva inicialización', tag: 'DeepARService');
     }
   }
+
+  /// ✅ FIX #6 (v3): Forzar limpieza completa sin importar el estado actual
+  /// Este método se usa antes de reinicializar DeepAR para asegurar un estado limpio
+  /// Siempre llama al dispose nativo, incluso si _isInitialized es false
+  Future<void> forceCleanup() async {
+    // Esperar si hay un dispose en progreso
+    if (_isDisposing) {
+      ReleaseLogger.log('⏳ [forceCleanup] Esperando dispose en progreso...', tag: 'DeepARService');
+      int attempts = 0;
+      while (_isDisposing && attempts < 50) {
+        await Future.delayed(const Duration(milliseconds: 100));
+        attempts++;
+      }
+    }
+
+    _isDisposing = true;
+    ReleaseLogger.log('🧹 [forceCleanup] Forzando limpieza total de DeepAR...', tag: 'DeepARService');
+
+    try {
+      // Cancelar cualquier suscripción activa
+      await _eventSubscription?.cancel();
+      _eventSubscription = null;
+
+      // Recrear el StreamController para evitar problemas de estado
+      if (!_eventController.isClosed) {
+        await _eventController.close();
+      }
+      _eventController = StreamController<DeepAREvent>.broadcast();
+
+      // SIEMPRE llamar al dispose nativo, sin importar _isInitialized
+      // Esto asegura que cualquier estado residual del lado nativo se limpie
+      ReleaseLogger.log('🧹 [forceCleanup] Llamando dispose nativo (forzado)...', tag: 'DeepARService');
+      try {
+        await _channel.invokeMethod('dispose');
+      } catch (e) {
+        // Ignorar errores si DeepAR no estaba inicializado
+        ReleaseLogger.log('⚠️ [forceCleanup] Error ignorado en dispose nativo: $e', tag: 'DeepARService');
+      }
+
+      // Resetear todos los estados internos
+      _isInitialized = false;
+      _isRecording = false;
+      _currentFilter = null;
+
+      ReleaseLogger.log('✅ [forceCleanup] Limpieza forzada completada', tag: 'DeepARService');
+    } catch (e) {
+      ReleaseLogger.error('❌ [forceCleanup] Error: $e', tag: 'DeepARService');
+    } finally {
+      _isDisposing = false;
+    }
+  }
 }
 
 /// Widget nativo para mostrar preview de DeepAR

@@ -31,8 +31,8 @@ class AddContactController {
   String get currentUserDisplayName => _auth.currentUser?.displayName ?? 'Usuario';
   String get currentUserEmail => _auth.currentUser?.email ?? '';
 
-  /// Obtener código del usuario actual
-  Future<String> getCurrentUserCode() async {
+  /// Obtener código del usuario actual con fecha de expiración
+  Future<({String code, DateTime? expiresAt})> getCurrentUserCode() async {
     try {
       return await _userCodeService.getCurrentUserCode();
     } catch (e) {
@@ -42,7 +42,7 @@ class AddContactController {
   }
 
   /// Regenerar código del usuario actual
-  Future<String> regenerateCurrentUserCode() async {
+  Future<({String code, DateTime? expiresAt})> regenerateCurrentUserCode() async {
     try {
       final currentUserId = this.currentUserId;
       if (currentUserId == null) {

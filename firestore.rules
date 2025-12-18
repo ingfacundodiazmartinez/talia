@@ -24,15 +24,24 @@ service cloud.firestore {
                exists(/databases/$(database)/documents/parent_children/$(userId + '_' + request.auth.uid));
       }
 
+      // 🔒 SEGURIDAD: Función para verificar si el padre puede ver este usuario
+      // porque es contacto de alguno de sus hijos
+      // Usa campo denormalizado contactedByChildOf en el documento del usuario
+      function isContactOfMyChild() {
+        return request.auth.uid in resource.data.get('contactedByChildOf', []);
+      }
+
       // 🔒 SEGURIDAD: Solo puedes leer usuarios si:
       // 1. Es tu propio perfil, O
       // 2. Existe un chat entre ambos (se crea al aprobar contacto), O
-      // 3. Hay relación padre-hijo
+      // 3. Hay relación padre-hijo, O
+      // 4. Es contacto de alguno de tus hijos (para ver fotos/nombres frescos)
       // Nota: La búsqueda por código usa Cloud Function findUserByCode
       allow read: if request.auth != null && (
         request.auth.uid == userId ||
         hasChatWith() ||
-        isParentOrChildRelation()
+        isParentOrChildRelation() ||
+        isContactOfMyChild()
       );
 
       // CREAR: Solo puede crear su propio usuario Y sin campos sensibles
@@ -154,36 +163,19 @@ service cloud.firestore {
 
     // Chats
     match /chats/{chatId} {
-      // ✅ OPTIMIZADO: Verificar padres usando campo desnormalizado (0 lecturas extra)
+      // 🔒 SEGURIDAD: Verificar padres usando campo desnormalizado (0 lecturas extra)
       // El campo approvedParentViewers se mantiene actualizado via Cloud Functions
-      function isParentOfParticipantOptimized() {
+      function isParentOfParticipant() {
         return resource.data.approvedParentViewers != null &&
                request.auth.uid in resource.data.approvedParentViewers;
       }
 
-      // Fallback para documentos sin desnormalización (4 lecturas extra)
-      // TODO: Migrar todos los chats y eliminar este fallback
-      function isParentOfParticipantLegacy() {
-        let participants = resource.data.participants;
-        return exists(/databases/$(database)/documents/parent_children/$(request.auth.uid + '_' + participants[0])) ||
-               exists(/databases/$(database)/documents/parent_children/$(request.auth.uid + '_' + participants[1])) ||
-               exists(/databases/$(database)/documents/parent_children/$(participants[0] + '_' + request.auth.uid)) ||
-               exists(/databases/$(database)/documents/parent_children/$(participants[1] + '_' + request.auth.uid));
-      }
-
-      // Función combinada para verificar si es padre de participante
-      function isParentOfParticipant() {
-        return isParentOfParticipantOptimized() ||
-               (resource.data.approvedParentViewers == null && isParentOfParticipantLegacy());
-      }
-
       // Permitir leer si:
       // 1. Eres participante del chat, O
-      // 2. Eres padre de alguno de los participantes (optimizado o legacy)
+      // 2. Eres padre aprobado (via campo desnormalizado approvedParentViewers)
       allow read: if request.auth != null && (
         request.auth.uid in resource.data.participants ||
-        isParentOfParticipantOptimized() ||
-        (resource.data.approvedParentViewers == null && isParentOfParticipantLegacy())
+        isParentOfParticipant()
       );
 
       // 🔒 SEGURIDAD CRÍTICA: Solo Cloud Functions pueden crear chats
@@ -241,8 +233,8 @@ service cloud.firestore {
       );
 
       match /messages/{messageId} {
-        // ✅ OPTIMIZADO: Verificar permisos en UNA sola lectura del chat
-        // Combina verificación de participante y padre en una función
+        // 🔒 SEGURIDAD: Verificar permisos en UNA sola lectura del chat
+        // Combina verificación de participante y padre aprobado
         function canReadMessages() {
           let chatDoc = get(/databases/$(database)/documents/chats/$(chatId));
           // Es participante directo?
@@ -253,33 +245,17 @@ service cloud.firestore {
           return isParticipant || isApprovedParent;
         }
 
-        // Fallback legacy para chats sin approvedParentViewers (más costoso)
-        function canReadMessagesLegacy() {
-          let chatDoc = get(/databases/$(database)/documents/chats/$(chatId));
-          let participants = chatDoc.data.participants;
-          return exists(/databases/$(database)/documents/parent_children/$(request.auth.uid + '_' + participants[0])) ||
-                 exists(/databases/$(database)/documents/parent_children/$(request.auth.uid + '_' + participants[1])) ||
-                 exists(/databases/$(database)/documents/parent_children/$(participants[0] + '_' + request.auth.uid)) ||
-                 exists(/databases/$(database)/documents/parent_children/$(participants[1] + '_' + request.auth.uid));
-        }
-
         // Función auxiliar: es participante? (para writes)
         function isParticipant() {
           let chatDoc = get(/databases/$(database)/documents/chats/$(chatId));
           return request.auth.uid in chatDoc.data.participants;
         }
 
-        // Permitir leer mensaje: primero intenta optimizado, luego legacy
-        allow get: if request.auth != null && (
-          canReadMessages() ||
-          canReadMessagesLegacy()
-        );
+        // Permitir leer mensajes si eres participante o padre aprobado
+        allow get: if request.auth != null && canReadMessages();
 
-        // Permitir listar mensajes: primero intenta optimizado, luego legacy
-        allow list: if request.auth != null && (
-          canReadMessages() ||
-          canReadMessagesLegacy()
-        );
+        // Permitir listar mensajes si eres participante o padre aprobado
+        allow list: if request.auth != null && canReadMessages();
 
         // Función auxiliar para verificar si es un mensaje de llamada
         function isCallMessage() {
@@ -385,6 +361,35 @@ service cloud.firestore {
         }
       }
 
+      // Reactions - Reacciones a mensajes (subcollection separada)
+      match /reactions/{reactionId} {
+        // Función para verificar si es participante del chat
+        function isParticipantForReactions() {
+          let chatDoc = get(/databases/$(database)/documents/chats/$(chatId));
+          return request.auth.uid in chatDoc.data.participants;
+        }
+
+        // Permitir leer reacciones si eres participante
+        allow read: if request.auth != null && isParticipantForReactions();
+
+        // Permitir crear reacciones si:
+        // 1. Eres participante del chat, Y
+        // 2. El userId en la reacción es tu uid
+        allow create: if request.auth != null &&
+          isParticipantForReactions() &&
+          request.resource.data.userId == request.auth.uid;
+
+        // Permitir actualizar solo TUS propias reacciones
+        allow update: if request.auth != null &&
+          isParticipantForReactions() &&
+          resource.data.userId == request.auth.uid;
+
+        // Permitir eliminar solo TUS propias reacciones
+        allow delete: if request.auth != null &&
+          isParticipantForReactions() &&
+          resource.data.userId == request.auth.uid;
+      }
+
       // Typing indicators
       match /typing/{userId} {
         allow read: if request.auth != null &&
@@ -422,56 +427,56 @@ service cloud.firestore {
 
     // Contactos
     match /contacts/{contactId} {
-      // 🔒 FUNCIÓN DE SEGURIDAD: Verificar si el usuario es padre de alguno de los usuarios en el contacto
-      // Usa hasAny() para verificar si algún hijo del padre está en el array users del contacto
-      function isParentOfContactUser() {
-        let parentDoc = get(/databases/$(database)/documents/users/$(request.auth.uid));
-        return parentDoc.data.linkedChildrenIds != null &&
-               resource.data.users.hasAny(parentDoc.data.linkedChildrenIds);
+      // 🔒 FUNCIÓN: Verificar si el usuario es parentViewer de este contacto
+      function isParentViewer() {
+        return request.auth.uid in resource.data.get('parentViewers', []);
       }
 
       // 🔒 SEGURIDAD: Solo puedes leer contactos donde:
       // 1. TÚ estés en el array 'users', O
-      // 2. Alguno de tus hijos vinculados está en el array 'users'
-      allow get: if request.auth != null && (
+      // 2. Estés en el array 'parentViewers'
+      allow read: if request.auth != null && (
         request.auth.uid in resource.data.users ||
-        isParentOfContactUser()
-      );
-
-      // 🔒 SEGURIDAD: Solo puedes listar contactos donde:
-      // 1. TÚ estés en el array 'users', O
-      // 2. Alguno de tus hijos vinculados está en el array 'users'
-      allow list: if request.auth != null && (
-        request.auth.uid in resource.data.users ||
-        isParentOfContactUser()
+        isParentViewer()
       );
 
       // 🔒 SEGURIDAD CRÍTICA: Solo Cloud Functions pueden crear contactos
-      // Los clientes DEBEN usar las Cloud Functions:
-      // - approveContactFromRequest (aprobación de padre)
-      // - autoApproveContact (auto-aprobación)
-      // - createContactFromGroupInvitation (invitación de grupo)
-      // Esto previene bypass de validación de padres/contactos
+      // Esto previene bypass de validación de roles y aprobaciones
       allow create: if false;
 
-      // 🔒 FUNCIÓN DE SEGURIDAD: Verificar que no se modifiquen campos críticos
-      // Solo Cloud Functions pueden modificar status y approvedViaGroupInvitation
-      function isUpdatingCriticalContactFields() {
+      // 🔒 FUNCIÓN: Verificar que el padre solo actualiza campos permitidos
+      function isUpdatingOnlyChildApproval() {
         let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
-        return changedKeys.hasAny(['status', 'approvedViaGroupInvitation', 'createdAt', 'users']);
+        // Permite cambios en 'approvals', 'status', y campos de revocación
+        return changedKeys.hasOnly(['approvals', 'status', 'revokedAt', 'revokedBy', 'revokedReason']);
+      }
+
+      // 🔒 FUNCIÓN: Verificar que el padre está aprobando/rechazando para un hijo válido
+      function isValidApprovalUpdate() {
+        // El padre debe estar en parentViewers
+        let isParent = request.auth.uid in resource.data.get('parentViewers', []);
+
+        // Solo verificar que el usuario es padre - permitir agregar/modificar approvals
+        // ya que los contactos antiguos pueden tener approvals vacío
+        return isParent;
+      }
+
+      // 🔒 FUNCIÓN: Campos no críticos que usuarios pueden modificar
+      function isUpdatingNonCriticalFields() {
+        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+        // Solo alias, nickname, isFavorite, metadata
+        return changedKeys.hasOnly(['alias', 'nickname', 'isFavorite', 'metadata']);
       }
 
       // Permitir actualizar si:
-      // 1. NO está tocando campos críticos (status, approvedViaGroupInvitation, users, createdAt) Y
-      // 2. (Eres uno de los usuarios del contacto O eres padre de alguno de los usuarios)
-      // Campos permitidos: alias, nickname, isFavorite, metadata, etc.
-      allow update: if request.auth != null &&
-        !isUpdatingCriticalContactFields() && (
-        request.auth.uid in resource.data.users ||
-        isParentOfContactUser()
+      // 1. Eres usuario del contacto Y solo tocas campos no críticos, O
+      // 2. Eres parentViewer Y solo actualizas approvals/status de forma válida
+      allow update: if request.auth != null && (
+        (request.auth.uid in resource.data.users && isUpdatingNonCriticalFields()) ||
+        (isParentViewer() && isUpdatingOnlyChildApproval() && isValidApprovalUpdate())
       );
 
-      // No permitir delete directo, solo update de status
+      // No permitir delete directo
       allow delete: if false;
     }
 
@@ -668,18 +673,15 @@ service cloud.firestore {
                (newViewedBy.size() == oldViewedBy.size() || newViewedBy.hasAny([request.auth.uid]));
       }
 
-      // 🔒 SEGURIDAD: Validar estructura de replies - solo puede agregar SU PROPIO reply
-      // Estructura esperada: [{userId: 'uid', text: '...', timestamp: ...}, ...]
+      // 🔒 SEGURIDAD CRÍTICA: Replies BLOQUEADOS desde cliente
+      // Los replies DEBEN crearse via Cloud Function replyToStory que:
+      // 1. Valida userId == auth.uid (previene spoofing)
+      // 2. Valida permisos de contacto
+      // 3. Aplica rate limiting
+      // 4. Pasa por moderación automática
       function isOnlyUpdatingReplies() {
-        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
-        let oldReplies = resource.data.get('replies', []);
-        let newReplies = request.resource.data.get('replies', []);
-        // Solo puede agregar replies, no modificar/remover existentes
-        // El nuevo reply debe tener el userId del usuario autenticado
-        return changedKeys.hasOnly(['replies']) &&
-               newReplies.size() == oldReplies.size() + 1;
-        // NOTA: No podemos validar contenido de array elements en Firestore rules
-        // La validación completa del userId dentro del reply se hace en código
+        // SIEMPRE retorna false - replies solo via Cloud Function
+        return false;
       }
 
       // 🔒 SEGURIDAD: Validar que solo agregues TU PROPIO uid a likedBy
@@ -865,26 +867,19 @@ service cloud.firestore {
     }
 
     // Link codes
-    // ⚠️ TODO: Después de deploy de Cloud Function validateLinkCode, cambiar a:
-    //   allow get: if request.auth != null && request.auth.uid == resource.data.createdBy;
-    //   allow list: if request.auth != null && resource.data.createdBy == request.auth.uid;
-    // Esto previene enumeración de códigos de otros usuarios (vulnerabilidad #3)
+    // 🔒 SEGURIDAD: Solo el creador puede leer sus códigos
+    // La búsqueda por código se hace via Cloud Function validateLinkCode
+    // Esto previene enumeración de códigos de otros usuarios
     match /link_codes/{codeId} {
-      // Permitir leer documento individual si:
-      // 1. Eres el creador (padre), O
-      // 2. El código está activo y no usado (para que el hijo pueda buscarlo y usarlo)
-      allow get: if request.auth != null && (
-        request.auth.uid == resource.data.createdBy ||
-        (resource.data.isActive == true && resource.data.used == false)
-      );
+      // 🔒 SEGURIDAD: Solo el creador puede leer documentos individuales
+      // El hijo usa Cloud Function validateLinkCode para buscar códigos
+      allow get: if request.auth != null &&
+        request.auth.uid == resource.data.createdBy;
 
-      // 🔒 SEGURIDAD: Permitir listar códigos si:
-      // 1. TÚ los creaste, O
-      // 2. El código está activo y no usado (para queries por código)
-      allow list: if request.auth != null && (
-        resource.data.createdBy == request.auth.uid ||
-        (resource.data.isActive == true && resource.data.used == false)
-      );
+      // 🔒 SEGURIDAD: Solo el creador puede listar sus propios códigos
+      // Previene enumeración de códigos activos de otros usuarios
+      allow list: if request.auth != null &&
+        resource.data.createdBy == request.auth.uid;
 
       // Permitir crear código si el usuario es el createdBy
       allow create: if request.auth != null &&
@@ -1618,6 +1613,35 @@ service cloud.firestore {
           allow create, delete: if request.auth != null && request.auth.uid == userId;
           allow update: if false;
         }
+      }
+
+      // Reactions - Reacciones a mensajes de grupo (subcollection separada)
+      match /reactions/{reactionId} {
+        // Función para verificar si es miembro del grupo
+        function isGroupV2MemberForReactions() {
+          let groupDoc = get(/databases/$(database)/documents/groups_v2/$(groupId));
+          return request.auth.uid in groupDoc.data.members;
+        }
+
+        // Permitir leer reacciones si eres miembro
+        allow read: if request.auth != null && isGroupV2MemberForReactions();
+
+        // Permitir crear reacciones si:
+        // 1. Eres miembro del grupo, Y
+        // 2. El userId en la reacción es tu uid
+        allow create: if request.auth != null &&
+          isGroupV2MemberForReactions() &&
+          request.resource.data.userId == request.auth.uid;
+
+        // Permitir actualizar solo TUS propias reacciones
+        allow update: if request.auth != null &&
+          isGroupV2MemberForReactions() &&
+          resource.data.userId == request.auth.uid;
+
+        // Permitir eliminar solo TUS propias reacciones
+        allow delete: if request.auth != null &&
+          isGroupV2MemberForReactions() &&
+          resource.data.userId == request.auth.uid;
       }
 
       // Typing indicators

@@ -30,8 +30,8 @@ class GroupInvitationService {
         return {'success': false, 'error': 'Usuario no autenticado'};
       }
 
-      // Obtener información del grupo
-      final groupDoc = await _firestore.collection('groups').doc(groupId).get();
+      // ✅ FIX #5: Use groups_v2 collection (not legacy 'groups')
+      final groupDoc = await _firestore.collection('groups_v2').doc(groupId).get();
       if (!groupDoc.exists) {
         return {'success': false, 'error': 'Grupo no encontrado'};
       }
@@ -58,7 +58,7 @@ class GroupInvitationService {
 
       // Si el invitado es padre/adulto, agregarlo directamente sin requerir aprobaciones
       if (isParentOrAdult) {
-        await _firestore.collection('groups').doc(groupId).update({
+        await _firestore.collection('groups_v2').doc(groupId).update({
           'members': FieldValue.arrayUnion([invitedChildId]),
         });
 
@@ -85,10 +85,21 @@ class GroupInvitationService {
 
       // Si no hay aprobaciones requeridas, agregar directamente al grupo
       if (requiredApprovals.isEmpty) {
-        await _firestore.collection('groups').doc(groupId).update({
-          'members': FieldValue.arrayUnion([invitedChildId]),
-        });
-
+        ReleaseLogger.log(
+          '[GroupInvitation] No approvals required, adding directly to group',
+          tag: 'GroupInvitationService',
+        );
+        try {
+          await _firestore.collection('groups_v2').doc(groupId).update({
+            'members': FieldValue.arrayUnion([invitedChildId]),
+          });
+        } catch (e) {
+          ReleaseLogger.error(
+            '[GroupInvitation] Error updating groups.members: $e',
+            tag: 'GroupInvitationService',
+          );
+          return {'success': false, 'error': e.toString()};
+        }
 
         return {
           'success': true,
@@ -98,31 +109,63 @@ class GroupInvitationService {
       }
 
       // Hay aprobaciones requeridas - crear invitación y agregar a pendingMembers
+      ReleaseLogger.log(
+        '[GroupInvitation] Approvals required: ${requiredApprovals.length}, adding to pendingMembers',
+        tag: 'GroupInvitationService',
+      );
+
       // Agregar a pendingMembers en el grupo
-      await _firestore.collection('groups').doc(groupId).update({
-        'pendingMembers': FieldValue.arrayUnion([invitedChildId]),
-      });
+      try {
+        await _firestore.collection('groups_v2').doc(groupId).update({
+          'pendingMembers': FieldValue.arrayUnion([invitedChildId]),
+        });
+      } catch (e) {
+        ReleaseLogger.error(
+          '[GroupInvitation] Error updating groups.pendingMembers: $e',
+          tag: 'GroupInvitationService',
+        );
+        return {'success': false, 'error': e.toString()};
+      }
 
       // Calcular fecha de expiración (48 horas)
       final expiresAt = DateTime.now().add(const Duration(hours: 48));
 
       // Crear documento de invitación
-      final invitationRef = await _firestore.collection('groupInvitations').add({
-        'groupId': groupId,
-        'groupName': groupName,
-        'inviterId': currentUserId,
-        'invitedChildId': invitedChildId,
-        'status': 'pending_approvals',
-        'createdAt': FieldValue.serverTimestamp(),
-        'expiresAt': Timestamp.fromDate(expiresAt),
-        'requiredApprovals': requiredApprovals,
-        'invitedParentApproval': {
-          'parentId': invitedParentId,
-          'status': 'pending',
-          'approvedAt': null,
-        },
-      });
+      ReleaseLogger.log(
+        '[GroupInvitation] Creating invitation document',
+        tag: 'GroupInvitationService',
+      );
 
+      late DocumentReference invitationRef;
+      try {
+        // ✅ FIX: Usar 'invitedBy' para coincidir con las reglas de Firestore
+        invitationRef = await _firestore.collection('groupInvitations').add({
+          'groupId': groupId,
+          'groupName': groupName,
+          'invitedBy': currentUserId, // ✅ Firestore rule expects 'invitedBy'
+          'inviterId': currentUserId, // Keep for backwards compatibility
+          'invitedChildId': invitedChildId,
+          'status': 'pending_approvals',
+          'createdAt': FieldValue.serverTimestamp(),
+          'expiresAt': Timestamp.fromDate(expiresAt),
+          'requiredApprovals': requiredApprovals,
+          'invitedParentApproval': {
+            'parentId': invitedParentId,
+            'status': 'pending',
+            'approvedAt': null,
+          },
+        });
+        ReleaseLogger.log(
+          '[GroupInvitation] Invitation created: ${invitationRef.id}',
+          tag: 'GroupInvitationService',
+        );
+      } catch (e) {
+        ReleaseLogger.error(
+          '[GroupInvitation] Error creating invitation: $e',
+          tag: 'GroupInvitationService',
+        );
+        return {'success': false, 'error': e.toString()};
+      }
 
       // Enviar notificaciones push
       await _sendInvitationNotifications(

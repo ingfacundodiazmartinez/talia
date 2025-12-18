@@ -513,7 +513,11 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
 
     if (otherUserId.isEmpty) return SizedBox.shrink();
 
+    // ✅ FIX #5: Agregar key única para evitar reutilización incorrecta de estado
+    // cuando Flutter reconstruye la lista (race condition que causaba
+    // nombre/foto incorrectos al entrar a un chat)
     return StreamBuilder<DocumentSnapshot>(
+      key: ValueKey('chat_stream_$chatId'),
       stream: _chatsController.getChatDataStream(chatId),
       initialData: chatDoc,
       builder: (context, chatSnapshot) {
@@ -532,7 +536,9 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
             : (currentChatData['lastMessage'] ?? '');
         final timeString = isChatCleared ? '' : _chatsController.formatTime(currentChatData['lastMessageTime']);
 
+        // ✅ FIX #5: Key única para datos de usuario
         return FutureBuilder<Map<String, dynamic>?>(
+          key: ValueKey('user_data_$otherUserId'),
           future: _chatsController.getUserData(otherUserId),
           builder: (context, userSnapshot) {
             if (!userSnapshot.hasData) {
@@ -558,8 +564,9 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
             final isOnline = userData['isOnline'] ?? false;
             final photoURL = userData['photoURL'] as String?;
 
-            // StreamBuilder para obtener el estado del último mensaje
+            // ✅ FIX #5: Key única para el último mensaje
             return StreamBuilder<QuerySnapshot>(
+              key: ValueKey('last_msg_$chatId'),
               stream: _chatsController.getChatLastMessageStream(chatId),
               builder: (context, messageSnapshot) {
                 String? lastMessageSenderId;
@@ -850,8 +857,8 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
             ],
           ),
           child: GestureDetector(
-            onTap: isRevoked ? null : () {
-              Navigator.of(context).push(
+            onTap: isRevoked ? null : () async {
+              await Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (context) => ChatDetailScreen(
                     contactId: userId,
@@ -860,6 +867,8 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
                   ),
                 ),
               );
+              // ✅ FIX: Forzar refresh cuando vuelve del chat para actualizar lastMessageTime
+              if (mounted) setState(() {});
             },
             child: Opacity(
               opacity: (isRevoked || isBlocked) ? 0.5 : 1.0,

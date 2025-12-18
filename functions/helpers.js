@@ -311,11 +311,14 @@ async function checkRateLimit(userId, action, limits) {
       const doc = await transaction.get(rateLimitRef);
 
       if (!doc.exists) {
+        // TTL de 5 minutos para auto-eliminación
+        const deleteAt = Timestamp.fromMillis(now + 5 * 60 * 1000);
         transaction.set(rateLimitRef, {
           requests: [{ timestamp: now }],
           userId: userId,
           action: action,
           createdAt: now,
+          deleteAt: deleteAt,
         });
         return { allowed: true };
       }
@@ -338,9 +341,12 @@ async function checkRateLimit(userId, action, limits) {
 
       recentRequests.push({ timestamp: now });
 
+      // TTL de 5 minutos desde la última request
+      const deleteAt = Timestamp.fromMillis(now + 5 * 60 * 1000);
       transaction.update(rateLimitRef, {
         requests: recentRequests,
         lastRequest: now,
+        deleteAt: deleteAt,
       });
 
       return { allowed: true };
@@ -478,6 +484,20 @@ async function sendDirectPushNotification(params) {
 
     console.log(`📱 [DirectPush] Tokens FCM encontrados: ${fcmTokens.length}`);
 
+    // ✅ Fetch user notification preferences for sound/vibration settings
+    let notificationPrefs = { soundEnabled: true, vibrationEnabled: true };
+    try {
+      const prefsDoc = await getFirestore().collection("notification_preferences").doc(userId).get();
+      if (prefsDoc.exists) {
+        const prefsData = prefsDoc.data();
+        notificationPrefs.soundEnabled = prefsData.soundEnabled !== false; // Default true
+        notificationPrefs.vibrationEnabled = prefsData.vibrationEnabled !== false; // Default true
+        console.log(`📱 [DirectPush] User prefs: sound=${notificationPrefs.soundEnabled}, vibration=${notificationPrefs.vibrationEnabled}`);
+      }
+    } catch (prefsError) {
+      console.log(`⚠️ [DirectPush] Could not fetch prefs, using defaults: ${prefsError.message}`);
+    }
+
     // Preparar mensaje FCM con TODOS los datos del sender (igual que sendNotificationOnCreate)
     const fcmData = {
       title: title || "Talia",
@@ -498,12 +518,14 @@ async function sendDirectPushNotification(params) {
     const isChatMessage = type === 'chat_message' || type === 'group_message';
 
     // ✅ FORMATO ORIGINAL que funcionaba para background notifications
+    // ✅ Respeta preferencias de sonido del usuario
     const apsPayload = {
       alert: {
         title: title || "Talia",
         body: body || "",
       },
-      sound: "default",
+      // ✅ Only include sound if user has sound enabled
+      ...(notificationPrefs.soundEnabled && { sound: "default" }),
       // mutable-content para NSE, content-available para background handler
       ...(isChatMessage
         ? { "mutable-content": 1 }
@@ -529,12 +551,34 @@ async function sendDirectPushNotification(params) {
       },
     };
 
+    // ✅ Build Android config with channel based on BOTH sound AND vibration prefs
+    const androidConfig = {
+      priority: "high",
+    };
+    if (isChatMessage) {
+      // ✅ Select channel based on combination of sound/vibration preferences
+      let channelId;
+      if (notificationPrefs.soundEnabled && notificationPrefs.vibrationEnabled) {
+        channelId = "talia_sound_vibration";
+      } else if (notificationPrefs.soundEnabled && !notificationPrefs.vibrationEnabled) {
+        channelId = "talia_sound_only";
+      } else if (!notificationPrefs.soundEnabled && notificationPrefs.vibrationEnabled) {
+        channelId = "talia_vibration_only";
+      } else {
+        channelId = "talia_silent";
+      }
+
+      androidConfig.notification = {
+        channelId: channelId,
+        ...(notificationPrefs.soundEnabled && { sound: "default" }),
+        defaultVibrateTimings: notificationPrefs.vibrationEnabled,
+      };
+    }
+
     const message = {
       data: fcmData,
       tokens: fcmTokens,
-      android: {
-        priority: "high",
-      },
+      android: androidConfig,
       apns: apnsPayload,
     };
 
@@ -611,6 +655,20 @@ async function sendPushNotification(userId, title, body, data = {}) {
 
     console.log(`📱 [sendPushNotification] Tokens FCM encontrados: ${fcmTokens.length}`);
 
+    // ✅ Fetch user notification preferences for sound/vibration settings
+    let notificationPrefs = { soundEnabled: true, vibrationEnabled: true };
+    try {
+      const prefsDoc = await getFirestore().collection("notification_preferences").doc(userId).get();
+      if (prefsDoc.exists) {
+        const prefsData = prefsDoc.data();
+        notificationPrefs.soundEnabled = prefsData.soundEnabled !== false;
+        notificationPrefs.vibrationEnabled = prefsData.vibrationEnabled !== false;
+        console.log(`📱 [sendPushNotification] User prefs: sound=${notificationPrefs.soundEnabled}, vibration=${notificationPrefs.vibrationEnabled}`);
+      }
+    } catch (prefsError) {
+      console.log(`⚠️ [sendPushNotification] Could not fetch prefs, using defaults: ${prefsError.message}`);
+    }
+
     // Preparar mensaje FCM
     const fcmData = {
       title: title || "Talia",
@@ -619,6 +677,18 @@ async function sendPushNotification(userId, title, body, data = {}) {
         Object.entries(data).map(([key, value]) => [key, String(value)])
       ),
     };
+
+    // ✅ Select channel based on combination of sound/vibration preferences
+    let channelId;
+    if (notificationPrefs.soundEnabled && notificationPrefs.vibrationEnabled) {
+      channelId = "talia_sound_vibration";
+    } else if (notificationPrefs.soundEnabled && !notificationPrefs.vibrationEnabled) {
+      channelId = "talia_sound_only";
+    } else if (!notificationPrefs.soundEnabled && notificationPrefs.vibrationEnabled) {
+      channelId = "talia_vibration_only";
+    } else {
+      channelId = "talia_silent";
+    }
 
     const message = {
       notification: {
@@ -630,9 +700,11 @@ async function sendPushNotification(userId, title, body, data = {}) {
       android: {
         priority: "high",
         notification: {
-          sound: "default",
+          // ✅ Respect user sound/vibration preferences
+          ...(notificationPrefs.soundEnabled && { sound: "default" }),
           priority: "high",
-          channelId: "talia_notifications",
+          channelId: channelId,
+          defaultVibrateTimings: notificationPrefs.vibrationEnabled,
         },
       },
       apns: {
@@ -646,7 +718,8 @@ async function sendPushNotification(userId, title, body, data = {}) {
               title: title || "Talia",
               body: body || "",
             },
-            sound: "default",
+            // ✅ Only include sound if user has sound enabled
+            ...(notificationPrefs.soundEnabled && { sound: "default" }),
             "content-available": 1,
           },
         },

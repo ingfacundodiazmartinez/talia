@@ -516,6 +516,28 @@ async function createPermissionRequestForChildContact({
         const parentToken = parentData?.fcmToken;
 
         if (parentToken) {
+          // ✅ Fetch user notification preferences
+          let notificationPrefs = { soundEnabled: true, vibrationEnabled: true };
+          try {
+            const prefsDoc = await db.collection("notification_preferences").doc(parentId).get();
+            if (prefsDoc.exists) {
+              notificationPrefs.soundEnabled = prefsDoc.data().soundEnabled !== false;
+              notificationPrefs.vibrationEnabled = prefsDoc.data().vibrationEnabled !== false;
+            }
+          } catch (e) { /* use defaults */ }
+
+          // ✅ Select channel based on combination of sound/vibration preferences
+          let channelId;
+          if (notificationPrefs.soundEnabled && notificationPrefs.vibrationEnabled) {
+            channelId = "talia_sound_vibration";
+          } else if (notificationPrefs.soundEnabled && !notificationPrefs.vibrationEnabled) {
+            channelId = "talia_sound_only";
+          } else if (!notificationPrefs.soundEnabled && notificationPrefs.vibrationEnabled) {
+            channelId = "talia_vibration_only";
+          } else {
+            channelId = "talia_silent";
+          }
+
           await messaging.send({
             token: parentToken,
             notification: {
@@ -529,6 +551,9 @@ async function createPermissionRequestForChildContact({
             },
             android: {
               priority: "high",
+              notification: {
+                channelId: channelId,
+              },
             },
             apns: {
               headers: {
@@ -536,7 +561,7 @@ async function createPermissionRequestForChildContact({
               },
               payload: {
                 aps: {
-                  sound: "default",
+                  ...(notificationPrefs.soundEnabled && { sound: "default" }),
                 },
               },
             },
@@ -626,6 +651,28 @@ async function createCrossChildPermissionRequest({
         const parentToken = parentData?.fcmToken;
 
         if (parentToken) {
+          // ✅ Fetch user notification preferences
+          let notificationPrefs = { soundEnabled: true, vibrationEnabled: true };
+          try {
+            const prefsDoc = await db.collection("notification_preferences").doc(parentId).get();
+            if (prefsDoc.exists) {
+              notificationPrefs.soundEnabled = prefsDoc.data().soundEnabled !== false;
+              notificationPrefs.vibrationEnabled = prefsDoc.data().vibrationEnabled !== false;
+            }
+          } catch (e) { /* use defaults */ }
+
+          // ✅ Select channel based on combination of sound/vibration preferences
+          let channelId;
+          if (notificationPrefs.soundEnabled && notificationPrefs.vibrationEnabled) {
+            channelId = "talia_sound_vibration";
+          } else if (notificationPrefs.soundEnabled && !notificationPrefs.vibrationEnabled) {
+            channelId = "talia_sound_only";
+          } else if (!notificationPrefs.soundEnabled && notificationPrefs.vibrationEnabled) {
+            channelId = "talia_vibration_only";
+          } else {
+            channelId = "talia_silent";
+          }
+
           await messaging.send({
             token: parentToken,
             notification: {
@@ -639,6 +686,9 @@ async function createCrossChildPermissionRequest({
             },
             android: {
               priority: "high",
+              notification: {
+                channelId: channelId,
+              },
             },
             apns: {
               headers: {
@@ -646,7 +696,7 @@ async function createCrossChildPermissionRequest({
               },
               payload: {
                 aps: {
-                  sound: "default",
+                  ...(notificationPrefs.soundEnabled && { sound: "default" }),
                 },
               },
             },
@@ -694,6 +744,28 @@ async function createCrossChildPermissionRequest({
         const parentToken = parentData?.fcmToken;
 
         if (parentToken) {
+          // ✅ Fetch user notification preferences
+          let notificationPrefs2 = { soundEnabled: true, vibrationEnabled: true };
+          try {
+            const prefsDoc2 = await db.collection("notification_preferences").doc(parentId).get();
+            if (prefsDoc2.exists) {
+              notificationPrefs2.soundEnabled = prefsDoc2.data().soundEnabled !== false;
+              notificationPrefs2.vibrationEnabled = prefsDoc2.data().vibrationEnabled !== false;
+            }
+          } catch (e) { /* use defaults */ }
+
+          // ✅ Select channel based on combination of sound/vibration preferences
+          let channelId2;
+          if (notificationPrefs2.soundEnabled && notificationPrefs2.vibrationEnabled) {
+            channelId2 = "talia_sound_vibration";
+          } else if (notificationPrefs2.soundEnabled && !notificationPrefs2.vibrationEnabled) {
+            channelId2 = "talia_sound_only";
+          } else if (!notificationPrefs2.soundEnabled && notificationPrefs2.vibrationEnabled) {
+            channelId2 = "talia_vibration_only";
+          } else {
+            channelId2 = "talia_silent";
+          }
+
           await messaging.send({
             token: parentToken,
             notification: {
@@ -707,6 +779,9 @@ async function createCrossChildPermissionRequest({
             },
             android: {
               priority: "high",
+              notification: {
+                channelId: channelId2,
+              },
             },
             apns: {
               headers: {
@@ -714,7 +789,7 @@ async function createCrossChildPermissionRequest({
               },
               payload: {
                 aps: {
-                  sound: "default",
+                  ...(notificationPrefs2.soundEnabled && { sound: "default" }),
                 },
               },
             },
@@ -1665,14 +1740,11 @@ exports.leaveGroup = onCall(
         throw new HttpsError("failed-precondition", "No eres miembro de este grupo");
       }
 
-      // Check if user is the only admin
-      if (groupData.admins?.includes(userId) && groupData.admins.length === 1) {
-        if (groupData.members.length > 1) {
-          throw new HttpsError(
-            "failed-precondition",
-            "Debes transferir el rol de administrador antes de abandonar el grupo"
-          );
-        }
+      // If user is the last member, delete the group entirely
+      if (groupData.members.length === 1) {
+        await db.collection("groups").doc(groupId).delete();
+        console.log(`🗑️ [leaveGroup] Grupo ${groupId} eliminado (último miembro ${userId} abandonó)`);
+        return { success: true, groupDeleted: true };
       }
 
       const updates = {
@@ -1680,9 +1752,46 @@ exports.leaveGroup = onCall(
         lastActivity: FieldValue.serverTimestamp(),
       };
 
-      // If user is admin, remove from admins array
+      // ✅ FIX: Si el usuario es el único admin y hay otros miembros, promover a otro miembro
       if (groupData.admins?.includes(userId)) {
         updates.admins = FieldValue.arrayRemove(userId);
+
+        // Si era el único admin, promover a otro miembro
+        if (groupData.admins.length === 1 && groupData.members.length > 1) {
+          const otherMembers = groupData.members.filter((m) => m !== userId);
+          let newAdminId = null;
+
+          // Intentar encontrar el miembro más antiguo usando memberDetails.joinedAt
+          if (groupData.memberDetails) {
+            let oldestJoinedAt = null;
+            for (const memberId of otherMembers) {
+              const memberDetail = groupData.memberDetails[memberId];
+              if (memberDetail?.joinedAt) {
+                const joinedAt = memberDetail.joinedAt.toDate
+                  ? memberDetail.joinedAt.toDate()
+                  : new Date(memberDetail.joinedAt);
+                if (!oldestJoinedAt || joinedAt < oldestJoinedAt) {
+                  oldestJoinedAt = joinedAt;
+                  newAdminId = memberId;
+                }
+              }
+            }
+          }
+
+          // Si no encontramos por fecha, elegir al primero de la lista
+          if (!newAdminId && otherMembers.length > 0) {
+            newAdminId = otherMembers[0];
+            console.log(`⚠️ [leaveGroup] No se encontró joinedAt, eligiendo primer miembro: ${newAdminId}`);
+          }
+
+          if (newAdminId) {
+            updates.admins = [newAdminId];
+            if (groupData.memberDetails) {
+              updates[`memberDetails.${newAdminId}.role`] = "admin";
+            }
+            console.log(`👑 [leaveGroup] Promoviendo a ${newAdminId} como nuevo admin del grupo ${groupId}`);
+          }
+        }
       }
 
       // If user was in pendingMembers, remove from there too

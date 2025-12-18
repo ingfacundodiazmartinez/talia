@@ -18,6 +18,9 @@ class ChatCacheManager {
   // Cache optimista para mensajes temporales
   final Map<String, Map<String, ChatMessage>> _optimisticCache = {};
 
+  // ✅ V2: Track localSavedAt por mensaje para ordenar por orden de llegada local
+  final Map<String, Map<String, int>> _localSavedAtByChat = {};
+
   // Métricas de cache
   int _cacheHits = 0;
   int _cacheMisses = 0;
@@ -40,9 +43,61 @@ class ChatCacheManager {
     return _mergeOptimisticMessages(chatId);
   }
 
-  /// Actualizar cache de un chat con nuevos mensajes
+  /// Actualizar cache de un chat con nuevos mensajes (REEMPLAZA todo)
   void updateCacheForChat(String chatId, List<ChatMessage> messages) {
     _messageCache[chatId] = List.from(messages); // Crear copia defensiva
+    _cacheTimestamps[chatId] = DateTime.now();
+
+    // Notificar cambios
+    _notifyChangesForChat(chatId);
+  }
+
+  /// Merge mensajes de Firestore con cache existente (PRESERVA mensajes locales)
+  ///
+  /// Esto es crítico para TTL: cuando Firestore elimina mensajes por TTL,
+  /// los mensajes ya cacheados en el dispositivo se preservan.
+  void mergeCacheForChat(String chatId, List<ChatMessage> firestoreMessages) {
+    // Obtener mensajes existentes en cache
+    final existingMessages = _messageCache[chatId] ?? <ChatMessage>[];
+
+    // ✅ V2: Inicializar mapa de localSavedAt si no existe
+    if (!_localSavedAtByChat.containsKey(chatId)) {
+      _localSavedAtByChat[chatId] = {};
+    }
+    final localSavedAtMap = _localSavedAtByChat[chatId]!;
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    // Crear mapa por ID para merge eficiente
+    final messageById = <String, ChatMessage>{};
+
+    // Primero agregar mensajes existentes (ya tienen localSavedAt)
+    for (final msg in existingMessages) {
+      messageById[msg.id] = msg;
+    }
+
+    // Luego actualizar/agregar mensajes de Firestore (tienen prioridad)
+    for (final msg in firestoreMessages) {
+      messageById[msg.id] = msg;
+      // ✅ V2: Asignar localSavedAt solo si es mensaje nuevo
+      if (!localSavedAtMap.containsKey(msg.id)) {
+        localSavedAtMap[msg.id] = now;
+      }
+    }
+
+    // ✅ V4: Ordenar por timestamp del servidor SIEMPRE
+    // Mensajes sin timestamp (pending) van al principio (más recientes)
+    final mergedMessages = messageById.values.toList()
+      ..sort((a, b) {
+        // Mensajes sin timestamp del servidor van primero (son los más recientes/pending)
+        if (a.timestamp == null && b.timestamp == null) return 0;
+        if (a.timestamp == null) return -1; // a va primero (más reciente)
+        if (b.timestamp == null) return 1;  // b va primero (más reciente)
+
+        // Ambos tienen timestamp del servidor - ordenar descendente
+        return b.timestamp!.compareTo(a.timestamp!);
+      });
+
+    _messageCache[chatId] = mergedMessages;
     _cacheTimestamps[chatId] = DateTime.now();
 
     // Notificar cambios
@@ -77,6 +132,7 @@ class ChatCacheManager {
   void invalidateChatCache(String chatId) {
     _messageCache.remove(chatId);
     _cacheTimestamps.remove(chatId);
+    _localSavedAtByChat.remove(chatId); // ✅ V2: Limpiar localSavedAt
     _notifyChangesForChat(chatId);
   }
 
@@ -85,6 +141,7 @@ class ChatCacheManager {
     _messageCache.clear();
     _cacheTimestamps.clear();
     _optimisticCache.clear();
+    _localSavedAtByChat.clear(); // ✅ V2: Limpiar localSavedAt
 
     // Notificar todos los chats
     for (final chatId in _chatControllers.keys) {
@@ -101,6 +158,12 @@ class ChatCacheManager {
     if (!_optimisticCache.containsKey(chatId)) {
       _optimisticCache[chatId] = {};
     }
+
+    // ✅ V2: Asignar localSavedAt
+    if (!_localSavedAtByChat.containsKey(chatId)) {
+      _localSavedAtByChat[chatId] = {};
+    }
+    _localSavedAtByChat[chatId]![message.id] = DateTime.now().millisecondsSinceEpoch;
 
     _optimisticCache[chatId]![message.id] = message;
     _notifyChangesForChat(chatId);
@@ -209,6 +272,11 @@ class ChatCacheManager {
       _messageCache[chatId] = [];
     }
 
+    // ✅ V2: Inicializar mapa de localSavedAt si no existe
+    if (!_localSavedAtByChat.containsKey(chatId)) {
+      _localSavedAtByChat[chatId] = {};
+    }
+
     // Evitar duplicados
     final existingIndex = _messageCache[chatId]!
         .indexWhere((msg) => msg.id == message.id);
@@ -217,6 +285,8 @@ class ChatCacheManager {
       _messageCache[chatId]![existingIndex] = message;
     } else {
       _messageCache[chatId]!.insert(0, message); // Nuevos mensajes al principio
+      // ✅ V2: Asignar localSavedAt
+      _localSavedAtByChat[chatId]![message.id] = DateTime.now().millisecondsSinceEpoch;
     }
 
     _notifyChangesForChat(chatId);
@@ -310,11 +380,16 @@ class ChatCacheManager {
       }
     }
 
-    // Ordenar por fecha (más recientes primero) - usar timestamp o localTimestamp
+    // ✅ V4: Ordenar por timestamp del servidor SIEMPRE
+    // Mensajes sin timestamp (pending) van al principio (más recientes)
     allMessages.sort((a, b) {
-      final aTime = a.localTimestamp ?? a.timestamp?.toDate() ?? DateTime.now();
-      final bTime = b.localTimestamp ?? b.timestamp?.toDate() ?? DateTime.now();
-      return bTime.compareTo(aTime);
+      // Mensajes sin timestamp del servidor van primero (son los más recientes/pending)
+      if (a.timestamp == null && b.timestamp == null) return 0;
+      if (a.timestamp == null) return -1; // a va primero (más reciente)
+      if (b.timestamp == null) return 1;  // b va primero (más reciente)
+
+      // Ambos tienen timestamp del servidor - ordenar descendente
+      return b.timestamp!.compareTo(a.timestamp!);
     });
 
     return allMessages;
@@ -340,6 +415,7 @@ class ChatCacheManager {
     _messageCache.clear();
     _cacheTimestamps.clear();
     _optimisticCache.clear();
+    _localSavedAtByChat.clear(); // ✅ V2: Limpiar localSavedAt
     resetMetrics();
   }
 }

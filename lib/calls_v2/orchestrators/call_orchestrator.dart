@@ -11,6 +11,7 @@ import '../services/update_call_service.dart';
 import '../services/call_status_service.dart';
 import '../services/agora_engine_service.dart';
 import '../services/watch_call_service.dart';
+import '../config/agora_config.dart';
 import '../../utils/release_logger.dart';
 
 class CallOrchestrator {
@@ -43,6 +44,18 @@ class CallOrchestrator {
     bool isGroup = false,
   }) async {
     try {
+      // ✅ FIX: Validar que Agora App ID esté configurado
+      if (!AgoraConfig.isConfigured()) {
+        ReleaseLogger.error(
+          'Agora App ID not configured. Please set agora_app_id in Firebase Remote Config or use --dart-define=AGORA_APP_ID',
+          tag: _tag,
+        );
+        return ServiceResponse.error(
+          'Las videollamadas no están disponibles. Por favor, actualiza la app.',
+          errorCode: 'AGORA_NOT_CONFIGURED',
+        );
+      }
+
       ReleaseLogger.log(
         'Orchestrating create and join call flow',
         tag: _tag,

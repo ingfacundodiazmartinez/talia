@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:provider/provider.dart';
 import '../../../utils/release_logger.dart';
 import '../../../link_parent_child.dart';
+import '../../../theme_service.dart';
 import '../../common/child_settings_screen.dart';
 import '../../common/help_support_screen.dart';
 import '../../common/privacy_security_screen.dart';
@@ -14,7 +17,6 @@ import '../../../services/child_profile_service.dart';
 import 'widgets/profile_header_widget.dart';
 import 'widgets/link_status_widget.dart';
 import 'widgets/profile_option_item.dart';
-import 'widgets/theme_setting_widget.dart';
 import 'widgets/image_picker_dialog.dart';
 
 class ChildProfileScreen extends StatefulWidget {
@@ -185,7 +187,8 @@ class _ChildProfileScreenState extends State<ChildProfileScreen> {
                 },
               ),
 
-              const ThemeSettingWidget(),
+              // Opción de solicitar independencia para children de 18+ años con padres vinculados
+              _buildRequestIndependenceOption(user.uid),
 
               ProfileOptionItem(
                 icon: Icons.settings,
@@ -199,6 +202,8 @@ class _ChildProfileScreenState extends State<ChildProfileScreen> {
                   );
                 },
               ),
+
+              _buildDarkModeSetting(),
 
               ProfileOptionItem(
                 icon: Icons.qr_code,
@@ -377,6 +382,228 @@ class _ChildProfileScreenState extends State<ChildProfileScreen> {
             ),
           );
         }
+      }
+    }
+  }
+
+  Widget _buildDarkModeSetting() {
+    final colorScheme = Theme.of(context).colorScheme;
+    final themeService = context.watch<ThemeService>();
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
+        leading: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: colorScheme.primaryContainer,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Icon(
+            themeService.isDarkMode ? Icons.dark_mode : Icons.light_mode,
+            color: colorScheme.primary,
+          ),
+        ),
+        title: Text(
+          'Modo oscuro',
+          style: TextStyle(
+            color: colorScheme.onSurface,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        subtitle: Text(
+          themeService.isDarkMode
+              ? 'Tema oscuro activado'
+              : 'Tema claro activado',
+          style: TextStyle(
+            fontSize: 12,
+            color: colorScheme.onSurfaceVariant,
+          ),
+        ),
+        trailing: Switch(
+          value: themeService.isDarkMode,
+          onChanged: (enabled) => themeService.toggleDarkMode(enabled),
+        ),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        tileColor: colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+      ),
+    );
+  }
+
+  /// Widget para solicitar independencia (solo para children 18+ con padres vinculados)
+  Widget _buildRequestIndependenceOption(String userId) {
+    return StreamBuilder<DocumentSnapshot>(
+      stream: _service.getUserDataStream(userId),
+      builder: (context, userSnapshot) {
+        if (!userSnapshot.hasData || !userSnapshot.data!.exists) {
+          return const SizedBox.shrink();
+        }
+
+        final userData = userSnapshot.data!.data() as Map<String, dynamic>?;
+        final role = userData?['role'] ?? 'child';
+        final birthDate = userData?['birthDate'];
+
+        // Solo mostrar para children
+        if (role != 'child') {
+          return const SizedBox.shrink();
+        }
+
+        // Calcular edad
+        final age = _calculateAge(birthDate);
+        if (age < 18) {
+          return const SizedBox.shrink();
+        }
+
+        // Verificar si tiene padres vinculados
+        return StreamBuilder<QuerySnapshot>(
+          stream: FirebaseFirestore.instance
+              .collection('parent_children')
+              .where('childId', isEqualTo: userId)
+              .snapshots(),
+          builder: (context, linksSnapshot) {
+            if (!linksSnapshot.hasData || linksSnapshot.data!.docs.isEmpty) {
+              return const SizedBox.shrink();
+            }
+
+            // Tiene 18+ años y padres vinculados - mostrar opción
+            return ProfileOptionItem(
+              icon: Icons.person_off,
+              title: 'Solicitar Independencia',
+              subtitle: 'Pide a tus padres que te desvinculen',
+              onTap: () => _showRequestIndependenceDialog(),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// Calcular edad a partir de la fecha de nacimiento
+  int _calculateAge(dynamic birthDate) {
+    if (birthDate == null) return 0;
+
+    DateTime birth;
+    if (birthDate is Timestamp) {
+      birth = birthDate.toDate();
+    } else if (birthDate is String) {
+      try {
+        birth = DateTime.parse(birthDate);
+      } catch (e) {
+        return 0;
+      }
+    } else {
+      return 0;
+    }
+
+    final now = DateTime.now();
+    int age = now.year - birth.year;
+    if (now.month < birth.month ||
+        (now.month == birth.month && now.day < birth.day)) {
+      age--;
+    }
+    return age;
+  }
+
+  /// Mostrar diálogo de confirmación para solicitar independencia
+  Future<void> _showRequestIndependenceDialog() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.person_off, color: Theme.of(context).colorScheme.primary),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text('Solicitar Independencia'),
+            ),
+          ],
+        ),
+        content: const Text(
+          'Al tener 18 años, puedes solicitar que tus padres te desvinculen de su supervisión.\n\n'
+          'Se enviará una notificación a tus padres para que decidan si desvincularte. '
+          'Ellos deberán aprobar esta solicitud.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Solicitar'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true || !mounted) return;
+
+    await _requestUnlink();
+  }
+
+  /// Llamar a la Cloud Function para solicitar desvinculación
+  Future<void> _requestUnlink() async {
+    try {
+      // Mostrar loading
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+
+      final functions = FirebaseFunctions.instance;
+      final result = await functions.httpsCallable('requestUnlink').call();
+
+      // Cerrar loading
+      if (mounted) {
+        Navigator.pop(context);
+      }
+
+      final resultData = result.data as Map<String, dynamic>;
+      final success = resultData['success'] ?? false;
+      final message = resultData['message'] ?? '';
+      final parentCount = resultData['parentCount'] ?? 0;
+
+      if (!mounted) return;
+
+      if (success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Se ha notificado a ${parentCount == 1 ? "tu padre/madre" : "tus padres"}. '
+              'Ellos decidirán si desvincularte.',
+            ),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message.isNotEmpty ? message : 'No se pudo enviar la solicitud'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+    } catch (e) {
+      ReleaseLogger.error('Error solicitando independencia: $e', tag: 'ChildProfile');
+
+      // Cerrar loading si está abierto
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Error al enviar la solicitud'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     }
   }

@@ -212,6 +212,11 @@ class GroupMessageCacheService {
               'hasMedia': message.replyTo!.hasMedia,
             }
           : null,
+      // ✅ FIX #8: Campos de reenvío
+      'isForwarded': message.isForwarded,
+      'originalSenderId': message.originalSenderId,
+      'originalChatId': message.originalChatId,
+      'originalContactName': message.originalContactName,
     };
   }
 
@@ -263,6 +268,11 @@ class GroupMessageCacheService {
               ?.map((e) => e.toString())
               .toList() ??
           [],
+      // ✅ FIX #8: Campos de reenvío
+      isForwarded: data['isForwarded'] as bool? ?? false,
+      originalSenderId: data['originalSenderId'] as String?,
+      originalChatId: data['originalChatId'] as String?,
+      originalContactName: data['originalContactName'] as String?,
     );
   }
 

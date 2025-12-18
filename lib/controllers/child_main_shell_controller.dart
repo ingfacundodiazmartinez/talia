@@ -119,11 +119,11 @@ class ChildMainShellController {
         await _childController!.initialize();
         ReleaseLogger.log('ChildHomeController inicializado exitosamente', tag: 'ChildMainShell');
 
-        // Sincronizar contactos en background para adultos
-        if (userRole == 'adult') {
-          _syncContactsInBackground();
-          _setupAppStateListener();
-        }
+        // TODOS sincronican contactos del dispositivo
+        // La Cloud Function determina si auto-aprobar o requerir aprobación parental
+        _syncContactsInBackground();
+        _setupAppStateListener();
+        ReleaseLogger.log('Sincronización de contactos habilitada para rol: $userRole', tag: 'ChildMainShell');
       } else {
         ReleaseLogger.warning('Usuario es parent (role: $userRole) - NO inicializando controller', tag: 'ChildMainShell');
         ReleaseLogger.warning('Este usuario debería estar en ParentMainShell, no en ChildMainShell', tag: 'ChildMainShell');
@@ -156,12 +156,21 @@ class ChildMainShellController {
     });
   }
 
-  /// Sincronizar contactos en background (solo para adultos)
+  /// Sincronizar contactos en background (para todos los usuarios)
   void _syncContactsInBackground() {
+    // ignore: avoid_print
+    print('📞📞📞 [ChildMainShell] _syncContactsInBackground() LLAMADO');
     // Usar WidgetsBinding para ejecutar después del primer frame
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ReleaseLogger.log('Iniciando sincronización de contactos para adult', tag: 'ChildMainShell');
-      _contactsSyncService.syncContacts().catchError((error) {
+      // ignore: avoid_print
+      print('📞📞📞 [ChildMainShell] PostFrameCallback ejecutado, llamando syncContacts()');
+      ReleaseLogger.log('Iniciando sincronización de contactos', tag: 'ChildMainShell');
+      _contactsSyncService.syncContacts().then((_) {
+        // ignore: avoid_print
+        print('✅✅✅ [ChildMainShell] syncContacts() completado exitosamente');
+      }).catchError((error) {
+        // ignore: avoid_print
+        print('❌❌❌ [ChildMainShell] Error en syncContacts(): $error');
         ReleaseLogger.error('Error syncing contacts: $error', tag: 'ChildMainShell');
       });
     });

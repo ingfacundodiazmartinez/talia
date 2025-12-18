@@ -67,6 +67,21 @@ exports.sendNotificationOnCreate = onDocumentCreated(
       }
 
       const userData = userDoc.data();
+
+      // ✅ FIX #4: Fetch user notification preferences for sound/vibration settings
+      let notificationPrefs = { soundEnabled: true, vibrationEnabled: true };
+      try {
+        const prefsDoc = await getFirestore().collection("notification_preferences").doc(userId).get();
+        if (prefsDoc.exists) {
+          const prefsData = prefsDoc.data();
+          notificationPrefs.soundEnabled = prefsData.soundEnabled !== false; // Default true
+          notificationPrefs.vibrationEnabled = prefsData.vibrationEnabled !== false; // Default true
+          console.log(`📱 [NotificationTrigger] User prefs: sound=${notificationPrefs.soundEnabled}, vibration=${notificationPrefs.vibrationEnabled}`);
+        }
+      } catch (prefsError) {
+        console.log(`⚠️ [NotificationTrigger] Could not fetch prefs, using defaults: ${prefsError.message}`);
+      }
+
       let fcmTokens = [];
 
       // Normalizar tokens FCM
@@ -121,23 +136,50 @@ exports.sendNotificationOnCreate = onDocumentCreated(
 
       const isChatMessage = type === 'chat_message' || type === 'group_message';
 
-      // ✅ FORMATO RESTAURADO que funcionaba
+      // ✅ FIX #4: Build apsPayload conditionally based on user preferences
       const apsPayload = isChatMessage
         ? {
             alert: { title: title || "Talia", body: body || "" },
-            sound: "default",
+            // ✅ Only include sound if user has sound enabled
+            ...(notificationPrefs.soundEnabled && { sound: "default" }),
             "mutable-content": 1,
           }
         : {
             "content-available": 1,
           };
 
+      // ✅ Build Android config with channel based on BOTH sound AND vibration prefs
+      const androidConfig = {
+        priority: "high",
+      };
+
+      // Only add notification block for chat messages (for custom sound/vibration)
+      if (isChatMessage) {
+        // ✅ Select channel based on combination of sound/vibration preferences
+        let channelId;
+        if (notificationPrefs.soundEnabled && notificationPrefs.vibrationEnabled) {
+          channelId = "talia_sound_vibration";
+        } else if (notificationPrefs.soundEnabled && !notificationPrefs.vibrationEnabled) {
+          channelId = "talia_sound_only";
+        } else if (!notificationPrefs.soundEnabled && notificationPrefs.vibrationEnabled) {
+          channelId = "talia_vibration_only";
+        } else {
+          channelId = "talia_silent";
+        }
+
+        androidConfig.notification = {
+          channelId: channelId,
+          // Only set default sound if enabled
+          ...(notificationPrefs.soundEnabled && { sound: "default" }),
+          // Set vibrate pattern only if enabled
+          defaultVibrateTimings: notificationPrefs.vibrationEnabled,
+        };
+      }
+
       const message = {
         data: fcmData,
         tokens: fcmTokens,
-        android: {
-          priority: "high",
-        },
+        android: androidConfig,
         apns: {
           headers: {
             "apns-priority": "10",
@@ -235,7 +277,19 @@ exports.sendInstantPushNotification = onCall(
 
       const userData = userDoc.data();
 
-      // ✅ FIX #17: Removed sensitive DEBUG logs with fcmToken data
+      // ✅ FIX #4: Fetch user notification preferences for sound/vibration settings
+      let notificationPrefs = { soundEnabled: true, vibrationEnabled: true };
+      try {
+        const prefsDoc = await getFirestore().collection("notification_preferences").doc(finalUserId).get();
+        if (prefsDoc.exists) {
+          const prefsData = prefsDoc.data();
+          notificationPrefs.soundEnabled = prefsData.soundEnabled !== false; // Default true
+          notificationPrefs.vibrationEnabled = prefsData.vibrationEnabled !== false; // Default true
+          console.log(`📱 [INSTANT PUSH] User prefs: sound=${notificationPrefs.soundEnabled}, vibration=${notificationPrefs.vibrationEnabled}`);
+        }
+      } catch (prefsError) {
+        console.log(`⚠️ [INSTANT PUSH] Could not fetch prefs, using defaults: ${prefsError.message}`);
+      }
 
       // ✅ COMPATIBILIDAD ROBUSTA: Normalizar tokens FCM con múltiples fallbacks
       let fcmTokens = [];
@@ -433,16 +487,45 @@ exports.sendInstantPushNotification = onCall(
 
       const isChatMessage = type === 'chat_message' || type === 'group_message';
 
-      // ✅ FORMATO RESTAURADO que funcionaba
+      // ✅ FIX #4: Build apsPayload conditionally based on user preferences
       const apsPayload = isChatMessage
         ? {
             alert: { title: finalTitle, body: finalBody },
-            sound: "default",
+            // ✅ Only include sound if user has sound enabled
+            ...(notificationPrefs.soundEnabled && { sound: "default" }),
             "mutable-content": 1,
           }
         : {
             "content-available": 1,
           };
+
+      // ✅ Build Android config with channel based on BOTH sound AND vibration prefs
+      const androidConfig = {
+        priority: "high",
+      };
+
+      // Only add notification block for chat messages (for custom sound/vibration)
+      if (isChatMessage) {
+        // ✅ Select channel based on combination of sound/vibration preferences
+        let channelId;
+        if (notificationPrefs.soundEnabled && notificationPrefs.vibrationEnabled) {
+          channelId = "talia_sound_vibration";
+        } else if (notificationPrefs.soundEnabled && !notificationPrefs.vibrationEnabled) {
+          channelId = "talia_sound_only";
+        } else if (!notificationPrefs.soundEnabled && notificationPrefs.vibrationEnabled) {
+          channelId = "talia_vibration_only";
+        } else {
+          channelId = "talia_silent";
+        }
+
+        androidConfig.notification = {
+          channelId: channelId,
+          // Only set default sound if enabled
+          ...(notificationPrefs.soundEnabled && { sound: "default" }),
+          // Set vibrate pattern only if enabled
+          defaultVibrateTimings: notificationPrefs.vibrationEnabled,
+        };
+      }
 
       const message = {
         token: fcmTokens[0],
@@ -469,9 +552,7 @@ exports.sendInstantPushNotification = onCall(
             type: type || "notification",
           },
         },
-        android: {
-          priority: "high",
-        },
+        android: androidConfig,
       };
 
       console.log(`📦 [INSTANT PUSH] ${isChatMessage ? 'ALERT+NSE' : 'DATA-ONLY'} message`);

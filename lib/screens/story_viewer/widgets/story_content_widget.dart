@@ -61,7 +61,9 @@ class StoryContentWidget extends StatelessWidget {
           // ✅ Deshabilitar scroll del PageView interno para que el swipe horizontal
           // se propague al PageView externo (cambio de usuario/grupo)
           // Las historias individuales se cambian con taps izquierda/derecha
+          // ✅ FIX: Key único por usuario para evitar reutilización incorrecta de widgets
           return PageView.builder(
+            key: ValueKey('user_stories_${userStories.userId}'),
             controller: userIndex == currentUserIndex ? storyPageController : null,
             physics: const NeverScrollableScrollPhysics(), // ← Deshabilitar swipe
             itemCount: stories.length,
@@ -73,8 +75,10 @@ class StoryContentWidget extends StatelessWidget {
             itemBuilder: (context, storyIndex) {
               final story = stories[storyIndex];
 
-              // ✅ Contenedor negro para cada historia individual
+              // ✅ FIX: Key único por historia para evitar que Flutter muestre el contenido incorrecto
+              // Contenedor negro para cada historia individual
               return Container(
+                key: ValueKey('story_content_${story.id}'),
                 color: Colors.black,
                 width: double.infinity,
                 height: double.infinity,
@@ -245,7 +249,9 @@ class StoryContentWidget extends StatelessWidget {
     }
 
     // Imagen de red (ya subida)
+    // ✅ FIX: Key único para evitar que Flutter reutilice el widget con imagen incorrecta
     return CachedNetworkImage(
+      key: ValueKey('cached_image_${story.id}'),
       imageUrl: story.mediaUrl,
       fit: BoxFit.contain,
       width: double.infinity,

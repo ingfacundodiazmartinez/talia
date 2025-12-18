@@ -1,3 +1,4 @@
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import '../../services/notification_preferences_service.dart';
 
@@ -182,7 +183,7 @@ class _NotificationSettingsScreenState
           Padding(
             padding: const EdgeInsets.all(16),
             child: Text(
-              'Sonido y Vibración',
+              Platform.isIOS ? 'Sonido' : 'Sonido y Vibración',
               style: Theme.of(context).textTheme.titleMedium,
             ),
           ),
@@ -190,18 +191,24 @@ class _NotificationSettingsScreenState
           SwitchListTile(
             secondary: const Icon(Icons.volume_up),
             title: const Text('Sonido'),
-            subtitle: const Text('Reproducir sonido para notificaciones'),
+            subtitle: Text(
+              Platform.isIOS
+                  ? 'Reproducir sonido y vibrar para notificaciones'
+                  : 'Reproducir sonido para notificaciones',
+            ),
             value: _preferences['soundEnabled'] ?? true,
             onChanged: (value) => _updatePreference('soundEnabled', value),
           ),
 
-          SwitchListTile(
-            secondary: const Icon(Icons.vibration),
-            title: const Text('Vibración'),
-            subtitle: const Text('Vibrar al recibir notificaciones'),
-            value: _preferences['vibrationEnabled'] ?? true,
-            onChanged: (value) => _updatePreference('vibrationEnabled', value),
-          ),
+          // Solo mostrar vibración en Android (iOS no permite control independiente)
+          if (Platform.isAndroid)
+            SwitchListTile(
+              secondary: const Icon(Icons.vibration),
+              title: const Text('Vibración'),
+              subtitle: const Text('Vibrar al recibir notificaciones'),
+              value: _preferences['vibrationEnabled'] ?? true,
+              onChanged: (value) => _updatePreference('vibrationEnabled', value),
+            ),
 
           const Divider(),
 

@@ -8,6 +8,7 @@ import '../models/models.dart';
 import '../services/services.dart';
 import '../../widgets/profile_photo_viewer.dart';
 import '../../screens/child/profile/widgets/media_gallery_widget.dart';
+import '../../screens/group_profile/widgets/add_members_dialog.dart'; // ✅ FIX #10
 import '../../services/favorite_service.dart';
 
 /// Profile screen for Groups V2
@@ -46,6 +47,9 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
   // Favorites state
   List<Map<String, dynamic>> _favoriteMessages = [];
   bool _isLoadingFavorites = true;
+
+  // Optimistic members (shown immediately while waiting for Firestore)
+  final List<ContactInfo> _optimisticMembers = [];
 
   String get _currentUserId => FirebaseAuth.instance.currentUser?.uid ?? '';
   bool get _isAdmin => _group?.isAdmin(_currentUserId) ?? false;
@@ -92,6 +96,8 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
           setState(() {
             _group = group;
             _isLoading = false;
+            // Limpiar miembros optimistas cuando llegan datos reales de Firestore
+            _optimisticMembers.clear();
           });
         }
       },
@@ -629,6 +635,23 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
   Widget _buildTabs(ColorScheme colorScheme) {
     final membersCount = _group!.memberCount;
 
+    // Calcular altura dinámica para miembros
+    // ListTile estándar = 72px, con header adicional
+    const double listTileHeight = 72.0;
+    const double sectionHeaderHeight = 48.0;
+    const double addButtonHeight = 56.0;
+    const double selectionHeaderHeight = 48.0;
+
+    final membersListHeight = _calculateMembersTabHeight(
+      listTileHeight: listTileHeight,
+      sectionHeaderHeight: sectionHeaderHeight,
+      addButtonHeight: addButtonHeight,
+      selectionHeaderHeight: selectionHeaderHeight,
+    );
+
+    // Altura mínima para multimedia y favoritos
+    const double minTabHeight = 300.0;
+
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
@@ -674,30 +697,92 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
               ],
             ),
           ),
-          // Tab View
-          SizedBox(
-            height: 400,
-            child: TabBarView(
-              controller: _tabController,
-              children: [
-                // Tab 1: Members
-                _buildMembersTab(colorScheme),
-                // Tab 2: Media gallery
-                Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: MediaGalleryWidget(
-                    chatId: widget.groupId,
-                    isOwnProfile: false,
-                  ),
+          // Tab View con altura dinámica basada en el tab seleccionado
+          AnimatedBuilder(
+            animation: _tabController,
+            builder: (context, child) {
+              // Calcular altura según el tab activo
+              double currentHeight;
+              switch (_tabController.index) {
+                case 0: // Miembros
+                  currentHeight = membersListHeight;
+                  break;
+                case 1: // Multimedia
+                case 2: // Favoritos
+                default:
+                  currentHeight = minTabHeight;
+              }
+
+              return AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                height: currentHeight,
+                child: TabBarView(
+                  controller: _tabController,
+                  physics: const NeverScrollableScrollPhysics(), // Deshabilitar swipe entre tabs
+                  children: [
+                    // Tab 1: Members - sin scroll interno
+                    _buildMembersTab(colorScheme),
+                    // Tab 2: Media gallery
+                    Padding(
+                      padding: const EdgeInsets.all(8),
+                      child: MediaGalleryWidget(
+                        chatId: widget.groupId,
+                        isOwnProfile: false,
+                      ),
+                    ),
+                    // Tab 3: Favorites
+                    _buildFavoritesTab(colorScheme),
+                  ],
                 ),
-                // Tab 3: Favorites
-                _buildFavoritesTab(colorScheme),
-              ],
-            ),
+              );
+            },
           ),
         ],
       ),
     );
+  }
+
+  /// Calcula la altura necesaria para mostrar todos los miembros
+  double _calculateMembersTabHeight({
+    required double listTileHeight,
+    required double sectionHeaderHeight,
+    required double addButtonHeight,
+    required double selectionHeaderHeight,
+  }) {
+    double height = 16; // Padding vertical
+
+    // Botón agregar miembros (solo admin)
+    if (_isAdmin) {
+      height += addButtonHeight;
+    }
+
+    // Header de selección (solo admin con miembros seleccionables)
+    final members = _group!.memberDetails.values.toList();
+    final selectableMembers = members.where((m) {
+      final isCreator = _group!.createdBy == m.userId;
+      final isCurrentUser = m.userId == _currentUserId;
+      return !isCreator && !isCurrentUser;
+    }).toList();
+
+    if (_isAdmin && selectableMembers.isNotEmpty) {
+      height += selectionHeaderHeight;
+    }
+
+    // Miembros activos
+    height += members.length * listTileHeight;
+
+    // Miembros optimistas
+    height += _optimisticMembers.length * listTileHeight;
+
+    // Sección de miembros pendientes
+    final pendingMembers = _group!.pendingMemberDetails.values.toList();
+    if (pendingMembers.isNotEmpty) {
+      height += sectionHeaderHeight; // Header "Pendientes"
+      height += pendingMembers.length * listTileHeight;
+    }
+
+    // Mínimo y máximo
+    return height.clamp(200.0, 800.0);
   }
 
   Widget _buildMembersTab(ColorScheme colorScheme) {
@@ -711,9 +796,24 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
       return !isCreator && !isCurrentUser;
     }).toList();
 
+    // ✅ FIX: NeverScrollableScrollPhysics - el scroll lo maneja el CustomScrollView padre
+    // La altura del contenedor se calcula dinámicamente para mostrar todos los miembros
     return ListView(
       padding: const EdgeInsets.symmetric(vertical: 8),
+      physics: const NeverScrollableScrollPhysics(),
+      shrinkWrap: true,
       children: [
+        // ✅ FIX #10: Botón agregar miembros (solo admin)
+        if (_isAdmin)
+          ListTile(
+            leading: CircleAvatar(
+              backgroundColor: colorScheme.primary.withValues(alpha: 0.1),
+              child: Icon(Icons.person_add, color: colorScheme.primary),
+            ),
+            title: const Text('Agregar participantes'),
+            onTap: _showAddMembersDialog,
+          ),
+
         // Selection header (only for admins)
         if (_isAdmin && selectableMembers.isNotEmpty)
           Padding(
@@ -798,6 +898,9 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
 
         // Active members
         ...members.map((member) => _buildMemberTile(colorScheme, member)),
+
+        // ✅ OPTIMISTIC: Mostrar miembros que se están agregando
+        ..._optimisticMembers.map((contact) => _buildOptimisticMemberTile(colorScheme, contact)),
 
         // Pending members section
         if (pendingMembers.isNotEmpty) ...[
@@ -897,6 +1000,7 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
 
     return ListView.separated(
       padding: const EdgeInsets.all(16),
+      physics: const ClampingScrollPhysics(),
       itemCount: _favoriteMessages.length,
       separatorBuilder: (context, index) => const SizedBox(height: 12),
       itemBuilder: (context, index) {
@@ -1022,8 +1126,13 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
 
   Widget _buildMemberTile(ColorScheme colorScheme, GroupMember member) {
     final isMemberAdmin = _group!.isAdmin(member.userId);
-    final isCreator = _group!.createdBy == member.userId;
-    final isCurrentUser = member.userId == _currentUserId;
+    // ✅ FIX: Verificar que userId y createdBy no estén vacíos para evitar falsos positivos
+    final isCreator = _group!.createdBy.isNotEmpty &&
+                      member.userId.isNotEmpty &&
+                      _group!.createdBy == member.userId;
+    final isCurrentUser = _currentUserId.isNotEmpty &&
+                          member.userId.isNotEmpty &&
+                          member.userId == _currentUserId;
     final canSelect = !isCreator && !isCurrentUser;
     final isSelected = _selectedMembers.contains(member.userId);
 
@@ -1124,6 +1233,54 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
       onLongPress: (!_isSelectionMode && _isAdmin && !isCurrentUser && !isCreator)
           ? () => _showMemberOptions(member, isMemberAdmin)
           : null,
+    );
+  }
+
+  /// ✅ OPTIMISTIC: Tile para miembros que se están agregando
+  Widget _buildOptimisticMemberTile(ColorScheme colorScheme, ContactInfo contact) {
+    return ListTile(
+      leading: CircleAvatar(
+        backgroundColor: colorScheme.primaryContainer.withValues(alpha: 0.5),
+        child: contact.avatar != null && contact.avatar!.isNotEmpty
+            ? ClipOval(
+                child: CachedNetworkImage(
+                  imageUrl: contact.avatar!,
+                  width: 40,
+                  height: 40,
+                  fit: BoxFit.cover,
+                  placeholder: (context, url) => Icon(
+                    Icons.person,
+                    color: colorScheme.primary.withValues(alpha: 0.5),
+                  ),
+                  errorWidget: (context, url, error) => Icon(
+                    Icons.person,
+                    color: colorScheme.primary.withValues(alpha: 0.5),
+                  ),
+                ),
+              )
+            : Text(
+                contact.name.isNotEmpty ? contact.name[0].toUpperCase() : 'U',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: colorScheme.primary.withValues(alpha: 0.5),
+                ),
+              ),
+      ),
+      title: Text(
+        contact.name,
+        style: TextStyle(
+          fontWeight: FontWeight.w600,
+          color: colorScheme.onSurface.withValues(alpha: 0.7),
+        ),
+      ),
+      trailing: SizedBox(
+        width: 16,
+        height: 16,
+        child: CircularProgressIndicator(
+          strokeWidth: 2,
+          valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
+        ),
+      ),
     );
   }
 
@@ -1276,25 +1433,31 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
     );
 
     if (confirmed == true && mounted) {
-      setState(() => _isUpdating = true);
+      final memberName = member.name;
+      final memberId = member.userId;
+      final groupId = widget.groupId;
 
-      final success = await _groupService.removeMember(
-        groupId: widget.groupId,
-        userId: member.userId,
+      // ✅ OPTIMISTIC: Mostrar feedback inmediato sin bloquear UI
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Eliminando a $memberName...'),
+          duration: Duration(seconds: 1),
+        ),
       );
 
-      if (mounted) {
-        setState(() => _isUpdating = false);
+      // Ejecutar en background
+      final success = await _groupService.removeMember(
+        groupId: groupId,
+        userId: memberId,
+      );
 
-        // Solo mostrar snackbar si hubo error
-        if (!success) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Error al eliminar miembro'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
+      if (mounted && !success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Error al eliminar miembro'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     }
   }
@@ -1327,38 +1490,62 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
     );
 
     if (confirmed == true && mounted) {
-      setState(() => _isUpdating = true);
+      final selectedIds = _selectedMembers.toList();
+      final groupId = widget.groupId;
 
+      // ✅ OPTIMISTIC: Limpiar selección y mostrar feedback inmediato
+      setState(() {
+        _isSelectionMode = false;
+        _selectedMembers.clear();
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Eliminando $count miembro${count > 1 ? 's' : ''}...'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+
+      // Ejecutar en background
       int errorCount = 0;
-
-      // Remove members one by one
-      for (final userId in _selectedMembers.toList()) {
+      for (final userId in selectedIds) {
         final success = await _groupService.removeMember(
-          groupId: widget.groupId,
+          groupId: groupId,
           userId: userId,
         );
-        if (!success) {
-          errorCount++;
-        }
+        if (!success) errorCount++;
       }
 
-      if (mounted) {
-        setState(() {
-          _isUpdating = false;
-          _isSelectionMode = false;
-          _selectedMembers.clear();
-        });
-
-        // Only show snackbar if there were errors
-        if (errorCount > 0) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Error al eliminar $errorCount miembro${errorCount > 1 ? 's' : ''}'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
+      // Solo mostrar error si hubo problemas
+      if (mounted && errorCount > 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al eliminar $errorCount miembro${errorCount > 1 ? 's' : ''}'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
+    }
+  }
+
+  /// ✅ FIX #10: Mostrar diálogo para agregar miembros al grupo
+  Future<void> _showAddMembersDialog() async {
+    if (_group == null) return;
+
+    final memberIds = _group!.memberDetails.keys.toList();
+    final result = await showDialog<List<ContactInfo>>(
+      context: context,
+      builder: (context) => AddMembersDialog(
+        groupId: widget.groupId,
+        currentMembers: memberIds,
+      ),
+    );
+
+    // ✅ OPTIMISTIC: Agregar los contactos inmediatamente a la lista
+    if (result != null && result.isNotEmpty && mounted) {
+      setState(() {
+        _optimisticMembers.addAll(result);
+      });
     }
   }
 

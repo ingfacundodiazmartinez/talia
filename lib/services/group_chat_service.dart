@@ -469,12 +469,16 @@ class GroupChatService {
     }
 
     // Escuchar cambios en grupos
+    // ✅ handleError evita crashes cuando el usuario es removido de un grupo
     await for (final snapshot in _firestore
         .collection('groups')
         .where('members', arrayContains: userId)
         .where('isActive', isEqualTo: true)
         .orderBy('lastActivity', descending: true)
-        .snapshots()) {
+        .snapshots()
+        .handleError((error) {
+          ReleaseLogger.log('Stream de grupos cerrado para $userId (sin permisos)', tag: 'GroupChatService');
+        })) {
 
       final groups = snapshot.docs.map((doc) {
         final data = doc.data();

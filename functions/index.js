@@ -127,10 +127,13 @@ exports.onPendingReportCreated = reports.onPendingReportCreated;
 // Gestión padre-hijo
 exports.createParentChildLink = parentChild.createParentChildLink;
 exports.validateLinkCode = parentChild.validateLinkCode;
+exports.ensureLinkedChildrenIds = parentChild.ensureLinkedChildrenIds;
 exports.unlinkChild = parentChild.unlinkChild;
 exports.onParentChildLinkCreated = parentChild.onParentChildLinkCreated;
+exports.onParentChildLinkUpdated = parentChild.onParentChildLinkUpdated;
 exports.onParentChildLinkDeleted = parentChild.onParentChildLinkDeleted;
 exports.requestChildLocation = parentChild.requestChildLocation;
+exports.requestUnlink = parentChild.requestUnlink;
 
 // Contactos y bloqueos
 exports.findUserByCode = contacts.findUserByCode;
@@ -145,7 +148,11 @@ exports.autoApproveContact = contacts.autoApproveContact;
 exports.createContactFromGroupInvitation = contacts.createContactFromGroupInvitation;
 exports.getChildContactsForModeration = contacts.getChildContactsForModeration;
 exports.updateChildContactModeration = contacts.updateChildContactModeration;
+exports.getContactModerationStatus = contacts.getContactModerationStatus;
 exports.updateContactStatus = contacts.updateContactStatus;
+exports.revokeChildContact = contacts.revokeChildContact;
+exports.migrateContactsUserData = contacts.migrateContactsUserData;
+exports.requestContactApproval = contacts.requestContactApproval;
 
 // Grupos (legacy - mantener para compatibilidad durante migración)
 exports.createGroup = groups.createGroup;
@@ -183,12 +190,15 @@ exports.incrementGroupUnreadCount = chats.incrementGroupUnreadCount;
 exports.sendChatMessage = chats.sendChatMessage;
 exports.sendGroupMessage = chats.sendGroupMessage;
 exports.createChat = chats.createChat;
+exports.cleanupDeliveredMessages = chats.cleanupDeliveredMessages; // V2: Eliminar mensajes cuando ambos recibieron
 
 // Emergencias
 exports.createEmergency = emergency.createEmergency;
 
 // Perfiles de usuario
 exports.updateUserProfile = userProfile.updateUserProfile;
+exports.checkPhoneDuplicate = userProfile.checkPhoneDuplicate;
+exports.generateUserCode = userProfile.generateUserCode;
 exports.onUserRegistered = userProfile.onUserRegistered;
 exports.onPresenceChanged = userProfile.onPresenceChanged;
 

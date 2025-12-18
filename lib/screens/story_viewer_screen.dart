@@ -8,11 +8,11 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:gal/gal.dart';
 import 'package:share_plus/share_plus.dart';
-import '../models/story.dart';
 import '../models/mood_poll.dart';
 import '../controllers/story_viewer_controller.dart';
 import '../services/ad_service.dart';
 import '../services/mood_polls/mood_poll_service.dart';
+import '../services/story_service_refactored.dart';
 import '../widgets/story_native_ad_widget.dart';
 import '../widgets/mood_poll_story_widget.dart';
 import 'story_viewer/widgets/story_content_widget.dart';
@@ -67,6 +67,13 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
   // Estado local de likes (para UI optimista)
   final Set<String> _localLikedStories = {};
 
+  // Copia local mutable de las historias (se actualiza via cache stream)
+  late List<UserStories> _allUserStories;
+
+  // Subscription al cache stream para actualizaciones en tiempo real
+  StreamSubscription<List<UserStories>>? _cacheSubscription;
+  final StoryService _storyService = StoryService();
+
   // Swipe down para cerrar - offset vertical del drag
   double _dragOffset = 0.0;
 
@@ -86,22 +93,86 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     return _controller.getInitialStoryIndex(stories);
   }
 
+  /// Suscribirse al cache stream para actualizaciones en tiempo real de likes/replies
+  void _subscribeToCacheChanges() {
+    _cacheSubscription = _storyService.storiesFromCache.listen((updatedStories) {
+      if (!mounted) return;
+
+      // Buscar y actualizar las historias que cambiaron
+      bool hasChanges = false;
+
+      for (int userIndex = 0; userIndex < _allUserStories.length; userIndex++) {
+        final localUserStories = _allUserStories[userIndex];
+
+        // Buscar este usuario en las historias actualizadas
+        final updatedUserStories = updatedStories
+            .where((us) => us.userId == localUserStories.userId)
+            .firstOrNull;
+
+        if (updatedUserStories == null) continue;
+
+        // Comparar y actualizar cada historia
+        for (int storyIndex = 0; storyIndex < localUserStories.stories.length; storyIndex++) {
+          final localStory = localUserStories.stories[storyIndex];
+
+          // Buscar esta historia en las actualizadas
+          final updatedStory = updatedUserStories.stories
+              .where((s) => s.id == localStory.id)
+              .firstOrNull;
+
+          if (updatedStory == null) continue;
+
+          // Verificar si hay cambios en likes o replies
+          final likesChanged = localStory.likedBy.length != updatedStory.likedBy.length ||
+              !_listEquals(localStory.likedBy, updatedStory.likedBy);
+          final repliesChanged = localStory.replies.length != updatedStory.replies.length;
+
+          if (likesChanged || repliesChanged) {
+            // Actualizar la historia local con los nuevos datos
+            localUserStories.stories[storyIndex] = updatedStory;
+            hasChanges = true;
+          }
+        }
+      }
+
+      // Solo reconstruir si hubo cambios reales
+      if (hasChanges) {
+        setState(() {});
+      }
+    });
+  }
+
+  /// Comparar dos listas de strings
+  bool _listEquals(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (int i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
   @override
   void initState() {
     super.initState();
 
+    // Inicializar copia local mutable de las historias
+    _allUserStories = List.from(widget.allUserStories);
+
     // Inicializar el controller
     _controller = StoryViewerController(
-      allUserStories: widget.allUserStories,
+      allUserStories: _allUserStories,
       initialUserIndex: widget.initialUserIndex,
     );
     _controller.initialize();
 
+    // Suscribirse al cache stream para actualizaciones en tiempo real
+    _subscribeToCacheChanges();
+
     // Validate and clamp initial user index
-    _currentUserIndex = widget.initialUserIndex.clamp(0, widget.allUserStories.length - 1);
+    _currentUserIndex = widget.initialUserIndex.clamp(0, _allUserStories.length - 1);
 
     // Calcular el índice de la primera historia NO vista del grupo actual
-    final currentUserStories = widget.allUserStories[_currentUserIndex];
+    final currentUserStories = _allUserStories[_currentUserIndex];
     final stories = _getStoriesForUser(currentUserStories);
     final initialStoryIndex = stories.isNotEmpty ? _getInitialStoryIndex(stories) : 0;
 
@@ -164,9 +235,32 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
   }
 
   /// Cargar un Native Ad para mostrar como historia
+  /// Primero intenta usar el ad pre-cargado, si no está disponible crea uno nuevo
   Future<void> _loadNativeAd() async {
+    // Log debug info
+    final debugInfo = _adService.getNativeAdDebugInfo();
+    _controller.logDebug('📊 [StoryViewer] Estado Native Ad: $debugInfo');
+
+    // 1. Primero intentar usar el ad pre-cargado (instantáneo)
+    final cachedAd = _adService.consumeCachedNativeAd();
+    if (cachedAd != null) {
+      _controller.logDebug('✅ [StoryViewer] Usando ad pre-cargado');
+      if (mounted) {
+        setState(() {
+          _nativeAd = cachedAd;
+          _isNativeAdLoaded = true;
+        });
+        _controller.logNativeAdLoaded();
+      }
+      return;
+    }
+
+    _controller.logDebug('⚠️ [StoryViewer] No hay ad pre-cargado, creando nuevo...');
+
+    // 2. Si no hay ad pre-cargado, crear uno nuevo (puede tardar)
     final ad = await _adService.createStoryNativeAd(
       onAdLoaded: (ad) {
+        _controller.logDebug('✅ [StoryViewer] Ad nuevo cargado exitosamente');
         if (mounted) {
           setState(() {
             _nativeAd = ad;
@@ -176,6 +270,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
         }
       },
       onAdFailedToLoad: (ad, error) {
+        _controller.logDebug('❌ [StoryViewer] Error cargando ad nuevo: ${error.message}');
         _controller.logNativeAdError(error.message);
         if (mounted) {
           setState(() {
@@ -187,10 +282,13 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     );
 
     if (ad != null && mounted) {
+      _controller.logDebug('📝 [StoryViewer] Ad creado, esperando onAdLoaded callback');
       setState(() {
         _nativeAd = ad;
         _isNativeAdLoaded = false; // Se marcará true en onAdLoaded
       });
+    } else {
+      _controller.logDebug('⚠️ [StoryViewer] createStoryNativeAd retornó null');
     }
   }
 
@@ -237,7 +335,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
 
   void _preloadNextStories() {
     try {
-      final currentUserStories = widget.allUserStories[_currentUserIndex];
+      final currentUserStories = _allUserStories[_currentUserIndex];
       final stories = _getStoriesForUser(currentUserStories);
       final upcomingStories = <Story>[];
 
@@ -259,10 +357,10 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
         final remainingSlots = 3 - upcomingStories.length;
 
         for (int userIndex = _currentUserIndex + 1;
-             userIndex < widget.allUserStories.length && upcomingStories.length < 3;
+             userIndex < _allUserStories.length && upcomingStories.length < 3;
              userIndex++) {
 
-          final nextUserStories = widget.allUserStories[userIndex];
+          final nextUserStories = _allUserStories[userIndex];
           final nextUserStoriesList = _getStoriesForUser(nextUserStories);
 
           final storiesFromThisUser = nextUserStoriesList.take(remainingSlots - (upcomingStories.length - nextStoriesFromCurrentUser.length)).toList();
@@ -322,7 +420,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
   }
 
   void _nextStory() {
-    final currentUserStories = widget.allUserStories[_currentUserIndex];
+    final currentUserStories = _allUserStories[_currentUserIndex];
     final stories = _getStoriesForUser(currentUserStories);
 
     // CRÍTICO: Pausar el video actual antes de cambiar de historia
@@ -382,7 +480,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     _storyTimer?.cancel();
     _progressController.reset();
 
-    if (_currentUserIndex < widget.allUserStories.length - 1) {
+    if (_currentUserIndex < _allUserStories.length - 1) {
       // Incrementar contador de grupos de historias visualizados
       _controller.nextUser();
 
@@ -427,7 +525,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       setState(() {
         _currentUserIndex++;
         // Calcular índice inicial de la primera historia no vista del nuevo grupo
-        final stories = _getStoriesForUser(widget.allUserStories[_currentUserIndex]);
+        final stories = _getStoriesForUser(_allUserStories[_currentUserIndex]);
         _currentStoryIndex = _getInitialStoryIndex(stories);
         _isCurrentStoryLoaded = false; // Reset para la nueva historia
       });
@@ -487,7 +585,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       setState(() {
         _currentUserIndex--;
         // Calcular índice inicial de la primera historia no vista del nuevo grupo
-        final stories = _getStoriesForUser(widget.allUserStories[_currentUserIndex]);
+        final stories = _getStoriesForUser(_allUserStories[_currentUserIndex]);
         _currentStoryIndex = _getInitialStoryIndex(stories);
         _isCurrentStoryLoaded = false; // Reset para la nueva historia
       });
@@ -501,7 +599,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
   }
 
   void _markCurrentStoryAsViewed() {
-    final currentUserStories = widget.allUserStories[_currentUserIndex];
+    final currentUserStories = _allUserStories[_currentUserIndex];
     final stories = _getStoriesForUser(currentUserStories);
     final currentStory = stories[_currentStoryIndex];
     _controller.markStoryAsViewed(currentStory.id);
@@ -536,7 +634,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     }
 
     try {
-      final currentUserStories = widget.allUserStories[_currentUserIndex];
+      final currentUserStories = _allUserStories[_currentUserIndex];
       final stories = _getStoriesForUser(currentUserStories);
       final currentStory = stories[_currentStoryIndex];
 
@@ -571,7 +669,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     _pauseStoryTimer();
 
     try {
-      final currentUserStories = widget.allUserStories[_currentUserIndex];
+      final currentUserStories = _allUserStories[_currentUserIndex];
       final stories = _getStoriesForUser(currentUserStories);
       final currentStory = stories[_currentStoryIndex];
 
@@ -679,7 +777,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     _pauseStoryTimer();
 
     try {
-      final currentUserStories = widget.allUserStories[_currentUserIndex];
+      final currentUserStories = _allUserStories[_currentUserIndex];
       final stories = _getStoriesForUser(currentUserStories);
       final currentStory = stories[_currentStoryIndex];
 
@@ -746,11 +844,16 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       }
 
       // Compartir usando share_plus
+      // ✅ FIX: Usar null en lugar de '' cuando no hay caption
+      // Algunos dispositivos rechazan text='' con "text provided, but cannot be empty"
       final xFile = XFile(tempFile.path, mimeType: mimeType);
+      final caption = currentStory.caption?.trim();
+      final hasCaption = caption != null && caption.isNotEmpty;
+
       await SharePlus.instance.share(
         ShareParams(
           files: [xFile],
-          text: currentStory.caption ?? '',
+          text: hasCaption ? caption : null,
           subject: 'Historia de Talia',
         ),
       );
@@ -785,7 +888,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     });
 
     try {
-      final currentUserStories = widget.allUserStories[_currentUserIndex];
+      final currentUserStories = _allUserStories[_currentUserIndex];
       final stories = _getStoriesForUser(currentUserStories);
       final currentStory = stories[_currentStoryIndex];
 
@@ -872,7 +975,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
 
   /// Toggle like de una historia
   Future<void> _toggleLike() async {
-    final currentUserStories = widget.allUserStories[_currentUserIndex];
+    final currentUserStories = _allUserStories[_currentUserIndex];
     final stories = _getStoriesForUser(currentUserStories);
     final currentStory = stories[_currentStoryIndex];
 
@@ -1047,6 +1150,9 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     _replyController.dispose();
     _replyFocusNode.dispose();
 
+    // Cancelar suscripción al cache stream
+    _cacheSubscription?.cancel();
+
     // Limpiar Native Ad
     _nativeAd?.dispose();
 
@@ -1065,7 +1171,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
   @override
   Widget build(BuildContext context) {
     // Bounds check: ensure indices are valid
-    if (widget.allUserStories.isEmpty) {
+    if (_allUserStories.isEmpty) {
       // No stories to show, close viewer
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) Navigator.pop(context);
@@ -1074,15 +1180,15 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     }
 
     // Clamp _currentUserIndex to valid range
-    if (_currentUserIndex >= widget.allUserStories.length) {
-      _currentUserIndex = widget.allUserStories.length - 1;
+    if (_currentUserIndex >= _allUserStories.length) {
+      _currentUserIndex = _allUserStories.length - 1;
     }
     if (_currentUserIndex < 0) {
       _currentUserIndex = 0;
     }
 
     // Validate _currentStoryIndex for current user
-    final currentUserStories = widget.allUserStories[_currentUserIndex];
+    final currentUserStories = _allUserStories[_currentUserIndex];
     final stories = _getStoriesForUser(currentUserStories);
     if (stories.isEmpty) {
       // User has no viewable stories, close viewer
@@ -1168,7 +1274,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
             StoryContentWidget(
               userPageController: _userPageController,
               storyPageController: _storyPageController,
-              allUserStories: widget.allUserStories,
+              allUserStories: _allUserStories,
               currentUserIndex: _currentUserIndex,
               currentStoryIndex: _currentStoryIndex,
               isCurrentStoryLoaded: _isCurrentStoryLoaded,
@@ -1195,7 +1301,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
 
             // Overlay con controles
             StoryOverlayWidget(
-              allUserStories: widget.allUserStories,
+              allUserStories: _allUserStories,
               currentUserIndex: _currentUserIndex,
               currentStoryIndex: _currentStoryIndex,
               progressController: _progressController,
@@ -1216,11 +1322,11 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
             // Campo de respuesta (con botón de like)
             StoryReplySection(
               currentUserId: _controller.currentUserId ?? '',
-              storyUserId: widget.allUserStories[_currentUserIndex].userId,
+              storyUserId: _allUserStories[_currentUserIndex].userId,
               replyController: _replyController,
               replyFocusNode: _replyFocusNode,
               onSendReply: _sendReply,
-              isLiked: _isStoryLiked(_getStoriesForUser(widget.allUserStories[_currentUserIndex])[_currentStoryIndex]),
+              isLiked: _isStoryLiked(_getStoriesForUser(_allUserStories[_currentUserIndex])[_currentStoryIndex]),
               onLikeToggle: _toggleLike,
             ),
           ],

@@ -38,7 +38,7 @@ class ChatMessage {
 
   // Nuevos campos para optimistic updates
   final MessageStatus status;
-  final DateTime? localTimestamp;  // Timestamp local para ordenar mientras se envía
+  final DateTime? localTimestamp;  // Timestamp local para MOSTRAR hora mientras está pending (NO usar para ordenar)
   final int? retryCount;           // Contador de reintentos
   final String? localPath;         // Path local del archivo (para preview mientras se sube)
 
@@ -175,15 +175,16 @@ class ChatMessage {
 
   /// Debug helper para logging
   static void _debugForwardingFields(String id, Map<String, dynamic> data) {
-    final isForwarded = data['isForwarded'] ?? false;
-    final originalContactName = data['originalContactName'] as String?;
-    if (isForwarded) {
-      if (originalContactName != null) {
-        print('📥 fromMap(${id.substring(0, 8)}...): isForwarded=$isForwarded, originalContactName="$originalContactName" ✅');
-      } else {
-        print('⚠️ fromMap(${id.substring(0, 8)}...): isForwarded=$isForwarded pero originalContactName es NULL!');
-      }
-    }
+    // Removed debug logging to reduce noise - only uncomment when debugging forwarding issues
+    // final isForwarded = data['isForwarded'] ?? false;
+    // final originalContactName = data['originalContactName'] as String?;
+    // if (isForwarded) {
+    //   if (originalContactName != null) {
+    //     ReleaseLogger.log('📥 fromMap: isForwarded=$isForwarded, originalContactName="$originalContactName"', tag: 'ChatMessage');
+    //   } else {
+    //     ReleaseLogger.warning('fromMap: isForwarded=true pero originalContactName es NULL!', tag: 'ChatMessage');
+    //   }
+    // }
   }
 
   /// Factory constructor para mensajes optimistas (pendientes de envío)
@@ -380,9 +381,10 @@ class ChatMessage {
   }
 
   /// Getter para obtener el timestamp efectivo (servidor o local)
+  /// ✅ Devuelve en timezone local del usuario
   DateTime get effectiveTimestamp {
-    if (timestamp != null) return timestamp!.toDate();
-    return localTimestamp ?? DateTime.now();
+    if (timestamp != null) return timestamp!.toDate().toLocal();
+    return localTimestamp?.toLocal() ?? DateTime.now();
   }
 
   /// Getter para verificar si el mensaje está pendiente

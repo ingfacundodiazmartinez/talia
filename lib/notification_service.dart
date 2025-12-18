@@ -21,9 +21,13 @@ import 'services/voip_service.dart';
 import 'services/app_state_service.dart';
 import 'services/location_service.dart';
 import 'services/notification_tracking_service.dart';
+import 'services/notification_preferences_service.dart';
+import 'services/story_service_refactored.dart'; // ✅ FIX #11: Para refresh de stories (también exporta StoryStatus)
+import 'services/stories/story_orchestrator.dart'; // ✅ FIX #10: Para actualización inmediata de cache
 import 'utils/release_logger.dart';
 // ❌ REMOVED (DATA-ONLY): notification_deduplication_service, local_unread_count_service
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 // V2 Call System imports
 import 'calls_v2/controllers/call_controller.dart' as calls_v2;
 import 'calls_v2/screens/agora_call_screen.dart';
@@ -128,7 +132,39 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     return;
   }
 
-  // 4. LOCATION REQUEST: Actualizar ubicación silenciosamente
+  // 4. CALL CANCELLED: Cerrar CallKit cuando el caller cancela antes de que el receiver conteste
+  // ✅ SEGURO: Solo cierra UI de CallKit, NO hace navegación ni pop de stacks
+  if (messageType == 'call_cancelled') {
+    final callId = message.data['callId'] ?? '';
+
+    // Validar callId antes de proceder
+    if (callId.isEmpty) {
+      ReleaseLogger.log('⚠️ [Background] call_cancelled sin callId - ignorando', tag: 'NotificationService');
+      return;
+    }
+
+    ReleaseLogger.log('📵 [Background] Llamada cancelada por caller: $callId', tag: 'NotificationService');
+
+    try {
+      // ✅ SOLO cerrar CallKit UI - esto es seguro y no afecta navegación
+      // endCall cierra la llamada específica
+      // endAllCalls es fallback por si el ID no coincide exactamente
+      await FlutterCallkitIncoming.endCall(callId);
+      await FlutterCallkitIncoming.endAllCalls();
+      ReleaseLogger.log('✅ [Background] CallKit cerrado para llamada cancelada $callId', tag: 'NotificationService');
+    } catch (e) {
+      // ✅ Error silencioso - no crashear si falla el cierre de CallKit
+      // Puede fallar si ya estaba cerrado o el ID no existe
+      ReleaseLogger.error('⚠️ [Background] Error cerrando CallKit (no crítico): $e', tag: 'NotificationService');
+    }
+
+    // ❌ REMOVED: VoIPService().unmarkVoIPCall(callId)
+    // Los singletons NO comparten estado entre background isolate y main isolate
+    // El cleanup de VoIP se hará cuando el main isolate detecte el cambio en Firestore
+    return;
+  }
+
+  // 5. LOCATION REQUEST: Actualizar ubicación silenciosamente
   if (messageType == 'location_request') {
     try {
       await LocationService().updateLocationNow();
@@ -356,6 +392,20 @@ class NotificationService {
       '📱 [AppLifecycle] App resumed at $_lastResumedTime',
       tag: 'NotificationService',
     );
+
+    // ✅ Cachear preferencias de notificación para que Android native las lea
+    // Esto asegura que las preferencias estén sincronizadas después de background
+    NotificationPreferencesService().getPreferences().then((_) {
+      ReleaseLogger.log(
+        '✅ [AppLifecycle] Preferencias de notificación sincronizadas',
+        tag: 'NotificationService',
+      );
+    }).catchError((e) {
+      ReleaseLogger.error(
+        '❌ [AppLifecycle] Error sincronizando preferencias: $e',
+        tag: 'NotificationService',
+      );
+    });
   }
 
   // ❌ NSE FUNCTIONS REMOVED: Con DATA-ONLY strategy, ya no usamos NSE
@@ -858,7 +908,7 @@ class NotificationService {
 
     // Crear canales de notificaciones para Android
     if (Platform.isAndroid) {
-      // Canal para notificaciones normales
+      // Canal para notificaciones normales (con sonido)
       const androidChannel = AndroidNotificationChannel(
         'high_importance_channel',
         'Notificaciones Importantes',
@@ -866,6 +916,26 @@ class NotificationService {
         importance: Importance.high,
         enableVibration: true,
         playSound: true,
+      );
+
+      // ✅ FIX #4: Canal para mensajes con sonido (usado por Cloud Functions)
+      const messagesChannel = AndroidNotificationChannel(
+        'talia_messages',
+        'Mensajes',
+        description: 'Canal para mensajes de chat con sonido',
+        importance: Importance.high,
+        enableVibration: true,
+        playSound: true,
+      );
+
+      // ✅ FIX #4: Canal silencioso para usuarios que desactivaron sonido
+      const silentChannel = AndroidNotificationChannel(
+        'talia_silent',
+        'Notificaciones Silenciosas',
+        description: 'Canal para notificaciones sin sonido',
+        importance: Importance.high,
+        enableVibration: false,
+        playSound: false,
       );
 
       // Canal especial para llamadas (máxima prioridad)
@@ -885,6 +955,8 @@ class NotificationService {
           >();
 
       await plugin?.createNotificationChannel(androidChannel);
+      await plugin?.createNotificationChannel(messagesChannel);
+      await plugin?.createNotificationChannel(silentChannel);
       await plugin?.createNotificationChannel(callsChannel);
     }
   }
@@ -1209,6 +1281,48 @@ class NotificationService {
         );
         // NO llamar a showLocalChatNotification - StreamDetector ya lo hace
         return;
+      }
+
+      // ═══════════════════════════════════════════════════════════════
+      // 4. ✅ FIX #10: STORY APPROVAL - Actualización INMEDIATA del cache
+      // ═══════════════════════════════════════════════════════════════
+      // Cuando el parent aprueba/rechaza una historia, el child recibe notificación
+      // Actualizar el cache local INMEDIATAMENTE para que la UI muestre el nuevo estado
+      if (messageType == 'story_approved' || messageType == 'story_rejected') {
+        final storyId = message.data['storyId'] as String?;
+        ReleaseLogger.log(
+          '📸 [Foreground $platform] Story $messageType - storyId: $storyId',
+          tag: 'NotificationService',
+        );
+
+        try {
+          if (storyId != null && storyId.isNotEmpty) {
+            // ✅ FIX #10: Actualizar status en cache local INMEDIATAMENTE (no esperar Firestore)
+            final newStatus = messageType == 'story_approved'
+                ? StoryStatus.approved
+                : StoryStatus.rejected;
+
+            StoryOrchestrator().cacheManagerForTesting.updateStoryStatus(storyId, newStatus);
+            ReleaseLogger.log(
+              '✅ [Foreground] Cache de story $storyId actualizado a $newStatus INMEDIATAMENTE',
+              tag: 'NotificationService',
+            );
+          }
+
+          // También forzar refresh completo como backup (asíncrono, sin esperar)
+          StoryService().forceRefreshCache().catchError((e) {
+            ReleaseLogger.error(
+              '❌ [Foreground] Error en refresh backup de stories: $e',
+              tag: 'NotificationService',
+            );
+          });
+        } catch (e) {
+          ReleaseLogger.error(
+            '❌ [Foreground] Error actualizando cache de stories: $e',
+            tag: 'NotificationService',
+          );
+        }
+        // Continuar para mostrar notificación local si corresponde
       }
     });
 
@@ -1606,6 +1720,34 @@ class NotificationService {
           '📸 Notificación de historia ($type) tocada, navegando a story viewer',
           tag: 'NotificationService',
         );
+        // ✅ FIX #10: Actualizar cache INMEDIATAMENTE al tap de notificación
+        if (type == 'story_approved' || type == 'story_rejected') {
+          final storyId = data['storyId'] as String?;
+          if (storyId != null && storyId.isNotEmpty) {
+            try {
+              final newStatus = type == 'story_approved'
+                  ? StoryStatus.approved
+                  : StoryStatus.rejected;
+              StoryOrchestrator().cacheManagerForTesting.updateStoryStatus(storyId, newStatus);
+              ReleaseLogger.log(
+                '✅ [Tap] Cache de story $storyId actualizado a $newStatus',
+                tag: 'NotificationService',
+              );
+            } catch (e) {
+              ReleaseLogger.error(
+                '❌ [Tap] Error actualizando cache de stories: $e',
+                tag: 'NotificationService',
+              );
+            }
+          }
+          // También forzar refresh como backup
+          StoryService().forceRefreshCache().catchError((e) {
+            ReleaseLogger.error(
+              '❌ Error refrescando cache de stories al tap: $e',
+              tag: 'NotificationService',
+            );
+          });
+        }
         _storyNotificationTapController.add(data);
         break;
 
@@ -2386,6 +2528,25 @@ class NotificationService {
       );
       ReleaseLogger.log('   - Chat ID: $chatId', tag: 'NotificationService');
 
+      // ✅ FIX #8: Obtener preferencias de sonido/vibración del usuario
+      final currentUser = FirebaseAuth.instance.currentUser;
+      NotificationSoundConfig? soundConfig;
+      if (currentUser != null) {
+        try {
+          soundConfig = await _filter.getSoundConfig(currentUser.uid);
+          ReleaseLogger.log(
+            '🔊 [Notification] Preferencias: sound=${soundConfig.soundEnabled}, vibration=${soundConfig.vibrationEnabled}',
+            tag: 'NotificationService',
+          );
+        } catch (e) {
+          // Usar valores por defecto si falla
+          ReleaseLogger.error('⚠️ [Notification] Error obteniendo preferencias: $e', tag: 'NotificationService');
+        }
+      }
+      // Valores por defecto si no hay preferencias
+      final playSound = soundConfig?.soundEnabled ?? true;
+      final enableVibration = soundConfig?.vibrationEnabled ?? true;
+
       final title = isGroup ? '👥 $groupName' : '💬 $senderName';
       final messagePreview = messageText.length > 100
           ? '${messageText.substring(0, 100)}...'
@@ -2505,6 +2666,7 @@ class NotificationService {
       );
 
       // Crear detalles de notificación Android con MessagingStyle
+      // ✅ FIX #8: Usar preferencias de sonido/vibración del usuario
       final androidDetails = AndroidNotificationDetails(
         'high_importance_channel',
         'Notificaciones Importantes',
@@ -2516,8 +2678,8 @@ class NotificationService {
             ? FilePathAndroidBitmap(photoPath)
             : null, // ✅ Avatar circular grande a la IZQUIERDA
         showWhen: true,
-        enableVibration: true,
-        playSound: true,
+        enableVibration: enableVibration, // ✅ FIX: Usar preferencia
+        playSound: playSound, // ✅ FIX: Usar preferencia
         styleInformation:
             messagingStyle, // ✅ MessagingStyle - foto a la IZQUIERDA
         visibility: NotificationVisibility.public,
@@ -2546,6 +2708,7 @@ class NotificationService {
             'chatId': chatId,
             'isGroup': isGroup,
             'senderPhotoUrl': photoPath ?? photoUrl ?? '',
+            'playSound': playSound, // ✅ FIX #8: Pasar preferencia de sonido
           });
 
           success = result == true;
@@ -2570,7 +2733,7 @@ class NotificationService {
             final iosDetails = DarwinNotificationDetails(
               presentAlert: true,
               presentBadge: true,
-              presentSound: true,
+              presentSound: playSound, // ✅ FIX #8: Usar preferencia del usuario
               threadIdentifier: chatId,
             );
             final details = NotificationDetails(iOS: iosDetails);
