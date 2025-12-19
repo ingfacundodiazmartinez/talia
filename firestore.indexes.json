@@ -230,73 +230,12 @@
       "density": "SPARSE_ALL"
     },
     {
-      "collectionGroup": "contact_requests",
+      "collectionGroup": "contacts",
       "queryScope": "COLLECTION",
       "fields": [
         {
-          "fieldPath": "childId",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "status",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "__name__",
-          "order": "ASCENDING"
-        }
-      ],
-      "density": "SPARSE_ALL"
-    },
-    {
-      "collectionGroup": "contact_requests",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "contactDocId",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "childId",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "status",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "__name__",
-          "order": "ASCENDING"
-        }
-      ],
-      "density": "SPARSE_ALL"
-    },
-    {
-      "collectionGroup": "contact_requests",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "contactId",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "status",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "__name__",
-          "order": "ASCENDING"
-        }
-      ],
-      "density": "SPARSE_ALL"
-    },
-    {
-      "collectionGroup": "contact_requests",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "parentId",
-          "order": "ASCENDING"
+          "fieldPath": "users",
+          "arrayConfig": "CONTAINS"
         },
         {
           "fieldPath": "status",
@@ -318,12 +257,12 @@
           "arrayConfig": "CONTAINS"
         },
         {
-          "fieldPath": "status",
-          "order": "ASCENDING"
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
         },
         {
           "fieldPath": "__name__",
-          "order": "ASCENDING"
+          "order": "DESCENDING"
         }
       ],
       "density": "SPARSE_ALL"

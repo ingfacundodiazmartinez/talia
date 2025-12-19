@@ -5,6 +5,7 @@ import 'package:image_picker/image_picker.dart';
 import '../models/parent.dart';
 import '../services/image_service.dart';
 import '../services/media_compression_service.dart';
+import '../services/data_management_service.dart';
 import '../utils/release_logger.dart';
 
 /// Controller que maneja la lógica del perfil de usuario
@@ -124,6 +125,9 @@ class ProfileController {
       if (_parent != null) {
         await _parent!.logout();
       }
+
+      // Limpiar todo el cache local antes de cerrar sesión
+      await DataManagementService().clearAllLocalDataOnLogout();
 
       await _auth.signOut();
     } catch (e) {

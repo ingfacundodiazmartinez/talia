@@ -80,9 +80,24 @@ class Contact {
   /// Solo presente en contactos con status='potential'
   final Map<String, String> phones;
 
+  /// ID del usuario que descubrió este contacto potential
+  /// Solo presente en contactos con status='potential'
+  /// Este usuario es el único que puede ver el contacto como sugerido
+  final String? discoveredBy;
+
   /// Tipo de contacto (null para contactos normales)
   /// Valores especiales: 'parent_child_link' (no mostrar en whitelist)
   final String? type;
+
+  /// Indica si el contacto está bloqueado
+  /// Denormalizado desde la colección chats para evitar joins
+  final bool blocked;
+
+  /// ID del usuario que bloqueó el contacto
+  final String? blockedBy;
+
+  /// Fecha en que se bloqueó el contacto
+  final DateTime? blockedAt;
 
   Contact({
     required this.id,
@@ -98,7 +113,11 @@ class Contact {
     this.revokedBy,
     this.revokedReason,
     this.phones = const {},
+    this.discoveredBy,
     this.type,
+    this.blocked = false,
+    this.blockedBy,
+    this.blockedAt,
   });
 
   // ═══════════════════════════════════════════════════════════════
@@ -138,7 +157,11 @@ class Contact {
       revokedBy: data['revokedBy'],
       revokedReason: data['revokedReason'],
       phones: phones,
+      discoveredBy: data['discoveredBy'],
       type: data['type'],
+      blocked: data['blocked'] ?? false,
+      blockedBy: data['blockedBy'],
+      blockedAt: (data['blockedAt'] as Timestamp?)?.toDate(),
     );
   }
 
@@ -168,6 +191,9 @@ class Contact {
       if (revokedBy != null) 'revokedBy': revokedBy,
       if (revokedReason != null) 'revokedReason': revokedReason,
       if (phones.isNotEmpty) 'phones': phones,
+      if (blocked) 'blocked': blocked,
+      if (blockedBy != null) 'blockedBy': blockedBy,
+      if (blockedAt != null) 'blockedAt': Timestamp.fromDate(blockedAt!),
     };
   }
 
@@ -180,6 +206,26 @@ class Contact {
   bool get isRejected => status == 'rejected';
   bool get isRevoked => status == 'revoked';
   bool get isPotential => status == 'potential';
+  bool get isBlocked => blocked;
+
+  /// Verificar si el contacto fue bloqueado por un usuario específico
+  bool isBlockedByUser(String userId) => blocked && blockedBy == userId;
+
+  /// Obtener el estado del contacto para un usuario específico
+  /// Retorna: approved, pending, rejected, potential, revoked
+  String getStatusForUser(String userId) {
+    if (isApproved) return 'approved';
+    if (isRevoked) return 'revoked';
+    if (isPotential) return 'potential';
+
+    final myApproval = approvals[userId];
+    if (myApproval != null) {
+      if (myApproval.isPending) return 'pending';
+      if (myApproval.isRejected) return 'rejected';
+    }
+
+    return 'approved';
+  }
 
   /// Obtener el ID del otro usuario en el contacto
   String getOtherUserId(String currentUserId) {
@@ -189,14 +235,8 @@ class Contact {
     );
   }
 
-  /// Verificar si un padre específico necesita aprobar
-  bool needsApprovalFrom(String parentId) {
-    return approvals.values.any(
-      (a) => a.isPending && a.parentId == parentId,
-    );
-  }
-
   /// Obtener los childIds que necesitan aprobación de un padre
+  /// Para verificar si necesita aprobación: getChildIdsNeedingApprovalFrom(parentId).isNotEmpty
   List<String> getChildIdsNeedingApprovalFrom(String parentId) {
     return approvals.entries
         .where((e) => e.value.isPending && e.value.parentId == parentId)
@@ -280,89 +320,37 @@ class Contact {
             snapshot.docs.map((doc) => Contact.fromFirestore(doc)).toList());
   }
 
-  /// Stream de contactos aprobados de un usuario
-  static Stream<List<Contact>> watchApprovedByUser(String userId) {
-    return FirebaseFirestore.instance
+  /// Query paginada de contactos (para lazy loading)
+  /// Retorna los primeros [limit] contactos, ordenados por createdAt desc
+  static Future<List<Contact>> getPagedContacts(
+    String userId, {
+    int limit = 50,
+    DocumentSnapshot? startAfter,
+  }) async {
+    Query query = FirebaseFirestore.instance
         .collection('contacts')
         .where('users', arrayContains: userId)
-        .where('status', isEqualTo: 'approved')
-        .snapshots()
-        .map((snapshot) =>
-            snapshot.docs.map((doc) => Contact.fromFirestore(doc)).toList());
+        .orderBy('createdAt', descending: true)
+        .limit(limit);
+
+    if (startAfter != null) {
+      query = query.startAfterDocument(startAfter);
+    }
+
+    final snapshot = await query.get();
+    return snapshot.docs.map((doc) => Contact.fromFirestore(doc)).toList();
   }
 
-  /// Stream de contactos sugeridos (potential) de un usuario
-  /// Estos son contactos descubiertos durante sync que aún no han sido solicitados
-  static Stream<List<Contact>> watchPotentialForUser(String userId) {
-    return FirebaseFirestore.instance
+  /// Obtener el último documento para paginación
+  static Future<DocumentSnapshot?> getLastDocument(String userId) async {
+    final snapshot = await FirebaseFirestore.instance
         .collection('contacts')
         .where('users', arrayContains: userId)
-        .where('status', isEqualTo: 'potential')
-        .snapshots()
-        .map((snapshot) =>
-            snapshot.docs.map((doc) => Contact.fromFirestore(doc)).toList());
-  }
+        .orderBy('createdAt', descending: true)
+        .limit(1)
+        .get();
 
-  // ═══════════════════════════════════════════════════════════════
-  // CHILD QUERIES (para pantalla de contactos del niño)
-  // ═══════════════════════════════════════════════════════════════
-
-  /// Stream de contactos donde MI aprobación está pendiente (mis padres deben aprobar)
-  /// Filtra contactos donde approvals[childId].status == 'pending'
-  static Stream<List<Contact>> watchPendingForChild(String childId) {
-    return FirebaseFirestore.instance
-        .collection('contacts')
-        .where('users', arrayContains: childId)
-        .snapshots()
-        .map((snapshot) => snapshot.docs
-            .map((doc) => Contact.fromFirestore(doc))
-            .where((contact) {
-              final approval = contact.approvals[childId];
-              return approval != null && approval.isPending;
-            })
-            .toList());
-  }
-
-  /// Stream de contactos donde MI aprobación fue rechazada
-  static Stream<List<Contact>> watchRejectedForChild(String childId) {
-    return FirebaseFirestore.instance
-        .collection('contacts')
-        .where('users', arrayContains: childId)
-        .snapshots()
-        .map((snapshot) => snapshot.docs
-            .map((doc) => Contact.fromFirestore(doc))
-            .where((contact) {
-              final approval = contact.approvals[childId];
-              return approval != null && approval.isRejected;
-            })
-            .toList());
-  }
-
-  /// Stream de contactos donde el OTRO usuario tiene aprobación pendiente
-  /// (sus padres deben aprobar)
-  static Stream<List<Contact>> watchOtherPendingForChild(String childId) {
-    return FirebaseFirestore.instance
-        .collection('contacts')
-        .where('users', arrayContains: childId)
-        .snapshots()
-        .map((snapshot) => snapshot.docs
-            .map((doc) => Contact.fromFirestore(doc))
-            .where((contact) {
-              final otherUserId = contact.getOtherUserId(childId);
-              final otherApproval = contact.approvals[otherUserId];
-              // Mi lado está ok pero el otro está pendiente
-              final myApproval = contact.approvals[childId];
-              final myStatusOk = myApproval == null || myApproval.isApproved;
-              return myStatusOk && otherApproval != null && otherApproval.isPending;
-            })
-            .toList());
-  }
-
-  /// Obtener el nombre del contacto (otro usuario) desde datos de usuario
-  /// Helper para UI - debe llamarse con datos de /users
-  String getContactName(String currentUserId, Map<String, dynamic>? otherUserData) {
-    if (otherUserData == null) return 'Usuario';
-    return otherUserData['name'] as String? ?? 'Usuario';
+    return snapshot.docs.isNotEmpty ? snapshot.docs.last : null;
   }
 
   // ═══════════════════════════════════════════════════════════════

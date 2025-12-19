@@ -8,6 +8,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'dart:io';
 import 'dart:math';
 import 'services/user_role_service.dart';
+import 'services/user_cache_service.dart';
 import 'widgets/location_permission_dialog.dart';
 import 'utils/release_logger.dart';
 
@@ -564,6 +565,9 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
 
         if (result.data['success'] == true) {
           ReleaseLogger.log('Vínculo creado por Cloud Function - Padre: ${result.data['parentName']}, Hijo: ${result.data['childName']}', tag: 'LinkParentChild');
+
+          // Cachear datos del padre en Hive para que aparezca correctamente en contactos
+          await UserCacheService().refreshUser(parentId);
         } else {
           throw Exception('Error en Cloud Function: ${result.data['message'] ?? 'Unknown error'}');
         }

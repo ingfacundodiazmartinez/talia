@@ -12,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:flutter/foundation.dart';
 import '../utils/release_logger.dart';
+import 'story_service_refactored.dart';
 
 /// Política de retención de datos
 class RetentionPolicy {
@@ -590,6 +591,71 @@ class DataManagementService {
     } catch (e) {
       ReleaseLogger.error('❌ Error getting data usage stats: $e', tag: 'DataManagementService');
       rethrow;
+    }
+  }
+
+  /// Limpiar TODO el cache local al cerrar sesión
+  ///
+  /// Limpia SharedPreferences (excepto configuraciones de dispositivo),
+  /// Hive boxes, y cache en memoria de servicios.
+  Future<void> clearAllLocalDataOnLogout() async {
+    ReleaseLogger.log('🧹 Clearing all local data on logout...', tag: 'DataManagementService');
+
+    try {
+      // 1. Limpiar SharedPreferences (excepto configuraciones de dispositivo)
+      final prefs = await SharedPreferences.getInstance();
+      final keysToKeep = <String>{
+        'theme_mode',           // Configuración de tema
+        'accessibility_',       // Configuraciones de accesibilidad
+        'first_launch',         // Flag de primer lanzamiento
+      };
+
+      final allKeys = prefs.getKeys().toList();
+      for (final key in allKeys) {
+        // Mantener keys que empiecen con los prefijos protegidos
+        final shouldKeep = keysToKeep.any((prefix) => key.startsWith(prefix));
+        if (!shouldKeep) {
+          await prefs.remove(key);
+        }
+      }
+      ReleaseLogger.log('✅ SharedPreferences cleared (kept device settings)', tag: 'DataManagementService');
+
+      // 2. Limpiar Hive boxes
+      final boxNames = [
+        'offline_queue',
+        'message_cache',
+        'user_cache',
+        'contact_cache',
+        'notification_cache',
+        'waveform_cache',
+        'stickers_cache',
+      ];
+
+      for (final boxName in boxNames) {
+        try {
+          if (Hive.isBoxOpen(boxName)) {
+            final box = Hive.box(boxName);
+            await box.clear();
+            ReleaseLogger.log('✅ Hive box "$boxName" cleared', tag: 'DataManagementService');
+          }
+        } catch (e) {
+          // Box might not exist, that's fine
+          ReleaseLogger.log('⚠️ Could not clear Hive box "$boxName": $e', tag: 'DataManagementService');
+        }
+      }
+
+      // 3. Limpiar servicios con cache en memoria
+      // StoryService - usar resetForLogout() que limpia todo incluyendo _hasBeenPopulated
+      try {
+        StoryService().resetForLogout();
+        ReleaseLogger.log('✅ StoryService cache cleared', tag: 'DataManagementService');
+      } catch (e) {
+        ReleaseLogger.log('⚠️ Could not clear StoryService cache: $e', tag: 'DataManagementService');
+      }
+
+      ReleaseLogger.log('✅ All local data cleared on logout', tag: 'DataManagementService');
+    } catch (e) {
+      ReleaseLogger.error('❌ Error clearing local data on logout: $e', tag: 'DataManagementService');
     }
   }
 

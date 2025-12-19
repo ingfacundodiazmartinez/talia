@@ -463,8 +463,3 @@ async function getLinkedParents(userId) {
   return links.docs.map((doc) => doc.data().parentId);
 }
 
-/**
- * Cloud Function: Crear solicitud de contacto
- * Solo esta función puede crear contact_requests
- */
-

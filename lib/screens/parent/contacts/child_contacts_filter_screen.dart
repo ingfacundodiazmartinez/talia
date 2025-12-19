@@ -48,9 +48,14 @@ class _ChildContactsFilterScreenState extends State<ChildContactsFilterScreen> {
     try {
       ReleaseLogger.log('🔧 Verificando linkedChildrenIds via Cloud Function...', tag: 'ChildContactsFilter');
 
-      final result = await _functions.httpsCallable('ensureLinkedChildrenIds').call({
-        'childId': widget.childId,
-      });
+      // Timeout de 10 segundos para evitar spinner infinito
+      final result = await _functions
+          .httpsCallable('ensureLinkedChildrenIds')
+          .call({'childId': widget.childId})
+          .timeout(
+            Duration(seconds: 10),
+            onTimeout: () => throw Exception('Timeout verificando vínculo'),
+          );
 
       final data = Map<String, dynamic>.from(result.data as Map);
       final success = data['success'] == true;
@@ -67,7 +72,9 @@ class _ChildContactsFilterScreenState extends State<ChildContactsFilterScreen> {
       return false;
     } catch (e) {
       ReleaseLogger.error('Error en ensureLinkedChildrenIds: $e', tag: 'ChildContactsFilter');
-      return false;
+      // En caso de error, intentar continuar sin verificación
+      // El query a Firestore fallará si no hay permisos
+      return true;
     }
   }
 
@@ -93,7 +100,11 @@ class _ChildContactsFilterScreenState extends State<ChildContactsFilterScreen> {
       final contactsSnapshot = await _firestore
           .collection('contacts')
           .where('users', arrayContains: widget.childId)
-          .get();
+          .get()
+          .timeout(
+            Duration(seconds: 15),
+            onTimeout: () => throw Exception('Timeout cargando contactos'),
+          );
 
       if (!mounted) return;
 

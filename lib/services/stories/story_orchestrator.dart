@@ -301,6 +301,13 @@ class StoryOrchestrator {
     _cacheManager.invalidateCache();
   }
 
+  /// Limpiar cache completamente al cerrar sesión
+  /// Resetea todo incluyendo _hasBeenPopulated
+  void resetForLogout() {
+    stopBackgroundProcesses();
+    _cacheManager.resetForLogout();
+  }
+
   /// Obtener métricas de performance
   Map<String, dynamic> getPerformanceMetrics() {
     return {

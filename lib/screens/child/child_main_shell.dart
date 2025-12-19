@@ -261,9 +261,7 @@ class _ChildMainShellState extends State<ChildMainShell> {
           ),
           Offstage(
             offstage: _selectedIndex != 1,
-            child: _mainController.childController != null
-                ? _buildNavigator(_contactsNavigatorKey, ChildContactsScreen(childId: currentUserId, controller: _mainController.childController!))
-                : Center(child: CircularProgressIndicator()),
+            child: _buildNavigator(_contactsNavigatorKey, ChildContactsScreen(childId: currentUserId)),
           ),
           Offstage(
             offstage: _selectedIndex != 2,

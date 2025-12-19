@@ -1,148 +1,217 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:cloud_functions/cloud_functions.dart';
-import 'package:rxdart/rxdart.dart';
 import '../models/contact.dart' as contact_model;
 import '../models/grouped_contact.dart';
 import '../models/user.dart' as app_user;
 import '../groups/groups.dart';
+import '../services/whitelist/whitelist_services.dart';
 import '../utils/release_logger.dart';
 
-/// Controller simplificado para Control Parental (Lista Blanca)
+/// Controller para Control Parental (Lista Blanca)
 ///
-/// Arquitectura unificada:
-/// - Una sola query a `/contacts` donde `parentViewers` contiene el parentId
-/// - Escrituras directas a Firestore para approve/reject
-/// - Fetch de datos de usuarios fresh desde `/users`
-/// - Mantiene soporte para grupos V2 (flujo separado)
+/// Arquitectura CODING_RULES:
+/// - Controller solo coordina entre UI y Services
+/// - Cada acción delega a un service atómico
+/// - Lazy loading con cursor-based pagination
+/// - Cache en memoria para búsqueda sin recrear streams
 class WhitelistController {
   final String parentId;
-  final FirebaseFirestore _firestore;
-  final FirebaseFunctions _functions;
+
+  // ═══════════════════════════════════════════════════════════════
+  // SERVICES (Inyección de dependencias)
+  // ═══════════════════════════════════════════════════════════════
+
+  final ListWhitelistContactsService _listContactsService;
+  final ListGroupApprovalsService _listGroupsService;
+  final GetLinkedChildrenService _linkedChildrenService;
+  final GetSharedGroupsService _sharedGroupsService;
+  final ApproveWhitelistContactService _approveService;
+  final RejectWhitelistContactService _rejectService;
+  final RevokeWhitelistContactService _revokeService;
+  final ReapproveWhitelistContactService _reapproveService;
+  final ApproveGroupMembershipService _approveGroupService;
+  final RejectGroupMembershipService _rejectGroupService;
+  final RevokeGroupMembershipService _revokeGroupService;
+  final GetContactModerationService _getModerationService;
+  final UpdateContactModerationService _updateModerationService;
+  final MarkWhitelistNotificationsReadService _markNotificationsReadService;
+
+  // ═══════════════════════════════════════════════════════════════
+  // ESTADO
+  // ═══════════════════════════════════════════════════════════════
 
   // Estado de procesamiento
   final Set<String> processingRequests = {};
   final Set<String> selectedRequests = {};
 
-  // Cache de datos de usuarios
+  // Cache para búsqueda y lazy loading
+  List<contact_model.Contact> _contactsCache = [];
+  List<GroupApprovalRequest> _groupRequestsCache = [];
+  List<GroupMembershipInfo> _groupMembershipsCache = [];
   final Map<String, Map<String, dynamic>> _userDataCache = {};
+  List<String> _linkedChildrenIds = [];
+
+  // Streams
+  StreamSubscription<List<contact_model.Contact>>? _contactsSubscription;
+  StreamSubscription<List<GroupApprovalRequest>>? _groupRequestsSubscription;
+  StreamSubscription<List<GroupMembershipInfo>>? _groupMembershipsSubscription;
+  StreamSubscription<List<String>>? _linkedChildrenSubscription;
+
+  // Callbacks para notificar cambios a la UI
+  VoidCallback? onDataChanged;
 
   WhitelistController({
     required this.parentId,
-    FirebaseFirestore? firestore,
-    FirebaseFunctions? functions,
-  })  : _firestore = firestore ?? FirebaseFirestore.instance,
-        _functions = functions ?? FirebaseFunctions.instance;
+    ListWhitelistContactsService? listContactsService,
+    ListGroupApprovalsService? listGroupsService,
+    GetLinkedChildrenService? linkedChildrenService,
+    GetSharedGroupsService? sharedGroupsService,
+    ApproveWhitelistContactService? approveService,
+    RejectWhitelistContactService? rejectService,
+    RevokeWhitelistContactService? revokeService,
+    ReapproveWhitelistContactService? reapproveService,
+    ApproveGroupMembershipService? approveGroupService,
+    RejectGroupMembershipService? rejectGroupService,
+    RevokeGroupMembershipService? revokeGroupService,
+    GetContactModerationService? getModerationService,
+    UpdateContactModerationService? updateModerationService,
+    MarkWhitelistNotificationsReadService? markNotificationsReadService,
+  })  : _listContactsService = listContactsService ?? ListWhitelistContactsService(),
+        _listGroupsService = listGroupsService ?? ListGroupApprovalsService(),
+        _linkedChildrenService = linkedChildrenService ?? GetLinkedChildrenService(),
+        _sharedGroupsService = sharedGroupsService ?? GetSharedGroupsService(),
+        _approveService = approveService ?? ApproveWhitelistContactService(),
+        _rejectService = rejectService ?? RejectWhitelistContactService(),
+        _revokeService = revokeService ?? RevokeWhitelistContactService(),
+        _reapproveService = reapproveService ?? ReapproveWhitelistContactService(),
+        _approveGroupService = approveGroupService ?? ApproveGroupMembershipService(),
+        _rejectGroupService = rejectGroupService ?? RejectGroupMembershipService(),
+        _revokeGroupService = revokeGroupService ?? RevokeGroupMembershipService(),
+        _getModerationService = getModerationService ?? GetContactModerationService(),
+        _updateModerationService = updateModerationService ?? UpdateContactModerationService(),
+        _markNotificationsReadService = markNotificationsReadService ?? MarkWhitelistNotificationsReadService();
 
   // ═══════════════════════════════════════════════════════════════
-  // STREAM PRINCIPAL - CONTACTOS DE HIJOS VINCULADOS
+  // INICIALIZACIÓN Y STREAMS
   // ═══════════════════════════════════════════════════════════════
 
-  /// Stream de todos los contactos de los hijos vinculados
-  /// Combina queries por cada hijo para obtener todos sus contactos
-  Stream<List<contact_model.Contact>> getContactsStream() {
-    // Primero obtener los hijos vinculados, luego crear streams para cada uno
-    return Stream.fromFuture(_getLinkedChildrenIds()).asyncExpand((childrenIds) {
-      if (childrenIds.isEmpty) {
-        ReleaseLogger.log('[Whitelist] No hay hijos vinculados', tag: 'WhitelistController');
-        return Stream.value(<contact_model.Contact>[]);
+  /// Inicializar controller y comenzar a escuchar cambios
+  Future<void> initialize() async {
+    // 1. Obtener hijos vinculados
+    _linkedChildrenIds = await _linkedChildrenService.getIds(parentId);
+
+    // 2. Escuchar cambios en hijos vinculados
+    _linkedChildrenSubscription = _linkedChildrenService
+        .watchIds(parentId)
+        .listen((ids) {
+      if (!_areListsEqual(_linkedChildrenIds, ids)) {
+        _linkedChildrenIds = ids;
+        _restartContactsStream();
       }
+    });
 
-      ReleaseLogger.log('[Whitelist] Buscando contactos de ${childrenIds.length} hijos', tag: 'WhitelistController');
+    // 3. Iniciar streams de datos
+    _startStreams();
+  }
 
-      // Crear un stream por cada hijo
-      final streams = childrenIds.map((childId) {
-        return _firestore
-            .collection('contacts')
-            .where('users', arrayContains: childId)
-            .snapshots()
-            .map((snapshot) =>
-                snapshot.docs
-                    .map((doc) => contact_model.Contact.fromFirestore(doc))
-                    .where((contact) => contact.isRealContact) // Filtrar parent_child_link
-                    .toList());
-      }).toList();
+  void _startStreams() {
+    if (_linkedChildrenIds.isEmpty) {
+      ReleaseLogger.log('No hay hijos vinculados', tag: 'WhitelistController');
+      return;
+    }
 
-      // Combinar todos los streams y eliminar duplicados
-      if (streams.isEmpty) {
-        return Stream.value(<contact_model.Contact>[]);
-      }
+    // Stream de contactos - query por parentViewers (requerido por Security Rules)
+    _contactsSubscription = _listContactsService
+        .watchByParent(parentId)
+        .listen((contacts) {
+      _contactsCache = contacts;
+      onDataChanged?.call();
+    });
 
-      if (streams.length == 1) {
-        return streams.first;
-      }
+    // Stream de solicitudes de grupo pendientes
+    _groupRequestsSubscription = _listGroupsService
+        .watchPendingRequests(parentId)
+        .listen((requests) {
+      _groupRequestsCache = requests;
+      onDataChanged?.call();
+    });
 
-      // Combinar múltiples streams
-      return Rx.combineLatestList(streams).map((listOfLists) {
-        final allContacts = <String, contact_model.Contact>{};
-        for (final list in listOfLists) {
-          for (final contact in list) {
-            allContacts[contact.id] = contact;
-          }
-        }
-        return allContacts.values.toList();
-      });
+    // Stream de membresías de grupo aprobadas
+    _groupMembershipsSubscription = _listGroupsService
+        .watchApprovedMemberships(_linkedChildrenIds)
+        .listen((memberships) {
+      _groupMembershipsCache = memberships;
+      onDataChanged?.call();
     });
   }
 
-  /// Stream de grupos V2 pendientes (flujo separado)
-  Stream<List<GroupApprovalRequest>> getPendingGroupApprovalRequests() {
-    return GroupApprovalRepository().watchPendingRequestsForParent(parentId);
+  void _restartContactsStream() {
+    _contactsSubscription?.cancel();
+    _groupMembershipsSubscription?.cancel();
+    _startStreams();
   }
 
-  /// Stream de grupos donde los hijos son miembros aprobados
-  /// Usa arrayContainsAny para una sola query (hasta 30 hijos)
+  bool _areListsEqual(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (int i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // STREAMS PÚBLICOS (para compatibilidad)
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Stream de contactos (delega a service)
+  /// Query por parentViewers (requerido por Security Rules)
+  Stream<List<contact_model.Contact>> getContactsStream() {
+    return _listContactsService.watchByParent(parentId);
+  }
+
+  /// Stream de solicitudes de grupo pendientes
+  Stream<List<GroupApprovalRequest>> getPendingGroupApprovalRequests() {
+    return _listGroupsService.watchPendingRequests(parentId);
+  }
+
+  /// Stream de grupos aprobados
   Stream<List<Map<String, dynamic>>> getApprovedGroupMembershipsStream() {
-    return Stream.fromFuture(_getLinkedChildrenIds()).asyncExpand((childrenIds) {
+    return Stream.fromFuture(_linkedChildrenService.getIds(parentId))
+        .asyncExpand((childrenIds) {
       if (childrenIds.isEmpty) {
-        ReleaseLogger.log('[Whitelist] No hay hijos vinculados para buscar grupos', tag: 'WhitelistController');
         return Stream.value(<Map<String, dynamic>>[]);
       }
-
-      ReleaseLogger.log('[Whitelist] Buscando grupos aprobados para ${childrenIds.length} hijos', tag: 'WhitelistController');
-
-      // Una sola query usando arrayContainsAny (hasta 30 valores)
-      return _firestore
-          .collection('groups_v2')
-          .where('members', arrayContainsAny: childrenIds)
-          .snapshots()
-          .map((snapshot) {
-            final results = <Map<String, dynamic>>[];
-
-            for (final doc in snapshot.docs) {
-              final data = doc.data();
-              final members = List<String>.from(data['members'] ?? []);
-
-              // Para cada hijo que es miembro de este grupo, crear una entrada
-              for (final childId in childrenIds) {
-                if (members.contains(childId)) {
-                  results.add({
-                    'groupId': doc.id,
-                    'groupName': data['name'] ?? 'Grupo',
-                    'groupAvatar': data['avatar'],
-                    'groupDescription': data['description'],
-                    'memberCount': data['memberCount'] ?? 0,
-                    'childId': childId,
-                    'members': members,
-                    'memberDetails': data['memberDetails'] ?? {},
-                  });
-                }
-              }
-            }
-
-            ReleaseLogger.log('[Whitelist] Encontrados ${results.length} membresías de grupo aprobadas', tag: 'WhitelistController');
-            return results;
-          });
+      return _listGroupsService.watchApprovedMemberships(childrenIds)
+          .map((memberships) => memberships.map((m) => m.toMap()).toList());
     });
   }
+
+  /// Stream de IDs de hijos vinculados
+  Stream<List<String>> getLinkedChildrenIdsStream() {
+    return _linkedChildrenService.watchIds(parentId);
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // ACCESO A CACHE (para búsqueda sin recrear streams)
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Contactos en cache
+  List<contact_model.Contact> get contactsCache => List.unmodifiable(_contactsCache);
+
+  /// Solicitudes de grupo en cache
+  List<GroupApprovalRequest> get groupRequestsCache => List.unmodifiable(_groupRequestsCache);
+
+  /// Membresías de grupo en cache
+  List<GroupMembershipInfo> get groupMembershipsCache => List.unmodifiable(_groupMembershipsCache);
+
+  /// IDs de hijos vinculados
+  List<String> get linkedChildrenIds => List.unmodifiable(_linkedChildrenIds);
 
   // ═══════════════════════════════════════════════════════════════
   // PROCESAMIENTO Y AGRUPAMIENTO
   // ═══════════════════════════════════════════════════════════════
 
-  /// Agrupa contactos por persona (el otro usuario en el contacto)
-  /// y resuelve datos de usuarios fresh
-  /// Incluye grupos aprobados donde los hijos son miembros
+  /// Agrupa contactos por persona y resuelve datos de usuarios
   Future<List<GroupedContact>> groupContactsByPerson(
     List<contact_model.Contact> contacts,
     List<GroupApprovalRequest> groupRequests,
@@ -155,45 +224,35 @@ class WhitelistController {
     for (final contact in contacts) {
       userIdsToResolve.addAll(contact.users);
     }
-
-    // Obtener IDs de hijos vinculados
-    final linkedChildrenIds = await _getLinkedChildrenIds();
-    userIdsToResolve.addAll(linkedChildrenIds);
+    userIdsToResolve.addAll(_linkedChildrenIds);
 
     // Batch fetch de datos de usuarios
     await _batchFetchUserData(userIdsToResolve.toList());
 
     // Procesar contactos individuales
     for (final contact in contacts) {
-      // Determinar cuál usuario es el hijo y cuál es el contacto
       for (final userId in contact.users) {
-        if (!linkedChildrenIds.contains(userId)) continue;
+        if (!_linkedChildrenIds.contains(userId)) continue;
 
         final childId = userId;
         final contactUserId = contact.getOtherUserId(childId);
         if (contactUserId.isEmpty) continue;
 
-        // Obtener datos del contacto y del hijo
         final contactData = _userDataCache[contactUserId] ?? {};
         final childData = _userDataCache[childId] ?? {};
 
         final contactName =
             contactData['name'] as String? ?? contactData['displayName'] as String? ?? 'Usuario';
-        final contactPhone = contactData['phoneNumber'] as String? ??
-            contactData['phone'] as String?;
+        final contactPhone = contactData['phoneNumber'] as String? ?? contactData['phone'] as String?;
         final contactPhoto = contactData['photoURL'] as String?;
         final childName = childData['name'] as String? ?? 'Hijo';
         final childPhoto = childData['photoURL'] as String?;
 
-        // Obtener estado de aprobación para este hijo
-        // IMPORTANTE: Si el contacto está revocado a nivel documento, usar ese status
-        // porque la CF solo actualiza contact.status, no approvals.{childId}.status
         final approval = contact.getApprovalForChild(childId);
         final status = contact.status == 'revoked'
             ? 'revoked'
             : (approval?.status ?? contact.status);
 
-        // Crear o actualizar grupo
         if (!grouped.containsKey(contactUserId)) {
           grouped[contactUserId] = GroupedContact(
             contactId: contactUserId,
@@ -204,7 +263,6 @@ class WhitelistController {
           );
         }
 
-        // Verificar si ya existe esta relación hijo-contacto
         final existingIndex = grouped[contactUserId]!
             .childRelations
             .indexWhere((r) => r.childId == childId);
@@ -246,20 +304,18 @@ class WhitelistController {
       final childName = childData['name'] as String? ?? 'Hijo';
       final childPhoto = childData['photoURL'] as String?;
 
-      // Usar groupId como key (prefijado para evitar colisiones con contactos)
       final key = 'group_$groupId';
 
       if (!grouped.containsKey(key)) {
         grouped[key] = GroupedContact(
           contactId: groupId,
           contactName: groupName,
-          contactPhone: null, // Los grupos no tienen teléfono
+          contactPhone: null,
           contactPhotoURL: groupAvatar,
           childRelations: [],
         );
       }
 
-      // Verificar si ya existe esta relación hijo-grupo
       final existingIndex = grouped[key]!
           .childRelations
           .indexWhere((r) => r.childId == childId);
@@ -273,7 +329,7 @@ class WhitelistController {
               childName: childName,
               childPhotoURL: childPhoto,
               status: 'pending',
-              contactDocId: request.id, // ID del request para aprobar/rechazar
+              contactDocId: request.id,
               type: 'group_v2',
               data: {
                 'groupId': groupId,
@@ -301,20 +357,18 @@ class WhitelistController {
       final childName = childData['name'] as String? ?? 'Hijo';
       final childPhoto = childData['photoURL'] as String?;
 
-      // Usar groupId como key (prefijado para evitar colisiones con contactos)
       final key = 'group_$groupId';
 
       if (!grouped.containsKey(key)) {
         grouped[key] = GroupedContact(
           contactId: groupId,
           contactName: groupName,
-          contactPhone: null, // Los grupos no tienen teléfono
+          contactPhone: null,
           contactPhotoURL: groupAvatar,
           childRelations: [],
         );
       }
 
-      // Verificar si ya existe esta relación hijo-grupo
       final existingIndex = grouped[key]!
           .childRelations
           .indexWhere((r) => r.childId == childId);
@@ -344,13 +398,10 @@ class WhitelistController {
       }
     }
 
-    // Convertir a lista y ordenar
     final result = grouped.values.toList();
     result.sort((a, b) {
-      // Primero por prioridad (pending > approved > rejected)
       final priorityCompare = a.sortPriority.compareTo(b.sortPriority);
       if (priorityCompare != 0) return priorityCompare;
-      // Luego alfabético por nombre
       return a.contactName.toLowerCase().compareTo(b.contactName.toLowerCase());
     });
 
@@ -391,132 +442,45 @@ class WhitelistController {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // ACCIONES DIRECTAS A FIRESTORE (SIN CLOUD FUNCTIONS)
+  // ACCIONES (delegan a services)
   // ═══════════════════════════════════════════════════════════════
 
-  /// Aprobar un contacto - escritura directa a Firestore
+  /// Aprobar un contacto
   Future<Map<String, dynamic>> approveContact({
     required String contactDocId,
     required String childId,
   }) async {
-    ReleaseLogger.log('🔄 [ApproveContact] Iniciando aprobación: contactDocId=$contactDocId, childId=$childId', tag: 'WhitelistController');
     processingRequests.add(contactDocId);
 
-    try {
-      final contactRef = _firestore.collection('contacts').doc(contactDocId);
-      ReleaseLogger.log('📖 [ApproveContact] Leyendo documento de contacto...', tag: 'WhitelistController');
-      final contactDoc = await contactRef.get();
+    final result = await _approveService.call(
+      contactDocId: contactDocId,
+      childId: childId,
+      parentId: parentId,
+    );
 
-      if (!contactDoc.exists) {
-        ReleaseLogger.error('❌ [ApproveContact] Documento no existe: $contactDocId', tag: 'WhitelistController');
-        throw Exception('Contacto no encontrado');
-      }
+    processingRequests.remove(contactDocId);
+    selectedRequests.remove(contactDocId);
 
-      final contact = contact_model.Contact.fromFirestore(contactDoc);
-      ReleaseLogger.log('📋 [ApproveContact] Contacto cargado. parentViewers: ${contact.parentViewers}', tag: 'WhitelistController');
-
-      // Verificar que este padre tiene permiso para aprobar
-      if (!contact.parentViewers.contains(parentId)) {
-        ReleaseLogger.error('❌ [ApproveContact] Padre $parentId no tiene permiso. parentViewers: ${contact.parentViewers}', tag: 'WhitelistController');
-        throw Exception('No tienes permiso para aprobar este contacto');
-      }
-
-      // Actualizar aprobación para este hijo
-      final updates = <String, dynamic>{
-        'approvals.$childId.status': 'approved',
-        'approvals.$childId.approvedBy': parentId,
-        'approvals.$childId.approvedAt': FieldValue.serverTimestamp(),
-      };
-
-      // Verificar si todas las aprobaciones están completas
-      final approvals = Map<String, contact_model.ApprovalStatus>.from(contact.approvals);
-      approvals[childId] = contact_model.ApprovalStatus(
-        status: 'approved',
-        parentId: approvals[childId]?.parentId,
-        approvedBy: parentId,
-        approvedAt: DateTime.now(),
-      );
-
-      final allApproved = approvals.values.every((a) => a.isApproved);
-      if (allApproved) {
-        updates['status'] = 'approved';
-        ReleaseLogger.log('✅ [ApproveContact] Todas las aprobaciones completas, actualizando status a approved', tag: 'WhitelistController');
-      }
-
-      ReleaseLogger.log('📤 [ApproveContact] Actualizando Firestore con: $updates', tag: 'WhitelistController');
-      await contactRef.update(updates);
-      ReleaseLogger.log('✅ [ApproveContact] Firestore actualizado exitosamente', tag: 'WhitelistController');
-
-      // Procesar invitaciones de grupo pendientes
-      try {
-        final contactUserId = contact.getOtherUserId(childId);
-        final contactData = await _getUserData(contactUserId);
-        final contactPhone = contactData['phoneNumber'] as String? ??
-            contactData['phone'] as String?;
-
-        if (contactPhone != null && contactPhone.isNotEmpty) {
-          ReleaseLogger.log('🔄 [ApproveContact] Procesando invitaciones de grupo para $contactPhone', tag: 'WhitelistController');
-          await _functions
-              .httpsCallable('processGroupInvitationsAfterContactApproval')
-              .call({
-            'childId': childId,
-            'contactPhone': contactPhone,
-          });
-        }
-      } catch (e) {
-        ReleaseLogger.error('⚠️ [ApproveContact] Error procesando invitaciones de grupo (no crítico): $e', tag: 'WhitelistController');
-      }
-
-      processingRequests.remove(contactDocId);
-      selectedRequests.remove(contactDocId);
-
-      ReleaseLogger.log('✅ [ApproveContact] Aprobación completada exitosamente', tag: 'WhitelistController');
-      return {'success': true};
-    } catch (e, stackTrace) {
-      ReleaseLogger.error('❌ [ApproveContact] Error: $e', tag: 'WhitelistController');
-      ReleaseLogger.error('❌ [ApproveContact] StackTrace: $stackTrace', tag: 'WhitelistController');
-      processingRequests.remove(contactDocId);
-      return {'success': false, 'error': _getErrorMessage(e)};
-    }
+    return {'success': result.success, 'error': result.success ? null : result.message};
   }
 
-  /// Rechazar un contacto - escritura directa a Firestore
+  /// Rechazar un contacto
   Future<Map<String, dynamic>> rejectContact({
     required String contactDocId,
     required String childId,
   }) async {
     processingRequests.add(contactDocId);
 
-    try {
-      final contactRef = _firestore.collection('contacts').doc(contactDocId);
-      final contactDoc = await contactRef.get();
+    final result = await _rejectService.call(
+      contactDocId: contactDocId,
+      childId: childId,
+      parentId: parentId,
+    );
 
-      if (!contactDoc.exists) {
-        throw Exception('Contacto no encontrado');
-      }
+    processingRequests.remove(contactDocId);
+    selectedRequests.remove(contactDocId);
 
-      final contact = contact_model.Contact.fromFirestore(contactDoc);
-
-      if (!contact.parentViewers.contains(parentId)) {
-        throw Exception('No tienes permiso para rechazar este contacto');
-      }
-
-      // Actualizar aprobación para este hijo
-      await contactRef.update({
-        'approvals.$childId.status': 'rejected',
-        'approvals.$childId.rejectedBy': parentId,
-        'approvals.$childId.rejectedAt': FieldValue.serverTimestamp(),
-        'status': 'rejected',
-      });
-
-      processingRequests.remove(contactDocId);
-      selectedRequests.remove(contactDocId);
-
-      return {'success': true};
-    } catch (e) {
-      processingRequests.remove(contactDocId);
-      return {'success': false, 'error': _getErrorMessage(e)};
-    }
+    return {'success': result.success, 'error': result.success ? null : result.message};
   }
 
   /// Revocar un contacto aprobado
@@ -525,68 +489,24 @@ class WhitelistController {
     required String childId,
     List<String>? groupsToRemove,
   }) async {
-    ReleaseLogger.log('🔄 [RevokeContact] Iniciando: contactDocId=$contactDocId, childId=$childId', tag: 'WhitelistController');
     processingRequests.add(contactDocId);
 
-    try {
-      final contactRef = _firestore.collection('contacts').doc(contactDocId);
-      final contactDoc = await contactRef.get();
+    final result = await _revokeService.call(
+      contactDocId: contactDocId,
+      childId: childId,
+      parentId: parentId,
+    );
 
-      if (!contactDoc.exists) {
-        ReleaseLogger.error('❌ [RevokeContact] Contacto no encontrado: $contactDocId', tag: 'WhitelistController');
-        throw Exception('Contacto no encontrado');
+    // Remover de grupos si se especificaron
+    if (result.success && groupsToRemove != null && groupsToRemove.isNotEmpty) {
+      for (final groupId in groupsToRemove) {
+        await removeChildFromGroup(groupId: groupId, childId: childId);
       }
-
-      final contact = contact_model.Contact.fromFirestore(contactDoc);
-      ReleaseLogger.log('📋 [RevokeContact] Contacto cargado. parentViewers: ${contact.parentViewers}, parentId: $parentId', tag: 'WhitelistController');
-
-      if (!contact.parentViewers.contains(parentId)) {
-        ReleaseLogger.error('❌ [RevokeContact] Sin permiso. parentViewers: ${contact.parentViewers}', tag: 'WhitelistController');
-        throw Exception('No tienes permiso para revocar este contacto');
-      }
-
-      final contactUserId = contact.getOtherUserId(childId);
-      ReleaseLogger.log('📝 [RevokeContact] Actualizando Firestore...', tag: 'WhitelistController');
-
-      // Actualizar estado a revocado
-      await contactRef.update({
-        'status': 'revoked',
-        'revokedAt': FieldValue.serverTimestamp(),
-        'revokedBy': parentId,
-        'revokedReason': 'Revocado por padre',
-      });
-      ReleaseLogger.log('✅ [RevokeContact] Firestore actualizado', tag: 'WhitelistController');
-
-      // Bloquear el chat usando Cloud Function (requiere permisos especiales)
-      if (contactUserId.isNotEmpty) {
-        try {
-          await _functions.httpsCallable('blockChat').call({
-            'childId': childId,
-            'contactId': contactUserId,
-            'reason': 'Contacto revocado por el padre',
-            'blockedBy': parentId,
-          });
-        } catch (e) {
-          ReleaseLogger.error('Error bloqueando chat: $e');
-        }
-      }
-
-      // Remover de grupos si se especificaron
-      if (groupsToRemove != null && groupsToRemove.isNotEmpty) {
-        for (final groupId in groupsToRemove) {
-          await removeChildFromGroup(groupId: groupId, childId: childId);
-        }
-      }
-
-      processingRequests.remove(contactDocId);
-      ReleaseLogger.log('✅ [RevokeContact] Completado exitosamente', tag: 'WhitelistController');
-      return {'success': true};
-    } catch (e, stackTrace) {
-      ReleaseLogger.error('❌ [RevokeContact] Error: $e', tag: 'WhitelistController');
-      ReleaseLogger.error('❌ [RevokeContact] StackTrace: $stackTrace', tag: 'WhitelistController');
-      processingRequests.remove(contactDocId);
-      return {'success': false, 'error': _getErrorMessage(e)};
     }
+
+    processingRequests.remove(contactDocId);
+
+    return {'success': result.success, 'error': result.success ? null : result.message};
   }
 
   /// Re-aprobar un contacto rechazado
@@ -596,54 +516,19 @@ class WhitelistController {
   }) async {
     processingRequests.add(contactDocId);
 
-    try {
-      final contactRef = _firestore.collection('contacts').doc(contactDocId);
-      final contactDoc = await contactRef.get();
+    final result = await _reapproveService.call(
+      contactDocId: contactDocId,
+      childId: childId,
+      parentId: parentId,
+    );
 
-      if (!contactDoc.exists) {
-        throw Exception('Contacto no encontrado');
-      }
+    processingRequests.remove(contactDocId);
 
-      final contact = contact_model.Contact.fromFirestore(contactDoc);
-
-      if (!contact.parentViewers.contains(parentId)) {
-        throw Exception('No tienes permiso para re-aprobar este contacto');
-      }
-
-      // Actualizar aprobación
-      await contactRef.update({
-        'approvals.$childId.status': 'approved',
-        'approvals.$childId.approvedBy': parentId,
-        'approvals.$childId.approvedAt': FieldValue.serverTimestamp(),
-        'status': 'approved',
-        'revokedAt': FieldValue.delete(),
-        'revokedBy': FieldValue.delete(),
-        'revokedReason': FieldValue.delete(),
-      });
-
-      // Desbloquear el chat
-      final contactUserId = contact.getOtherUserId(childId);
-      if (contactUserId.isNotEmpty) {
-        try {
-          await _functions.httpsCallable('unblockChat').call({
-            'childId': childId,
-            'contactId': contactUserId,
-          });
-        } catch (e) {
-          ReleaseLogger.error('Error desbloqueando chat: $e');
-        }
-      }
-
-      processingRequests.remove(contactDocId);
-      return {'success': true};
-    } catch (e) {
-      processingRequests.remove(contactDocId);
-      return {'success': false, 'error': _getErrorMessage(e)};
-    }
+    return {'success': result.success, 'error': result.success ? null : result.message};
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // GRUPOS V2 (MANTIENE CLOUD FUNCTIONS)
+  // GRUPOS V2
   // ═══════════════════════════════════════════════════════════════
 
   /// Aprobar solicitud de grupo V2
@@ -654,20 +539,16 @@ class WhitelistController {
   }) async {
     processingRequests.add(requestId);
 
-    try {
-      await _functions.httpsCallable('approveGroupMembership').call({
-        'requestId': requestId,
-        'groupId': groupId,
-        'childId': childId,
-      });
+    final result = await _approveGroupService.call(
+      requestId: requestId,
+      groupId: groupId,
+      childId: childId,
+    );
 
-      processingRequests.remove(requestId);
-      selectedRequests.remove(requestId);
-      return {'success': true};
-    } catch (e) {
-      processingRequests.remove(requestId);
-      return {'success': false, 'error': _getErrorMessage(e)};
-    }
+    processingRequests.remove(requestId);
+    selectedRequests.remove(requestId);
+
+    return {'success': result.success, 'error': result.success ? null : result.message};
   }
 
   /// Rechazar solicitud de grupo V2
@@ -676,21 +557,15 @@ class WhitelistController {
   }) async {
     processingRequests.add(requestId);
 
-    try {
-      await _functions.httpsCallable('rejectGroupMembership').call({
-        'requestId': requestId,
-      });
+    final result = await _rejectGroupService.call(requestId: requestId);
 
-      processingRequests.remove(requestId);
-      selectedRequests.remove(requestId);
-      return {'success': true};
-    } catch (e) {
-      processingRequests.remove(requestId);
-      return {'success': false, 'error': _getErrorMessage(e)};
-    }
+    processingRequests.remove(requestId);
+    selectedRequests.remove(requestId);
+
+    return {'success': result.success, 'error': result.success ? null : result.message};
   }
 
-  /// Revocar membresía de grupo (sacar hijo del grupo)
+  /// Revocar membresía de grupo
   Future<Map<String, dynamic>> revokeGroupMembership({
     required String groupId,
     required String childId,
@@ -698,81 +573,78 @@ class WhitelistController {
     final requestKey = '$groupId-$childId';
     processingRequests.add(requestKey);
 
-    try {
-      ReleaseLogger.log('[RevokeGroup] Sacando a $childId del grupo $groupId', tag: 'WhitelistController');
+    final result = await _revokeGroupService.call(
+      groupId: groupId,
+      childId: childId,
+    );
 
-      await _functions.httpsCallable('revokeGroupMembership').call({
-        'groupId': groupId,
-        'childId': childId,
-      });
+    processingRequests.remove(requestKey);
 
-      processingRequests.remove(requestKey);
-      ReleaseLogger.log('[RevokeGroup] Éxito: $childId removido del grupo $groupId', tag: 'WhitelistController');
-      return {'success': true};
-    } catch (e) {
-      ReleaseLogger.error('[RevokeGroup] Error: $e', tag: 'WhitelistController');
-      processingRequests.remove(requestKey);
-      return {'success': false, 'error': _getErrorMessage(e)};
-    }
+    return {'success': result.success, 'error': result.success ? null : result.message};
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // MODERACIÓN IA
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Obtener nivel de moderación de un contacto
+  Future<String?> getContactModerationLevel({
+    required String childId,
+    required String contactId,
+  }) async {
+    final result = await _getModerationService.call(
+      childId: childId,
+      contactId: contactId,
+    );
+    return result.moderationLevel;
+  }
+
+  /// Actualizar nivel de moderación de un contacto
+  Future<Map<String, dynamic>> updateContactModerationLevel({
+    required String childId,
+    required String contactId,
+    required String moderationLevel,
+  }) async {
+    final result = await _updateModerationService.call(
+      childId: childId,
+      contactId: contactId,
+      moderationLevel: moderationLevel,
+    );
+    return {'success': result.success, 'error': result.success ? null : result.message};
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // NOTIFICACIONES
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Marcar todas las notificaciones de whitelist como leídas
+  Future<int> markNotificationsAsRead() async {
+    return await _markNotificationsReadService.call(parentId);
   }
 
   // ═══════════════════════════════════════════════════════════════
   // HELPERS
   // ═══════════════════════════════════════════════════════════════
 
-  /// Obtener IDs de hijos vinculados
-  Future<List<String>> _getLinkedChildrenIds() async {
-    final parentDoc = await _firestore.collection('users').doc(parentId).get();
-    return List<String>.from(parentDoc.data()?['linkedChildrenIds'] ?? []);
-  }
-
-  /// Stream de IDs de hijos vinculados
-  Stream<List<String>> getLinkedChildrenIdsStream() {
-    return _firestore
-        .collection('users')
-        .doc(parentId)
-        .snapshots()
-        .map((snapshot) {
-      if (!snapshot.exists) return <String>[];
-      return List<String>.from(snapshot.data()?['linkedChildrenIds'] ?? []);
-    });
-  }
-
   /// Obtener lista de hijos vinculados con sus nombres
   Future<List<Map<String, String>>> getLinkedChildrenWithNames() async {
-    final children = <Map<String, String>>[];
-
-    try {
-      final linkedChildrenIds = await _getLinkedChildrenIds();
-
-      for (final childId in linkedChildrenIds) {
-        final childData = await _getUserData(childId);
-        children.add({
-          'id': childId,
-          'name': childData['name'] as String? ?? 'Hijo',
-        });
-      }
-    } catch (e) {
-      ReleaseLogger.error('Error obteniendo hijos vinculados: $e');
-    }
-
-    return children;
+    final children = await _linkedChildrenService.getWithNames(parentId);
+    return children
+        .map((c) => {'id': c.id, 'name': c.name})
+        .toList();
   }
 
   /// Batch fetch de datos de usuarios
   Future<void> _batchFetchUserData(List<String> userIds) async {
-    final idsToFetch =
-        userIds.where((id) => !_userDataCache.containsKey(id)).toList();
-
+    final idsToFetch = userIds.where((id) => !_userDataCache.containsKey(id)).toList();
     if (idsToFetch.isEmpty) return;
 
-    // Firestore limita a 10 documentos por IN query
     const batchSize = 10;
     for (var i = 0; i < idsToFetch.length; i += batchSize) {
       final batch = idsToFetch.skip(i).take(batchSize).toList();
 
       try {
-        final snapshot = await _firestore
+        final snapshot = await FirebaseFirestore.instance
             .collection('users')
             .where(FieldPath.documentId, whereIn: batch)
             .get();
@@ -781,32 +653,23 @@ class WhitelistController {
           _userDataCache[doc.id] = doc.data();
         }
       } catch (e) {
-        ReleaseLogger.error('Error en batch fetch de usuarios: $e');
-        // Fetch individual como fallback
+        ReleaseLogger.error('Error en batch fetch de usuarios: $e', tag: 'WhitelistController');
         for (final userId in batch) {
-          await _getUserData(userId);
+          await _fetchSingleUser(userId);
         }
       }
     }
   }
 
-  /// Obtener datos de un usuario (con cache)
-  Future<Map<String, dynamic>> _getUserData(String userId) async {
-    if (_userDataCache.containsKey(userId)) {
-      return _userDataCache[userId]!;
-    }
-
+  Future<void> _fetchSingleUser(String userId) async {
     try {
       final userData = await app_user.User.getById(userId);
       if (userData != null) {
         _userDataCache[userId] = userData;
-        return userData;
       }
     } catch (e) {
-      ReleaseLogger.error('Error obteniendo datos de usuario $userId: $e');
+      ReleaseLogger.error('Error obteniendo usuario $userId: $e', tag: 'WhitelistController');
     }
-
-    return {};
   }
 
   /// Obtener grupos compartidos entre hijo y contacto
@@ -814,33 +677,13 @@ class WhitelistController {
     required String childId,
     required String contactId,
   }) async {
-    try {
-      final groupsSnapshot = await _firestore
-          .collection('groups')
-          .where('members', arrayContains: childId)
-          .where('isActive', isEqualTo: true)
-          .get();
-
-      final sharedGroups = <Map<String, dynamic>>[];
-
-      for (final doc in groupsSnapshot.docs) {
-        final data = doc.data();
-        final members = List<String>.from(data['members'] ?? []);
-
-        if (members.contains(contactId)) {
-          sharedGroups.add({
-            'id': doc.id,
-            'name': data['name'] ?? 'Grupo sin nombre',
-            'memberCount': members.length,
-          });
-        }
-      }
-
-      return sharedGroups;
-    } catch (e) {
-      ReleaseLogger.error('Error obteniendo grupos compartidos: $e');
-      return [];
-    }
+    final groups = await _sharedGroupsService.call(
+      childId: childId,
+      contactId: contactId,
+    );
+    return groups
+        .map((g) => {'id': g.id, 'name': g.name, 'memberCount': g.memberCount})
+        .toList();
   }
 
   /// Remover a hijo de un grupo
@@ -848,39 +691,25 @@ class WhitelistController {
     required String groupId,
     required String childId,
   }) async {
-    try {
-      await _firestore.collection('groups').doc(groupId).update({
-        'members': FieldValue.arrayRemove([childId]),
-      });
-    } catch (e) {
-      ReleaseLogger.error('Error removiendo niño del grupo: $e');
-      rethrow;
-    }
-  }
-
-  /// Obtener mensaje de error amigable
-  String _getErrorMessage(dynamic error) {
-    if (error is FirebaseFunctionsException) {
-      switch (error.code) {
-        case 'failed-precondition':
-          return 'Esta solicitud ya fue procesada';
-        case 'permission-denied':
-          return 'No tienes permiso para realizar esta acción';
-        case 'not-found':
-          return 'Solicitud no encontrada';
-        case 'unauthenticated':
-          return 'Debes iniciar sesión nuevamente';
-        default:
-          return error.message ?? 'Error al procesar solicitud';
-      }
-    }
-    return error.toString();
+    await _sharedGroupsService.removeChildFromGroup(
+      groupId: groupId,
+      childId: childId,
+    );
   }
 
   /// Limpiar recursos
   void dispose() {
+    _contactsSubscription?.cancel();
+    _groupRequestsSubscription?.cancel();
+    _groupMembershipsSubscription?.cancel();
+    _linkedChildrenSubscription?.cancel();
     processingRequests.clear();
     selectedRequests.clear();
     _userDataCache.clear();
+    _contactsCache.clear();
+    _groupRequestsCache.clear();
+    _groupMembershipsCache.clear();
   }
 }
+
+typedef VoidCallback = void Function();

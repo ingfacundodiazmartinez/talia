@@ -2,291 +2,334 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import '../models/contact.dart';
-import '../services/chat_permission_service.dart';
+import '../services/contacts/cancel_pending_contact_service.dart';
+import '../services/contacts/delete_contact_service.dart';
+import '../services/contacts/list_contacts_service.dart';
+import '../services/contacts/request_contact_approval_service.dart';
+import '../services/contacts/resend_contact_request_service.dart';
+import '../services/contacts_sync_service.dart';
 import '../services/block_service.dart';
+import '../services/user_cache_service.dart';
 import '../utils/release_logger.dart';
-import '../utils/chat_utils.dart';
 
 /// Controller para la pantalla de contactos de niños
 ///
-/// Responsabilidades:
-/// - Gestionar streams de solicitudes de contacto pendientes
-/// - Obtener contactos aprobados bidirecccionalmente
-/// - Manejar datos de usuarios y estados en línea
-/// - Proporcionar información para navegación a chats
-/// - Cumplir con CODING_RULES.md: ZERO Firebase calls en screens
+/// Arquitectura: Screen → Controller → Service → Model
+/// El Controller SOLO expone métodos que el Screen necesita
+/// El Controller maneja TODO el filtrado y ordenamiento
+///
+/// Implementa lazy loading: carga inicial + cargar más al scrollear
 class ChildContactsController {
   final String childId;
 
-  // Servicios privados
-  final ChatPermissionService _permissionService;
+  // Services atómicos
+  final CancelPendingContactService _cancelPendingService;
+  final DeleteContactService _deleteContactService;
+  final ListContactsService _listContactsService;
+  final RequestContactApprovalService _requestApprovalService;
+  final ResendContactRequestService _resendRequestService;
+  final ContactsSyncService _syncService;
   final BlockService _blockService;
-  final FirebaseFirestore _firestore;
+  final UserCacheService _userCache;
   final firebase_auth.FirebaseAuth _auth;
 
   // Estado interno
-  bool _isInitialized = false;
   String? _currentUserId;
+  String _searchQuery = '';
+  List<Contact> _allContacts = []; // Todos los contactos cargados
+  List<Contact>? _cachedContacts; // Cache para filtrar sin recrear stream
 
-  /// Constructor
+  // Paginación
+  static const int _pageSize = 50;
+  DocumentSnapshot? _lastDocument;
+  bool _hasMoreContacts = true;
+  bool _isLoadingMore = false;
+
+  // Streams
+  StreamSubscription? _contactsSubscription;
+  final _contactsStreamController = StreamController<List<Contact>>.broadcast();
+
   ChildContactsController({
     required this.childId,
-    ChatPermissionService? permissionService,
+    CancelPendingContactService? cancelPendingService,
+    DeleteContactService? deleteContactService,
+    ListContactsService? listContactsService,
+    RequestContactApprovalService? requestApprovalService,
+    ResendContactRequestService? resendRequestService,
+    ContactsSyncService? syncService,
     BlockService? blockService,
-    FirebaseFirestore? firestore,
+    UserCacheService? userCache,
     firebase_auth.FirebaseAuth? auth,
-  }) : _permissionService = permissionService ?? ChatPermissionService(),
-       _blockService = blockService ?? BlockService(),
-       _firestore = firestore ?? FirebaseFirestore.instance,
-       _auth = auth ?? firebase_auth.FirebaseAuth.instance;
+  })  : _cancelPendingService = cancelPendingService ?? CancelPendingContactService(),
+        _deleteContactService = deleteContactService ?? DeleteContactService(),
+        _listContactsService = listContactsService ?? ListContactsService(),
+        _requestApprovalService = requestApprovalService ?? RequestContactApprovalService(),
+        _resendRequestService = resendRequestService ?? ResendContactRequestService(),
+        _syncService = syncService ?? ContactsSyncService(),
+        _blockService = blockService ?? BlockService(),
+        _userCache = userCache ?? UserCacheService(),
+        _auth = auth ?? firebase_auth.FirebaseAuth.instance;
 
-  // Getters para información del usuario actual
   String? get currentUserId => _currentUserId ?? _auth.currentUser?.uid;
-  bool get isInitialized => _isInitialized;
 
-  /// Inicializar el controller
+  /// Indica si hay más contactos por cargar
+  bool get hasMoreContacts => _hasMoreContacts;
+
+  /// Indica si está cargando más contactos
+  bool get isLoadingMore => _isLoadingMore;
+
+  // ═══════════════════════════════════════════════════════════════
+  // INITIALIZATION
+  // ═══════════════════════════════════════════════════════════════
+
   Future<void> initialize() async {
     try {
-      ReleaseLogger.log('Inicializando ChildContactsController para: $childId', tag: 'ChildContacts');
-
       _currentUserId = _auth.currentUser?.uid;
       if (_currentUserId == null) {
         ReleaseLogger.error('Usuario no autenticado', tag: 'ChildContacts');
         return;
       }
 
-      _isInitialized = true;
-      ReleaseLogger.log('ChildContactsController inicializado exitosamente', tag: 'ChildContacts');
+      await _userCache.initialize();
+      await _syncService.initialize();
+      _startContactsStream();
     } catch (e) {
       ReleaseLogger.error('Error inicializando ChildContactsController: $e', tag: 'ChildContacts');
     }
   }
 
-  /// Stream de contactos bloqueados
-  Stream<List<String>> getBlockedContactsStream() {
-    try {
-      return _blockService.getBlockedContactsStream();
-    } catch (e) {
-      ReleaseLogger.error('Error obteniendo stream de contactos bloqueados: $e', tag: 'ChildContacts');
-      return Stream.value([]);
-    }
-  }
-
-  /// Stream de contactos donde MI aprobación está pendiente (mis padres deben aprobar)
-  /// Usa colección `contacts` con filtro client-side por approvals[userId].status
-  Stream<List<Contact>> getMyPendingContactsStream() {
+  void _startContactsStream() {
     final userId = currentUserId;
-    if (userId == null) {
-      ReleaseLogger.error('Usuario no autenticado para obtener mis solicitudes', tag: 'ChildContacts');
-      return Stream.value([]);
-    }
+    if (userId == null) return;
 
-    try {
-      return Contact.watchPendingForChild(userId);
-    } catch (e) {
-      ReleaseLogger.error('Error obteniendo stream de mis solicitudes: $e', tag: 'ChildContacts');
-      return Stream.value([]);
-    }
+    _contactsSubscription?.cancel();
+
+    // Stream para actualizaciones en tiempo real
+    // Los contactos se agregan al cache conforme llegan
+    _contactsSubscription = _listContactsService.watchByUser(userId).listen(
+      (contacts) {
+        _allContacts = contacts;
+        _cachedContacts = contacts;
+        _contactsStreamController.add(_filterAndSort(contacts, userId));
+      },
+      onError: (e) {
+        ReleaseLogger.error('Error en stream de contactos: $e', tag: 'ChildContacts');
+        _contactsStreamController.addError(e);
+      },
+    );
   }
 
-  /// Stream de contactos donde el OTRO usuario tiene aprobación pendiente (sus padres deben aprobar)
-  Stream<List<Contact>> getOtherPendingContactsStream() {
+  /// Cargar más contactos (lazy loading)
+  /// Retorna true si se cargaron más, false si no hay más
+  Future<bool> loadMoreContacts() async {
+    if (_isLoadingMore || !_hasMoreContacts) return false;
+
     final userId = currentUserId;
-    if (userId == null) {
-      ReleaseLogger.error('Usuario no autenticado para obtener otras solicitudes', tag: 'ChildContacts');
-      return Stream.value([]);
-    }
+    if (userId == null) return false;
+
+    _isLoadingMore = true;
 
     try {
-      return Contact.watchOtherPendingForChild(userId);
-    } catch (e) {
-      ReleaseLogger.error('Error obteniendo stream de otras solicitudes: $e', tag: 'ChildContacts');
-      return Stream.value([]);
-    }
-  }
+      final newContacts = await _listContactsService.getPage(
+        userId,
+        limit: _pageSize,
+        startAfter: _lastDocument,
+      );
 
-  /// Stream de contactos RECHAZADOS donde yo soy el child (mis padres rechazaron)
-  Stream<List<Contact>> getRejectedContactsStream() {
-    final userId = currentUserId;
-    if (userId == null) {
-      ReleaseLogger.error('Usuario no autenticado para obtener solicitudes rechazadas', tag: 'ChildContacts');
-      return Stream.value([]);
-    }
-
-    try {
-      return Contact.watchRejectedForChild(userId);
-    } catch (e) {
-      ReleaseLogger.error('Error obteniendo stream de solicitudes rechazadas: $e', tag: 'ChildContacts');
-      return Stream.value([]);
-    }
-  }
-
-  /// Stream de contactos SUGERIDOS (potential) - descubiertos en sync pero no solicitados aún
-  /// Estos contactos aparecen en sección "Sugeridos" y pueden solicitarse aprobación
-  Stream<List<Contact>> getPotentialContactsStream() {
-    final userId = currentUserId;
-    if (userId == null) {
-      ReleaseLogger.error('Usuario no autenticado para obtener contactos sugeridos', tag: 'ChildContacts');
-      return Stream.value([]);
-    }
-
-    try {
-      return Contact.watchPotentialForUser(userId);
-    } catch (e) {
-      ReleaseLogger.error('Error obteniendo stream de contactos sugeridos: $e', tag: 'ChildContacts');
-      return Stream.value([]);
-    }
-  }
-
-  /// Stream de contactos aprobados bidirecccionalmente
-  Stream<List<String>> getBidirectionallyApprovedContactsStream() {
-    final userId = currentUserId;
-    if (userId == null) {
-      ReleaseLogger.error('Usuario no autenticado para contactos aprobados', tag: 'ChildContacts');
-      return Stream.value([]);
-    }
-
-    try {
-      return _permissionService.watchBidirectionallyApprovedContacts(userId);
-    } catch (e) {
-      ReleaseLogger.error('Error obteniendo stream de contactos aprobados: $e', tag: 'ChildContacts');
-      return Stream.value([]);
-    }
-  }
-
-  /// Obtener datos de un usuario específico
-  Future<Map<String, dynamic>?> getUserData(String userId) async {
-    try {
-      final doc = await _firestore.collection('users').doc(userId).get();
-      if (!doc.exists) {
-        ReleaseLogger.warning('Usuario $userId no existe', tag: 'ChildContacts');
-        return null;
+      if (newContacts.isEmpty) {
+        _hasMoreContacts = false;
+        _isLoadingMore = false;
+        return false;
       }
-      return doc.data();
+
+      // Obtener el último documento para la siguiente página
+      final lastContact = newContacts.last;
+      _lastDocument = await _getDocumentSnapshot(lastContact.id);
+
+      // Agregar nuevos contactos (evitar duplicados)
+      final existingIds = _allContacts.map((c) => c.id).toSet();
+      final uniqueNewContacts = newContacts.where((c) => !existingIds.contains(c.id));
+      _allContacts.addAll(uniqueNewContacts);
+      _cachedContacts = _allContacts;
+
+      // Emitir lista actualizada
+      _contactsStreamController.add(_filterAndSort(_allContacts, userId));
+
+      _hasMoreContacts = newContacts.length >= _pageSize;
+      _isLoadingMore = false;
+      return true;
     } catch (e) {
-      ReleaseLogger.error('Error obteniendo datos de usuario $userId: $e', tag: 'ChildContacts');
+      ReleaseLogger.error('Error cargando más contactos: $e', tag: 'ChildContacts');
+      _isLoadingMore = false;
+      return false;
+    }
+  }
+
+  Future<DocumentSnapshot?> _getDocumentSnapshot(String contactId) async {
+    try {
+      return await FirebaseFirestore.instance
+          .collection('contacts')
+          .doc(contactId)
+          .get();
+    } catch (e) {
       return null;
     }
   }
 
-  /// Obtener datos de múltiples usuarios en paralelo
-  Future<List<Map<String, dynamic>?>> getMultipleUsersData(List<String> userIds) async {
-    try {
-      if (userIds.isEmpty) return [];
+  List<Contact> _filterAndSort(List<Contact> contacts, String userId) {
+    var filtered = contacts.where((c) {
+      // Solo contactos reales
+      if (!c.isRealContact) return false;
 
-      final futures = userIds.map((id) => getUserData(id));
-      return await Future.wait(futures);
-    } catch (e) {
-      ReleaseLogger.error('Error obteniendo datos de múltiples usuarios: $e', tag: 'ChildContacts');
-      return userIds.map((e) => null).toList();
-    }
-  }
+      // Excluir bloqueados (ahora está en el modelo Contact)
+      if (c.blocked) return false;
 
-  /// Obtener datos de un usuario para FutureBuilder (compatible con widgets existentes)
-  Future<DocumentSnapshot> getUserDocument(String userId) async {
-    try {
-      return await _firestore.collection('users').doc(userId).get();
-    } catch (e) {
-      ReleaseLogger.error('Error obteniendo documento de usuario $userId: $e', tag: 'ChildContacts');
-      rethrow;
-    }
-  }
-
-  /// Obtener documentos de múltiples usuarios en paralelo
-  Future<List<DocumentSnapshot>> getMultipleUserDocuments(List<String> userIds) async {
-    try {
-      if (userIds.isEmpty) return [];
-
-      final futures = userIds.map((id) => getUserDocument(id));
-      return await Future.wait(futures);
-    } catch (e) {
-      ReleaseLogger.error('Error obteniendo documentos de múltiples usuarios: $e', tag: 'ChildContacts');
-      rethrow;
-    }
-  }
-
-  /// Generar chat ID entre dos usuarios
-  String getChatId(String user1, String user2) {
-    return ChatUtils.getChatId(user1, user2);
-  }
-
-  /// Generar chat ID para el usuario actual y un contacto
-  String getChatIdWithContact(String contactId) {
-    final userId = currentUserId;
-    if (userId == null) {
-      ReleaseLogger.error('Usuario no autenticado para generar chat ID', tag: 'ChildContacts');
-      return '';
-    }
-    return getChatId(userId, contactId);
-  }
-
-  /// Determinar el "otro usuario" en un contacto
-  String getOtherUserIdFromContact(Contact contact) {
-    final userId = currentUserId;
-    if (userId == null) return '';
-    return contact.getOtherUserId(userId);
-  }
-
-  /// Filtrar contactos por búsqueda
-  bool matchesSearch(String name, String searchQuery) {
-    if (searchQuery.isEmpty) return true;
-    return name.toLowerCase().contains(searchQuery.toLowerCase());
-  }
-
-  /// Verificar si un contacto está bloqueado
-  bool isContactBlocked(String contactId, List<String> blockedContacts) {
-    return blockedContacts.contains(contactId);
-  }
-
-  /// Agrupar contactos pendientes por otro usuario
-  Map<String, List<Contact>> groupPendingContactsByUser(List<Contact> contacts) {
-    final userId = currentUserId;
-    if (userId == null) return {};
-
-    final Map<String, List<Contact>> groupedContacts = {};
-
-    try {
-      for (var contact in contacts) {
-        final otherUserId = contact.getOtherUserId(userId);
-
-        if (otherUserId.isNotEmpty) {
-          groupedContacts.putIfAbsent(otherUserId, () => []);
-          groupedContacts[otherUserId]!.add(contact);
-        }
+      // IMPORTANTE: Solo mostrar contactos donde yo tengo al otro en mi agenda
+      // Si discoveredBy está seteado y NO soy yo, significa que el otro me descubrió
+      // pero yo NO lo tengo en mi agenda, entonces no debo verlo
+      // Esto aplica a TODOS los estados (potential, pending, approved, etc.)
+      if (c.discoveredBy != null && c.discoveredBy != userId) {
+        return false;
       }
-    } catch (e) {
-      ReleaseLogger.error('Error agrupando contactos pendientes: $e', tag: 'ChildContacts');
-    }
 
-    return groupedContacts;
-  }
-
-  /// Crear mapa de nombres de padres por ID
-  Map<String, String> createParentNamesMap(
-    List<String> parentIds,
-    List<DocumentSnapshot> parentDocs,
-  ) {
-    final parentNamesMap = <String, String>{};
-
-    try {
-      for (var i = 0; i < parentIds.length && i < parentDocs.length; i++) {
-        final doc = parentDocs[i];
-        final name = (doc.data() as Map<String, dynamic>?)?['name'] ?? 'Padre/Madre';
-        parentNamesMap[parentIds[i]] = name;
+      // Filtrar por búsqueda
+      if (_searchQuery.isNotEmpty) {
+        final otherUserId = c.getOtherUserId(userId);
+        final name = _userCache.getDisplayName(otherUserId, fallback: 'Usuario').toLowerCase();
+        if (!name.contains(_searchQuery)) return false;
       }
-    } catch (e) {
-      ReleaseLogger.error('Error creando mapa de nombres de padres: $e', tag: 'ChildContacts');
-    }
 
-    return parentNamesMap;
+      return true;
+    }).toList();
+
+    // Ordenar alfabéticamente
+    filtered.sort((a, b) {
+      final nameA = _userCache.getDisplayName(a.getOtherUserId(userId), fallback: 'Usuario');
+      final nameB = _userCache.getDisplayName(b.getOtherUserId(userId), fallback: 'Usuario');
+      return nameA.toLowerCase().compareTo(nameB.toLowerCase());
+    });
+
+    return filtered;
   }
 
-  /// Validar que el usuario actual esté autenticado
-  bool get isUserAuthenticated => currentUserId != null;
+  // ═══════════════════════════════════════════════════════════════
+  // STREAMS (lo que el Screen necesita)
+  // ═══════════════════════════════════════════════════════════════
 
-  /// Limpiar recursos
+  /// Stream de contactos filtrados y ordenados
+  Stream<List<Contact>> getContactsStream() => _contactsStreamController.stream;
+
+  // ═══════════════════════════════════════════════════════════════
+  // SEARCH
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Actualizar query de búsqueda
+  void setSearchQuery(String query) {
+    _searchQuery = query.toLowerCase();
+    // Re-filtrar desde cache (sin recrear stream de Firestore)
+    _refilterFromCache();
+  }
+
+  /// Re-filtra contactos desde cache sin recrear subscription
+  void _refilterFromCache() {
+    final userId = currentUserId;
+    if (userId == null || _cachedContacts == null) return;
+
+    _contactsStreamController.add(_filterAndSort(_cachedContacts!, userId));
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // SYNC
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Sincronizar contactos del dispositivo
+  Future<bool> syncContacts() async {
+    try {
+      await _syncService.syncContacts(force: true);
+      return true;
+    } catch (e) {
+      ReleaseLogger.error('Error sincronizando contactos: $e', tag: 'ChildContacts');
+      return false;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // ACTIONS (delegan a Services atómicos)
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Solicitar aprobación de un contacto potential
+  Future<({bool success, String message})> requestApproval(String contactDocId) async {
+    final result = await _requestApprovalService.call(contactDocId);
+    return (success: result.success, message: result.message);
+  }
+
+  /// Cancelar un contacto pendiente
+  Future<bool> cancelPending(String contactId) async {
+    return await _cancelPendingService.call(contactId);
+  }
+
+  /// Reenviar solicitud de contacto
+  Future<({bool success, String message})> resendRequest(String otherUserId) async {
+    return await _resendRequestService.call(otherUserId);
+  }
+
+  /// Eliminar un contacto rechazado
+  Future<bool> deleteRejected(String contactId) async {
+    return await _deleteContactService.call(contactId);
+  }
+
+  /// Bloquear un contacto
+  Future<void> blockContact(String contactId) async {
+    await _blockService.blockContact(contactId);
+  }
+
+  /// Desbloquear un contacto
+  Future<void> unblockContact(String contactId) async {
+    await _blockService.unblockContact(contactId);
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // HELPERS (datos para el Screen)
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Obtener nombre a mostrar para un contacto
+  /// Usa: alias > nombre de Firestore > nombre de agenda > fallback
+  String getDisplayName(String odId) {
+    return _userCache.getDisplayName(odId, fallback: 'Usuario');
+  }
+
+  /// Obtener datos de usuario (para foto, etc)
+  Map<String, dynamic>? getUserData(String odId) {
+    return _userCache.getUserDataSync(odId);
+  }
+
+  /// Intentar resolver y guardar el nombre de la agenda para un contacto
+  /// Llamar esto cuando se detecta que el nombre es "Usuario"
+  Future<String?> resolveAndCacheLocalName(String userId, String? phoneNumber) async {
+    if (phoneNumber == null || phoneNumber.isEmpty) return null;
+
+    // Ya tiene localName guardado?
+    final existingLocalName = _userCache.getLocalName(userId);
+    if (existingLocalName != null && existingLocalName.isNotEmpty) {
+      return existingLocalName;
+    }
+
+    // Resolver desde la agenda del dispositivo
+    final localName = await _syncService.resolveDeviceName(phoneNumber);
+    if (localName != null && localName.isNotEmpty) {
+      await _userCache.setLocalName(userId, localName);
+      return localName;
+    }
+
+    return null;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // CLEANUP
+  // ═══════════════════════════════════════════════════════════════
+
   void dispose() {
-    ReleaseLogger.log('Disposing ChildContactsController', tag: 'ChildContacts');
-    _isInitialized = false;
+    _contactsSubscription?.cancel();
+    _contactsStreamController.close();
   }
 }

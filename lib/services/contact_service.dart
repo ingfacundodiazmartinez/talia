@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 /// Servicio para manejar operaciones relacionadas con contactos
@@ -16,22 +18,31 @@ class ContactService {
 
   /// Verificar si un chat está bloqueado
   /// Retorna un Stream que emite true si el chat está bloqueado
+  ///
+  /// NOTA: Maneja errores de PERMISSION_DENIED silenciosamente.
+  /// Esto puede ocurrir cuando el documento no existe o el usuario
+  /// no tiene permisos de lectura (ej: padre intentando leer).
   Stream<bool> watchChatBlocked(String chatId) {
     return _firestore
         .collection('blocked_chats')
         .doc(chatId)
         .snapshots()
-        .handleError((error) {
-          // Ignorar errores de permisos silenciosamente
-          // Esto ocurre cuando el documento no existe aún
-        })
-        .map((snapshot) {
+        .map<bool>((snapshot) {
           if (snapshot.exists) {
             final data = snapshot.data();
             return data?['isActive'] ?? false;
           }
           return false;
-        });
+        })
+        .transform(
+          StreamTransformer<bool, bool>.fromHandlers(
+            handleData: (data, sink) => sink.add(data),
+            handleError: (error, stackTrace, sink) {
+              // PERMISSION_DENIED: emitir false (no bloqueado) en lugar de error
+              sink.add(false);
+            },
+          ),
+        );
   }
 
   /// Verificar si un contacto está revocado

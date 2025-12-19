@@ -138,21 +138,19 @@ exports.requestUnlink = parentChild.requestUnlink;
 // Contactos y bloqueos
 exports.findUserByCode = contacts.findUserByCode;
 exports.createContactRequest = contacts.createContactRequest;
-exports.updateContactRequestStatus = contacts.updateContactRequestStatus;
-exports.blockChat = contacts.blockChat;
-exports.unblockChat = contacts.unblockChat;
+// REMOVED: updateContactRequestStatus - padres usan Firestore directo + Security Rules
+// REMOVED: blockChat, unblockChat - escritura directa desde Flutter + Security Rules en blocked_chats y chats
 exports.invalidateChatOnContactDelete = contacts.invalidateChatOnContactDelete;
+exports.onContactApprovalRequested = contacts.onContactApprovalRequested;
 exports.syncDeviceContacts = contacts.syncDeviceContacts;
-exports.approveContactFromRequest = contacts.approveContactFromRequest;
+// REMOVED: approveContactFromRequest - padres usan WhitelistController + Security Rules
 exports.autoApproveContact = contacts.autoApproveContact;
 exports.createContactFromGroupInvitation = contacts.createContactFromGroupInvitation;
 exports.getChildContactsForModeration = contacts.getChildContactsForModeration;
-exports.updateChildContactModeration = contacts.updateChildContactModeration;
-exports.getContactModerationStatus = contacts.getContactModerationStatus;
+// REMOVED: updateChildContactModeration, getContactModerationStatus - lectura/escritura directa desde Flutter
 exports.updateContactStatus = contacts.updateContactStatus;
 exports.revokeChildContact = contacts.revokeChildContact;
 exports.migrateContactsUserData = contacts.migrateContactsUserData;
-exports.requestContactApproval = contacts.requestContactApproval;
 
 // Grupos (legacy - mantener para compatibilidad durante migración)
 exports.createGroup = groups.createGroup;
@@ -163,9 +161,8 @@ exports.processGroupInvitationsAfterContactApproval = groups.processGroupInvitat
 
 // Grupos V2 (nueva arquitectura con aprobación parental)
 exports.createGroupV2 = groupsV2.createGroupV2;
-exports.approveGroupMembership = groupsV2.approveGroupMembership;
-exports.rejectGroupMembership = groupsV2.rejectGroupMembership;
-exports.revokeGroupMembership = groupsV2.revokeGroupMembership;
+// REMOVED: approveGroupMembership, rejectGroupMembership, revokeGroupMembership
+// Escritura directa desde Flutter + Security Rules en groups_v2 y group_approval_requests
 exports.addGroupMembersV2 = groupsV2.addGroupMembersV2;
 exports.removeGroupMemberV2 = groupsV2.removeGroupMemberV2;
 exports.leaveGroupV2 = groupsV2.leaveGroupV2;

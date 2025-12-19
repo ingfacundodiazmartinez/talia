@@ -64,7 +64,7 @@ describe('Cloud Functions Integration Tests', () => {
 
         // Contacts
         createContactRequest: { handler: jest.fn() },
-        blockChat: { handler: jest.fn() },
+        // blockChat: REMOVED - escritura directa desde Flutter + Security Rules
 
         // Video Calls
         generateAgoraToken: { handler: jest.fn() },
@@ -114,9 +114,8 @@ describe('Cloud Functions Integration Tests', () => {
         'createGroup',
         'approveGroupPermission',
 
-        // Contacts (2)
+        // Contacts (1) - blockChat eliminado, escritura directa desde Flutter
         'createContactRequest',
-        'blockChat',
 
         // Core Functions (7)
         'generateAgoraToken',
@@ -133,7 +132,7 @@ describe('Cloud Functions Integration Tests', () => {
       });
 
       console.log(`✅ ${expectedFunctions.length} funciones principales exportadas correctamente`);
-      expect(expectedFunctions.length).toBe(23);
+      expect(expectedFunctions.length).toBe(22);
     });
   });
 
@@ -253,14 +252,14 @@ describe('Cloud Functions Integration Tests', () => {
   });
 
   describe('🏆 FINAL CLOUD FUNCTIONS VERIFICATION', () => {
-    test('🎉 TODAS LAS CLOUD FUNCTIONS IMPLEMENTADAS: 23/23 (100%)', () => {
+    test('🎉 TODAS LAS CLOUD FUNCTIONS IMPLEMENTADAS: 22/22 (100%)', () => {
       const implementedCategories = [
         '📖 Stories (2 functions): onStoryApprovalRequestCreated, replyToStory',
         '✅ Story Approval (3 functions): createStory, approveStory, rejectStory',
         '💬 Chats (4 functions): sendChatMessage, sendGroupMessage, incrementUnreadCount, incrementGroupUnreadCount',
         '🔔 Notifications (2 functions): sendNotificationOnCreate, sendInstantPushNotification',
         '👥 Groups (2 functions): createGroup, approveGroupPermission',
-        '🤝 Contacts (2 functions): createContactRequest, blockChat',
+        '🤝 Contacts (1 function): createContactRequest (blockChat eliminado - escritura directa)',
         '🎯 Core Services (7 functions): generateAgoraToken, createEmergency, moderateMessage, updateUserProfile, checkPremiumStatus, cleanupOldMessages, transformCharacter',
         '🔧 Additional (1 function): processGroupInvitationsAfterContactApproval'
       ];
@@ -274,7 +273,7 @@ describe('Cloud Functions Integration Tests', () => {
       });
 
       console.log('='*80);
-      console.log('📊 TOTAL FUNCTIONS IMPLEMENTED: 23/23 (100%)');
+      console.log('📊 TOTAL FUNCTIONS IMPLEMENTED: 22/22 (100%)');
       console.log('🔒 P0 Security: Auth validation, input sanitization, permissions');
       console.log('⚡ P1 Performance: Atomic operations, transactions, batching');
       console.log('🚀 P2 Advanced: Cross-service integration, error handling, monitoring');

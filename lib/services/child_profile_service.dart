@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
+import 'data_management_service.dart';
 
 /// Service que maneja la lógica de perfil para usuarios child
 class ChildProfileService {
@@ -74,6 +75,9 @@ class ChildProfileService {
         'fcmToken': null,
         'voipToken': null, // Limpiar también el token VoIP
       }).catchError((e) => null); // Silently handle error
+
+      // Limpiar todo el cache local antes de cerrar sesión
+      await DataManagementService().clearAllLocalDataOnLogout();
 
       // Cerrar sesión
       await _auth.signOut();

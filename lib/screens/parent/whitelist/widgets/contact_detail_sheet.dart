@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../../../models/grouped_contact.dart';
 import '../../../../controllers/whitelist_controller.dart';
+import '../../../../services/whitelist/get_contact_moderation_service.dart';
+import '../../../../services/whitelist/update_contact_moderation_service.dart';
 import '../../../../utils/release_logger.dart';
 
 /// Bottom sheet con detalle del contacto y configuración de moderación
@@ -61,6 +62,10 @@ class ContactDetailSheet extends StatefulWidget {
 }
 
 class _ContactDetailSheetState extends State<ContactDetailSheet> {
+  // Services
+  final GetContactModerationService _getModerationService = GetContactModerationService();
+  final UpdateContactModerationService _updateModerationService = UpdateContactModerationService();
+
   // Estado de moderación por hijo (childId -> {enabled, level})
   final Map<String, Map<String, dynamic>> _moderationState = {};
   final Map<String, bool> _loadingModeration = {};
@@ -91,20 +96,17 @@ class _ContactDetailSheetState extends State<ContactDetailSheet> {
 
   Future<void> _loadModerationForChild(ChildRelation relation) async {
     try {
-      final callable = FirebaseFunctions.instance.httpsCallable('getContactModerationStatus');
-      final result = await callable.call({
-        'childId': relation.childId,
-        'contactId': widget.contact.contactId,
-      });
+      final result = await _getModerationService.call(
+        childId: relation.childId,
+        contactId: widget.contact.contactId,
+      );
 
-      final data = Map<String, dynamic>.from(result.data as Map);
-      if (data['success'] == true) {
+      if (result.success) {
         if (mounted) {
           setState(() {
             _moderationState[relation.childId] = {
-              'enabled': data['enabled'] ?? false,
-              'level': data['level'] ?? 'medium',
-              'chatId': data['chatId'] ?? '',
+              'enabled': result.enabled,
+              'level': result.moderationLevel ?? 'medium',
             };
             _loadingModeration[relation.childId] = false;
           });
@@ -118,7 +120,6 @@ class _ContactDetailSheetState extends State<ContactDetailSheet> {
           _moderationState[relation.childId] = {
             'enabled': false,
             'level': 'medium',
-            'chatId': '',
           };
           _loadingModeration[relation.childId] = false;
         });
@@ -136,18 +137,15 @@ class _ContactDetailSheetState extends State<ContactDetailSheet> {
     });
 
     try {
-      final callable = FirebaseFunctions.instance.httpsCallable('updateChildContactModeration');
-      final result = await callable.call({
-        'childId': relation.childId,
-        'contactId': widget.contact.contactId,
-        'chatId': state['chatId'] ?? '',
-        'enabled': enabled,
-        'level': state['level'] ?? 'high',
-      });
+      final result = await _updateModerationService.call(
+        childId: relation.childId,
+        contactId: widget.contact.contactId,
+        moderationLevel: state['level'] ?? 'medium',
+        enabled: enabled,
+      );
 
-      final data = Map<String, dynamic>.from(result.data as Map);
-      if (data['success'] != true) {
-        throw Exception('Error al actualizar moderación');
+      if (!result.success) {
+        throw Exception(result.message);
       }
 
       if (mounted) {
@@ -190,18 +188,15 @@ class _ContactDetailSheetState extends State<ContactDetailSheet> {
     });
 
     try {
-      final callable = FirebaseFunctions.instance.httpsCallable('updateChildContactModeration');
-      final result = await callable.call({
-        'childId': relation.childId,
-        'contactId': widget.contact.contactId,
-        'chatId': state['chatId'] ?? '',
-        'enabled': state['enabled'] ?? false,
-        'level': level,
-      });
+      final result = await _updateModerationService.call(
+        childId: relation.childId,
+        contactId: widget.contact.contactId,
+        moderationLevel: level,
+        enabled: state['enabled'] ?? false,
+      );
 
-      final data = Map<String, dynamic>.from(result.data as Map);
-      if (data['success'] != true) {
-        throw Exception('Error al actualizar nivel');
+      if (!result.success) {
+        throw Exception(result.message);
       }
 
       if (mounted) {
@@ -801,17 +796,15 @@ class _ContactDetailSheetState extends State<ContactDetailSheet> {
     });
 
     try {
-      final callable = FirebaseFunctions.instance.httpsCallable('updateChildContactModeration');
-      final result = await callable.call({
-        'childId': relation.childId,
-        'contactId': widget.contact.contactId,
-        'enabled': newEnabled,
-        'level': newLevel,
-      });
+      final result = await _updateModerationService.call(
+        childId: relation.childId,
+        contactId: widget.contact.contactId,
+        moderationLevel: newLevel,
+        enabled: newEnabled,
+      );
 
-      final data = Map<String, dynamic>.from(result.data as Map);
-      if (data['success'] != true) {
-        throw Exception('Error al actualizar moderación');
+      if (!result.success) {
+        throw Exception(result.message);
       }
     } catch (e) {
       // Revertir en caso de error

@@ -96,7 +96,7 @@ exports.generateUserCode = onCall(
   {
     region: "us-central1",
     timeoutSeconds: 30,
-    memory: "128MiB",
+    memory: "256MiB",
     // ✅ Acceso público para Cloud Run Gen 2
     invoker: "public",
   },
@@ -506,6 +506,7 @@ exports.onUserRegistered = onDocumentCreated(
 
         if (hasLinkedParents) {
           // Niño con padre → crear contacto POTENTIAL
+          // IMPORTANTE: Solo visible para el niño que tiene al nuevo usuario en su agenda
           const phonesMap = {};
           if (userPhone) {
             phonesMap[userId] = userPhone;
@@ -521,9 +522,11 @@ exports.onUserRegistered = onDocumentCreated(
             autoCreated: true,
             source: "auto_device_sync_registration",
             phones: phonesMap,
+            // Solo el niño que tiene al nuevo usuario en su agenda puede ver este contacto
+            discoveredBy: childUserId,
           });
           potentialCreated++;
-          console.log(`   💡 Contacto POTENTIAL creado: ${userName} <-> ${childUserData.name}`);
+          console.log(`   💡 Contacto POTENTIAL creado: ${userName} <-> ${childUserData.name} (visible solo para ${childUserData.name})`);
         } else {
           // Niño sin padre → auto-aprobar
           batch.set(contactRef, {

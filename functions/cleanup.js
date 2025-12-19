@@ -7,7 +7,7 @@
 const USED_FUNCTIONS = new Set([
   'activatePremium',
   'approveGroupPermission',
-  'blockChat',
+  // 'blockChat', // ✅ ELIMINADO: Escritura directa desde Flutter + Security Rules
   'cancelSubscription',
   // 'checkMessageBeforeSending', // ✅ ELIMINADO: La moderación ahora se hace SOLO en el trigger
   'checkPremiumStatus',
@@ -27,7 +27,7 @@ const USED_FUNCTIONS = new Set([
   'processGroupInvitationsAfterContactApproval',
   'sendNotificationOnCreate',  // ✅ TRIGGER - necesario
   'transformCharacter',
-  'unblockChat',
+  // 'unblockChat', // ✅ ELIMINADO: Escritura directa desde Flutter + Security Rules
   'unlinkChild',
   'updateContactRequestStatus',
   'updateGroupPermissionStatus',

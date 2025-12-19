@@ -1026,7 +1026,9 @@ async function checkApprovedContact(user1, user2) {
  * Requisitos:
  * 1. El contacto debe existir con status 'approved'
  * 2. No debe haber bloqueos activos entre los usuarios
- * 3. Todas las contact_requests relacionadas deben estar aprobadas
+ *
+ * NOTA: Ya no se verifica contact_requests - si contacts.status === 'approved',
+ * significa que todas las aprobaciones parentales están completas.
  */
 async function checkBidirectionalContact(user1, user2) {
   try {
@@ -1047,36 +1049,6 @@ async function checkBidirectionalContact(user1, user2) {
     if (hasBlock) {
       console.log(`[checkBidirectional] Existe bloqueo entre ${user1} y ${user2}`);
       return false;
-    }
-
-    // 3. Verificar que todas las contact_requests están aprobadas (no hay pendientes)
-    // Buscar el contacto para obtener el contactDocId
-    const contactSnapshot = await db
-      .collection('contacts')
-      .where('users', 'array-contains', user1)
-      .where('status', '==', 'approved')
-      .get();
-
-    let contactDocId = null;
-    for (const doc of contactSnapshot.docs) {
-      const users = doc.data().users || [];
-      if (users.includes(user2)) {
-        contactDocId = doc.id;
-        break;
-      }
-    }
-
-    if (contactDocId) {
-      const pendingRequests = await db
-        .collection('contact_requests')
-        .where('contactDocId', '==', contactDocId)
-        .where('status', '==', 'pending')
-        .get();
-
-      if (!pendingRequests.empty) {
-        console.log(`[checkBidirectional] Hay solicitudes pendientes para el contacto`);
-        return false;
-      }
     }
 
     console.log(`[checkBidirectional] Contacto bidireccional confirmado: ${user1} <-> ${user2}`);

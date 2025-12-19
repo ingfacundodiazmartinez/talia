@@ -257,6 +257,13 @@ class StoryService {
     _orchestrator.clearCache();
   }
 
+  /// Limpiar cache completamente al cerrar sesión
+  /// Resetea todo incluyendo _hasBeenPopulated para que el próximo usuario
+  /// empiece con un estado limpio
+  void resetForLogout() {
+    _orchestrator.resetForLogout();
+  }
+
   /// Verificar si background stream está activo
   bool get isBackgroundStreamActive {
     // Acceder a métricas del orchestrator

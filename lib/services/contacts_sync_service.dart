@@ -25,96 +25,67 @@ class ContactsSyncService {
   static const String _cacheBoxName = 'contacts_sync_cache';
   static const String _deviceNumbersKey = 'device_phone_numbers';
   static const String _lastSyncKey = 'last_sync_timestamp';
+  static const String _nameIndexBoxName = 'device_contacts_name_index';
 
   Box? _cacheBox;
+  Box? _nameIndexBox;
   bool _isSyncing = false;
 
-  /// Inicializar cache de Hive
   Future<void> initialize() async {
     _cacheBox ??= await Hive.openBox(_cacheBoxName);
+    _nameIndexBox ??= await Hive.openBox(_nameIndexBoxName);
   }
 
   /// Sincronizar contactos del dispositivo con Cloud Function
-  /// Se ejecuta al abrir la app (transparente al usuario)
-  ///
-  /// Lógica optimizada:
-  /// - SIEMPRE verifica cambios locales (comparando hashes del dispositivo vs cache)
-  /// - Solo llama a Cloud Function si hay cambios
-  /// - force=true salta la verificación de cambios y siempre llama a CF
   Future<void> syncContacts({bool force = false}) async {
-    // ignore: avoid_print
-    print('🔄🔄🔄 [ContactsSync] syncContacts() INICIADO force=$force');
-    ReleaseLogger.log('🔄 syncContacts() llamado (force=$force)', tag: 'ContactsSync');
-
-    // Evitar syncs concurrentes
-    if (_isSyncing) {
-      // ignore: avoid_print
-      print('⏭️⏭️⏭️ [ContactsSync] Sync ya en progreso, SALTANDO');
-      ReleaseLogger.log('⏭️ Sync ya en progreso, saltando', tag: 'ContactsSync');
-      return;
-    }
+    if (_isSyncing) return;
 
     _isSyncing = true;
-    // ignore: avoid_print
-    print('🔒🔒🔒 [ContactsSync] _isSyncing = true');
-    ReleaseLogger.log('🔒 _isSyncing = true', tag: 'ContactsSync');
 
     try {
       await initialize();
-      ReleaseLogger.log('✅ Hive inicializado', tag: 'ContactsSync');
 
       final currentUser = _auth.currentUser;
-      if (currentUser == null) {
-        ReleaseLogger.log('❌ Usuario no autenticado', tag: 'ContactsSync');
-        return;
-      }
-      ReleaseLogger.log('👤 Usuario: ${currentUser.uid}', tag: 'ContactsSync');
+      if (currentUser == null) return;
 
-      // 1. Verificar permiso de contactos
-      ReleaseLogger.log('📋 Verificando permiso de contactos...', tag: 'ContactsSync');
-      bool hasPermission = false;
-      try {
-        hasPermission = await _deviceContacts.hasPermission();
-        ReleaseLogger.log('📋 hasPermission: $hasPermission', tag: 'ContactsSync');
-
-        // Si no tiene permiso, solicitarlo (primera vez)
-        if (!hasPermission) {
-          ReleaseLogger.log('📋 Solicitando permiso de contactos...', tag: 'ContactsSync');
-          hasPermission = await _deviceContacts.requestPermission();
-          ReleaseLogger.log('📋 Permiso después de solicitar: $hasPermission', tag: 'ContactsSync');
-        }
-      } catch (e) {
-        ReleaseLogger.log('❌ Error verificando/solicitando permisos: $e', tag: 'ContactsSync');
-        return;
-      }
-
+      // Verificar permiso de contactos
+      bool hasPermission = await _deviceContacts.hasPermission();
       if (!hasPermission) {
-        ReleaseLogger.log('⏭️ Permiso de contactos denegado, saltando sync', tag: 'ContactsSync');
-        return;
+        hasPermission = await _deviceContacts.requestPermission();
       }
+      if (!hasPermission) return;
 
-      // 2. Obtener contactos del dispositivo
-      ReleaseLogger.log('📱 Obteniendo contactos del dispositivo...', tag: 'ContactsSync');
-      List<dynamic> deviceContacts = [];
-      try {
-        deviceContacts = await _deviceContacts.getDeviceContacts();
-        ReleaseLogger.log('📱 Contactos obtenidos: ${deviceContacts.length}', tag: 'ContactsSync');
-      } catch (e) {
-        ReleaseLogger.log('❌ Error obteniendo contactos: $e', tag: 'ContactsSync');
-        return;
-      }
+      // Obtener contactos del dispositivo
+      final deviceContacts = await _deviceContacts.getDeviceContacts();
 
-      // 3. Extraer y normalizar números de teléfono
-      ReleaseLogger.log('🔢 Normalizando números...', tag: 'ContactsSync');
+      // Extraer y normalizar números + construir índice de nombres
       final normalizedNumbers = <String>{};
+      final nameIndex = <String, String>{};
+
       for (final contact in deviceContacts) {
         try {
+          final displayName = contact.displayName;
+          if (displayName.isEmpty) continue;
+
           for (final phone in contact.phones) {
             if (phone.number.isEmpty) continue;
 
             final normalized = _phoneNormalizer.normalizePhone(phone.number);
             if (normalized.isNotEmpty) {
               normalizedNumbers.add(normalized);
+
+              // Indexar por últimos 10 dígitos
+              final digits = phone.number.replaceAll(RegExp(r'[^\d]'), '');
+              if (digits.length >= 10) {
+                final last10 = digits.substring(digits.length - 10);
+                nameIndex.putIfAbsent(last10, () => displayName);
+              }
+
+              final normalizedDigits = normalized.replaceAll(RegExp(r'[^\d]'), '');
+              if (normalizedDigits.length >= 10) {
+                final last10Normalized = normalizedDigits.substring(normalizedDigits.length - 10);
+                nameIndex.putIfAbsent(last10Normalized, () => displayName);
+              }
             }
           }
         } catch (e) {
@@ -122,17 +93,17 @@ class ContactsSyncService {
         }
       }
 
-      ReleaseLogger.log('✅ ${normalizedNumbers.length} números normalizados', tag: 'ContactsSync');
+      // Guardar índice de nombres en Hive
+      await _nameIndexBox?.clear();
+      await _nameIndexBox?.putAll(nameIndex);
 
-      // 4. Hashear los números para privacidad
+      // Hashear los números para privacidad
       final hashedNumbers = normalizedNumbers
           .map((phone) => _phoneNormalizer.hashPhone(phone))
           .where((hash) => hash.isNotEmpty)
           .toSet();
 
-      ReleaseLogger.log('🔐 ${hashedNumbers.length} números hasheados', tag: 'ContactsSync');
-
-      // 5. Comparar con cache local para detectar cambios
+      // Comparar con cache local para detectar cambios
       final cachedHashes = _cacheBox?.get(_deviceNumbersKey) as List?;
       final cachedSet = cachedHashes != null
           ? Set<String>.from(cachedHashes.map((e) => e.toString()))
@@ -143,132 +114,41 @@ class ContactsSyncService {
           hashedNumbers.difference(cachedSet).isNotEmpty ||
           cachedSet.difference(hashedNumbers).isNotEmpty;
 
-      if (!hasChanges) {
-        ReleaseLogger.log('⏭️ Sin cambios en contactos locales, saltando llamada a CF', tag: 'ContactsSync');
-        return;
-      }
+      if (!hasChanges) return;
 
-      final newContacts = hashedNumbers.difference(cachedSet).length;
-      final removedContacts = cachedSet.difference(hashedNumbers).length;
-      ReleaseLogger.log('🆕 Cambios detectados: +$newContacts nuevos, -$removedContacts eliminados', tag: 'ContactsSync');
-
-      // 6. Guardar hashes en cache local
+      // Guardar hashes en cache local
       await _cacheBox?.put(_deviceNumbersKey, hashedNumbers.toList());
-      ReleaseLogger.log('💾 Hashes guardados en cache local', tag: 'ContactsSync');
 
-      // 7. Llamar a Cloud Function para matching (solo si hay cambios)
-      ReleaseLogger.log('☁️ Llamando a Cloud Function syncDeviceContacts...', tag: 'ContactsSync');
+      // Llamar a Cloud Function para matching
       try {
         final callable = FirebaseFunctions.instance.httpsCallable('syncDeviceContacts');
-        final result = await callable.call<Map<String, dynamic>>({
+        await callable.call<Map<String, dynamic>>({
           'phoneHashes': hashedNumbers.toList(),
         });
-
-        final data = result.data;
-        final created = data['created'] as int? ?? 0;
-        final matches = data['matches'] as int? ?? 0;
-
-        ReleaseLogger.log(
-          '✅ Sync completado: $created contactos creados, $matches matches encontrados',
-          tag: 'ContactsSync',
-        );
       } catch (e) {
-        ReleaseLogger.error('❌ Error en Cloud Function syncDeviceContacts: $e', tag: 'ContactsSync');
-        // No bloquear el flujo si falla la Cloud Function
+        ReleaseLogger.error('Error en CF syncDeviceContacts: $e', tag: 'ContactsSync');
       }
 
-      // 8. Actualizar timestamp de último sync
       await _cacheBox?.put(_lastSyncKey, DateTime.now().millisecondsSinceEpoch);
 
     } catch (e) {
-      ReleaseLogger.error('❌ Error general en syncContacts: $e', tag: 'ContactsSync');
+      ReleaseLogger.error('Error en syncContacts: $e', tag: 'ContactsSync');
     } finally {
       _isSyncing = false;
-      ReleaseLogger.log('🔓 _isSyncing = false', tag: 'ContactsSync');
     }
   }
 
-  /// Detectar si hay nuevos contactos en el dispositivo vs cache
-  /// Usa hashes para la comparación (privacidad)
-  Future<bool> _hasNewDeviceContacts() async {
-    try {
-      final hasPermission = await _deviceContacts.hasPermission();
-      if (!hasPermission) return false;
+  /// Resolver nombre del dispositivo para un teléfono - O(1)
+  Future<String?> resolveDeviceName(String phoneNumber) async {
+    if (phoneNumber.isEmpty) return null;
 
-      // Obtener hashes del cache
-      final cachedHashes = _cacheBox?.get(_deviceNumbersKey) as List?;
-      if (cachedHashes == null) return true; // Primera vez
-
-      // Obtener números actuales del dispositivo y hashearlos
-      final deviceContacts = await _deviceContacts.getDeviceContacts();
-      final currentHashes = <String>{};
-
-      for (final contact in deviceContacts) {
-        for (final phone in contact.phones) {
-          if (phone.number.isEmpty) continue;
-          final hash = _phoneNormalizer.hashPhone(phone.number);
-          if (hash.isNotEmpty) {
-            currentHashes.add(hash);
-          }
-        }
-      }
-
-      // Comparar hashes
-      final cachedSet = Set<String>.from(cachedHashes.map((e) => e.toString()));
-      return currentHashes.difference(cachedSet).isNotEmpty;
-    } catch (e) {
-      return false;
-    }
-  }
-
-  /// Verificar si hay nuevos contactos (público para uso externo)
-  Future<bool> hasNewDeviceContacts() async {
     await initialize();
-    return _hasNewDeviceContacts();
+    if (_nameIndexBox == null) return null;
+
+    final digits = phoneNumber.replaceAll(RegExp(r'[^\d]'), '');
+    if (digits.length < 10) return null;
+
+    final last10 = digits.substring(digits.length - 10);
+    return _nameIndexBox?.get(last10) as String?;
   }
-
-  /// Limpiar cache
-  Future<void> clearCache() async {
-    await initialize();
-    await _cacheBox?.clear();
-  }
-}
-
-/// Modelo para contactos registrados (mantenido para compatibilidad)
-class RegisteredContact {
-  final String userId;
-  final String name;
-  final String phone;
-  final String? photoUrl;
-  final bool isParent;
-  final dynamic deviceContact;
-
-  RegisteredContact({
-    required this.userId,
-    required this.name,
-    required this.phone,
-    this.photoUrl,
-    required this.isParent,
-    this.deviceContact,
-  });
-}
-
-/// Extensión para serialización de RegisteredContact
-extension RegisteredContactJson on RegisteredContact {
-  Map<String, dynamic> toJson() => {
-    'userId': userId,
-    'name': name,
-    'phone': phone,
-    'photoUrl': photoUrl,
-    'isParent': isParent,
-  };
-
-  static RegisteredContact fromJson(Map<String, dynamic> json) => RegisteredContact(
-    userId: json['userId'] as String,
-    name: json['name'] as String,
-    phone: json['phone'] as String,
-    photoUrl: json['photoUrl'] as String?,
-    isParent: json['isParent'] as bool,
-    deviceContact: null,
-  );
 }

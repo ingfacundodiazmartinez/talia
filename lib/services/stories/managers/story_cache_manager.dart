@@ -184,6 +184,18 @@ class StoryCacheManager {
     _notifyCacheChange();
   }
 
+  /// Limpiar cache completamente al cerrar sesión
+  /// Resetea todo incluyendo _hasBeenPopulated para que el próximo usuario
+  /// empiece con un estado limpio
+  void resetForLogout() {
+    _cachedStories = null;
+    _lastCacheUpdate = null;
+    _optimisticCache.clear();
+    _hasBeenPopulated = false;
+    resetMetrics();
+    // No llamamos _notifyCacheChange() porque el usuario está cerrando sesión
+  }
+
   // ═══════════════════════════════════════════════════════════════
   // OPTIMISTIC CACHE - Para UX inmediata
   // ═══════════════════════════════════════════════════════════════

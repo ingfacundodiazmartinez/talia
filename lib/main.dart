@@ -17,8 +17,6 @@ import 'screens/parent/parent_main_shell.dart';
 import 'screens/child/child_main_shell.dart';
 import 'screens/common/profile_completion_screen.dart';
 import 'screens/auth/two_factor_verification_screen.dart';
-import 'screens/chat_moderation_settings_screen.dart';
-import 'screens/parent/chat_moderation_management_screen.dart';
 import 'screens/splash_wrapper.dart';
 import 'notification_service.dart';
 import 'theme_service.dart';
@@ -1137,20 +1135,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
           },
           home: const SplashWrapper(nextScreen: AuthWrapper()),
           onGenerateRoute: (settings) {
-            if (settings.name == '/chat_moderation_settings') {
-              final args = settings.arguments as Map<String, dynamic>;
-              return MaterialPageRoute(
-                builder: (context) => ChatModerationSettingsScreen(
-                  chatId: args['chatId'] as String,
-                  contactName: args['contactName'] as String,
-                ),
-              );
-            }
-            if (settings.name == '/chat_moderation_management') {
-              return MaterialPageRoute(
-                builder: (context) => const ChatModerationManagementScreen(),
-              );
-            }
+            // Rutas dinámicas removidas - moderación se maneja directamente desde whitelist
             return null;
           },
         ),

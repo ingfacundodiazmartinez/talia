@@ -121,7 +121,8 @@ class NotificationCacheService {
         if (key.toString().startsWith('${userId}_')) {
           final data = _notificationsBox!.get(key);
           if (data != null && data is Map) {
-            notifications.add(Map<String, dynamic>.from(data));
+            // ✅ FIX: Convertir recursivamente para evitar _Map<dynamic, dynamic>
+            notifications.add(_convertToStringDynamicMap(data));
           }
         }
       }
@@ -138,6 +139,31 @@ class NotificationCacheService {
       ReleaseLogger.error('Error obteniendo notificaciones del cache: $e', tag: 'NotifCache');
       return [];
     }
+  }
+
+  /// Convertir Map de Hive (_Map<dynamic, dynamic>) a Map<String, dynamic> recursivamente
+  Map<String, dynamic> _convertToStringDynamicMap(Map data) {
+    final result = <String, dynamic>{};
+    for (final entry in data.entries) {
+      final key = entry.key.toString();
+      final value = entry.value;
+
+      if (value is Map) {
+        // Convertir recursivamente
+        result[key] = _convertToStringDynamicMap(value);
+      } else if (value is List) {
+        // Convertir listas recursivamente
+        result[key] = value.map((item) {
+          if (item is Map) {
+            return _convertToStringDynamicMap(item);
+          }
+          return item;
+        }).toList();
+      } else {
+        result[key] = value;
+      }
+    }
+    return result;
   }
 
   /// Obtener notificaciones filtradas por childId

@@ -225,8 +225,10 @@ class StoryStreamManager {
 
       _backgroundStreamSubscription = backgroundStream.listen(
         (stories) {
-          // Solo actualizar cache si los datos realmente cambiaron
-          if (_hasStoriesChanged(stories)) {
+          // ✅ FIX: Siempre actualizar cache en la primera emisión para marcar _hasBeenPopulated
+          // Esto evita el spinner infinito cuando no hay historias
+          final shouldUpdate = !_cacheManager.hasBeenPopulated || _hasStoriesChanged(stories);
+          if (shouldUpdate) {
             _cacheManager.updateCache(stories);
             _lastRefresh = DateTime.now();
           }

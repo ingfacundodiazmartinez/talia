@@ -1,24 +1,19 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:rxdart/rxdart.dart';
 import '../../../controllers/whitelist_controller.dart';
-import '../../../models/contact.dart' as contact_model;
 import '../../../models/grouped_contact.dart';
-import '../../../groups/groups.dart';
 import '../../../utils/release_logger.dart';
 import '../../../theme_service.dart';
-import '../chat_moderation_management_screen.dart';
 import 'widgets/grouped_contact_card.dart';
 import 'widgets/contact_detail_sheet.dart';
 import '../../../services/unread_messages_service.dart';
 
-/// Screen principal de Control Parental (Lista Blanca) - Simplificado
+/// Screen principal de Control Parental (Lista Blanca)
 ///
-/// Arquitectura unificada:
-/// - Una sola query a `/contacts` donde `parentViewers` contiene el parentId
-/// - Filtros dropdown por estado e hijo
-/// - Header compacto con icono de Moderación IA
+/// Arquitectura CODING_RULES:
+/// - UI solo renderiza y maneja interacciones
+/// - Delega toda la lógica al WhitelistController
+/// - Usa cache del controller para búsqueda sin recrear streams
 class WhitelistScreen extends StatefulWidget {
   /// Filtro inicial por hijo (opcional)
   final String? initialChildFilter;
@@ -59,9 +54,6 @@ class _WhitelistScreenState extends State<WhitelistScreen>
   // Contadores para badges
   int _pendingCount = 0;
 
-  // Stream subscriptions
-  StreamSubscription? _contactsSubscription;
-
   @override
   bool get wantKeepAlive => true;
 
@@ -73,72 +65,78 @@ class _WhitelistScreenState extends State<WhitelistScreen>
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser != null) {
       _controller = WhitelistController(parentId: currentUser.uid);
-      _loadData();
+      _initializeController();
     }
   }
 
-  Future<void> _loadData() async {
+  Future<void> _initializeController() async {
     if (!mounted) return;
 
     try {
-      // Cargar hijos vinculados
+      // Configurar callback para actualizar UI cuando cambian los datos
+      _controller.onDataChanged = _onControllerDataChanged;
+
+      // Inicializar controller (carga hijos y arranca streams)
+      await _controller.initialize();
+
+      // Marcar notificaciones de whitelist como leídas al entrar
+      _controller.markNotificationsAsRead();
+
+      // Cargar hijos vinculados para filtro
       final children = await _controller.getLinkedChildrenWithNames();
       if (!mounted) return;
       setState(() => _linkedChildren = children);
 
-      // Cancelar suscripción anterior
-      await _contactsSubscription?.cancel();
-
-      // Stream combinado de contactos + grupos V2 pendientes + grupos aprobados
-      // Usamos startWith([]) para que el CombineLatestStream emita inmediatamente
-      _contactsSubscription = CombineLatestStream.combine3(
-        _controller.getContactsStream().startWith([]),
-        _controller.getPendingGroupApprovalRequests().startWith([]),
-        _controller.getApprovedGroupMembershipsStream().startWith([]),
-        (
-          List<contact_model.Contact> contacts,
-          List<GroupApprovalRequest> pendingGroups,
-          List<Map<String, dynamic>> approvedGroups,
-        ) => {
-          'contacts': contacts,
-          'pendingGroups': pendingGroups,
-          'approvedGroups': approvedGroups,
-        },
-      ).listen(
-        (data) async {
-          if (!mounted) return;
-
-          final contacts = data['contacts'] as List<contact_model.Contact>;
-          final pendingGroups = data['pendingGroups'] as List<GroupApprovalRequest>;
-          final approvedGroups = data['approvedGroups'] as List<Map<String, dynamic>>;
-
-          final grouped = await _controller.groupContactsByPerson(
-            contacts,
-            pendingGroups,
-            approvedGroups,
-          );
-
-          if (!mounted) return;
-          setState(() {
-            _groupedContacts = grouped;
-            _pendingCount =
-                grouped.fold(0, (total, c) => total + c.pendingCount);
-            _isLoading = false;
-          });
-        },
-        onError: (error) {
-          ReleaseLogger.error('Error en stream de contactos: $error', tag: 'WhitelistScreen');
-          if (mounted) {
-            setState(() => _isLoading = false);
-          }
-        },
-      );
+      // Procesar datos iniciales del cache
+      await _processDataFromCache();
     } catch (e) {
-      ReleaseLogger.error('Error cargando datos: $e', tag: 'WhitelistScreen');
+      ReleaseLogger.error('Error inicializando controller: $e', tag: 'WhitelistScreen');
       if (mounted) {
         setState(() => _isLoading = false);
       }
     }
+  }
+
+  /// Callback del controller cuando cambian los datos en cache
+  void _onControllerDataChanged() {
+    if (!mounted) return;
+    _processDataFromCache();
+  }
+
+  /// Procesar datos desde el cache del controller
+  Future<void> _processDataFromCache() async {
+    if (!mounted) return;
+
+    try {
+      final contacts = _controller.contactsCache;
+      final pendingGroups = _controller.groupRequestsCache;
+      final approvedGroups = _controller.groupMembershipsCache
+          .map((m) => m.toMap())
+          .toList();
+
+      final grouped = await _controller.groupContactsByPerson(
+        contacts,
+        pendingGroups,
+        approvedGroups,
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _groupedContacts = grouped;
+        _pendingCount = grouped.fold(0, (total, c) => total + c.pendingCount);
+        _isLoading = false;
+      });
+    } catch (e) {
+      ReleaseLogger.error('Error procesando datos: $e', tag: 'WhitelistScreen');
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  /// Compatibilidad: método legacy para refresh
+  Future<void> _loadData() async {
+    await _processDataFromCache();
   }
 
   Future<void> _refresh() async {
@@ -147,7 +145,7 @@ class _WhitelistScreenState extends State<WhitelistScreen>
 
   @override
   void dispose() {
-    _contactsSubscription?.cancel();
+    _controller.onDataChanged = null; // Limpiar callback
     _searchController.dispose();
     _controller.dispose();
     super.dispose();
@@ -238,22 +236,16 @@ class _WhitelistScreenState extends State<WhitelistScreen>
               ],
             ),
           ),
-          // Botón de Moderación IA
+          // Botón de ayuda sobre Moderación IA
           Container(
             decoration: BoxDecoration(
               color: Colors.white.withValues(alpha: 0.2),
               borderRadius: BorderRadius.circular(12),
             ),
             child: IconButton(
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) => const ChatModerationManagementScreen(),
-                  ),
-                );
-              },
+              onPressed: () => _showAIModerationHelp(context),
               icon: Icon(Icons.psychology, color: Colors.white, size: 26),
-              tooltip: 'Moderación con IA',
+              tooltip: 'Sobre Moderación con IA',
             ),
           ),
         ],
@@ -1005,6 +997,118 @@ class _WhitelistScreenState extends State<WhitelistScreen>
       SnackBar(
         content: Text(message),
         backgroundColor: Colors.red,
+      ),
+    );
+  }
+
+  /// Mostrar diálogo de ayuda sobre Moderación con IA
+  void _showAIModerationHelp(BuildContext context) {
+    const aiColor = Color(0xFF5C6BC0);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: Icon(Icons.psychology, color: aiColor, size: 48),
+        title: Text('Moderación con IA'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '¿Qué es?',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+              ),
+              SizedBox(height: 4),
+              Text(
+                'La IA analiza los mensajes que recibe tu hijo y te alerta si detecta contenido potencialmente peligroso o inapropiado.',
+                style: TextStyle(fontSize: 14),
+              ),
+              SizedBox(height: 16),
+              Text(
+                '¿Cómo activarla?',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+              ),
+              SizedBox(height: 4),
+              Text(
+                'Toca sobre un contacto aprobado y selecciona el nivel de moderación deseado en la sección "Mod. IA".',
+                style: TextStyle(fontSize: 14),
+              ),
+              SizedBox(height: 16),
+              Text(
+                'Niveles disponibles:',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+              ),
+              SizedBox(height: 8),
+              _buildHelpLevelItem('Alto', 'Detecta grooming, acoso, contenido sexual y violento', Colors.red),
+              _buildHelpLevelItem('Medio', 'Detecta contenido inapropiado y lenguaje ofensivo', Colors.orange),
+              _buildHelpLevelItem('Bajo', 'Solo detecta contenido explícitamente peligroso', Colors.blue),
+              SizedBox(height: 16),
+              Container(
+                padding: EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.amber.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.amber.withValues(alpha: 0.5)),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.warning_amber, color: Colors.amber[700], size: 20),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'La IA puede cometer errores. Úsala como herramienta de apoyo, no como reemplazo de la supervisión parental.',
+                        style: TextStyle(fontSize: 13, color: Colors.amber[900]),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Entendido'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHelpLevelItem(String level, String description, Color color) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 55,
+            padding: EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text(
+              level,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: color,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ),
+          SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              description,
+              style: TextStyle(fontSize: 13),
+            ),
+          ),
+        ],
       ),
     );
   }

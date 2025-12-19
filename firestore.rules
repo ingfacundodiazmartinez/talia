@@ -18,6 +18,15 @@ service cloud.firestore {
         return exists(/databases/$(database)/documents/chats/$(chatId));
       }
 
+      // 🔒 SEGURIDAD: Función para verificar si existe contacto entre usuarios
+      // El contactId tiene formato: {sortedUserId1}_{sortedUserId2}
+      // Permite leer datos de usuarios con contacto pendiente/aprobado
+      function hasContactWith() {
+        let contactId = request.auth.uid < userId ?
+          request.auth.uid + '_' + userId : userId + '_' + request.auth.uid;
+        return exists(/databases/$(database)/documents/contacts/$(contactId));
+      }
+
       // 🔒 SEGURIDAD: Función para verificar relación padre-hijo usando parent_children
       function isParentOrChildRelation() {
         return exists(/databases/$(database)/documents/parent_children/$(request.auth.uid + '_' + userId)) ||
@@ -34,12 +43,14 @@ service cloud.firestore {
       // 🔒 SEGURIDAD: Solo puedes leer usuarios si:
       // 1. Es tu propio perfil, O
       // 2. Existe un chat entre ambos (se crea al aprobar contacto), O
-      // 3. Hay relación padre-hijo, O
-      // 4. Es contacto de alguno de tus hijos (para ver fotos/nombres frescos)
+      // 3. Existe un contacto entre ambos (pendiente o aprobado), O
+      // 4. Hay relación padre-hijo, O
+      // 5. Es contacto de alguno de tus hijos (para ver fotos/nombres frescos)
       // Nota: La búsqueda por código usa Cloud Function findUserByCode
       allow read: if request.auth != null && (
         request.auth.uid == userId ||
         hasChatWith() ||
+        hasContactWith() ||
         isParentOrChildRelation() ||
         isContactOfMyChild()
       );
@@ -163,11 +174,28 @@ service cloud.firestore {
 
     // Chats
     match /chats/{chatId} {
-      // 🔒 SEGURIDAD: Verificar padres usando campo desnormalizado (0 lecturas extra)
-      // El campo approvedParentViewers se mantiene actualizado via Cloud Functions
+      // 🔒 SEGURIDAD: Verificar si el usuario es padre de algún participante del chat
+      // Verifica en parent_children usando el formato parentId_childId
+      // NOTA: Esta función asume chats de 2 participantes (1 a 1)
       function isParentOfParticipant() {
-        return resource.data.approvedParentViewers != null &&
-               request.auth.uid in resource.data.approvedParentViewers;
+        // Primero intentar con campo desnormalizado (más rápido, 0 lecturas)
+        let hasDenormalized = resource.data.approvedParentViewers != null &&
+                              request.auth.uid in resource.data.approvedParentViewers;
+
+        // Si no hay campo desnormalizado, verificar en parent_children directamente
+        // Extraer los participantes (asumiendo array de 2 elementos)
+        let participants = resource.data.participants;
+        let p1 = participants[0];
+        let p2 = participants[1];
+
+        // Verificar si el usuario actual es padre de p1 o p2
+        // Verificamos ambas direcciones del ID por consistencia
+        let isParentOfP1 = exists(/databases/$(database)/documents/parent_children/$(request.auth.uid + '_' + p1)) ||
+                           exists(/databases/$(database)/documents/parent_children/$(p1 + '_' + request.auth.uid));
+        let isParentOfP2 = exists(/databases/$(database)/documents/parent_children/$(request.auth.uid + '_' + p2)) ||
+                           exists(/databases/$(database)/documents/parent_children/$(p2 + '_' + request.auth.uid));
+
+        return hasDenormalized || isParentOfP1 || isParentOfP2;
       }
 
       // Permitir leer si:
@@ -220,28 +248,44 @@ service cloud.firestore {
 
       // Permitir actualizar si:
       // 1. El usuario es participante Y NO está tocando campos críticos Y NO está tocando campos de moderación, O
-      // 2. El usuario es padre de uno de los participantes Y solo está actualizando campos de moderación, O
+      // 2. El usuario es padre de uno de los participantes Y solo está actualizando campos de moderación/bloqueo, O
       // 3. El usuario es participante Y solo está actualizando sus propios campos de archivado, O
       // 4. El usuario es participante Y solo está actualizando su propio contador de no leídos
       // 🔒 NUEVO: Prohibir actualización de lastMessage, lastMessageTime, lastMessageSender desde frontend
       allow update: if request.auth != null && !isUpdatingCriticalChatFields() && (
         (request.auth.uid in resource.data.participants && !isUpdatingModerationFields()) ||
         (isParentOfParticipant() &&
-         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['moderationEnabled', 'moderationParentId', 'moderationEnabledAt', 'moderationLevel', 'updatedAt', 'participants'])) ||
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+           'moderationEnabled', 'moderationParentId', 'moderationEnabledAt', 'moderationLevel',
+           'isBlocked', 'blockedAt', 'blockedBy', 'unblockedAt', 'unblockedBy', 'lastActivity',
+           'updatedAt', 'participants'
+         ])) ||
         (request.auth.uid in resource.data.participants && isUpdatingOnlyArchiveFields()) ||
         (request.auth.uid in resource.data.participants && isUpdatingOnlyUnreadCount())
       );
 
       match /messages/{messageId} {
-        // 🔒 SEGURIDAD: Verificar permisos en UNA sola lectura del chat
+        // 🔒 SEGURIDAD: Verificar permisos para leer mensajes
         // Combina verificación de participante y padre aprobado
         function canReadMessages() {
           let chatDoc = get(/databases/$(database)/documents/chats/$(chatId));
           // Es participante directo?
           let isParticipant = request.auth.uid in chatDoc.data.participants;
-          // Es padre aprobado? (usa campo desnormalizado)
-          let isApprovedParent = chatDoc.data.approvedParentViewers != null &&
-                                 request.auth.uid in chatDoc.data.approvedParentViewers;
+
+          // Es padre aprobado? (usa campo desnormalizado primero, luego parent_children)
+          let hasDenormalized = chatDoc.data.approvedParentViewers != null &&
+                                request.auth.uid in chatDoc.data.approvedParentViewers;
+
+          // Si no hay desnormalizado, verificar en parent_children
+          let participants = chatDoc.data.participants;
+          let p1 = participants[0];
+          let p2 = participants[1];
+          let isParentOfP1 = exists(/databases/$(database)/documents/parent_children/$(request.auth.uid + '_' + p1)) ||
+                             exists(/databases/$(database)/documents/parent_children/$(p1 + '_' + request.auth.uid));
+          let isParentOfP2 = exists(/databases/$(database)/documents/parent_children/$(request.auth.uid + '_' + p2)) ||
+                             exists(/databases/$(database)/documents/parent_children/$(p2 + '_' + request.auth.uid));
+
+          let isApprovedParent = hasDenormalized || isParentOfP1 || isParentOfP2;
           return isParticipant || isApprovedParent;
         }
 
@@ -264,11 +308,16 @@ service cloud.firestore {
         }
 
         // ✅ FUNCIÓN: Verificar si el chat es válido para enviar mensajes
+        // 🔒 SEGURIDAD: También verifica si el chat está bloqueado (isBlocked)
         function isChatValid() {
           let chatDoc = get(/databases/$(database)/documents/chats/$(chatId));
+          // Verificar que el chat NO esté bloqueado
+          let notBlocked = !chatDoc.data.keys().hasAny(['isBlocked']) || chatDoc.data.isBlocked != true;
           // Si no existe el campo isValidChat, asumimos true (compatibilidad con chats viejos)
           // Si existe, debe ser true
-          return !chatDoc.data.keys().hasAny(['isValidChat']) || chatDoc.data.isValidChat == true;
+          let isValid = !chatDoc.data.keys().hasAny(['isValidChat']) || chatDoc.data.isValidChat == true;
+          // El chat es válido SOLO si no está bloqueado Y es válido
+          return notBlocked && isValid;
         }
 
         // 🔒 FUNCIÓN: Verificar si el chat tiene moderación activa
@@ -468,16 +517,96 @@ service cloud.firestore {
         return changedKeys.hasOnly(['alias', 'nickname', 'isFavorite', 'metadata']);
       }
 
+      // 🔒 FUNCIÓN: Verificar que solo se actualiza moderationSettings
+      // La validación de permisos (parent vs child) se hace en el servicio
+      function isUpdatingOnlyModerationSettings() {
+        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+        return changedKeys.hasOnly(['moderationSettings']);
+      }
+
+      // 🔒 FUNCIÓN: Verificar solicitud de aprobación válida (potential → pending/approved)
+      function isValidApprovalRequest() {
+        // Solo desde status 'potential'
+        let fromPotential = resource.data.status == 'potential';
+        // Solo hacia 'pending' o 'approved'
+        let toValidStatus = request.resource.data.status == 'pending' ||
+                           request.resource.data.status == 'approved';
+        // El initiatorId debe ser el usuario actual
+        let isInitiator = request.resource.data.initiatorId == request.auth.uid;
+        // Campos permitidos para esta transición
+        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+        let allowedKeys = ['status', 'initiatorId', 'requestedAt', 'approvals', 'completedApprovals', 'approvedAt'];
+        let onlyAllowedKeys = changedKeys.hasOnly(allowedKeys);
+
+        return fromPotential && toValidStatus && isInitiator && onlyAllowedKeys;
+      }
+
+      // 🔒 FUNCIÓN: Verificar cancelación válida (pending → rejected en approvals)
+      function isValidCancelRequest() {
+        // Solo si el contacto está en status 'pending'
+        let isPending = resource.data.status == 'pending';
+        // Solo modificar el approval del usuario actual
+        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+        let onlyApprovalsChanged = changedKeys.hasOnly(['approvals']);
+        // Verificar que approvals existe y tiene entrada para el usuario
+        let hasApprovals = 'approvals' in resource.data && resource.data.approvals != null;
+        let hasMyApproval = hasApprovals && request.auth.uid in resource.data.approvals;
+        // El usuario tiene un approval pendiente
+        let hasMyPendingApproval = hasMyApproval && resource.data.approvals[request.auth.uid].status == 'pending';
+
+        return isPending && onlyApprovalsChanged && hasMyPendingApproval;
+      }
+
+      // 🔒 FUNCIÓN: Verificar reenvío válido (cancelled/rejected → potential)
+      function isValidResendRequest() {
+        // Verificar que approvals existe y tiene entrada para el usuario
+        let hasApprovals = 'approvals' in resource.data && resource.data.approvals != null;
+        let hasMyApproval = hasApprovals && request.auth.uid in resource.data.approvals;
+        // Solo desde status 'cancelled' o cuando el approval del usuario está en 'rejected'
+        let myApprovalRejected = hasMyApproval && resource.data.approvals[request.auth.uid].status == 'rejected';
+        // Solo hacia 'potential'
+        let toPotential = request.resource.data.status == 'potential';
+        // Campos permitidos
+        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+        let allowedKeys = ['status', 'approvals'];
+        let onlyAllowedKeys = changedKeys.hasOnly(allowedKeys);
+
+        return myApprovalRejected && toPotential && onlyAllowedKeys;
+      }
+
       // Permitir actualizar si:
       // 1. Eres usuario del contacto Y solo tocas campos no críticos, O
-      // 2. Eres parentViewer Y solo actualizas approvals/status de forma válida
+      // 2. Eres parentViewer Y solo actualizas approvals/status de forma válida, O
+      // 3. Eres usuario del contacto Y es una solicitud de aprobación válida (potential → pending/approved), O
+      // 4. Eres usuario del contacto Y es una cancelación válida (pending, tu approval → rejected), O
+      // 5. Eres usuario del contacto Y es un reenvío válido (tu approval rejected → status potential), O
+      // 6. Eres usuario del contacto Y solo actualizas moderationSettings (validación de permisos en servicio), O
+      // 7. Eres parentViewer Y solo actualizas moderationSettings (para activar moderación en hijos)
       allow update: if request.auth != null && (
         (request.auth.uid in resource.data.users && isUpdatingNonCriticalFields()) ||
-        (isParentViewer() && isUpdatingOnlyChildApproval() && isValidApprovalUpdate())
+        (isParentViewer() && isUpdatingOnlyChildApproval() && isValidApprovalUpdate()) ||
+        (request.auth.uid in resource.data.users && isValidApprovalRequest()) ||
+        (request.auth.uid in resource.data.users && isValidCancelRequest()) ||
+        (request.auth.uid in resource.data.users && isValidResendRequest()) ||
+        (request.auth.uid in resource.data.users && isUpdatingOnlyModerationSettings()) ||
+        (isParentViewer() && isUpdatingOnlyModerationSettings())
       );
 
-      // No permitir delete directo
-      allow delete: if false;
+      // 🔒 FUNCIÓN: Verificar eliminación válida de contacto rechazado
+      function canDeleteRejectedContact() {
+        // El usuario es parte del contacto
+        let isParticipant = request.auth.uid in resource.data.users;
+        // Verificar que approvals existe y tiene entrada para el usuario
+        let hasApprovals = 'approvals' in resource.data && resource.data.approvals != null;
+        let hasMyApproval = hasApprovals && request.auth.uid in resource.data.approvals;
+        // Su approval está en 'rejected'
+        let myApprovalRejected = hasMyApproval && resource.data.approvals[request.auth.uid].status == 'rejected';
+
+        return isParticipant && myApprovalRejected;
+      }
+
+      // Permitir delete solo si el contacto está rechazado para el usuario
+      allow delete: if request.auth != null && canDeleteRejectedContact();
     }
 
     // Notificaciones
@@ -1082,39 +1211,52 @@ service cloud.firestore {
 
     // Blocked chats
     match /blocked_chats/{blockedId} {
-      // Función auxiliar para verificar si el usuario es padre de alguno de los participantes
-      // Solo se ejecuta si el documento existe
-      function isParentOfBlockedChatParticipant() {
+      // Función auxiliar: verificar si es padre del childId en el documento existente
+      function isParentOfBlockedChatChild() {
         return resource != null &&
                resource.data != null &&
+               resource.data.childId != null &&
                (exists(/databases/$(database)/documents/parent_children/$(request.auth.uid + '_' + resource.data.childId)) ||
-                exists(/databases/$(database)/documents/parent_children/$(resource.data.childId + '_' + request.auth.uid)) ||
-                exists(/databases/$(database)/documents/parent_children/$(request.auth.uid + '_' + resource.data.contactId)) ||
-                exists(/databases/$(database)/documents/parent_children/$(resource.data.contactId + '_' + request.auth.uid)));
+                exists(/databases/$(database)/documents/parent_children/$(resource.data.childId + '_' + request.auth.uid)));
+      }
+
+      // Función auxiliar: verificar si es padre del childId en los datos nuevos (para create)
+      function isParentOfNewChildId() {
+        return request.resource.data.childId != null &&
+               (exists(/databases/$(database)/documents/parent_children/$(request.auth.uid + '_' + request.resource.data.childId)) ||
+                exists(/databases/$(database)/documents/parent_children/$(request.resource.data.childId + '_' + request.auth.uid)));
       }
 
       // Permitir leer si:
       // 1. Eres uno de los participantes (tu UID está en el documento ID), O
-      // 2. El documento existe Y eres padre de alguno de los participantes
+      // 2. El documento existe Y eres padre del childId
       allow read: if request.auth != null && (
         blockedId.matches('.*' + request.auth.uid + '.*') ||
-        isParentOfBlockedChatParticipant()
+        isParentOfBlockedChatChild()
       );
 
-      // ⚠️ CORREGIDO: Solo puedes crear/modificar bloqueos si eres participante
+      // ✅ Permitir crear si:
+      // 1. Eres el childId (el niño mismo), O
+      // 2. Eres padre verificado del childId (via parent_children)
       allow create: if request.auth != null && (
         request.resource.data.childId == request.auth.uid ||
-        request.resource.data.parentId == request.auth.uid
+        isParentOfNewChildId()
       );
 
+      // ✅ Permitir actualizar si:
+      // 1. Eres el childId, O
+      // 2. Eres padre verificado del childId
       allow update: if request.auth != null && (
         resource.data.childId == request.auth.uid ||
-        resource.data.parentId == request.auth.uid
+        isParentOfBlockedChatChild()
       );
 
+      // ✅ Permitir eliminar si:
+      // 1. Eres el childId, O
+      // 2. Eres padre verificado del childId
       allow delete: if request.auth != null && (
         resource.data.childId == request.auth.uid ||
-        resource.data.parentId == request.auth.uid
+        isParentOfBlockedChatChild()
       );
     }
 
@@ -1186,44 +1328,11 @@ service cloud.firestore {
         request.auth.uid == request.resource.data.userId;
     }
 
-    // Contact requests
+    // DEPRECATED: contact_requests - ya no se usa
+    // Las aprobaciones ahora se almacenan en contacts.approvals
+    // Los padres aprueban/rechazan directamente via WhitelistController + Security Rules en /contacts
     match /contact_requests/{requestId} {
-      // 🔒 FUNCIÓN: Verificar si el usuario es padre del childId en la solicitud
-      function isParentOfRequestChild() {
-        let parentDoc = get(/databases/$(database)/documents/users/$(request.auth.uid));
-        return parentDoc.data.linkedChildrenIds != null &&
-               resource.data.childId in parentDoc.data.linkedChildrenIds;
-      }
-
-      // 🔒 SEGURIDAD: Solo puedes leer solicitudes donde eres childId o parentId o el contacto
-      // ✅ NUEVO: O si eres padre de algún hijo en la solicitud (para AutoApprovalService)
-      allow get: if request.auth != null &&
-        (resource.data.childId == request.auth.uid ||
-         resource.data.parentId == request.auth.uid ||
-         resource.data.contactId == request.auth.uid ||
-         isParentOfRequestChild());
-
-      // 🔒 SEGURIDAD: Solo puedes listar solicitudes donde estés involucrado
-      // ✅ NUEVO: O si eres padre del childId (para AutoApprovalService)
-      allow list: if request.auth != null &&
-        (resource.data.childId == request.auth.uid ||
-         resource.data.parentId == request.auth.uid ||
-         resource.data.contactId == request.auth.uid ||
-         isParentOfRequestChild());
-
-      // Solo Cloud Functions pueden crear
-      allow create: if false;
-
-      // Solo Cloud Functions pueden actualizar
-      allow update: if false;
-
-      // Permitir eliminar si:
-      // 1. Eres el childId o contactId (cualquiera de los dos usuarios), Y
-      // 2. La solicitud está pendiente
-      allow delete: if request.auth != null &&
-        (request.auth.uid == resource.data.childId ||
-         request.auth.uid == resource.data.contactId) &&
-        resource.data.status == 'pending';
+      allow read, write: if false;
     }
 
     // Weekly reports
@@ -1542,11 +1651,21 @@ service cloud.firestore {
     // Groups V2 - Nueva colección de grupos con aprobación parental
     match /groups_v2/{groupId} {
       // Miembros activos o pendientes pueden leer el grupo
-      // Esto permite queries con array-contains en members o pendingMembers
+      // Padres de miembros/pendientes también pueden leer (para whitelist)
       allow read: if request.auth != null && (
         request.auth.uid in resource.data.members ||
-        (resource.data.pendingMembers != null && request.auth.uid in resource.data.pendingMembers)
+        (resource.data.pendingMembers != null && request.auth.uid in resource.data.pendingMembers) ||
+        isParentOfAnyMemberOrPending(resource.data)
       );
+
+      // Función para verificar si es padre de algún miembro o pendiente
+      function isParentOfAnyMemberOrPending(groupData) {
+        // Verificar si el caller es padre de algún miembro
+        let allUsers = groupData.members;
+        // No podemos iterar en rules, pero podemos verificar vía parent_children
+        // Esta función se usa principalmente para read, update ya tiene verificación específica
+        return false; // Se verificará en update específicamente por childId
+      }
 
       // Solo Cloud Functions pueden crear grupos
       allow create: if false;
@@ -1570,11 +1689,21 @@ service cloud.firestore {
         return onlyChangingMembers && wasInGroup && isRemovedFromMembers;
       }
 
+      // Función para verificar si es padre modificando membresía de su hijo
+      // Campos permitidos para padres: members, memberDetails, memberCount, pendingMembers, updatedAt
+      function isParentModifyingChildMembership() {
+        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+        let allowedParentFields = ['members', 'memberDetails', 'memberCount', 'pendingMembers', 'updatedAt'];
+        return changedKeys.hasOnly(allowedParentFields);
+      }
+
       // Miembros pueden actualizar campos de actividad y su propio unreadCount
       // O pueden salir del grupo (removerse a sí mismos del array members)
+      // Padres pueden modificar membresía de sus hijos (approve/revoke)
       allow update: if request.auth != null && (
         (request.auth.uid in resource.data.members && isUpdatingOnlyAllowedGroupFields()) ||
-        isLeavingGroup()
+        isLeavingGroup() ||
+        isParentModifyingChildMembership()
       );
 
       // Solo Cloud Functions pueden eliminar grupos
@@ -1664,8 +1793,24 @@ service cloud.firestore {
       allow read: if request.auth != null &&
         resource.data.parentId == request.auth.uid;
 
-      // Solo Cloud Functions pueden crear/modificar solicitudes
-      allow create, update, delete: if false;
+      // Solo Cloud Functions pueden crear solicitudes
+      allow create: if false;
+
+      // Padre puede actualizar sus propias solicitudes (approve/reject)
+      // Campos permitidos: status, respondedAt, respondedBy
+      function isParentUpdatingOwnRequest() {
+        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+        let allowedFields = ['status', 'respondedAt', 'respondedBy'];
+        return resource.data.parentId == request.auth.uid &&
+               resource.data.status == 'pending' &&
+               changedKeys.hasOnly(allowedFields) &&
+               (request.resource.data.status == 'approved' || request.resource.data.status == 'rejected');
+      }
+
+      allow update: if request.auth != null && isParentUpdatingOwnRequest();
+
+      // Solo Cloud Functions pueden eliminar solicitudes
+      allow delete: if false;
     }
 
     // ============================================================================

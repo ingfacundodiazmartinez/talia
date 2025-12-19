@@ -6,7 +6,6 @@ import '../../../services/block_service.dart';
 import '../../../services/typing_indicator_service.dart';
 import '../../../controllers/chat_app_bar_controller.dart';
 import '../../../calls_v2/screens/agora_call_screen.dart';
-import '../../chat_moderation_settings_screen.dart';
 
 /// AppBar personalizado para pantallas de chat
 class ChatAppBar extends StatefulWidget implements PreferredSizeWidget {
@@ -173,17 +172,7 @@ class _ChatAppBarState extends State<ChatAppBar> {
             return PopupMenuButton<String>(
               icon: const Icon(Icons.more_vert),
               onSelected: (value) async {
-                if (value == 'moderation') {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => ChatModerationSettingsScreen(
-                        chatId: widget.chatId,
-                        contactName: widget.contactName,
-                      ),
-                    ),
-                  );
-                } else if (value == 'clear_chat') {
+                if (value == 'clear_chat') {
                   if (widget.onClearChat != null) {
                     // Mostrar confirmación
                     showDialog(
@@ -284,28 +273,6 @@ class _ChatAppBarState extends State<ChatAppBar> {
               },
               itemBuilder: (context) {
             final items = <PopupMenuEntry<String>>[];
-
-            // Mostrar "Moderación con IA" solo para padres/adultos
-            if (_controller.isParentOrAdult && !_controller.isLoading) {
-              items.add(
-                PopupMenuItem(
-                  value: 'moderation',
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.psychology_outlined,
-                        color: colorScheme.onSurface,
-                      ),
-                      const SizedBox(width: 12),
-                      Text(
-                        'Moderación con IA',
-                        style: TextStyle(color: colorScheme.onSurface),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            }
 
             // Opción limpiar chat
             if (widget.onClearChat != null) {

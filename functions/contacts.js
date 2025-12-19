@@ -230,25 +230,28 @@ exports.findUserByCode = onCall({
 
     const userData = userDoc.data();
 
-    // 7. Verificar si ya son contactos
+    // 7. Verificar si ya son contactos y estado
     const existingContact = await db.collection("contacts")
       .where("users", "array-contains", callerId)
       .get();
 
-    const alreadyContact = existingContact.docs.some(doc => {
-      const users = doc.data().users || [];
-      return users.includes(userId);
-    });
+    let alreadyContact = false;
+    let pendingRequest = false;
 
-    // 8. Verificar si hay solicitud pendiente
-    const pendingRequest = await db.collection("contact_requests")
-      .where("childId", "in", [callerId, userId])
-      .where("contactId", "in", [callerId, userId])
-      .where("status", "==", "pending")
-      .limit(1)
-      .get();
+    for (const doc of existingContact.docs) {
+      const contactData = doc.data();
+      const users = contactData.users || [];
+      if (users.includes(userId)) {
+        if (contactData.status === "approved") {
+          alreadyContact = true;
+        } else if (contactData.status === "pending") {
+          pendingRequest = true;
+        }
+        break;
+      }
+    }
 
-    // 9. Invalidar el código después de usarlo (one-time use)
+    // 8. Invalidar el código después de usarlo (one-time use)
     const codeDocRef = codeSnapshot.docs[0].ref;
     await codeDocRef.update({
       isActive: false,
@@ -257,7 +260,7 @@ exports.findUserByCode = onCall({
     });
     console.log(`🔒 [findUserByCode] Código ${codeUpper} invalidado después de uso por ${callerId}`);
 
-    // 10. Retornar info básica (sin datos sensibles)
+    // 9. Retornar info básica (sin datos sensibles)
     // 🔒 SEGURIDAD: No incluir photoURL para prevenir exposición de fotos
     return {
       found: true,
@@ -265,7 +268,7 @@ exports.findUserByCode = onCall({
       name: userData.name || "Usuario",
       role: userData.role || "adult",
       alreadyContact: alreadyContact,
-      pendingRequest: !pendingRequest.empty,
+      pendingRequest: pendingRequest,
     };
   } catch (error) {
     console.error(`❌ [findUserByCode] Error:`, error);
@@ -320,71 +323,17 @@ exports.createContactRequest = onCall(
           throw new HttpsError("already-exists", "Ya existe un contacto aprobado con este usuario");
         }
 
-        // Si está pendiente, verificar si hay solicitudes activas
+        // Si está pendiente, ya hay una solicitud activa
         if (contactStatus === "pending") {
-          // Verificar si hay contact_requests pendientes
-          const pendingRequests = await db
-            .collection("contact_requests")
-            .where("contactDocId", "==", existingContact.docs[0].id)
-            .where("status", "==", "pending")
-            .get();
-
-          if (!pendingRequests.empty) {
-            throw new HttpsError("already-exists", "Ya existe una solicitud pendiente con este usuario");
-          }
+          throw new HttpsError("already-exists", "Ya existe una solicitud pendiente con este usuario");
         }
 
-        // Si está deleted o rejected, reutilizar el documento existente
-        console.log(`🔄 Contacto existente con estado ${contactStatus}, reutilizando documento para reagregar...`);
+        // Si está deleted, rejected o potential → reutilizar el documento existente
+        console.log(`🔄 Contacto existente con estado ${contactStatus}, reutilizando documento...`);
         existingContactDoc = existingContact.docs[0];
-
-        // Eliminar contact_requests viejos asociados a este contacto
-        console.log(`🗑️ Limpiando contact_requests viejos del contacto...`);
-        const oldRequests = await db
-          .collection("contact_requests")
-          .where("contactDocId", "==", existingContactDoc.id)
-          .get();
-
-        const deletePromises = oldRequests.docs.map((doc) => doc.ref.delete());
-        await Promise.all(deletePromises);
-        console.log(`✅ ${deletePromises.length} contact_requests viejos eliminados`);
       }
 
-      // 4. Detectar solicitudes simultáneas (el otro usuario ya inició una solicitud)
-      // En lugar de lanzar error, fusionamos las solicitudes reutilizando el contactDocId existente
-      let simultaneousRequest = null;
-      const existingPendingRequests = await db
-        .collection("contact_requests")
-        .where("childId", "in", participants)
-        .where("contactId", "in", participants)
-        .where("status", "==", "pending")
-        .get();
-
-      if (!existingPendingRequests.empty) {
-        // Verificar si es una solicitud del OTRO usuario hacia nosotros (simultánea)
-        for (const doc of existingPendingRequests.docs) {
-          const reqData = doc.data();
-          // Si el childId es el contacto (el otro usuario inició) y contactId somos nosotros
-          if (reqData.childId === contactUserId && reqData.contactId === currentUserId) {
-            console.log(`🔄 Solicitud simultánea detectada - fusionando con solicitud existente`);
-            simultaneousRequest = { id: doc.id, data: reqData };
-            // Reutilizar el contactDocId existente si lo tiene
-            if (reqData.contactDocId) {
-              existingContactDoc = await db.collection("contacts").doc(reqData.contactDocId).get();
-              if (existingContactDoc.exists) {
-                console.log(`✅ Reutilizando documento contacts existente: ${reqData.contactDocId}`);
-              }
-            }
-            break;
-          }
-          // Si es una solicitud que nosotros ya iniciamos (duplicado real)
-          if (reqData.childId === currentUserId && reqData.contactId === contactUserId) {
-            throw new HttpsError("already-exists", "Ya existe una solicitud pendiente con este usuario");
-          }
-        }
-      }
-
-      // 5. Obtener datos de ambos usuarios
+      // 4. Obtener datos de ambos usuarios
       const [user1Doc, user2Doc] = await Promise.all([
         db.collection("users").doc(participants[0]).get(),
         db.collection("users").doc(participants[1]).get(),
@@ -461,12 +410,18 @@ exports.createContactRequest = onCall(
         };
       }
 
+      // Obtener nombres y emails de Firestore (fallback si no vienen en request.data)
+      const resolvedUser1Name = user1Data.name || "Usuario";
+      const resolvedUser2Name = user2Data.name || "Usuario";
+      const resolvedUser1Email = user1Data.email || "";
+      const resolvedUser2Email = user2Data.email || "";
+
       const contactData = {
         users: participants,
-        user1Name: participants[0] === currentUserId ? currentUserName : contactName,
-        user2Name: participants[1] === currentUserId ? currentUserName : contactName,
-        user1Email: participants[0] === currentUserId ? currentUserEmail : contactEmail,
-        user2Email: participants[1] === currentUserId ? currentUserEmail : contactEmail,
+        user1Name: resolvedUser1Name,
+        user2Name: resolvedUser2Name,
+        user1Email: resolvedUser1Email,
+        user2Email: resolvedUser2Email,
         status: needsAnyApproval ? "pending" : "approved",
         autoApproved: !needsAnyApproval,
         addedAt: new Date(),
@@ -522,10 +477,9 @@ exports.createContactRequest = onCall(
         console.log(`✅ contactedByChildOf actualizado en ambos usuarios con parentViewers: ${JSON.stringify(parentViewers)}`);
       }
 
-      // 9. DEPRECATED: Ya no creamos contact_requests separados
-      // Toda la información está en el documento contacts.approvals
+      // 9. Aprobaciones almacenadas en contacts.approvals
       // Los padres consultan contacts con parentViewers arrayContains parentId
-      console.log(`ℹ️ Aprobaciones almacenadas en contacts.approvals (contact_requests deprecado)`);
+      // y aprueban/rechazan directamente via Flutter + Security Rules
 
       // 10. Enviar notificaciones push solo al PRIMER padre de cada lado (1 aprobación suficiente)
       const messaging = getMessaging();
@@ -727,229 +681,14 @@ exports.createContactRequest = onCall(
   }
 );
 
-/**
- * Cloud Function: Aprobar/Rechazar solicitud de contacto
- * Solo esta función puede actualizar contact_requests
- */
+// DEPRECATED: updateContactRequestStatus fue eliminada
+// Los padres ahora aprueban/rechazan contactos directamente desde Flutter
+// usando Security Rules en la colección "contacts"
 
-exports.updateContactRequestStatus = onCall(
-  { cors: true, consumeAppCheckToken: true },
-  async (request) => {
-    const db = getFirestore();
-    const auth = request.auth;
-
-    if (!auth) {
-      throw new HttpsError("unauthenticated", "Usuario no autenticado");
-    }
-
-    const { requestId, status } = request.data;
-
-    if (!requestId || !status) {
-      throw new HttpsError("invalid-argument", "requestId y status son requeridos");
-    }
-
-    if (!["approved", "rejected"].includes(status)) {
-      throw new HttpsError("invalid-argument", "status debe ser 'approved' o 'rejected'");
-    }
-
-    console.log(`📝 Actualizando contact_request ${requestId} a ${status}`);
-
-    try {
-      // 1. Obtener la solicitud
-      const requestDoc = await db.collection("contact_requests").doc(requestId).get();
-
-      if (!requestDoc.exists) {
-        throw new HttpsError("not-found", "Solicitud no encontrada");
-      }
-
-      const requestData = requestDoc.data();
-
-      // 2. Verificar que el usuario sea el padre asignado
-      if (requestData.parentId !== auth.uid) {
-        throw new HttpsError("permission-denied", "No tienes permiso para aprobar esta solicitud");
-      }
-
-      // 3. Verificar el estado actual y las transiciones permitidas
-      const currentStatus = requestData.status;
-
-      // Transiciones permitidas:
-      // - pending -> approved/rejected
-      // - rejected -> approved (re-aprobar)
-      // - approved -> rejected (revocar aprobación)
-      // Si ya tiene el mismo estado, no hacer nada
-      if (currentStatus === status) {
-        console.log(`⚠️ Solicitud ${requestId} ya tiene el estado ${status}`);
-        return {
-          success: true,
-          status: status,
-          message: "La solicitud ya tiene este estado",
-        };
-      }
-
-      // 4. Actualizar la solicitud
-      const updateData = {
-        status: status,
-        updatedAt: new Date(),
-        updatedBy: auth.uid,
-      };
-
-      // Si se está aprobando, limpiar campos de rechazo previo
-      if (status === "approved") {
-        updateData.rejectedAt = null;
-        updateData.rejectedBy = null;
-        updateData.approvedAt = new Date();
-      } else if (status === "rejected") {
-        updateData.rejectedAt = new Date();
-        updateData.rejectedBy = auth.uid;
-      }
-
-      await requestDoc.ref.update(updateData);
-
-      console.log(`✅ Contact request ${requestId} actualizado a ${status}`);
-
-      // 5. Si fue aprobada, aprobar el contacto inmediatamente (un padre es suficiente)
-      if (status === "approved" && requestData.contactDocId) {
-        // ✅ FIX: Aprobar el contacto inmediatamente (no esperar a todos los padres)
-        await db.collection("contacts").doc(requestData.contactDocId).update({
-          status: "approved",
-          approvedAt: new Date(),
-          approvedBy: auth.uid,
-        });
-
-        console.log(`✅ Contacto ${requestData.contactDocId} aprobado por ${auth.uid}`);
-
-        // ✅ FIX: Marcar todas las otras solicitudes pendientes como aprobadas
-        const otherRequests = await db
-          .collection("contact_requests")
-          .where("contactDocId", "==", requestData.contactDocId)
-          .where("status", "==", "pending")
-          .get();
-
-        if (!otherRequests.empty) {
-          const batch = db.batch();
-          for (const doc of otherRequests.docs) {
-            batch.update(doc.ref, {
-              status: "approved",
-              updatedAt: new Date(),
-              resolvedByOtherParent: true,
-              resolvedBy: auth.uid,
-            });
-          }
-          await batch.commit();
-          console.log(`✅ ${otherRequests.size} solicitudes de otros padres marcadas como aprobadas`);
-        }
-      }
-
-      // 7. Si fue rechazada, rechazar todo el contacto
-      if (status === "rejected" && requestData.contactDocId) {
-        await db.collection("contacts").doc(requestData.contactDocId).update({
-          status: "rejected",
-          rejectedAt: new Date(),
-          rejectedBy: auth.uid,
-        });
-
-        // Rechazar todas las solicitudes relacionadas
-        const allRequests = await db
-          .collection("contact_requests")
-          .where("contactDocId", "==", requestData.contactDocId)
-          .get();
-
-        const batch = db.batch();
-        allRequests.docs.forEach((doc) => {
-          if (doc.data().status === "pending") {
-            batch.update(doc.ref, {
-              status: "rejected",
-              updatedAt: new Date(),
-            });
-          }
-        });
-        await batch.commit();
-
-        console.log(`❌ Contacto ${requestData.contactDocId} rechazado`);
-
-        // 8. Enviar notificación de rechazo al iniciador
-        try {
-          const contactDoc = await db.collection("contacts").doc(requestData.contactDocId).get();
-          if (contactDoc.exists) {
-            const contactData = contactDoc.data();
-            const initiatorId = contactData.initiatorId || contactData.addedBy;
-
-            // Solo notificar si el iniciador no es quien rechazó
-            if (initiatorId && initiatorId !== auth.uid) {
-              // Obtener nombre del contacto rechazado
-              const rejectedContactName = requestData.contactName || "un usuario";
-
-              // Crear notificación en Firestore para el iniciador
-              await db.collection("notifications").add({
-                userId: initiatorId,
-                type: "contact_request_rejected",
-                title: "Solicitud de contacto rechazada",
-                body: `Tu solicitud de contacto con ${rejectedContactName} fue rechazada`,
-                data: {
-                  contactDocId: requestData.contactDocId,
-                  contactName: rejectedContactName,
-                  rejectedBy: auth.uid,
-                },
-                pushSent: false,
-                createdAt: FieldValue.serverTimestamp(),
-                read: false,
-              });
-              console.log(`📩 Notificación de rechazo enviada al iniciador ${initiatorId}`);
-
-              // Intentar enviar push notification también
-              const initiatorDoc = await db.collection("users").doc(initiatorId).get();
-              const initiatorData = initiatorDoc.data();
-              const initiatorToken = initiatorData?.fcmToken;
-
-              if (initiatorToken) {
-                const messaging = getMessaging();
-                await messaging.send({
-                  token: initiatorToken,
-                  notification: {
-                    title: "Solicitud de contacto rechazada",
-                    body: `Tu solicitud de contacto con ${rejectedContactName} fue rechazada`,
-                  },
-                  data: {
-                    type: "contact_request_rejected",
-                    contactDocId: requestData.contactDocId,
-                  },
-                  android: {
-                    priority: "high",
-                    notification: {
-                      channelId: "talia_sound_vibration",
-                    },
-                  },
-                  apns: {
-                    headers: { "apns-priority": "10" },
-                    payload: { aps: { sound: "default" } },
-                  },
-                });
-                console.log(`📬 Push notification de rechazo enviada al iniciador`);
-              }
-            }
-          }
-        } catch (notifError) {
-          console.error(`⚠️ Error enviando notificación de rechazo:`, notifError);
-          // No fallar la operación principal por error en notificación
-        }
-      }
-
-      return {
-        success: true,
-        status: status,
-      };
-    } catch (error) {
-      console.error("❌ Error actualizando solicitud de contacto:", error);
-      throw error;
-    }
-  }
-);
-
-/**
- * Cloud Function: Aprobar solicitud de permiso de grupo
- * Solo esta función puede crear/actualizar contacts para permisos de grupo
- */
-
+// DEPRECATED: blockChat - Ya no se exporta desde index.js
+// Los padres ahora bloquean chats directamente desde Flutter usando:
+// - RevokeWhitelistContactService escribe a blocked_chats y chats
+// - Security Rules verifican parent_children para autorización
 exports.blockChat = onCall({ consumeAppCheckToken: true }, async (request) => {
   const db = getFirestore();
   const { childId, contactId, reason, blockedBy } = request.data;
@@ -1039,6 +778,11 @@ exports.blockChat = onCall({ consumeAppCheckToken: true }, async (request) => {
 /**
  * Desbloquear un chat entre dos usuarios
  * Usado cuando un padre re-aprueba un contacto previamente revocado
+ *
+ * DEPRECATED: Ya no se exporta desde index.js
+ * Los padres ahora desbloquean chats directamente desde Flutter usando:
+ * - ReapproveWhitelistContactService escribe a blocked_chats y chats
+ * - Security Rules verifican parent_children para autorización
  */
 
 exports.unblockChat = onCall({ consumeAppCheckToken: true }, async (request) => {
@@ -1124,6 +868,122 @@ exports.unblockChat = onCall({ consumeAppCheckToken: true }, async (request) => 
     throw new HttpsError("internal", `Error desbloqueando chat: ${error.message}`);
   }
 });
+
+// ═══════════════════════════════════════════════════════════════
+// TRIGGER: NOTIFICACIONES AL SOLICITAR APROBACIÓN
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * ⚡ TRIGGER: Crear notificaciones cuando un contacto pasa de potential a pending
+ *
+ * Este trigger reemplaza la lógica de notificaciones de requestContactApproval.
+ * El cliente actualiza el contacto directamente via Firestore (con rules seguras),
+ * y este trigger crea las notificaciones para los padres.
+ */
+exports.onContactApprovalRequested = onDocumentUpdated(
+  {
+    document: "contacts/{contactId}",
+    region: "us-central1",
+  },
+  async (event) => {
+    const db = getFirestore();
+
+    try {
+      const beforeData = event.data.before.data();
+      const afterData = event.data.after.data();
+      const contactId = event.params.contactId;
+
+      // Solo procesar transición potential → pending
+      if (beforeData.status !== "potential" || afterData.status !== "pending") {
+        return null;
+      }
+
+      console.log(`📋 [onContactApprovalRequested] Contacto ${contactId} cambió de potential a pending`);
+
+      // Obtener datos pre-calculados del contacto
+      const users = afterData.users || [];
+      const initiatorId = afterData.initiatorId;
+      const user1Parents = afterData.user1Parents || [];
+      const user2Parents = afterData.user2Parents || [];
+      const user1Name = afterData.user1Name || "Usuario";
+      const user2Name = afterData.user2Name || "Usuario";
+      const needsInitiatorApproval = afterData.needsInitiatorApproval || false;
+      const needsTargetApproval = afterData.needsTargetApproval || false;
+
+      if (users.length !== 2) {
+        console.error(`❌ Contacto inválido: users.length = ${users.length}`);
+        return null;
+      }
+
+      // Determinar quién es el initiator y quién es el target
+      const isUser1Initiator = users[0] === initiatorId;
+      const initiatorName = isUser1Initiator ? user1Name : user2Name;
+      const targetName = isUser1Initiator ? user2Name : user1Name;
+      const initiatorParents = isUser1Initiator ? user1Parents : user2Parents;
+      const targetParents = isUser1Initiator ? user2Parents : user1Parents;
+      const targetId = users.find(u => u !== initiatorId);
+
+      // Determinar qué padres notificar
+      const parentIdsToNotify = [];
+      if (needsInitiatorApproval && initiatorParents.length > 0) {
+        parentIdsToNotify.push(...initiatorParents);
+      }
+      if (needsTargetApproval && targetParents.length > 0) {
+        parentIdsToNotify.push(...targetParents);
+      }
+
+      if (parentIdsToNotify.length === 0) {
+        console.log(`ℹ️ No hay padres que notificar para contacto ${contactId}`);
+        return null;
+      }
+
+      const uniqueParentIds = [...new Set(parentIdsToNotify)];
+      console.log(`📬 Enviando notificaciones a ${uniqueParentIds.length} padre(s)...`);
+
+      for (const parentId of uniqueParentIds) {
+        try {
+          // Determinar quién es el hijo de este padre
+          const childId = initiatorParents.includes(parentId) ? initiatorId : targetId;
+          const childName = childId === initiatorId ? initiatorName : targetName;
+          const contactName = childId === initiatorId ? targetName : initiatorName;
+
+          // TTL: 7 días para auto-eliminación
+          const now = new Date();
+          const deleteAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+          // Crear notificación (sendNotificationOnCreate enviará el push)
+          await db.collection("notifications").add({
+            userId: parentId,
+            type: "contact_request",
+            title: "Nueva solicitud de contacto",
+            body: `${childName} quiere agregar a ${contactName} como contacto`,
+            data: {
+              contactDocId: contactId,
+              childId: childId,
+              childName: childName,
+              contactName: contactName,
+            },
+            read: false,
+            pushSent: false,
+            priority: "high",
+            createdAt: FieldValue.serverTimestamp(),
+            deleteAt: Timestamp.fromDate(deleteAt),
+          });
+          console.log(`   ✅ Notificación creada para padre ${parentId}`);
+        } catch (notifError) {
+          console.warn(`   ⚠️ Error enviando notificación a ${parentId}: ${notifError.message}`);
+        }
+      }
+
+      console.log(`✅ [onContactApprovalRequested] Notificaciones enviadas para contacto ${contactId}`);
+      return null;
+
+    } catch (error) {
+      console.error(`❌ [onContactApprovalRequested] Error:`, error);
+      return null;
+    }
+  }
+);
 
 // ═══════════════════════════════════════════════════════════════
 // INVALIDAR CHATS CUANDO SE ELIMINA CONTACTO
@@ -1274,6 +1134,13 @@ exports.syncDeviceContacts = onCall(
       const currentUserParents = await getLinkedParents(currentUserId);
       const currentUserEffectiveRole = getEffectiveRole(currentUserRole, currentUserParents);
 
+      // Obtener hijos vinculados del usuario actual (si es padre)
+      const currentUserChildren = currentUserDoc.linkedChildrenIds || [];
+
+      // Crear Set de padres e hijos vinculados para excluirlos del matching
+      // No queremos crear contactos duplicados con familia directa
+      const linkedFamilySet = new Set([...currentUserParents, ...currentUserChildren]);
+
       // 2. Hashear el número del usuario actual para matching bidireccional
       const currentUserPhoneHash = hashPhone(currentUserPhone);
 
@@ -1331,40 +1198,36 @@ exports.syncDeviceContacts = onCall(
         return { success: true, created: 0, matches: registeredUsers.length };
       }
 
-      // 4. Obtener contactos existentes del usuario actual (para no duplicar)
+      // 4. Obtener contactos existentes del usuario actual
+      // También guardamos los docs para poder actualizar discoveredBy si es necesario
       const existingContactsSnapshot = await db
         .collection("contacts")
         .where("users", "array-contains", currentUserId)
         .get();
 
       const existingContactUserIds = new Set();
+      const existingContactDocs = new Map(); // userId -> {docId, data}
       for (const doc of existingContactsSnapshot.docs) {
-        const users = doc.data().users || [];
+        const data = doc.data();
+        const users = data.users || [];
         for (const userId of users) {
           if (userId !== currentUserId) {
             existingContactUserIds.add(userId);
+            existingContactDocs.set(userId, { docId: doc.id, data });
           }
         }
       }
 
       console.log(`📋 Contactos existentes: ${existingContactUserIds.size}`);
 
-      // 5. Verificar bidireccionalidad usando hashes
-      // Bidireccionalidad REAL: Ambos nos tenemos en nuestros contactos del dispositivo
-      //
-      // CASO 1: Él ya sincronizó Y tiene mi hash -> crear contacto
-      // CASO 2 (NUEVO): Él ya sincronizó Y YO tengo su hash -> crear contacto
-      //                 (porque yo acabo de sincronizar y lo tengo, él ya sincronizó antes)
-      //                 La bidireccionalidad se confirma cuando yo tengo su phoneHash
-      //                 (que significa que lo tengo en mi dispositivo) Y él tiene
-      //                 devicePhoneHashes (que significa que sincronizó sus contactos)
-      //
-      // Esto resuelve el problema de: A se registra, B ya estaba registrado,
-      // ambos se tienen mutuamente pero B sincronizó ANTES de que A existiera.
-      // Cuando A sincroniza, debe crear el contacto si B ya sincronizó antes.
+      // 5. Crear/actualizar contactos
+      // Si yo tengo a alguien en mi agenda, puedo verlo como sugerido
+      // El campo 'discoveredBy' controla visibilidad:
+      // - discoveredBy = userId: solo ese usuario lo ve
+      // - discoveredBy = null: ambos lo ven (bidireccional)
 
-      // 6. Crear contactos bidireccionales
       let createdCount = 0;
+      let updatedCount = 0;
       const batch = db.batch();
       let batchCount = 0;
 
@@ -1374,52 +1237,39 @@ exports.syncDeviceContacts = onCall(
       for (const contact of registeredUsers) {
         // Ya existe contacto?
         if (existingContactUserIds.has(contact.userId)) {
-          console.log(`⏭️ ${contact.name} (${contact.userId}) ya es contacto existente, saltando`);
-          continue;
-        }
-
-        // Verificar bidireccionalidad MEJORADA:
-        // Condición 1: Yo tengo su phoneHash en mis contactos del dispositivo
-        // (siempre true porque está en registeredUsers - su phoneHash coincide con alguno de mis hashes)
-        const iHaveTheirHash = true;
-
-        // Condición 2: Él tiene mis hashes sincronizados (ya ejecutó syncDeviceContacts antes)
-        const hasDeviceHashes = contact.devicePhoneHashes && contact.devicePhoneHashes.length > 0;
-
-        // Condición 3: Él tiene MI phoneHash en sus devicePhoneHashes
-        const theyHaveMyHash = hasDeviceHashes && contact.devicePhoneHashes.includes(currentUserPhoneHash);
-
-        // NUEVO: Condición 4: Él ya sincronizó (tiene devicePhoneHashes) Y yo lo tengo
-        // En este caso, la bidireccionalidad se confirma porque:
-        // - Yo acabo de sincronizar y lo tengo en mi dispositivo (iHaveTheirHash = true)
-        // - Él ya sincronizó antes (hasDeviceHashes = true)
-        // - Cuando él sincronizó, probablemente no me tenía porque yo no existía
-        // - Pero ahora yo existo Y lo tengo, así que la próxima vez que él sincronice, me encontrará
-        // Para evitar esperar a que él re-sincronice, creamos el contacto AHORA
-        // si él ya tiene algún hash sincronizado (significa que es usuario activo que sincroniza)
-        const heHasSyncedBefore = hasDeviceHashes;
-
-        // Bidireccionalidad: él me tiene explícitamente O él ya sincronizó y yo lo tengo
-        // La segunda condición es más permisiva pero evita el problema de timing
-        const isBidirectional = theyHaveMyHash || (iHaveTheirHash && heHasSyncedBefore);
-
-        console.log(`🔍 Verificando ${contact.name}: yoLoTengo=${iHaveTheirHash}, elMeTiene=${theyHaveMyHash}, elSincronizo=${heHasSyncedBefore}, bidireccional=${isBidirectional}`);
-
-        if (!isBidirectional) {
-          // Log detallado para debugging
-          if (!hasDeviceHashes) {
-            console.log(`⏭️ ${contact.name} no es bidireccional: NO ha sincronizado sus contactos aún (devicePhoneHashes vacío)`);
+          // Si yo tengo al otro en mi agenda y el contacto tiene discoveredBy != yo,
+          // actualizar discoveredBy a null para que ambos podamos ver el contacto
+          // Esto aplica a CUALQUIER estado (potential, pending, approved, etc.)
+          const existing = existingContactDocs.get(contact.userId);
+          if (existing && existing.data.discoveredBy && existing.data.discoveredBy !== currentUserId) {
+            // El otro usuario lo descubrió primero, pero yo también lo tengo en mi agenda
+            // Actualizar discoveredBy a null para que ambos lo vean
+            console.log(`🔄 ${contact.name}: actualizando discoveredBy a null (ambos nos tenemos en la agenda)`);
+            const contactRef = db.collection("contacts").doc(existing.docId);
+            batch.update(contactRef, { discoveredBy: FieldValue.delete() });
+            batchCount++;
+            updatedCount++;
           } else {
-            console.log(`⏭️ ${contact.name} no es bidireccional: condiciones no cumplidas`);
+            console.log(`⏭️ ${contact.name} (${contact.userId}) ya es contacto existente, saltando`);
           }
           continue;
         }
 
-        if (theyHaveMyHash) {
-          console.log(`✅ Match bidireccional EXPLÍCITO con ${contact.name}: él me tiene en sus hashes`);
-        } else {
-          console.log(`✅ Match bidireccional IMPLÍCITO con ${contact.name}: yo lo tengo Y él ya sincronizó antes`);
+        // Es familia vinculada (padre o hijo)? Ya tiene contacto parent_child_link
+        if (linkedFamilySet.has(contact.userId)) {
+          console.log(`⏭️ ${contact.name} (${contact.userId}) es familia vinculada, ya tiene contacto`);
+          continue;
         }
+
+        // SIMPLIFICADO: Ya no requerimos bidireccionalidad
+        // Si yo tengo a alguien en mi agenda, puedo verlo como contacto sugerido
+        // El campo 'discoveredBy' controla que SOLO YO lo vea hasta que solicite aprobación
+        // Esto evita el problema de timing cuando el otro usuario no ha sincronizado aún
+        //
+        // Nota: El contacto está en registeredUsers porque su phoneHash coincide
+        // con alguno de mis hashes del dispositivo (lo tengo en mi agenda)
+
+        console.log(`✅ ${contact.name} encontrado en mi agenda - creando contacto potential`);
 
         // Obtener datos del otro usuario para determinar aprobación
         const otherUserRole = contact.role || "child";
@@ -1477,7 +1327,7 @@ exports.syncDeviceContacts = onCall(
         } else {
           // Requiere aprobación parental - crear contacto POTENTIAL (sugerido)
           // El usuario debe solicitar la aprobación manualmente desde la app
-          // NO se crean contact_requests aún - se crearán cuando el usuario solicite
+          // Cuando solicite, el contacto cambiará a status=pending via Security Rules
           const contactRef = db.collection("contacts").doc(contactDocId);
 
           // Preparar el mapa de phones para que Flutter pueda buscar el nombre en la agenda
@@ -1489,20 +1339,35 @@ exports.syncDeviceContacts = onCall(
             phonesMap[contact.userId] = contact.phone;
           }
 
+          // Pre-calcular datos de aprobación para simplificar requestContactApproval
+          const allParentViewers = [...new Set([...currentUserParents, ...otherUserParents])];
+
           batch.set(contactRef, {
             users: users,
-            status: "potential", // Nuevo estado: sugerido pero no solicitado
+            status: "potential",
             createdAt: FieldValue.serverTimestamp(),
             autoCreated: true,
             source: "auto_device_sync",
-            phones: phonesMap, // Para buscar nombre en contactos del dispositivo
-            // NO incluimos userNames, approvals, parentViewers
-            // Se agregarán cuando el usuario solicite aprobación
+            phones: phonesMap,
+            // IMPORTANTE: Solo el usuario que tiene al otro en su agenda puede ver este contacto
+            // El otro usuario NO debe verlo hasta que se solicite aprobación
+            discoveredBy: currentUserId,
+            // Datos pre-calculados para requestContactApproval
+            user1Name: users[0] === currentUserId ? currentUserName : contact.name,
+            user2Name: users[1] === currentUserId ? currentUserName : contact.name,
+            user1Parents: users[0] === currentUserId ? currentUserParents : otherUserParents,
+            user2Parents: users[1] === currentUserId ? currentUserParents : otherUserParents,
+            user1EffectiveRole: users[0] === currentUserId ? currentUserEffectiveRole : otherUserEffectiveRole,
+            user2EffectiveRole: users[0] === currentUserId ? otherUserEffectiveRole : currentUserEffectiveRole,
+            approvalType: approvalReqs.approvalType,
+            needsInitiatorApproval: approvalReqs.needsInitiatorApproval,
+            needsTargetApproval: approvalReqs.needsTargetApproval,
+            parentViewers: allParentViewers,
           });
           batchCount++;
 
           createdCount++;
-          console.log(`💡 Contacto POTENTIAL creado: ${currentUserName} <-> ${contact.name} (requiere solicitud manual)`);
+          console.log(`💡 Contacto POTENTIAL creado: ${currentUserName} <-> ${contact.name} (visible solo para ${currentUserName})`);
         }
 
         // Firestore batch limit is 500
@@ -1517,11 +1382,12 @@ exports.syncDeviceContacts = onCall(
         await batch.commit();
       }
 
-      console.log(`✅ Sync completado: ${createdCount} contactos creados`);
+      console.log(`✅ Sync completado: ${createdCount} contactos creados, ${updatedCount} actualizados`);
 
       return {
         success: true,
         created: createdCount,
+        updated: updatedCount,
         matches: registeredUsers.length,
       };
     } catch (error) {
@@ -1532,357 +1398,12 @@ exports.syncDeviceContacts = onCall(
 );
 
 // ═══════════════════════════════════════════════════════════════
-// SOLICITUD DE APROBACIÓN DE CONTACTO POTENTIAL
-// ═══════════════════════════════════════════════════════════════
-
-/**
- * Cloud Function: Solicitar aprobación de un contacto potential
- *
- * Llamado por el usuario cuando quiere solicitar aprobación para un contacto sugerido.
- * Cambia el estado de 'potential' a 'pending' o 'approved' según los roles.
- *
- * @param {string} contactDocId - ID del documento de contacto (formato: userId1_userId2)
- * @returns {Object} - { success, newStatus, message }
- */
-exports.requestContactApproval = onCall(
-  { cors: true, consumeAppCheckToken: true },
-  async (request) => {
-    const db = getFirestore();
-    const auth = request.auth;
-
-    if (!auth) {
-      throw new HttpsError("unauthenticated", "Usuario no autenticado");
-    }
-
-    const { contactDocId } = request.data;
-    const currentUserId = auth.uid;
-
-    if (!contactDocId) {
-      throw new HttpsError("invalid-argument", "contactDocId es requerido");
-    }
-
-    console.log(`📋 [requestContactApproval] Usuario ${currentUserId} solicita aprobación para ${contactDocId}`);
-
-    try {
-      // 1. Obtener el documento de contacto
-      const contactRef = db.collection("contacts").doc(contactDocId);
-      const contactDoc = await contactRef.get();
-
-      if (!contactDoc.exists) {
-        throw new HttpsError("not-found", "Contacto no encontrado");
-      }
-
-      const contactData = contactDoc.data();
-
-      // 2. Verificar que está en estado 'potential'
-      if (contactData.status !== "potential") {
-        throw new HttpsError(
-          "failed-precondition",
-          `El contacto no está en estado potential (actual: ${contactData.status})`
-        );
-      }
-
-      // 3. Verificar que el usuario es parte del contacto
-      const users = contactData.users || [];
-      if (!users.includes(currentUserId)) {
-        throw new HttpsError("permission-denied", "No eres parte de este contacto");
-      }
-
-      // 4. Obtener el otro usuario
-      const otherUserId = users.find((u) => u !== currentUserId);
-      if (!otherUserId) {
-        throw new HttpsError("internal", "No se pudo determinar el otro usuario");
-      }
-
-      // 5. Obtener datos de ambos usuarios
-      const [currentUserDoc, otherUserDoc] = await Promise.all([
-        db.collection("users").doc(currentUserId).get(),
-        db.collection("users").doc(otherUserId).get(),
-      ]);
-
-      const currentUserData = currentUserDoc.data() || {};
-      const otherUserData = otherUserDoc.data() || {};
-
-      const currentUserName = currentUserData.name || "Usuario";
-      const otherUserName = otherUserData.name || "Usuario";
-      const currentUserRole = currentUserData.role || "child";
-      const otherUserRole = otherUserData.role || "child";
-
-      // 6. Obtener padres vinculados de ambos usuarios
-      const [currentUserParents, otherUserParents] = await Promise.all([
-        getLinkedParents(currentUserId),
-        getLinkedParents(otherUserId),
-      ]);
-
-      const currentUserEffectiveRole = getEffectiveRole(currentUserRole, currentUserParents);
-      const otherUserEffectiveRole = getEffectiveRole(otherUserRole, otherUserParents);
-
-      console.log(`📋 Roles: ${currentUserName}=${currentUserEffectiveRole}, ${otherUserName}=${otherUserEffectiveRole}`);
-      console.log(`📋 Padres: ${currentUserName}=[${currentUserParents.join(",")}], ${otherUserName}=[${otherUserParents.join(",")}]`);
-
-      // 7. Determinar si necesita aprobación
-      const approvalReqs = determineApprovalRequirements(
-        currentUserEffectiveRole,
-        otherUserEffectiveRole,
-        currentUserParents,
-        otherUserParents,
-        currentUserId,
-        otherUserId
-      );
-
-      const needsApproval = approvalReqs.requiredApprovals.length > 0;
-      console.log(`📋 needsApproval=${needsApproval}, approvalType=${approvalReqs.approvalType}`);
-
-      // 8. Preparar datos del contacto actualizado
-      const updateData = {
-        initiatorId: currentUserId,
-        requestedAt: FieldValue.serverTimestamp(),
-        user1Name: users[0] === currentUserId ? currentUserName : otherUserName,
-        user2Name: users[1] === currentUserId ? currentUserName : otherUserName,
-        user1PhotoURL: users[0] === currentUserId ? currentUserData.photoURL : otherUserData.photoURL,
-        user2PhotoURL: users[1] === currentUserId ? currentUserData.photoURL : otherUserData.photoURL,
-        approvalType: approvalReqs.approvalType,
-      };
-
-      let newStatus;
-      let parentIdsToNotify = [];
-
-      if (!needsApproval) {
-        // Auto-aprobar: ambos son adults/parents o children sin padres
-        newStatus = "approved";
-        updateData.status = "approved";
-        updateData.approvedAt = FieldValue.serverTimestamp();
-
-        console.log(`✅ Auto-aprobando contacto: ${currentUserName} <-> ${otherUserName}`);
-
-        // Crear chat invisible
-        const chatRef = db.collection("chats").doc(contactDocId);
-        await chatRef.set({
-          participants: users,
-          isValidChat: true,
-          visible: false,
-          createdAt: FieldValue.serverTimestamp(),
-          lastMessageTime: null,
-          lastMessageAt: null,
-          lastMessage: "",
-          lastMessageSender: null,
-          deletedBy: [],
-        }, { merge: true });
-
-      } else {
-        // Requiere aprobación parental
-        newStatus = "pending";
-        updateData.status = "pending";
-        updateData.requiredApprovals = approvalReqs.requiredApprovals;
-        updateData.completedApprovals = [];
-
-        // Agregar padres a parentViewers para que puedan ver el contacto
-        const allParents = [...new Set([...currentUserParents, ...otherUserParents])];
-        if (allParents.length > 0) {
-          updateData.parentViewers = allParents;
-        }
-
-        // Preparar mapa de approvals
-        const approvalsMap = {};
-        if (approvalReqs.needsInitiatorApproval && currentUserParents.length > 0) {
-          approvalsMap[currentUserId] = {
-            status: "pending",
-            parentId: currentUserParents[0],
-            side: "initiator",
-          };
-          parentIdsToNotify.push(...currentUserParents);
-        }
-        if (approvalReqs.needsTargetApproval && otherUserParents.length > 0) {
-          approvalsMap[otherUserId] = {
-            status: "pending",
-            parentId: otherUserParents[0],
-            side: "target",
-          };
-          parentIdsToNotify.push(...otherUserParents);
-        }
-        if (Object.keys(approvalsMap).length > 0) {
-          updateData.approvals = approvalsMap;
-        }
-
-        console.log(`⏳ Contacto pendiente de aprobación: ${currentUserName} <-> ${otherUserName}`);
-      }
-
-      // 9. Actualizar documento de contacto
-      await contactRef.update(updateData);
-
-      // 10. Enviar notificaciones a los padres
-      if (parentIdsToNotify.length > 0) {
-        const uniqueParentIds = [...new Set(parentIdsToNotify)];
-        console.log(`📬 Enviando notificaciones a ${uniqueParentIds.length} padre(s)...`);
-
-        for (const parentId of uniqueParentIds) {
-          try {
-            console.log(`   📤 Procesando padre ${parentId}...`);
-
-            // Determinar quién es el hijo de este padre
-            const childId = currentUserParents.includes(parentId) ? currentUserId : otherUserId;
-            const childName = childId === currentUserId ? currentUserName : otherUserName;
-            const contactName = childId === currentUserId ? otherUserName : currentUserName;
-
-            // TTL: 7 días para auto-eliminación
-            const now = new Date();
-            const deleteAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-
-            // Crear notificación en Firestore (el trigger sendNotificationOnCreate enviará el push)
-            await db.collection("notifications").add({
-              userId: parentId,
-              type: "contact_request",
-              title: "Nueva solicitud de contacto",
-              body: `${childName} quiere agregar a ${contactName} como contacto`,
-              data: {
-                contactDocId: contactDocId,
-                childId: childId,
-                childName: childName,
-                contactName: contactName,
-              },
-              read: false,
-              pushSent: false, // CRITICAL: Para que sendNotificationOnCreate envíe el push
-              priority: "high",
-              createdAt: FieldValue.serverTimestamp(),
-              deleteAt: Timestamp.fromDate(deleteAt), // TTL: Firestore eliminará automáticamente
-            });
-            console.log(`   ✅ Notificación creada en Firestore para padre ${parentId}`);
-          } catch (notifError) {
-            console.warn(`   ⚠️ Error enviando notificación a ${parentId}: ${notifError.message}`);
-          }
-        }
-      }
-
-      return {
-        success: true,
-        newStatus: newStatus,
-        message: newStatus === "approved"
-          ? "Contacto aprobado automáticamente"
-          : "Solicitud enviada. El padre debe aprobar el contacto.",
-      };
-
-    } catch (error) {
-      console.error("❌ [requestContactApproval] Error:", error);
-      if (error instanceof HttpsError) {
-        throw error;
-      }
-      throw new HttpsError("internal", `Error procesando solicitud: ${error.message}`);
-    }
-  }
-);
-
-// ═══════════════════════════════════════════════════════════════
 // CREACIÓN SEGURA DE CONTACTOS (Solo via Cloud Functions)
 // ═══════════════════════════════════════════════════════════════
 
-/**
- * Cloud Function: Aprobar contacto desde una solicitud existente
- * Usado cuando un padre aprueba una contact_request
- * Reemplaza firebase_service.dart:approveContact()
- *
- * @param {string} requestId - ID de la contact_request
- * @param {string} childId - ID del hijo
- * @param {string} contactId - ID del contacto
- */
-exports.approveContactFromRequest = onCall(
-  { cors: true, consumeAppCheckToken: true },
-  async (request) => {
-    const db = getFirestore();
-    const auth = request.auth;
-
-    if (!auth) {
-      throw new HttpsError("unauthenticated", "Usuario no autenticado");
-    }
-
-    const { requestId, childId, contactId } = request.data;
-
-    if (!requestId || !childId || !contactId) {
-      throw new HttpsError("invalid-argument", "requestId, childId y contactId son requeridos");
-    }
-
-    console.log(`✅ [approveContactFromRequest] Aprobando contacto: ${childId} <-> ${contactId}`);
-
-    try {
-      // 1. Verificar que el usuario es padre del hijo
-      const parentChildLink = await db
-        .collection("parent_children")
-        .where("parentId", "==", auth.uid)
-        .where("childId", "==", childId)
-        .where("status", "==", "approved")
-        .get();
-
-      if (parentChildLink.empty) {
-        throw new HttpsError("permission-denied", "No tienes permiso para aprobar contactos de este hijo");
-      }
-
-      // 2. Verificar que la solicitud existe
-      const requestDoc = await db.collection("contact_requests").doc(requestId).get();
-      if (!requestDoc.exists) {
-        throw new HttpsError("not-found", "Solicitud no encontrada");
-      }
-
-      // 3. Actualizar el estado de la solicitud
-      await db.collection("contact_requests").doc(requestId).update({
-        status: "approved",
-        approvedAt: FieldValue.serverTimestamp(),
-        approvedBy: auth.uid,
-      });
-
-      // 4. Verificar si ya existe un contacto entre ellos
-      const participants = [childId, contactId].sort();
-      const existingContact = await db
-        .collection("contacts")
-        .where("users", "==", participants)
-        .get();
-
-      let contactDocId;
-      if (existingContact.empty) {
-        // Crear nuevo contacto
-        const newContact = await db.collection("contacts").add({
-          users: participants,
-          status: "approved",
-          createdAt: FieldValue.serverTimestamp(),
-          type: "contact",
-          approvedBy: auth.uid,
-        });
-        contactDocId = newContact.id;
-        console.log(`✅ Contacto creado: ${contactDocId}`);
-      } else {
-        // Actualizar existente
-        contactDocId = existingContact.docs[0].id;
-        await db.collection("contacts").doc(contactDocId).update({
-          status: "approved",
-          approvedAt: FieldValue.serverTimestamp(),
-          approvedBy: auth.uid,
-        });
-        console.log(`✅ Contacto actualizado: ${contactDocId}`);
-      }
-
-      // 5. Crear chat invisible
-      const chatId = participants.join("_");
-      await db.collection("chats").doc(chatId).set({
-        participants: participants,
-        isValidChat: true,
-        visible: false,
-        createdAt: FieldValue.serverTimestamp(),
-        lastMessageTime: null,
-        lastMessageAt: null,
-        lastMessage: "",
-        lastMessageSender: null,
-        deletedBy: [],
-      }, { merge: true });
-
-      return {
-        success: true,
-        contactId: contactDocId,
-        chatId: chatId,
-      };
-    } catch (error) {
-      console.error("❌ [approveContactFromRequest] Error:", error);
-      throw error;
-    }
-  }
-);
+// DEPRECATED: approveContactFromRequest fue eliminada
+// Los padres ahora aprueban contactos directamente desde Flutter
+// usando WhitelistController.approveContact() + Security Rules
 
 /**
  * Cloud Function: Auto-aprobar contacto (cuando ya existe contacto aprobado con otro padre)
@@ -2292,12 +1813,17 @@ exports.getChildContactsForModeration = onCall(
 
 // ═══════════════════════════════════════════════════════════════
 // ACTUALIZAR MODERACIÓN DE CONTACTO DEL HIJO
+// DEPRECATED: Ya no se exporta desde index.js
+// Usar UpdateContactModerationService (escritura directa desde Flutter)
 // ═══════════════════════════════════════════════════════════════
 
 /**
  * Actualizar configuración de moderación para un contacto del hijo o del padre
  * Padres vinculados pueden moderar chats de sus hijos
  * Padres también pueden moderar sus propios chats
+ *
+ * DEPRECATED: Ya no se exporta desde index.js
+ * Usar UpdateContactModerationService para escritura directa con Security Rules
  */
 exports.updateChildContactModeration = onCall(
   { cors: true, consumeAppCheckToken: true },
@@ -2445,6 +1971,8 @@ exports.updateChildContactModeration = onCall(
 
 // ═══════════════════════════════════════════════════════════════
 // OBTENER ESTADO DE MODERACIÓN DE UN CONTACTO ESPECÍFICO
+// DEPRECATED: Ya no se exporta desde index.js
+// Usar GetContactModerationService (lectura directa desde Flutter)
 // ═══════════════════════════════════════════════════════════════
 
 /**
@@ -2452,6 +1980,9 @@ exports.updateChildContactModeration = onCall(
  *
  * Devuelve si la moderación está habilitada y en qué nivel para
  * un contacto específico de un hijo.
+ *
+ * DEPRECATED: Ya no se exporta desde index.js
+ * Usar GetContactModerationService para lectura directa con Security Rules
  *
  * @param {string} childId - ID del hijo
  * @param {string} contactId - ID del contacto

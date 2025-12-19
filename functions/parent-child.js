@@ -179,28 +179,22 @@ exports.createParentChildLink = onCall({
 
     console.log(`✅ Preparando entradas en whitelist`);
 
-    // ✅ NUEVO: Crear contacto bidireccional entre padre e hijo en la colección 'contacts'
-    // Esto permite que aparezcan mutuamente en la lista de chats
-    const contactRef = db.collection("contacts").doc();
+    // ✅ Crear contacto bidireccional entre padre e hijo en la colección 'contacts'
+    // Usa ID predecible para evitar duplicados con syncDeviceContacts
+    const contactUsers = [parentId, childId].sort();
+    const contactDocId = `${contactUsers[0]}_${contactUsers[1]}`;
+    const contactRef = db.collection("contacts").doc(contactDocId);
     batch.set(contactRef, {
-      users: [parentId, childId],
-      userNames: {
-        [parentId]: parentData.name || "Usuario",
-        [childId]: childData.name || "Usuario",
-      },
-      userPhotoURLs: {
-        [parentId]: parentData.photoURL || null,
-        [childId]: childData.photoURL || null,
-      },
+      users: contactUsers,
       createdAt: now,
       createdBy: callerId,
       approvedBy: parentId,
       approvedAt: now,
-      approvedParentIds: [parentId],
+      parentViewers: [parentId],
       status: "approved",
       type: "parent_child_link",
-      reason: "Vínculo padre-hijo automático",
-    });
+      autoApproved: true,
+    }, { merge: true });
 
     console.log(`✅ Preparando contacto bidireccional en 'contacts' para chat mutuo`);
 

@@ -516,6 +516,9 @@ exports.createGroupV2 = onCall(
 /**
  * Approve group membership for a child
  *
+ * DEPRECATED: Ya no se exporta desde index.js
+ * Usar ApproveGroupMembershipService para escritura directa con Security Rules
+ *
  * @param {string} requestId - The approval request ID
  */
 exports.approveGroupMembership = onCall(
@@ -621,6 +624,9 @@ exports.approveGroupMembership = onCall(
 /**
  * Reject group membership for a child
  *
+ * DEPRECATED: Ya no se exporta desde index.js
+ * Usar RejectGroupMembershipService para escritura directa con Security Rules
+ *
  * @param {string} requestId - The approval request ID
  */
 exports.rejectGroupMembership = onCall(
@@ -709,6 +715,9 @@ exports.rejectGroupMembership = onCall(
 
 /**
  * Revoke group membership for a child (parent removes their child)
+ *
+ * DEPRECATED: Ya no se exporta desde index.js
+ * Usar RevokeGroupMembershipService para escritura directa con Security Rules
  *
  * @param {string} groupId - The group ID
  * @param {string} childId - The child ID to remove

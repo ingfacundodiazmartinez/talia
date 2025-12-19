@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../utils/release_logger.dart';
@@ -140,6 +142,9 @@ class ChatBlockService {
   }
 
   /// Verificar si un chat está bloqueado
+  ///
+  /// NOTA: Si no se tienen permisos para leer blocked_chats (ej: padre
+  /// intentando leer documento que no existe), retorna false sin error.
   Future<ChatBlockStatus> getChatBlockStatus({
     required String childId,
     required String contactId,
@@ -147,25 +152,36 @@ class ChatBlockService {
     try {
       final chatId = _getChatId(childId, contactId);
 
-      // Verificar en blocked_chats
-      final blockDoc = await _firestore
-          .collection('blocked_chats')
-          .doc(chatId)
-          .get();
+      // Verificar en blocked_chats (con manejo de permisos)
+      try {
+        final blockDoc = await _firestore
+            .collection('blocked_chats')
+            .doc(chatId)
+            .get();
 
-      if (blockDoc.exists) {
-        final blockData = blockDoc.data()!;
-        final isActive = blockData['isActive'] ?? false;
+        if (blockDoc.exists) {
+          final blockData = blockDoc.data()!;
+          final isActive = blockData['isActive'] ?? false;
 
-        if (isActive) {
-          return ChatBlockStatus(
-            isBlocked: true,
-            blockedAt: blockData['blockedAt'] as Timestamp?,
-            reason:
-                blockData['reason'] ?? 'Contacto removido de la lista blanca',
-            blockedBy: blockData['blockedBy'],
-          );
+          if (isActive) {
+            return ChatBlockStatus(
+              isBlocked: true,
+              blockedAt: blockData['blockedAt'] as Timestamp?,
+              reason:
+                  blockData['reason'] ?? 'Contacto removido de la lista blanca',
+              blockedBy: blockData['blockedBy'],
+            );
+          }
         }
+      } catch (blockError) {
+        // PERMISSION_DENIED puede ocurrir si:
+        // - El documento no existe y el usuario no tiene permiso de lectura
+        // - El padre está intentando leer un documento de blocked_chats de su hijo
+        // En estos casos, asumimos que NO está bloqueado y continuamos
+        ReleaseLogger.log(
+          '⚠️ No se pudo verificar blocked_chats (puede ser normal): $blockError',
+          tag: 'ChatBlockService',
+        );
       }
 
       // También verificar en la colección de chats (con manejo de permisos)
@@ -189,40 +205,64 @@ class ChatBlockService {
         // (el chat puede no existir aún o no tener permisos)
         ReleaseLogger.log(
           '⚠️ No se pudo verificar estado en chats: $chatError',
+          tag: 'ChatBlockService',
         );
       }
 
       return ChatBlockStatus(isBlocked: false);
     } catch (e) {
-      ReleaseLogger.log('❌ Error verificando estado de bloqueo: $e');
+      ReleaseLogger.log(
+        '❌ Error verificando estado de bloqueo: $e',
+        tag: 'ChatBlockService',
+      );
       return ChatBlockStatus(isBlocked: false, error: e.toString());
     }
   }
 
   /// Stream para escuchar cambios en el estado de bloqueo de un chat
+  ///
+  /// NOTA: Maneja errores de PERMISSION_DENIED que pueden ocurrir si:
+  /// - El documento no existe y el usuario no tiene permiso de lectura
+  /// - El padre está intentando leer un documento de blocked_chats de su hijo
   Stream<ChatBlockStatus> watchChatBlockStatus({
     required String childId,
     required String contactId,
   }) {
     final chatId = _getChatId(childId, contactId);
 
-    return _firestore.collection('blocked_chats').doc(chatId).snapshots().map((
-      snapshot,
-    ) {
-      if (!snapshot.exists) {
-        return ChatBlockStatus(isBlocked: false);
-      }
+    return _firestore
+        .collection('blocked_chats')
+        .doc(chatId)
+        .snapshots()
+        .map<ChatBlockStatus>((snapshot) {
+          if (!snapshot.exists) {
+            return ChatBlockStatus(isBlocked: false);
+          }
 
-      final data = snapshot.data()!;
-      final isActive = data['isActive'] ?? false;
+          final data = snapshot.data()!;
+          final isActive = data['isActive'] ?? false;
 
-      return ChatBlockStatus(
-        isBlocked: isActive,
-        blockedAt: data['blockedAt'] as Timestamp?,
-        reason: data['reason'] ?? 'Contacto removido de la lista blanca',
-        blockedBy: data['blockedBy'],
-      );
-    });
+          return ChatBlockStatus(
+            isBlocked: isActive,
+            blockedAt: data['blockedAt'] as Timestamp?,
+            reason: data['reason'] ?? 'Contacto removido de la lista blanca',
+            blockedBy: data['blockedBy'],
+          );
+        })
+        .transform(
+          StreamTransformer<ChatBlockStatus, ChatBlockStatus>.fromHandlers(
+            handleData: (data, sink) => sink.add(data),
+            handleError: (error, stackTrace, sink) {
+              // PERMISSION_DENIED puede ocurrir si el usuario no tiene acceso
+              // En estos casos, asumimos que NO está bloqueado
+              ReleaseLogger.log(
+                '⚠️ Error en watchChatBlockStatus (asumiendo no bloqueado): $error',
+                tag: 'ChatBlockService',
+              );
+              sink.add(ChatBlockStatus(isBlocked: false));
+            },
+          ),
+        );
   }
 
   /// Obtener todos los chats bloqueados de un usuario

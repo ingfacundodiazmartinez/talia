@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter_contacts/flutter_contacts.dart';
-import 'package:permission_handler/permission_handler.dart' show openAppSettings;
 import '../../../models/parent.dart';
+import '../../../widgets/contacts/contacts_permission_banner.dart';
 import '../../../models/child.dart';
 import '../../../models/user.dart';
 import '../../../services/user_role_service.dart';
@@ -36,7 +35,7 @@ class ParentContactsScreen extends StatefulWidget {
 }
 
 class _ParentContactsScreenState extends State<ParentContactsScreen>
-    with AutomaticKeepAliveClientMixin, WidgetsBindingObserver {
+    with AutomaticKeepAliveClientMixin {
   final firebase_auth.FirebaseAuth _auth = firebase_auth.FirebaseAuth.instance;
   late ParentDashboardController _controller;
   final ContactAliasService _aliasService = ContactAliasService();
@@ -48,9 +47,6 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
   // Cache local para evitar rebuilds innecesarios
   List<String>? _cachedLinkedChildren;
 
-  // Estado del permiso de contactos
-  bool _hasContactsPermission = true; // Optimistic default
-
   // Estado de sincronización
   bool _isSyncing = false;
 
@@ -60,33 +56,12 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     _controller = ParentDashboardController(
       parentId: _auth.currentUser!.uid,
       context: context,
       notificationService: NotificationService(),
       autoApprovalService: AutoApprovalService(),
     );
-    _checkContactsPermission();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Re-verificar permiso cuando la app vuelve al foreground (después de ir a settings)
-    if (state == AppLifecycleState.resumed) {
-      _checkContactsPermission();
-    }
-  }
-
-  Future<void> _checkContactsPermission() async {
-    // Usar flutter_contacts directamente (permission_handler tiene bugs en iOS)
-    final hasPermission = await FlutterContacts.requestPermission(readonly: true);
-
-    if (mounted) {
-      setState(() {
-        _hasContactsPermission = hasPermission;
-      });
-    }
   }
 
   /// Sincronizar contactos manualmente (forzado)
@@ -130,7 +105,6 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     _contactsSearchController.dispose();
     _contactsSearchQuery.dispose();
     _controller.dispose();
@@ -278,8 +252,10 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
                         ),
                       ),
                       // Banner de advertencia si no hay permiso de contactos
-                      if (!_hasContactsPermission)
-                        _buildContactsPermissionWarning(),
+                      ContactsPermissionBanner(
+                        onRequestPermission: _syncContacts,
+                        onPermissionChanged: _syncContacts,
+                      ),
                       // Lista de contactos (filtrable)
                       Expanded(
                         child: FutureBuilder<List<String>>(
@@ -348,6 +324,13 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
                                 if (otherUserId.isEmpty ||
                                     processedUserIds.contains(otherUserId) ||
                                     blockedContacts.contains(otherUserId)) {
+                                  continue;
+                                }
+
+                                // IMPORTANTE: Solo mostrar contactos donde yo tengo al otro en mi agenda
+                                // Si discoveredBy está seteado y NO soy yo, no debo ver este contacto
+                                final discoveredBy = data['discoveredBy'] as String?;
+                                if (discoveredBy != null && discoveredBy != currentUserId) {
                                   continue;
                                 }
 
@@ -556,74 +539,6 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
         },
         icon: Icon(Icons.link),
         label: Text('Vincular Hijo'),
-      ),
-    );
-  }
-
-  Widget _buildContactsPermissionWarning() {
-    return Container(
-      margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      padding: EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.orange.shade50,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.orange.shade200),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Colors.orange.shade100,
-              shape: BoxShape.circle,
-            ),
-            child: Icon(
-              Icons.contacts,
-              color: Colors.orange.shade700,
-              size: 20,
-            ),
-          ),
-          SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Sincronizar contactos',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: Colors.orange.shade900,
-                    fontSize: 14,
-                  ),
-                ),
-                SizedBox(height: 2),
-                Text(
-                  'Activa el permiso para ver tus contactos que usan Talia',
-                  style: TextStyle(
-                    color: Colors.orange.shade800,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          SizedBox(width: 8),
-          TextButton(
-            onPressed: () => openAppSettings(),
-            style: TextButton.styleFrom(
-              backgroundColor: Colors.orange.shade600,
-              foregroundColor: Colors.white,
-              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-            child: Text(
-              'Activar',
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-            ),
-          ),
-        ],
       ),
     );
   }

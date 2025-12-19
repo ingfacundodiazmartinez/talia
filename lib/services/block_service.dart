@@ -24,7 +24,7 @@ class BlockService {
     return '${sorted[0]}_${sorted[1]}';
   }
 
-  // Bloquear un contacto - usa chats/{chatId}.isBlocked como fuente de verdad
+  // Bloquear un contacto - actualiza chats y contacts
   Future<void> blockContact(String contactId) async {
     final user = _auth.currentUser;
     if (user == null) throw Exception('Usuario no autenticado');
@@ -41,7 +41,14 @@ class BlockService {
         'participants': [user.uid, contactId],
       }, SetOptions(merge: true));
 
-      ReleaseLogger.log('✅ Chat bloqueado: $chatId', tag: 'BlockService');
+      // Denormalizar: También actualizar el documento de contact
+      await _firestore.collection('contacts').doc(chatId).update({
+        'blocked': true,
+        'blockedAt': FieldValue.serverTimestamp(),
+        'blockedBy': user.uid,
+      });
+
+      ReleaseLogger.log('✅ Chat y contacto bloqueados: $chatId', tag: 'BlockService');
 
       // Notificar al cache service para triggear el refresh automático
       _blockStatusCache.updateBlockStatus(contactId, true);
@@ -55,7 +62,7 @@ class BlockService {
     }
   }
 
-  // Desbloquear un contacto
+  // Desbloquear un contacto - actualiza chats y contacts
   // Solo permite desbloquear si el usuario actual fue quien bloqueó
   // NO permite desbloquear si fue bloqueado por un padre
   Future<void> unblockContact(String contactId) async {
@@ -91,9 +98,16 @@ class BlockService {
           'unblockedAt': FieldValue.serverTimestamp(),
           'unblockedBy': user.uid,
         });
+
+        // Denormalizar: También actualizar el documento de contact
+        await _firestore.collection('contacts').doc(chatId).update({
+          'blocked': false,
+          'blockedBy': FieldValue.delete(),
+          'blockedAt': FieldValue.delete(),
+        });
       }
 
-      ReleaseLogger.log('✅ Chat desbloqueado: $chatId', tag: 'BlockService');
+      ReleaseLogger.log('✅ Chat y contacto desbloqueados: $chatId', tag: 'BlockService');
 
       // Notificar al cache service para triggear el refresh automático
       _blockStatusCache.updateBlockStatus(contactId, false);
