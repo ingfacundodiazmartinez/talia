@@ -20,6 +20,8 @@ class ChatListItem extends StatefulWidget {
   final bool isEmpty;
   final bool isBlocked;
   final VoidCallback? onArchived;
+  final VoidCallback? onMuted;
+  final VoidCallback? onCleared;
   // Campos para indicador de estado del último mensaje
   final String? lastMessageSenderId;
   final MessageStatus? lastMessageStatus;
@@ -37,6 +39,8 @@ class ChatListItem extends StatefulWidget {
     this.isEmpty = false,
     this.isBlocked = false,
     this.onArchived,
+    this.onMuted,
+    this.onCleared,
     this.lastMessageSenderId,
     this.lastMessageStatus,
     this.lastMessageModerationStatus,
@@ -95,6 +99,9 @@ class _ChatListItemState extends State<ChatListItem> {
           backgroundColor: success ? Colors.green : Colors.red,
         ),
       );
+      if (success) {
+        widget.onMuted?.call();
+      }
     }
   }
 
@@ -110,6 +117,9 @@ class _ChatListItemState extends State<ChatListItem> {
           backgroundColor: success ? Colors.green : Colors.red,
         ),
       );
+      if (success) {
+        widget.onMuted?.call();
+      }
     }
   }
 
@@ -174,78 +184,95 @@ class _ChatListItemState extends State<ChatListItem> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: [
-                        _buildSlideButton(
-                          icon: Icons.archive_outlined,
-                          label: 'Archivar',
-                          onTap: _archiveChat,
+                        Builder(
+                          builder: (slidableContext) => _buildSlideButton(
+                            icon: Icons.archive_outlined,
+                            label: 'Archivar',
+                            onTap: () async {
+                              Slidable.of(slidableContext)?.close();
+                              await _archiveChat();
+                            },
+                          ),
                         ),
-                        _buildSlideButton(
-                          icon: isMuted ? Icons.notifications_active_outlined : Icons.notifications_off_outlined,
-                          label: isMuted ? 'Activar' : 'Silenciar',
-                          onTap: () {
-                            if (isMuted) {
-                              _unmuteChat();
-                            } else {
-                              _muteChat();
-                            }
-                          },
+                        Builder(
+                          builder: (slidableContext) => _buildSlideButton(
+                            icon: isMuted ? Icons.notifications_active_outlined : Icons.notifications_off_outlined,
+                            label: isMuted ? 'Activar' : 'Silenciar',
+                            onTap: () async {
+                              // Cerrar el swipe primero
+                              Slidable.of(slidableContext)?.close();
+                              if (isMuted) {
+                                await _unmuteChat();
+                              } else {
+                                await _muteChat();
+                              }
+                            },
+                          ),
                         ),
-                        _buildSlideButton(
-                          icon: Icons.delete_outline_rounded,
-                          label: 'Limpiar',
-                          onTap: () async {
-                            final confirmed = await showDialog<bool>(
-                              context: context,
-                              builder: (dialogContext) => AlertDialog(
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(20),
-                                ),
-                                title: Row(
-                                  children: [
-                                    Icon(Icons.delete_sweep_rounded, color: Color(0xFFE53935)),
-                                    SizedBox(width: 8),
-                                    Text('¿Limpiar chat?'),
+                        Builder(
+                          builder: (slidableContext) => _buildSlideButton(
+                            icon: Icons.delete_outline_rounded,
+                            label: 'Limpiar',
+                            onTap: () async {
+                              // Cerrar el swipe primero
+                              Slidable.of(slidableContext)?.close();
+
+                              final confirmed = await showDialog<bool>(
+                                context: context,
+                                builder: (dialogContext) => AlertDialog(
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  title: Row(
+                                    children: [
+                                      Icon(Icons.delete_sweep_rounded, color: Color(0xFFE53935)),
+                                      SizedBox(width: 8),
+                                      Text('¿Limpiar chat?'),
+                                    ],
+                                  ),
+                                  content: Text(
+                                    '¿Estás seguro de que quieres eliminar todo el historial de mensajes de este chat?\n\n'
+                                    'Esta acción no se puede deshacer.',
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.pop(dialogContext, false),
+                                      child: Text('Cancelar'),
+                                    ),
+                                    ElevatedButton(
+                                      onPressed: () => Navigator.pop(dialogContext, true),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: Color(0xFFE53935),
+                                        foregroundColor: Colors.white,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(12),
+                                        ),
+                                      ),
+                                      child: Text('Limpiar'),
+                                    ),
                                   ],
                                 ),
-                                content: Text(
-                                  '¿Estás seguro de que quieres eliminar todo el historial de mensajes de este chat?\n\n'
-                                  'Esta acción no se puede deshacer.',
-                                ),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () => Navigator.pop(dialogContext, false),
-                                    child: Text('Cancelar'),
-                                  ),
-                                  ElevatedButton(
-                                    onPressed: () => Navigator.pop(dialogContext, true),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: Color(0xFFE53935),
-                                      foregroundColor: Colors.white,
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(12),
+                              );
+
+                              if (confirmed == true) {
+                                final success = await _controller.clearChat();
+
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        success ? 'Chat limpiado' : 'Error al limpiar chat',
                                       ),
+                                      backgroundColor: success ? Colors.green : Colors.red,
                                     ),
-                                    child: Text('Limpiar'),
-                                  ),
-                                ],
-                              ),
-                            );
-
-                            if (confirmed == true) {
-                              final success = await _controller.clearChat();
-
-                              if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      success ? 'Chat limpiado' : 'Error al limpiar chat',
-                                    ),
-                                    backgroundColor: success ? Colors.green : Colors.red,
-                                  ),
-                                );
+                                  );
+                                  if (success) {
+                                    widget.onCleared?.call();
+                                  }
+                                }
                               }
-                            }
-                          },
+                            },
+                          ),
                         ),
                     ],
                   ),

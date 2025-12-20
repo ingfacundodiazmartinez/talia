@@ -7,6 +7,7 @@ import '../../../services/block_service.dart';
 import '../../../services/message_status_helper.dart';
 import '../../../services/local_unread_count_service.dart';
 import '../../../services/search_service.dart';
+import '../../../services/chats/chat_preferences_cache.dart';
 import '../../../models/chat_message.dart';
 import '../../../widgets/stories_section.dart';
 import '../../../groups/groups.dart'; // Groups V2
@@ -42,6 +43,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
     with AutomaticKeepAliveClientMixin {
   final ContactAliasService _aliasService = ContactAliasService();
   final BlockService _blockService = BlockService();
+  final ChatPreferencesCache _preferencesCache = ChatPreferencesCache();
   final TextEditingController _searchController = TextEditingController();
   final ValueNotifier<String> _searchQuery = ValueNotifier<String>('');
   late ParentChatsController _controller;
@@ -138,7 +140,10 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                           MaterialPageRoute(
                             builder: (context) => ParentArchivedChatsScreen(),
                           ),
-                        );
+                        ).then((_) {
+                          // Refrescar lista al volver de chats archivados
+                          if (mounted) setState(() {});
+                        });
                       },
                       padding: EdgeInsets.all(8),
                     ),
@@ -584,6 +589,9 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
             // Prioridad: groupData['lastMessage'] > lastMessageFromStream > 'Inicia la conversación'
             final lastMessage = groupData['lastMessage'] ?? lastMessageFromStream ?? 'Inicia la conversación';
 
+            // Formatear tiempo del último mensaje
+            final timeString = _controller.formatTime(groupData['lastMessageTime']);
+
             return GroupChatListItem(
               groupId: groupId,
               groupName: groupName,
@@ -597,6 +605,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
               lastMessageSenderId: lastMessageSenderId,
               lastMessageStatus: lastMessageStatus,
               lastMessageModerationStatus: lastMessageModerationStatus,
+              timeString: timeString,
             );
           },
         );
@@ -686,15 +695,14 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                     }
                   }
 
-                  // Verificar si el chat fue limpiado y no hay mensajes nuevos
-                  final clearedAt =
-                      chatData['clearedAt_$parentId'] as Timestamp?;
+                  // Verificar si el chat fue limpiado usando Hive cache
+                  final clearedAt = _preferencesCache.getClearedAt(chatDoc.id);
                   final lastMessageTime =
                       chatData['lastMessageTime'] as Timestamp?;
                   final isChatCleared =
                       clearedAt != null &&
                       (lastMessageTime == null ||
-                          clearedAt.compareTo(lastMessageTime) >= 0);
+                          !clearedAt.isBefore(lastMessageTime.toDate()));
 
                   return ChatListItem(
                     chatId: chatDoc.id,
@@ -719,6 +727,9 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                     lastMessageModerationStatus: isChatCleared
                         ? null
                         : lastMessageModerationStatus,
+                    onArchived: () => setState(() {}),
+                    onMuted: () => setState(() {}),
+                    onCleared: () => setState(() {}),
                   );
                 },
               );
@@ -736,6 +747,9 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                 photoURL: photoURL,
                 isEmpty: true,
                 isBlocked: isBlocked,
+                onArchived: () => setState(() {}),
+                onMuted: () => setState(() {}),
+                onCleared: () => setState(() {}),
               );
             }
           },

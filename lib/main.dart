@@ -46,6 +46,7 @@ import 'services/ad_service.dart';
 import 'services/story_service_refactored.dart';
 import 'services/contact_photo_cache_service.dart';
 import 'services/deep_link_service.dart';
+import 'services/chats/chat_preferences_cache.dart';
 import 'calls_v2/services/agora_engine_service.dart';
 import 'calls_v2/config/agora_config.dart';
 import 'dart:async';
@@ -161,6 +162,17 @@ void main() async {
   } catch (e) {
     ReleaseLogger.error(
       '❌ Error inicializando LocalUnreadCountService: $e',
+      tag: 'MainApp',
+    );
+  }
+
+  // ✅ Inicializar ChatPreferencesCache para preferencias de chat (archived, muted)
+  try {
+    await ChatPreferencesCache().initialize();
+    ReleaseLogger.log('✅ ChatPreferencesCache inicializado', tag: 'MainApp');
+  } catch (e) {
+    ReleaseLogger.error(
+      '❌ Error inicializando ChatPreferencesCache: $e',
       tag: 'MainApp',
     );
   }

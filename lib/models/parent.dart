@@ -162,11 +162,19 @@ class Parent extends User {
     return now.difference(created).inDays;
   }
 
-  /// Actualiza la foto de perfil
+  /// Actualiza la foto de perfil y sincroniza a hijos vinculados
   Future<void> updatePhotoURL(String photoURL) async {
     await FirebaseFirestore.instance.collection('users').doc(id).update({
       'photoURL': photoURL,
       'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    // Sincronizar datos a hijos vinculados (en background, sin esperar)
+    FirebaseFunctions.instance
+        .httpsCallable('syncParentDataToChildren')
+        .call()
+        .catchError((e) {
+      ReleaseLogger.log('⚠️ Error sincronizando foto a hijos: $e', tag: 'Parent');
     });
   }
 

@@ -385,11 +385,14 @@ service cloud.firestore {
         }
 
         // Permitir actualizar SI:
-        // 1. Eres el sender Y solo editas tu mensaje (text, edited, editedAt), O
+        // 1. Eres el sender Y solo editas tu mensaje (text, edited, editedAt) Y NO hay moderación activa, O
         // 2. Eres participante Y solo actualizas estado/reacciones (reactions, status, readBy, deliveredTo)
+        // 🔒 SEGURIDAD: Bloquear edición de texto cuando hay moderación para evitar bypass
+        // (enviar mensaje inocente, esperar aprobación, luego editarlo a ofensivo)
         allow update: if request.auth != null && (
           (request.auth.uid == resource.data.senderId &&
-           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'edited', 'editedAt'])) ||
+           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'edited', 'editedAt']) &&
+           !chatHasModeration()) ||
           (isParticipant() && isUpdatingOnlyMetadata())
         );
 
@@ -513,8 +516,8 @@ service cloud.firestore {
       // 🔒 FUNCIÓN: Campos no críticos que usuarios pueden modificar
       function isUpdatingNonCriticalFields() {
         let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
-        // Solo alias, nickname, isFavorite, metadata
-        return changedKeys.hasOnly(['alias', 'nickname', 'isFavorite', 'metadata']);
+        // Solo alias, nickname, isFavorite, metadata, storyNotifications
+        return changedKeys.hasOnly(['alias', 'nickname', 'isFavorite', 'metadata', 'storyNotifications']);
       }
 
       // 🔒 FUNCIÓN: Verificar que solo se actualiza moderationSettings
@@ -580,15 +583,16 @@ service cloud.firestore {
       // 3. Eres usuario del contacto Y es una solicitud de aprobación válida (potential → pending/approved), O
       // 4. Eres usuario del contacto Y es una cancelación válida (pending, tu approval → rejected), O
       // 5. Eres usuario del contacto Y es un reenvío válido (tu approval rejected → status potential), O
-      // 6. Eres usuario del contacto Y solo actualizas moderationSettings (validación de permisos en servicio), O
-      // 7. Eres parentViewer Y solo actualizas moderationSettings (para activar moderación en hijos)
+      // 6. Eres parentViewer Y solo actualizas moderationSettings (para activar moderación en hijos)
+      // 🔒 NOTA: Solo padres pueden modificar moderationSettings - previene bypass de moderación
       allow update: if request.auth != null && (
         (request.auth.uid in resource.data.users && isUpdatingNonCriticalFields()) ||
         (isParentViewer() && isUpdatingOnlyChildApproval() && isValidApprovalUpdate()) ||
         (request.auth.uid in resource.data.users && isValidApprovalRequest()) ||
         (request.auth.uid in resource.data.users && isValidCancelRequest()) ||
         (request.auth.uid in resource.data.users && isValidResendRequest()) ||
-        (request.auth.uid in resource.data.users && isUpdatingOnlyModerationSettings()) ||
+        // 🔒 SEGURIDAD: Solo padres (parentViewer) pueden modificar moderationSettings
+        // ELIMINADA la opción para usuarios normales - previene que un niño desactive su propia moderación
         (isParentViewer() && isUpdatingOnlyModerationSettings())
       );
 
@@ -1677,16 +1681,43 @@ service cloud.firestore {
         return changedKeys.hasOnly(['lastActivity', 'lastMessage', 'lastMessageTime', 'lastMessageSender', 'lastMessageId', 'unreadCount_' + request.auth.uid]);
       }
 
-      // Función para verificar si el usuario está saliendo del grupo (removiéndose a sí mismo)
+      // Validar cambios en admins cuando alguien sale
+      function isValidAdminsChangeOnLeave() {
+        // Sin cambios O el usuario se remueve a sí mismo (tamaño -1 y ya no está)
+        return request.resource.data.admins == resource.data.admins ||
+               (request.auth.uid in resource.data.admins &&
+                !(request.auth.uid in request.resource.data.admins) &&
+                request.resource.data.admins.size() == resource.data.admins.size() - 1);
+      }
+
+      // Validar cambios en pendingMembers cuando alguien sale
+      function isValidPendingChangeOnLeave() {
+        // Sin cambios O el usuario se remueve a sí mismo
+        let unchanged = request.resource.data.pendingMembers == resource.data.pendingMembers;
+        let removing = resource.data.pendingMembers != null &&
+                       request.auth.uid in resource.data.pendingMembers &&
+                       !(request.auth.uid in request.resource.data.pendingMembers);
+        return unchanged || removing;
+      }
+
+      // Validar isActive cuando alguien sale
+      function isValidIsActiveChangeOnLeave() {
+        // Sin cambios O false solo cuando members queda vacío
+        return request.resource.data.isActive == resource.data.isActive ||
+               (request.resource.data.isActive == false && request.resource.data.members.size() == 0);
+      }
+
+      // Función principal para verificar si el usuario está saliendo del grupo
       function isLeavingGroup() {
         let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
-        // Solo permite cambiar members (y opcionalmente updatedAt)
-        let onlyChangingMembers = changedKeys.hasOnly(['members', 'updatedAt']) || changedKeys.hasOnly(['members']);
-        // El usuario ESTABA en el grupo antes
-        let wasInGroup = request.auth.uid in resource.data.members;
-        // El usuario YA NO está en el nuevo array de members
-        let isRemovedFromMembers = !(request.auth.uid in request.resource.data.members);
-        return onlyChangingMembers && wasInGroup && isRemovedFromMembers;
+        let allowedFields = ['members', 'admins', 'pendingMembers', 'isActive', 'updatedAt'];
+
+        return changedKeys.hasOnly(allowedFields) &&
+               request.auth.uid in resource.data.members &&
+               !(request.auth.uid in request.resource.data.members) &&
+               isValidAdminsChangeOnLeave() &&
+               isValidPendingChangeOnLeave() &&
+               isValidIsActiveChangeOnLeave();
       }
 
       // Función para verificar si es padre modificando membresía de su hijo

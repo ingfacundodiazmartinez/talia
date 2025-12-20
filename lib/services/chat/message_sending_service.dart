@@ -76,10 +76,13 @@ class MessageSendingService {
               contactDoc.data()['moderationSettings'] as Map<String, dynamic>?;
 
           if (moderationSettings != null) {
-            // ✅ FIX: Verificar settings del RECEPTOR (contactId), no del sender
-            final receiverSettings =
-                moderationSettings[contactId] as Map<String, dynamic>?;
-            if (receiverSettings != null && receiverSettings['enabled'] == true) {
+            // ✅ FIX: Verificar settings del SENDER (currentUserId)
+            // Cuando un padre activa moderación para un hijo, se guarda en moderationSettings[childId]
+            // Por lo tanto, cuando el sender (currentUserId) envía mensajes,
+            // debemos verificar si el sender tiene moderación activada
+            final senderSettings =
+                moderationSettings[currentUserId] as Map<String, dynamic>?;
+            if (senderSettings != null && senderSettings['enabled'] == true) {
               moderationEnabled = true;
             }
           }

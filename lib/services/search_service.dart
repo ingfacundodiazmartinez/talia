@@ -1,10 +1,16 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../models/chat_message.dart';
+import '../groups/services/group_message_cache_service.dart';
+import '../utils/release_logger.dart';
 import 'message_cache_service.dart';
+import 'user_profile_cache_service.dart';
 
 /// Servicio para buscar en chats y mensajes con normalización de texto
 class SearchService {
   final MessageCacheService _cacheService = MessageCacheService();
+  final GroupMessageCacheService _groupCacheService = GroupMessageCacheService();
+  final UserProfileCacheService _userProfileService = UserProfileCacheService();
 
   /// Normaliza texto removiendo acentos y convirtiéndolo a minúsculas
   /// Ejemplo: "Fábrica" -> "fabrica"
@@ -41,31 +47,171 @@ class SearchService {
     if (query.isEmpty) return [];
 
     try {
-      // Obtener mensajes del caché
-      final messages = await _cacheService.getMessages(chatId);
       final results = <MessageSearchResult>[];
 
-      // Buscar en cada mensaje
-      for (final message in messages) {
-        // Solo buscar en mensajes de texto
-        if (message.text != null && message.text!.isNotEmpty) {
-          if (matchesQuery(message.text!, query)) {
-            results.add(MessageSearchResult(
-              chatId: chatId,
-              chatName: chatName,
-              chatPhotoUrl: chatPhotoUrl,
-              message: message,
-              query: query,
-              chatType: chatType,
-            ));
+      // Usar el cache correcto según el tipo de chat
+      if (chatType == ChatType.group) {
+        // Buscar en cache de grupos
+        final groupMessages = await _groupCacheService.getMessages(chatId);
+
+        for (final message in groupMessages) {
+          // Solo buscar en mensajes de texto no eliminados
+          if (message.text != null && message.text!.isNotEmpty && !message.isDeleted) {
+            if (matchesQuery(message.text!, query)) {
+              // Convertir GroupMessage a ChatMessage para el resultado
+              final chatMessage = ChatMessage(
+                id: message.id,
+                senderId: message.senderId,
+                text: message.text,
+                imageUrl: message.imageUrl,
+                videoUrl: message.videoUrl,
+                audioUrl: message.audioUrl,
+                timestamp: Timestamp.fromDate(message.timestamp),
+                isRead: true,
+                status: MessageStatus.sent,
+              );
+
+              results.add(MessageSearchResult(
+                chatId: chatId,
+                chatName: chatName,
+                chatPhotoUrl: chatPhotoUrl,
+                message: chatMessage,
+                query: query,
+                chatType: chatType,
+              ));
+            }
+          }
+        }
+      } else {
+        // Buscar en cache de chats directos
+        final messages = await _cacheService.getMessages(chatId);
+
+        for (final message in messages) {
+          // Solo buscar en mensajes de texto
+          if (message.text != null && message.text!.isNotEmpty) {
+            if (matchesQuery(message.text!, query)) {
+              results.add(MessageSearchResult(
+                chatId: chatId,
+                chatName: chatName,
+                chatPhotoUrl: chatPhotoUrl,
+                message: message,
+                query: query,
+                chatType: chatType,
+              ));
+            }
           }
         }
       }
 
       return results;
     } catch (e) {
+      ReleaseLogger.error('Error buscando en mensajes de $chatId: $e', tag: 'SearchService');
       return [];
     }
+  }
+
+  /// Buscar en mensajes de todos los chats y grupos
+  /// Retorna resultados por nombre de chat/grupo y por contenido de mensajes
+  Future<SearchResults> performMessageSearch({
+    required String query,
+    required String currentUserId,
+    required List<QueryDocumentSnapshot> chatDocs,
+    required List<QueryDocumentSnapshot> groups,
+  }) async {
+    if (query.isEmpty) {
+      return SearchResults(chatResults: [], messageResults: []);
+    }
+
+    final chatResults = <ChatSearchResult>[];
+    final messageResults = <MessageSearchResult>[];
+
+    // Buscar en chats directos
+    for (final chatDoc in chatDocs) {
+      final chatData = chatDoc.data() as Map<String, dynamic>;
+      final chatId = chatDoc.id;
+      final participants = chatData['participants'] as List<dynamic>?;
+
+      if (participants == null) continue;
+
+      final otherUserId = participants.firstWhere(
+        (id) => id != currentUserId,
+        orElse: () => null,
+      );
+
+      if (otherUserId == null) continue;
+
+      try {
+        // Obtener datos del usuario
+        final userData = await _userProfileService.getUserProfile(otherUserId);
+        if (userData == null) continue;
+
+        final userName = userData['name'] ?? 'Usuario';
+        final photoURL = userData['photoURL'] as String?;
+
+        // Verificar si coincide por nombre
+        if (matchesQuery(userName, query)) {
+          chatResults.add(
+            ChatSearchResult(
+              chatId: chatId,
+              chatName: userName,
+              chatPhotoUrl: photoURL,
+              chatType: ChatType.direct,
+            ),
+          );
+        }
+
+        // Buscar en mensajes del chat
+        final chatMessageResults = await searchInChatMessages(
+          chatId: chatId,
+          query: query,
+          chatName: userName,
+          chatPhotoUrl: photoURL,
+          chatType: ChatType.direct,
+        );
+        messageResults.addAll(chatMessageResults);
+      } catch (e) {
+        ReleaseLogger.error('Error buscando en chat $chatId: $e', tag: 'SearchService');
+      }
+    }
+
+    // Buscar en grupos
+    for (final groupDoc in groups) {
+      final groupData = groupDoc.data() as Map<String, dynamic>;
+      final groupId = groupDoc.id;
+      final groupName = groupData['name'] ?? 'Grupo';
+      final avatar = groupData['avatar'] as String?;
+
+      // Verificar si coincide por nombre
+      if (matchesQuery(groupName, query)) {
+        chatResults.add(
+          ChatSearchResult(
+            chatId: groupId,
+            chatName: groupName,
+            chatPhotoUrl: avatar,
+            chatType: ChatType.group,
+          ),
+        );
+      }
+
+      // Buscar en mensajes del grupo
+      try {
+        final groupMessageResults = await searchInChatMessages(
+          chatId: groupId,
+          query: query,
+          chatName: groupName,
+          chatPhotoUrl: avatar,
+          chatType: ChatType.group,
+        );
+        messageResults.addAll(groupMessageResults);
+      } catch (e) {
+        ReleaseLogger.error('Error buscando en grupo $groupId: $e', tag: 'SearchService');
+      }
+    }
+
+    return SearchResults(
+      chatResults: chatResults,
+      messageResults: messageResults,
+    );
   }
 }
 

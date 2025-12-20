@@ -2,6 +2,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import '../services/chat_service.dart';
 import '../services/group_chat_service.dart';
+// ✅ Nuevos servicios atómicos
+import '../services/chats/chat_services.dart';
 import '../utils/release_logger.dart';
 
 /// Controller base con lógica compartida entre Parent y Child chats
@@ -16,15 +18,23 @@ abstract class BaseChatsController {
   final FirebaseFirestore _firestore;
   final ChatService _chatService;
   final GroupChatService _groupChatService;
+  // ✅ Nuevo servicio atómico para grupos
+  final LeaveGroupService _leaveGroupService;
+  // ✅ Cache de preferencias (Hive) para archivados/silenciados
+  final ChatPreferencesCache _preferencesCache;
 
   BaseChatsController({
     required this.userId,
     FirebaseFirestore? firestore,
     ChatService? chatService,
     GroupChatService? groupChatService,
+    LeaveGroupService? leaveGroupService,
+    ChatPreferencesCache? preferencesCache,
   }) : _firestore = firestore ?? FirebaseFirestore.instance,
        _chatService = chatService ?? ChatService(),
-       _groupChatService = groupChatService ?? GroupChatService();
+       _groupChatService = groupChatService ?? GroupChatService(),
+       _leaveGroupService = leaveGroupService ?? LeaveGroupService(),
+       _preferencesCache = preferencesCache ?? ChatPreferencesCache();
 
   // Getters protegidos para acceso desde subclases
   @protected
@@ -34,16 +44,19 @@ abstract class BaseChatsController {
   GroupChatService get groupChatService => _groupChatService;
 
   /// Stream de chats donde el usuario participa
-  Stream<QuerySnapshot> getChatsStream() {
+  /// ✅ Paginado a 50 chats para escalar a 10,000+ chats
+  Stream<QuerySnapshot> getChatsStream({int limit = 50}) {
     return _firestore
         .collection('chats')
         .where('participants', arrayContains: userId)
         .orderBy('lastMessageTime', descending: true)
+        .limit(limit)
         .snapshots(includeMetadataChanges: false);
   }
 
   /// Stream de grupos donde el usuario es miembro (Groups V2)
-  Stream<QuerySnapshot> getGroupsStream() {
+  /// ✅ Paginado a 50 grupos para escalar
+  Stream<QuerySnapshot> getGroupsStream({int limit = 50}) {
     ReleaseLogger.log('🔍 [getGroupsStream] Iniciando stream para userId: $userId', tag: 'BaseChats');
 
     return _firestore
@@ -51,6 +64,7 @@ abstract class BaseChatsController {
         .where('members', arrayContains: userId)
         .where('isActive', isEqualTo: true)
         .orderBy('lastActivity', descending: true)
+        .limit(limit)
         .snapshots(includeMetadataChanges: false)
         .handleError((error, stackTrace) {
           ReleaseLogger.error(
@@ -144,11 +158,13 @@ abstract class BaseChatsController {
 
       // Hacer una query explícita al servidor para actualizar el cache
       // Con timeout para evitar que se cuelgue
+      // ✅ Limitado a 50 para escalar
       final snapshot = await _firestore
           .collection('groups_v2')
           .where('members', arrayContains: userId)
           .where('isActive', isEqualTo: true)
           .orderBy('lastActivity', descending: true)
+          .limit(50)
           .get(GetOptions(source: Source.server))
           .timeout(
             Duration(seconds: 10),
@@ -159,6 +175,7 @@ abstract class BaseChatsController {
                   .where('members', arrayContains: userId)
                   .where('isActive', isEqualTo: true)
                   .orderBy('lastActivity', descending: true)
+                  .limit(50)
                   .get();
             },
           );
@@ -183,25 +200,23 @@ abstract class BaseChatsController {
     return _chatService.filterDeletedChats(snapshot);
   }
 
-  /// Filtra chats archivados para el usuario actual
+  /// Filtra chats archivados usando Hive cache (no Firestore)
   List<QueryDocumentSnapshot> filterArchivedChats(
     List<QueryDocumentSnapshot> chatDocs,
   ) {
     return chatDocs.where((doc) {
-      final chatData = doc.data() as Map<String, dynamic>;
-      final isArchived = chatData['archived_$userId'] ?? false;
-      return !isArchived;
+      // ✅ Usar Hive cache en vez de Firestore
+      return !_preferencesCache.isArchived(doc.id);
     }).toList();
   }
 
-  /// Filtra grupos archivados para el usuario actual
+  /// Filtra grupos archivados usando Hive cache (no Firestore)
   List<QueryDocumentSnapshot> filterArchivedGroups(
     List<QueryDocumentSnapshot> groupDocs,
   ) {
     return groupDocs.where((doc) {
-      final groupData = doc.data() as Map<String, dynamic>;
-      final isArchived = groupData['archived_$userId'] ?? false;
-      return !isArchived;
+      // ✅ Usar Hive cache en vez de Firestore
+      return !_preferencesCache.isArchived(doc.id);
     }).toList();
   }
 
@@ -232,8 +247,12 @@ abstract class BaseChatsController {
   }
 
   /// Sale de un grupo específico
+  /// ✅ Usa nuevo servicio atómico
   Future<void> leaveGroup(String groupId) async {
-    await _groupChatService.leaveGroup(groupId, userId);
+    final result = await _leaveGroupService.call(groupId: groupId);
+    if (!result.success) {
+      throw Exception(result.message);
+    }
   }
 
   /// Ordenar chats por última actividad

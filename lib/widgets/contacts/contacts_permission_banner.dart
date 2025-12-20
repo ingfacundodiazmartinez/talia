@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 /// Banner de advertencia cuando el permiso de contactos no está otorgado
@@ -8,6 +9,9 @@ import 'package:permission_handler/permission_handler.dart';
 /// - permanentlyDenied: Usuario denegó permanentemente, debe ir a configuración
 /// - restricted: iOS - restringido por controles parentales
 /// - limited: iOS - acceso limitado
+///
+/// NOTA: Usa FlutterContacts para verificar el permiso real en iOS,
+/// ya que permission_handler tiene bugs conocidos en iOS.
 ///
 /// Compatible con Android e iOS
 class ContactsPermissionBanner extends StatefulWidget {
@@ -56,14 +60,36 @@ class _ContactsPermissionBannerState extends State<ContactsPermissionBanner>
   }
 
   Future<void> _checkPermission() async {
+    // ✅ FIX iOS: Usar FlutterContacts para verificar el permiso real
+    // permission_handler tiene bugs en iOS donde retorna 'denied' incluso con acceso
+    final hasFlutterContactsAccess = await FlutterContacts.requestPermission(readonly: true);
+
+    // Obtener status de permission_handler para casos especiales (restricted, limited)
     final status = await Permission.contacts.status;
     if (!mounted) return;
 
     final wasGranted = _status?.isGranted ?? false;
-    final isNowGranted = status.isGranted;
+
+    // ✅ El permiso está granted si FlutterContacts tiene acceso
+    // O si permission_handler dice que está granted
+    final isNowGranted = hasFlutterContactsAccess || status.isGranted;
+
+    // Determinar el status efectivo
+    PermissionStatus effectiveStatus;
+    if (isNowGranted) {
+      effectiveStatus = PermissionStatus.granted;
+    } else if (status.isRestricted) {
+      effectiveStatus = PermissionStatus.restricted;
+    } else if (status.isLimited) {
+      effectiveStatus = PermissionStatus.limited;
+    } else if (status.isPermanentlyDenied) {
+      effectiveStatus = PermissionStatus.permanentlyDenied;
+    } else {
+      effectiveStatus = PermissionStatus.denied;
+    }
 
     setState(() {
-      _status = status;
+      _status = effectiveStatus;
       _isLoading = false;
       // Si el permiso fue otorgado, ocultar el banner
       if (isNowGranted) {

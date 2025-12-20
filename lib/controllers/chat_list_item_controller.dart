@@ -1,9 +1,8 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
-import '../services/chat_archive_service.dart';
-import '../services/chat_mute_service.dart';
-import '../services/chat_clear_service.dart';
+// ✅ Nuevos servicios atómicos
+import '../services/chats/chat_services.dart';
 import '../services/message_cache_service.dart';
 import '../utils/release_logger.dart';
 
@@ -18,10 +17,12 @@ class ChatListItemController {
   final String chatId;
   final String userId;
 
-  // Servicios privados
-  final ChatArchiveService _archiveService;
-  final ChatMuteService _muteService;
-  final ChatClearService _clearService;
+  // ✅ Nuevos servicios atómicos
+  final ArchiveChatService _archiveService;
+  final MuteChatService _muteService;
+  final UnmuteChatService _unmuteService;
+  final ClearChatService _clearService;
+  final ChatPreferencesCache _preferencesCache;
   final MessageCacheService _cacheService;
   final FirebaseFirestore _firestore;
   final firebase_auth.FirebaseAuth _auth;
@@ -33,15 +34,19 @@ class ChatListItemController {
   ChatListItemController({
     required this.chatId,
     required this.userId,
-    ChatArchiveService? archiveService,
-    ChatMuteService? muteService,
-    ChatClearService? clearService,
+    ArchiveChatService? archiveService,
+    MuteChatService? muteService,
+    UnmuteChatService? unmuteService,
+    ClearChatService? clearService,
+    ChatPreferencesCache? preferencesCache,
     MessageCacheService? cacheService,
     FirebaseFirestore? firestore,
     firebase_auth.FirebaseAuth? auth,
-  }) : _archiveService = archiveService ?? ChatArchiveService(),
-       _muteService = muteService ?? ChatMuteService(),
-       _clearService = clearService ?? ChatClearService(),
+  }) : _archiveService = archiveService ?? ArchiveChatService(),
+       _muteService = muteService ?? MuteChatService(),
+       _unmuteService = unmuteService ?? UnmuteChatService(),
+       _clearService = clearService ?? ClearChatService(),
+       _preferencesCache = preferencesCache ?? ChatPreferencesCache(),
        _cacheService = cacheService ?? MessageCacheService(),
        _firestore = firestore ?? FirebaseFirestore.instance,
        _auth = auth ?? firebase_auth.FirebaseAuth.instance;
@@ -60,24 +65,16 @@ class ChatListItemController {
   /// Archivar chat
   Future<bool> archiveChat() async {
     try {
-      final userId = currentUserId;
-      if (userId == null) {
-        ReleaseLogger.error('Usuario no autenticado para archivar chat', tag: 'ChatListItem');
-        return false;
-      }
+      // ✅ Usar nuevo servicio atómico
+      final result = await _archiveService.call(chatId: chatId);
 
-      final success = await _archiveService.archiveChat(
-        chatId: chatId,
-        userId: userId,
-      );
-
-      if (success) {
+      if (result.success) {
         ReleaseLogger.log('Chat $chatId archivado exitosamente', tag: 'ChatListItem');
       } else {
-        ReleaseLogger.error('Error archivando chat $chatId', tag: 'ChatListItem');
+        ReleaseLogger.error('Error archivando chat $chatId: ${result.message}', tag: 'ChatListItem');
       }
 
-      return success;
+      return result.success;
     } catch (e) {
       ReleaseLogger.error('Error archivando chat: $e', tag: 'ChatListItem');
       return false;
@@ -87,24 +84,16 @@ class ChatListItemController {
   /// Silenciar chat
   Future<bool> muteChat() async {
     try {
-      final userId = currentUserId;
-      if (userId == null) {
-        ReleaseLogger.error('Usuario no autenticado para silenciar chat', tag: 'ChatListItem');
-        return false;
-      }
+      // ✅ Usar nuevo servicio atómico
+      final result = await _muteService.call(chatId: chatId);
 
-      final success = await _muteService.muteChat(
-        chatId: chatId,
-        userId: userId,
-      );
-
-      if (success) {
+      if (result.success) {
         ReleaseLogger.log('Chat $chatId silenciado exitosamente', tag: 'ChatListItem');
       } else {
-        ReleaseLogger.error('Error silenciando chat $chatId', tag: 'ChatListItem');
+        ReleaseLogger.error('Error silenciando chat $chatId: ${result.message}', tag: 'ChatListItem');
       }
 
-      return success;
+      return result.success;
     } catch (e) {
       ReleaseLogger.error('Error silenciando chat: $e', tag: 'ChatListItem');
       return false;
@@ -114,24 +103,16 @@ class ChatListItemController {
   /// Desilenciar chat
   Future<bool> unmuteChat() async {
     try {
-      final userId = currentUserId;
-      if (userId == null) {
-        ReleaseLogger.error('Usuario no autenticado para desilenciar chat', tag: 'ChatListItem');
-        return false;
-      }
+      // ✅ Usar nuevo servicio atómico
+      final result = await _unmuteService.call(chatId: chatId);
 
-      final success = await _muteService.unmuteChat(
-        chatId: chatId,
-        userId: userId,
-      );
-
-      if (success) {
+      if (result.success) {
         ReleaseLogger.log('Chat $chatId desilenciado exitosamente', tag: 'ChatListItem');
       } else {
-        ReleaseLogger.error('Error desilenciando chat $chatId', tag: 'ChatListItem');
+        ReleaseLogger.error('Error desilenciando chat $chatId: ${result.message}', tag: 'ChatListItem');
       }
 
-      return success;
+      return result.success;
     } catch (e) {
       ReleaseLogger.error('Error desilenciando chat: $e', tag: 'ChatListItem');
       return false;
@@ -141,30 +122,19 @@ class ChatListItemController {
   /// Limpiar chat
   Future<bool> clearChat() async {
     try {
-      final userId = currentUserId;
-      if (userId == null) {
-        ReleaseLogger.error('Usuario no autenticado para limpiar chat', tag: 'ChatListItem');
-        return false;
-      }
-
-      final success = await _clearService.clearChat(
-        chatId: chatId,
-        userId: userId,
-      );
+      // ✅ Usar nuevo servicio atómico
+      final result = await _clearService.call(chatId: chatId);
 
       // Limpiar también el cache local
-      if (success) {
+      if (result.success) {
         await _cacheService.clearChat(chatId);
         ReleaseLogger.log('Cache local limpiado para chat $chatId', tag: 'ChatListItem');
-      }
-
-      if (success) {
         ReleaseLogger.log('Chat $chatId limpiado exitosamente', tag: 'ChatListItem');
       } else {
-        ReleaseLogger.error('Error limpiando chat $chatId', tag: 'ChatListItem');
+        ReleaseLogger.error('Error limpiando chat $chatId: ${result.message}', tag: 'ChatListItem');
       }
 
-      return success;
+      return result.success;
     } catch (e) {
       ReleaseLogger.error('Error limpiando chat: $e', tag: 'ChatListItem');
       return false;
@@ -172,20 +142,15 @@ class ChatListItemController {
   }
 
   /// Stream para verificar si un chat está silenciado
+  /// ✅ Usa ChatPreferencesCache local para evitar llamadas a Firestore
   Stream<bool> watchChatMuted() {
     try {
-      final userId = currentUserId;
-      if (userId == null) {
-        ReleaseLogger.warning('Usuario no autenticado para watch chat muted', tag: 'ChatListItem');
-        return Stream.value(false);
-      }
-
-      return _muteService.watchChatMuted(
-        chatId: chatId,
-        userId: userId,
-      );
+      // El cache local es síncrono, así que devolvemos un Stream.value
+      // que emite el valor actual del cache
+      final isMuted = _preferencesCache.isMuted(chatId);
+      return Stream.value(isMuted);
     } catch (e) {
-      ReleaseLogger.error('Error obteniendo stream de chat silenciado: $e', tag: 'ChatListItem');
+      ReleaseLogger.error('Error obteniendo estado de chat silenciado: $e', tag: 'ChatListItem');
       return Stream.value(false);
     }
   }

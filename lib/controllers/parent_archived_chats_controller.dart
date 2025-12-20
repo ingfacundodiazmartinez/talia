@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
-import '../services/chat_archive_service.dart';
+import '../models/chat.dart';
+import '../services/chats/chat_services.dart';
 import '../services/contact_alias_service.dart';
 import '../services/block_service.dart';
 import '../utils/release_logger.dart';
@@ -14,9 +15,13 @@ import '../utils/release_logger.dart';
 /// - Manejar operaciones de archivado/desarchivado
 /// - Proporcionar streams de servicios
 /// - Cumplir con CODING_RULES.md: ZERO Firebase calls en screens
+///
+/// ✅ CORREGIDO: Usa ChatPreferencesCache (Hive) en vez de Firestore
 class ParentArchivedChatsController {
   // Servicios privados
-  final ChatArchiveService _archiveService;
+  final ListChatsService _listChatsService;
+  final UnarchiveChatService _unarchiveService;
+  final ChatPreferencesCache _preferencesCache;
   final ContactAliasService _aliasService;
   final BlockService _blockService;
   final FirebaseFirestore _firestore;
@@ -24,24 +29,31 @@ class ParentArchivedChatsController {
 
   // Estado interno
   String? _currentUserId;
+  StreamSubscription? _chatsSubscription;
+  final _archivedChatsController = StreamController<List<Chat>>.broadcast();
 
   /// Constructor
   ParentArchivedChatsController({
-    ChatArchiveService? archiveService,
+    ListChatsService? listChatsService,
+    UnarchiveChatService? unarchiveService,
+    ChatPreferencesCache? preferencesCache,
     ContactAliasService? aliasService,
     BlockService? blockService,
     FirebaseFirestore? firestore,
     firebase_auth.FirebaseAuth? auth,
-  }) : _archiveService = archiveService ?? ChatArchiveService(),
-       _aliasService = aliasService ?? ContactAliasService(),
-       _blockService = blockService ?? BlockService(),
-       _firestore = firestore ?? FirebaseFirestore.instance,
-       _auth = auth ?? firebase_auth.FirebaseAuth.instance;
+  })  : _listChatsService = listChatsService ?? ListChatsService(),
+        _unarchiveService = unarchiveService ?? UnarchiveChatService(),
+        _preferencesCache = preferencesCache ?? ChatPreferencesCache(),
+        _aliasService = aliasService ?? ContactAliasService(),
+        _blockService = blockService ?? BlockService(),
+        _firestore = firestore ?? FirebaseFirestore.instance,
+        _auth = auth ?? firebase_auth.FirebaseAuth.instance;
 
   // Getters
   String? get currentUserId => _currentUserId ?? _auth.currentUser?.uid;
   String get currentUserIdSafe => currentUserId ?? '';
   bool get isUserAuthenticated => currentUserId != null;
+  Stream<List<Chat>> get archivedChatsStream => _archivedChatsController.stream;
 
   /// Inicializar el controller
   void initialize() {
@@ -51,26 +63,34 @@ class ParentArchivedChatsController {
         ReleaseLogger.warning('Usuario no autenticado en ParentArchivedChatsController', tag: 'ArchivedChats');
       } else {
         ReleaseLogger.log('ParentArchivedChatsController inicializado para usuario: $_currentUserId', tag: 'ArchivedChats');
+        _startListeningChats();
       }
     } catch (e) {
       ReleaseLogger.error('Error inicializando ParentArchivedChatsController: $e', tag: 'ArchivedChats');
     }
   }
 
-  /// Stream de chats archivados
-  Stream<QuerySnapshot> getArchivedChatsStream() {
-    try {
-      final userId = currentUserId;
-      if (userId == null) {
-        ReleaseLogger.warning('Usuario no autenticado para stream de chats archivados', tag: 'ArchivedChats');
-        return Stream.empty();
-      }
+  /// ✅ Escuchar chats y filtrar archivados desde Hive
+  void _startListeningChats() {
+    _chatsSubscription?.cancel();
 
-      return _archiveService.getArchivedChatsStream(userId);
-    } catch (e) {
-      ReleaseLogger.error('Error creando stream de chats archivados: $e', tag: 'ArchivedChats');
-      return Stream.empty();
-    }
+    _chatsSubscription = _listChatsService
+        .call(includeArchived: true)
+        .listen(
+          (chats) {
+            // Filtrar solo los archivados usando el cache de Hive
+            final archived = chats.where((c) => _preferencesCache.isArchived(c.id)).toList();
+            _archivedChatsController.add(archived);
+          },
+          onError: (e) {
+            ReleaseLogger.error('Error en stream de chats archivados: $e', tag: 'ArchivedChats');
+          },
+        );
+  }
+
+  /// Refrescar la lista
+  void refresh() {
+    _startListeningChats();
   }
 
   /// Desarchivar chat
@@ -82,18 +102,16 @@ class ParentArchivedChatsController {
         return false;
       }
 
-      final success = await _archiveService.unarchiveChat(
-        chatId: chatId,
-        userId: userId,
-      );
+      final result = await _unarchiveService.call(chatId: chatId);
 
-      if (success) {
+      if (result.success) {
         ReleaseLogger.log('Chat $chatId desarchivado exitosamente', tag: 'ArchivedChats');
+        refresh(); // Refrescar la lista
       } else {
-        ReleaseLogger.error('Error desarchivando chat $chatId', tag: 'ArchivedChats');
+        ReleaseLogger.error('Error desarchivando chat $chatId: ${result.message}', tag: 'ArchivedChats');
       }
 
-      return success;
+      return result.success;
     } catch (e) {
       ReleaseLogger.error('Error desarchivando chat: $e', tag: 'ArchivedChats');
       return false;
@@ -109,7 +127,6 @@ class ParentArchivedChatsController {
           .get();
     } catch (e) {
       ReleaseLogger.error('Error obteniendo documento de usuario $userId: $e', tag: 'ArchivedChats');
-      // Crear un documento vacío en caso de error
       rethrow;
     }
   }
@@ -135,18 +152,9 @@ class ParentArchivedChatsController {
   }
 
   /// Verificar si un chat fue limpiado
-  bool isChatCleared(Map<String, dynamic> chatData) {
-    try {
-      final parentId = currentUserIdSafe;
-      final clearedAt = chatData['clearedAt_$parentId'] as Timestamp?;
-      final lastMessageTime = chatData['lastMessageTime'] as Timestamp?;
-
-      return clearedAt != null &&
-          (lastMessageTime == null || clearedAt.compareTo(lastMessageTime) >= 0);
-    } catch (e) {
-      ReleaseLogger.error('Error verificando si chat está limpio: $e', tag: 'ArchivedChats');
-      return false;
-    }
+  bool isChatCleared(String chatId) {
+    final clearedAt = _preferencesCache.getClearedAt(chatId);
+    return clearedAt != null;
   }
 
   /// Obtener el otro participante de un chat
@@ -160,29 +168,6 @@ class ParentArchivedChatsController {
     } catch (e) {
       ReleaseLogger.error('Error obteniendo otro participante: $e', tag: 'ArchivedChats');
       return '';
-    }
-  }
-
-  /// Ordenar chats archivados por última actividad
-  List<QueryDocumentSnapshot> sortChatsByLastActivity(List<QueryDocumentSnapshot> chats) {
-    try {
-      final sortedChats = List<QueryDocumentSnapshot>.from(chats);
-      sortedChats.sort((a, b) {
-        final aData = a.data() as Map<String, dynamic>;
-        final bData = b.data() as Map<String, dynamic>;
-        final aTime = aData['lastMessageTime'] as Timestamp?;
-        final bTime = bData['lastMessageTime'] as Timestamp?;
-
-        if (aTime == null && bTime == null) return 0;
-        if (aTime == null) return 1;
-        if (bTime == null) return -1;
-        return bTime.compareTo(aTime);
-      });
-
-      return sortedChats;
-    } catch (e) {
-      ReleaseLogger.error('Error ordenando chats: $e', tag: 'ArchivedChats');
-      return chats;
     }
   }
 
@@ -234,6 +219,7 @@ class ParentArchivedChatsController {
   /// Limpiar recursos
   void dispose() {
     ReleaseLogger.log('Disposing ParentArchivedChatsController', tag: 'ArchivedChats');
-    // No hay recursos específicos que limpiar para servicios stateless
+    _chatsSubscription?.cancel();
+    _archivedChatsController.close();
   }
 }

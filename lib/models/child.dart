@@ -194,40 +194,75 @@ class Child extends User {
   }
 
   /// Obtiene los padres vinculados del hijo
-  /// ✅ FIX: Usa parent_children en lugar de users.linkedChildrenIds (permisos)
+  /// ✅ FIX: Usa linkedParentsData desnormalizado para evitar problemas de permisos
   Future<List<Map<String, dynamic>>> getParents() async {
     try {
-      // 1. Obtener parentIds desde parent_children
-      final linksSnapshot = await FirebaseFirestore.instance
-          .collection('parent_children')
-          .where('childId', isEqualTo: id)
-          .where('status', isEqualTo: 'approved')
+      ReleaseLogger.log('👨‍👩‍👧 [getParents] Buscando padres para childId: $id', tag: 'Child');
+
+      // 1. Obtener el documento del hijo
+      final childDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(id)
           .get();
 
-      final parentIds = linksSnapshot.docs
-          .map((doc) => doc.data()['parentId'] as String)
-          .toList();
-
-      if (parentIds.isEmpty) {
+      if (!childDoc.exists) {
+        ReleaseLogger.log('👨‍👩‍👧 [getParents] Documento del hijo no existe', tag: 'Child');
         return [];
       }
 
-      // 2. Obtener datos de cada padre
+      final childData = childDoc.data()!;
+      final parentIds = List<String>.from(childData['linkedParentIds'] ?? []);
+      final linkedParentsData = childData['linkedParentsData'] as Map<String, dynamic>? ?? {};
+
+      ReleaseLogger.log('👨‍👩‍👧 [getParents] linkedParentIds: $parentIds', tag: 'Child');
+      ReleaseLogger.log('👨‍👩‍👧 [getParents] linkedParentsData keys: ${linkedParentsData.keys.toList()}', tag: 'Child');
+
+      if (parentIds.isEmpty) {
+        ReleaseLogger.log('👨‍👩‍👧 [getParents] No hay padres vinculados', tag: 'Child');
+        return [];
+      }
+
+      // 2. Usar datos desnormalizados si están disponibles
       List<Map<String, dynamic>> parents = [];
 
       for (var parentId in parentIds) {
-        final parentDoc = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(parentId)
-            .get();
+        if (linkedParentsData.containsKey(parentId)) {
+          // Usar datos desnormalizados (no requiere permisos adicionales)
+          final parentInfo = linkedParentsData[parentId] as Map<String, dynamic>;
+          parents.add({
+            'id': parentId,
+            'name': parentInfo['name'] ?? 'Padre/Madre',
+            'photoURL': parentInfo['photoURL'],
+          });
+          ReleaseLogger.log('👨‍👩‍👧 [getParents] Padre desde datos desnormalizados: ${parentInfo['name']}', tag: 'Child');
+        } else {
+          // Fallback: intentar leer documento (puede fallar por permisos)
+          ReleaseLogger.log('👨‍👩‍👧 [getParents] Intentando leer documento del padre: $parentId', tag: 'Child');
+          try {
+            final parentDoc = await FirebaseFirestore.instance
+                .collection('users')
+                .doc(parentId)
+                .get();
 
-        if (parentDoc.exists) {
-          final parentData = parentDoc.data()!;
-          parentData['id'] = parentDoc.id;
-          parents.add(parentData);
+            if (parentDoc.exists) {
+              final parentData = parentDoc.data()!;
+              parentData['id'] = parentDoc.id;
+              parents.add(parentData);
+              ReleaseLogger.log('👨‍👩‍👧 [getParents] Padre encontrado: ${parentData['name']}', tag: 'Child');
+            }
+          } catch (e) {
+            // Si falla por permisos, agregar con datos mínimos
+            ReleaseLogger.log('👨‍👩‍👧 [getParents] Sin permisos para leer padre $parentId, usando datos mínimos', tag: 'Child');
+            parents.add({
+              'id': parentId,
+              'name': 'Padre/Madre',
+              'photoURL': null,
+            });
+          }
         }
       }
 
+      ReleaseLogger.log('👨‍👩‍👧 [getParents] Total padres: ${parents.length}', tag: 'Child');
       return parents;
     } catch (e) {
       ReleaseLogger.error('Error obteniendo padres del hijo: $e', tag: 'Child');

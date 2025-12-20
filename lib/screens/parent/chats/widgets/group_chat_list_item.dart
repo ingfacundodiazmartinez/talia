@@ -20,6 +20,7 @@ class GroupChatListItem extends StatelessWidget {
   final String? lastMessageSenderId;
   final MessageStatus? lastMessageStatus;
   final ModerationStatus? lastMessageModerationStatus;
+  final String? timeString; // Tiempo formateado del último mensaje
 
   const GroupChatListItem({
     super.key,
@@ -34,6 +35,7 @@ class GroupChatListItem extends StatelessWidget {
     this.lastMessageSenderId,
     this.lastMessageStatus,
     this.lastMessageModerationStatus,
+    this.timeString,
   });
 
 
@@ -43,12 +45,18 @@ class GroupChatListItem extends StatelessWidget {
     final auth = FirebaseAuth.instance;
 
     final colorScheme = Theme.of(context).colorScheme;
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
+    // Color para acciones del slidable - adaptado a modo oscuro
+    final slideActionColor = isDarkMode
+        ? colorScheme.primaryContainer
+        : colorScheme.primary;
 
     return Padding(
       padding: EdgeInsets.only(bottom: 8),
       child: ClipRect(
         child: Container(
-          color: colorScheme.primary,
+          color: slideActionColor,
           child: Slidable(
         key: Key('group_$groupId'),
         closeOnScroll: false,
@@ -60,19 +68,23 @@ class GroupChatListItem extends StatelessWidget {
         children: [
           Expanded(
             child: Container(
-              color: colorScheme.primary,
+              color: slideActionColor,
               child: GestureDetector(
                 onTap: () => onLeaveGroup?.call(),
                 behavior: HitTestBehavior.opaque,
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(Icons.exit_to_app_outlined, color: Colors.white, size: 24),
+                    Icon(
+                      Icons.exit_to_app_outlined,
+                      color: isDarkMode ? colorScheme.onPrimaryContainer : Colors.white,
+                      size: 24,
+                    ),
                     const SizedBox(height: 4),
                     Text(
                       'Salir',
-                      style: const TextStyle(
-                        color: Colors.white,
+                      style: TextStyle(
+                        color: isDarkMode ? colorScheme.onPrimaryContainer : Colors.white,
                         fontSize: 11,
                         fontWeight: FontWeight.w500,
                       ),
@@ -99,9 +111,7 @@ class GroupChatListItem extends StatelessWidget {
           },
           child: Container(
           padding: EdgeInsets.all(12),
-          color: unreadCount > 0
-              ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.1)
-              : colorScheme.surface,
+          color: colorScheme.surface,
           child: Row(
             children: [
               CircleAvatar(
@@ -123,53 +133,46 @@ class GroupChatListItem extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // Primera línea: Nombre + badge miembros + tiempo (igual que chat 1-1)
                     Row(
                       children: [
                         Expanded(
                           child: Text(
                             groupName,
                             style: TextStyle(
-                              fontSize: 16,
+                              fontSize: 15,
                               fontWeight: FontWeight.w600,
-                              color: Theme.of(context).colorScheme.onSurface,
+                              color: colorScheme.onSurface,
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                        if (unreadCount > 0) ...[
-                          Container(
-                            padding: EdgeInsets.all(6),
-                            decoration: BoxDecoration(
-                              color: Theme.of(context).colorScheme.primary,
-                              shape: BoxShape.circle,
-                            ),
-                            child: Text(
-                              unreadCount.toString(),
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                          SizedBox(width: 8),
-                        ],
                         Container(
-                          padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                           decoration: BoxDecoration(
                             color: Color(0xFF4CAF50).withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(12),
+                            borderRadius: BorderRadius.circular(8),
                           ),
                           child: Text(
                             '$memberCount miembros',
                             style: TextStyle(
-                              fontSize: 12,
+                              fontSize: 11,
                               color: Color(0xFF4CAF50),
                               fontWeight: FontWeight.w500,
                             ),
                           ),
                         ),
+                        if (timeString != null && timeString!.isNotEmpty) ...[
+                          SizedBox(width: 8),
+                          Text(
+                            timeString!,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                     SizedBox(height: 4),
@@ -186,7 +189,6 @@ class GroupChatListItem extends StatelessWidget {
                           final isOwnMessage = lastMessageSenderId == currentUserId;
 
                           return Row(
-                            mainAxisSize: MainAxisSize.min,
                             children: [
                               if (isOwnMessage && lastMessageStatus != null) ...[
                                 MessageStatusIndicator(
@@ -196,17 +198,35 @@ class GroupChatListItem extends StatelessWidget {
                                 ),
                                 const SizedBox(width: 4),
                               ],
-                              Flexible(
+                              Expanded(
                                 child: Text(
                                   lastMessage,
                                   style: TextStyle(
-                                    fontSize: 14,
-                                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                    fontSize: 13,
+                                    color: colorScheme.onSurfaceVariant,
                                   ),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                 ),
                               ),
+                              if (unreadCount > 0) ...[
+                                const SizedBox(width: 8),
+                                Container(
+                                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: colorScheme.primary,
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Text(
+                                    unreadCount.toString(),
+                                    style: TextStyle(
+                                      color: colorScheme.onPrimary,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ],
                           );
                         }
@@ -311,7 +331,6 @@ class GroupChatListItem extends StatelessWidget {
                         final isOwnMessage = lastMessageSenderId == currentUserId;
 
                         return Row(
-                          mainAxisSize: MainAxisSize.min,
                           children: [
                             // Indicador de estado (solo para mensajes propios) - ANTES del texto
                             if (isOwnMessage && lastMessageStatus != null) ...[
@@ -322,17 +341,35 @@ class GroupChatListItem extends StatelessWidget {
                               ),
                               const SizedBox(width: 4),
                             ],
-                            Flexible(
+                            Expanded(
                               child: Text(
                                 lastMessage,
                                 style: TextStyle(
-                                  fontSize: 14,
-                                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                  fontSize: 13,
+                                  color: colorScheme.onSurfaceVariant,
                                 ),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
+                            if (unreadCount > 0) ...[
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: colorScheme.primary,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(
+                                  unreadCount.toString(),
+                                  style: TextStyle(
+                                    color: colorScheme.onPrimary,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ],
                         );
                       },

@@ -18,6 +18,7 @@ import '../../../notification_service.dart';
 import '../../contact_photo_cache_service.dart';
 import '../../app_state_service.dart';
 import '../../message_status_helper.dart';
+import '../chat_preferences_cache.dart';
 
 /// Manager para coordinación de streams de chats
 ///
@@ -1177,35 +1178,30 @@ class ChatStreamManager {
   // CLEARED AT CACHE
   // ═══════════════════════════════════════════════════════════════
 
-  /// Obtener clearedAt timestamp con cache (evita queries redundantes)
+  /// Obtener clearedAt timestamp desde Hive (ChatPreferencesCache)
+  /// ✅ FIX: Usar cache local en lugar de Firestore para consistencia con ClearChatService
   Future<Timestamp?> _getClearedAtCached(String chatId, String? userId, bool isGroup) async {
     if (userId == null) return null;
 
     final cacheKey = '${chatId}_$userId';
 
-    // Si ya está en cache, retornar inmediatamente
+    // Si ya está en memory cache, retornar inmediatamente
     if (_clearedAtCache.containsKey(cacheKey)) {
-      ReleaseLogger.log('✅ [Cache] clearedAt para $cacheKey obtenido del cache');
       return _clearedAtCache[cacheKey];
     }
 
-    // Si no está en cache, hacer query y cachear
+    // Obtener de Hive (ChatPreferencesCache) - donde ClearChatService guarda
     try {
-      final collection = isGroup ? 'groups_v2' : 'chats';
-      final chatDoc = await FirebaseFirestore.instance
-          .collection(collection)
-          .doc(chatId)
-          .get();
+      final clearedAtDateTime = ChatPreferencesCache().getClearedAt(chatId);
 
-      if (chatDoc.exists) {
-        final data = chatDoc.data();
-        final clearedAt = data?['clearedAt_$userId'] as Timestamp?;
-        _clearedAtCache[cacheKey] = clearedAt;
-        ReleaseLogger.log('📥 [Cache] clearedAt para $cacheKey cacheado');
-        return clearedAt;
+      if (clearedAtDateTime != null) {
+        final clearedAtTimestamp = Timestamp.fromDate(clearedAtDateTime);
+        _clearedAtCache[cacheKey] = clearedAtTimestamp;
+        ReleaseLogger.log('📥 [Cache] clearedAt para $chatId obtenido de Hive: $clearedAtDateTime');
+        return clearedAtTimestamp;
       }
     } catch (e) {
-      ReleaseLogger.error('❌ Error obteniendo clearedAt: $e');
+      ReleaseLogger.error('❌ Error obteniendo clearedAt de Hive: $e');
     }
 
     // Cachear null si no existe
@@ -1392,6 +1388,15 @@ class ChatStreamManager {
     required bool isGroup,
   }) async {
     try {
+      // ✅ CHECK MUTED: No mostrar notificación si el chat está silenciado
+      if (ChatPreferencesCache().isMuted(chatId)) {
+        ReleaseLogger.log(
+          '🔇 [StreamDetector] Chat $chatId silenciado - SKIP notificación',
+          tag: 'ChatStreamManager',
+        );
+        return;
+      }
+
       final cacheService = ContactPhotoCacheService();
 
       // 1. Obtener nombre del remitente (alias > nombre cacheado > query Firestore)

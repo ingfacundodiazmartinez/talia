@@ -45,11 +45,11 @@ function setCachedContext(chatId, conversationContext, reportedMessagesContext) 
 exports.checkMessageBeforeSending = onCall(
   { region: "us-central1", consumeAppCheckToken: true },
   async (request) => {
-    const { chatId, text, type = "text", localId, messageId } = request.data;
+    const { chatId, text, type = "text", localId, messageId, checkOnly = false } = request.data;
     const userId = request.auth?.uid;
 
     const isUpdate = messageId != null;
-    console.log(`🔍 [Pre-moderación] ${isUpdate ? 'Re-verificando' : 'Verificando'} mensaje para chat ${chatId}`);
+    console.log(`🔍 [Pre-moderación] ${isUpdate ? 'Re-verificando' : 'Verificando'} mensaje para chat ${chatId}${checkOnly ? ' (checkOnly mode)' : ''}`);
 
     if (!userId) {
       throw new HttpsError("unauthenticated", "Usuario no autenticado");
@@ -273,6 +273,12 @@ exports.checkMessageBeforeSending = onCall(
       if (!shouldBlock) {
         console.log(`✅ [Pre-moderación] Mensaje aprobado (severity: ${analysis.severity}, level: ${moderationLevel})`);
 
+        // Si es checkOnly, solo retornar resultado sin escribir en Firestore
+        if (checkOnly) {
+          console.log(`✅ [Pre-moderación] checkOnly mode - retornando sin escribir en Firestore`);
+          return { approved: true };
+        }
+
         // Si es una actualización de mensaje bloqueado, actualizar en Firestore
         if (isUpdate) {
           try {
@@ -305,6 +311,16 @@ exports.checkMessageBeforeSending = onCall(
 
       // Mensaje bloqueado
       console.log(`🚫 [Pre-moderación] Mensaje bloqueado: ${analysis.reason} (severity: ${analysis.severity})`);
+
+      // Si es checkOnly, solo retornar resultado sin escribir en Firestore ni notificar
+      if (checkOnly) {
+        console.log(`🚫 [Pre-moderación] checkOnly mode - retornando bloqueo sin escribir en Firestore`);
+        return {
+          approved: false,
+          reason: analysis.reason,
+          severity: analysis.severity,
+        };
+      }
 
       // Obtener nombre del sender
       let senderName = "Usuario";
@@ -871,8 +887,9 @@ exports.moderateMessage = onDocumentCreated(
             lastMessage: messagePreview,
             lastMessageTime: FieldValue.serverTimestamp(),
             lastMessageSender: senderId,
+            lastMessageId: messageId, // ✅ FIX: Incluir ID para que ChatDocsListener trackee correctamente
           });
-          console.log(`📝 Chat sincronizado: lastMessage="${messagePreview.substring(0, 30)}..."`);
+          console.log(`📝 Chat sincronizado: lastMessage="${messagePreview.substring(0, 30)}...", lastMessageId=${messageId}`);
         } catch (updateError) {
           console.error("Error actualizando chat:", updateError);
         }
@@ -901,9 +918,10 @@ exports.moderateMessage = onDocumentCreated(
             lastMessage: "🚫 Mensaje bloqueado",
             lastMessageTime: FieldValue.serverTimestamp(),
             lastMessageSender: senderId,
+            lastMessageId: messageId, // ✅ FIX: Incluir ID para que ChatDocsListener trackee correctamente
           });
 
-          console.log(`📝 Chat sincronizado: lastMessage="🚫 Mensaje bloqueado"`);
+          console.log(`📝 Chat sincronizado: lastMessage="🚫 Mensaje bloqueado", lastMessageId=${messageId}`);
         } catch (e) {
           console.error(`⚠️ Error sincronizando chat después de bloqueo: ${e}`);
         }
@@ -1022,6 +1040,159 @@ exports.createApprovedMessage = onCall(
     } catch (error) {
       console.error(`❌ [CreateApprovedMessage] Error:`, error);
       throw new HttpsError("internal", `Error creando mensaje: ${error.message}`);
+    }
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
+// MODERACIÓN PROPIA (PARA USUARIOS ADULTOS)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Permite a usuarios adultos (no niños supervisados) configurar su propia moderación
+ * Esta función bypasea las Firestore rules que solo permiten parentViewer
+ *
+ * Flujo:
+ * 1. Verificar que el usuario está autenticado
+ * 2. Verificar que el usuario es adulto o padre (role != 'child')
+ * 3. Verificar que el usuario es parte del contacto
+ * 4. Actualizar moderationSettings para el usuario
+ * 5. Sincronizar con el chat
+ */
+exports.setOwnModeration = onCall(
+  { region: "us-central1" },
+  async (request) => {
+    const { contactId, level, enabled = true } = request.data;
+    const userId = request.auth?.uid;
+
+    console.log(`🔧 [SetOwnModeration] userId=${userId}, contactId=${contactId}, level=${level}, enabled=${enabled}`);
+
+    // 1. Verificar autenticación
+    if (!userId) {
+      throw new HttpsError("unauthenticated", "Usuario no autenticado");
+    }
+
+    // Validar parámetros
+    if (!contactId) {
+      throw new HttpsError("invalid-argument", "contactId es requerido");
+    }
+
+    const validLevels = ["high", "medium", "low", "none"];
+    if (!validLevels.includes(level)) {
+      throw new HttpsError("invalid-argument", `Nivel no válido. Usar: ${validLevels.join(", ")}`);
+    }
+
+    const db = getFirestore();
+
+    try {
+      // 2. Verificar que el usuario es adulto o padre (no niño supervisado)
+      const userDoc = await db.collection("users").doc(userId).get();
+      if (!userDoc.exists) {
+        throw new HttpsError("not-found", "Usuario no encontrado");
+      }
+
+      const userData = userDoc.data();
+      const userRole = userData.role || "adult";
+
+      // Si es niño, verificar si tiene padres vinculados
+      if (userRole === "child") {
+        const parentLinks = await db.collection("parent_children")
+          .where("childId", "==", userId)
+          .where("status", "==", "approved")
+          .limit(1)
+          .get();
+
+        if (!parentLinks.empty) {
+          console.log(`⛔ [SetOwnModeration] Niño ${userId} tiene padres vinculados, no puede modificar moderación`);
+          throw new HttpsError(
+            "permission-denied",
+            "Los niños con padres vinculados no pueden modificar la moderación. Pide a tu padre/madre que lo haga."
+          );
+        }
+        // Si es niño sin padres, permitir (es independiente)
+        console.log(`✅ [SetOwnModeration] Niño ${userId} sin padres vinculados, permitiendo modificación`);
+      }
+
+      // 3. Verificar que el usuario es parte del contacto
+      const contactDoc = await db.collection("contacts").doc(contactId).get();
+      if (!contactDoc.exists) {
+        throw new HttpsError("not-found", "Contacto no encontrado");
+      }
+
+      const contactData = contactDoc.data();
+      const users = contactData.users || [];
+
+      if (!users.includes(userId)) {
+        throw new HttpsError("permission-denied", "No eres parte de este contacto");
+      }
+
+      // 4. Calcular valores
+      const isNone = level === "none";
+      const shouldEnable = enabled && !isNone;
+      const effectiveLevel = isNone ? "medium" : level;
+
+      // 5. Actualizar moderationSettings para el usuario
+      const newSettings = {
+        enabled: shouldEnable,
+        level: effectiveLevel,
+        updatedAt: FieldValue.serverTimestamp(),
+        enabledBy: shouldEnable ? userId : null,
+        enabledAt: shouldEnable ? FieldValue.serverTimestamp() : null,
+      };
+
+      await db.collection("contacts").doc(contactId).update({
+        [`moderationSettings.${userId}`]: newSettings,
+      });
+
+      console.log(`✅ [SetOwnModeration] moderationSettings.${userId} actualizado en contacto ${contactId}`);
+
+      // 6. Sincronizar con el chat
+      // El chatId es el mismo que el contactId (formato user1_user2 ordenado)
+      const chatRef = db.collection("chats").doc(contactId);
+      const chatDoc = await chatRef.get();
+
+      if (chatDoc.exists) {
+        if (shouldEnable) {
+          await chatRef.update({
+            moderationEnabled: true,
+            moderationUpdatedAt: FieldValue.serverTimestamp(),
+          });
+          console.log(`✅ [SetOwnModeration] Chat ${contactId}: moderationEnabled=true`);
+        } else {
+          // Verificar si hay otras moderaciones activas
+          const updatedContactDoc = await db.collection("contacts").doc(contactId).get();
+          const moderationSettings = updatedContactDoc.data()?.moderationSettings || {};
+
+          let anyModerationActive = false;
+          for (const [key, settings] of Object.entries(moderationSettings)) {
+            if (settings?.enabled === true) {
+              anyModerationActive = true;
+              break;
+            }
+          }
+
+          if (!anyModerationActive) {
+            await chatRef.update({
+              moderationEnabled: false,
+              moderationUpdatedAt: FieldValue.serverTimestamp(),
+            });
+            console.log(`✅ [SetOwnModeration] Chat ${contactId}: moderationEnabled=false (ninguna activa)`);
+          }
+        }
+      }
+
+      return {
+        success: true,
+        message: "Moderación actualizada correctamente",
+        enabled: shouldEnable,
+        level: effectiveLevel,
+      };
+    } catch (error) {
+      if (error instanceof HttpsError) {
+        throw error;
+      }
+      console.error(`❌ [SetOwnModeration] Error:`, error);
+      throw new HttpsError("internal", `Error actualizando moderación: ${error.message}`);
     }
   }
 );

@@ -176,10 +176,11 @@ exports.promoteGroupAdmin = groupsV2.promoteGroupAdmin;
 exports.demoteGroupAdmin = groupsV2.demoteGroupAdmin;
 
 // Moderación de contenido
-// ✅ ELIMINADO: checkMessageBeforeSending - La moderación ahora se hace SOLO en el trigger moderateMessage
-// exports.checkMessageBeforeSending = moderation.checkMessageBeforeSending;
+// ✅ checkMessageBeforeSending - Usado para verificar moderación antes de enviar (incluye modo checkOnly para edición de mensajes bloqueados)
+exports.checkMessageBeforeSending = moderation.checkMessageBeforeSending;
 exports.moderateMessage = moderation.moderateMessage;
 exports.createApprovedMessage = moderation.createApprovedMessage;
+exports.setOwnModeration = moderation.setOwnModeration; // ✅ Permite a adultos configurar su propia moderación
 
 // Chats
 exports.incrementUnreadCount = chats.incrementUnreadCount;

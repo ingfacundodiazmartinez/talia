@@ -6,6 +6,7 @@ import '../../../services/block_service.dart';
 import '../../../services/typing_indicator_service.dart';
 import '../../../controllers/chat_app_bar_controller.dart';
 import '../../../calls_v2/screens/agora_call_screen.dart';
+import 'moderation_dialog.dart';
 
 /// AppBar personalizado para pantallas de chat
 class ChatAppBar extends StatefulWidget implements PreferredSizeWidget {
@@ -41,7 +42,7 @@ class _ChatAppBarState extends State<ChatAppBar> {
   void initState() {
     super.initState();
     _controller = ChatAppBarController();
-    _controller.initialize();
+    _controller.initialize(chatId: widget.chatId);
   }
 
   @override
@@ -269,6 +270,9 @@ class _ChatAppBarState extends State<ChatAppBar> {
                       );
                     }
                   }
+                } else if (value == 'moderation') {
+                  // Mostrar diálogo de moderación
+                  ModerationDialog.show(context, _controller);
                 }
               },
               itemBuilder: (context) {
@@ -318,6 +322,48 @@ class _ChatAppBarState extends State<ChatAppBar> {
               ),
             );
 
+            // Opción moderación IA (solo para adultos/padres)
+            if (_controller.canModifyModeration) {
+              items.add(
+                PopupMenuItem(
+                  value: 'moderation',
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.psychology,
+                        color: _controller.moderationEnabled
+                            ? const Color(0xFF5C6BC0)
+                            : colorScheme.onSurface,
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        'Moderación IA',
+                        style: TextStyle(color: colorScheme.onSurface),
+                      ),
+                      if (_controller.moderationEnabled) ...[
+                        const Spacer(),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF5C6BC0),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            _getModerationLabel(_controller.moderationLevel),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              );
+            }
+
             return items;
           },
         );
@@ -325,6 +371,20 @@ class _ChatAppBarState extends State<ChatAppBar> {
         ),
       ],
     );
+  }
+
+  /// Helper para obtener label del nivel de moderación
+  String _getModerationLabel(String level) {
+    switch (level) {
+      case 'high':
+        return 'Alto';
+      case 'medium':
+        return 'Medio';
+      case 'low':
+        return 'Bajo';
+      default:
+        return 'Medio';
+    }
   }
 
   void _showParentBlockedDialog(BuildContext context) {

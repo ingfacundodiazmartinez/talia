@@ -89,6 +89,51 @@ class UpdateContactModerationService {
         'moderationSettings.$childId': newSettings,
       });
 
+      // ✅ FIX: Sincronizar moderationEnabled al chat para que Firestore rules bloqueen escritura directa
+      // El chatId tiene el mismo formato que contactId (user1_user2 ordenado alfabéticamente)
+      final chatRef = _firestore.collection('chats').doc(contactDocId);
+      final chatDoc = await chatRef.get();
+
+      if (chatDoc.exists) {
+        // Si habilitamos moderación → activar en chat
+        // Si deshabilitamos → verificar si hay otras moderaciones activas antes de desactivar
+        if (shouldEnable) {
+          await chatRef.update({
+            'moderationEnabled': true,
+            'moderationUpdatedAt': FieldValue.serverTimestamp(),
+          });
+          ReleaseLogger.log(
+            'Chat $contactDocId: moderationEnabled=true (sincronizado)',
+            tag: 'UpdateContactModeration',
+          );
+        } else {
+          // Verificar si el otro usuario tiene moderación activa
+          final contactData = (await contactRef.get()).data();
+          final moderationSettings = contactData?['moderationSettings'] as Map<String, dynamic>? ?? {};
+
+          // Buscar si algún usuario tiene moderación activa
+          bool anyModerationActive = false;
+          for (final entry in moderationSettings.entries) {
+            final settings = entry.value as Map<String, dynamic>?;
+            if (settings?['enabled'] == true) {
+              anyModerationActive = true;
+              break;
+            }
+          }
+
+          if (!anyModerationActive) {
+            await chatRef.update({
+              'moderationEnabled': false,
+              'moderationUpdatedAt': FieldValue.serverTimestamp(),
+            });
+            ReleaseLogger.log(
+              'Chat $contactDocId: moderationEnabled=false (ninguna moderación activa)',
+              tag: 'UpdateContactModeration',
+            );
+          }
+        }
+      }
+
       ReleaseLogger.log(
         'Moderación actualizada exitosamente para $childId',
         tag: 'UpdateContactModeration',

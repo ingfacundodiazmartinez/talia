@@ -609,18 +609,17 @@ class ChatMessagingService {
                   contactDoc.data()['moderationSettings'] as Map<String, dynamic>?;
 
               if (moderationSettings != null) {
-                // ✅ FIX: Buscar la configuración que el RECEPTOR (contactId) tiene activada
-                // Estructura: moderationSettings[receptorId] = {enabled: true, level: "high"}
-                // Cuando A activa moderación para B, se guarda en moderationSettings[A]
-                // Significa: "A quiere moderar los mensajes que RECIBE"
-                // Por lo tanto, cuando el sender (currentUserId) envía a contactId,
-                // debemos verificar si contactId tiene moderación activada
-                final receiverModerationSettings =
-                    moderationSettings[contactId] as Map<String, dynamic>?;
-                if (receiverModerationSettings != null && receiverModerationSettings['enabled'] == true) {
+                // ✅ FIX: Buscar la configuración del SENDER (currentUserId)
+                // Estructura: moderationSettings[senderId] = {enabled: true, level: "high"}
+                // Cuando un padre activa moderación para un hijo, se guarda en moderationSettings[childId]
+                // Por lo tanto, cuando el sender (currentUserId) envía mensajes,
+                // debemos verificar si el sender tiene moderación activada
+                final senderModerationSettings =
+                    moderationSettings[currentUserId] as Map<String, dynamic>?;
+                if (senderModerationSettings != null && senderModerationSettings['enabled'] == true) {
                   moderationEnabled = true;
                   ReleaseLogger.log(
-                    '🔒 Moderación activada: receptor ($contactId) modera mensajes de sender ($currentUserId)',
+                    '🔒 Moderación activada: sender ($currentUserId) tiene moderación habilitada',
                     tag: 'Moderation',
                   );
                 }
@@ -665,12 +664,23 @@ class ChatMessagingService {
     required String content,
   }) async {
     try {
-      // Reutilizar la lógica existente de _checkModeration
-      await _checkModeration(
-        chatId: chatId,
-        content: content,
-        type: 'text',
-      );
+      // ✅ FIX: Llamar a Cloud Function con checkOnly=true para verificar moderación real
+      // sin crear/actualizar mensajes en Firestore
+      final functions = FirebaseFunctions.instanceFor(region: 'us-central1');
+      final result = await functions.httpsCallable('checkMessageBeforeSending').call({
+        'chatId': chatId,
+        'text': content,
+        'type': 'text',
+        'checkOnly': true, // ✅ Solo verificar, no escribir en Firestore
+      }).timeout(const Duration(seconds: 20));
+
+      final approved = result.data['approved'] as bool;
+
+      if (!approved) {
+        final reason = result.data['reason'] as String? ?? 'Contenido inapropiado detectado';
+        ReleaseLogger.log('Moderation check blocked: $reason', tag: 'Moderation');
+        throw ModerationBlockedException(reason);
+      }
 
       ReleaseLogger.log('Moderation check passed for content', tag: 'Moderation');
     } on ModerationBlockedException {

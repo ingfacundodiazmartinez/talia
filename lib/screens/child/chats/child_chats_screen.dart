@@ -2,28 +2,27 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 import '../../../controllers/child_home_controller.dart';
 import '../../../controllers/child_chats_controller.dart';
 import '../../../widgets/stories_section.dart';
 import '../../../widgets/emergency_button.dart';
-import '../../../widgets/synced_user_widgets.dart';
 import '../../../groups/groups.dart'; // Groups V2
 import '../../../services/chat_service.dart';
-import '../../../services/chat_archive_service.dart';
-import '../../../services/chat_mute_service.dart';
-import '../../../services/chat_clear_service.dart';
-import '../../../services/message_cache_service.dart';
-import '../../../services/typing_indicator_service.dart';
+import '../../../services/chats/chat_services.dart';
 import '../../../services/message_status_helper.dart';
-import '../../../services/group_chat_service.dart';
 import '../../../services/local_unread_count_service.dart';
+import '../../../services/search_service.dart';
+import '../../../services/contact_alias_service.dart';
+import '../../../services/block_service.dart';
 import '../../../models/chat_message.dart';
-import '../../../widgets/message_status_indicator.dart';
+import '../../../models/chat_list_item_type.dart';
+import '../../../utils/chat_utils.dart';
 import '../../chat_detail_screen.dart';
 import '../../parent/chats/widgets/group_chat_list_item.dart';
+import '../../parent/chats/widgets/chat_list_item.dart';
+import '../../parent/chats/widgets/chat_search_bar.dart';
+import '../../parent/chats/widgets/search_result_widgets.dart';
 import '../../common/chats/chat_header_widget.dart';
-import '../../common/chats/chat_section_header_widget.dart';
 import '../../common/chats/chat_empty_state_widget.dart';
 import 'child_archived_chats_screen.dart';
 
@@ -52,10 +51,13 @@ class ChildChatsScreen extends StatefulWidget {
 class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepAliveClientMixin {
   late ChildChatsController _chatsController;
   final ChatService _chatService = ChatService();
-  final ChatArchiveService _archiveService = ChatArchiveService();
-  final ChatMuteService _muteService = ChatMuteService();
-  final ChatClearService _clearService = ChatClearService();
-  final MessageCacheService _cacheService = MessageCacheService();
+  final LeaveGroupService _leaveGroupService = LeaveGroupService();
+  final ContactAliasService _aliasService = ContactAliasService();
+  final BlockService _blockService = BlockService();
+  final ChatPreferencesCache _preferencesCache = ChatPreferencesCache();
+  // Búsqueda
+  final TextEditingController _searchController = TextEditingController();
+  final ValueNotifier<String> _searchQuery = ValueNotifier<String>('');
 
   @override
   bool get wantKeepAlive => true;
@@ -76,39 +78,11 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
     }
   }
 
-  Widget _buildSlideButton({
-    required IconData icon,
-    required String label,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: Colors.white, size: 24),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 11,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   @override
   void dispose() {
     LocalUnreadCountService().removeListener(_onUnreadCountsChanged);
+    _searchController.dispose();
+    _searchQuery.dispose();
     _chatsController.dispose();
     super.dispose();
   }
@@ -168,7 +142,10 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
               childId: widget.childId,
             ),
           ),
-        );
+        ).then((_) {
+          // Refrescar lista al volver de chats archivados
+          if (mounted) setState(() {});
+        });
       },
       onCreateGroupTap: () async {
         await Navigator.push(
@@ -250,76 +227,309 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
     );
   }
 
+  /// Busca en mensajes de todos los chats cuando hay un query activo
+  Future<SearchResults> _performMessageSearch({
+    required String query,
+    required List<QueryDocumentSnapshot> chatDocs,
+    required List<QueryDocumentSnapshot> groups,
+  }) async {
+    return await _chatsController.performMessageSearch(
+      query: query,
+      chatDocs: chatDocs,
+      groups: groups,
+    );
+  }
+
   // Método separado para construir el contenido con grupos
+  // ✅ UNIFICADO: Usa el mismo enfoque que parent_chats_screen
   Widget _buildChatListContent(List<QueryDocumentSnapshot> chatDocs, ColorScheme colorScheme) {
-    // Obtener grupos del niño
     return StreamBuilder<QuerySnapshot>(
       stream: _chatsController.getGroupsStream(),
       builder: (context, groupsSnapshot) {
         final allGroups = groupsSnapshot.data?.docs ?? [];
         final groups = _chatsController.filterArchivedGroups(allGroups);
 
-        if (chatDocs.isEmpty && groups.isEmpty) {
-          return _buildEmptyState(colorScheme);
-        }
+        // Construir lista de items usando controller (igual que parent)
+        final listItems = _chatsController.buildListItems(
+          chatDocs: chatDocs,
+          groups: groups,
+        );
 
-        return SlidableAutoCloseBehavior(
-          child: ListView(
-            padding: EdgeInsets.all(16),
-            children: [
-              StoriesHeader(),
-              StoriesSection(),
-              SizedBox(height: 16),
-              ..._buildChatItems(chatDocs, groups, colorScheme),
-            ],
-          ),
+        return Column(
+          children: [
+            // Historias (estáticas, fuera del ListView)
+            StoriesHeader(),
+            StoriesSection(),
+            SizedBox(height: 16),
+            // Buscador (estático, fuera del ListView)
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16),
+              child: ChatSearchBar(
+                controller: _searchController,
+                onChanged: (value) => _searchQuery.value = value,
+              ),
+            ),
+            // Lista de chats con pull-to-refresh
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: () async {
+                  await _chatsController.forceReconnect();
+                  await Future.delayed(Duration(milliseconds: 500));
+                },
+                child: ValueListenableBuilder<String>(
+                  valueListenable: _searchQuery,
+                  builder: (context, query, _) {
+                    // Si hay query activo, mostrar resultados de búsqueda
+                    if (query.trim().isNotEmpty) {
+                      return FutureBuilder<SearchResults>(
+                        future: _performMessageSearch(
+                          query: query,
+                          chatDocs: chatDocs,
+                          groups: groups,
+                        ),
+                        builder: (context, snapshot) {
+                          if (snapshot.connectionState == ConnectionState.waiting &&
+                              !snapshot.hasData) {
+                            return Center(child: CircularProgressIndicator());
+                          }
+
+                          if (snapshot.hasError) {
+                            return Center(
+                              child: Text('Error en la búsqueda: ${snapshot.error}'),
+                            );
+                          }
+
+                          final results = snapshot.data;
+                          if (results == null || results.isEmpty) {
+                            return SearchEmptyState(query: query);
+                          }
+
+                          return ListView.builder(
+                            padding: EdgeInsets.all(16),
+                            itemCount: results.chatResults.length +
+                                results.messageResults.length +
+                                2,
+                            itemBuilder: (context, index) {
+                              if (index == 0 && results.chatResults.isNotEmpty) {
+                                return SearchResultsHeader(
+                                  title: 'CHATS',
+                                  count: results.chatResults.length,
+                                );
+                              }
+
+                              if (index > 0 && index <= results.chatResults.length) {
+                                final chatResult = results.chatResults[index - 1];
+                                return ChatSearchResultCard(
+                                  result: chatResult,
+                                  onTap: () => _navigateToChat(chatResult),
+                                );
+                              }
+
+                              if (index == results.chatResults.length + 1 &&
+                                  results.messageResults.isNotEmpty) {
+                                return SearchResultsHeader(
+                                  title: 'MENSAJES',
+                                  count: results.messageResults.length,
+                                );
+                              }
+
+                              final messageIndex = index - results.chatResults.length - 2;
+                              if (messageIndex >= 0 &&
+                                  messageIndex < results.messageResults.length) {
+                                final messageResult = results.messageResults[messageIndex];
+                                return MessageSearchResultCard(
+                                  result: messageResult,
+                                  onTap: () => _navigateToMessage(messageResult),
+                                );
+                              }
+
+                              return SizedBox.shrink();
+                            },
+                          );
+                        },
+                      );
+                    }
+
+                    // Si no hay query, mostrar lista normal
+                    if (listItems.isEmpty) {
+                      return _buildEmptyState(colorScheme);
+                    }
+
+                    return SlidableAutoCloseBehavior(
+                      child: ListView.builder(
+                        padding: EdgeInsets.all(16),
+                        itemCount: listItems.length,
+                        itemBuilder: (context, index) {
+                          final item = listItems[index];
+                          return _buildItemWidget(item, chatDocs);
+                        },
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ],
         );
       },
     );
   }
 
-  List<Widget> _buildChatItems(
+  /// Construye el widget correspondiente a cada tipo de item (igual que parent)
+  Widget _buildItemWidget(
+    ChatListItemType item,
     List<QueryDocumentSnapshot> chatDocs,
-    List<QueryDocumentSnapshot> groups,
-    ColorScheme colorScheme,
   ) {
-    final widgets = <Widget>[];
+    switch (item) {
+      case ChatItem(:final userId, :final chatDoc):
+        return StreamBuilder<DocumentSnapshot>(
+          key: ValueKey('user_stream_$userId'),
+          stream: _chatsController.getUserDataStream(userId),
+          builder: (context, userSnapshot) {
+            if (!userSnapshot.hasData || userSnapshot.data == null) {
+              return SizedBox.shrink();
+            }
 
-    // Build groups section
-    if (groups.isNotEmpty) {
-      widgets.add(ChatSectionHeaderWidget(
-        title: 'Grupos',
-        icon: Icons.group,
-        iconColor: colorScheme.primary,
-        iconBackgroundColor: colorScheme.primaryContainer,
-        padding: EdgeInsets.only(bottom: 12, left: 4, top: 8),
-      ));
-      for (final groupDoc in groups) {
-        widgets.add(_buildGroupItem(groupDoc, colorScheme));
-      }
-      widgets.add(SizedBox(height: 8));
+            final fetchedUserData = userSnapshot.data!.data() as Map<String, dynamic>?;
+            if (fetchedUserData == null) return SizedBox.shrink();
+
+            final userName = fetchedUserData['name'] ?? 'Usuario';
+
+            return StreamBuilder<String>(
+              key: ValueKey('alias_$userId'),
+              stream: _aliasService.watchDisplayName(userId, userName),
+              initialData: userName,
+              builder: (context, aliasSnapshot) {
+                final displayName = aliasSnapshot.data ?? userName;
+                return _buildChatItemWidget(
+                  childId: userId,
+                  childData: fetchedUserData,
+                  chatDoc: chatDoc,
+                  displayName: displayName,
+                );
+              },
+            );
+          },
+        );
+
+      case GroupItem(:final groupId, :final groupData):
+        return _buildGroupItemWidget(groupId, groupData);
+
+      default:
+        return SizedBox.shrink();
     }
-
-    // Build other chats section
-    if (chatDocs.isNotEmpty) {
-      widgets.add(ChatSectionHeaderWidget(
-        title: 'Contactos',
-        icon: Icons.people,
-        iconColor: colorScheme.primary,
-        iconBackgroundColor: colorScheme.primaryContainer,
-        padding: EdgeInsets.only(bottom: 12, left: 4),
-      ));
-      for (final chatDoc in chatDocs) {
-        widgets.add(_buildSingleChatItem(chatDoc, false, colorScheme));
-      }
-    }
-
-    return widgets;
   }
 
-  Widget _buildGroupItem(QueryDocumentSnapshot groupDoc, ColorScheme colorScheme) {
-    final groupId = groupDoc.id;
-    final groupData = groupDoc.data() as Map<String, dynamic>;
+  Widget _buildChatItemWidget({
+    required String childId,
+    required Map<String, dynamic> childData,
+    QueryDocumentSnapshot? chatDoc,
+    required String displayName,
+  }) {
+    final photoURL = childData['photoURL'];
+
+    return StreamBuilder<bool>(
+      key: ValueKey('blocked_$childId'),
+      stream: _blockService.isBlockedStream(childId),
+      initialData: false,
+      builder: (context, blockedSnapshot) {
+        final isBlocked = blockedSnapshot.data ?? false;
+
+        if (chatDoc != null) {
+          final chatData = chatDoc.data() as Map<String, dynamic>;
+          final unreadCount = LocalUnreadCountService().getUnreadCount(chatDoc.id);
+
+          return StreamBuilder<QuerySnapshot>(
+            key: ValueKey('last_msg_${chatDoc.id}'),
+            stream: _chatsController.getChatLastMessageStream(chatDoc.id),
+            builder: (context, messageSnapshot) {
+              String? lastMessageSenderId;
+              MessageStatus? lastMessageStatus;
+              ModerationStatus? lastMessageModerationStatus;
+
+              if (messageSnapshot.hasData &&
+                  messageSnapshot.data != null &&
+                  messageSnapshot.data!.docs.isNotEmpty) {
+                final lastMessageDoc = messageSnapshot.data!.docs.first;
+                final lastMessageData = lastMessageDoc.data() as Map<String, dynamic>;
+
+                final senderId = lastMessageData['senderId'] as String? ?? '';
+                lastMessageSenderId = senderId;
+
+                lastMessageStatus = MessageStatusHelper.calculateStatus(
+                  data: lastMessageData,
+                  senderId: senderId,
+                  hasServerTimestamp: lastMessageData['timestamp'] != null,
+                );
+
+                final modStatusString = lastMessageData['moderationStatus'] as String?;
+                if (modStatusString != null) {
+                  switch (modStatusString) {
+                    case 'approved':
+                      lastMessageModerationStatus = ModerationStatus.approved;
+                      break;
+                    case 'blocked':
+                      lastMessageModerationStatus = ModerationStatus.blocked;
+                      break;
+                    case 'pending':
+                      lastMessageModerationStatus = ModerationStatus.pending;
+                      break;
+                  }
+                }
+              }
+
+              // Verificar si el chat fue limpiado usando Hive cache
+              final clearedAt = _preferencesCache.getClearedAt(chatDoc.id);
+              final lastMessageTime = chatData['lastMessageTime'] as Timestamp?;
+              final isChatCleared = clearedAt != null &&
+                  (lastMessageTime == null || !clearedAt.isBefore(lastMessageTime.toDate()));
+
+              return ChatListItem(
+                chatId: chatDoc.id,
+                userId: childId,
+                name: displayName,
+                lastMessage: isBlocked
+                    ? '🔒 Contacto bloqueado'
+                    : (isChatCleared
+                        ? 'Inicia una conversación...'
+                        : (chatData['lastMessage'] ?? '')),
+                time: isChatCleared ? '' : ChatUtils.formatChatTime(chatData['lastMessageTime']),
+                unreadCount: isBlocked ? 0 : unreadCount,
+                photoURL: photoURL,
+                isEmpty: isChatCleared,
+                isBlocked: isBlocked,
+                lastMessageSenderId: isChatCleared ? null : lastMessageSenderId,
+                lastMessageStatus: isChatCleared ? null : lastMessageStatus,
+                lastMessageModerationStatus: isChatCleared ? null : lastMessageModerationStatus,
+                onArchived: () => setState(() {}),
+                onMuted: () => setState(() {}),
+                onCleared: () => setState(() {}),
+              );
+            },
+          );
+        } else {
+          return ChatListItem(
+            chatId: ChatUtils.getChatId(widget.childId, childId),
+            userId: childId,
+            name: displayName,
+            lastMessage: isBlocked
+                ? '🔒 Contacto bloqueado'
+                : 'Toca para iniciar conversación',
+            time: '',
+            unreadCount: 0,
+            photoURL: photoURL,
+            isEmpty: true,
+            isBlocked: isBlocked,
+            onArchived: () => setState(() {}),
+            onMuted: () => setState(() {}),
+            onCleared: () => setState(() {}),
+          );
+        }
+      },
+    );
+  }
+
+  Widget _buildGroupItemWidget(String groupId, Map<String, dynamic> groupData) {
     final groupName = groupData['name'] ?? 'Grupo';
     final groupMembers = (groupData['members'] as List?)?.cast<String>() ?? <String>[];
     // ✅ Leer contador de mensajes no leídos desde cache local
@@ -409,6 +619,9 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
         // Prioridad: groupData['lastMessage'] > lastMessageFromStream > 'Inicia la conversación'
         final lastMessage = groupData['lastMessage'] ?? lastMessageFromStream ?? 'Inicia la conversación';
 
+        // Formatear tiempo del último mensaje
+        final timeString = _chatsController.formatTime(groupData['lastMessageTime']);
+
         return GroupChatListItem(
           groupId: groupId,
           groupName: groupName,
@@ -421,6 +634,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
           lastMessageSenderId: lastMessageSenderId,
           lastMessageStatus: lastMessageStatus,
           lastMessageModerationStatus: lastMessageModerationStatus,
+          timeString: timeString,
         );
       },
     );
@@ -467,23 +681,19 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
       builder: (dialogContext) => const Center(child: CircularProgressIndicator()),
     );
 
-    String? errorMessage;
-    try {
-      await GroupChatService().leaveGroup(groupId, widget.childId);
-    } catch (e) {
-      errorMessage = e.toString();
-    } finally {
-      // ✅ SIEMPRE cerrar el spinner, sin importar el resultado
-      if (navigator.canPop()) {
-        navigator.pop();
-      }
+    // ✅ Usar nuevo servicio atómico
+    final result = await _leaveGroupService.call(groupId: groupId);
+
+    // ✅ SIEMPRE cerrar el spinner, sin importar el resultado
+    if (navigator.canPop()) {
+      navigator.pop();
     }
 
     // Mostrar mensaje después de cerrar el spinner
-    if (errorMessage != null) {
+    if (!result.success) {
       scaffoldMessenger.showSnackBar(
         SnackBar(
-          content: Text('Error al salir del grupo: $errorMessage'),
+          content: Text('Error al salir del grupo: ${result.message}'),
           backgroundColor: Colors.red,
           duration: Duration(seconds: 4),
         ),
@@ -498,134 +708,81 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
     }
   }
 
-  Widget _buildSingleChatItem(
-    QueryDocumentSnapshot chatDoc,
-    bool isParent,
-    ColorScheme colorScheme,
-  ) {
-    final chatId = chatDoc.id;
-    final chatData = chatDoc.data() as Map<String, dynamic>;
-    final participants = List<String>.from(chatData['participants'] ?? []);
-    final otherUserId = participants.firstWhere(
-      (id) => id != widget.childId,
-      orElse: () => '',
-    );
+  /// Navega al chat desde un resultado de búsqueda
+  void _navigateToChat(ChatSearchResult result) {
+    // Limpiar el buscador
+    _searchController.clear();
+    _searchQuery.value = '';
 
-    if (otherUserId.isEmpty) return SizedBox.shrink();
+    // Navegar según el tipo de chat
+    if (result.chatType == ChatType.group) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => GroupChatScreenV2(
+            groupId: result.chatId,
+            groupName: result.chatName,
+          ),
+        ),
+      );
+    } else {
+      // Para chats directos
+      _navigateToDirectChat(result.chatId, result.chatName);
+    }
+  }
 
-    // ✅ FIX #5: Agregar key única para evitar reutilización incorrecta de estado
-    // cuando Flutter reconstruye la lista (race condition que causaba
-    // nombre/foto incorrectos al entrar a un chat)
-    return StreamBuilder<DocumentSnapshot>(
-      key: ValueKey('chat_stream_$chatId'),
-      stream: _chatsController.getChatDataStream(chatId),
-      initialData: chatDoc,
-      builder: (context, chatSnapshot) {
-        final currentChatData = chatSnapshot.hasData
-            ? (chatSnapshot.data!.data() as Map<String, dynamic>?) ?? chatData
-            : chatData;
+  /// Navega al chat y al mensaje específico desde un resultado de búsqueda
+  void _navigateToMessage(MessageSearchResult result) {
+    // Limpiar el buscador
+    _searchController.clear();
+    _searchQuery.value = '';
 
-        // ✅ Leer contador de mensajes no leídos desde cache local
-        final unreadCount = LocalUnreadCountService().getUnreadCount(chatId);
-        final clearedAt = currentChatData['clearedAt_${widget.childId}'] as Timestamp?;
-        final lastMessageTime = currentChatData['lastMessageTime'] as Timestamp?;
-        final isChatCleared = clearedAt != null &&
-            (lastMessageTime == null || clearedAt.compareTo(lastMessageTime) >= 0);
-        final lastMessage = isChatCleared
-            ? 'Inicia una conversación...'
-            : (currentChatData['lastMessage'] ?? '');
-        final timeString = isChatCleared ? '' : _chatsController.formatTime(currentChatData['lastMessageTime']);
+    // Navegar según el tipo de chat, pasando el messageId para hacer scroll
+    if (result.chatType == ChatType.group) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => GroupChatScreenV2(
+            groupId: result.chatId,
+            groupName: result.chatName,
+            scrollToMessageId: result.message.id,
+          ),
+        ),
+      );
+    } else {
+      // Para chats directos
+      _navigateToDirectChat(result.chatId, result.chatName, result.message.id);
+    }
+  }
 
-        // ✅ FIX #5: Key única para datos de usuario
-        return FutureBuilder<Map<String, dynamic>?>(
-          key: ValueKey('user_data_$otherUserId'),
-          future: _chatsController.getUserData(otherUserId),
-          builder: (context, userSnapshot) {
-            if (!userSnapshot.hasData) {
-              return _buildChatItem(
-                chatId: chatId,
-                userId: otherUserId,
-                name: '...',
-                lastMessage: lastMessage,
-                time: timeString,
-                unreadCount: unreadCount is int ? unreadCount : 0,
-                isOnline: false,
-                isParent: isParent,
-                isEmpty: isChatCleared,
-                isBlocked: false,
-                colorScheme: colorScheme,
-              );
-            }
+  /// Helper para navegar a chat directo obteniendo el contactId
+  Future<void> _navigateToDirectChat(
+    String chatId,
+    String contactName, [
+    String? scrollToMessageId,
+  ]) async {
+    try {
+      final chatData = await _chatsController.getChatDataForNavigation(chatId);
+      if (chatData == null) return;
 
-            final userData = userSnapshot.data;
-            if (userData == null) return SizedBox.shrink();
+      final contactId = chatData['contactId'];
+      if (contactId == null) return;
 
-            final realName = userData['name'] ?? 'Usuario';
-            final isOnline = userData['isOnline'] ?? false;
-            final photoURL = userData['photoURL'] as String?;
-
-            // ✅ FIX #5: Key única para el último mensaje
-            return StreamBuilder<QuerySnapshot>(
-              key: ValueKey('last_msg_$chatId'),
-              stream: _chatsController.getChatLastMessageStream(chatId),
-              builder: (context, messageSnapshot) {
-                String? lastMessageSenderId;
-                MessageStatus? lastMessageStatus;
-                ModerationStatus? lastMessageModerationStatus;
-
-                if (messageSnapshot.hasData && messageSnapshot.data!.docs.isNotEmpty) {
-                  final lastMessageDoc = messageSnapshot.data!.docs.first;
-                  final lastMessageData = lastMessageDoc.data() as Map<String, dynamic>;
-
-                  final senderId = lastMessageData['senderId'] as String? ?? '';
-                  lastMessageSenderId = senderId;
-
-                  // Usar calculateStatus para chats 1:1
-                  lastMessageStatus = MessageStatusHelper.calculateStatus(
-                    data: lastMessageData,
-                    senderId: senderId,
-                    hasServerTimestamp: lastMessageData['timestamp'] != null,
-                  );
-
-                  final modStatusString = lastMessageData['moderationStatus'] as String?;
-                  if (modStatusString != null) {
-                    switch (modStatusString) {
-                      case 'approved':
-                        lastMessageModerationStatus = ModerationStatus.approved;
-                        break;
-                      case 'blocked':
-                        lastMessageModerationStatus = ModerationStatus.blocked;
-                        break;
-                      case 'pending':
-                        lastMessageModerationStatus = ModerationStatus.pending;
-                        break;
-                    }
-                  }
-                }
-
-                return _buildChatItem(
-                  chatId: chatId,
-                  userId: otherUserId,
-                  name: realName,
-                  lastMessage: lastMessage,
-                  time: timeString,
-                  unreadCount: unreadCount is int ? unreadCount : 0,
-                  isOnline: isOnline,
-                  photoURL: photoURL,
-                  isParent: isParent,
-                  isEmpty: isChatCleared,
-                  isBlocked: false,
-                  colorScheme: colorScheme,
-                  lastMessageSenderId: isChatCleared ? null : lastMessageSenderId,
-                  lastMessageStatus: isChatCleared ? null : lastMessageStatus,
-                  lastMessageModerationStatus: isChatCleared ? null : lastMessageModerationStatus,
-                );
-              },
-            );
-          },
+      if (mounted) {
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => ChatDetailScreen(
+              chatId: chatId,
+              contactId: contactId,
+              contactName: contactName,
+              scrollToMessageId: scrollToMessageId,
+            ),
+          ),
         );
-      },
-    );
+        // ✅ FIX: Forzar refresh cuando vuelve del chat
+        if (mounted) setState(() {});
+      }
+    } catch (e) {
+      // Error silencioso
+    }
   }
 
   Widget _buildEmptyState(ColorScheme colorScheme) {
@@ -635,8 +792,6 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
         return ListView(
           padding: EdgeInsets.all(16),
           children: [
-            StoriesHeader(),
-            StoriesSection(),
             SizedBox(height: 24),
             if (parentSnapshot.hasData && parentSnapshot.data != null)
               FutureBuilder<Map<String, dynamic>?>(
@@ -653,30 +808,18 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
                       builder: (context, aliasSnapshot) {
                         final displayName = aliasSnapshot.data ?? realName;
 
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            ChatSectionHeaderWidget(
-                              title: 'Familia',
-                              icon: Icons.shield,
-                              iconColor: Colors.green,
-                              iconBackgroundColor: Colors.green.withValues(alpha: 0.1),
-                              padding: EdgeInsets.only(bottom: 12, left: 4),
-                            ),
-                            _buildChatItem(
-                              chatId: _chatsController.getChatId(widget.childId, parentId),
-                              userId: parentId,
-                              name: displayName,
-                              lastMessage: 'Inicia una conversación',
-                              time: '',
-                              unreadCount: 0,
-                              isOnline: parentData['isOnline'] ?? false,
-                              photoURL: parentData['photoURL'],
-                              isParent: true,
-                              isEmpty: true,
-                              colorScheme: colorScheme,
-                            ),
-                          ],
+                        return ChatListItem(
+                          chatId: _chatsController.getChatId(widget.childId, parentId),
+                          userId: parentId,
+                          name: displayName,
+                          lastMessage: 'Inicia una conversación',
+                          time: '',
+                          unreadCount: 0,
+                          photoURL: parentData['photoURL'],
+                          isEmpty: true,
+                          onArchived: () => setState(() {}),
+                          onMuted: () => setState(() {}),
+                          onCleared: () => setState(() {}),
                         );
                       },
                     );
@@ -687,393 +830,6 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
             if (parentSnapshot.data == null)
               ChatEmptyStateWidget(),
           ],
-        );
-      },
-    );
-  }
-
-  Widget _buildChatItem({
-    required String chatId,
-    required String userId,
-    required String name,
-    required String lastMessage,
-    required String time,
-    required int unreadCount,
-    required bool isOnline,
-    String? photoURL,
-    bool isParent = false,
-    bool isEmpty = false,
-    bool isRevoked = false,
-    bool isBlocked = false,
-    required ColorScheme colorScheme,
-    String? lastMessageSenderId,
-    MessageStatus? lastMessageStatus,
-    ModerationStatus? lastMessageModerationStatus,
-  }) {
-    final currentUserId = FirebaseAuth.instance.currentUser?.uid ?? '';
-
-    return StreamBuilder<bool>(
-      stream: _muteService.watchChatMuted(
-        chatId: chatId,
-        userId: currentUserId,
-      ),
-      initialData: false,
-      builder: (context, muteSnapshot) {
-        final isMuted = muteSnapshot.data ?? false;
-
-        final colorScheme = Theme.of(context).colorScheme;
-
-        return Padding(
-          padding: EdgeInsets.only(bottom: 8),
-          child: ClipRect(
-            child: Container(
-              color: colorScheme.primary,
-              child: Slidable(
-            key: Key('chat_$chatId'),
-            closeOnScroll: false,
-            endActionPane: ActionPane(
-            motion: const BehindMotion(),
-            extentRatio: 0.5,
-            openThreshold: 0.1,
-            closeThreshold: 0.1,
-            children: [
-              Expanded(
-                child: Container(
-                  color: colorScheme.primary,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      _buildSlideButton(
-                        icon: Icons.archive_outlined,
-                        label: 'Archivar',
-                        onTap: () async {
-                          final success = await _archiveService.archiveChat(
-                            chatId: chatId,
-                            userId: currentUserId,
-                          );
-
-                          if (mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  success ? 'Chat archivado' : 'Error al archivar chat',
-                                ),
-                                backgroundColor: success ? Colors.green : Colors.red,
-                              ),
-                            );
-                          }
-                        },
-                      ),
-                      _buildSlideButton(
-                        icon: isMuted ? Icons.notifications_active_outlined : Icons.notifications_off_outlined,
-                        label: isMuted ? 'Activar' : 'Silenciar',
-                        onTap: () async {
-                          final success = isMuted
-                              ? await _muteService.unmuteChat(chatId: chatId, userId: currentUserId)
-                              : await _muteService.muteChat(chatId: chatId, userId: currentUserId);
-
-                          if (mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  success
-                                      ? (isMuted ? 'Chat desilenciado' : 'Chat silenciado')
-                                      : 'Error al ${isMuted ? 'desilenciar' : 'silenciar'} chat',
-                                ),
-                                backgroundColor: success ? Colors.green : Colors.red,
-                              ),
-                            );
-                          }
-                        },
-                      ),
-                      _buildSlideButton(
-                        icon: Icons.delete_outline_rounded,
-                        label: 'Limpiar',
-                        onTap: () async {
-                          final confirmed = await showDialog<bool>(
-                            context: context,
-                            builder: (dialogContext) => AlertDialog(
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              title: Row(
-                                children: [
-                                  Icon(Icons.delete_sweep_rounded, color: Color(0xFFE53935)),
-                                  SizedBox(width: 8),
-                                  Text('¿Limpiar chat?'),
-                                ],
-                              ),
-                              content: Text(
-                                '¿Estás seguro de que quieres eliminar todo el historial de mensajes de este chat?\n\n'
-                                'Esta acción no se puede deshacer.',
-                              ),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.pop(dialogContext, false),
-                                  child: Text('Cancelar'),
-                                ),
-                                ElevatedButton(
-                                  onPressed: () => Navigator.pop(dialogContext, true),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Color(0xFFE53935),
-                                    foregroundColor: Colors.white,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                  ),
-                                  child: Text('Limpiar'),
-                                ),
-                              ],
-                            ),
-                          );
-
-                          if (confirmed == true) {
-                            final success = await _clearService.clearChat(
-                              chatId: chatId,
-                              userId: currentUserId,
-                            );
-
-                            if (success) {
-                              await _cacheService.clearChat(chatId);
-                            }
-
-                            if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    success ? 'Chat limpiado' : 'Error al limpiar chat',
-                                  ),
-                                  backgroundColor: success ? Colors.green : Colors.red,
-                                ),
-                              );
-                            }
-                          }
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-          child: GestureDetector(
-            onTap: isRevoked ? null : () async {
-              await Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (context) => ChatDetailScreen(
-                    contactId: userId,
-                    contactName: name,
-                    chatId: chatId,
-                  ),
-                ),
-              );
-              // ✅ FIX: Forzar refresh cuando vuelve del chat para actualizar lastMessageTime
-              if (mounted) setState(() {});
-            },
-            child: Opacity(
-              opacity: (isRevoked || isBlocked) ? 0.5 : 1.0,
-              child: Container(
-                padding: EdgeInsets.all(12),
-                color: (isRevoked || isBlocked)
-                    ? colorScheme.surfaceContainerHighest.withValues(alpha: 0.5)
-                    : colorScheme.surface,
-                child: Row(
-                  children: [
-                    Stack(
-                      children: [
-                        CircleAvatar(
-                          radius: 25,
-                          backgroundColor: colorScheme.primaryContainer,
-                          child: photoURL != null && photoURL.isNotEmpty
-                              ? ClipOval(
-                                  child: CachedNetworkImage(
-                                    imageUrl: photoURL,
-                                    width: 50,
-                                    height: 50,
-                                    fit: BoxFit.cover,
-                                    placeholder: (context, url) => Text(
-                                      name.isNotEmpty ? name[0].toUpperCase() : 'U',
-                                      style: TextStyle(color: colorScheme.primary, fontWeight: FontWeight.bold),
-                                    ),
-                                    errorWidget: (context, url, error) => Text(
-                                      name.isNotEmpty ? name[0].toUpperCase() : 'U',
-                                      style: TextStyle(color: colorScheme.primary, fontWeight: FontWeight.bold),
-                                    ),
-                                  ),
-                                )
-                              : Text(
-                                  name.isNotEmpty ? name[0].toUpperCase() : 'U',
-                                  style: TextStyle(color: colorScheme.primary, fontWeight: FontWeight.bold),
-                                ),
-                        ),
-                        if (isBlocked)
-                          Positioned(
-                            right: 0,
-                            bottom: 0,
-                            child: Container(
-                              width: 18,
-                              height: 18,
-                              decoration: BoxDecoration(
-                                color: Colors.red,
-                                shape: BoxShape.circle,
-                                border: Border.all(color: colorScheme.surface, width: 2),
-                              ),
-                              child: Icon(Icons.block, color: Colors.white, size: 10),
-                            ),
-                          )
-                        else if (isOnline)
-                          Positioned(
-                            right: 0,
-                            bottom: 0,
-                            child: Container(
-                              width: 14,
-                              height: 14,
-                              decoration: BoxDecoration(
-                                color: Colors.green,
-                                shape: BoxShape.circle,
-                                border: Border.all(color: colorScheme.surface, width: 2),
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                    SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: SyncedUserName(
-                                  userId: userId,
-                                  fallbackName: name,
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 15,
-                                    color: colorScheme.onSurface,
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              if (isMuted)
-                                Padding(
-                                  padding: EdgeInsets.only(right: 4),
-                                  child: Icon(
-                                    Icons.notifications_off,
-                                    size: 14,
-                                    color: colorScheme.onSurfaceVariant,
-                                  ),
-                                ),
-                              if (time.isNotEmpty)
-                                Text(
-                                  time,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: colorScheme.onSurfaceVariant,
-                                  ),
-                                ),
-                            ],
-                          ),
-                          SizedBox(height: 4),
-                          StreamBuilder<bool>(
-                            stream: TypingIndicatorService().watchOtherUserTyping(
-                              chatId,
-                              userId,
-                            ),
-                            builder: (context, typingSnapshot) {
-                              final isTyping = typingSnapshot.data ?? false;
-
-                              if (isTyping && !isBlocked && !isRevoked) {
-                                return Row(
-                                  children: [
-                                    SizedBox(
-                                      width: 12,
-                                      height: 12,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 1.5,
-                                        valueColor: AlwaysStoppedAnimation<Color>(
-                                          colorScheme.primary,
-                                        ),
-                                      ),
-                                    ),
-                                    SizedBox(width: 6),
-                                    Text(
-                                      'Escribiendo...',
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        color: colorScheme.primary,
-                                        fontStyle: FontStyle.italic,
-                                      ),
-                                    ),
-                                  ],
-                                );
-                              }
-
-                              return Row(
-                                children: [
-                                  // Status indicator (only for own messages)
-                                  if (lastMessageSenderId == currentUserId &&
-                                      lastMessageStatus != null &&
-                                      !isBlocked &&
-                                      !isRevoked) ...[
-                                    MessageStatusIndicator(
-                                      status: lastMessageStatus,
-                                      moderationStatus: lastMessageModerationStatus,
-                                      size: 12,
-                                    ),
-                                    const SizedBox(width: 4),
-                                  ],
-                                  Expanded(
-                                    child: Text(
-                                      isBlocked
-                                          ? '🔒 Contacto bloqueado'
-                                          : (isRevoked
-                                              ? '🔒 Contacto no habilitado por tus padres'
-                                              : lastMessage),
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        color: (isRevoked || isBlocked)
-                                            ? colorScheme.error.withValues(alpha: 0.7)
-                                            : (isEmpty
-                                                ? colorScheme.onSurfaceVariant.withValues(alpha: 0.7)
-                                                : colorScheme.onSurfaceVariant),
-                                        fontStyle: (isEmpty || isRevoked || isBlocked) ? FontStyle.italic : FontStyle.normal,
-                                      ),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                  if (unreadCount > 0 && !isRevoked && !isBlocked)
-                                    Container(
-                                      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                      decoration: BoxDecoration(
-                                        color: colorScheme.primary,
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                      child: Text(
-                                        unreadCount.toString(),
-                                        style: TextStyle(
-                                          color: colorScheme.onPrimary,
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ),
-                                ],
-                              );
-                            },
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          ),
-          ),
-        ),
         );
       },
     );

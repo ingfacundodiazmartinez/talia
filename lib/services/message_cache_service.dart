@@ -197,7 +197,9 @@ class MessageCacheService {
           if (seenIds.contains(msgId)) continue;
 
           // Skip si es mensaje optimista que ya tiene versión confirmada
-          if (seenLocalIds.contains(msgId)) continue;
+          // PERO no si el mensaje ES la versión confirmada (su propio localId == id)
+          final msgLocalId = data['localId'] as String?;
+          if (seenLocalIds.contains(msgId) && msgId != msgLocalId) continue;
 
           final msg = _messageFromCacheData(data);
           messages.add(msg);

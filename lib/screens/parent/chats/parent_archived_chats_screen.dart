@@ -3,11 +3,13 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../../../controllers/parent_archived_chats_controller.dart';
+import '../../../models/chat.dart';
 import '../../../utils/chat_utils.dart';
 import '../../chat_detail_screen.dart';
 import '../../../theme_service.dart';
 
 /// Pantalla de chats archivados para padres
+/// ✅ CORREGIDO: Usa List<Chat> desde Hive en vez de QuerySnapshot de Firestore
 class ParentArchivedChatsScreen extends StatefulWidget {
   const ParentArchivedChatsScreen({super.key});
 
@@ -43,6 +45,9 @@ class _ParentArchivedChatsScreenState extends State<ParentArchivedChatsScreen> {
           backgroundColor: success ? Colors.green : Colors.red,
         ),
       );
+      if (success) {
+        setState(() {}); // Refrescar lista
+      }
     }
   }
 
@@ -85,7 +90,7 @@ class _ParentArchivedChatsScreenState extends State<ParentArchivedChatsScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Chats Archivados 📦',
+                            'Chats Archivados',
                             style: TextStyle(
                               fontSize: 24,
                               fontWeight: FontWeight.bold,
@@ -115,8 +120,8 @@ class _ParentArchivedChatsScreenState extends State<ParentArchivedChatsScreen> {
                       topRight: Radius.circular(30),
                     ),
                   ),
-                  child: StreamBuilder<QuerySnapshot>(
-                    stream: _controller.getArchivedChatsStream(),
+                  child: StreamBuilder<List<Chat>>(
+                    stream: _controller.archivedChatsStream,
                     builder: (context, snapshot) {
                       if (snapshot.connectionState == ConnectionState.waiting) {
                         return Center(child: CircularProgressIndicator());
@@ -142,8 +147,7 @@ class _ParentArchivedChatsScreenState extends State<ParentArchivedChatsScreen> {
                         );
                       }
 
-                      final archivedChatsDocs = snapshot.data?.docs ?? [];
-                      final archivedChats = _controller.sortChatsByLastActivity(archivedChatsDocs);
+                      final archivedChats = snapshot.data ?? [];
 
                       if (archivedChats.isEmpty) {
                         return Center(
@@ -165,7 +169,7 @@ class _ParentArchivedChatsScreenState extends State<ParentArchivedChatsScreen> {
                               ),
                               SizedBox(height: 8),
                               Text(
-                                'Mantén presionado un chat para archivarlo',
+                                'Desliza un chat hacia la izquierda para archivarlo',
                                 style: TextStyle(
                                   fontSize: 14,
                                   color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -181,12 +185,8 @@ class _ParentArchivedChatsScreenState extends State<ParentArchivedChatsScreen> {
                         padding: EdgeInsets.all(16),
                         itemCount: archivedChats.length,
                         itemBuilder: (context, index) {
-                          final chatDoc = archivedChats[index];
-                          final chatData = chatDoc.data() as Map<String, dynamic>;
-                          final participants = List<String>.from(
-                            chatData['participants'] ?? [],
-                          );
-                          final otherUserId = _controller.getOtherParticipant(participants);
+                          final chat = archivedChats[index];
+                          final otherUserId = _controller.getOtherParticipant(chat.participants);
 
                           if (otherUserId.isEmpty) return SizedBox.shrink();
 
@@ -212,23 +212,23 @@ class _ParentArchivedChatsScreenState extends State<ParentArchivedChatsScreen> {
                                     initialData: false,
                                     builder: (context, blockedSnapshot) {
                                       final isBlocked = blockedSnapshot.data ?? false;
-
-                                      // Verificar si el chat fue limpiado y no hay mensajes nuevos
-                                      final isChatCleared = _controller.isChatCleared(chatData);
+                                      final isChatCleared = _controller.isChatCleared(chat.id);
 
                                       return _buildArchivedChatItem(
-                                        chatId: chatDoc.id,
+                                        chatId: chat.id,
                                         userId: otherUserId,
                                         name: displayName,
                                         lastMessage: isBlocked
-                                            ? '🔒 Contacto bloqueado'
+                                            ? 'Contacto bloqueado'
                                             : (isChatCleared
                                                 ? 'Inicia una conversación...'
-                                                : (chatData['lastMessage'] ?? '')),
+                                                : (chat.lastMessage ?? '')),
                                         time: isChatCleared
                                             ? ''
                                             : ChatUtils.formatChatTime(
-                                                chatData['lastMessageTime'],
+                                                chat.lastMessageTime != null
+                                                    ? Timestamp.fromDate(chat.lastMessageTime!)
+                                                    : null,
                                               ),
                                         isOnline: formattedUserData['isOnline'],
                                         photoURL: formattedUserData['photoURL'],
@@ -283,8 +283,6 @@ class _ParentArchivedChatsScreenState extends State<ParentArchivedChatsScreen> {
       ),
       child: GestureDetector(
         onTap: () {
-          // MaterialPageRoute evita parpadeo Y habilita swipe-to-go-back en iOS
-          // El bottom nav se oculta automáticamente por el NavigatorObserver del shell
           Navigator.of(context).push(
             MaterialPageRoute(
               builder: (context) => ChatDetailScreen(

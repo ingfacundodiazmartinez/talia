@@ -68,6 +68,7 @@ class RejectGroupMembershipService {
           if (pendingMembers.contains(childId)) {
             await groupRef.update({
               'pendingMembers': FieldValue.arrayRemove([childId]),
+              'pendingMemberDetails.$childId': FieldValue.delete(),
               'updatedAt': now,
             });
           }

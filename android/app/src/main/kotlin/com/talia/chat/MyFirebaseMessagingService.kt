@@ -558,6 +558,13 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         // Flutter background handler no puede usar Platform Channel en background isolate
         // Por lo tanto, el servicio nativo es responsable de mostrar notificaciones en background
 
+        // ✅ FILTRO MUTE: Verificar si el chat está silenciado
+        val messageChatIdMute = data["chatId"]
+        if (messageChatIdMute != null && isChatMuted(messageChatIdMute)) {
+            Log.e(TAG, "🔇 [FILTRO MUTE] Chat $messageChatIdMute está silenciado - NO mostrar notificación")
+            return
+        }
+
         // ✅ FILTRO CHAT ACTUAL: Verificar si el usuario está viendo este chat
         Log.e(TAG, "🔍 [FILTRO] Iniciando verificación de chat actual...")
         val messageChatId = data["chatId"]
@@ -747,6 +754,30 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
     private fun createNotificationChannel() {
         // ✅ Delegar al método estático unificado que crea ambos canales
         createNotificationChannelsStatic(this)
+    }
+
+    /**
+     * ✅ CHECK MUTED: Verificar si el chat está silenciado
+     *
+     * Lee la lista de chats silenciados desde SharedPreferences.
+     * Flutter sincroniza esta lista cada vez que se silencia/desilencia un chat.
+     *
+     * @param chatId El ID del chat a verificar
+     * @return `true` si el chat está silenciado, `false` en caso contrario
+     */
+    private fun isChatMuted(chatId: String): Boolean {
+        val sharedPrefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+        val mutedChatsString = sharedPrefs.getString("flutter.muted_chat_ids", "") ?: ""
+
+        if (mutedChatsString.isEmpty()) {
+            return false
+        }
+
+        val mutedChatIds = mutedChatsString.split(",")
+        val isMuted = mutedChatIds.contains(chatId)
+
+        Log.d(TAG, "🔇 [MUTE CHECK] Chat $chatId silenciado: $isMuted (lista: $mutedChatsString)")
+        return isMuted
     }
 
     /**

@@ -150,104 +150,17 @@ class ParentChatsController extends BaseChatsController {
   }
 
   /// Buscar en mensajes de todos los chats
+  /// Delega la búsqueda al SearchService
   Future<SearchResults> performMessageSearch({
     required String query,
     required List<QueryDocumentSnapshot> chatDocs,
     required List<QueryDocumentSnapshot> groups,
   }) async {
-    if (query.isEmpty) {
-      return SearchResults(chatResults: [], messageResults: []);
-    }
-
-    final chatResults = <ChatSearchResult>[];
-    final messageResults = <MessageSearchResult>[];
-
-    // Buscar en chats directos
-    for (final chatDoc in chatDocs) {
-      final chatData = chatDoc.data() as Map<String, dynamic>;
-      final chatId = chatDoc.id;
-      final participants = chatData['participants'] as List<dynamic>?;
-
-      if (participants == null) continue;
-
-      final otherUserId = participants.firstWhere(
-        (id) => id != currentUserId,
-        orElse: () => null,
-      );
-
-      if (otherUserId == null) continue;
-
-      try {
-        // Obtener datos del usuario
-        final userData = await getUserData(otherUserId);
-        if (userData == null) continue;
-
-        final userName = userData['name'] ?? 'Usuario';
-        final photoURL = userData['photoURL'] as String?;
-
-        // Verificar si coincide por nombre
-        if (_searchService.matchesQuery(userName, query)) {
-          chatResults.add(
-            ChatSearchResult(
-              chatId: chatId,
-              chatName: userName,
-              chatPhotoUrl: photoURL,
-              chatType: ChatType.direct,
-            ),
-          );
-        }
-
-        // Buscar en mensajes del chat
-        final chatMessageResults = await _searchService.searchInChatMessages(
-          chatId: chatId,
-          query: query,
-          chatName: userName,
-          chatPhotoUrl: photoURL,
-          chatType: ChatType.direct,
-        );
-        messageResults.addAll(chatMessageResults);
-      } catch (e) {
-        ReleaseLogger.error('Error buscando en chat $chatId: $e', tag: 'ParentChats');
-      }
-    }
-
-    // Buscar en grupos
-    for (final groupDoc in groups) {
-      final groupData = groupDoc.data() as Map<String, dynamic>;
-      final groupId = groupDoc.id;
-      final groupName = groupData['name'] ?? 'Grupo';
-      final avatar = groupData['avatar'] as String?;
-
-      // Verificar si coincide por nombre
-      if (_searchService.matchesQuery(groupName, query)) {
-        chatResults.add(
-          ChatSearchResult(
-            chatId: groupId,
-            chatName: groupName,
-            chatPhotoUrl: avatar,
-            chatType: ChatType.group,
-          ),
-        );
-      }
-
-      // Buscar en mensajes del grupo
-      try {
-        final groupMessageResults = await _searchService.searchInChatMessages(
-          chatId: groupId,
-          query: query,
-          chatName: groupName,
-          chatPhotoUrl: avatar,
-          chatType: ChatType.group,
-        );
-        messageResults.addAll(groupMessageResults);
-      } catch (e) {
-        ReleaseLogger.error('Error buscando en grupo $groupId: $e', tag: 'ParentChats');
-      }
-    }
-
-    return SearchResults(
-      chatResults: chatResults,
-      messageResults: messageResults,
+    return await _searchService.performMessageSearch(
+      query: query,
+      currentUserId: currentUserId,
+      chatDocs: chatDocs,
+      groups: groups,
     );
   }
 

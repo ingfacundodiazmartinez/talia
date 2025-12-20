@@ -185,17 +185,47 @@ exports.incrementUnreadCount = onDocumentCreated(
       // This trigger was overwriting it with empty string because messageData.text is undefined for calls
       const isCallMessage = messageData.type === 'missed_call' || messageData.type === 'answered_call';
 
+      // ✅ FIX RACE CONDITION: Skip lastMessage update for pending moderation
+      // Si el mensaje tiene moderationStatus: pending, NO actualizar lastMessage aquí
+      // El trigger moderateMessage lo actualizará después de resolver la moderación
+      const hasPendingModeration = messageData.moderationStatus === 'pending';
+
+      // ✅ FIX RACE CONDITION (caso edge): Si el chat tiene moderación activa,
+      // NO actualizar lastMessage aquí aunque el mensaje no tenga moderationStatus aún.
+      // Esto cubre el caso de mensajes creados sin moderationStatus (cliente viejo)
+      // que serán procesados por moderateMessage.
+      const chatData = chatDoc.exists ? chatDoc.data() : {};
+      const chatHasModerationEnabled = chatData.moderationEnabled === true;
+
+      // También verificar si hay moderación a nivel de contacto (cuando el receptor activó moderación)
+      // Solo aplica si hay texto para moderar
+      const hasTextContent = messageData.text && messageData.text.trim().length > 0;
+
+      // Determinar si debemos dejar que moderateMessage maneje TODO el update
+      // Cuando hay moderación, NO actualizamos lastMessageTime aquí para evitar
+      // que ChatDocsListener en Flutter detecte el cambio antes de que la moderación termine
+      const shouldSkipAllUpdates = hasPendingModeration || (chatHasModerationEnabled && hasTextContent);
+
       if (isCallMessage) {
         // For call messages, only update visibility (let onCallV2Updated handle lastMessage)
         await chatRef.update({
           visible: true,
         });
         console.log(`✅ Call message processed for ${receiverId}, skipping lastMessage update (handled by onCallV2Updated)`);
+      } else if (shouldSkipAllUpdates) {
+        // Para mensajes con moderación: SOLO actualizar visible
+        // lastMessageTime, lastMessage, lastMessageSender serán actualizados por moderateMessage
+        // Esto evita que ChatDocsListener detecte el cambio antes de que la moderación termine
+        await chatRef.update({
+          visible: true,
+        });
+        console.log(`🔒 Mensaje con moderación pendiente para ${receiverId}, SOLO actualizando visible (moderateMessage manejará el resto)`);
       } else {
-        // For regular messages, update everything including lastMessage
+        // For regular messages (no moderation), update everything including lastMessage
         await chatRef.update({
           visible: true,
           lastMessageAt: Timestamp.now(),
+          lastMessageTime: Timestamp.now(),
           lastMessage: messageData.text || "",
           lastMessageSender: senderId,
         });
@@ -710,10 +740,36 @@ exports.sendChatMessage = onCall(
           messageData.replyTo = replyTo;
         }
 
-        // ✅ MODERACIÓN: El cliente indica si hay moderación activa via `requiresModeration`
-        // Si es true, guardar con `moderationStatus: 'pending'` para que el trigger lo procese
-        // El receptor NO verá el mensaje hasta que sea 'approved' (filtrado en UI)
-        const requiresModeration = request.data.requiresModeration === true;
+        // ✅ MODERACIÓN: Verificar moderación del lado del servidor (no confiar solo en el cliente)
+        // 1. Primero verificar si el cliente indicó moderación
+        let requiresModeration = request.data.requiresModeration === true;
+
+        // 2. Si el cliente no indicó, verificar del lado del servidor (defense-in-depth)
+        if (!requiresModeration) {
+          // Verificar moderación a nivel de CHAT
+          const chatData = chatDoc.exists ? chatDoc.data() : {};
+          if (chatData.moderationEnabled === true) {
+            requiresModeration = true;
+            console.log(`🔒 [sendChatMessage] Moderación detectada a nivel de CHAT`);
+          }
+
+          // Verificar moderación a nivel de CONTACTO
+          if (!requiresModeration && receiverId) {
+            const sortedUsers = [senderId, receiverId].sort();
+            const contactId = `${sortedUsers[0]}_${sortedUsers[1]}`;
+            const contactDoc = await db.collection("contacts").doc(contactId).get();
+
+            if (contactDoc.exists) {
+              const moderationSettings = contactDoc.data().moderationSettings || {};
+              // Verificar si el sender tiene moderación activa
+              const senderSettings = moderationSettings[senderId];
+              if (senderSettings && senderSettings.enabled === true) {
+                requiresModeration = true;
+                console.log(`🔒 [sendChatMessage] Moderación detectada a nivel de CONTACTO para sender ${senderId}`);
+              }
+            }
+          }
+        }
 
         if (requiresModeration) {
           messageData.moderationStatus = "pending";
@@ -726,19 +782,29 @@ exports.sendChatMessage = onCall(
         // Actualizar lastMessage y timestamp del chat
         const lastMessageNow = Timestamp.now();  // ✅ FIX: Timestamp inmediato para evitar NULL en listeners
 
-        // ✅ FIX: Si hay moderación, NO actualizar lastMessage con el texto original
-        // El trigger moderateMessage actualizará el lastMessage después de procesar
-        const lastMessageData = {
-          lastMessageAt: lastMessageNow,
-          lastMessageTime: lastMessageNow, // Legacy (mantener por compatibilidad)
-          lastMessageSender: senderId,
-          updatedAt: lastMessageNow,
-          visible: true, // ✅ Hacer chat visible al enviar primer mensaje
-        };
+        // ✅ FIX RACE CONDITION: Si hay moderación, NO actualizar lastMessageTime/lastMessageSender
+        // Esto evita que ChatDocsListener en Flutter detecte el cambio antes de que moderateMessage termine
+        // El trigger moderateMessage actualizará TODOS los campos después de procesar
+        let lastMessageData;
 
-        // Solo actualizar lastMessage si NO hay moderación pendiente
-        if (!requiresModeration) {
-          lastMessageData.lastMessage = text || (messageType === "image" ? "📷 Imagen" : messageType === "video" ? "🎥 Video" : messageType === "audio" ? "🎤 Audio" : "");
+        if (requiresModeration) {
+          // Solo actualizar campos mínimos - moderateMessage hará el resto
+          lastMessageData = {
+            updatedAt: lastMessageNow,
+            visible: true, // Hacer chat visible al enviar primer mensaje
+          };
+          console.log(`🔒 [sendChatMessage] Moderación activa - NO actualizando lastMessageTime (moderateMessage lo hará)`);
+        } else {
+          // Sin moderación - actualizar todo inmediatamente
+          lastMessageData = {
+            lastMessageAt: lastMessageNow,
+            lastMessageTime: lastMessageNow,
+            lastMessageSender: senderId,
+            lastMessageId: messageRef.id, // ✅ FIX: Incluir ID para que ChatDocsListener trackee correctamente
+            lastMessage: text || (messageType === "image" ? "📷 Imagen" : messageType === "video" ? "🎥 Video" : messageType === "audio" ? "🎤 Audio" : ""),
+            updatedAt: lastMessageNow,
+            visible: true,
+          };
         }
 
         await chatRef.update(lastMessageData);

@@ -90,6 +90,7 @@ class ApproveGroupMembershipService {
         },
         'memberCount': FieldValue.increment(1),
         'pendingMembers': FieldValue.arrayRemove([childId]),
+        'pendingMemberDetails.$childId': FieldValue.delete(),
         'updatedAt': now,
       });
 

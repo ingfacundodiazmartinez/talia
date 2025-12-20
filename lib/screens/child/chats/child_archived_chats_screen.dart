@@ -1,14 +1,17 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
-import '../../../services/chat_archive_service.dart';
+import '../../../models/chat.dart';
+import '../../../services/chats/chat_services.dart';
 import '../../../services/contact_alias_service.dart';
 import '../../../services/block_service.dart';
 import '../../../utils/chat_utils.dart';
 import '../../chat_detail_screen.dart';
 
 /// Pantalla de chats archivados para hijos
+/// ✅ CORREGIDO: Usa Hive (ChatPreferencesCache) en vez de Firestore
 class ChildArchivedChatsScreen extends StatefulWidget {
   final String childId;
 
@@ -22,26 +25,70 @@ class ChildArchivedChatsScreen extends StatefulWidget {
 }
 
 class _ChildArchivedChatsScreenState extends State<ChildArchivedChatsScreen> {
-  final ChatArchiveService _archiveService = ChatArchiveService();
+  final ListChatsService _listChatsService = ListChatsService();
+  final UnarchiveChatService _unarchiveService = UnarchiveChatService();
+  final ChatPreferencesCache _preferencesCache = ChatPreferencesCache();
   final ContactAliasService _aliasService = ContactAliasService();
   final BlockService _blockService = BlockService();
 
+  StreamSubscription? _chatsSubscription;
+  final _archivedChatsController = StreamController<List<Chat>>.broadcast();
+
+  @override
+  void initState() {
+    super.initState();
+    _startListeningChats();
+  }
+
+  @override
+  void dispose() {
+    _chatsSubscription?.cancel();
+    _archivedChatsController.close();
+    super.dispose();
+  }
+
+  void _startListeningChats() {
+    _chatsSubscription?.cancel();
+
+    _chatsSubscription = _listChatsService
+        .call(includeArchived: true)
+        .listen(
+          (chats) {
+            // Filtrar solo los archivados usando el cache de Hive
+            final archived = chats.where((c) => _preferencesCache.isArchived(c.id)).toList();
+            _archivedChatsController.add(archived);
+          },
+          onError: (e) {
+            _archivedChatsController.addError(e);
+          },
+        );
+  }
+
   Future<void> _unarchiveChat(String chatId) async {
-    final success = await _archiveService.unarchiveChat(
-      chatId: chatId,
-      userId: widget.childId,
-    );
+    final result = await _unarchiveService.call(chatId: chatId);
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            success ? 'Chat desarchivado' : 'Error al desarchivar chat',
+            result.success ? 'Chat desarchivado' : 'Error al desarchivar chat',
           ),
-          backgroundColor: success ? Colors.green : Colors.red,
+          backgroundColor: result.success ? Colors.green : Colors.red,
         ),
       );
+
+      if (result.success) {
+        setState(() {}); // Refrescar UI
+        _startListeningChats(); // Refrescar stream
+      }
     }
+  }
+
+  String _getOtherParticipant(List<String> participants) {
+    return participants.firstWhere(
+      (id) => id != widget.childId,
+      orElse: () => '',
+    );
   }
 
   @override
@@ -83,7 +130,7 @@ class _ChildArchivedChatsScreenState extends State<ChildArchivedChatsScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Chats Archivados 📦',
+                            'Chats Archivados',
                             style: TextStyle(
                               fontSize: 24,
                               fontWeight: FontWeight.bold,
@@ -115,8 +162,8 @@ class _ChildArchivedChatsScreenState extends State<ChildArchivedChatsScreen> {
                       topRight: Radius.circular(30),
                     ),
                   ),
-                  child: StreamBuilder<QuerySnapshot>(
-                    stream: _archiveService.getArchivedChatsStream(widget.childId),
+                  child: StreamBuilder<List<Chat>>(
+                    stream: _archivedChatsController.stream,
                     builder: (context, snapshot) {
                       if (snapshot.connectionState == ConnectionState.waiting) {
                         return Center(child: CircularProgressIndicator());
@@ -142,20 +189,7 @@ class _ChildArchivedChatsScreenState extends State<ChildArchivedChatsScreen> {
                         );
                       }
 
-                      final archivedChatsDocs = snapshot.data?.docs ?? [];
-
-                      // Ordenar por última actividad en el cliente
-                      final archivedChats = List.from(archivedChatsDocs)
-                        ..sort((a, b) {
-                          final aData = a.data() as Map<String, dynamic>;
-                          final bData = b.data() as Map<String, dynamic>;
-                          final aTime = aData['lastMessageTime'] as Timestamp?;
-                          final bTime = bData['lastMessageTime'] as Timestamp?;
-                          if (aTime == null && bTime == null) return 0;
-                          if (aTime == null) return 1;
-                          if (bTime == null) return -1;
-                          return bTime.compareTo(aTime);
-                        });
+                      final archivedChats = snapshot.data ?? [];
 
                       if (archivedChats.isEmpty) {
                         return Center(
@@ -177,7 +211,7 @@ class _ChildArchivedChatsScreenState extends State<ChildArchivedChatsScreen> {
                               ),
                               SizedBox(height: 8),
                               Text(
-                                'Mantén presionado un chat para archivarlo',
+                                'Desliza un chat hacia la izquierda para archivarlo',
                                 style: TextStyle(
                                   fontSize: 14,
                                   color: colorScheme.onSurfaceVariant,
@@ -193,15 +227,8 @@ class _ChildArchivedChatsScreenState extends State<ChildArchivedChatsScreen> {
                         padding: EdgeInsets.all(16),
                         itemCount: archivedChats.length,
                         itemBuilder: (context, index) {
-                          final chatDoc = archivedChats[index];
-                          final chatData = chatDoc.data() as Map<String, dynamic>;
-                          final participants = List<String>.from(
-                            chatData['participants'] ?? [],
-                          );
-                          final otherUserId = participants.firstWhere(
-                            (id) => id != widget.childId,
-                            orElse: () => '',
-                          );
+                          final chat = archivedChats[index];
+                          final otherUserId = _getOtherParticipant(chat.participants);
 
                           if (otherUserId.isEmpty) return SizedBox.shrink();
 
@@ -233,26 +260,23 @@ class _ChildArchivedChatsScreenState extends State<ChildArchivedChatsScreen> {
                                     initialData: false,
                                     builder: (context, blockedSnapshot) {
                                       final isBlocked = blockedSnapshot.data ?? false;
-
-                                      // Verificar si el chat fue limpiado y no hay mensajes nuevos
-                                      final clearedAt = chatData['clearedAt_${widget.childId}'] as Timestamp?;
-                                      final lastMessageTime = chatData['lastMessageTime'] as Timestamp?;
-                                      final isChatCleared = clearedAt != null &&
-                                          (lastMessageTime == null || clearedAt.compareTo(lastMessageTime) >= 0);
+                                      final isChatCleared = _preferencesCache.getClearedAt(chat.id) != null;
 
                                       return _buildArchivedChatItem(
-                                        chatId: chatDoc.id,
+                                        chatId: chat.id,
                                         userId: otherUserId,
                                         name: displayName,
                                         lastMessage: isBlocked
-                                            ? '🔒 Contacto bloqueado'
+                                            ? 'Contacto bloqueado'
                                             : (isChatCleared
                                                 ? 'Inicia una conversación...'
-                                                : (chatData['lastMessage'] ?? '')),
+                                                : (chat.lastMessage ?? '')),
                                         time: isChatCleared
                                             ? ''
                                             : ChatUtils.formatChatTime(
-                                                chatData['lastMessageTime'],
+                                                chat.lastMessageTime != null
+                                                    ? Timestamp.fromDate(chat.lastMessageTime!)
+                                                    : null,
                                               ),
                                         isOnline: userData['isOnline'] ?? false,
                                         photoURL: userData['photoURL'],
@@ -296,7 +320,6 @@ class _ChildArchivedChatsScreenState extends State<ChildArchivedChatsScreen> {
         motion: const ScrollMotion(),
         extentRatio: 0.25,
         children: [
-          // Botón Desarchivar - Azul suave
           CustomSlidableAction(
             onPressed: (context) => _unarchiveChat(chatId),
             backgroundColor: Color(0xFF4A90E2),
@@ -308,19 +331,12 @@ class _ChildArchivedChatsScreenState extends State<ChildArchivedChatsScreen> {
       child: GestureDetector(
         onTap: () {
           Navigator.of(context).push(
-            PageRouteBuilder(
-              pageBuilder: (context, animation, secondaryAnimation) => ChatDetailScreen(
+            MaterialPageRoute(
+              builder: (context) => ChatDetailScreen(
                 chatId: chatId,
                 contactId: userId,
                 contactName: name,
               ),
-              transitionsBuilder: (context, animation, secondaryAnimation, child) {
-                return FadeTransition(
-                  opacity: animation,
-                  child: child,
-                );
-              },
-              transitionDuration: const Duration(milliseconds: 200),
             ),
           );
         },

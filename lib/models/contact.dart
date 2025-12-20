@@ -168,6 +168,9 @@ class Contact {
   /// Verificar si es un contacto real (no un link interno)
   bool get isRealContact => type == null || type != 'parent_child_link';
 
+  /// Verificar si es un link padre-hijo
+  bool get isParentChildLink => type == 'parent_child_link';
+
   // ═══════════════════════════════════════════════════════════════
   // SERIALIZATION
   // ═══════════════════════════════════════════════════════════════

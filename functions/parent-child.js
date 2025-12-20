@@ -198,6 +198,24 @@ exports.createParentChildLink = onCall({
 
     console.log(`✅ Preparando contacto bidireccional en 'contacts' para chat mutuo`);
 
+    // ✅ Crear chat automáticamente para comunicación padre-hijo
+    const chatId = contactDocId; // Mismo ID que el contacto
+    const chatRef = db.collection("chats").doc(chatId);
+    batch.set(chatRef, {
+      participants: contactUsers,
+      isValidChat: true,
+      visible: true, // Visible porque es vínculo familiar
+      createdAt: now,
+      lastMessageTime: null,
+      lastMessageAt: null,
+      lastMessage: "",
+      lastMessageSender: null,
+      deletedBy: [],
+      type: "parent_child_link", // Marcar como chat familiar
+    }, { merge: true });
+
+    console.log(`✅ Preparando chat familiar en 'chats' para comunicación directa`);
+
     // Actualizar user_locations del hijo para agregar el padre a approvedParents
     const childLocationRef = db.collection("user_locations").doc(childId);
     batch.set(
@@ -584,13 +602,22 @@ exports.onParentChildLinkCreated = onDocumentCreated(
         console.log(`ℹ️ [OnLinkCreated] ${childId} ya estaba en linkedChildrenIds`);
       }
 
-      // ✅ Actualizar linkedParentIds del niño
+      // ✅ Actualizar linkedParentIds del niño con datos desnormalizados
+      const parentDoc = await db.collection("users").doc(parentId).get();
+      const parentData = parentDoc.exists ? parentDoc.data() : {};
+
       const childRef = db.collection("users").doc(childId);
       await childRef.update({
         linkedParentIds: FieldValue.arrayUnion(parentId),
         parentId: parentId, // También actualizar parentId principal
+        // Desnormalizar datos del padre para evitar problemas de permisos
+        [`linkedParentsData.${parentId}`]: {
+          name: parentData.name || 'Padre/Madre',
+          photoURL: parentData.photoURL || null,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
       });
-      console.log(`✅ [OnLinkCreated] Agregado ${parentId} a linkedParentIds de ${childId}`);
+      console.log(`✅ [OnLinkCreated] Agregado ${parentId} a linkedParentIds de ${childId} con datos desnormalizados`);
 
       // ✅ Actualizar parentViewers en todos los contactos existentes del niño
       const contactsSnapshot = await db.collection("contacts")
@@ -1215,6 +1242,64 @@ exports.requestUnlink = onCall({
     }
 
     throw new HttpsError("internal", `Error solicitando desvinculación: ${error.message}`);
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// SYNC PARENT DATA TO CHILDREN (Callable)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Función callable para sincronizar datos del padre a sus hijos.
+ * Se debe llamar desde la app cuando el padre actualiza su perfil.
+ * Más eficiente que un trigger en users/* que se ejecutaría constantemente.
+ */
+exports.syncParentDataToChildren = onCall({
+  cors: true,
+  consumeAppCheckToken: true,
+}, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Usuario no autenticado");
+  }
+
+  const parentId = request.auth.uid;
+  const db = getFirestore();
+
+  try {
+    // 1. Obtener datos del padre
+    const parentDoc = await db.collection("users").doc(parentId).get();
+    if (!parentDoc.exists) {
+      throw new HttpsError("not-found", "Usuario no encontrado");
+    }
+
+    const parentData = parentDoc.data();
+    const linkedChildrenIds = parentData.linkedChildrenIds || [];
+
+    if (linkedChildrenIds.length === 0) {
+      return { success: true, updated: 0 };
+    }
+
+    // 2. Actualizar linkedParentsData en cada hijo
+    const batch = db.batch();
+
+    for (const childId of linkedChildrenIds) {
+      const childRef = db.collection("users").doc(childId);
+      batch.update(childRef, {
+        [`linkedParentsData.${parentId}`]: {
+          name: parentData.name || 'Padre/Madre',
+          photoURL: parentData.photoURL || null,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+      });
+    }
+
+    await batch.commit();
+    console.log(`✅ [syncParentDataToChildren] Actualizado linkedParentsData en ${linkedChildrenIds.length} hijos`);
+
+    return { success: true, updated: linkedChildrenIds.length };
+  } catch (error) {
+    console.error(`❌ [syncParentDataToChildren] Error:`, error);
+    throw new HttpsError("internal", error.message);
   }
 });
 

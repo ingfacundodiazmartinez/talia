@@ -178,8 +178,11 @@ class ChildContactsController {
 
   List<Contact> _filterAndSort(List<Contact> contacts, String userId) {
     var filtered = contacts.where((c) {
-      // Solo contactos reales
-      if (!c.isRealContact) return false;
+      // Permitir siempre links padre-hijo (no requieren estar en agenda)
+      final isParentChild = c.isParentChildLink;
+
+      // Solo contactos reales (excepto parent-child links)
+      if (!c.isRealContact && !isParentChild) return false;
 
       // Excluir bloqueados (ahora está en el modelo Contact)
       if (c.blocked) return false;
@@ -188,7 +191,8 @@ class ChildContactsController {
       // Si discoveredBy está seteado y NO soy yo, significa que el otro me descubrió
       // pero yo NO lo tengo en mi agenda, entonces no debo verlo
       // Esto aplica a TODOS los estados (potential, pending, approved, etc.)
-      if (c.discoveredBy != null && c.discoveredBy != userId) {
+      // EXCEPCIÓN: Los links padre-hijo siempre se muestran
+      if (!isParentChild && c.discoveredBy != null && c.discoveredBy != userId) {
         return false;
       }
 

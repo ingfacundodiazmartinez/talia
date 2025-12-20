@@ -234,48 +234,91 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
           return SizedBox.shrink();
         }
 
-        final locationEnabled = permissions['location'] == true;
-        final contactsEnabled = permissions['contacts'] == true;
+        // Obtener estados granulares (con fallback a legacy)
+        final locationState = PermissionSyncService.parseLocationState(
+          permissions['locationState'] as String?,
+        );
+        final contactsState = PermissionSyncService.parseContactsState(
+          permissions['contactsState'] as String?,
+        );
+        final devicePlatform = permissions['devicePlatform'] as String? ?? 'Android';
 
-        // Si todos los permisos críticos están activados, no mostrar nada
-        if (locationEnabled && contactsEnabled) {
+        // Fallback a campos legacy si no hay estados granulares
+        final locationOk = locationState == LocationPermissionState.always ||
+            (permissions['locationState'] == null && permissions['location'] == true);
+        final contactsOk = contactsState == ContactsPermissionState.full ||
+            (permissions['contactsState'] == null && permissions['contacts'] == true);
+
+        // Si todos los permisos críticos están OK, no mostrar nada
+        if (locationOk && contactsOk) {
           return SizedBox.shrink();
         }
 
-        // Construir lista de permisos faltantes
-        final missingPermissions = <String>[];
-        if (!locationEnabled) missingPermissions.add('Ubicación');
-        if (!contactsEnabled) missingPermissions.add('Contactos');
+        // Determinar color y mensaje según el estado
+        final (warningColor, warningMessage) = _getWarningDetails(
+          locationState: locationState,
+          contactsState: contactsState,
+          locationOk: locationOk,
+          contactsOk: contactsOk,
+        );
 
         return Container(
           margin: EdgeInsets.only(bottom: 12),
-          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(
             color: isDarkMode
-                ? Colors.orange.withValues(alpha: 0.2)
-                : Colors.orange.shade50,
+                ? warningColor.withValues(alpha: 0.2)
+                : warningColor.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(10),
             border: Border.all(
               color: isDarkMode
-                  ? Colors.orange.withValues(alpha: 0.4)
-                  : Colors.orange.shade200,
+                  ? warningColor.withValues(alpha: 0.4)
+                  : warningColor.withValues(alpha: 0.3),
             ),
           ),
           child: Row(
             children: [
               Icon(
-                Icons.warning_amber_rounded,
-                color: isDarkMode ? Colors.orange.shade300 : Colors.orange.shade700,
-                size: 18,
+                _getWarningIcon(locationState, contactsState),
+                color: isDarkMode ? warningColor.withValues(alpha: 0.9) : warningColor,
+                size: 20,
               ),
-              SizedBox(width: 8),
+              SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'Permisos desactivados: ${missingPermissions.join(", ")}',
+                  warningMessage,
                   style: TextStyle(
                     fontSize: 12,
-                    color: isDarkMode ? Colors.orange.shade200 : Colors.orange.shade800,
+                    color: isDarkMode
+                        ? warningColor.withValues(alpha: 0.9)
+                        : warningColor.withValues(alpha: 0.9),
                     fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+              // Icono de info para mostrar instrucciones
+              GestureDetector(
+                onTap: () => _showPermissionHelpSheet(
+                  context,
+                  locationState: locationState,
+                  contactsState: contactsState,
+                  devicePlatform: devicePlatform,
+                  childName: child.name,
+                  locationLegacy: permissions['location'] as bool?,
+                  contactsLegacy: permissions['contacts'] as bool?,
+                ),
+                child: Container(
+                  padding: EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                    color: isDarkMode
+                        ? Colors.white.withValues(alpha: 0.1)
+                        : warningColor.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    Icons.help_outline_rounded,
+                    color: isDarkMode ? Colors.white70 : warningColor,
+                    size: 18,
                   ),
                 ),
               ),
@@ -284,6 +327,412 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
         );
       },
     );
+  }
+
+  /// Determina el color y mensaje según el estado de los permisos
+  (Color, String) _getWarningDetails({
+    required LocationPermissionState locationState,
+    required ContactsPermissionState contactsState,
+    required bool locationOk,
+    required bool contactsOk,
+  }) {
+    // Priorizar ubicación porque es más crítica para la app
+    if (!locationOk) {
+      switch (locationState) {
+        case LocationPermissionState.whenInUse:
+          return (
+            Colors.amber.shade700,
+            'Ubicación parcial: solo funciona con la app abierta'
+          );
+        case LocationPermissionState.denied:
+          return (
+            Colors.orange.shade700,
+            'Ubicación desactivada: no se puede rastrear'
+          );
+        case LocationPermissionState.restricted:
+          return (
+            Colors.red.shade600,
+            'Ubicación restringida por control parental'
+          );
+        default:
+          if (!contactsOk) {
+            return (
+              Colors.orange.shade700,
+              'Permisos faltantes: Ubicación y Contactos'
+            );
+          }
+          return (
+            Colors.orange.shade700,
+            'Ubicación desactivada'
+          );
+      }
+    }
+
+    // Solo contactos tienen problemas
+    if (!contactsOk) {
+      switch (contactsState) {
+        case ContactsPermissionState.limited:
+          return (
+            Colors.amber.shade700,
+            'Contactos: acceso limitado'
+          );
+        case ContactsPermissionState.denied:
+          return (
+            Colors.orange.shade700,
+            'Contactos desactivados'
+          );
+        case ContactsPermissionState.restricted:
+          return (
+            Colors.red.shade600,
+            'Contactos restringidos por control parental'
+          );
+        default:
+          return (
+            Colors.orange.shade700,
+            'Contactos desactivados'
+          );
+      }
+    }
+
+    return (Colors.orange.shade700, 'Permisos incompletos');
+  }
+
+  /// Determina el icono según el estado
+  IconData _getWarningIcon(
+    LocationPermissionState locationState,
+    ContactsPermissionState contactsState,
+  ) {
+    if (locationState == LocationPermissionState.restricted ||
+        contactsState == ContactsPermissionState.restricted) {
+      return Icons.block_rounded;
+    }
+    if (locationState == LocationPermissionState.whenInUse ||
+        contactsState == ContactsPermissionState.limited) {
+      return Icons.warning_amber_rounded;
+    }
+    return Icons.error_outline_rounded;
+  }
+
+  /// Muestra un bottom sheet con instrucciones para activar permisos
+  void _showPermissionHelpSheet(
+    BuildContext context, {
+    required LocationPermissionState locationState,
+    required ContactsPermissionState contactsState,
+    required String devicePlatform,
+    required String childName,
+    bool? locationLegacy,
+    bool? contactsLegacy,
+  }) {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final isIOS = devicePlatform == 'iOS';
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surface,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        padding: EdgeInsets.fromLTRB(20, 8, 20, 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Handle
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                margin: EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            // Título
+            Text(
+              '¿Por qué necesitamos estos permisos?',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            SizedBox(height: 8),
+            Text(
+              'Estos permisos son necesarios para proteger a $childName',
+              style: TextStyle(
+                fontSize: 13,
+                color: isDarkMode ? Colors.grey.shade400 : Colors.grey.shade600,
+              ),
+            ),
+            SizedBox(height: 20),
+
+            // Explicación de ubicación
+            if (locationState != LocationPermissionState.always) ...[
+              _buildPermissionExplanation(
+                context,
+                icon: Icons.location_on_outlined,
+                title: 'Ubicación en segundo plano',
+                currentState: _getLocationStateText(locationState, locationLegacy),
+                stateColor: _getLocationStateColor(locationState, locationLegacy),
+                reason: 'Permite ver dónde está $childName en tiempo real, '
+                    'incluso cuando no tiene la app abierta.',
+                howToFix: isIOS
+                    ? 'En el iPhone de $childName:\n'
+                        '1. Ir a Ajustes → Talia\n'
+                        '2. Tocar "Ubicación"\n'
+                        '3. Seleccionar "Siempre"'
+                    : 'En el teléfono de $childName:\n'
+                        '1. Ir a Ajustes → Apps → Talia\n'
+                        '2. Tocar "Permisos" → "Ubicación"\n'
+                        '3. Seleccionar "Permitir siempre"',
+                isDarkMode: isDarkMode,
+              ),
+              SizedBox(height: 16),
+            ],
+
+            // Explicación de contactos
+            if (contactsState != ContactsPermissionState.full) ...[
+              _buildPermissionExplanation(
+                context,
+                icon: Icons.contacts_outlined,
+                title: 'Acceso a contactos',
+                currentState: _getContactsStateText(contactsState, contactsLegacy),
+                stateColor: _getContactsStateColor(contactsState, contactsLegacy),
+                reason: 'Permite verificar que $childName solo hable con '
+                    'contactos aprobados.',
+                howToFix: isIOS
+                    ? 'En el iPhone de $childName:\n'
+                        '1. Ir a Ajustes → Talia\n'
+                        '2. Tocar "Contactos"\n'
+                        '3. Seleccionar "Acceso completo"'
+                    : 'En el teléfono de $childName:\n'
+                        '1. Ir a Ajustes → Apps → Talia\n'
+                        '2. Tocar "Permisos" → "Contactos"\n'
+                        '3. Activar el permiso',
+                isDarkMode: isDarkMode,
+              ),
+            ],
+
+            SizedBox(height: 20),
+
+            // Nota sobre dispositivo
+            Container(
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: isDarkMode
+                    ? Colors.blue.withValues(alpha: 0.1)
+                    : Colors.blue.shade50,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    isIOS ? Icons.phone_iphone : Icons.phone_android,
+                    color: Colors.blue,
+                    size: 20,
+                  ),
+                  SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      '$childName usa $devicePlatform',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: isDarkMode ? Colors.blue.shade300 : Colors.blue.shade700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPermissionExplanation(
+    BuildContext context, {
+    required IconData icon,
+    required String title,
+    required String currentState,
+    required Color stateColor,
+    required String reason,
+    required String howToFix,
+    required bool isDarkMode,
+  }) {
+    return Container(
+      padding: EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: isDarkMode
+            ? Colors.grey.shade800.withValues(alpha: 0.5)
+            : Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header con estado actual
+          Row(
+            children: [
+              Icon(icon, size: 22, color: Theme.of(context).colorScheme.primary),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: stateColor.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  currentState,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: stateColor,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: 10),
+          // Por qué
+          Text(
+            reason,
+            style: TextStyle(
+              fontSize: 13,
+              color: isDarkMode ? Colors.grey.shade300 : Colors.grey.shade700,
+            ),
+          ),
+          SizedBox(height: 12),
+          // Cómo activar
+          Container(
+            padding: EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: isDarkMode
+                  ? Colors.green.withValues(alpha: 0.1)
+                  : Colors.green.shade50,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: Colors.green.withValues(alpha: 0.3),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.check_circle_outline,
+                        size: 16, color: Colors.green.shade600),
+                    SizedBox(width: 6),
+                    Text(
+                      'Cómo activarlo:',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.green.shade700,
+                      ),
+                    ),
+                  ],
+                ),
+                SizedBox(height: 6),
+                Text(
+                  howToFix,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.green.shade800,
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _getLocationStateText(LocationPermissionState state, bool? legacyValue) {
+    switch (state) {
+      case LocationPermissionState.always:
+        return 'Activado';
+      case LocationPermissionState.whenInUse:
+        return 'Solo en uso';
+      case LocationPermissionState.denied:
+        return 'Denegado';
+      case LocationPermissionState.restricted:
+        return 'Restringido';
+      case LocationPermissionState.unknown:
+        // Usar valor legacy si está disponible
+        if (legacyValue == true) return 'Activado';
+        if (legacyValue == false) return 'Denegado';
+        return 'Pendiente';
+    }
+  }
+
+  Color _getLocationStateColor(LocationPermissionState state, bool? legacyValue) {
+    switch (state) {
+      case LocationPermissionState.always:
+        return Colors.green;
+      case LocationPermissionState.whenInUse:
+        return Colors.amber.shade700;
+      case LocationPermissionState.denied:
+        return Colors.orange.shade700;
+      case LocationPermissionState.restricted:
+        return Colors.red.shade600;
+      case LocationPermissionState.unknown:
+        // Usar valor legacy si está disponible
+        if (legacyValue == true) return Colors.green;
+        if (legacyValue == false) return Colors.orange.shade700;
+        return Colors.grey;
+    }
+  }
+
+  String _getContactsStateText(ContactsPermissionState state, bool? legacyValue) {
+    switch (state) {
+      case ContactsPermissionState.full:
+        return 'Activado';
+      case ContactsPermissionState.limited:
+        return 'Limitado';
+      case ContactsPermissionState.denied:
+        return 'Denegado';
+      case ContactsPermissionState.restricted:
+        return 'Restringido';
+      case ContactsPermissionState.unknown:
+        // Usar valor legacy si está disponible
+        if (legacyValue == true) return 'Activado';
+        if (legacyValue == false) return 'Denegado';
+        return 'Pendiente';
+    }
+  }
+
+  Color _getContactsStateColor(ContactsPermissionState state, bool? legacyValue) {
+    switch (state) {
+      case ContactsPermissionState.full:
+        return Colors.green;
+      case ContactsPermissionState.limited:
+        return Colors.amber.shade700;
+      case ContactsPermissionState.denied:
+        return Colors.orange.shade700;
+      case ContactsPermissionState.restricted:
+        return Colors.red.shade600;
+      case ContactsPermissionState.unknown:
+        // Usar valor legacy si está disponible
+        if (legacyValue == true) return Colors.green;
+        if (legacyValue == false) return Colors.orange.shade700;
+        return Colors.grey;
+    }
   }
 
   Widget _buildQuickActions(BuildContext context, Child child) {

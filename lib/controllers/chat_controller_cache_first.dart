@@ -10,6 +10,8 @@ import '../services/chats/chat_orchestrator.dart';
 import '../services/chats/repositories/user_repository.dart';
 import '../services/chats/repositories/chat_repository.dart';
 import '../services/chats/services/chat_messaging_service.dart';  // For MessageType enum
+// ✅ Nuevos servicios atómicos
+import '../services/chats/chat_services.dart';
 import '../services/typing_indicator_service.dart';
 import '../services/block_service.dart';
 import '../services/audio_processing_service.dart';
@@ -47,6 +49,12 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   late final NotificationService _notificationService;
   late final FavoriteService _favoriteService;  // ✅ NEW
   late final ReactionService _reactionService;  // ✅ NEW: For reactions
+
+  // ✅ Nuevos servicios atómicos
+  late final DeleteMessageService _deleteMessageService;
+  late final EditMessageService _editMessageService;
+  late final ClearChatService _clearChatService;
+  late final MarkMessagesReadService _markReadService;
 
   // Stream subscription management
   StreamSubscription<List<ChatMessage>>? _messagesSubscription;
@@ -121,6 +129,12 @@ class ChatControllerCacheFirst extends ChangeNotifier {
     _notificationService = notificationService ?? NotificationService();
     _favoriteService = FavoriteService();  // ✅ NEW
     _reactionService = ReactionService();  // ✅ NEW: For reactions
+
+    // ✅ Inicializar nuevos servicios atómicos
+    _deleteMessageService = DeleteMessageService();
+    _editMessageService = EditMessageService();
+    _clearChatService = ClearChatService();
+    _markReadService = MarkMessagesReadService();
   }
 
   /// Initialize the controller and start listening to messages
@@ -911,6 +925,7 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   // ═══════════════════════════════════════════════════════════════
 
   /// Delete a message (optimistic delete)
+  /// ✅ Usa nuevo servicio atómico DeleteMessageService
   Future<bool> deleteMessage(String messageId, Timestamp? timestamp) async {
     ReleaseLogger.log('Deleting message $messageId from chat $chatId');
 
@@ -923,24 +938,44 @@ class ChatControllerCacheFirst extends ChangeNotifier {
     await MessageCacheService().deleteMessage(chatId, messageId);
 
     try {
-      // 3. Delete from Firestore
-      await _orchestrator.deleteMessage(chatId, messageId);
-      ReleaseLogger.log('Message $messageId deleted successfully');
-      return true;
+      // 3. ✅ Delete using new atomic service
+      final result = await _deleteMessageService.deleteForMe(
+        chatId: chatId,
+        messageId: messageId,
+        isGroup: isGroup,
+      );
+
+      if (result.success) {
+        ReleaseLogger.log('Message $messageId deleted successfully');
+      } else {
+        ReleaseLogger.error('Failed to delete message: ${result.message}');
+      }
+      return result.success;
     } catch (e) {
       ReleaseLogger.error('Failed to delete message $messageId: $e');
-      // Note: Message already removed from UI, Firestore stream will sync if delete failed
       return false;
     }
   }
 
   /// Update blocked message (edit)
+  /// ✅ Usa nuevo servicio atómico EditMessageService
   Future<void> updateBlockedMessage(String messageId, String newContent) async {
     ReleaseLogger.log('Editing blocked message $messageId in chat $chatId');
 
     try {
-      await _orchestrator.editMessage(chatId, messageId, newContent);
-      ReleaseLogger.log('Message $messageId edited successfully');
+      final result = await _editMessageService.call(
+        chatId: chatId,
+        messageId: messageId,
+        newText: newContent,
+        isGroup: isGroup,
+      );
+
+      if (result.success) {
+        ReleaseLogger.log('Message $messageId edited successfully');
+      } else {
+        ReleaseLogger.error('Failed to edit message: ${result.message}');
+        throw Exception(result.message);
+      }
     } catch (e) {
       ReleaseLogger.error('Failed to edit message $messageId: $e');
       rethrow;
@@ -948,13 +983,16 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   }
 
   /// Clear chat history
-  /// ✅ REFACTORED: Now uses ChatRepository instead of direct Firestore access
+  /// ✅ Usa nuevo servicio atómico ClearChatService
   Future<bool> clearChat() async {
     try {
-      // ✅ FIX: Limpiar en Firestore usando ChatRepository (marca clearedAt)
-      await _chatRepository.updateChat(chatId, {
-        'clearedAt_$currentUserId': FieldValue.serverTimestamp(),
-      });
+      // ✅ Usar nuevo servicio atómico
+      final result = await _clearChatService.call(chatId: chatId);
+
+      if (!result.success) {
+        ReleaseLogger.error('Failed to clear chat: ${result.message}');
+        return false;
+      }
 
       // ✅ FIX: Invalidar cache de clearedAt para forzar refresh
       _orchestrator.invalidateClearedAtCache(chatId, currentUserId);
@@ -994,9 +1032,10 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   }
 
   /// Mark chat as read
+  /// ✅ Usa nuevo servicio atómico MarkMessagesReadService
   Future<void> markChatAsRead() async {
     try {
-      await _orchestrator.markChatAsRead(chatId);
+      await _markReadService.call(chatId: chatId, isGroup: isGroup);
       ReleaseLogger.log('Chat $chatId marked as read');
     } catch (e) {
       ReleaseLogger.error('Failed to mark chat $chatId as read: $e');

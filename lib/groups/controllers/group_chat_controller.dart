@@ -4,6 +4,8 @@ import '../models/models.dart';
 import '../services/services.dart';
 import '../services/group_message_cache_service.dart';
 import '../../services/reaction_service.dart';  // ✅ NEW: For reactions
+// ✅ Nuevos servicios atómicos
+import '../../services/chats/chat_services.dart';
 import '../../utils/release_logger.dart';
 
 /// Controller for group chat
@@ -18,6 +20,9 @@ class GroupChatController {
   final GroupService _groupService;
   final GroupMessageCacheService _cacheService;
   final ReactionService _reactionService;  // ✅ NEW
+  // ✅ Nuevos servicios atómicos
+  final EditMessageService _editMessageService;
+  final DeleteMessageService _deleteMessageService;
 
   // State
   Group? _group;
@@ -47,9 +52,13 @@ class GroupChatController {
     GroupService? groupService,
     GroupMessageCacheService? cacheService,
     ReactionService? reactionService,
+    EditMessageService? editMessageService,
+    DeleteMessageService? deleteMessageService,
   }) : _groupService = groupService ?? GroupService(),
        _cacheService = cacheService ?? GroupMessageCacheService(),
-       _reactionService = reactionService ?? ReactionService();
+       _reactionService = reactionService ?? ReactionService(),
+       _editMessageService = editMessageService ?? EditMessageService(),
+       _deleteMessageService = deleteMessageService ?? DeleteMessageService();
 
   // Getters
   Group? get group => _group;
@@ -404,14 +413,19 @@ class GroupChatController {
   }
 
   /// Edit a message
+  /// ✅ Usa nuevo servicio atómico EditMessageService
   Future<bool> editMessage(String messageId, String newText) async {
     try {
-      await _groupService.editMessage(
-        groupId: groupId,
+      final result = await _editMessageService.call(
+        chatId: groupId,
         messageId: messageId,
         newText: newText,
+        isGroup: true,
       );
-      return true;
+      if (!result.success) {
+        _setError('Error editando mensaje: ${result.message}');
+      }
+      return result.success;
     } catch (e) {
       _setError('Error editando mensaje: $e');
       return false;
@@ -419,13 +433,18 @@ class GroupChatController {
   }
 
   /// Delete a message
+  /// ✅ Usa nuevo servicio atómico DeleteMessageService
   Future<bool> deleteMessage(String messageId) async {
     try {
-      await _groupService.deleteMessage(
-        groupId: groupId,
+      final result = await _deleteMessageService.deleteForMe(
+        chatId: groupId,
         messageId: messageId,
+        isGroup: true,
       );
-      return true;
+      if (!result.success) {
+        _setError('Error eliminando mensaje: ${result.message}');
+      }
+      return result.success;
     } catch (e) {
       _setError('Error eliminando mensaje: $e');
       return false;

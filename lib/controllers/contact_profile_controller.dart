@@ -8,6 +8,7 @@ import '../services/favorite_service.dart';
 import '../calls_v2/controllers/call_controller.dart' as calls_v2;
 import '../models/child.dart';
 import '../models/contact_user.dart';
+import '../utils/release_logger.dart';
 
 /// Controller para manejar la lógica del perfil de contacto
 ///
@@ -233,6 +234,7 @@ class ContactProfileController {
           : 'Notificaciones de historias desactivadas');
       return true;
     } catch (e) {
+      ReleaseLogger.error('Error actualizando notificaciones de historias: $e', tag: 'ContactProfile');
       onError?.call('Error actualizando notificaciones de historias');
       return false;
     }
@@ -611,13 +613,24 @@ class ContactProfileController {
   /// Cargar padres del niño si aplica
   Future<void> loadChildParents() async {
     try {
-      if (isContactChild()) {
+      final isChild = isContactChild();
+      ReleaseLogger.log(
+        '👨‍👩‍👧 [loadChildParents] contactId: $contactId, isChild: $isChild, _contactUser: $_contactUser',
+        tag: 'ContactProfile',
+      );
+
+      if (isChild) {
         final child = Child(id: contactId, name: contactName);
         _childParents = await child.getParents();
+        ReleaseLogger.log(
+          '👨‍👩‍👧 [loadChildParents] Padres encontrados: ${_childParents.length}',
+          tag: 'ContactProfile',
+        );
       } else {
         _childParents = [];
       }
     } catch (e) {
+      ReleaseLogger.error('Error cargando información de padres: $e', tag: 'ContactProfile');
       _childParents = [];
       onError?.call('Error cargando información de padres');
     }

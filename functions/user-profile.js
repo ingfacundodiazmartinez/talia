@@ -308,7 +308,35 @@ exports.updateUserProfile = onCall(
 
       console.log(`✅ [updateUserProfile] Perfil actualizado exitosamente - rol: ${newRole}`);
 
-      // 7. Retornar resultado
+      // 8. Si tiene hijos, sincronizar linkedParentsData
+      if (hasChildren) {
+        try {
+          const userDoc = await db.collection("users").doc(userId).get();
+          const userData = userDoc.data();
+          const linkedChildrenIds = userData.linkedChildrenIds || [];
+
+          if (linkedChildrenIds.length > 0) {
+            const batch = db.batch();
+            for (const childId of linkedChildrenIds) {
+              const childRef = db.collection("users").doc(childId);
+              batch.update(childRef, {
+                [`linkedParentsData.${userId}`]: {
+                  name: name,
+                  photoURL: userData.photoURL || null,
+                  updatedAt: FieldValue.serverTimestamp(),
+                },
+              });
+            }
+            await batch.commit();
+            console.log(`✅ [updateUserProfile] linkedParentsData sincronizado en ${linkedChildrenIds.length} hijos`);
+          }
+        } catch (syncError) {
+          // No fallar si la sincronización falla
+          console.error(`⚠️ [updateUserProfile] Error sincronizando linkedParentsData:`, syncError);
+        }
+      }
+
+      // 9. Retornar resultado
       return {
         success: true,
         role: newRole,
