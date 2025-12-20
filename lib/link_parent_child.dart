@@ -4,8 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'dart:io';
+import 'package:geolocator/geolocator.dart';
 import 'dart:math';
 import 'services/user_role_service.dart';
 import 'services/user_cache_service.dart';
@@ -698,24 +697,17 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
       // Solicitar permisos de ubicación para niños que vinculan su primer padre
       // Solo si es el primer padre (no tiene otros padres vinculados) Y no tiene permisos ya concedidos
       if (existingParents.isEmpty && mounted) {
-        // Verificar si los permisos ya fueron concedidos
-        final locationAlwaysStatus = await Permission.locationAlways.status;
+        // ✅ FIX iOS: Usar Geolocator para verificar permisos (permission_handler tiene bugs en iOS)
+        final locationPermission = await Geolocator.checkPermission();
 
-        if (!locationAlwaysStatus.isGranted) {
-          ReleaseLogger.log('Solicitando permisos de ubicación para el niño (permisos no concedidos)', tag: 'LinkParentChild');
+        if (locationPermission != LocationPermission.always) {
+          ReleaseLogger.log('Solicitando permisos de ubicación para el niño (permisos: $locationPermission)', tag: 'LinkParentChild');
 
-          // En iOS: solicitar directamente sin mostrar diálogo personalizado
-          // En Android: mostrar diálogo explicativo primero
-          if (Platform.isIOS) {
-            // iOS: solicitar permisos directamente
-            await Permission.location.request();
-            await Permission.locationAlways.request();
-          } else {
-            // Android: mostrar diálogo explicativo
-            await LocationPermissionDialog.show(context);
-          }
+          // Mostrar diálogo explicativo en ambas plataformas
+          // (El dialog ahora maneja correctamente iOS y Android)
+          await LocationPermissionDialog.show(context);
         } else {
-          ReleaseLogger.log('Permisos de ubicación ya concedidos, omitiendo solicitud', tag: 'LinkParentChild');
+          ReleaseLogger.log('Permisos de ubicación ya concedidos (always), omitiendo solicitud', tag: 'LinkParentChild');
         }
       }
 

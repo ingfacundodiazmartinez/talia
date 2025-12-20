@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
+import 'package:geolocator/geolocator.dart';
 import '../utils/release_logger.dart';
 
 /// Estados granulares de permisos de ubicación
@@ -40,30 +41,29 @@ class PermissionSyncService {
       final userId = _auth.currentUser?.uid;
       if (userId == null) return;
 
-      // Verificar permisos en paralelo
+      // Verificar permisos de cámara, micrófono y contactos
       final results = await Future.wait([
-        Permission.locationAlways.status,
-        Permission.locationWhenInUse.status,
         Permission.camera.status,
         Permission.microphone.status,
         Permission.contacts.status,
       ]);
 
-      // Determinar estado granular de ubicación
-      final locationAlwaysStatus = results[0];
-      final locationWhenInUseStatus = results[1];
-      final locationState = _getLocationState(locationAlwaysStatus, locationWhenInUseStatus);
+      // ✅ FIX iOS: Usar Geolocator para verificar el permiso de ubicación real
+      // permission_handler tiene bugs en iOS donde retorna 'denied' incluso con acceso
+      final geolocatorPermission = await Geolocator.checkPermission();
+      final locationState = _getLocationStateFromGeolocator(geolocatorPermission);
 
-      // Para contactos usar flutter_contacts (permission_handler tiene bugs en iOS)
+      // ✅ FIX iOS: Usar FlutterContacts para verificar el permiso de contactos real
+      // permission_handler tiene bugs en iOS donde retorna 'denied' incluso con acceso
       final hasContactsPermission = await FlutterContacts.requestPermission(readonly: true);
-      final contactsState = _getContactsState(results[4], hasContactsPermission);
+      final contactsState = _getContactsState(results[2], hasContactsPermission);
 
       final permissionStatus = {
         // Mantener campos legacy para compatibilidad
         'location': locationState == LocationPermissionState.always,
         'contacts': contactsState == ContactsPermissionState.full,
-        'camera': results[2].isGranted,
-        'microphone': results[3].isGranted,
+        'camera': results[0].isGranted,
+        'microphone': results[1].isGranted,
         // Nuevos campos granulares
         'locationState': locationState.name,  // 'always', 'whenInUse', 'denied', etc.
         'contactsState': contactsState.name,  // 'full', 'limited', 'denied', etc.
@@ -77,9 +77,9 @@ class PermissionSyncService {
       });
 
       ReleaseLogger.log(
-        'Permissions synced: location=$locationState, '
+        'Permissions synced: location=$locationState (geolocator=$geolocatorPermission), '
         'contacts=$contactsState, '
-        'camera=${results[2].isGranted}, mic=${results[3].isGranted}, '
+        'camera=${results[0].isGranted}, mic=${results[1].isGranted}, '
         'platform=${Platform.isIOS ? 'iOS' : 'Android'}',
         tag: 'PermissionSync',
       );
@@ -88,22 +88,20 @@ class PermissionSyncService {
     }
   }
 
-  /// Determina el estado granular de ubicación
-  LocationPermissionState _getLocationState(
-    PermissionStatus alwaysStatus,
-    PermissionStatus whenInUseStatus,
-  ) {
-    if (alwaysStatus.isGranted) {
-      return LocationPermissionState.always;
-    } else if (whenInUseStatus.isGranted) {
-      return LocationPermissionState.whenInUse;
-    } else if (alwaysStatus.isRestricted || whenInUseStatus.isRestricted) {
-      return LocationPermissionState.restricted;
-    } else if (alwaysStatus.isDenied || alwaysStatus.isPermanentlyDenied ||
-               whenInUseStatus.isDenied || whenInUseStatus.isPermanentlyDenied) {
-      return LocationPermissionState.denied;
+  /// Determina el estado granular de ubicación usando Geolocator (más confiable en iOS)
+  LocationPermissionState _getLocationStateFromGeolocator(LocationPermission permission) {
+    switch (permission) {
+      case LocationPermission.always:
+        return LocationPermissionState.always;
+      case LocationPermission.whileInUse:
+        return LocationPermissionState.whenInUse;
+      case LocationPermission.denied:
+        return LocationPermissionState.denied;
+      case LocationPermission.deniedForever:
+        return LocationPermissionState.denied;  // Tratamos como denied
+      case LocationPermission.unableToDetermine:
+        return LocationPermissionState.unknown;
     }
-    return LocationPermissionState.unknown;
   }
 
   /// Determina el estado granular de contactos

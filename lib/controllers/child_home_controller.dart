@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:permission_handler/permission_handler.dart';
+import 'package:geolocator/geolocator.dart';
 import '../services/location_service.dart';
 import '../notification_service.dart';
 import '../services/user_role_service.dart';
@@ -9,6 +9,7 @@ import '../groups/groups.dart'; // Groups V2
 import '../screens/chat_detail_screen.dart';
 import '../widgets/location_permission_dialog.dart';
 import '../utils/release_logger.dart';
+import '../services/permission_sync_service.dart';
 
 /// Controller que maneja la lógica de negocio del home de niños
 ///
@@ -99,16 +100,16 @@ class ChildHomeController {
   /// - Android: Requerido por políticas de Play Store para permisos de ubicación en background
   /// - iOS: Buena práctica para mejor UX aunque no es estrictamente requerido
   Future<void> _requestLocationPermissionWithExplanation() async {
-    // Verificar estado actual de permisos
-    final locationAlwaysStatus = await Permission.locationAlways.status;
+    // ✅ FIX iOS: Usar Geolocator para verificar permisos (permission_handler tiene bugs en iOS)
+    final locationPermission = await Geolocator.checkPermission();
 
     ReleaseLogger.log(
-      'Estado de permiso locationAlways: $locationAlwaysStatus',
+      'Estado de permiso ubicación (Geolocator): $locationPermission',
       tag: 'ChildHomeController',
     );
 
-    // Si ya tiene permisos de background, no hacer nada
-    if (locationAlwaysStatus.isGranted) {
+    // Si ya tiene permisos de background ("always"), no hacer nada
+    if (locationPermission == LocationPermission.always) {
       ReleaseLogger.log('Permisos de ubicación en background ya concedidos', tag: 'ChildHomeController');
       return;
     }
@@ -119,6 +120,11 @@ class ChildHomeController {
     if (context.mounted) {
       ReleaseLogger.log('Mostrando dialog explicativo de ubicación', tag: 'ChildHomeController');
       await LocationPermissionDialog.show(context);
+
+      // ✅ Sincronizar permisos a Firestore después de que el usuario responda al dialog
+      // Esto permite que el parent dashboard vea el estado actualizado inmediatamente
+      ReleaseLogger.log('Sincronizando permisos después del dialog...', tag: 'ChildHomeController');
+      await PermissionSyncService().syncPermissions();
     }
   }
 
