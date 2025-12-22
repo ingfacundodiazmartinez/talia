@@ -466,16 +466,6 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
     // Actualizar UI
     if (mounted) {
       setState(() {});
-
-      if (showSnackbar && markedCount > 0) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('$markedCount notificación${markedCount > 1 ? 'es' : ''} marcada${markedCount > 1 ? 's' : ''} como leída${markedCount > 1 ? 's' : ''}'),
-            duration: Duration(seconds: 2),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
     }
   }
 }

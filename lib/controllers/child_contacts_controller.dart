@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' show min;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import '../models/contact.dart';
@@ -176,6 +177,16 @@ class ChildContactsController {
     }
   }
 
+  /// Obtener el nombre a mostrar para un contacto internamente
+  /// Usa phone del perfil o del campo phones, y nombre denormalizado como fallback
+  String _getDisplayNameForContact(Contact contact, String userId) {
+    final otherUserId = contact.getOtherUserId(userId);
+    final userData = _userCache.getUserDataSync(otherUserId);
+    final phone = userData?['phone'] as String? ?? contact.phones[otherUserId] ?? '';
+    final contactName = contact.getOtherUserName(userId);
+    return getDisplayName(otherUserId, phoneHint: phone, contactNameHint: contactName);
+  }
+
   List<Contact> _filterAndSort(List<Contact> contacts, String userId) {
     var filtered = contacts.where((c) {
       // Permitir siempre links padre-hijo (no requieren estar en agenda)
@@ -198,8 +209,7 @@ class ChildContactsController {
 
       // Filtrar por búsqueda
       if (_searchQuery.isNotEmpty) {
-        final otherUserId = c.getOtherUserId(userId);
-        final name = _userCache.getDisplayName(otherUserId, fallback: 'Usuario').toLowerCase();
+        final name = _getDisplayNameForContact(c, userId).toLowerCase();
         if (!name.contains(_searchQuery)) return false;
       }
 
@@ -208,8 +218,8 @@ class ChildContactsController {
 
     // Ordenar alfabéticamente
     filtered.sort((a, b) {
-      final nameA = _userCache.getDisplayName(a.getOtherUserId(userId), fallback: 'Usuario');
-      final nameB = _userCache.getDisplayName(b.getOtherUserId(userId), fallback: 'Usuario');
+      final nameA = _getDisplayNameForContact(a, userId);
+      final nameB = _getDisplayNameForContact(b, userId);
       return nameA.toLowerCase().compareTo(nameB.toLowerCase());
     });
 
@@ -297,9 +307,18 @@ class ChildContactsController {
   // ═══════════════════════════════════════════════════════════════
 
   /// Obtener nombre a mostrar para un contacto
-  /// Usa: alias > nombre de Firestore > nombre de agenda > fallback
-  String getDisplayName(String odId) {
-    return _userCache.getDisplayName(odId, fallback: 'Usuario');
+  /// Prioridad: agenda del SO > alias > nombre Firestore > nombre contacto > fallback
+  ///
+  /// @param userId: ID del otro usuario
+  /// @param phoneHint: Teléfono para buscar en agenda (opcional)
+  /// @param contactNameHint: Nombre denormalizado del contacto (opcional)
+  String getDisplayName(String userId, {String? phoneHint, String? contactNameHint}) {
+    // Usar el nombre del contacto como fallback si está disponible
+    final fallback = (contactNameHint != null && contactNameHint.isNotEmpty)
+        ? contactNameHint
+        : 'Usuario';
+
+    return _userCache.getDisplayName(userId, fallback: fallback, phoneHint: phoneHint);
   }
 
   /// Obtener datos de usuario (para foto, etc)
@@ -326,6 +345,29 @@ class ChildContactsController {
     }
 
     return null;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // BATCH UPDATE (para actualizar fotos de contactos visibles)
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Actualizar datos de usuarios visibles en batch
+  /// Divide en batches de 30 (límite de whereIn de Firestore)
+  Future<void> batchUpdateVisibleUsers(Set<String> userIds) async {
+    if (userIds.isEmpty) return;
+
+    final toUpdate = userIds.where((id) => id.isNotEmpty).toList();
+    if (toUpdate.isEmpty) return;
+
+    // Dividir en batches de 30
+    const batchSize = 30;
+    for (var i = 0; i < toUpdate.length; i += batchSize) {
+      final batch = toUpdate.sublist(i, min(i + batchSize, toUpdate.length));
+      await _userCache.batchRefreshUsers(batch);
+    }
+
+    // Re-emitir stream para actualizar UI con nuevas fotos
+    _refilterFromCache();
   }
 
   // ═══════════════════════════════════════════════════════════════

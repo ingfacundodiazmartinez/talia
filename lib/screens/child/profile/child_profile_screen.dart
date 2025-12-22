@@ -570,18 +570,7 @@ class _ChildProfileScreenState extends State<ChildProfileScreen> {
 
       if (!mounted) return;
 
-      if (success) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Se ha notificado a ${parentCount == 1 ? "tu padre/madre" : "tus padres"}. '
-              'Ellos decidirán si desvincularte.',
-            ),
-            backgroundColor: Colors.green,
-            duration: const Duration(seconds: 5),
-          ),
-        );
-      } else {
+      if (!success) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(message.isNotEmpty ? message : 'No se pudo enviar la solicitud'),

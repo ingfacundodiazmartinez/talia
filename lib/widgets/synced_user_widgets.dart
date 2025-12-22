@@ -2,7 +2,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../services/contact_photo_cache_service.dart';
-import '../utils/release_logger.dart';
 
 /// Widget de avatar que se sincroniza automáticamente con cambios de foto de perfil
 /// Usa lazy/on-demand listeners para eficiencia
@@ -167,9 +166,7 @@ class _SyncedUserNameState extends State<SyncedUserName> {
   }
 
   void _initializeProfile() {
-    // Verificar si ya hay alias en cache
-    final cachedAlias = _profileCacheService.getAlias(widget.userId);
-    ReleaseLogger.log('🏷️ [SyncedUserName] Init for userId: ${widget.userId}, cached alias: $cachedAlias, fallback: ${widget.fallbackName}');
+    // ✅ No logueamos init porque se llama para cada item en listas
 
     // Iniciar listener lazy para este usuario
     _profileCacheService.startWatching(widget.userId);
@@ -180,7 +177,6 @@ class _SyncedUserNameState extends State<SyncedUserName> {
     // Suscribirse a cambios de nombre
     _profileSubscription = _profileCacheService.onProfileUpdated.listen((event) {
       if (event.userId == widget.userId && event.nameChanged && mounted) {
-        ReleaseLogger.log('🏷️ [SyncedUserName] Name changed for ${widget.userId}');
         _updateDisplayName();
       }
     });
@@ -188,9 +184,7 @@ class _SyncedUserNameState extends State<SyncedUserName> {
     // Suscribirse a cambios de alias (si no está deshabilitado)
     if (!widget.ignoreAlias) {
       _aliasSubscription = _profileCacheService.onAliasUpdated.listen((event) {
-        ReleaseLogger.log('🏷️ [SyncedUserName] Alias event received: ${event.contactId} (my userId: ${widget.userId})');
         if (event.contactId == widget.userId && mounted) {
-          ReleaseLogger.log('🏷️ [SyncedUserName] Alias matched! Updating display name');
           _updateDisplayName();
         }
       });
@@ -198,20 +192,16 @@ class _SyncedUserNameState extends State<SyncedUserName> {
   }
 
   void _updateDisplayName() {
-    final alias = _profileCacheService.getAlias(widget.userId);
-    final cachedName = _profileCacheService.getName(widget.userId);
-
-    ReleaseLogger.log('🏷️ [SyncedUserName] _updateDisplayName for ${widget.userId}: alias="$alias", cachedName="$cachedName", fallback="${widget.fallbackName}"');
-
+    // ✅ No logueamos porque este método se llama frecuentemente
     setState(() {
       if (widget.ignoreAlias) {
         // Solo nombre, sin alias
+        final cachedName = _profileCacheService.getName(widget.userId);
         _currentDisplayName = cachedName ?? widget.fallbackName;
       } else {
         // Usar lógica del servicio: alias > name > fallback
         _currentDisplayName = _profileCacheService.getDisplayName(widget.userId, widget.fallbackName);
       }
-      ReleaseLogger.log('🏷️ [SyncedUserName] Display name updated for ${widget.userId}: "$_currentDisplayName"');
     });
   }
 

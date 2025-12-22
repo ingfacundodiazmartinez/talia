@@ -13,6 +13,8 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'package:flutter/foundation.dart';
 import '../utils/release_logger.dart';
 import 'story_service_refactored.dart';
+import 'contact_photo_cache_service.dart';
+import 'user_cache_service.dart';
 
 /// Política de retención de datos
 class RetentionPolicy {
@@ -651,6 +653,26 @@ class DataManagementService {
         ReleaseLogger.log('✅ StoryService cache cleared', tag: 'DataManagementService');
       } catch (e) {
         ReleaseLogger.log('⚠️ Could not clear StoryService cache: $e', tag: 'DataManagementService');
+      }
+
+      // ✅ FIX: Limpiar ContactPhotoCacheService (fotos y nombres de contactos)
+      try {
+        final photoCache = ContactPhotoCacheService();
+        photoCache.stopAliasListener();
+        photoCache.clearAll();
+        photoCache.dispose();
+        ReleaseLogger.log('✅ ContactPhotoCacheService cleared', tag: 'DataManagementService');
+      } catch (e) {
+        ReleaseLogger.log('⚠️ Could not clear ContactPhotoCacheService: $e', tag: 'DataManagementService');
+      }
+
+      // ✅ FIX: Limpiar UserCacheService (cache de usuarios)
+      try {
+        // El Hive box 'user_cache' ya se limpió arriba, pero también limpiar memoria
+        // UserCacheService no tiene método dispose, el Hive box clear es suficiente
+        ReleaseLogger.log('✅ UserCacheService Hive box cleared', tag: 'DataManagementService');
+      } catch (e) {
+        ReleaseLogger.log('⚠️ Could not clear UserCacheService: $e', tag: 'DataManagementService');
       }
 
       ReleaseLogger.log('✅ All local data cleared on logout', tag: 'DataManagementService');

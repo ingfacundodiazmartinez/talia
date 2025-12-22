@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
+import '../../../utils/release_logger.dart';
 import '../../../services/contact_alias_service.dart';
 import '../../../services/block_service.dart';
 import '../../../services/message_status_helper.dart';
@@ -48,6 +49,9 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
   final ValueNotifier<String> _searchQuery = ValueNotifier<String>('');
   late ParentChatsController _controller;
 
+  /// Contador para forzar rebuild cuando cambia estado de archivado/silenciado/limpiado
+  int _preferencesVersion = 0;
+
   @override
   bool get wantKeepAlive => true;
 
@@ -60,6 +64,21 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
 
     // ✅ Escuchar cambios en contadores de no leídos para actualizar badges
     LocalUnreadCountService().addListener(_onUnreadCountsChanged);
+
+    // ✅ Escuchar cambios en preferencias (archivado/silenciado/limpiado) para actualizar lista
+    _preferencesCache.addListener(_onPreferencesChanged);
+    ReleaseLogger.log('🔔 [ParentChatsScreen] Listener REGISTRADO en ChatPreferencesCache. hashCode: ${identityHashCode(_preferencesCache)}', tag: 'Chats');
+  }
+
+  void _onPreferencesChanged() {
+    final oldVersion = _preferencesVersion;
+    ReleaseLogger.log('🔄 [ParentChatsScreen] _onPreferencesChanged LLAMADO! version: $oldVersion -> ${oldVersion + 1}', tag: 'Chats');
+    if (mounted) {
+      setState(() => _preferencesVersion++);
+      ReleaseLogger.log('🔄 [ParentChatsScreen] setState EJECUTADO. Nuevo _preferencesVersion: $_preferencesVersion', tag: 'Chats');
+    } else {
+      ReleaseLogger.warning('⚠️ [ParentChatsScreen] Widget NO ESTÁ MOUNTED! No se puede hacer setState', tag: 'Chats');
+    }
   }
 
   void _onUnreadCountsChanged() {
@@ -71,6 +90,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
   @override
   void dispose() {
     LocalUnreadCountService().removeListener(_onUnreadCountsChanged);
+    _preferencesCache.removeListener(_onPreferencesChanged);
     _searchController.dispose();
     _searchQuery.dispose();
     super.dispose();
@@ -207,7 +227,9 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                             // Pequeño delay para dar feedback visual
                             await Future.delayed(Duration(milliseconds: 500));
                           },
+                          // ✅ Key cambia cuando preferencias cambian para forzar rebuild completo
                           child: StreamBuilder<QuerySnapshot>(
+                            key: ValueKey('chats_$_preferencesVersion'),
                             stream: _controller.getChatsStream(),
                             builder: (context, snapshot) {
                               // SIEMPRE usar datos cacheados si están disponibles
@@ -241,7 +263,9 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                               );
 
                               // Obtener grupos del parent
+                              // ✅ Key cambia cuando preferencias cambian para forzar rebuild
                               return StreamBuilder<QuerySnapshot>(
+                                    key: ValueKey('groups_$_preferencesVersion'),
                                     stream: _controller.getGroupsStream(),
                                     builder: (context, groupsSnapshot) {
                                       // Filtrar grupos archivados
@@ -586,11 +610,21 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
               }
             }
 
-            // Prioridad: groupData['lastMessage'] > lastMessageFromStream > 'Inicia la conversación'
-            final lastMessage = groupData['lastMessage'] ?? lastMessageFromStream ?? 'Inicia la conversación';
+            // ✅ FIX: Verificar si el grupo fue "limpiado" por el usuario
+            final clearedAt = _preferencesCache.getClearedAt(groupId);
+            final lastMessageTime = groupData['lastMessageTime'] as Timestamp?;
+            final isCleared = clearedAt != null &&
+                (lastMessageTime == null ||
+                    !clearedAt.isBefore(lastMessageTime.toDate()));
 
-            // Formatear tiempo del último mensaje
-            final timeString = _controller.formatTime(groupData['lastMessageTime']);
+            // Prioridad: Si está limpiado, mostrar 'Inicia la conversación'
+            // De lo contrario: groupData['lastMessage'] > lastMessageFromStream > 'Inicia la conversación'
+            final lastMessage = isCleared
+                ? 'Inicia la conversación'
+                : (groupData['lastMessage'] ?? lastMessageFromStream ?? 'Inicia la conversación');
+
+            // Formatear tiempo del último mensaje (vacío si está limpiado)
+            final timeString = isCleared ? '' : _controller.formatTime(groupData['lastMessageTime']);
 
             return GroupChatListItem(
               groupId: groupId,
@@ -602,6 +636,9 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                   groupData['avatar'], // Campo correcto es 'avatar' no 'imageUrl'
               unreadCount: unreadCount,
               onLeaveGroup: () => _confirmLeaveGroup(groupId, groupName),
+              onArchived: () => setState(() => _preferencesVersion++),
+              onMuted: () => setState(() => _preferencesVersion++),
+              onCleared: () => setState(() => _preferencesVersion++),
               lastMessageSenderId: lastMessageSenderId,
               lastMessageStatus: lastMessageStatus,
               lastMessageModerationStatus: lastMessageModerationStatus,
@@ -727,9 +764,9 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                     lastMessageModerationStatus: isChatCleared
                         ? null
                         : lastMessageModerationStatus,
-                    onArchived: () => setState(() {}),
-                    onMuted: () => setState(() {}),
-                    onCleared: () => setState(() {}),
+                    onArchived: () => setState(() => _preferencesVersion++),
+                    onMuted: () => setState(() => _preferencesVersion++),
+                    onCleared: () => setState(() => _preferencesVersion++),
                   );
                 },
               );
@@ -747,9 +784,9 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                 photoURL: photoURL,
                 isEmpty: true,
                 isBlocked: isBlocked,
-                onArchived: () => setState(() {}),
-                onMuted: () => setState(() {}),
-                onCleared: () => setState(() {}),
+                onArchived: () => setState(() => _preferencesVersion++),
+                onMuted: () => setState(() => _preferencesVersion++),
+                onCleared: () => setState(() => _preferencesVersion++),
               );
             }
           },

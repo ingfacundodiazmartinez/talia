@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 import '../services/permission_service.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:image/image.dart' as img;
@@ -40,6 +41,10 @@ class StoryCameraController {
       'bc5821fe04221f7349429783cced44ddbe6006d0287c4397dc97fc5dd993a843429712eda6fe98c9';
   static const String _androidLicenseKey =
       'e54c25aaa8b14776f4837d0c406f91bebb6f9652716847c37004a458645242ccce15c78ea3f1084b';
+
+  // Hive keys para preferencias locales
+  static const String _featureFlagsBoxName = 'feature_flags';
+  static const String _hasUsedFaceSwapKey = 'hasUsedFaceSwap';
 
   // Servicios privados
   final DeepARService _deepARService;
@@ -101,6 +106,7 @@ class StoryCameraController {
   Function()? onCameraInitialized;
   Function(bool)? onLoadingChanged;
   Function(int)? onRecordingTimeChanged;
+  Function()? onFaceSwapFirstUse; // Callback cuando se usa face-swap por primera vez
 
   // Constructor
   StoryCameraController({
@@ -155,6 +161,37 @@ class StoryCameraController {
   bool get isBackCamera => _cameras != null &&
                            _selectedCameraIndex < _cameras!.length &&
                            _cameras![_selectedCameraIndex].lensDirection == CameraLensDirection.back;
+
+  // ═══════════════════════════════════════════════════════════════
+  // FACE SWAP - FIRST USE TRACKING
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Verifica si el usuario ha usado face-swap alguna vez
+  Future<bool> hasUsedFaceSwap() async {
+    try {
+      final box = await Hive.openBox(_featureFlagsBoxName);
+      return box.get(_hasUsedFaceSwapKey, defaultValue: false) as bool;
+    } catch (e) {
+      ReleaseLogger.error('Error checking hasUsedFaceSwap: $e', tag: 'StoryCameraController');
+      return false;
+    }
+  }
+
+  /// Marca que el usuario ha usado face-swap por primera vez
+  Future<void> _markFaceSwapAsUsed() async {
+    try {
+      final box = await Hive.openBox(_featureFlagsBoxName);
+      final wasUsedBefore = box.get(_hasUsedFaceSwapKey, defaultValue: false) as bool;
+
+      if (!wasUsedBefore) {
+        await box.put(_hasUsedFaceSwapKey, true);
+        onFaceSwapFirstUse?.call();
+        ReleaseLogger.log('✨ Face-swap marcado como usado por primera vez', tag: 'StoryCameraController');
+      }
+    } catch (e) {
+      ReleaseLogger.error('Error marking face-swap as used: $e', tag: 'StoryCameraController');
+    }
+  }
 
   /// Inicializa el controller
   Future<void> initialize({BuildContext? context}) async {
@@ -353,9 +390,12 @@ class StoryCameraController {
       _maxExposure = await _cameraController!.getMaxExposureOffset();
       _currentExposure = 0.0;
 
-      // Reset flash mode (off por defecto, especialmente para cámara frontal)
+      // ✅ FIX iOS: Forzar flash off con reintentos
+      // El plugin camera tiene FlashMode.auto como default, y en iOS el
+      // setFlashMode puede no tener efecto si se llama muy temprano.
+      // Esto causaba que la UI mostrara "off" pero el flash real estuviera en "auto".
       _flashMode = FlashMode.off;
-      await _cameraController!.setFlashMode(_flashMode);
+      await _forceFlashModeOff();
 
       ReleaseLogger.log(
         '📸 Camera limits - Zoom: $_minZoom-$_maxZoom, Exposure: $_minExposure-$_maxExposure',
@@ -363,6 +403,30 @@ class StoryCameraController {
       );
     } catch (e) {
       ReleaseLogger.error('Error getting camera limits: $e', tag: 'StoryCameraController');
+    }
+  }
+
+  /// Forzar flash mode a off con reintentos para iOS
+  Future<void> _forceFlashModeOff() async {
+    if (_cameraController == null) return;
+
+    // Intento 1: inmediato
+    try {
+      await _cameraController!.setFlashMode(FlashMode.off);
+      ReleaseLogger.log('🔦 Flash inicializado en OFF (intento 1)', tag: 'StoryCameraController');
+    } catch (e) {
+      ReleaseLogger.log('⚠️ setFlashMode falló en intento 1: $e', tag: 'StoryCameraController');
+    }
+
+    // Intento 2: con pequeño delay (para iOS)
+    await Future.delayed(const Duration(milliseconds: 100));
+    if (_cameraController != null && _cameraController!.value.isInitialized) {
+      try {
+        await _cameraController!.setFlashMode(FlashMode.off);
+        ReleaseLogger.log('🔦 Flash confirmado en OFF (intento 2)', tag: 'StoryCameraController');
+      } catch (e) {
+        ReleaseLogger.log('⚠️ setFlashMode falló en intento 2: $e', tag: 'StoryCameraController');
+      }
     }
   }
 
@@ -421,26 +485,28 @@ class StoryCameraController {
   /// Ciclar entre modos de flash: off → auto → always → torch → off
   /// Para cámara frontal, solo cambia entre off y always (screen flash)
   Future<void> toggleFlashMode() async {
-    if (_cameraController == null || !_isCameraInitialized) return;
-
     FlashMode nextMode;
 
-    // Para cámara frontal: solo off ↔ always (screen flash)
-    if (!isBackCamera) {
+    // Para cámara frontal (o DeepAR en modo frontal): solo off ↔ always (screen flash)
+    // El screen flash funciona mostrando pantalla blanca, no requiere cameraController
+    if (!isBackCamera || (_filterType == 'deepar' && _isDeepARInitialized)) {
       nextMode = _flashMode == FlashMode.off ? FlashMode.always : FlashMode.off;
       _flashMode = nextMode;
+      ReleaseLogger.log('🔦 Screen flash: ${nextMode == FlashMode.always ? "ON" : "OFF"}', tag: 'StoryCameraController');
 
-      // Intentar configurar en el plugin, pero ignorar errores silenciosamente
-      // iOS maneja el screen flash automáticamente si el plugin lo soporta
-      try {
-        await _cameraController!.setFlashMode(nextMode);
-        ReleaseLogger.log('🔦 Screen flash: ${nextMode == FlashMode.always ? "ON" : "OFF"}', tag: 'StoryCameraController');
-      } catch (e) {
-        // Ignorar error silenciosamente - algunos dispositivos no soportan flash en cámara frontal
-        ReleaseLogger.log('🔦 Screen flash (local): ${nextMode == FlashMode.always ? "ON" : "OFF"} - hardware no soportado', tag: 'StoryCameraController');
+      // Intentar configurar en el plugin si está disponible
+      if (_cameraController != null && _isCameraInitialized) {
+        try {
+          await _cameraController!.setFlashMode(nextMode);
+        } catch (e) {
+          // Ignorar - el screen flash se maneja por software
+        }
       }
       return;
     }
+
+    // Para cámara trasera: requiere cameraController
+    if (_cameraController == null || !_isCameraInitialized) return;
 
     // Para cámara trasera: ciclar todos los modos
     try {
@@ -639,6 +705,7 @@ class StoryCameraController {
         // 🔄 INCREMENTAR CONTADOR PARA FACE SWAP después de aplicar exitosamente
         if (filterName == DeepARFilters.faceSwap) {
           await _usageLimitsService.incrementFaceSwapUsage();
+          await _markFaceSwapAsUsed();
           final usage = await _usageLimitsService.getFaceSwapUsage();
           final isUnlimited = usage['unlimited'] == true;
           final successMessage = isUnlimited
@@ -734,6 +801,15 @@ class StoryCameraController {
         throw Exception('Cámara no inicializada');
       }
 
+      // ✅ FIX: Sincronizar flash mode con el plugin ANTES de tomar la foto
+      // Esto asegura que el estado interno del plugin coincida con nuestro estado
+      try {
+        await _cameraController!.setFlashMode(_flashMode);
+        ReleaseLogger.log('🔦 Flash sincronizado antes de foto: ${_flashMode.name}', tag: 'StoryCameraController');
+      } catch (e) {
+        ReleaseLogger.log('⚠️ No se pudo sincronizar flash: $e', tag: 'StoryCameraController');
+      }
+
       final image = await _cameraController!.takePicture();
       return image.path;
     } catch (e) {
@@ -802,14 +878,19 @@ class StoryCameraController {
       // ✅ CASO 1: Modo DeepAR
       if (_filterType == 'deepar' && _isDeepARInitialized) {
         ReleaseLogger.log('⏹️ Deteniendo grabación DeepAR...', tag: 'StoryCameraController');
-        await _deepARService.stopRecording();
 
-        // DeepAR guarda en el path que le pasamos
-        if (_recordedVideoPath != null) {
-          ReleaseLogger.log('✅ Video DeepAR guardado: $_recordedVideoPath', tag: 'StoryCameraController');
-          return _recordedVideoPath;
+        // ✅ FIX: Esperar a que DeepAR procese el video y lo guarde
+        // Antes retornábamos inmediatamente, pero el video todavía no existía
+        final videoPath = await _deepARService.stopRecordingAndWaitForVideo();
+
+        if (videoPath != null && videoPath.isNotEmpty) {
+          _recordedVideoPath = videoPath;
+          ReleaseLogger.log('✅ Video DeepAR guardado: $videoPath', tag: 'StoryCameraController');
+          return videoPath;
+        } else {
+          ReleaseLogger.error('❌ DeepAR no retornó path de video', tag: 'StoryCameraController');
+          return null;
         }
-        return null;
       }
 
       // ✅ CASO 2: Modo Flutter Camera normal
@@ -1103,6 +1184,7 @@ class StoryCameraController {
 
       // Incrementar contador de face swap
       await _usageLimitsService.incrementFaceSwapUsage();
+      await _markFaceSwapAsUsed();
       final usage = await _usageLimitsService.getFaceSwapUsage();
 
       // Descargar imagen transformada y reemplazar archivo original
@@ -1260,6 +1342,7 @@ class StoryCameraController {
 
       // Incrementar contador
       await _usageLimitsService.incrementFaceSwapUsage();
+      await _markFaceSwapAsUsed();
       final usage = await _usageLimitsService.getFaceSwapUsage();
 
       // Guardar resultado

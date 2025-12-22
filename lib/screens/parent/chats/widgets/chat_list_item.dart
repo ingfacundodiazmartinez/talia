@@ -7,6 +7,7 @@ import '../../../../controllers/chat_list_item_controller.dart';
 import '../../../../models/chat_message.dart';
 import '../../../../widgets/message_status_indicator.dart';
 import '../../../../widgets/synced_user_widgets.dart';
+import '../../../../utils/release_logger.dart';
 import '../../../chat_detail_screen.dart';
 
 class ChatListItem extends StatefulWidget {
@@ -73,16 +74,21 @@ class _ChatListItemState extends State<ChatListItem> {
     final success = await _controller.archiveChat();
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            success ? 'Chat archivado' : 'Error al archivar chat',
+      if (!success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al archivar chat'),
+            backgroundColor: Colors.red,
           ),
-          backgroundColor: success ? Colors.green : Colors.red,
-        ),
-      );
-      if (success) {
-        widget.onArchived?.call();
+        );
+      } else {
+        // ✅ Log para verificar que el callback se ejecuta
+        if (widget.onArchived != null) {
+          ReleaseLogger.log('✅ [ChatListItem] Llamando onArchived callback', tag: 'ChatListItem');
+          widget.onArchived!.call();
+        } else {
+          ReleaseLogger.warning('⚠️ [ChatListItem] onArchived callback es NULL!', tag: 'ChatListItem');
+        }
       }
     }
   }
@@ -91,15 +97,14 @@ class _ChatListItemState extends State<ChatListItem> {
     final success = await _controller.muteChat();
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            success ? 'Chat silenciado' : 'Error al silenciar chat',
+      if (!success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al silenciar chat'),
+            backgroundColor: Colors.red,
           ),
-          backgroundColor: success ? Colors.green : Colors.red,
-        ),
-      );
-      if (success) {
+        );
+      } else {
         widget.onMuted?.call();
       }
     }
@@ -109,15 +114,14 @@ class _ChatListItemState extends State<ChatListItem> {
     final success = await _controller.unmuteChat();
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            success ? 'Chat desilenciado' : 'Error al desilenciar chat',
+      if (!success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al desilenciar chat'),
+            backgroundColor: Colors.red,
           ),
-          backgroundColor: success ? Colors.green : Colors.red,
-        ),
-      );
-      if (success) {
+        );
+      } else {
         widget.onMuted?.call();
       }
     }
@@ -258,15 +262,14 @@ class _ChatListItemState extends State<ChatListItem> {
                                 final success = await _controller.clearChat();
 
                                 if (mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        success ? 'Chat limpiado' : 'Error al limpiar chat',
+                                  if (!success) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text('Error al limpiar chat'),
+                                        backgroundColor: Colors.red,
                                       ),
-                                      backgroundColor: success ? Colors.green : Colors.red,
-                                    ),
-                                  );
-                                  if (success) {
+                                    );
+                                  } else {
                                     widget.onCleared?.call();
                                   }
                                 }

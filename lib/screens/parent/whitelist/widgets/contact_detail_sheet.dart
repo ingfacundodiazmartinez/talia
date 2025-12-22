@@ -147,18 +147,6 @@ class _ContactDetailSheetState extends State<ContactDetailSheet> {
       if (!result.success) {
         throw Exception(result.message);
       }
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(enabled
-                ? 'Moderación activada para ${relation.childName}'
-                : 'Moderación desactivada'),
-            backgroundColor: enabled ? Colors.green : Colors.orange,
-            duration: Duration(seconds: 2),
-          ),
-        );
-      }
     } catch (e) {
       // Revertir
       setState(() {
@@ -199,15 +187,6 @@ class _ContactDetailSheetState extends State<ContactDetailSheet> {
         throw Exception(result.message);
       }
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Nivel actualizado a ${_getLevelLabel(level)}'),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 2),
-          ),
-        );
-      }
     } catch (e) {
       // Revertir
       setState(() {
@@ -390,7 +369,7 @@ class _ContactDetailSheetState extends State<ContactDetailSheet> {
                 radius: 14,
                 backgroundColor: colorScheme.primaryContainer,
                 backgroundImage: relation.childPhotoURL != null && relation.childPhotoURL!.isNotEmpty
-                    ? NetworkImage(relation.childPhotoURL!)
+                    ? CachedNetworkImageProvider(relation.childPhotoURL!)
                     : null,
                 child: relation.childPhotoURL == null || relation.childPhotoURL!.isEmpty
                     ? Text(

@@ -6,11 +6,6 @@ import '../../../controllers/story_viewer_controller.dart';
 import 'package:video_player/video_player.dart';
 
 /// Widget que maneja el contenido principal de las historias
-///
-/// Responsabilidades:
-/// - Mostrar PageView de usuarios y sus historias
-/// - Manejar videos e imágenes
-/// - Gestionar carga y precarga de contenido
 class StoryContentWidget extends StatelessWidget {
   final PageController userPageController;
   final PageController? storyPageController;
@@ -24,6 +19,8 @@ class StoryContentWidget extends StatelessWidget {
   final Function(int) onStoryChanged;
   final StoryViewerController controller;
   final Widget Function(Story) buildVideoPlayer;
+  final bool showCaptionOverlay;
+  final bool hasReplyInput;
 
   const StoryContentWidget({
     super.key,
@@ -39,6 +36,8 @@ class StoryContentWidget extends StatelessWidget {
     required this.onStoryChanged,
     required this.controller,
     required this.buildVideoPlayer,
+    this.showCaptionOverlay = true,
+    this.hasReplyInput = false,
   });
 
   List<Story> _getStoriesForUser(UserStories userStories) {
@@ -47,7 +46,6 @@ class StoryContentWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // ✅ Fondo negro para que no se vean márgenes blancos con BoxFit.contain
     return Container(
       color: Colors.black,
       child: PageView.builder(
@@ -58,14 +56,10 @@ class StoryContentWidget extends StatelessWidget {
           final userStories = allUserStories[userIndex];
           final stories = _getStoriesForUser(userStories);
 
-          // ✅ Deshabilitar scroll del PageView interno para que el swipe horizontal
-          // se propague al PageView externo (cambio de usuario/grupo)
-          // Las historias individuales se cambian con taps izquierda/derecha
-          // ✅ FIX: Key único por usuario para evitar reutilización incorrecta de widgets
           return PageView.builder(
             key: ValueKey('user_stories_${userStories.userId}'),
             controller: userIndex == currentUserIndex ? storyPageController : null,
-            physics: const NeverScrollableScrollPhysics(), // ← Deshabilitar swipe
+            physics: const NeverScrollableScrollPhysics(),
             itemCount: stories.length,
             onPageChanged: (storyIndex) {
               if (userIndex == currentUserIndex) {
@@ -75,8 +69,6 @@ class StoryContentWidget extends StatelessWidget {
             itemBuilder: (context, storyIndex) {
               final story = stories[storyIndex];
 
-              // ✅ FIX: Key único por historia para evitar que Flutter muestre el contenido incorrecto
-              // Contenedor negro para cada historia individual
               return Container(
                 key: ValueKey('story_content_${story.id}'),
                 color: Colors.black,
@@ -99,20 +91,129 @@ class StoryContentWidget extends StatelessWidget {
         return _buildMoodContent(context, story, userIndex, storyIndex);
       case 'video':
       default:
-        return buildVideoPlayer(story);
+        return _buildVideoContent(context, story, userIndex, storyIndex);
     }
   }
 
-  Widget _buildMoodContent(BuildContext context, Story story, int userIndex, int storyIndex) {
-    // Extraer emoji del mediaUrl (formato: mood://😊)
-    final emoji = story.mediaUrl.replaceFirst('mood://', '');
+  Widget _buildImageContent(BuildContext context, Story story, int userIndex, int storyIndex) {
+    final hasCaption = showCaptionOverlay &&
+        story.caption != null &&
+        story.caption!.trim().isNotEmpty;
 
-    // Extraer datos del filter
+    Widget imageWidget;
+
+    // Si tiene archivo local (mientras se sube)
+    if (story.localMediaPath != null && story.localMediaPath!.isNotEmpty) {
+      imageWidget = Image.file(
+        File(story.localMediaPath!),
+        fit: BoxFit.cover,
+        width: double.infinity,
+        height: double.infinity,
+      );
+
+      // Notificar carga
+      if (!isCurrentStoryLoaded &&
+          userIndex == currentUserIndex &&
+          storyIndex == currentStoryIndex) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          onStoryLoaded();
+        });
+      }
+    } else {
+      // Imagen de red
+      imageWidget = CachedNetworkImage(
+        key: ValueKey('cached_image_${story.id}'),
+        imageUrl: story.mediaUrl,
+        fit: BoxFit.cover,
+        width: double.infinity,
+        height: double.infinity,
+        memCacheWidth: (MediaQuery.of(context).size.width * MediaQuery.of(context).devicePixelRatio).round(),
+        memCacheHeight: (MediaQuery.of(context).size.height * MediaQuery.of(context).devicePixelRatio).round(),
+        maxWidthDiskCache: 1080,
+        maxHeightDiskCache: 1920,
+        placeholder: (context, url) => const Center(
+          child: CircularProgressIndicator(color: Colors.white),
+        ),
+        errorWidget: (context, url, error) => const Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.error, color: Colors.white, size: 48),
+              SizedBox(height: 16),
+              Text('Error cargando imagen', style: TextStyle(color: Colors.white)),
+            ],
+          ),
+        ),
+        imageBuilder: (context, imageProvider) {
+          if (!isCurrentStoryLoaded &&
+              userIndex == currentUserIndex &&
+              storyIndex == currentStoryIndex) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              controller.logImageLoaded();
+              onStoryLoaded();
+            });
+          }
+          return Image(
+            image: imageProvider,
+            fit: BoxFit.cover,
+            width: double.infinity,
+            height: double.infinity,
+          );
+        },
+      );
+    }
+
+    // Si no hay caption, devolver solo la imagen
+    if (!hasCaption) {
+      return imageWidget;
+    }
+
+    // Con caption: Stack con imagen + caption overlay
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        imageWidget,
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: hasReplyInput ? 100 : 30,
+          child: _buildCaptionWidget(story.caption!),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildVideoContent(BuildContext context, Story story, int userIndex, int storyIndex) {
+    final hasCaption = showCaptionOverlay &&
+        story.caption != null &&
+        story.caption!.trim().isNotEmpty;
+
+    final videoWidget = buildVideoPlayer(story);
+
+    if (!hasCaption) {
+      return videoWidget;
+    }
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        videoWidget,
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: hasReplyInput ? 100 : 30,
+          child: _buildCaptionWidget(story.caption!),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMoodContent(BuildContext context, Story story, int userIndex, int storyIndex) {
+    final emoji = story.mediaUrl.replaceFirst('mood://', '');
     final questionText = story.filter?['questionText'] as String? ?? '';
     final responseText = story.filter?['text'] as String? ??
         story.caption?.replaceFirst(RegExp(r'^[\p{Emoji}]+\s*', unicode: true), '') ?? '';
 
-    // Notificar que la historia está cargada
     if (!isCurrentStoryLoaded &&
         userIndex == currentUserIndex &&
         storyIndex == currentStoryIndex) {
@@ -128,15 +229,11 @@ class StoryContentWidget extends StatelessWidget {
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [
-            Color(0xFF667eea),
-            Color(0xFF764ba2),
-          ],
+          colors: [Color(0xFF667eea), Color(0xFF764ba2)],
         ),
       ),
       child: Stack(
         children: [
-          // Círculos decorativos
           Positioned(
             top: -80,
             right: -80,
@@ -173,7 +270,6 @@ class StoryContentWidget extends StatelessWidget {
               ),
             ),
           ),
-          // Contenido centrado
           SafeArea(
             child: Center(
               child: Padding(
@@ -181,7 +277,6 @@ class StoryContentWidget extends StatelessWidget {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Pregunta
                     if (questionText.isNotEmpty) ...[
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -202,13 +297,8 @@ class StoryContentWidget extends StatelessWidget {
                       ),
                       const SizedBox(height: 32),
                     ],
-                    // Emoji grande
-                    Text(
-                      emoji,
-                      style: const TextStyle(fontSize: 90),
-                    ),
+                    Text(emoji, style: const TextStyle(fontSize: 90)),
                     const SizedBox(height: 20),
-                    // Respuesta
                     if (responseText.isNotEmpty)
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
@@ -237,69 +327,32 @@ class StoryContentWidget extends StatelessWidget {
     );
   }
 
-  Widget _buildImageContent(BuildContext context, Story story, int userIndex, int storyIndex) {
-    // Si tiene archivo local (mientras se sube)
-    if (story.localMediaPath != null && story.localMediaPath!.isNotEmpty) {
-      return Image.file(
-        File(story.localMediaPath!),
-        fit: BoxFit.contain,
-        width: double.infinity,
-        height: double.infinity,
-      );
-    }
-
-    // Imagen de red (ya subida)
-    // ✅ FIX: Key único para evitar que Flutter reutilice el widget con imagen incorrecta
-    return CachedNetworkImage(
-      key: ValueKey('cached_image_${story.id}'),
-      imageUrl: story.mediaUrl,
-      fit: BoxFit.contain,
-      width: double.infinity,
-      height: double.infinity,
-      // Optimización: cachear en tamaño máximo de pantalla
-      memCacheWidth: (MediaQuery.of(context).size.width * MediaQuery.of(context).devicePixelRatio).round(),
-      memCacheHeight: (MediaQuery.of(context).size.height * MediaQuery.of(context).devicePixelRatio).round(),
-      maxWidthDiskCache: 1080, // Máximo en disco
-      maxHeightDiskCache: 1920,
-      placeholder: (context, url) => Center(
-        child: CircularProgressIndicator(
+  Widget _buildCaptionWidget(String caption) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+      child: Text(
+        caption,
+        style: TextStyle(
           color: Colors.white,
-        ),
-      ),
-      errorWidget: (context, url, error) => Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.error,
-              color: Colors.white,
-              size: 48,
+          fontSize: 16,
+          fontWeight: FontWeight.w500,
+          shadows: [
+            Shadow(
+              offset: const Offset(0, 1),
+              blurRadius: 3,
+              color: Colors.black.withValues(alpha: 0.8),
             ),
-            SizedBox(height: 16),
-            Text(
-              'Error cargando imagen',
-              style: TextStyle(color: Colors.white),
+            Shadow(
+              offset: const Offset(0, 2),
+              blurRadius: 6,
+              color: Colors.black.withValues(alpha: 0.5),
             ),
           ],
         ),
+        textAlign: TextAlign.center,
+        maxLines: 5,
+        overflow: TextOverflow.ellipsis,
       ),
-      imageBuilder: (context, imageProvider) {
-        // Imagen cargada, notificar solo si aún no está cargada
-        if (!isCurrentStoryLoaded &&
-            userIndex == currentUserIndex &&
-            storyIndex == currentStoryIndex) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            controller.logImageLoaded();
-            onStoryLoaded();
-          });
-        }
-        return Image(
-          image: imageProvider,
-          fit: BoxFit.contain,
-          width: double.infinity,
-          height: double.infinity,
-        );
-      },
     );
   }
 }

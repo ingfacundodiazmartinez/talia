@@ -29,6 +29,8 @@ class ContactAliasService {
   }
 
   /// Stream que escucha cambios en el nombre a mostrar de un contacto
+  /// ✅ Usa distinct() para evitar rebuilds innecesarios cuando otros campos
+  /// del documento cambian (como lastSeen, isOnline, etc.)
   Stream<String> watchDisplayName(String contactId, String realName) {
     final currentUser = _auth.currentUser;
     if (currentUser == null) return Stream.value(realName);
@@ -49,7 +51,7 @@ class ContactAliasService {
       }
 
       return realName;
-    });
+    }).distinct(); // ✅ Solo emite cuando el valor del alias realmente cambia
   }
 
   /// Guardar un alias para un contacto

@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:gal/gal.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import '../../../services/video_cache_service.dart';
 
 /// Pantalla para visualizar imágenes y videos en pantalla completa
 /// con navegación entre múltiples medios mediante swipe
@@ -66,10 +67,11 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
 
     final item = widget.mediaItems[index];
     if (item.type == 'video' && !_videoControllers.containsKey(index)) {
-      final controller = VideoPlayerController.networkUrl(Uri.parse(item.url));
-      _videoControllers[index] = controller;
-
       try {
+        // Usar cache service para obtener controller con cache
+        final controller = await VideoCacheService().getController(item.url);
+        _videoControllers[index] = controller;
+
         await controller.initialize();
         if (mounted && _currentIndex == index) {
           setState(() {});
@@ -299,10 +301,13 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
   }
 
   void _showSnackBar(String message, {bool isError = false}) {
+    // Only show error snackbars
+    if (!isError) return;
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
-        backgroundColor: isError ? Colors.red : Colors.green,
+        backgroundColor: Colors.red,
         behavior: SnackBarBehavior.floating,
         margin: const EdgeInsets.all(16),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),

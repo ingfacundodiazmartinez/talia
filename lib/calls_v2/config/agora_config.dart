@@ -32,6 +32,9 @@ class AgoraConfig {
   static Future<void> initialize() async {
     if (_isInitialized) return;
 
+    ReleaseLogger.log('🎥 [AgoraConfig] Initializing...', tag: 'AgoraConfig');
+    ReleaseLogger.log('🎥 [AgoraConfig] Dart-define App ID: ${_dartDefineAppId.isNotEmpty ? "${_dartDefineAppId.substring(0, 8)}..." : "(empty)"}', tag: 'AgoraConfig');
+
     try {
       final remoteConfig = FirebaseRemoteConfig.instance;
 
@@ -41,36 +44,66 @@ class AgoraConfig {
       });
 
       // Fetch with short timeout for faster startup
+      // ✅ FIX: Usar intervalo mínimo de 0 para debug, asegura fetch fresco
       await remoteConfig.setConfigSettings(RemoteConfigSettings(
         fetchTimeout: const Duration(seconds: 10),
-        minimumFetchInterval: const Duration(hours: 1),
+        minimumFetchInterval: Duration.zero, // Siempre fetch fresco
       ));
 
       // Try to fetch from server
       try {
-        await remoteConfig.fetchAndActivate();
+        final activated = await remoteConfig.fetchAndActivate();
+        ReleaseLogger.log('🎥 [AgoraConfig] Remote Config fetched, activated: $activated', tag: 'AgoraConfig');
       } catch (e) {
         ReleaseLogger.log(
-          'AgoraConfig: Remote fetch failed, using cached/default: $e',
+          '🎥 [AgoraConfig] Remote fetch failed, using cached/default: $e',
+          tag: 'AgoraConfig',
         );
       }
 
       // Get the App ID
       _cachedAppId = remoteConfig.getString('agora_app_id');
 
+      // Debug: mostrar todas las keys disponibles
+      final allKeys = remoteConfig.getAll();
+      ReleaseLogger.log('🎥 [AgoraConfig] Remote Config keys: ${allKeys.keys.toList()}', tag: 'AgoraConfig');
+      ReleaseLogger.log('🎥 [AgoraConfig] Remote Config agora_app_id: ${_cachedAppId?.isNotEmpty == true ? "${_cachedAppId!.substring(0, 8)}..." : "(empty)"}', tag: 'AgoraConfig');
+      ReleaseLogger.log('🎥 [AgoraConfig] Last fetch status: ${remoteConfig.lastFetchStatus}', tag: 'AgoraConfig');
+
       if (_cachedAppId?.isEmpty ?? true) {
         _cachedAppId = _dartDefineAppId;
+        ReleaseLogger.log('🎥 [AgoraConfig] Using dart-define fallback', tag: 'AgoraConfig');
       }
 
       _isInitialized = true;
 
+      final isConfiguredNow = isConfigured();
       ReleaseLogger.log(
-        'AgoraConfig: Initialized (source: ${_cachedAppId == _dartDefineAppId ? "dart-define" : "Remote Config"})',
+        '🎥 [AgoraConfig] ✅ Initialized - isConfigured: $isConfiguredNow, source: ${_cachedAppId == _dartDefineAppId ? "dart-define" : "Remote Config"}',
+        tag: 'AgoraConfig',
       );
+
+      if (!isConfiguredNow) {
+        ReleaseLogger.error(
+          '🎥 [AgoraConfig] ❌ WARNING: Agora App ID is EMPTY! Video calls will NOT work.',
+          tag: 'AgoraConfig',
+        );
+        ReleaseLogger.error(
+          '🎥 [AgoraConfig] Please configure "agora_app_id" in Firebase Remote Config or use --dart-define=AGORA_APP_ID=your_app_id',
+          tag: 'AgoraConfig',
+        );
+      }
     } catch (e) {
-      ReleaseLogger.error('AgoraConfig: Init failed, using dart-define: $e');
+      ReleaseLogger.error('🎥 [AgoraConfig] Init failed: $e', tag: 'AgoraConfig');
       _cachedAppId = _dartDefineAppId;
       _isInitialized = true;
+
+      if (!isConfigured()) {
+        ReleaseLogger.error(
+          '🎥 [AgoraConfig] ❌ CRITICAL: No Agora App ID available!',
+          tag: 'AgoraConfig',
+        );
+      }
     }
   }
 

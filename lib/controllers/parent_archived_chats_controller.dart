@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
-import '../models/chat.dart';
 import '../services/chats/chat_services.dart';
 import '../services/contact_alias_service.dart';
 import '../services/block_service.dart';
@@ -13,13 +12,14 @@ import '../utils/release_logger.dart';
 /// - Gestionar autenticación de usuario
 /// - Obtener información de usuarios (Firestore)
 /// - Manejar operaciones de archivado/desarchivado
-/// - Proporcionar streams de servicios
+/// - Proporcionar streams de Firestore (igual que BaseChatsController)
 /// - Cumplir con CODING_RULES.md: ZERO Firebase calls en screens
 ///
-/// ✅ CORREGIDO: Usa ChatPreferencesCache (Hive) en vez de Firestore
+/// ✅ CORREGIDO: Usa EXACTAMENTE el mismo patrón que ParentChatsScreen:
+/// - Stream<QuerySnapshot> CRUDO de Firestore (sin .map())
+/// - Filtrado en el builder de la Screen
 class ParentArchivedChatsController {
   // Servicios privados
-  final ListChatsService _listChatsService;
   final UnarchiveChatService _unarchiveService;
   final ChatPreferencesCache _preferencesCache;
   final ContactAliasService _aliasService;
@@ -29,20 +29,16 @@ class ParentArchivedChatsController {
 
   // Estado interno
   String? _currentUserId;
-  StreamSubscription? _chatsSubscription;
-  final _archivedChatsController = StreamController<List<Chat>>.broadcast();
 
   /// Constructor
   ParentArchivedChatsController({
-    ListChatsService? listChatsService,
     UnarchiveChatService? unarchiveService,
     ChatPreferencesCache? preferencesCache,
     ContactAliasService? aliasService,
     BlockService? blockService,
     FirebaseFirestore? firestore,
     firebase_auth.FirebaseAuth? auth,
-  })  : _listChatsService = listChatsService ?? ListChatsService(),
-        _unarchiveService = unarchiveService ?? UnarchiveChatService(),
+  })  : _unarchiveService = unarchiveService ?? UnarchiveChatService(),
         _preferencesCache = preferencesCache ?? ChatPreferencesCache(),
         _aliasService = aliasService ?? ContactAliasService(),
         _blockService = blockService ?? BlockService(),
@@ -53,7 +49,44 @@ class ParentArchivedChatsController {
   String? get currentUserId => _currentUserId ?? _auth.currentUser?.uid;
   String get currentUserIdSafe => currentUserId ?? '';
   bool get isUserAuthenticated => currentUserId != null;
-  Stream<List<Chat>> get archivedChatsStream => _archivedChatsController.stream;
+
+  /// ✅ Stream CRUDO de Firestore - EXACTAMENTE igual que BaseChatsController.getChatsStream()
+  /// NO usa .map() para que cuando ValueKey cambie, Firestore emita datos cacheados inmediatamente
+  Stream<QuerySnapshot> getChatsStream() {
+    final userId = currentUserIdSafe;
+    if (userId.isEmpty) return Stream.value(_EmptyQuerySnapshot());
+
+    return _firestore
+        .collection('chats')
+        .where('participants', arrayContains: userId)
+        .orderBy('lastMessageTime', descending: true)
+        .limit(50)
+        .snapshots(includeMetadataChanges: false);
+  }
+
+  /// ✅ Stream CRUDO de Firestore - EXACTAMENTE igual que BaseChatsController.getGroupsStream()
+  Stream<QuerySnapshot> getGroupsStream() {
+    final userId = currentUserIdSafe;
+    if (userId.isEmpty) return Stream.value(_EmptyQuerySnapshot());
+
+    return _firestore
+        .collection('groups_v2')
+        .where('members', arrayContains: userId)
+        .where('isActive', isEqualTo: true)
+        .orderBy('lastActivity', descending: true)
+        .limit(50)
+        .snapshots(includeMetadataChanges: false);
+  }
+
+  /// ✅ Filtrar SOLO chats archivados (se llama EN EL BUILDER, no en stream)
+  List<QueryDocumentSnapshot> filterOnlyArchivedChats(List<QueryDocumentSnapshot> chatDocs) {
+    return chatDocs.where((doc) => _preferencesCache.isArchived(doc.id)).toList();
+  }
+
+  /// ✅ Filtrar SOLO grupos archivados (se llama EN EL BUILDER, no en stream)
+  List<QueryDocumentSnapshot> filterOnlyArchivedGroups(List<QueryDocumentSnapshot> groupDocs) {
+    return groupDocs.where((doc) => _preferencesCache.isArchived(doc.id)).toList();
+  }
 
   /// Inicializar el controller
   void initialize() {
@@ -63,34 +96,10 @@ class ParentArchivedChatsController {
         ReleaseLogger.warning('Usuario no autenticado en ParentArchivedChatsController', tag: 'ArchivedChats');
       } else {
         ReleaseLogger.log('ParentArchivedChatsController inicializado para usuario: $_currentUserId', tag: 'ArchivedChats');
-        _startListeningChats();
       }
     } catch (e) {
       ReleaseLogger.error('Error inicializando ParentArchivedChatsController: $e', tag: 'ArchivedChats');
     }
-  }
-
-  /// ✅ Escuchar chats y filtrar archivados desde Hive
-  void _startListeningChats() {
-    _chatsSubscription?.cancel();
-
-    _chatsSubscription = _listChatsService
-        .call(includeArchived: true)
-        .listen(
-          (chats) {
-            // Filtrar solo los archivados usando el cache de Hive
-            final archived = chats.where((c) => _preferencesCache.isArchived(c.id)).toList();
-            _archivedChatsController.add(archived);
-          },
-          onError: (e) {
-            ReleaseLogger.error('Error en stream de chats archivados: $e', tag: 'ArchivedChats');
-          },
-        );
-  }
-
-  /// Refrescar la lista
-  void refresh() {
-    _startListeningChats();
   }
 
   /// Desarchivar chat
@@ -106,7 +115,6 @@ class ParentArchivedChatsController {
 
       if (result.success) {
         ReleaseLogger.log('Chat $chatId desarchivado exitosamente', tag: 'ArchivedChats');
-        refresh(); // Refrescar la lista
       } else {
         ReleaseLogger.error('Error desarchivando chat $chatId: ${result.message}', tag: 'ArchivedChats');
       }
@@ -114,6 +122,30 @@ class ParentArchivedChatsController {
       return result.success;
     } catch (e) {
       ReleaseLogger.error('Error desarchivando chat: $e', tag: 'ArchivedChats');
+      return false;
+    }
+  }
+
+  /// Desarchivar grupo (usa el mismo servicio que chats - IDs son genéricos)
+  Future<bool> unarchiveGroup(String groupId) async {
+    try {
+      final userId = currentUserId;
+      if (userId == null) {
+        ReleaseLogger.error('Usuario no autenticado para desarchivar grupo', tag: 'ArchivedChats');
+        return false;
+      }
+
+      final result = await _unarchiveService.call(chatId: groupId);
+
+      if (result.success) {
+        ReleaseLogger.log('Grupo $groupId desarchivado exitosamente', tag: 'ArchivedChats');
+      } else {
+        ReleaseLogger.error('Error desarchivando grupo $groupId: ${result.message}', tag: 'ArchivedChats');
+      }
+
+      return result.success;
+    } catch (e) {
+      ReleaseLogger.error('Error desarchivando grupo: $e', tag: 'ArchivedChats');
       return false;
     }
   }
@@ -219,7 +251,29 @@ class ParentArchivedChatsController {
   /// Limpiar recursos
   void dispose() {
     ReleaseLogger.log('Disposing ParentArchivedChatsController', tag: 'ArchivedChats');
-    _chatsSubscription?.cancel();
-    _archivedChatsController.close();
+    // No hay subscripciones que limpiar - los streams se manejan en la UI
   }
+}
+
+/// Clase auxiliar para devolver un QuerySnapshot vacío cuando no hay usuario
+class _EmptyQuerySnapshot implements QuerySnapshot<Map<String, dynamic>> {
+  @override
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> get docs => [];
+
+  @override
+  List<DocumentChange<Map<String, dynamic>>> get docChanges => [];
+
+  @override
+  SnapshotMetadata get metadata => _EmptyMetadata();
+
+  @override
+  int get size => 0;
+}
+
+class _EmptyMetadata implements SnapshotMetadata {
+  @override
+  bool get hasPendingWrites => false;
+
+  @override
+  bool get isFromCache => true;
 }

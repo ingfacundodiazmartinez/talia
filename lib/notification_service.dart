@@ -24,10 +24,12 @@ import 'services/notification_tracking_service.dart';
 import 'services/notification_preferences_service.dart';
 import 'services/story_service_refactored.dart'; // ✅ FIX #11: Para refresh de stories (también exporta StoryStatus)
 import 'services/stories/story_orchestrator.dart'; // ✅ FIX #10: Para actualización inmediata de cache
+import 'services/chats/chat_services.dart'; // ✅ Para verificar mute de chats/grupos
 import 'utils/release_logger.dart';
 // ❌ REMOVED (DATA-ONLY): notification_deduplication_service, local_unread_count_service
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
+import 'package:permission_handler/permission_handler.dart';
 // V2 Call System imports
 import 'calls_v2/controllers/call_controller.dart' as calls_v2;
 import 'calls_v2/screens/agora_call_screen.dart';
@@ -245,6 +247,11 @@ class NotificationService {
   // ✅ FIXED: Deduplicación para evitar notificaciones duplicadas
   final Set<String> _processedCallIds = {};
   final Set<String> _processedMessageIds = {};
+  final Set<String> _processedNotificationIds = {};
+
+  // ✅ Listener de Firestore para notificaciones en foreground
+  StreamSubscription? _notificationsStreamSubscription;
+  DateTime? _notificationsListenerStartTime;
 
   // Stream para notificar videollamadas entrantes
   final _incomingCallController =
@@ -793,6 +800,9 @@ class NotificationService {
       // 7. ✅ CRÍTICO: Verificar si hay usuario autenticado e iniciar monitoreo automáticamente
       await _checkAndStartCallMonitoring();
 
+      // 8. ✅ Iniciar listener de Firestore para notificaciones en foreground
+      await _startNotificationsListener();
+
       _isInitialized = true;
       ReleaseLogger.log(
         '✅ Servicio de notificaciones inicializado (DATA-ONLY strategy)',
@@ -813,6 +823,42 @@ class NotificationService {
         '🔔 Solicitando permisos de notificaciones...',
         tag: 'NotificationService',
       );
+
+      // ✅ FIX: Android 13+ (API 33) requiere permiso POST_NOTIFICATIONS explícito
+      // Sin este permiso, las notificaciones no se muestran en Android 13+
+      if (Platform.isAndroid) {
+        final androidNotifPermission = await Permission.notification.status;
+        ReleaseLogger.log(
+          '🤖 [Android] Estado permiso notificaciones: $androidNotifPermission',
+          tag: 'NotificationService',
+        );
+
+        if (androidNotifPermission.isDenied || androidNotifPermission.isRestricted) {
+          ReleaseLogger.log(
+            '🤖 [Android] Solicitando permiso POST_NOTIFICATIONS...',
+            tag: 'NotificationService',
+          );
+          final result = await Permission.notification.request();
+          ReleaseLogger.log(
+            '🤖 [Android] Resultado solicitud: $result',
+            tag: 'NotificationService',
+          );
+
+          if (result.isPermanentlyDenied) {
+            ReleaseLogger.log(
+              '⚠️ [Android] Permiso denegado permanentemente - usuario debe habilitarlo manualmente',
+              tag: 'NotificationService',
+            );
+          }
+        } else if (androidNotifPermission.isGranted) {
+          ReleaseLogger.log(
+            '✅ [Android] Permiso de notificaciones ya concedido',
+            tag: 'NotificationService',
+          );
+        }
+      }
+
+      // Solicitar permisos de FCM (principalmente para iOS)
       final settings = await _fcm.requestPermission(
         alert: true,
         announcement: false,
@@ -824,59 +870,27 @@ class NotificationService {
       );
 
       ReleaseLogger.log(
-        '📱 Permisos de notificaciones: ${settings.authorizationStatus}',
-        tag: 'NotificationService',
-      );
-      ReleaseLogger.log(
-        '   Alert: ${settings.alert}',
-        tag: 'NotificationService',
-      );
-      ReleaseLogger.log(
-        '   Badge: ${settings.badge}',
-        tag: 'NotificationService',
-      );
-      ReleaseLogger.log(
-        '   Sound: ${settings.sound}',
+        '📱 Permisos FCM: ${settings.authorizationStatus}',
         tag: 'NotificationService',
       );
 
       if (settings.authorizationStatus == AuthorizationStatus.authorized) {
-        ReleaseLogger.log('✅ Permisos concedidos', tag: 'NotificationService');
+        ReleaseLogger.log('✅ Permisos FCM concedidos', tag: 'NotificationService');
       } else if (settings.authorizationStatus ==
           AuthorizationStatus.provisional) {
         ReleaseLogger.log(
-          '⚠️ Permisos provisionales',
+          '⚠️ Permisos FCM provisionales',
           tag: 'NotificationService',
         );
       } else {
         ReleaseLogger.log(
-          '❌ Permisos denegados o no decididos',
-          tag: 'NotificationService',
-        );
-        ReleaseLogger.log(
-          '   Status: ${settings.authorizationStatus}',
-          tag: 'NotificationService',
-        );
-        ReleaseLogger.log(
-          '⚠️ Para habilitar notificaciones:',
-          tag: 'NotificationService',
-        );
-        ReleaseLogger.log(
-          '   1. Ve a Ajustes > Talia > Notificaciones',
-          tag: 'NotificationService',
-        );
-        ReleaseLogger.log(
-          '   2. Activa "Permitir notificaciones"',
+          '❌ Permisos FCM denegados o no decididos: ${settings.authorizationStatus}',
           tag: 'NotificationService',
         );
       }
     } catch (e) {
       ReleaseLogger.error(
         'Error solicitando permisos: $e',
-        tag: 'NotificationService',
-      );
-      ReleaseLogger.error(
-        '   Stack trace: ${StackTrace.current}',
         tag: 'NotificationService',
       );
     }
@@ -959,6 +973,186 @@ class NotificationService {
       await plugin?.createNotificationChannel(silentChannel);
       await plugin?.createNotificationChannel(callsChannel);
     }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // ✅ FIRESTORE LISTENER: Notificaciones en foreground
+  // ═══════════════════════════════════════════════════════════════
+  //
+  // Similar a ChatStreamManager: escucha nuevas notificaciones en Firestore
+  // y las muestra como notificación local cuando la app está en foreground.
+  // Esto asegura que notificaciones NO-chat (emergencias, stories, etc.)
+  // se muestren inmediatamente sin depender de FCM.
+  //
+  Future<void> _startNotificationsListener() async {
+    // Cancelar listener anterior si existe
+    await _notificationsStreamSubscription?.cancel();
+    _notificationsStreamSubscription = null;
+
+    final currentUser = _auth.currentUser;
+    if (currentUser == null) {
+      ReleaseLogger.log(
+        '⚠️ [NotificationsListener] No hay usuario autenticado - listener no iniciado',
+        tag: 'NotificationService',
+      );
+      return;
+    }
+
+    // Guardar tiempo de inicio para filtrar solo notificaciones nuevas
+    _notificationsListenerStartTime = DateTime.now();
+    _processedNotificationIds.clear();
+
+    ReleaseLogger.log(
+      '🔔 [NotificationsListener] Iniciando listener para usuario ${currentUser.uid}',
+      tag: 'NotificationService',
+    );
+
+    try {
+      _notificationsStreamSubscription = _firestore
+          .collection('notifications')
+          .where('userId', isEqualTo: currentUser.uid)
+          .orderBy('timestamp', descending: true)
+          .limit(10)
+          .snapshots()
+          .listen(
+        (snapshot) async {
+          for (final change in snapshot.docChanges) {
+            // Solo procesar documentos nuevos (added)
+            if (change.type != DocumentChangeType.added) continue;
+
+            final doc = change.doc;
+            final data = doc.data();
+            if (data == null) continue;
+
+            // Deduplicación
+            if (_processedNotificationIds.contains(doc.id)) continue;
+            _processedNotificationIds.add(doc.id);
+
+            // Filtrar notificaciones anteriores al inicio del listener
+            final timestamp = data['timestamp'];
+            if (timestamp != null) {
+              DateTime? notifTime;
+              if (timestamp is Timestamp) {
+                notifTime = timestamp.toDate();
+              } else if (timestamp is int) {
+                notifTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
+              }
+
+              if (notifTime != null && notifTime.isBefore(_notificationsListenerStartTime!)) {
+                continue;
+              }
+            }
+
+            // Ignorar notificaciones de chat (ya manejadas por ChatStreamManager)
+            final type = data['type'] as String? ?? '';
+            if (type == 'chat_message' || type == 'message' || type == 'group_message') {
+              continue;
+            }
+
+            // Ignorar notificaciones de llamadas (ya manejadas por CallKit)
+            if (type == 'incoming_call' || type == 'video_call' || type == 'audio_call' ||
+                type == 'group_video_call' || type == 'group_audio_call' || type == 'emergency_call') {
+              continue;
+            }
+
+            // Ignorar notificaciones ya leídas
+            if (data['read'] == true) continue;
+
+            await _showNotificationFromFirestore(doc.id, data, type);
+          }
+        },
+        onError: (error) {
+          ReleaseLogger.error(
+            '❌ [NotificationsListener] Error: $error',
+            tag: 'NotificationService',
+          );
+        },
+      );
+
+      ReleaseLogger.log(
+        '✅ [NotificationsListener] Listener activo',
+        tag: 'NotificationService',
+      );
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [NotificationsListener] Error iniciando listener: $e',
+        tag: 'NotificationService',
+      );
+    }
+  }
+
+  /// Mostrar notificación local desde documento de Firestore
+  Future<void> _showNotificationFromFirestore(
+    String docId,
+    Map<String, dynamic> data,
+    String type,
+  ) async {
+    try {
+      final title = data['title'] as String? ?? 'Talia';
+      final body = data['body'] as String? ?? '';
+
+      ReleaseLogger.log(
+        '📬 [NotificationsListener] Mostrando: type=$type, title=$title',
+        tag: 'NotificationService',
+      );
+
+      // Generar ID único para la notificación
+      final notificationId = docId.hashCode;
+
+      // Configurar detalles según plataforma
+      NotificationDetails details;
+      if (Platform.isAndroid) {
+        details = const NotificationDetails(
+          android: AndroidNotificationDetails(
+            'high_importance_channel',
+            'Notificaciones Importantes',
+            channelDescription: 'Canal para notificaciones importantes de Talia',
+            importance: Importance.high,
+            priority: Priority.high,
+            enableVibration: true,
+            playSound: true,
+          ),
+        );
+      } else {
+        details = const NotificationDetails(
+          iOS: DarwinNotificationDetails(
+            presentAlert: true,
+            presentBadge: true,
+            presentSound: true,
+          ),
+        );
+      }
+
+      // Preparar payload para navegación al tocar
+      final payload = jsonEncode({
+        'type': type,
+        'notificationId': docId,
+        ...data,
+      });
+
+      await _localNotifications.show(
+        notificationId,
+        title,
+        body,
+        details,
+        payload: payload,
+      );
+
+      ReleaseLogger.log(
+        '✅ [NotificationsListener] Notificación mostrada (id=$notificationId)',
+        tag: 'NotificationService',
+      );
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [NotificationsListener] Error mostrando notificación: $e',
+        tag: 'NotificationService',
+      );
+    }
+  }
+
+  /// Reiniciar listener de notificaciones (llamar cuando cambia el usuario)
+  Future<void> restartNotificationsListener() async {
+    await _startNotificationsListener();
   }
 
   // Obtener token FCM
@@ -1246,22 +1440,21 @@ class NotificationService {
         VoIPService().markCallAsVoIPHandled(callId);
 
         try {
-          if (Platform.isAndroid) {
-            final isVideo = message.data['isVideo'] == 'true' || message.data['isVideo'] == true;
-            final isAudioType = messageType == 'audio_call' || messageType == 'group_audio_call';
+          // ✅ FIX: Mostrar CallKit en AMBAS plataformas cuando la app está en foreground
+          // VoIP push solo maneja background en iOS, foreground necesita CallKit manual
+          final isVideo = message.data['isVideo'] == 'true' || message.data['isVideo'] == true;
+          final isAudioType = messageType == 'audio_call' || messageType == 'group_audio_call';
 
-            await _callKit.showIncomingCall(
-              callId: callId,
-              callerName: message.data['callerName'] ?? 'Usuario',
-              callerId: message.data['callerId'] ?? message.data['senderId'] ?? '',
-              callerPhotoUrl: message.data['callerPhotoURL'] ?? message.data['senderPhotoUrl'],
-              callType: (isAudioType || !isVideo) ? 'audio' : 'video',
-              isEmergency: message.data['isEmergency'] == 'true',
-              extraData: message.data,
-            );
-            ReleaseLogger.log('✅ [Foreground] CallKit mostrado', tag: 'NotificationService');
-          }
-          // iOS: VoIP push maneja CallKit automáticamente
+          await _callKit.showIncomingCall(
+            callId: callId,
+            callerName: message.data['callerName'] ?? 'Usuario',
+            callerId: message.data['callerId'] ?? message.data['senderId'] ?? '',
+            callerPhotoUrl: message.data['callerPhotoURL'] ?? message.data['senderPhotoUrl'],
+            callType: (isAudioType || !isVideo) ? 'audio' : 'video',
+            isEmergency: message.data['isEmergency'] == 'true',
+            extraData: message.data,
+          );
+          ReleaseLogger.log('✅ [Foreground ${Platform.isIOS ? "iOS" : "Android"}] CallKit mostrado para llamada $callId', tag: 'NotificationService');
         } catch (e) {
           ReleaseLogger.error('❌ [Foreground] Error CallKit: $e', tag: 'NotificationService');
         }
@@ -1447,6 +1640,21 @@ class NotificationService {
           tag: 'NotificationService',
         );
         return;
+      }
+
+      // ✅ FIX: Verificar si el chat/grupo está silenciado (Hive local)
+      // Grupos usan 'groupId', chats 1-1 usan 'chatId'
+      final conversationId = chatId ?? message.data['groupId'];
+      if (conversationId != null) {
+        final preferencesCache = ChatPreferencesCache();
+        await preferencesCache.initialize(); // Returns early if already initialized
+        if (preferencesCache.isMuted(conversationId)) {
+          ReleaseLogger.log(
+            '🔇 Notificación bloqueada: Chat/Grupo silenciado (ID: $conversationId)',
+            tag: 'NotificationService',
+          );
+          return;
+        }
       }
 
       ReleaseLogger.log(
@@ -2929,6 +3137,11 @@ class NotificationService {
     // Cancelar suscripción a cambios de estado de app
     _appStateSubscription?.cancel();
     _appStateSubscription = null;
+
+    // Cancelar listener de notificaciones de Firestore
+    _notificationsStreamSubscription?.cancel();
+    _notificationsStreamSubscription = null;
+    _processedNotificationIds.clear();
 
     ReleaseLogger.log(
       '✅ NotificationService limpiado',

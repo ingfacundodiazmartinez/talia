@@ -66,16 +66,6 @@ class _ChildLocationScreenState extends State<ChildLocationScreen> {
       final result = await callable.call({'childId': widget.childId});
       final data = result.data as Map<String, dynamic>;
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(data['message'] ?? 'Solicitud enviada'),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 3),
-          ),
-        );
-      }
-
       ReleaseLogger.log(
         '✅ Solicitud de ubicación enviada exitosamente',
         tag: 'ChildLocationScreen',

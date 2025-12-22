@@ -5,8 +5,8 @@ import '../../../models/story.dart';
 import '../../../controllers/story_viewer_controller.dart';
 import 'story_progress_indicators.dart';
 import 'story_user_header.dart';
-import 'story_caption_widget.dart';
 import 'story_reply_input.dart';
+// StoryCaptionWidget ya no se usa aquí - caption se renderiza en StoryContentWidget
 
 /// Widget posicionado para campo de respuesta
 class StoryReplySection extends StatelessWidget {
@@ -155,12 +155,8 @@ class StoryOverlayWidget extends StatelessWidget {
 
               Spacer(),
 
-              // Caption si existe
-              if (currentStory.caption != null)
-                StoryCaptionWidget(
-                  caption: currentStory.caption!,
-                  isCurrentUser: isCurrentUser,
-                ),
+              // ✅ Caption ahora se renderiza en StoryContentWidget
+              // para que aparezca sobre el contenido del story, no en el letterbox
 
               // Mostrar likes si es la historia del usuario actual y tiene likes
               _buildLikesSection(context, currentStory, isCurrentUser),

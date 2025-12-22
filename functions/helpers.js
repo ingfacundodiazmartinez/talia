@@ -40,10 +40,16 @@ try {
   const voipCertPath = path.join(__dirname, "voip_cert.pem");
   const pemData = fs.readFileSync(voipCertPath, "utf8");
 
+  // ✅ FIX: Usar variable de entorno para determinar ambiente
+  // VOIP_PRODUCTION=false para pruebas desde Xcode
+  // VOIP_PRODUCTION=true (default) para TestFlight/App Store
+  const isProduction = process.env.VOIP_PRODUCTION !== 'false';
+  console.log(`📱 [APNs] Usando ambiente: ${isProduction ? 'PRODUCTION' : 'SANDBOX'}`);
+
   apnProvider = new apn.Provider({
     cert: pemData,
     key: pemData,
-    production: true, // TRUE para TestFlight y App Store, FALSE solo para Xcode Debug
+    production: isProduction,
   });
   console.log("✅ APNs VoIP provider inicializado");
 } catch (error) {

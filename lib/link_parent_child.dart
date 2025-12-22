@@ -169,12 +169,6 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
   void _copyToClipboard() {
     if (_linkCode != null) {
       Clipboard.setData(ClipboardData(text: _linkCode!));
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('📋 Código copiado al portapapeles'),
-          duration: Duration(seconds: 2),
-        ),
-      );
     }
   }
 

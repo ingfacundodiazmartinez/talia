@@ -4,6 +4,7 @@ import 'package:camera/camera.dart' show FlashMode;
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import 'package:cached_network_image/cached_network_image.dart';
 import '../controllers/story_camera_controller.dart';
+import '../theme_service.dart';
 import '../models/character.dart';
 import '../services/deepar_service.dart';
 import '../utils/release_logger.dart';
@@ -29,7 +30,7 @@ class StoryCameraScreen extends StatefulWidget {
 }
 
 class _StoryCameraScreenState extends State<StoryCameraScreen>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   // ✅ CORRECTO: Solo controller y estado UI local
   late StoryCameraController _controller;
 
@@ -39,10 +40,27 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   bool _showZoomIndicator = false; // Mostrar indicador de zoom temporalmente
   Character? _selectedFaceSwapCharacter; // Personaje seleccionado para Face Swap
 
+  // Face-swap pulsing animation (para usuarios que nunca lo han usado)
+  late AnimationController _faceSwapPulseController;
+  late Animation<double> _faceSwapPulseAnimation;
+  bool _hasUsedFaceSwap = true; // Default true para no mostrar animación hasta cargar
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+
+    // Inicializar animación de pulso para face-swap
+    _faceSwapPulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    );
+    _faceSwapPulseAnimation = Tween<double>(begin: 1.0, end: 1.15).animate(
+      CurvedAnimation(
+        parent: _faceSwapPulseController,
+        curve: Curves.easeInOut,
+      ),
+    );
 
     // ✅ CORRECTO: Solo inicializar controller y configurar callbacks
     final currentUserId = firebase_auth.FirebaseAuth.instance.currentUser?.uid ?? '';
@@ -51,8 +69,25 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     // Configurar callbacks para comunicación controller → screen
     _setupControllerCallbacks();
 
+    // Verificar si el usuario ya usó face-swap
+    _loadFaceSwapStatus();
+
     // Inicializar controller
     _controller.initialize(context: context);
+  }
+
+  /// Cargar estado de uso de face-swap
+  Future<void> _loadFaceSwapStatus() async {
+    final hasUsed = await _controller.hasUsedFaceSwap();
+    if (mounted) {
+      setState(() {
+        _hasUsedFaceSwap = hasUsed;
+      });
+      // Si no ha usado, iniciar animación de pulso
+      if (!hasUsed) {
+        _faceSwapPulseController.repeat(reverse: true);
+      }
+    }
   }
 
   /// Configurar callbacks del controller para actualizar UI
@@ -70,15 +105,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     };
 
     _controller.onSuccess = (message) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(message),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 2),
-          ),
-        );
-      }
+      // Success feedback removed - only show errors
     };
 
     _controller.onPermissionDenied = () {
@@ -113,11 +140,21 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         });
       }
     };
+
+    _controller.onFaceSwapFirstUse = () {
+      if (mounted) {
+        setState(() {
+          _hasUsedFaceSwap = true;
+        });
+        _faceSwapPulseController.stop();
+      }
+    };
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _faceSwapPulseController.dispose();
 
     // Dispose controller which will handle cleanup of any active modals
     _controller.dispose();
@@ -301,6 +338,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       final storyController = FlutterStoryEditorController();
       final captionController = TextEditingController();
 
+      // Variables para capturar resultado del editor
+      String? editedFilePath;
+      String? capturedCaption;
+      bool shouldPublish = false;
+
       await Navigator.push(
         context,
         MaterialPageRoute(
@@ -308,16 +350,17 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             selectedFiles: [file],
             controller: storyController,
             captionController: captionController,
-            onSaveClickListener: (editedFiles) async {
+            onSaveClickListener: (editedFiles) {
               ReleaseLogger.log('💾 Story editor completado con ${editedFiles.length} archivos', tag: 'StoryCameraScreen');
               if (editedFiles.isNotEmpty) {
-                // Cerrar el editor primero
-                Navigator.pop(context);
-                // Luego publicar la historia (esto cerrará la cámara al terminar)
-                await _publishStory(editedFiles.first.path, mediaType);
-              } else {
-                Navigator.pop(context);
+                // Capturar datos para publicar DESPUÉS de que el editor cierre
+                editedFilePath = editedFiles.first.path;
+                capturedCaption = captionController.text.trim();
+                shouldPublish = true;
+                ReleaseLogger.log('📝 Caption capturado: "${capturedCaption?.isNotEmpty == true ? capturedCaption : "(vacío)"}"', tag: 'StoryCameraScreen');
               }
+              // Cerrar el editor - Navigator.push retornará después de esto
+              Navigator.pop(context);
             },
             onFaceSwapClickListener: (currentFile, currentIndex) async {
               return await _handleFaceSwap(currentFile, currentIndex);
@@ -325,21 +368,25 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           ),
         ),
       );
+
+      // ✅ FIX: Cerrar cámara INMEDIATAMENTE y publicar en background
+      // Navegación optimista - el usuario no espera la subida
+      if (shouldPublish && editedFilePath != null && mounted) {
+        ReleaseLogger.log('📤 Cerrando cámara y publicando en background...', tag: 'StoryCameraScreen');
+
+        // Cerrar cámara primero (navegación inmediata)
+        Navigator.pop(context);
+
+        // Publicar en background (no await)
+        _controller.publishStory(
+          mediaPath: editedFilePath!,
+          mediaType: mediaType,
+          caption: capturedCaption?.isNotEmpty == true ? capturedCaption : null,
+        );
+      }
     } catch (e) {
       ReleaseLogger.error('❌ Error navegando al story editor: $e', tag: 'StoryCameraScreen');
       _controller.onError?.call('Error abriendo editor: $e');
-    }
-  }
-
-  /// Publicar historia usando el controller
-  Future<void> _publishStory(String finalMediaPath, String mediaType) async {
-    final success = await _controller.publishStory(
-      mediaPath: finalMediaPath,
-      mediaType: mediaType,
-    );
-
-    if (success && mounted) {
-      Navigator.pop(context); // Cerrar cámara después de publicar
     }
   }
 
@@ -349,6 +396,23 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   }
 
   /// ===== BUILD UI =====
+
+  /// Verifica si la vista de cámara está mostrando preview real (no loading)
+  /// Usado para evitar mostrar doble spinner durante inicialización
+  bool _isCameraViewReady() {
+    // Si no hay permisos o hubo error, no mostrar loading overlay
+    if (!_controller.hasCameraPermissions || _controller.hasInitializationFailed) {
+      return false;
+    }
+
+    // Para DeepAR: verificar si está inicializado
+    if (_controller.filterType == 'deepar') {
+      return _controller.isDeepARInitialized;
+    }
+
+    // Para cámara Flutter: verificar si está inicializada
+    return _controller.cameraController != null && _controller.isCameraInitialized;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -370,8 +434,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
               // Overlay de controles
               _buildControlsOverlay(),
 
-              // Loading overlay
-              if (_controller.isLoading) _buildLoadingOverlay(),
+              // Loading overlay - solo mostrar cuando la cámara ya está lista
+              // (para operaciones como tomar foto, grabar, etc.)
+              // Durante inicialización, _buildCameraView() ya muestra _buildLoadingUI()
+              if (_controller.isLoading && _isCameraViewReady()) _buildLoadingOverlay(),
             ],
           ),
         ),
@@ -716,7 +782,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   Widget _buildFaceSwapButton() {
     final isActive = _selectedFaceSwapCharacter != null;
 
-    return GestureDetector(
+    // Si el usuario nunca ha usado face-swap y el botón no está activo, mostrar con animación
+    final showPulsingAnimation = !_hasUsedFaceSwap && !isActive;
+
+    Widget button = GestureDetector(
       onTap: isActive ? _cancelFaceSwapMode : _showFaceSwapSelector,
       child: Container(
         width: 56,
@@ -727,19 +796,34 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
               ? LinearGradient(
                   colors: [Color(0xFF9D7FE8), Color(0xFFB39DDB)],
                 )
-              : null,
-          color: isActive ? null : Colors.black.withValues(alpha: 0.5),
+              : showPulsingAnimation
+                  ? LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        context.customColors.gradientStart,
+                        context.customColors.gradientEnd,
+                      ],
+                    )
+                  : null,
+          color: (isActive || showPulsingAnimation) ? null : Colors.black.withValues(alpha: 0.5),
           border: Border.all(
-            color: isActive ? Color(0xFF9D7FE8) : Colors.white,
-            width: 2,
+            color: isActive
+                ? Color(0xFF9D7FE8)
+                : showPulsingAnimation
+                    ? context.customColors.gradientStart
+                    : Colors.white,
+            width: showPulsingAnimation ? 3 : 2,
           ),
           boxShadow: [
             BoxShadow(
               color: isActive
                   ? Color(0xFF9D7FE8).withValues(alpha: 0.5)
-                  : Colors.black.withValues(alpha: 0.4),
-              blurRadius: isActive ? 12 : 8,
-              spreadRadius: isActive ? 2 : 1,
+                  : showPulsingAnimation
+                      ? context.customColors.gradientStart.withValues(alpha: 0.6)
+                      : Colors.black.withValues(alpha: 0.4),
+              blurRadius: isActive ? 12 : (showPulsingAnimation ? 16 : 8),
+              spreadRadius: isActive ? 2 : (showPulsingAnimation ? 4 : 1),
             ),
           ],
         ),
@@ -769,6 +853,16 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
               ),
       ),
     );
+
+    // Envolver con animación de pulso si es primera vez
+    if (showPulsingAnimation) {
+      return ScaleTransition(
+        scale: _faceSwapPulseAnimation,
+        child: button,
+      );
+    }
+
+    return button;
   }
 
   /// Indicador visual de Face Swap activo

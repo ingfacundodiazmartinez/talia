@@ -113,16 +113,6 @@ class _AddContactDeeplinkScreenState extends State<AddContactDeeplinkScreen> {
       if (!mounted) return;
 
       if (result.success) {
-        final message = result.status == 'approved'
-            ? 'Contacto agregado exitosamente'
-            : 'Solicitud de contacto enviada';
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(message),
-            backgroundColor: Colors.green,
-          ),
-        );
         Navigator.of(context).pop(true);
       } else {
         ScaffoldMessenger.of(context).showSnackBar(

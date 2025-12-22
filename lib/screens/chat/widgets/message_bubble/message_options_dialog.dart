@@ -177,13 +177,6 @@ class MessageOptionsDialog {
                           onTap: () {
                             Navigator.pop(dialogContext);
                             Clipboard.setData(ClipboardData(text: messageText));
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Mensaje copiado'),
-                                duration: Duration(seconds: 2),
-                                behavior: SnackBarBehavior.floating,
-                              ),
-                            );
                           },
                         ),
 
@@ -492,16 +485,6 @@ class MessageOptionsDialog {
         'reason': 'offensive', // Categoría: ofensivo
       });
 
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Mensaje reportado correctamente'),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 2),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
     } catch (e) {
       ReleaseLogger.error('Error reportando mensaje: $e', tag: 'MessageOptionsDialog');
 

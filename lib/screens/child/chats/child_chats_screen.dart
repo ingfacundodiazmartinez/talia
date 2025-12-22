@@ -59,6 +59,9 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
   final TextEditingController _searchController = TextEditingController();
   final ValueNotifier<String> _searchQuery = ValueNotifier<String>('');
 
+  /// ✅ Contador para forzar rebuild cuando cambia estado de archivado/silenciado/limpiado
+  int _preferencesVersion = 0;
+
   @override
   bool get wantKeepAlive => true;
 
@@ -70,6 +73,15 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
 
     // ✅ Escuchar cambios en contadores de no leídos para actualizar badges
     LocalUnreadCountService().addListener(_onUnreadCountsChanged);
+
+    // ✅ Escuchar cambios en preferencias (archivado/silenciado/limpiado) para actualizar lista
+    _preferencesCache.addListener(_onPreferencesChanged);
+  }
+
+  void _onPreferencesChanged() {
+    if (mounted) {
+      setState(() => _preferencesVersion++);
+    }
   }
 
   void _onUnreadCountsChanged() {
@@ -81,6 +93,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
   @override
   void dispose() {
     LocalUnreadCountService().removeListener(_onUnreadCountsChanged);
+    _preferencesCache.removeListener(_onPreferencesChanged);
     _searchController.dispose();
     _searchQuery.dispose();
     _chatsController.dispose();
@@ -177,6 +190,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
 
   Widget _buildChatList(ColorScheme colorScheme) {
     return StreamBuilder<QuerySnapshot>(
+      key: ValueKey('chats_$_preferencesVersion'),
       stream: _chatsController.getChatsStream(),
       builder: (context, snapshot) {
         // CACHE LOGIC: Actualizar cache cuando tenemos datos válidos
@@ -244,6 +258,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
   // ✅ UNIFICADO: Usa el mismo enfoque que parent_chats_screen
   Widget _buildChatListContent(List<QueryDocumentSnapshot> chatDocs, ColorScheme colorScheme) {
     return StreamBuilder<QuerySnapshot>(
+      key: ValueKey('groups_$_preferencesVersion'),
       stream: _chatsController.getGroupsStream(),
       builder: (context, groupsSnapshot) {
         final allGroups = groupsSnapshot.data?.docs ?? [];
@@ -501,9 +516,9 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
                 lastMessageSenderId: isChatCleared ? null : lastMessageSenderId,
                 lastMessageStatus: isChatCleared ? null : lastMessageStatus,
                 lastMessageModerationStatus: isChatCleared ? null : lastMessageModerationStatus,
-                onArchived: () => setState(() {}),
-                onMuted: () => setState(() {}),
-                onCleared: () => setState(() {}),
+                onArchived: () => setState(() => _preferencesVersion++),
+                onMuted: () => setState(() => _preferencesVersion++),
+                onCleared: () => setState(() => _preferencesVersion++),
               );
             },
           );
@@ -520,9 +535,9 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
             photoURL: photoURL,
             isEmpty: true,
             isBlocked: isBlocked,
-            onArchived: () => setState(() {}),
-            onMuted: () => setState(() {}),
-            onCleared: () => setState(() {}),
+            onArchived: () => setState(() => _preferencesVersion++),
+            onMuted: () => setState(() => _preferencesVersion++),
+            onCleared: () => setState(() => _preferencesVersion++),
           );
         }
       },
@@ -616,11 +631,20 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
           }
         }
 
-        // Prioridad: groupData['lastMessage'] > lastMessageFromStream > 'Inicia la conversación'
-        final lastMessage = groupData['lastMessage'] ?? lastMessageFromStream ?? 'Inicia la conversación';
+        // ✅ Verificar si el grupo fue "limpiado" por el usuario
+        // Comparar clearedAt con lastMessageTime para mostrar solo mensajes nuevos
+        final clearedAt = _preferencesCache.getClearedAt(groupId);
+        final lastMessageTime = groupData['lastMessageTime'] as Timestamp?;
+        final isGroupCleared = clearedAt != null &&
+            (lastMessageTime == null || !clearedAt.isBefore(lastMessageTime.toDate()));
 
-        // Formatear tiempo del último mensaje
-        final timeString = _chatsController.formatTime(groupData['lastMessageTime']);
+        // Prioridad: Si está limpiado -> mensaje vacío, sino groupData['lastMessage'] > lastMessageFromStream > 'Inicia la conversación'
+        final lastMessage = isGroupCleared
+            ? 'Inicia la conversación'
+            : (groupData['lastMessage'] ?? lastMessageFromStream ?? 'Inicia la conversación');
+
+        // Formatear tiempo del último mensaje (vacío si está limpiado)
+        final timeString = isGroupCleared ? '' : _chatsController.formatTime(groupData['lastMessageTime']);
 
         return GroupChatListItem(
           groupId: groupId,
@@ -631,6 +655,9 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
           groupImageUrl: groupData['avatar'],
           unreadCount: unreadCount,
           onLeaveGroup: () => _confirmLeaveGroup(groupId, groupName),
+          onArchived: () => setState(() => _preferencesVersion++),
+          onMuted: () => setState(() => _preferencesVersion++),
+          onCleared: () => setState(() => _preferencesVersion++),
           lastMessageSenderId: lastMessageSenderId,
           lastMessageStatus: lastMessageStatus,
           lastMessageModerationStatus: lastMessageModerationStatus,
@@ -696,13 +723,6 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
           content: Text('Error al salir del grupo: ${result.message}'),
           backgroundColor: Colors.red,
           duration: Duration(seconds: 4),
-        ),
-      );
-    } else {
-      scaffoldMessenger.showSnackBar(
-        SnackBar(
-          content: Text('Has salido de "$groupName"'),
-          duration: Duration(seconds: 2),
         ),
       );
     }
@@ -817,9 +837,9 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
                           unreadCount: 0,
                           photoURL: parentData['photoURL'],
                           isEmpty: true,
-                          onArchived: () => setState(() {}),
-                          onMuted: () => setState(() {}),
-                          onCleared: () => setState(() {}),
+                          onArchived: () => setState(() => _preferencesVersion++),
+                          onMuted: () => setState(() => _preferencesVersion++),
+                          onCleared: () => setState(() => _preferencesVersion++),
                         );
                       },
                     );

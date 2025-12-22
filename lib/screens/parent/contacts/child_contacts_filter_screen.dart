@@ -486,15 +486,6 @@ class _ChildContactsFilterScreenState extends State<ChildContactsFilterScreen> {
 
       ReleaseLogger.log('✅ [ApproveContact] CF respondió: ${result.data}', tag: 'ChildContactsFilter');
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Contacto $contactName aprobado'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-
       // Recargar contactos
       await _loadContacts();
     } catch (e, stackTrace) {
@@ -627,18 +618,6 @@ class _ChildContactsFilterScreenState extends State<ChildContactsFilterScreen> {
         await _firestore.collection('groups').doc(group.id).update({
           'members': FieldValue.arrayRemove([widget.childId]),
         });
-      }
-
-      if (mounted) {
-        final message = sharedGroups.isEmpty
-            ? 'Contacto $contactName eliminado'
-            : 'Contacto $contactName eliminado y ${widget.childName} removido de ${sharedGroups.length} grupo(s)';
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(message),
-            backgroundColor: Colors.green,
-          ),
-        );
       }
 
       // Recargar contactos

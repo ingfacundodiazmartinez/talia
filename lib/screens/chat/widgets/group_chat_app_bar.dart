@@ -173,9 +173,6 @@ class _GroupChatAppBarState extends State<GroupChatAppBar> {
   }
 
   void _showSuccessSnackbar(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), backgroundColor: Colors.green),
-    );
+    // Success feedback removed - only show errors
   }
 }

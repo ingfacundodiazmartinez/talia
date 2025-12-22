@@ -13,6 +13,8 @@ import '../controllers/story_viewer_controller.dart';
 import '../services/ad_service.dart';
 import '../services/mood_polls/mood_poll_service.dart';
 import '../services/story_service_refactored.dart';
+import '../services/video_cache_service.dart';
+import '../services/deep_link_service.dart';
 import '../widgets/story_native_ad_widget.dart';
 import '../widgets/mood_poll_story_widget.dart';
 import 'story_viewer/widgets/story_content_widget.dart';
@@ -58,6 +60,8 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
 
   // VideoPlayerController map para manejar múltiples videos
   final Map<String, VideoPlayerController> _videoControllers = {};
+  // Set para trackear videos que están siendo cargados desde cache
+  final Set<String> _loadingVideos = {};
 
   // Controlador para respuestas
   final TextEditingController _replyController = TextEditingController();
@@ -739,22 +743,8 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       // Eliminar archivo temporal
       await tempFile.delete();
 
-      // Mostrar confirmación
       if (mounted) {
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                Icon(Icons.check_circle, color: Colors.white),
-                SizedBox(width: 12),
-                Text('Guardado en galería'),
-              ],
-            ),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 2),
-          ),
-        );
       }
     } catch (e) {
       if (mounted) {
@@ -781,9 +771,8 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       final stories = _getStoriesForUser(currentUserStories);
       final currentStory = stories[_currentStoryIndex];
 
-      // Verificar que sea una historia con media compartible (no mood)
-      if (currentStory.mediaType == 'mood' ||
-          !currentStory.mediaUrl.startsWith('http')) {
+      // Verificar que sea una historia compartible (no mood)
+      if (currentStory.mediaType == 'mood') {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -797,75 +786,27 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
         return;
       }
 
-      // Mostrar indicador de preparación
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Colors.white,
-                  ),
-                ),
-                SizedBox(width: 12),
-                Text('Preparando para compartir...'),
-              ],
-            ),
-            backgroundColor: Colors.blue,
-            duration: Duration(seconds: 10),
-          ),
-        );
-      }
+      // Generar URL de la historia usando DeepLinkService
+      final storyUrl = DeepLinkService().generateStoryUrl(currentStory.id);
 
-      // Descargar el archivo temporalmente
-      final response = await http.get(Uri.parse(currentStory.mediaUrl));
-      if (response.statusCode != 200) {
-        throw Exception('Error descargando archivo');
-      }
-
-      // Determinar extensión y tipo MIME
-      final isVideo = currentStory.mediaType == 'video';
-      final extension = isVideo ? 'mp4' : 'jpg';
-      final mimeType = isVideo ? 'video/mp4' : 'image/jpeg';
-      final fileName = 'talia_story_${DateTime.now().millisecondsSinceEpoch}.$extension';
-
-      // Guardar en directorio temporal
-      final tempDir = await getTemporaryDirectory();
-      final tempFile = File('${tempDir.path}/$fileName');
-      await tempFile.writeAsBytes(response.bodyBytes);
-
-      // Cerrar el snackbar de preparación
-      if (mounted) {
-        ScaffoldMessenger.of(context).hideCurrentSnackBar();
-      }
-
-      // Compartir usando share_plus
-      // ✅ FIX: Usar null en lugar de '' cuando no hay caption
-      // Algunos dispositivos rechazan text='' con "text provided, but cannot be empty"
-      final xFile = XFile(tempFile.path, mimeType: mimeType);
+      // Construir mensaje para compartir
       final caption = currentStory.caption?.trim();
       final hasCaption = caption != null && caption.isNotEmpty;
 
+      // Texto a compartir: caption (si existe) + link
+      final shareText = hasCaption
+          ? '$caption\n\n$storyUrl'
+          : '¡Mira mi historia en Talia!\n$storyUrl';
+
+      // Compartir el link
       await SharePlus.instance.share(
         ShareParams(
-          files: [xFile],
-          text: hasCaption ? caption : null,
+          text: shareText,
           subject: 'Historia de Talia',
         ),
       );
-
-      // Limpiar archivo temporal después de compartir
-      await Future.delayed(Duration(seconds: 2));
-      if (await tempFile.exists()) {
-        await tempFile.delete();
-      }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).hideCurrentSnackBar();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Error al compartir: $e'),
@@ -895,23 +836,6 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       // Limpiar input y cerrar teclado INMEDIATAMENTE (optimista)
       _replyController.clear();
       _replyFocusNode.unfocus();
-
-      // Mostrar feedback inmediato
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Enviando respuesta...'),
-            backgroundColor: Colors.blue,
-            duration: Duration(milliseconds: 800),
-            behavior: SnackBarBehavior.floating,
-            margin: EdgeInsets.only(
-              bottom: MediaQuery.of(context).size.height - 150,
-              left: 20,
-              right: 20,
-            ),
-          ),
-        );
-      }
 
       // Enviar en background (sin await bloqueante para el usuario)
       _controller.replyToStory(
@@ -995,28 +919,6 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
         await _controller.unlikeStory(currentStory.id);
       } else {
         await _controller.likeStory(currentStory.id);
-        // Mostrar feedback solo cuando se da like (no al quitar)
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Row(
-                children: [
-                  Icon(Icons.favorite, color: Colors.white, size: 18),
-                  SizedBox(width: 8),
-                  Text('Le diste like a la historia'),
-                ],
-              ),
-              backgroundColor: Colors.red.shade400,
-              duration: Duration(milliseconds: 1200),
-              behavior: SnackBarBehavior.floating,
-              margin: EdgeInsets.only(
-                bottom: MediaQuery.of(context).size.height - 150,
-                left: 20,
-                right: 20,
-              ),
-            ),
-          );
-        }
       }
     } catch (e) {
       // Revertir cambio optimista en caso de error
@@ -1057,27 +959,6 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
         responseId: response.id,
       );
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                Text(response.selectedEmoji, style: TextStyle(fontSize: 20)),
-                SizedBox(width: 8),
-                Text('Historia compartida'),
-              ],
-            ),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 2),
-            behavior: SnackBarBehavior.floating,
-            margin: EdgeInsets.only(
-              bottom: MediaQuery.of(context).size.height - 150,
-              left: 20,
-              right: 20,
-            ),
-          ),
-        );
-      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1093,35 +974,28 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
 
   Widget _buildVideoPlayer(Story story) {
     // Si el video controller no existe para esta historia, crear uno nuevo
-    if (!_videoControllers.containsKey(story.id)) {
+    if (!_videoControllers.containsKey(story.id) && !_loadingVideos.contains(story.id)) {
       _controller.logVideoControllerCreated(story.id);
-      final newController = VideoPlayerController.networkUrl(
-        Uri.parse(story.mediaUrl),
+
+      // Usar archivo local si existe (mientras se sube)
+      if (story.localMediaPath != null && story.localMediaPath!.isNotEmpty) {
+        final newController = VideoPlayerController.file(
+          File(story.localMediaPath!),
+        );
+        _videoControllers[story.id] = newController;
+        _initializeVideoController(newController, story.id);
+      } else {
+        // Para videos de red, usar cache service (async)
+        _loadingVideos.add(story.id);
+        _loadVideoFromCache(story);
+      }
+    }
+
+    // Si está cargando o no existe el controller, mostrar loading
+    if (!_videoControllers.containsKey(story.id)) {
+      return Center(
+        child: CircularProgressIndicator(color: Colors.white),
       );
-      _videoControllers[story.id] = newController;
-
-      newController.initialize().then((_) {
-        if (mounted) {
-          setState(() {});
-          newController.play();
-          newController.setLooping(true);
-
-          // CRÍTICO: Esperar a que el video REALMENTE esté reproduciendo
-          void videoPlayingListener() {
-            if (mounted &&
-                newController.value.isPlaying &&
-                !_isCurrentStoryLoaded &&
-                newController.value.position.inMilliseconds > 0) {
-              _controller.logVideoPlaying();
-              _onStoryLoaded();
-              newController.removeListener(videoPlayingListener);
-            }
-          }
-          newController.addListener(videoPlayingListener);
-        }
-      }).catchError((error) {
-        _controller.logVideoError(error);
-      });
     }
 
     final controller = _videoControllers[story.id]!;
@@ -1139,6 +1013,49 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
         child: VideoPlayer(controller),
       ),
     );
+  }
+
+  /// Cargar video desde cache de forma async
+  Future<void> _loadVideoFromCache(Story story) async {
+    try {
+      final controller = await VideoCacheService().getController(story.mediaUrl);
+      if (!mounted) {
+        controller.dispose();
+        return;
+      }
+      _videoControllers[story.id] = controller;
+      _loadingVideos.remove(story.id);
+      _initializeVideoController(controller, story.id);
+    } catch (e) {
+      _loadingVideos.remove(story.id);
+      _controller.logVideoError(e);
+    }
+  }
+
+  /// Inicializar controller de video y configurar listeners
+  void _initializeVideoController(VideoPlayerController controller, String storyId) {
+    controller.initialize().then((_) {
+      if (mounted) {
+        setState(() {});
+        controller.play();
+        controller.setLooping(true);
+
+        // CRÍTICO: Esperar a que el video REALMENTE esté reproduciendo
+        void videoPlayingListener() {
+          if (mounted &&
+              controller.value.isPlaying &&
+              !_isCurrentStoryLoaded &&
+              controller.value.position.inMilliseconds > 0) {
+            _controller.logVideoPlaying();
+            _onStoryLoaded();
+            controller.removeListener(videoPlayingListener);
+          }
+        }
+        controller.addListener(videoPlayingListener);
+      }
+    }).catchError((error) {
+      _controller.logVideoError(error);
+    });
   }
 
   @override
@@ -1297,6 +1214,10 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
               },
               controller: _controller,
               buildVideoPlayer: _buildVideoPlayer,
+              // Mostrar caption en overlay sobre el contenido
+              showCaptionOverlay: true,
+              // Si NO es historia propia, hay input de respuesta abajo
+              hasReplyInput: _allUserStories[_currentUserIndex].userId != _controller.currentUserId,
             ),
 
             // Overlay con controles

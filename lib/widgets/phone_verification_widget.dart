@@ -502,24 +502,17 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
     return GestureDetector(
       onTap: _showCountrySelector,
       child: Container(
-        width: 100, // Ancho fijo más compacto
-        padding: EdgeInsets.symmetric(horizontal: 8, vertical: 16),
+        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 16),
         decoration: BoxDecoration(
           border: Border.all(color: Colors.grey[300]!),
           borderRadius: BorderRadius.circular(12),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text(selectedCountry['flag']!, style: TextStyle(fontSize: 18)),
+            Text(selectedCountry['flag']!, style: TextStyle(fontSize: 24)),
             SizedBox(width: 4),
-            Text(
-              selectedCountry['code']!,
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-            ),
-            SizedBox(width: 2),
-            Icon(Icons.arrow_drop_down, color: Colors.grey[600], size: 18),
+            Icon(Icons.arrow_drop_down, color: Colors.grey[600], size: 20),
           ],
         ),
       ),
@@ -534,7 +527,23 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
       decoration: InputDecoration(
         labelText: 'Número de teléfono',
         hintText: '11 1234 5678',
-        prefixIcon: Icon(Icons.phone, color: Color(0xFF9D7FE8)),
+        prefixIcon: Padding(
+          padding: EdgeInsets.only(left: 12, right: 4),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                _selectedCountryCode,
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF9D7FE8),
+                ),
+              ),
+            ],
+          ),
+        ),
+        prefixIconConstraints: BoxConstraints(minWidth: 0, minHeight: 0),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),

@@ -119,12 +119,6 @@ class _MyCodeTabState extends State<MyCodeTab> {
   void _handleCopy(BuildContext context) {
     if (widget.userCode != null) {
       Clipboard.setData(ClipboardData(text: widget.userCode!));
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Codigo copiado al portapapeles'),
-          backgroundColor: Colors.blue,
-        ),
-      );
     }
     widget.onCopy();
   }

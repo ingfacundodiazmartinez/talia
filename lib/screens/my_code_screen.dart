@@ -196,12 +196,6 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
   void _copyCode() {
     if (_userCode != null) {
       Clipboard.setData(ClipboardData(text: _userCode!));
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('📋 Código copiado al portapapeles'),
-          backgroundColor: Colors.blue,
-        ),
-      );
     }
   }
 

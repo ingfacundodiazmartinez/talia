@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
@@ -53,6 +54,7 @@ import 'dart:async';
 import 'utils/release_logger.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
+import 'services/device_contact_name_cache.dart';
 
 // IMPORTANTE: Después de ejecutar 'flutterfire configure',
 // descomenta la siguiente línea:
@@ -60,6 +62,10 @@ import 'firebase_options.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // 🔍 DEBUG: Detectar TODOS los widget rebuilds
+  // Descomenta para ver qué widgets se reconstruyen (⚠️ MUY RUIDOSO)
+  // debugPrintRebuildDirtyWidgets = true;
 
   // Bloquear rotación de pantalla - solo permitir portrait
   await SystemChrome.setPreferredOrientations([
@@ -394,14 +400,17 @@ void main() async {
       });
 
   // Activar Firebase App Check con Play Integrity para producción
-  if (kDebugMode) {
-    // En modo debug, usar debug provider para emuladores
+  // ✅ FIX: Usar --dart-define=USE_DEBUG_APP_CHECK=true para probar release sin TestFlight
+  const useDebugAppCheck = bool.fromEnvironment('USE_DEBUG_APP_CHECK', defaultValue: false);
+
+  if (kDebugMode || useDebugAppCheck) {
+    // En modo debug o cuando se fuerza debug App Check para testing
     await FirebaseAppCheck.instance.activate(
       androidProvider: AndroidProvider.debug,
       appleProvider: AppleProvider.debug,
       webProvider: ReCaptchaV3Provider('recaptcha-v3-site-key'),
     );
-    ReleaseLogger.log('🐛Firebase App Check activado con DEBUG provider');
+    ReleaseLogger.log('🐛Firebase App Check activado con DEBUG provider${useDebugAppCheck ? " (forzado para testing)" : ""}');
 
     // Obtener y mostrar el debug token para registrarlo en Firebase Console
     // En Android debug, el token se genera automáticamente por el debug provider
@@ -966,6 +975,14 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
         // ✅ P3: Inicializar listener de aliases
         ReleaseLogger.log('🏷️ Inicializando alias listener...');
         ContactPhotoCacheService().startAliasListener();
+
+        // ✅ Inicializar cache de nombres de contactos del dispositivo
+        ReleaseLogger.log('📱 Inicializando DeviceContactNameCache...');
+        DeviceContactNameCache().initialize().then((_) {
+          ReleaseLogger.log('✅ DeviceContactNameCache inicializado');
+        }).catchError((e) {
+          ReleaseLogger.error('❌ Error inicializando DeviceContactNameCache: $e');
+        });
 
         // Inicializar stream background de historias
         ReleaseLogger.log('📱Iniciando stream background de historias...');

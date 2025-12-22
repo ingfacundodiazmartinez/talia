@@ -441,20 +441,7 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
   Future<void> _toggleAutoApproval(bool enabled) async {
     try {
       await _controller.toggleAutoApproval(enabled);
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              enabled
-                  ? 'Aprobación automática activada'
-                  : 'Aprobación automática desactivada',
-            ),
-            backgroundColor: enabled ? Colors.green : Colors.orange,
-            duration: Duration(seconds: 2),
-          ),
-        );
-      }
+      // UI updates automatically via StreamBuilder
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

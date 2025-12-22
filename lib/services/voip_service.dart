@@ -441,17 +441,28 @@ class VoIPService {
   /// En iOS, el token VoIP se recibe automáticamente pero solo se puede guardar cuando el usuario está autenticado
   Future<void> processVoIPTokenAfterLogin() async {
     try {
-      ReleaseLogger.log('📱[VoIP] Verificando token VoIP pendiente después del login...', tag: 'VoIPService');
+      ReleaseLogger.log('📱[VoIP] Solicitando token VoIP después del login...', tag: 'VoIPService');
 
       if (_auth.currentUser == null) {
         ReleaseLogger.log('⚠️ [VoIP] Usuario no autenticado, no se puede procesar token', tag: 'VoIPService');
         return;
       }
 
-      // En iOS, el token se maneja automáticamente por el AppDelegate
-      // Este método está aquí para mantener consistencia con el FCM token
-      // y por si necesitamos agregar lógica adicional en el futuro
-      ReleaseLogger.log('✅ [VoIP] Usuario autenticado - el token VoIP se procesará automáticamente cuando iOS lo envíe', tag: 'VoIPService');
+      // Solo iOS usa VoIP push
+      if (!Platform.isIOS) {
+        ReleaseLogger.log('📱 [VoIP] Android no usa VoIP push - skip', tag: 'VoIPService');
+        return;
+      }
+
+      // ✅ FIX: Solicitar token VoIP inmediatamente después del login
+      // Antes solo logueaba pero no pedía el token, causando que el usuario
+      // tuviera que cerrar y abrir la app para que se registrara
+      final token = await _tokenService.requestFreshToken();
+      if (token != null) {
+        ReleaseLogger.log('✅ [VoIP] Token VoIP obtenido después del login: ${token.substring(0, 20)}...', tag: 'VoIPService');
+      } else {
+        ReleaseLogger.log('⚠️ [VoIP] No se pudo obtener token VoIP después del login', tag: 'VoIPService');
+      }
     } catch (e) {
       ReleaseLogger.error('❌ [VoIP] Error procesando token: $e', tag: 'VoIPService');
     }

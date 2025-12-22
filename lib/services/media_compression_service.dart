@@ -307,6 +307,44 @@ class MediaCompressionService {
     }
   }
 
+  /// Comprime video para stories (siempre comprime para mejor UX)
+  ///
+  /// A diferencia de validateVideo, este método SIEMPRE comprime
+  /// para optimizar tiempos de carga en stories.
+  Future<File?> compressVideoForStory(File videoFile) async {
+    try {
+      final originalSizeMB = await getFileSizeMB(videoFile);
+      ReleaseLogger.log('🎥 Video story original: ${originalSizeMB.toStringAsFixed(2)} MB', tag: 'MediaCompressionService');
+
+      // Siempre comprimir para stories (mejor UX de carga)
+      ReleaseLogger.log('🗜️ Comprimiendo video para story...', tag: 'MediaCompressionService');
+
+      final MediaInfo? compressedInfo = await VideoCompress.compressVideo(
+        videoFile.path,
+        quality: VideoQuality.MediumQuality,
+        deleteOrigin: false,
+        includeAudio: true,
+      );
+
+      if (compressedInfo == null || compressedInfo.file == null) {
+        ReleaseLogger.error('❌ Error: La compresión no produjo un archivo', tag: 'MediaCompressionService');
+        return videoFile; // Retornar original si falla
+      }
+
+      final compressedFile = compressedInfo.file!;
+      final compressedSizeMB = await getFileSizeMB(compressedFile);
+      ReleaseLogger.log(
+        '✅ Video story comprimido: ${originalSizeMB.toStringAsFixed(2)} MB → ${compressedSizeMB.toStringAsFixed(2)} MB',
+        tag: 'MediaCompressionService',
+      );
+
+      return compressedFile;
+    } catch (e) {
+      ReleaseLogger.error('❌ Error comprimiendo video story: $e', tag: 'MediaCompressionService');
+      return videoFile; // Retornar original si falla
+    }
+  }
+
   /// Valida un archivo de audio
   Future<File?> validateAudio(File audioFile) async {
     try {

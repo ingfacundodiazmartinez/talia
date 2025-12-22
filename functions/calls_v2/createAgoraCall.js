@@ -271,9 +271,20 @@ exports.createAgoraCall = onCall(
           // Usar sendVoIPPush que usa APNs directamente
           notificationPromises.push(
             sendVoIPPush(voipToken, voipPayload)
-              .then((success) => {
-                if (success) {
+              .then(async (result) => {
+                if (result === true) {
                   console.log(`✅ VoIP push sent to ${participantId} via APNs`);
+                } else if (result === 'invalid_token') {
+                  // ✅ FIX: Eliminar token VoIP inválido de Firestore
+                  console.warn(`⚠️ VoIP token invalid for ${participantId} - removing from Firestore`);
+                  try {
+                    await db.collection('users').doc(participantId).update({
+                      voipToken: admin.firestore.FieldValue.delete()
+                    });
+                    console.log(`✅ Invalid VoIP token removed for ${participantId}`);
+                  } catch (e) {
+                    console.error(`❌ Failed to remove invalid VoIP token: ${e}`);
+                  }
                 } else {
                   console.warn(`⚠️ VoIP push failed for ${participantId} (APNs provider issue)`);
                 }
@@ -286,14 +297,13 @@ exports.createAgoraCall = onCall(
           console.warn(`⚠️ Invalid VoIP token for ${participantId}: ${typeof voipToken}`);
         }
 
-        // Send FCM notification (Android background - data only, no visible notification)
-        // ✅ PHASE 2: Send only data payload to avoid duplicate notification before CallKit
+        // Send FCM notification
+        // ✅ FIX: Android needs high priority FCM to wake from killed state
+        // Android: data-only con priority high - el background handler mostrará CallKit
+        // iOS: content-available para fallback (VoIP push es el principal)
         if (fcmToken) {
           const message = {
-            // ❌ NO notification payload - this would show a banner before CallKit
-            // notification: { ... }
-
-            // ✅ ONLY data payload - processed by background handler to show CallKit
+            // ✅ Data payload for background processing (ambas plataformas)
             data: {
               type: 'incoming_call',
               callId: callId,
@@ -302,6 +312,7 @@ exports.createAgoraCall = onCall(
               agoraUid: participantUid.toString(),
               callerId: callerId,
               callerName: callerName,
+              callerPhotoURL: callerData.photoURL || '',
               isVideo: isVideo.toString(),
               isGroup: isGroup.toString(),
               timestamp: timestamp.toString()
@@ -309,13 +320,12 @@ exports.createAgoraCall = onCall(
             token: fcmToken,
             android: {
               priority: 'high',
-              // ❌ NO notification config - CallKit will handle UI
+              // ✅ FIX: Usar direct_boot_ok para que funcione con pantalla bloqueada
+              direct_boot_ok: true,
             },
             apns: {
               payload: {
                 aps: {
-                  // ❌ REMOVED alert/sound/badge - prevents duplicate visible notification
-                  // CallKit/VoIP handles the UI, this is only for background data
                   contentAvailable: true,
                   mutableContent: true,
                   category: 'INCOMING_CALL'

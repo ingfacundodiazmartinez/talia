@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../utils/release_logger.dart';
@@ -20,7 +21,7 @@ import '../../utils/release_logger.dart';
 /// - Funciona offline nativamente
 /// - Menos escrituras a Firestore = menos costo ($$$)
 /// - Documentos más pequeños = menos bandwidth
-class ChatPreferencesCache {
+class ChatPreferencesCache extends ChangeNotifier {
   static final ChatPreferencesCache _instance = ChatPreferencesCache._internal();
   factory ChatPreferencesCache() => _instance;
   ChatPreferencesCache._internal();
@@ -39,6 +40,9 @@ class ChatPreferencesCache {
   bool _isInitialized = false;
 
   bool get isInitialized => _isInitialized;
+
+  /// @deprecated Use addListener/removeListener directamente (hereda de ChangeNotifier)
+  ValueListenable<Box>? get listenable => _box?.listenable();
 
   // ═══════════════════════════════════════════════════════════════
   // INITIALIZATION
@@ -73,15 +77,30 @@ class ChatPreferencesCache {
   // ═══════════════════════════════════════════════════════════════
 
   /// Archivar un chat
+  /// ✅ MEJORADO: Ahora lanza excepción si box no está inicializado
   Future<void> archiveChat(String chatId) async {
+    ReleaseLogger.log('📦 [archiveChat] Iniciando para chatId: $chatId', tag: 'ChatCache');
+    ReleaseLogger.log('📦 [archiveChat] Instance hashCode: ${identityHashCode(this)}, listeners: ${hasListeners}', tag: 'ChatCache');
+
     await _ensureInitialized();
-    if (_box == null) return;
+
+    if (_box == null) {
+      ReleaseLogger.error('❌ [archiveChat] _box es NULL! No se puede archivar', tag: 'ChatCache');
+      throw StateError('ChatPreferencesCache no inicializado correctamente');
+    }
 
     final archived = Set<String>.from(_box!.get(_archivedKey) ?? []);
+    ReleaseLogger.log('📦 [archiveChat] Archivados antes: ${archived.length} items', tag: 'ChatCache');
+
     archived.add(chatId);
     await _box!.put(_archivedKey, archived.toList());
 
-    ReleaseLogger.log('Chat archivado: $chatId', tag: 'ChatCache');
+    ReleaseLogger.log('📦 [archiveChat] Archivados después: ${archived.length} items', tag: 'ChatCache');
+    ReleaseLogger.log('📦 [archiveChat] Llamando notifyListeners()...', tag: 'ChatCache');
+
+    notifyListeners(); // ✅ Notificar a la UI
+
+    ReleaseLogger.log('✅ [archiveChat] Chat archivado y notificado: $chatId', tag: 'ChatCache');
   }
 
   /// Desarchivar un chat
@@ -94,14 +113,23 @@ class ChatPreferencesCache {
     await _box!.put(_archivedKey, archived.toList());
 
     ReleaseLogger.log('Chat desarchivado: $chatId', tag: 'ChatCache');
+    notifyListeners(); // ✅ Notificar a la UI
   }
 
   /// Verificar si un chat está archivado
   bool isArchived(String chatId) {
-    if (_box == null) return false;
+    if (_box == null) {
+      ReleaseLogger.warning('⚠️ [isArchived] _box es NULL para chatId: $chatId', tag: 'ChatCache');
+      return false;
+    }
 
     final archived = Set<String>.from(_box!.get(_archivedKey) ?? []);
-    return archived.contains(chatId);
+    final result = archived.contains(chatId);
+    // Solo logear cuando es true para evitar spam
+    if (result) {
+      ReleaseLogger.log('📦 [isArchived] chatId: $chatId -> TRUE', tag: 'ChatCache');
+    }
+    return result;
   }
 
   /// Obtener todos los chats archivados
@@ -134,6 +162,7 @@ class ChatPreferencesCache {
       'Chat silenciado: $chatId hasta ${until ?? "indefinidamente"}',
       tag: 'ChatCache',
     );
+    notifyListeners(); // ✅ Notificar a la UI
   }
 
   /// Desilenciar un chat
@@ -149,6 +178,7 @@ class ChatPreferencesCache {
     await _syncMutedChatsToNative();
 
     ReleaseLogger.log('Chat desilenciado: $chatId', tag: 'ChatCache');
+    notifyListeners(); // ✅ Notificar a la UI
   }
 
   /// ✅ Sincronizar lista de chats silenciados con SharedPreferences (Android nativo)
@@ -292,6 +322,7 @@ class ChatPreferencesCache {
     await _box!.put(_clearedAtKey, cleared);
 
     ReleaseLogger.log('Chat limpiado: $chatId desde $clearedAt', tag: 'ChatCache');
+    notifyListeners(); // ✅ Notificar a la UI
   }
 
   /// Obtener timestamp de "chat limpiado"

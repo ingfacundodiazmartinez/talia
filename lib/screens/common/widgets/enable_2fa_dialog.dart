@@ -242,12 +242,6 @@ class _Enable2FADialogState extends State<Enable2FADialog> {
                   TextButton.icon(
                     onPressed: () {
                       Clipboard.setData(ClipboardData(text: _secret ?? ''));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('Clave copiada al portapapeles'),
-                          duration: Duration(seconds: 2),
-                        ),
-                      );
                     },
                     icon: Icon(Icons.copy, size: 16),
                     label: Text('Copiar clave', style: TextStyle(fontSize: 12)),
@@ -359,12 +353,6 @@ class _Enable2FADialogState extends State<Enable2FADialog> {
               onPressed: () {
                 final allCodes = (_recoveryCodes ?? []).join('\n');
                 Clipboard.setData(ClipboardData(text: allCodes));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Códigos copiados al portapapeles'),
-                    duration: Duration(seconds: 2),
-                  ),
-                );
               },
               icon: Icon(Icons.copy),
               label: Text('Copiar todos los códigos'),

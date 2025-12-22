@@ -94,6 +94,16 @@ class DeepLinkService {
         }
         break;
 
+      case 'story':
+      case 's': // Alias corto
+        // https://taliachat.com/story/{storyId} o https://taliachat.com/s/{storyId}
+        if (pathSegments.length >= 2) {
+          final storyId = pathSegments[1];
+          ReleaseLogger.log('🔗 [DeepLink] View story: $storyId');
+          _handleViewStory(storyId);
+        }
+        break;
+
       default:
         ReleaseLogger.log('🔗 [DeepLink] Unknown action: $action');
     }
@@ -123,6 +133,31 @@ class DeepLinkService {
   /// userId pendiente de agregar (si la app aún no está lista)
   String? _pendingAddContactUserId;
 
+  /// storyId pendiente de ver (si la app aún no está lista)
+  String? _pendingViewStoryId;
+
+  /// Callback para cuando se recibe un deep link de ver historia
+  void Function(String storyId)? onViewStoryLink;
+
+  /// Manejar acción de ver historia
+  void _handleViewStory(String storyId) {
+    // Intentar navegar usando el callback
+    if (onViewStoryLink != null) {
+      ReleaseLogger.log('🔗 [DeepLink] Calling onViewStoryLink for storyId: $storyId');
+      onViewStoryLink!(storyId);
+    } else {
+      ReleaseLogger.log('🔗 [DeepLink] No callback for story, saving for later');
+      _pendingViewStoryId = storyId;
+    }
+  }
+
+  /// Obtener y limpiar storyId pendiente
+  String? consumePendingViewStory() {
+    final storyId = _pendingViewStoryId;
+    _pendingViewStoryId = null;
+    return storyId;
+  }
+
   /// Obtener y limpiar userId pendiente
   String? consumePendingAddContact() {
     final userId = _pendingAddContactUserId;
@@ -138,6 +173,12 @@ class DeepLinkService {
   /// Generar URL para invitación a grupo
   String generateGroupInviteUrl(String groupId, String inviteCode) {
     return 'https://taliachat.com/invite/$inviteCode';
+  }
+
+  /// Generar URL para compartir historia
+  /// Usa /s/ como alias corto para mejor UX en redes sociales
+  String generateStoryUrl(String storyId) {
+    return 'https://taliachat.com/s/$storyId';
   }
 
   /// Limpiar recursos

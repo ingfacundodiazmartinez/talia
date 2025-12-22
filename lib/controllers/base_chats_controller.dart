@@ -204,20 +204,38 @@ abstract class BaseChatsController {
   List<QueryDocumentSnapshot> filterArchivedChats(
     List<QueryDocumentSnapshot> chatDocs,
   ) {
-    return chatDocs.where((doc) {
+    ReleaseLogger.log('🔍 [filterArchivedChats] Filtrando ${chatDocs.length} chats', tag: 'BaseChats');
+
+    final result = chatDocs.where((doc) {
       // ✅ Usar Hive cache en vez de Firestore
-      return !_preferencesCache.isArchived(doc.id);
+      final isArchived = _preferencesCache.isArchived(doc.id);
+      if (isArchived) {
+        ReleaseLogger.log('🗃️ [filterArchivedChats] Chat ${doc.id} ESTÁ archivado - FILTRANDO', tag: 'BaseChats');
+      }
+      return !isArchived;
     }).toList();
+
+    ReleaseLogger.log('🔍 [filterArchivedChats] Resultado: ${result.length} chats (${chatDocs.length - result.length} filtrados)', tag: 'BaseChats');
+    return result;
   }
 
   /// Filtra grupos archivados usando Hive cache (no Firestore)
   List<QueryDocumentSnapshot> filterArchivedGroups(
     List<QueryDocumentSnapshot> groupDocs,
   ) {
-    return groupDocs.where((doc) {
+    ReleaseLogger.log('🔍 [filterArchivedGroups] Filtrando ${groupDocs.length} grupos', tag: 'BaseChats');
+
+    final result = groupDocs.where((doc) {
       // ✅ Usar Hive cache en vez de Firestore
-      return !_preferencesCache.isArchived(doc.id);
+      final isArchived = _preferencesCache.isArchived(doc.id);
+      if (isArchived) {
+        ReleaseLogger.log('🗃️ [filterArchivedGroups] Grupo ${doc.id} ESTÁ archivado - FILTRANDO', tag: 'BaseChats');
+      }
+      return !isArchived;
     }).toList();
+
+    ReleaseLogger.log('🔍 [filterArchivedGroups] Resultado: ${result.length} grupos (${groupDocs.length - result.length} filtrados)', tag: 'BaseChats');
+    return result;
   }
 
   /// Formatear tiempo de mensaje

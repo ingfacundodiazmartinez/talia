@@ -141,15 +141,7 @@ class _GroupProfileScreenState extends State<GroupProfileScreen>
     };
 
     _controller.onSuccess = (message) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(message),
-            backgroundColor: Colors.green,
-            duration: const Duration(seconds: 2),
-          ),
-        );
-      }
+      // Success feedback removed - only show errors
     };
   }
 

@@ -2,7 +2,6 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'network_status_service.dart';
-import 'snackbar_service.dart';
 import 'app_logger.dart';
 
 /// Servicio para manejar operaciones offline y sincronización
@@ -152,7 +151,7 @@ class OfflineQueueService {
       }
 
       if (successful > 0) {
-        snackbar.showSuccess('$successful operaciones sincronizadas');
+        logger.info('$successful operaciones sincronizadas', tag: 'Offline');
       }
 
       if (failed > 0) {

@@ -954,14 +954,7 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
 
     if (!mounted) return;
 
-    if (response.success) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Invitando a ${response.data?.displayName ?? "participante"}...'),
-          backgroundColor: Colors.green,
-        ),
-      );
-    } else {
+    if (!response.success) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(response.error ?? 'Error al agregar participante'),

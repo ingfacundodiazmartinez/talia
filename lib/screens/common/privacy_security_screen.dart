@@ -723,16 +723,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
 
                   Navigator.pop(context);
 
-                  if (success) {
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('✅ Backup importado correctamente'),
-                          backgroundColor: Colors.green,
-                        ),
-                      );
-                    }
-                  } else {
+                  if (!success) {
                     if (mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(

@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../utils/release_logger.dart';
+import 'device_contact_name_cache.dart';
 
 /// Servicio de cache para datos de usuarios
 ///
@@ -56,12 +57,18 @@ class UserCacheService {
         return null;
       }
 
+      // Preservar datos locales (alias y localName) antes de sobrescribir
+      final existingData = getUserDataSync(userId);
+      final existingAlias = existingData?['alias'] as String?;
+      final existingLocalName = existingData?['localName'] as String?;
+
       final firestoreData = doc.data()!;
       final data = {
         'name': firestoreData['name'] ?? 'Usuario',
         'photoURL': firestoreData['photoURL'],
         'phone': firestoreData['phone'],
-        'alias': null,
+        'alias': existingAlias,  // Preservar alias local
+        'localName': existingLocalName,  // Preservar nombre de agenda
         'cachedAt': DateTime.now().millisecondsSinceEpoch,
       };
 
@@ -99,20 +106,35 @@ class UserCacheService {
   }
 
   /// Obtener el nombre a mostrar
-  /// Prioridad: alias > name (Firestore) > localName (agenda) > fallback
-  String getDisplayName(String userId, {String fallback = 'Usuario'}) {
+  /// Prioridad: agenda del SO (por phone) > alias > name (Firestore) > fallback
+  ///
+  /// @param userId: ID del usuario
+  /// @param fallback: Nombre a usar si no se encuentra nada (default: 'Usuario')
+  /// @param phoneHint: Teléfono del usuario (opcional, para buscar en agenda si no está en cache)
+  String getDisplayName(String userId, {String fallback = 'Usuario', String? phoneHint}) {
     final data = getUserDataSync(userId);
+
+    // 1. PRIMERO: Buscar en agenda del dispositivo por teléfono
+    // Usar phoneHint si se proporciona, sino usar el phone del cache
+    final phone = phoneHint ?? data?['phone'] as String?;
+    if (phone != null && phone.isNotEmpty) {
+      final deviceName = DeviceContactNameCache().getNameByPhone(phone);
+      if (deviceName != null && deviceName.isNotEmpty) {
+        return deviceName;
+      }
+    }
+
     if (data == null) return fallback;
 
-    // 1. Alias local (puesto por el usuario)
+    // 2. Alias local (puesto por el usuario)
     final alias = data['alias'] as String?;
     if (alias != null && alias.isNotEmpty) return alias;
 
-    // 2. Nombre de Firestore
+    // 3. Nombre de Firestore
     final name = data['name'] as String?;
     if (name != null && name.isNotEmpty && name != 'Usuario') return name;
 
-    // 3. Nombre de la agenda del dispositivo (guardado localmente)
+    // 4. Nombre de la agenda guardado previamente (legacy)
     final localName = data['localName'] as String?;
     if (localName != null && localName.isNotEmpty) return localName;
 
@@ -190,5 +212,44 @@ class UserCacheService {
   String? getLocalName(String userId) {
     final data = getUserDataSync(userId);
     return data?['localName'] as String?;
+  }
+
+  /// Refrescar múltiples usuarios en un solo query (batch)
+  /// Máximo 30 userIds por llamada (límite de whereIn)
+  /// Preserva alias y localName que son locales
+  Future<void> batchRefreshUsers(List<String> userIds) async {
+    if (userIds.isEmpty) return;
+    await initialize();
+
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .where(FieldPath.documentId, whereIn: userIds)
+          .get();
+
+      for (final doc in snapshot.docs) {
+        final userId = doc.id;
+        final firestoreData = doc.data();
+
+        // Preservar datos locales
+        final existingData = getUserDataSync(userId);
+        final existingAlias = existingData?['alias'] as String?;
+        final existingLocalName = existingData?['localName'] as String?;
+
+        final data = {
+          'name': firestoreData['name'] ?? 'Usuario',
+          'photoURL': firestoreData['photoURL'],
+          'phone': firestoreData['phone'],
+          'alias': existingAlias,
+          'localName': existingLocalName,
+          'cachedAt': DateTime.now().millisecondsSinceEpoch,
+        };
+
+        await _box?.put(userId, data);
+        _memoryCache[userId] = data;
+      }
+    } catch (e) {
+      ReleaseLogger.error('Error en batch refresh: $e', tag: 'UserCache');
+    }
   }
 }

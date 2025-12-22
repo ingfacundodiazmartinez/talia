@@ -6,8 +6,10 @@ import 'package:flutter_slidable/flutter_slidable.dart';
 import '../../../../groups/groups.dart'; // Groups V2
 import '../../../../models/chat_message.dart';
 import '../../../../widgets/message_status_indicator.dart';
+import '../../../../controllers/chat_list_item_controller.dart';
+import '../../../../utils/release_logger.dart';
 
-class GroupChatListItem extends StatelessWidget {
+class GroupChatListItem extends StatefulWidget {
   final String groupId;
   final String groupName;
   final String lastMessage;
@@ -16,11 +18,14 @@ class GroupChatListItem extends StatelessWidget {
   final String? groupImageUrl;
   final int unreadCount;
   final VoidCallback? onLeaveGroup;
+  final VoidCallback? onArchived;
+  final VoidCallback? onMuted;
+  final VoidCallback? onCleared;
   // Campos para indicador de estado del último mensaje
   final String? lastMessageSenderId;
   final MessageStatus? lastMessageStatus;
   final ModerationStatus? lastMessageModerationStatus;
-  final String? timeString; // Tiempo formateado del último mensaje
+  final String? timeString;
 
   const GroupChatListItem({
     super.key,
@@ -32,358 +37,559 @@ class GroupChatListItem extends StatelessWidget {
     this.groupImageUrl,
     this.unreadCount = 0,
     this.onLeaveGroup,
+    this.onArchived,
+    this.onMuted,
+    this.onCleared,
     this.lastMessageSenderId,
     this.lastMessageStatus,
     this.lastMessageModerationStatus,
     this.timeString,
   });
 
+  @override
+  State<GroupChatListItem> createState() => _GroupChatListItemState();
+}
+
+class _GroupChatListItemState extends State<GroupChatListItem> {
+  // Reutilizar el mismo controller de chats 1-1 (los servicios son genéricos)
+  late final ChatListItemController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    // Usar groupId como chatId - los servicios son genéricos
+    _controller = ChatListItemController(
+      chatId: widget.groupId,
+      userId: '', // No aplica para grupos
+    );
+    _controller.initialize();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _archiveGroup() async {
+    final success = await _controller.archiveChat();
+    if (mounted) {
+      if (!success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al archivar grupo'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      } else {
+        // ✅ Log para verificar que el callback se ejecuta
+        if (widget.onArchived != null) {
+          ReleaseLogger.log('✅ [GroupChatListItem] Llamando onArchived callback', tag: 'GroupChatListItem');
+          widget.onArchived!.call();
+        } else {
+          ReleaseLogger.warning('⚠️ [GroupChatListItem] onArchived callback es NULL!', tag: 'GroupChatListItem');
+        }
+      }
+    }
+  }
+
+  Future<void> _muteGroup() async {
+    final success = await _controller.muteChat();
+    if (mounted) {
+      if (!success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al silenciar grupo'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      } else {
+        widget.onMuted?.call();
+      }
+    }
+  }
+
+  Future<void> _unmuteGroup() async {
+    final success = await _controller.unmuteChat();
+    if (mounted) {
+      if (!success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al desilenciar grupo'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      } else {
+        widget.onMuted?.call();
+      }
+    }
+  }
+
+  Widget _buildSlideButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: Colors.white, size: 24),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final firestore = FirebaseFirestore.instance;
     final auth = FirebaseAuth.instance;
-
     final colorScheme = Theme.of(context).colorScheme;
-    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
-    // Color para acciones del slidable - adaptado a modo oscuro
-    final slideActionColor = isDarkMode
-        ? colorScheme.primaryContainer
-        : colorScheme.primary;
+    // Usar StreamBuilder para estado de mute (igual que ChatListItem)
+    return StreamBuilder<bool>(
+      stream: _controller.watchChatMuted(),
+      initialData: false,
+      builder: (context, muteSnapshot) {
+        final isMuted = muteSnapshot.data ?? false;
 
-    return Padding(
-      padding: EdgeInsets.only(bottom: 8),
-      child: ClipRect(
-        child: Container(
-          color: slideActionColor,
-          child: Slidable(
-        key: Key('group_$groupId'),
-        closeOnScroll: false,
-        endActionPane: ActionPane(
-        motion: const BehindMotion(),
-        extentRatio: 0.2,
-        openThreshold: 0.1,
-        closeThreshold: 0.1,
-        children: [
-          Expanded(
+        return Padding(
+          padding: EdgeInsets.only(bottom: 8),
+          child: ClipRect(
             child: Container(
-              color: slideActionColor,
-              child: GestureDetector(
-                onTap: () => onLeaveGroup?.call(),
-                behavior: HitTestBehavior.opaque,
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
+              color: colorScheme.primary,
+              child: Slidable(
+                key: Key('group_${widget.groupId}'),
+                closeOnScroll: false,
+                endActionPane: ActionPane(
+                  motion: const BehindMotion(),
+                  extentRatio: 0.65, // 4 botones
+                  openThreshold: 0.1,
+                  closeThreshold: 0.1,
                   children: [
-                    Icon(
-                      Icons.exit_to_app_outlined,
-                      color: isDarkMode ? colorScheme.onPrimaryContainer : Colors.white,
-                      size: 24,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Salir',
-                      style: TextStyle(
-                        color: isDarkMode ? colorScheme.onPrimaryContainer : Colors.white,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w500,
+                    Expanded(
+                      child: Container(
+                        color: colorScheme.primary,
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                          children: [
+                            // Archivar
+                            Builder(
+                              builder: (slidableContext) => _buildSlideButton(
+                                icon: Icons.archive_outlined,
+                                label: 'Archivar',
+                                onTap: () async {
+                                  Slidable.of(slidableContext)?.close();
+                                  await _archiveGroup();
+                                },
+                              ),
+                            ),
+                            // Silenciar/Activar
+                            Builder(
+                              builder: (slidableContext) => _buildSlideButton(
+                                icon: isMuted ? Icons.notifications_active_outlined : Icons.notifications_off_outlined,
+                                label: isMuted ? 'Activar' : 'Silenciar',
+                                onTap: () async {
+                                  Slidable.of(slidableContext)?.close();
+                                  if (isMuted) {
+                                    await _unmuteGroup();
+                                  } else {
+                                    await _muteGroup();
+                                  }
+                                },
+                              ),
+                            ),
+                            // Limpiar
+                            Builder(
+                              builder: (slidableContext) => _buildSlideButton(
+                                icon: Icons.delete_outline_rounded,
+                                label: 'Limpiar',
+                                onTap: () async {
+                                  Slidable.of(slidableContext)?.close();
+
+                                  final confirmed = await showDialog<bool>(
+                                    context: context,
+                                    builder: (dialogContext) => AlertDialog(
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(20),
+                                      ),
+                                      title: Row(
+                                        children: [
+                                          Icon(Icons.delete_sweep_rounded, color: Color(0xFFE53935)),
+                                          SizedBox(width: 8),
+                                          Text('¿Limpiar grupo?'),
+                                        ],
+                                      ),
+                                      content: Text(
+                                        '¿Estás seguro de que quieres ocultar todo el historial de mensajes de este grupo?\n\n'
+                                        'Los mensajes seguirán visibles para los demás miembros.',
+                                      ),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () => Navigator.pop(dialogContext, false),
+                                          child: Text('Cancelar'),
+                                        ),
+                                        ElevatedButton(
+                                          onPressed: () => Navigator.pop(dialogContext, true),
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: Color(0xFFE53935),
+                                            foregroundColor: Colors.white,
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius: BorderRadius.circular(12),
+                                            ),
+                                          ),
+                                          child: Text('Limpiar'),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+
+                                  if (confirmed == true) {
+                                    final success = await _controller.clearChat();
+                                    if (mounted) {
+                                      if (!success) {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(
+                                            content: Text('Error al limpiar grupo'),
+                                            backgroundColor: Colors.red,
+                                          ),
+                                        );
+                                      } else {
+                                        widget.onCleared?.call();
+                                      }
+                                    }
+                                  }
+                                },
+                              ),
+                            ),
+                            // Salir
+                            Builder(
+                              builder: (slidableContext) => _buildSlideButton(
+                                icon: Icons.exit_to_app_outlined,
+                                label: 'Salir',
+                                onTap: () {
+                                  Slidable.of(slidableContext)?.close();
+                                  widget.onLeaveGroup?.call();
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ],
                 ),
-              ),
-            ),
-          ),
-        ],
-      ),
-      child: GestureDetector(
-          onTap: () async {
-            // MaterialPageRoute evita parpadeo Y habilita swipe-to-go-back en iOS
-            // Usar Navigator del tab (sin rootNavigator) para que pop() funcione correctamente
-            await Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (context) => GroupChatScreenV2(
-                  groupId: groupId,
-                  groupName: groupName,
-                ),
-              ),
-            );
-          },
-          child: Container(
-          padding: EdgeInsets.all(12),
-          color: colorScheme.surface,
-          child: Row(
-            children: [
-              CircleAvatar(
-                radius: 28,
-                backgroundColor: Color(0xFF4CAF50).withValues(alpha: 0.2),
-                backgroundImage: groupImageUrl != null && groupImageUrl!.isNotEmpty
-                    ? CachedNetworkImageProvider(groupImageUrl!)
-                    : null,
-                child: groupImageUrl == null || groupImageUrl!.isEmpty
-                    ? Icon(
-                        Icons.group,
-                        color: Color(0xFF4CAF50),
-                        size: 28,
-                      )
-                    : null,
-              ),
-              SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Primera línea: Nombre + badge miembros + tiempo (igual que chat 1-1)
-                    Row(
+                child: GestureDetector(
+                  onTap: () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (context) => GroupChatScreenV2(
+                          groupId: widget.groupId,
+                          groupName: widget.groupName,
+                        ),
+                      ),
+                    );
+                  },
+                  child: Container(
+                    padding: EdgeInsets.all(12),
+                    color: colorScheme.surface,
+                    child: Row(
                       children: [
+                        CircleAvatar(
+                          radius: 28,
+                          backgroundColor: Color(0xFF4CAF50).withValues(alpha: 0.2),
+                          backgroundImage: widget.groupImageUrl != null && widget.groupImageUrl!.isNotEmpty
+                              ? CachedNetworkImageProvider(widget.groupImageUrl!)
+                              : null,
+                          child: widget.groupImageUrl == null || widget.groupImageUrl!.isEmpty
+                              ? Icon(
+                                  Icons.group,
+                                  color: Color(0xFF4CAF50),
+                                  size: 28,
+                                )
+                              : null,
+                        ),
+                        SizedBox(width: 12),
                         Expanded(
-                          child: Text(
-                            groupName,
-                            style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                              color: colorScheme.onSurface,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        Container(
-                          padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: Color(0xFF4CAF50).withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text(
-                            '$memberCount miembros',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: Color(0xFF4CAF50),
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ),
-                        if (timeString != null && timeString!.isNotEmpty) ...[
-                          SizedBox(width: 8),
-                          Text(
-                            timeString!,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                    SizedBox(height: 4),
-                    StreamBuilder<QuerySnapshot>(
-                      stream: firestore
-                          .collection('groups_v2')
-                          .doc(groupId)
-                          .collection('typing')
-                          .snapshots(),
-                      builder: (context, typingSnapshot) {
-                        // Si hay error de permisos, mostrar el último mensaje
-                        if (typingSnapshot.hasError) {
-                          final currentUserId = auth.currentUser?.uid ?? '';
-                          final isOwnMessage = lastMessageSenderId == currentUserId;
-
-                          return Row(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              if (isOwnMessage && lastMessageStatus != null) ...[
-                                MessageStatusIndicator(
-                                  status: lastMessageStatus!,
-                                  moderationStatus: lastMessageModerationStatus,
-                                  size: 12,
-                                ),
-                                const SizedBox(width: 4),
-                              ],
-                              Expanded(
-                                child: Text(
-                                  lastMessage,
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    color: colorScheme.onSurfaceVariant,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              if (unreadCount > 0) ...[
-                                const SizedBox(width: 8),
-                                Container(
-                                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: colorScheme.primary,
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: Text(
-                                    unreadCount.toString(),
-                                    style: TextStyle(
-                                      color: colorScheme.onPrimary,
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.bold,
+                              // Primera línea: Nombre + icono mute + badge miembros + tiempo
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      widget.groupName,
+                                      style: TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w600,
+                                        color: colorScheme.onSurface,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
                                     ),
                                   ),
-                                ),
-                              ],
-                            ],
-                          );
-                        }
-
-                        if (typingSnapshot.hasData && typingSnapshot.data!.docs.isNotEmpty) {
-                          final currentUserId = auth.currentUser!.uid;
-                          final now = DateTime.now();
-
-                          final typingUserIds = typingSnapshot.data!.docs.where((doc) {
-                            if (doc.id == currentUserId) return false;
-
-                            final data = doc.data() as Map<String, dynamic>;
-                            final isTyping = data['isTyping'] as bool? ?? false;
-                            final timestamp = data['timestamp'] as Timestamp?;
-
-                            if (!isTyping || timestamp == null) return false;
-
-                            final diff = now.difference(timestamp.toDate());
-                            return diff.inSeconds < 5;
-                          }).map((doc) => doc.id).toList();
-
-                          if (typingUserIds.isNotEmpty) {
-                            // Obtener nombres de los usuarios que están escribiendo
-                            return FutureBuilder<List<String>>(
-                              future: Future.wait<String>(
-                                typingUserIds.map<Future<String>>((userId) async {
-                                  try {
-                                    final userDoc = await firestore.collection('users').doc(userId).get();
-                                    return userDoc.data()?['name'] as String? ?? 'Alguien';
-                                  } catch (e) {
-                                    return 'Alguien';
-                                  }
-                                }),
-                              ),
-                              builder: (context, namesSnapshot) {
-                                if (!namesSnapshot.hasData) {
-                                  return Row(
-                                    children: [
-                                      SizedBox(
-                                        width: 12,
-                                        height: 12,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 1.5,
-                                          valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF4CAF50)),
-                                        ),
-                                      ),
-                                      SizedBox(width: 6),
-                                      Text(
-                                        'Escribiendo...',
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          color: Color(0xFF4CAF50),
-                                          fontStyle: FontStyle.italic,
-                                        ),
-                                      ),
-                                    ],
-                                  );
-                                }
-
-                                final names = namesSnapshot.data!;
-                                String typingText;
-                                if (names.length == 1) {
-                                  typingText = '${names[0]} está escribiendo...';
-                                } else if (names.length == 2) {
-                                  typingText = '${names[0]} y ${names[1]} escribiendo...';
-                                } else {
-                                  typingText = '${names[0]} y ${names.length - 1} más escribiendo...';
-                                }
-
-                                return Row(
-                                  children: [
-                                    SizedBox(
-                                      width: 12,
-                                      height: 12,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 1.5,
-                                        valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF4CAF50)),
+                                  // Indicador de grupo silenciado
+                                  if (isMuted)
+                                    Padding(
+                                      padding: EdgeInsets.only(right: 4),
+                                      child: Icon(
+                                        Icons.notifications_off,
+                                        size: 14,
+                                        color: colorScheme.onSurfaceVariant,
                                       ),
                                     ),
-                                    SizedBox(width: 6),
-                                    Expanded(
-                                      child: Text(
-                                        typingText,
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          color: Color(0xFF4CAF50),
-                                          fontStyle: FontStyle.italic,
-                                        ),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
+                                  Container(
+                                    padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Color(0xFF4CAF50).withValues(alpha: 0.1),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Text(
+                                      '${widget.memberCount} miembros',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: Color(0xFF4CAF50),
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                  ),
+                                  if (widget.timeString != null && widget.timeString!.isNotEmpty) ...[
+                                    SizedBox(width: 8),
+                                    Text(
+                                      widget.timeString!,
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: colorScheme.onSurfaceVariant,
                                       ),
                                     ),
                                   ],
-                                );
-                              },
-                            );
-                          }
-                        }
+                                ],
+                              ),
+                              SizedBox(height: 4),
+                              StreamBuilder<QuerySnapshot>(
+                                stream: firestore
+                                    .collection('groups_v2')
+                                    .doc(widget.groupId)
+                                    .collection('typing')
+                                    .snapshots(),
+                                builder: (context, typingSnapshot) {
+                                  // Si hay error de permisos, mostrar el último mensaje
+                                  if (typingSnapshot.hasError) {
+                                    final currentUserId = auth.currentUser?.uid ?? '';
+                                    final isOwnMessage = widget.lastMessageSenderId == currentUserId;
 
-                        // Mostrar lastMessage con indicador de estado (si es mensaje propio)
-                        final currentUserId = auth.currentUser?.uid ?? '';
-                        final isOwnMessage = lastMessageSenderId == currentUserId;
+                                    return Row(
+                                      children: [
+                                        if (isOwnMessage && widget.lastMessageStatus != null) ...[
+                                          MessageStatusIndicator(
+                                            status: widget.lastMessageStatus!,
+                                            moderationStatus: widget.lastMessageModerationStatus,
+                                            size: 12,
+                                          ),
+                                          const SizedBox(width: 4),
+                                        ],
+                                        Expanded(
+                                          child: Text(
+                                            widget.lastMessage,
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              color: colorScheme.onSurfaceVariant,
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                        if (widget.unreadCount > 0) ...[
+                                          const SizedBox(width: 8),
+                                          Container(
+                                            padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                            decoration: BoxDecoration(
+                                              color: colorScheme.primary,
+                                              borderRadius: BorderRadius.circular(12),
+                                            ),
+                                            child: Text(
+                                              widget.unreadCount.toString(),
+                                              style: TextStyle(
+                                                color: colorScheme.onPrimary,
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    );
+                                  }
 
-                        return Row(
-                          children: [
-                            // Indicador de estado (solo para mensajes propios) - ANTES del texto
-                            if (isOwnMessage && lastMessageStatus != null) ...[
-                              MessageStatusIndicator(
-                                status: lastMessageStatus!,
-                                moderationStatus: lastMessageModerationStatus,
-                                size: 12,
+                                  if (typingSnapshot.hasData && typingSnapshot.data!.docs.isNotEmpty) {
+                                    final currentUserId = auth.currentUser!.uid;
+                                    final now = DateTime.now();
+
+                                    final typingUserIds = typingSnapshot.data!.docs.where((doc) {
+                                      if (doc.id == currentUserId) return false;
+
+                                      final data = doc.data() as Map<String, dynamic>;
+                                      final isTyping = data['isTyping'] as bool? ?? false;
+                                      final timestamp = data['timestamp'] as Timestamp?;
+
+                                      if (!isTyping || timestamp == null) return false;
+
+                                      final diff = now.difference(timestamp.toDate());
+                                      return diff.inSeconds < 5;
+                                    }).map((doc) => doc.id).toList();
+
+                                    if (typingUserIds.isNotEmpty) {
+                                      return FutureBuilder<List<String>>(
+                                        future: Future.wait<String>(
+                                          typingUserIds.map<Future<String>>((userId) async {
+                                            try {
+                                              final userDoc = await firestore.collection('users').doc(userId).get();
+                                              return userDoc.data()?['name'] as String? ?? 'Alguien';
+                                            } catch (e) {
+                                              return 'Alguien';
+                                            }
+                                          }),
+                                        ),
+                                        builder: (context, namesSnapshot) {
+                                          if (!namesSnapshot.hasData) {
+                                            return Row(
+                                              children: [
+                                                SizedBox(
+                                                  width: 12,
+                                                  height: 12,
+                                                  child: CircularProgressIndicator(
+                                                    strokeWidth: 1.5,
+                                                    valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF4CAF50)),
+                                                  ),
+                                                ),
+                                                SizedBox(width: 6),
+                                                Text(
+                                                  'Escribiendo...',
+                                                  style: TextStyle(
+                                                    fontSize: 14,
+                                                    color: Color(0xFF4CAF50),
+                                                    fontStyle: FontStyle.italic,
+                                                  ),
+                                                ),
+                                              ],
+                                            );
+                                          }
+
+                                          final names = namesSnapshot.data!;
+                                          String typingText;
+                                          if (names.length == 1) {
+                                            typingText = '${names[0]} está escribiendo...';
+                                          } else if (names.length == 2) {
+                                            typingText = '${names[0]} y ${names[1]} escribiendo...';
+                                          } else {
+                                            typingText = '${names[0]} y ${names.length - 1} más escribiendo...';
+                                          }
+
+                                          return Row(
+                                            children: [
+                                              SizedBox(
+                                                width: 12,
+                                                height: 12,
+                                                child: CircularProgressIndicator(
+                                                  strokeWidth: 1.5,
+                                                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF4CAF50)),
+                                                ),
+                                              ),
+                                              SizedBox(width: 6),
+                                              Expanded(
+                                                child: Text(
+                                                  typingText,
+                                                  style: TextStyle(
+                                                    fontSize: 14,
+                                                    color: Color(0xFF4CAF50),
+                                                    fontStyle: FontStyle.italic,
+                                                  ),
+                                                  maxLines: 1,
+                                                  overflow: TextOverflow.ellipsis,
+                                                ),
+                                              ),
+                                            ],
+                                          );
+                                        },
+                                      );
+                                    }
+                                  }
+
+                                  // Mostrar lastMessage con indicador de estado
+                                  final currentUserId = auth.currentUser?.uid ?? '';
+                                  final isOwnMessage = widget.lastMessageSenderId == currentUserId;
+
+                                  return Row(
+                                    children: [
+                                      if (isOwnMessage && widget.lastMessageStatus != null) ...[
+                                        MessageStatusIndicator(
+                                          status: widget.lastMessageStatus!,
+                                          moderationStatus: widget.lastMessageModerationStatus,
+                                          size: 12,
+                                        ),
+                                        const SizedBox(width: 4),
+                                      ],
+                                      Expanded(
+                                        child: Text(
+                                          widget.lastMessage,
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            color: colorScheme.onSurfaceVariant,
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                      if (widget.unreadCount > 0) ...[
+                                        const SizedBox(width: 8),
+                                        Container(
+                                          padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                          decoration: BoxDecoration(
+                                            color: colorScheme.primary,
+                                            borderRadius: BorderRadius.circular(12),
+                                          ),
+                                          child: Text(
+                                            widget.unreadCount.toString(),
+                                            style: TextStyle(
+                                              color: colorScheme.onPrimary,
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  );
+                                },
                               ),
-                              const SizedBox(width: 4),
                             ],
-                            Expanded(
-                              child: Text(
-                                lastMessage,
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: colorScheme.onSurfaceVariant,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            if (unreadCount > 0) ...[
-                              const SizedBox(width: 8),
-                              Container(
-                                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: colorScheme.primary,
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Text(
-                                  unreadCount.toString(),
-                                  style: TextStyle(
-                                    color: colorScheme.onPrimary,
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ],
-                        );
-                      },
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
               ),
-            ],
+            ),
           ),
-          ),
-        ),
-        ),
-        ),
-      ),
+        );
+      },
     );
   }
 }

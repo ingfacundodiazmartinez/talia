@@ -74,16 +74,6 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
 
     try {
       await _contactsSyncService.syncContacts(force: true);
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Contactos sincronizados'),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 2),
-          ),
-        );
-      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

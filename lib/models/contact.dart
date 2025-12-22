@@ -99,6 +99,18 @@ class Contact {
   /// Fecha en que se bloqueó el contacto
   final DateTime? blockedAt;
 
+  /// Nombre del usuario 1 (denormalizado para mostrar sin consultar /users)
+  final String? user1Name;
+
+  /// Nombre del usuario 2 (denormalizado para mostrar sin consultar /users)
+  final String? user2Name;
+
+  /// Foto del usuario 1 (denormalizado para mostrar sin consultar /users)
+  final String? user1PhotoURL;
+
+  /// Foto del usuario 2 (denormalizado para mostrar sin consultar /users)
+  final String? user2PhotoURL;
+
   Contact({
     required this.id,
     required this.users,
@@ -118,6 +130,10 @@ class Contact {
     this.blocked = false,
     this.blockedBy,
     this.blockedAt,
+    this.user1Name,
+    this.user2Name,
+    this.user1PhotoURL,
+    this.user2PhotoURL,
   });
 
   // ═══════════════════════════════════════════════════════════════
@@ -162,6 +178,10 @@ class Contact {
       blocked: data['blocked'] ?? false,
       blockedBy: data['blockedBy'],
       blockedAt: (data['blockedAt'] as Timestamp?)?.toDate(),
+      user1Name: data['user1Name'],
+      user2Name: data['user2Name'],
+      user1PhotoURL: data['user1PhotoURL'],
+      user2PhotoURL: data['user2PhotoURL'],
     );
   }
 
@@ -236,6 +256,39 @@ class Contact {
       (id) => id != currentUserId,
       orElse: () => '',
     );
+  }
+
+  /// Obtener el nombre del otro usuario desde los campos denormalizados
+  /// Retorna null si no está disponible
+  String? getOtherUserName(String currentUserId) {
+    if (users.isEmpty || users.length < 2) return null;
+
+    // users[0] corresponde a user1Name, users[1] a user2Name
+    final otherUserId = getOtherUserId(currentUserId);
+    if (otherUserId.isEmpty) return null;
+
+    // Si el otro usuario es el primero en la lista, su nombre es user1Name
+    if (users[0] == otherUserId) {
+      return user1Name;
+    }
+    // Si no, es user2Name
+    return user2Name;
+  }
+
+  /// Obtener la foto del otro usuario desde los campos denormalizados
+  /// Retorna null si no está disponible
+  String? getOtherUserPhotoURL(String currentUserId) {
+    if (users.isEmpty || users.length < 2) return null;
+
+    final otherUserId = getOtherUserId(currentUserId);
+    if (otherUserId.isEmpty) return null;
+
+    // Si el otro usuario es el primero en la lista, su foto es user1PhotoURL
+    if (users[0] == otherUserId) {
+      return user1PhotoURL;
+    }
+    // Si no, es user2PhotoURL
+    return user2PhotoURL;
   }
 
   /// Obtener los childIds que necesitan aprobación de un padre

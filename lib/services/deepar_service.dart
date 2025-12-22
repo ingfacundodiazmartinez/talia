@@ -178,7 +178,72 @@ class DeepARService {
     }
   }
 
-  /// Parar grabación
+  /// Parar grabación y esperar a que el video esté listo
+  /// Retorna el path del video procesado, o null si falló
+  Future<String?> stopRecordingAndWaitForVideo() async {
+    if (!_isInitialized || !_isRecording) {
+      ReleaseLogger.error('❌ No hay grabación en progreso', tag: 'DeepARService');
+      return null;
+    }
+
+    try {
+      ReleaseLogger.log('⏹️ Deteniendo grabación y esperando video...', tag: 'DeepARService');
+
+      // Crear completer para esperar el evento recordingStopped
+      final completer = Completer<String?>();
+      StreamSubscription<DeepAREvent>? subscription;
+
+      // Timeout de 10 segundos
+      final timeout = Timer(const Duration(seconds: 10), () {
+        if (!completer.isCompleted) {
+          ReleaseLogger.error('❌ Timeout esperando video de DeepAR', tag: 'DeepARService');
+          subscription?.cancel();
+          completer.complete(null);
+        }
+      });
+
+      // Escuchar evento recordingStopped
+      subscription = _eventController.stream.listen((event) {
+        if (event.type == DeepAREventType.recordingStopped) {
+          timeout.cancel();
+          subscription?.cancel();
+          final filePath = event.data['filePath'] as String?;
+          ReleaseLogger.log('✅ Video recibido de DeepAR: $filePath', tag: 'DeepARService');
+          if (!completer.isCompleted) {
+            completer.complete(filePath);
+          }
+        } else if (event.type == DeepAREventType.error) {
+          timeout.cancel();
+          subscription?.cancel();
+          ReleaseLogger.error('❌ Error de DeepAR: ${event.data['error']}', tag: 'DeepARService');
+          if (!completer.isCompleted) {
+            completer.complete(null);
+          }
+        }
+      });
+
+      // Enviar comando para detener grabación
+      final result = await _channel.invokeMethod('stopRecording');
+      _isRecording = false;
+
+      if (result != true) {
+        timeout.cancel();
+        subscription.cancel();
+        ReleaseLogger.error('❌ stopRecording retornó false', tag: 'DeepARService');
+        return null;
+      }
+
+      // Esperar el video
+      return await completer.future;
+    } catch (e) {
+      ReleaseLogger.error('❌ Error deteniendo grabación: $e', tag: 'DeepARService');
+      _isRecording = false;
+      return null;
+    }
+  }
+
+  /// Parar grabación (versión simple, sin esperar video)
+  /// @deprecated Usar stopRecordingAndWaitForVideo() en su lugar
   Future<bool> stopRecording() async {
     if (!_isInitialized || !_isRecording) {
       ReleaseLogger.error('❌ No hay grabación en progreso', tag: 'DeepARService');

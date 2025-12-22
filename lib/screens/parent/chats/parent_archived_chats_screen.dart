@@ -3,13 +3,19 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../../../controllers/parent_archived_chats_controller.dart';
-import '../../../models/chat.dart';
+import '../../../groups/groups.dart'; // GroupChatScreenV2
+import '../../../services/chats/chat_preferences_cache.dart';
 import '../../../utils/chat_utils.dart';
+import '../../../utils/release_logger.dart';
 import '../../chat_detail_screen.dart';
 import '../../../theme_service.dart';
 
 /// Pantalla de chats archivados para padres
-/// ✅ CORREGIDO: Usa List<Chat> desde Hive en vez de QuerySnapshot de Firestore
+///
+/// ✅ CORREGIDO: Usa EXACTAMENTE el mismo patrón que ParentChatsScreen:
+/// - Stream<QuerySnapshot> CRUDO de Firestore (sin .map())
+/// - Filtrado EN EL BUILDER (se ejecuta en cada rebuild)
+/// - ValueKey con _preferencesVersion para forzar rebuild
 class ParentArchivedChatsScreen extends StatefulWidget {
   const ParentArchivedChatsScreen({super.key});
 
@@ -19,16 +25,33 @@ class ParentArchivedChatsScreen extends StatefulWidget {
 
 class _ParentArchivedChatsScreenState extends State<ParentArchivedChatsScreen> {
   late final ParentArchivedChatsController _controller;
+  final ChatPreferencesCache _preferencesCache = ChatPreferencesCache();
+
+  /// Contador para forzar rebuild cuando cambia estado de archivado
+  /// ✅ EXACTAMENTE igual que ParentChatsScreen
+  int _preferencesVersion = 0;
 
   @override
   void initState() {
     super.initState();
     _controller = ParentArchivedChatsController();
     _controller.initialize();
+
+    // ✅ Escuchar cambios en preferencias para actualizar lista
+    // EXACTAMENTE igual que ParentChatsScreen
+    _preferencesCache.addListener(_onPreferencesChanged);
+  }
+
+  void _onPreferencesChanged() {
+    ReleaseLogger.log('🔄 [ArchivedChatsScreen] Preferencias cambiaron, forzando rebuild', tag: 'ArchivedChats');
+    if (mounted) {
+      setState(() => _preferencesVersion++);
+    }
   }
 
   @override
   void dispose() {
+    _preferencesCache.removeListener(_onPreferencesChanged);
     _controller.dispose();
     super.dispose();
   }
@@ -37,15 +60,31 @@ class _ParentArchivedChatsScreenState extends State<ParentArchivedChatsScreen> {
     final success = await _controller.unarchiveChat(chatId);
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            success ? 'Chat desarchivado' : 'Error al desarchivar chat',
+      if (!success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al desarchivar chat'),
+            backgroundColor: Colors.red,
           ),
-          backgroundColor: success ? Colors.green : Colors.red,
-        ),
-      );
-      if (success) {
+        );
+      } else {
+        setState(() {}); // Refrescar lista
+      }
+    }
+  }
+
+  Future<void> _unarchiveGroup(String groupId) async {
+    final success = await _controller.unarchiveGroup(groupId);
+
+    if (mounted) {
+      if (!success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al desarchivar grupo'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      } else {
         setState(() {}); // Refrescar lista
       }
     }
@@ -120,125 +159,107 @@ class _ParentArchivedChatsScreenState extends State<ParentArchivedChatsScreen> {
                       topRight: Radius.circular(30),
                     ),
                   ),
-                  child: StreamBuilder<List<Chat>>(
-                    stream: _controller.archivedChatsStream,
-                    builder: (context, snapshot) {
-                      if (snapshot.connectionState == ConnectionState.waiting) {
-                        return Center(child: CircularProgressIndicator());
-                      }
+                  // ✅ EXACTAMENTE MISMO PATRÓN QUE ParentChatsScreen:
+                  // 1. Stream<QuerySnapshot> CRUDO de Firestore (sin .map())
+                  // 2. Key con _preferencesVersion para forzar rebuild
+                  // 3. Filtrar EN EL BUILDER (se ejecuta en cada rebuild)
+                  child: StreamBuilder<QuerySnapshot>(
+                    key: ValueKey('archived_chats_$_preferencesVersion'),
+                    stream: _controller.getChatsStream(),
+                    builder: (context, chatsSnapshot) {
+                      return StreamBuilder<QuerySnapshot>(
+                        key: ValueKey('archived_groups_$_preferencesVersion'),
+                        stream: _controller.getGroupsStream(),
+                        builder: (context, groupsSnapshot) {
+                          // Solo mostrar spinner en la primera carga SIN cache
+                          if (chatsSnapshot.connectionState == ConnectionState.waiting &&
+                              groupsSnapshot.connectionState == ConnectionState.waiting &&
+                              !chatsSnapshot.hasData && !groupsSnapshot.hasData) {
+                            return Center(child: CircularProgressIndicator());
+                          }
 
-                      if (snapshot.hasError) {
-                        return Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
+                          // Manejar errores
+                          if (chatsSnapshot.hasError || groupsSnapshot.hasError) {
+                            return Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    Icons.error_outline,
+                                    size: 64,
+                                    color: Colors.red,
+                                  ),
+                                  SizedBox(height: 16),
+                                  Text(
+                                    'Error al cargar archivados',
+                                    style: TextStyle(fontSize: 16),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }
+
+                          // ✅ FILTRAR EN EL BUILDER - EXACTAMENTE igual que ParentChatsScreen
+                          // Esto se ejecuta en cada rebuild, no solo cuando Firestore emite
+                          final allChatDocs = chatsSnapshot.data?.docs ?? <QueryDocumentSnapshot>[];
+                          final allGroupDocs = groupsSnapshot.data?.docs ?? <QueryDocumentSnapshot>[];
+                          final archivedChats = _controller.filterOnlyArchivedChats(allChatDocs);
+                          final archivedGroups = _controller.filterOnlyArchivedGroups(allGroupDocs);
+
+                          // Estado vacío
+                          if (archivedChats.isEmpty && archivedGroups.isEmpty) {
+                            return Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    Icons.archive_outlined,
+                                    size: 64,
+                                    color: Theme.of(context).colorScheme.outlineVariant,
+                                  ),
+                                  SizedBox(height: 16),
+                                  Text(
+                                    'No hay chats archivados',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                  SizedBox(height: 8),
+                                  Text(
+                                    'Desliza un chat o grupo hacia la izquierda para archivarlo',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ],
+                              ),
+                            );
+                          }
+
+                          return ListView(
+                            padding: EdgeInsets.all(16),
                             children: [
-                              Icon(
-                                Icons.error_outline,
-                                size: 64,
-                                color: Colors.red,
-                              ),
-                              SizedBox(height: 16),
-                              Text(
-                                'Error al cargar chats archivados',
-                                style: TextStyle(fontSize: 16),
-                              ),
+                              // Sección de grupos archivados
+                              if (archivedGroups.isNotEmpty) ...[
+                                _buildSectionHeader('Grupos', archivedGroups.length),
+                                ...archivedGroups.map((groupDoc) => _buildArchivedGroupItem(groupDoc)),
+                                if (archivedChats.isNotEmpty) SizedBox(height: 16),
+                              ],
+                              // Sección de chats 1-1 archivados
+                              if (archivedChats.isNotEmpty) ...[
+                                _buildSectionHeader('Chats', archivedChats.length),
+                                ...archivedChats.map((chatDoc) {
+                                  final chatData = chatDoc.data() as Map<String, dynamic>;
+                                  final participants = List<String>.from(chatData['participants'] ?? []);
+                                  final otherUserId = _controller.getOtherParticipant(participants);
+                                  if (otherUserId.isEmpty) return SizedBox.shrink();
+                                  return _buildArchivedChatItemFromDoc(chatDoc, otherUserId);
+                                }),
+                              ],
                             ],
-                          ),
-                        );
-                      }
-
-                      final archivedChats = snapshot.data ?? [];
-
-                      if (archivedChats.isEmpty) {
-                        return Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.archive_outlined,
-                                size: 64,
-                                color: Theme.of(context).colorScheme.outlineVariant,
-                              ),
-                              SizedBox(height: 16),
-                              Text(
-                                'No hay chats archivados',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                                ),
-                              ),
-                              SizedBox(height: 8),
-                              Text(
-                                'Desliza un chat hacia la izquierda para archivarlo',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                                ),
-                                textAlign: TextAlign.center,
-                              ),
-                            ],
-                          ),
-                        );
-                      }
-
-                      return ListView.builder(
-                        padding: EdgeInsets.all(16),
-                        itemCount: archivedChats.length,
-                        itemBuilder: (context, index) {
-                          final chat = archivedChats[index];
-                          final otherUserId = _controller.getOtherParticipant(chat.participants);
-
-                          if (otherUserId.isEmpty) return SizedBox.shrink();
-
-                          return FutureBuilder<DocumentSnapshot>(
-                            future: _controller.getUserDocument(otherUserId),
-                            builder: (context, userSnapshot) {
-                              if (!userSnapshot.hasData) return SizedBox.shrink();
-
-                              final formattedUserData = _controller.formatUserData(userSnapshot.data!);
-                              final realName = formattedUserData['realName'];
-
-                              return StreamBuilder<String>(
-                                stream: _controller.watchDisplayName(
-                                  otherUserId,
-                                  realName,
-                                ),
-                                initialData: realName,
-                                builder: (context, aliasSnapshot) {
-                                  final displayName = aliasSnapshot.data ?? realName;
-
-                                  return StreamBuilder<bool>(
-                                    stream: _controller.isBlockedStream(otherUserId),
-                                    initialData: false,
-                                    builder: (context, blockedSnapshot) {
-                                      final isBlocked = blockedSnapshot.data ?? false;
-                                      final isChatCleared = _controller.isChatCleared(chat.id);
-
-                                      return _buildArchivedChatItem(
-                                        chatId: chat.id,
-                                        userId: otherUserId,
-                                        name: displayName,
-                                        lastMessage: isBlocked
-                                            ? 'Contacto bloqueado'
-                                            : (isChatCleared
-                                                ? 'Inicia una conversación...'
-                                                : (chat.lastMessage ?? '')),
-                                        time: isChatCleared
-                                            ? ''
-                                            : ChatUtils.formatChatTime(
-                                                chat.lastMessageTime != null
-                                                    ? Timestamp.fromDate(chat.lastMessageTime!)
-                                                    : null,
-                                              ),
-                                        isOnline: formattedUserData['isOnline'],
-                                        photoURL: formattedUserData['photoURL'],
-                                        isBlocked: isBlocked,
-                                      );
-                                    },
-                                  );
-                                },
-                              );
-                            },
                           );
                         },
                       );
@@ -434,6 +455,235 @@ class _ParentArchivedChatsScreenState extends State<ParentArchivedChatsScreen> {
         ),
       ),
     ),
+    );
+  }
+
+  /// Widget para encabezado de sección
+  Widget _buildSectionHeader(String title, int count) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: 12, top: 4),
+      child: Row(
+        children: [
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+          SizedBox(width: 8),
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.primaryContainer,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              count.toString(),
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: Theme.of(context).colorScheme.onPrimaryContainer,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Widget para item de chat 1-1 archivado (con FutureBuilder para datos del usuario)
+  /// ✅ ACTUALIZADO: Ahora recibe QueryDocumentSnapshot en lugar de Chat model
+  Widget _buildArchivedChatItemFromDoc(QueryDocumentSnapshot chatDoc, String otherUserId) {
+    final chatData = chatDoc.data() as Map<String, dynamic>;
+    final chatId = chatDoc.id;
+    final lastMessage = chatData['lastMessage'] as String?;
+    final lastMessageTime = chatData['lastMessageTime'] as Timestamp?;
+
+    return FutureBuilder<DocumentSnapshot>(
+      future: _controller.getUserDocument(otherUserId),
+      builder: (context, userSnapshot) {
+        if (!userSnapshot.hasData) return SizedBox.shrink();
+
+        final formattedUserData = _controller.formatUserData(userSnapshot.data!);
+        final realName = formattedUserData['realName'];
+
+        return StreamBuilder<String>(
+          stream: _controller.watchDisplayName(
+            otherUserId,
+            realName,
+          ),
+          initialData: realName,
+          builder: (context, aliasSnapshot) {
+            final displayName = aliasSnapshot.data ?? realName;
+
+            return StreamBuilder<bool>(
+              stream: _controller.isBlockedStream(otherUserId),
+              initialData: false,
+              builder: (context, blockedSnapshot) {
+                final isBlocked = blockedSnapshot.data ?? false;
+                final isChatCleared = _controller.isChatCleared(chatId);
+
+                return _buildArchivedChatItem(
+                  chatId: chatId,
+                  userId: otherUserId,
+                  name: displayName,
+                  lastMessage: isBlocked
+                      ? 'Contacto bloqueado'
+                      : (isChatCleared
+                          ? 'Inicia una conversación...'
+                          : (lastMessage ?? '')),
+                  time: isChatCleared
+                      ? ''
+                      : ChatUtils.formatChatTime(lastMessageTime),
+                  isOnline: formattedUserData['isOnline'],
+                  photoURL: formattedUserData['photoURL'],
+                  isBlocked: isBlocked,
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// Widget para item de grupo archivado
+  /// ✅ ACTUALIZADO: Ahora recibe QueryDocumentSnapshot en lugar de Group model
+  Widget _buildArchivedGroupItem(QueryDocumentSnapshot groupDoc) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final groupData = groupDoc.data() as Map<String, dynamic>;
+    final groupId = groupDoc.id;
+    final groupName = groupData['name'] as String? ?? 'Grupo';
+    final groupAvatar = groupData['avatar'] as String?;
+    final members = groupData['members'] as List? ?? [];
+    final memberCount = members.length;
+    final lastMessage = groupData['lastMessage'] as String?;
+    final lastActivity = groupData['lastActivity'] as Timestamp?;
+
+    return Slidable(
+      key: Key('archived_group_$groupId'),
+      closeOnScroll: false,
+      endActionPane: ActionPane(
+        motion: const ScrollMotion(),
+        extentRatio: 0.25,
+        children: [
+          // Botón Desarchivar - Azul suave
+          CustomSlidableAction(
+            onPressed: (context) => _unarchiveGroup(groupId),
+            backgroundColor: Color(0xFF4A90E2),
+            foregroundColor: Colors.white,
+            child: Icon(Icons.unarchive, size: 32, color: Colors.white),
+          ),
+        ],
+      ),
+      child: GestureDetector(
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => GroupChatScreenV2(
+                groupId: groupId,
+                groupName: groupName,
+              ),
+            ),
+          );
+        },
+        child: Container(
+          margin: EdgeInsets.only(bottom: 8),
+          padding: EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
+            children: [
+              // Avatar del grupo
+              CircleAvatar(
+                radius: 28,
+                backgroundColor: Color(0xFF4CAF50).withValues(alpha: 0.2),
+                backgroundImage: groupAvatar != null && groupAvatar.isNotEmpty
+                    ? CachedNetworkImageProvider(groupAvatar)
+                    : null,
+                child: groupAvatar == null || groupAvatar.isEmpty
+                    ? Icon(
+                        Icons.group,
+                        color: Color(0xFF4CAF50),
+                        size: 28,
+                      )
+                    : null,
+              ),
+              SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            groupName,
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: colorScheme.onSurface,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        Container(
+                          padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Color(0xFF4CAF50).withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            '$memberCount miembros',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Color(0xFF4CAF50),
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      lastMessage ?? 'Sin mensajes',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              Column(
+                children: [
+                  if (lastActivity != null)
+                    Text(
+                      ChatUtils.formatChatTime(lastActivity),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  SizedBox(height: 4),
+                  Icon(
+                    Icons.archive,
+                    size: 16,
+                    color: colorScheme.primary,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

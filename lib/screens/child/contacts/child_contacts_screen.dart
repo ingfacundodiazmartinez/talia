@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../../controllers/child_contacts_controller.dart';
 import '../../../models/contact.dart' as contact_model;
 import '../../../screens/add_contact_screen.dart';
@@ -27,6 +29,10 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
   late final ScrollController _scrollController;
   bool _isSyncing = false;
 
+  // Tracking de visibilidad para batch update de fotos
+  final Set<String> _visibleUserIds = {};
+  Timer? _visibilityTimer;
+
   @override
   void initState() {
     super.initState();
@@ -38,6 +44,7 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
 
   @override
   void dispose() {
+    _visibilityTimer?.cancel();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     _controller.dispose();
@@ -53,6 +60,26 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
         _loadMoreContacts();
       }
     }
+
+    // Resetear timer de visibilidad en cada scroll
+    _resetVisibilityTimer();
+  }
+
+  /// Trackear un contacto como visible y resetear timer
+  void _trackVisibleContact(String userId) {
+    _visibleUserIds.add(userId);
+    _resetVisibilityTimer();
+  }
+
+  /// Resetear timer - después de 2s sin actividad, batch update
+  void _resetVisibilityTimer() {
+    _visibilityTimer?.cancel();
+    _visibilityTimer = Timer(const Duration(seconds: 2), () {
+      if (_visibleUserIds.isNotEmpty && mounted) {
+        _controller.batchUpdateVisibleUsers(Set.from(_visibleUserIds));
+        _visibleUserIds.clear();
+      }
+    });
   }
 
   /// Cargar más contactos con actualización de UI
@@ -233,11 +260,26 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
 
     final otherUserId = contact.getOtherUserId(currentUserId);
     final userData = _controller.getUserData(otherUserId);
-    var displayName = _controller.getDisplayName(otherUserId);
+
+    // Trackear este contacto como visible para batch update
+    _trackVisibleContact(otherUserId);
 
     // Obtener teléfono: del perfil o del campo phones del contacto
     final phone = userData?['phone'] as String? ?? contact.phones[otherUserId] ?? '';
-    final photoURL = userData?['photoURL'] as String?;
+
+    // Obtener nombre denormalizado del contacto como fallback
+    final contactName = contact.getOtherUserName(currentUserId);
+
+    // Obtener displayName con hints para priorizar nombre de agenda
+    var displayName = _controller.getDisplayName(
+      otherUserId,
+      phoneHint: phone,
+      contactNameHint: contactName,
+    );
+
+    // Foto: primero del contacto (denormalizado), fallback a userData
+    final photoURL = contact.getOtherUserPhotoURL(currentUserId) ??
+        userData?['photoURL'] as String?;
     final status = contact.getStatusForUser(currentUserId);
 
     // Si el nombre es "Usuario", intentar resolver desde la agenda
@@ -678,7 +720,7 @@ class _ContactItemCard extends StatelessWidget {
       radius: 28,
       backgroundColor: bgColor,
       backgroundImage: status == 'approved' && photoURL != null
-          ? NetworkImage(photoURL!)
+          ? CachedNetworkImageProvider(photoURL!)
           : null,
       child: (status != 'approved' || photoURL == null)
           ? Text(

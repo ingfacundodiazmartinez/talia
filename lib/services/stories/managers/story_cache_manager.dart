@@ -147,15 +147,25 @@ class StoryCacheManager {
 
   /// Stream reactivo de cambios en el cache
   ///
-  /// ✅ FIX: Solo emite estado inicial si el cache ha sido poblado al menos una vez.
-  /// Esto evita emitir lista vacía antes de que Firestore responda en el primer login,
-  /// lo que causaba que las historias no se mostraran hasta reiniciar la app.
+  /// ✅ FIX: Siempre emite estado inicial para evitar spinner infinito en celulares lentos.
+  /// Si el cache no ha sido poblado, emite lista vacía después de un corto delay,
+  /// permitiendo que el UI muestre un estado vacío en lugar de loading infinito.
   Stream<List<UserStories>> get cacheChangesStream {
     return Stream.multi((controller) {
-      // ✅ FIX: Solo emitir estado inicial si ya tenemos datos
-      // Si nunca se ha poblado, esperar a que Firestore responda
+      // ✅ FIX: Siempre emitir estado inicial
+      // Si ya hay datos, emitirlos inmediatamente
+      // Si no hay datos, emitir lista vacía después de un delay corto
+      // Esto evita el spinner infinito en celulares lentos donde Firestore tarda
       if (_hasBeenPopulated) {
         controller.add(getCachedStories());
+      } else {
+        // Emitir lista vacía después de 500ms si Firestore no ha respondido
+        // Esto desbloquea el UI y permite mostrar el botón "Mi Historia"
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (!_hasBeenPopulated && !controller.isClosed) {
+            controller.add([]);
+          }
+        });
       }
 
       // Luego escuchar cambios futuros

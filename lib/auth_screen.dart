@@ -109,27 +109,13 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
 
                           SizedBox(height: 48),
 
-                          // Phone Verification Widget Card
-                          Container(
-                            padding: EdgeInsets.all(24),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(24),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.1),
-                                  blurRadius: 30,
-                                  offset: Offset(0, 10),
-                                ),
-                              ],
-                            ),
-                            child: PhoneVerificationWidget(
-                              onVerificationSuccess: _onPhoneVerificationSuccess,
-                              onCancel: () {
-                                // Volver al selector de tipo de app
-                                Navigator.of(context).pop();
-                              },
-                            ),
+                          // Phone Verification Widget (ya tiene su propia card)
+                          PhoneVerificationWidget(
+                            onVerificationSuccess: _onPhoneVerificationSuccess,
+                            onCancel: () {
+                              // Volver al selector de tipo de app
+                              Navigator.of(context).pop();
+                            },
                           ),
                         ],
                       ),

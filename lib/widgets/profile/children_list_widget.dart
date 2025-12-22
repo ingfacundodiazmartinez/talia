@@ -250,22 +250,13 @@ class ChildrenListWidget extends StatelessWidget {
         Navigator.of(context, rootNavigator: true).pop();
       }
 
-      if (context.mounted) {
-        if (success) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('✅ $name ha sido desvinculado exitosamente'),
-              backgroundColor: Colors.green,
-            ),
-          );
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Error al desvincular a $name'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
+      if (context.mounted && !success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al desvincular a $name'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     } catch (e) {
       // Cerrar dialog de progreso en caso de error

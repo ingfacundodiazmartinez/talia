@@ -182,11 +182,20 @@ class StoryCreationService {
     Function(String storyId, double progress)? onProgressUpdate,
   }) async {
       try {
-        // 1. ✅ OPTIMIZACIÓN: Comprimir imagen antes de subir
+        // 1. ✅ OPTIMIZACIÓN: Comprimir imagen/video antes de subir
         String finalMediaPath = mediaPath;
+        final compressionService = MediaCompressionService();
+
         if (optimisticStory.mediaType == 'image') {
           final imageFile = File(mediaPath);
-          final compressedFile = await MediaCompressionService().compressImage(imageFile);
+          final compressedFile = await compressionService.compressImage(imageFile);
+          if (compressedFile != null) {
+            finalMediaPath = compressedFile.path;
+          }
+        } else if (optimisticStory.mediaType == 'video') {
+          // Comprimir video para mejor tiempo de carga
+          final videoFile = File(mediaPath);
+          final compressedFile = await compressionService.compressVideoForStory(videoFile);
           if (compressedFile != null) {
             finalMediaPath = compressedFile.path;
           }

@@ -937,29 +937,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
       ReleaseLogger.log('Pending report $pendingReportId: $status ($progress%) - $progressMessage', tag: 'ReportsScreen');
 
       if (status == 'completed') {
-        // Mostrar snackbar de éxito
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                Icon(Icons.check_circle, color: Colors.white),
-                SizedBox(width: 8),
-                Expanded(child: Text('Reporte de $childName listo')),
-              ],
-            ),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 3),
-            action: SnackBarAction(
-              label: 'Ver',
-              textColor: Colors.white,
-              onPressed: () {
-                // El StreamBuilder ya debería haber actualizado la lista
-                // Pero podemos forzar un setState si es necesario
-                setState(() {});
-              },
-            ),
-          ),
-        );
+        // Refresh UI to show the new report
+        setState(() {});
       } else if (status == 'failed') {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

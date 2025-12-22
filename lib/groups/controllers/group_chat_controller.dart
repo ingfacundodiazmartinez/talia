@@ -63,15 +63,23 @@ class GroupChatController {
   // Getters
   Group? get group => _group;
   /// Combined list of optimistic + real messages, sorted by timestamp
+  /// ✅ FIX: Filtra mensajes anteriores a clearedAt (cuando el usuario "limpia" el grupo)
   List<GroupMessage> get messages {
     final combined = [..._optimisticMessages, ..._messages];
     // Remove duplicates (optimistic messages replaced by real ones)
     final seen = <String>{};
-    final unique = combined.where((m) {
+    var unique = combined.where((m) {
       if (seen.contains(m.id)) return false;
       seen.add(m.id);
       return true;
     }).toList();
+
+    // ✅ FIX: Filtrar mensajes anteriores a clearedAt
+    final clearedAt = ChatPreferencesCache().getClearedAt(groupId);
+    if (clearedAt != null) {
+      unique = unique.where((m) => m.timestamp.isAfter(clearedAt)).toList();
+    }
+
     // Sort by timestamp descending (newest first for reverse ListView)
     unique.sort((a, b) => b.timestamp.compareTo(a.timestamp));
     return unique;

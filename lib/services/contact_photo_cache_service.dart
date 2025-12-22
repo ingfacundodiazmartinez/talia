@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import '../utils/release_logger.dart';
+import 'device_contact_name_cache.dart';
 
 /// ✅ P1: Servicio de cache proactivo de fotos de contactos
 ///
@@ -114,14 +115,15 @@ class ContactPhotoCacheService {
         .listen(
       (snapshot) {
         if (!snapshot.exists) {
-          _updateUserProfile(userId, null, null);
+          _updateUserProfile(userId, null, null, null);
           return;
         }
 
         final data = snapshot.data();
         final photoUrl = data?['photoURL'] as String?;
         final name = data?['name'] as String?;
-        _updateUserProfile(userId, photoUrl, name);
+        final phone = data?['phone'] as String?;
+        _updateUserProfile(userId, photoUrl, name, phone);
       },
       onError: (error) {
         ReleaseLogger.error(
@@ -152,7 +154,7 @@ class ContactPhotoCacheService {
   }
 
   /// Actualizar cache de perfil y emitir evento
-  void _updateUserProfile(String userId, String? newPhotoUrl, String? newName) {
+  void _updateUserProfile(String userId, String? newPhotoUrl, String? newName, String? newPhone) {
     final oldCache = _userProfileCache[userId];
     final oldPhotoUrl = oldCache?.photoUrl;
     final oldName = oldCache?.name;
@@ -161,10 +163,11 @@ class ContactPhotoCacheService {
     final photoChanged = oldPhotoUrl != newPhotoUrl;
     final nameChanged = oldName != newName;
 
-    if (photoChanged || nameChanged) {
+    if (photoChanged || nameChanged || oldCache == null) {
       _userProfileCache[userId] = UserProfileCache(
         photoUrl: newPhotoUrl,
         name: newName,
+        phone: newPhone,
       );
 
       if (photoChanged) {
@@ -246,7 +249,8 @@ class ContactPhotoCacheService {
         .snapshots()
         .listen(
       (snapshot) {
-        ReleaseLogger.log('📥 [ProfileCache] Alias snapshot received, exists: ${snapshot.exists}');
+        // ✅ No logueamos cada snapshot porque el documento del usuario
+        // se actualiza frecuentemente (lastSeen, isOnline, etc.)
 
         if (!snapshot.exists) {
           _updateAliases({});
@@ -255,7 +259,6 @@ class ContactPhotoCacheService {
 
         final data = snapshot.data();
         final aliases = data?['contactAliases'] as Map<String, dynamic>? ?? {};
-        ReleaseLogger.log('📥 [ProfileCache] Aliases in snapshot: ${aliases.keys.toList()}');
         _updateAliases(Map<String, String>.from(
           aliases.map((key, value) => MapEntry(key, value.toString())),
         ));
@@ -302,28 +305,41 @@ class ContactPhotoCacheService {
 
   /// Obtener alias para un contacto (null si no tiene alias)
   String? getAlias(String contactId) {
-    final alias = _aliasCache[contactId];
-    ReleaseLogger.log('🏷️ [ProfileCache] getAlias($contactId): "$alias" (cache size: ${_aliasCache.length}, keys: ${_aliasCache.keys.toList()})');
-    return alias;
+    // ✅ No logueamos porque este método se llama muy frecuentemente
+    return _aliasCache[contactId];
   }
 
-  /// Obtener nombre a mostrar: alias > name > fallback
+  /// Obtener nombre a mostrar con prioridad:
+  /// 1. Nombre de agenda del dispositivo (por teléfono)
+  /// 2. Alias personalizado
+  /// 3. Nombre cacheado de Firestore
+  /// 4. Fallback
   /// @param contactId: ID del contacto
-  /// @param fallbackName: Nombre a usar si no hay alias ni name cacheado
+  /// @param fallbackName: Nombre a usar si no hay otras opciones
   String getDisplayName(String contactId, String fallbackName) {
-    // 1. Primero verificar si hay alias
+    final cachedProfile = _userProfileCache[contactId];
+
+    // 1. Primero intentar con nombre de agenda del dispositivo (por teléfono)
+    if (cachedProfile?.phone != null && cachedProfile!.phone!.isNotEmpty) {
+      final deviceName = DeviceContactNameCache().getNameByPhone(cachedProfile.phone);
+      if (deviceName != null && deviceName.isNotEmpty) {
+        return deviceName;
+      }
+    }
+
+    // 2. Verificar si hay alias
     final alias = _aliasCache[contactId];
     if (alias != null && alias.isNotEmpty) {
       return alias;
     }
 
-    // 2. Si no hay alias, usar nombre cacheado
-    final cachedName = _userProfileCache[contactId]?.name;
+    // 3. Si no hay alias, usar nombre cacheado
+    final cachedName = cachedProfile?.name;
     if (cachedName != null && cachedName.isNotEmpty) {
       return cachedName;
     }
 
-    // 3. Fallback
+    // 4. Fallback
     return fallbackName;
   }
 
@@ -631,10 +647,12 @@ class ContactPhotoCacheService {
 class UserProfileCache {
   final String? photoUrl;
   final String? name;
+  final String? phone;
 
   UserProfileCache({
     this.photoUrl,
     this.name,
+    this.phone,
   });
 }
 

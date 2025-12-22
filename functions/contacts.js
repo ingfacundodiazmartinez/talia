@@ -410,11 +410,13 @@ exports.createContactRequest = onCall(
         };
       }
 
-      // Obtener nombres y emails de Firestore (fallback si no vienen en request.data)
+      // Obtener nombres, emails y fotos de Firestore (fallback si no vienen en request.data)
       const resolvedUser1Name = user1Data.name || "Usuario";
       const resolvedUser2Name = user2Data.name || "Usuario";
       const resolvedUser1Email = user1Data.email || "";
       const resolvedUser2Email = user2Data.email || "";
+      const resolvedUser1PhotoURL = user1Data.photoURL || null;
+      const resolvedUser2PhotoURL = user2Data.photoURL || null;
 
       const contactData = {
         users: participants,
@@ -422,6 +424,8 @@ exports.createContactRequest = onCall(
         user2Name: resolvedUser2Name,
         user1Email: resolvedUser1Email,
         user2Email: resolvedUser2Email,
+        user1PhotoURL: resolvedUser1PhotoURL,
+        user2PhotoURL: resolvedUser2PhotoURL,
         status: needsAnyApproval ? "pending" : "approved",
         autoApproved: !needsAnyApproval,
         addedAt: new Date(),
@@ -1125,6 +1129,7 @@ exports.syncDeviceContacts = onCall(
       const currentUserRole = currentUserData.role || "child";
       const currentUserPhone = currentUserData.phone;
       const currentUserName = currentUserData.name || "Usuario";
+      const currentUserPhotoURL = currentUserData.photoURL || null;
 
       // TODOS pueden sincronizar contactos (descubrir quién está en Talia)
       // La diferencia está en si se auto-aprueban o requieren aprobación parental
@@ -1185,6 +1190,7 @@ exports.syncDeviceContacts = onCall(
             phoneHash: userData.phoneHash,
             phone: userData.phone || null, // Para guardar en contactos potential
             name: userData.name || "Usuario",
+            photoURL: userData.photoURL || null,
             devicePhoneHashes: userData.devicePhoneHashes || [],
             role: userData.role || "child",
             linkedParents: linkedParents,
@@ -1304,6 +1310,8 @@ exports.syncDeviceContacts = onCall(
             source: "auto_device_sync",
             user1Name: users[0] === currentUserId ? currentUserName : contact.name,
             user2Name: users[1] === currentUserId ? currentUserName : contact.name,
+            user1PhotoURL: users[0] === currentUserId ? currentUserPhotoURL : contact.photoURL,
+            user2PhotoURL: users[1] === currentUserId ? currentUserPhotoURL : contact.photoURL,
             approvalType: "none_required",
           });
 
@@ -1355,6 +1363,8 @@ exports.syncDeviceContacts = onCall(
             // Datos pre-calculados para requestContactApproval
             user1Name: users[0] === currentUserId ? currentUserName : contact.name,
             user2Name: users[1] === currentUserId ? currentUserName : contact.name,
+            user1PhotoURL: users[0] === currentUserId ? currentUserPhotoURL : contact.photoURL,
+            user2PhotoURL: users[1] === currentUserId ? currentUserPhotoURL : contact.photoURL,
             user1Parents: users[0] === currentUserId ? currentUserParents : otherUserParents,
             user2Parents: users[1] === currentUserId ? currentUserParents : otherUserParents,
             user1EffectiveRole: users[0] === currentUserId ? currentUserEffectiveRole : otherUserEffectiveRole,

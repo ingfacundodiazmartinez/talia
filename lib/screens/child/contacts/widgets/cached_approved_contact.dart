@@ -75,12 +75,6 @@ class _CachedApprovedContactState extends State<CachedApprovedContact> {
               setState(() {
                 _isBlocked = false;
               });
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('Contacto desbloqueado'),
-                  backgroundColor: Colors.green,
-                ),
-              );
             }
           } on ParentBlockedException {
             if (mounted) {
@@ -127,12 +121,6 @@ class _CachedApprovedContactState extends State<CachedApprovedContact> {
             setState(() {
               _isBlocked = true;
             });
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Contacto bloqueado'),
-                backgroundColor: Colors.green,
-              ),
-            );
           }
         }
       }
@@ -187,15 +175,6 @@ class _CachedApprovedContactState extends State<CachedApprovedContact> {
         if (currentUserId == null) return;
 
         await _contactService.deleteContact(currentUserId, widget.contactId);
-
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Contacto eliminado'),
-              backgroundColor: Colors.green,
-            ),
-          );
-        }
       }
     } catch (e) {
       if (mounted) {

@@ -300,13 +300,6 @@ class _DeviceContactsTabState extends State<DeviceContactsTab> {
           _pendingRequests.remove(contact.userId);
           _sentRequests.add(contact.userId);
         });
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Solicitud enviada a ${contact.displayName}'),
-            backgroundColor: Colors.green,
-          ),
-        );
       }
     } catch (e) {
       if (mounted) {

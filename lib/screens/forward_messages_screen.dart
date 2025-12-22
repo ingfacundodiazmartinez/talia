@@ -69,14 +69,7 @@ class _ForwardMessagesScreenState extends State<ForwardMessagesScreen> {
       if (mounted) {
         Navigator.pop(context);
 
-        if (result['success']) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('${widget.messages.length} mensajes reenviados a ${result['forwardedCount']} chats'),
-              backgroundColor: Colors.green,
-            ),
-          );
-        } else {
+        if (!result['success']) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('Error al reenviar: ${result['error']}'),

@@ -81,12 +81,6 @@ class _AddContactScreenState extends State<AddContactScreen>
   void _copyCode() {
     if (_userCode != null) {
       Clipboard.setData(ClipboardData(text: _userCode!));
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Codigo copiado al portapapeles'),
-          backgroundColor: Colors.blue,
-        ),
-      );
     }
   }
 

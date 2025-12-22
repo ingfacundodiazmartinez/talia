@@ -337,15 +337,6 @@ class _ReportedMessagesScreenState extends State<ReportedMessagesScreen> {
         reportedMessage.messageId,
       );
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Mensaje desbloqueado correctamente'),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 2),
-          ),
-        );
-      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

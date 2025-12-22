@@ -593,13 +593,6 @@ class _WhitelistScreenState extends State<WhitelistScreen>
         _showErrorSnackBar(result['error']);
       } else {
         ReleaseLogger.log('✅ [HandleApprove] Aprobación exitosa', tag: 'WhitelistScreen');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Contacto aprobado'),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 2),
-          ),
-        );
         // Forzar recarga de datos para actualizar UI
         await _loadData();
       }
@@ -649,13 +642,6 @@ class _WhitelistScreenState extends State<WhitelistScreen>
       if (!result['success']) {
         _showErrorSnackBar(result['error']);
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Contacto rechazado'),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 2),
-          ),
-        );
         // Forzar recarga de datos para actualizar UI
         await _loadData();
       }
@@ -736,13 +722,6 @@ class _WhitelistScreenState extends State<WhitelistScreen>
     if (mounted) {
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
       if (result['success']) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Contacto revocado exitosamente'),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 2),
-          ),
-        );
         // Forzar recarga de datos para actualizar UI
         await _loadData();
       } else {
@@ -838,13 +817,6 @@ class _WhitelistScreenState extends State<WhitelistScreen>
     if (mounted) {
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
       if (result['success'] == true) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('${relation.childName} fue removido del grupo'),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 2),
-          ),
-        );
         // Forzar recarga de datos para actualizar UI
         await _loadData();
       } else {
@@ -885,13 +857,6 @@ class _WhitelistScreenState extends State<WhitelistScreen>
     if (mounted) {
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
       if (result['success']) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Contacto habilitado exitosamente'),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 2),
-          ),
-        );
         await _loadData();
       } else {
         _showErrorSnackBar(result['error']);

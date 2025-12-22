@@ -248,14 +248,6 @@ class _ChatAppBarState extends State<ChatAppBar> {
                   // Desbloquear contacto
                   try {
                     await _blockService.unblockContact(widget.contactId);
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('${widget.contactName} ha sido desbloqueado'),
-                          backgroundColor: Colors.green,
-                        ),
-                      );
-                    }
                   } on ParentBlockedException {
                     if (context.mounted) {
                       _showParentBlockedDialog(context);
