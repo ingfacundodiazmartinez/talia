@@ -1039,50 +1039,55 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   Widget _buildARFilterButton(String filterId, String name, String emoji) {
     final isSelected = _controller.selectedARFilter == filterId;
+    // Deshabilitar filtros mientras la cámara está inicializando
+    final isDisabled = !_isCameraViewReady() || _controller.isLoading;
 
     return GestureDetector(
-      onTap: () => _applyARFilter(filterId),
-      child: Container(
-        width: 70,
-        margin: EdgeInsets.only(right: 12),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(35),
-          color: Colors.black.withValues(alpha: 0.3),
-          border: Border.all(
-            color: isSelected ? Color(0xFF9D7FE8) : Colors.white,
-            width: isSelected ? 3 : 1,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.3),
-              blurRadius: 6,
-              spreadRadius: 1,
+      onTap: isDisabled ? null : () => _applyARFilter(filterId),
+      child: Opacity(
+        opacity: isDisabled ? 0.4 : 1.0,
+        child: Container(
+          width: 70,
+          margin: EdgeInsets.only(right: 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(35),
+            color: Colors.black.withValues(alpha: 0.3),
+            border: Border.all(
+              color: isSelected ? Color(0xFF9D7FE8) : Colors.white,
+              width: isSelected ? 3 : 1,
             ),
-          ],
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(emoji, style: TextStyle(fontSize: 32)),
-            SizedBox(height: 4),
-            Text(
-              name,
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 8,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                shadows: [
-                  Shadow(
-                    color: Colors.black,
-                    blurRadius: 4,
-                  ),
-                ],
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.3),
+                blurRadius: 6,
+                spreadRadius: 1,
               ),
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
+            ],
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(emoji, style: TextStyle(fontSize: 32)),
+              SizedBox(height: 4),
+              Text(
+                name,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 8,
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                  shadows: [
+                    Shadow(
+                      color: Colors.black,
+                      blurRadius: 4,
+                    ),
+                  ],
+                ),
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
         ),
       ),
     );

@@ -366,8 +366,10 @@ class ChildContactsController {
       await _userCache.batchRefreshUsers(batch);
     }
 
-    // Re-emitir stream para actualizar UI con nuevas fotos
-    _refilterFromCache();
+    // ✅ NO llamar a _refilterFromCache() aquí para evitar ciclo infinito:
+    // rebuild → trackVisibleContact → timer 2s → batchUpdate → refilter → rebuild...
+    // Los widgets que necesitan los datos actualizados (fotos) usan SyncedUserAvatar
+    // que se actualiza automáticamente via ContactPhotoCacheService
   }
 
   // ═══════════════════════════════════════════════════════════════

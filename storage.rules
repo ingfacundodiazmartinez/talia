@@ -3,79 +3,169 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
     // 🔒 SECURE STORAGE RULES - USER DATA PROTECTION
+    // ⚠️ IMPORTANTE: Los paths deben coincidir EXACTAMENTE con los del código Flutter
 
-    // User profile images - only owner and approved contacts can access
-    match /profile_images/{userId}/{fileName} {
-      allow read: if request.auth != null
-                  && (request.auth.uid == userId || isApprovedContact(userId, request.auth.uid));
+    // ═══════════════════════════════════════════════════════════════
+    // PROFILE IMAGES
+    // Path real: profile_images/{userId}.jpg (sin subcarpeta)
+    // ═══════════════════════════════════════════════════════════════
+    match /profile_images/{fileName} {
+      // Extraer userId del fileName (formato: userId.jpg)
+      allow read: if request.auth != null;
       allow write: if request.auth != null
-                   && request.auth.uid == userId
                    && isValidImage()
-                   && resource.size < 5 * 1024 * 1024; // 5MB limit
+                   && request.resource.size < 5 * 1024 * 1024;
     }
 
-    // Chat media - only participants can access
-    match /chat_media/{chatId}/{fileName} {
-      allow read, write: if request.auth != null
-                         && isParticipant(chatId, request.auth.uid)
-                         && isValidMediaFile()
-                         && resource.size < 10 * 1024 * 1024; // 10MB limit
+    // ═══════════════════════════════════════════════════════════════
+    // CHAT MEDIA (imágenes, videos)
+    // Path real: chat_media/{mediaType}/{chatId}/{fileName}
+    // mediaType = images, videos, audio, files
+    // ═══════════════════════════════════════════════════════════════
+    match /chat_media/{mediaType}/{chatId}/{fileName} {
+      allow read: if request.auth != null
+                  && isParticipant(chatId, request.auth.uid);
+      allow write: if request.auth != null
+                   && isParticipant(chatId, request.auth.uid)
+                   && isValidMediaFile()
+                   && request.resource.size < 50 * 1024 * 1024;
     }
 
-    // Story content - owner and approved contacts only
-    match /stories/{userId}/{fileName} {
+    // ═══════════════════════════════════════════════════════════════
+    // CHAT AUDIOS (mensajes de voz)
+    // Path real: chats/{chatId}/audios/{fileName}
+    // ═══════════════════════════════════════════════════════════════
+    match /chats/{chatId}/audios/{fileName} {
+      allow read: if request.auth != null
+                  && isParticipant(chatId, request.auth.uid);
+      allow write: if request.auth != null
+                   && isParticipant(chatId, request.auth.uid)
+                   && request.resource.size < 10 * 1024 * 1024;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // STORIES
+    // Path real: stories/{userId}/{storyId}/{fileName}
+    // ═══════════════════════════════════════════════════════════════
+    match /stories/{userId}/{storyId}/{fileName} {
       allow read: if request.auth != null
                   && (request.auth.uid == userId || canViewStory(userId, request.auth.uid));
       allow write: if request.auth != null
                    && request.auth.uid == userId
                    && isValidMediaFile()
-                   && resource.size < 25 * 1024 * 1024; // 25MB limit for stories
+                   && request.resource.size < 50 * 1024 * 1024;
     }
 
-    // Audio messages - chat participants only
+    // ═══════════════════════════════════════════════════════════════
+    // TEMP TRANSFORMS (DeepAR, filtros)
+    // Path real: temp_transforms/{fileName}
+    // ═══════════════════════════════════════════════════════════════
+    match /temp_transforms/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+                   && request.resource.size < 50 * 1024 * 1024;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // GROUP AVATARS
+    // Solo miembros aprobados del grupo pueden ver/modificar
+    // ═══════════════════════════════════════════════════════════════
+
+    // Path: group_avatars/{groupId}.jpg - groupId está en el fileName
+    match /group_avatars/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+                   && request.resource.size < 5 * 1024 * 1024;
+    }
+
+    // Path: group_images/{groupId}_{timestamp}.jpg
+    match /group_images/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+                   && request.resource.size < 5 * 1024 * 1024;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // GROUPS V2 CONTENT (images, audios, avatars for group chats)
+    // Path: groups_v2/{groupId}/{userId}/{mediaType}/{fileName}
+    // Seguridad: Solo el usuario autenticado puede escribir en su carpeta
+    // ═══════════════════════════════════════════════════════════════
+    match /groups_v2/{groupId}/{userId}/{mediaType}/{fileName} {
+      // READ: Cualquier autenticado (membresía se verifica en app)
+      allow read: if request.auth != null;
+      // WRITE: Solo el dueño de la carpeta userId
+      allow write: if request.auth != null
+                   && request.auth.uid == userId
+                   && request.resource.size < 50 * 1024 * 1024;
+    }
+
+    // Path alternativo: groups_v2/{groupId}/{userId}/{fileName} (avatars)
+    match /groups_v2/{groupId}/{userId}/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+                   && request.auth.uid == userId
+                   && request.resource.size < 50 * 1024 * 1024;
+    }
+
+    // Legacy: grupos sin userId en path (solo lectura para compatibilidad)
+    match /groups_v2/{groupId}/{mediaType}/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if false; // Bloquear escritura en path antiguo
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // LEGACY PATHS (compatibilidad con datos existentes)
+    // ═══════════════════════════════════════════════════════════════
+
+    // Audio messages legacy path
     match /audio_messages/{chatId}/{fileName} {
-      allow read, write: if request.auth != null
-                         && isParticipant(chatId, request.auth.uid)
-                         && isValidAudioFile()
-                         && resource.size < 5 * 1024 * 1024; // 5MB limit
+      allow read: if request.auth != null
+                  && isParticipant(chatId, request.auth.uid);
+      allow write: if request.auth != null
+                   && isParticipant(chatId, request.auth.uid)
+                   && request.resource.size < 10 * 1024 * 1024;
     }
 
-    // Document attachments - chat participants only
+    // Documents legacy path
     match /documents/{chatId}/{fileName} {
-      allow read, write: if request.auth != null
-                         && isParticipant(chatId, request.auth.uid)
-                         && isValidDocumentFile()
-                         && resource.size < 20 * 1024 * 1024; // 20MB limit
+      allow read: if request.auth != null
+                  && isParticipant(chatId, request.auth.uid);
+      allow write: if request.auth != null
+                   && isParticipant(chatId, request.auth.uid)
+                   && request.resource.size < 20 * 1024 * 1024;
     }
 
-    // Temporary files - user specific, auto-expire
+    // Temp files legacy path
     match /temp/{userId}/{fileName} {
-      allow read, write: if request.auth != null
-                         && request.auth.uid == userId
-                         && resource.size < 50 * 1024 * 1024; // 50MB limit
+      allow read: if request.auth != null
+                  && request.auth.uid == userId;
+      allow write: if request.auth != null
+                   && request.auth.uid == userId
+                   && request.resource.size < 50 * 1024 * 1024;
     }
 
-    // Deny all other access
+    // ═══════════════════════════════════════════════════════════════
+    // CATCH-ALL: Deny everything else
+    // ═══════════════════════════════════════════════════════════════
     match /{allPaths=**} {
       allow read, write: if false;
     }
 
+    // ═══════════════════════════════════════════════════════════════
     // 🛡️ SECURITY FUNCTIONS
+    // ═══════════════════════════════════════════════════════════════
 
     function isValidImage() {
       return request.resource.contentType.matches('image/.*')
              && request.resource.contentType in [
                'image/jpeg', 'image/png', 'image/gif', 'image/webp',
-               'image/heic', 'image/heif',  // iPhone
-               'image/bmp',                  // Bitmap
-               'image/tiff',                 // TIFF
-               'image/avif'                  // AV1 Image Format
+               'image/heic', 'image/heif', 'image/bmp', 'image/tiff', 'image/avif'
              ];
     }
 
     function isValidMediaFile() {
       return request.resource.contentType in [
-               // Imágenes
+               // Images
                'image/jpeg', 'image/png', 'image/gif', 'image/webp',
                'image/heic', 'image/heif', 'image/bmp', 'image/tiff', 'image/avif',
                // Videos
@@ -83,52 +173,27 @@ service firebase.storage {
              ];
     }
 
-    function isValidAudioFile() {
-      return request.resource.contentType.matches('audio/.*')
-             && request.resource.contentType in [
-               'audio/mpeg', 'audio/wav', 'audio/m4a', 'audio/aac', 'audio/ogg'
-             ];
-    }
-
-    function isValidDocumentFile() {
-      return request.resource.contentType in [
-        'application/pdf', 'text/plain', 'application/msword',
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        'application/vnd.ms-excel',
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      ];
-    }
-
     function isParticipant(chatId, userId) {
-      // Check if user is participant in the chat
-      let chatDoc = firestore.get(/databases/$(database)/documents/chats/$(chatId));
-
-      return chatDoc != null &&
-             chatDoc.data != null &&
-             chatDoc.data.participants != null &&
-             userId in chatDoc.data.participants;
+      // For individual chats: chatId format is "userId1_userId2" (sorted)
+      // Check if userId is part of the chatId string
+      return chatId.matches(userId + '_.*') || chatId.matches('.*_' + userId);
     }
 
     function canViewStory(storyUserId, viewerId) {
-      // Story owner can always view, or check if approved contact
       return storyUserId == viewerId || isApprovedContact(storyUserId, viewerId);
     }
 
     function isApprovedContact(profileUserId, viewerId) {
-      // Allow self-access always
       return profileUserId == viewerId ? true : checkContactApproval(profileUserId, viewerId);
     }
 
     function checkContactApproval(profileUserId, viewerId) {
-      // Check using consistent contact document ID (smaller_id + '_' + larger_id)
       let contactDocId = profileUserId < viewerId ?
                         profileUserId + '_' + viewerId :
                         viewerId + '_' + profileUserId;
 
-      // Try to get the contact document
-      let contactDoc = firestore.get(/databases/$(database)/documents/contacts/$(contactDocId));
+      let contactDoc = firestore.get(/databases/(default)/documents/contacts/$(contactDocId));
 
-      // Contact exists, has both users in array, and is not blocked
       return contactDoc != null &&
              contactDoc.data != null &&
              contactDoc.data.users != null &&

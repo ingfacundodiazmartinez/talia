@@ -5,6 +5,7 @@ import 'package:flutter_slidable/flutter_slidable.dart';
 import '../../../controllers/child_archived_chats_controller.dart';
 import '../../../groups/groups.dart'; // GroupChatScreenV2
 import '../../../services/chats/chat_preferences_cache.dart';
+import '../../../services/user_cache_service.dart';
 import '../../../utils/chat_utils.dart';
 import '../../chat_detail_screen.dart';
 
@@ -25,6 +26,7 @@ class ChildArchivedChatsScreen extends StatefulWidget {
 class _ChildArchivedChatsScreenState extends State<ChildArchivedChatsScreen> {
   late final ChildArchivedChatsController _controller;
   final ChatPreferencesCache _preferencesCache = ChatPreferencesCache();
+  final UserCacheService _userCacheService = UserCacheService();
 
   /// Contador para forzar rebuild cuando cambia estado de archivado
   int _preferencesVersion = 0;
@@ -34,6 +36,12 @@ class _ChildArchivedChatsScreenState extends State<ChildArchivedChatsScreen> {
     super.initState();
     _controller = ChildArchivedChatsController(childId: widget.childId);
     _preferencesCache.addListener(_onPreferencesChanged);
+    _userCacheService.aliasChangedNotifier.addListener(_onAliasChanged);
+
+    // ✅ Inicializar cache de usuarios y forzar rebuild cuando termine
+    _userCacheService.initialize().then((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   void _onPreferencesChanged() {
@@ -42,9 +50,16 @@ class _ChildArchivedChatsScreenState extends State<ChildArchivedChatsScreen> {
     }
   }
 
+  void _onAliasChanged() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
   @override
   void dispose() {
     _preferencesCache.removeListener(_onPreferencesChanged);
+    _userCacheService.aliasChangedNotifier.removeListener(_onAliasChanged);
     _controller.dispose();
     super.dispose();
   }
@@ -277,44 +292,44 @@ class _ChildArchivedChatsScreenState extends State<ChildArchivedChatsScreen> {
         final realName = userData['name'] ?? 'Usuario';
         final photoURL = userData['photoURL'] as String?;
         final isOnline = userData['isOnline'] ?? false;
+        final phone = userData['phone'] as String?;
 
-        return StreamBuilder<String>(
-          stream: _controller.watchDisplayName(otherUserId, realName),
-          initialData: realName,
-          builder: (context, aliasSnapshot) {
-            final displayName = aliasSnapshot.data ?? realName;
+        // Usar el cache centralizado con prioridad: alias > agenda > Firestore
+        final displayName = _userCacheService.getDisplayName(
+          otherUserId,
+          fallback: realName,
+          phoneHint: phone,
+        );
 
-            return StreamBuilder<bool>(
-              stream: _controller.isBlockedStream(otherUserId),
-              initialData: false,
-              builder: (context, blockedSnapshot) {
-                final isBlocked = blockedSnapshot.data ?? false;
-                final isCleared = _controller.isCleared(chatId);
-                final lastMessage = chatData['lastMessage'] as String?;
-                final lastMessageTime = chatData['lastMessageTime'] as Timestamp?;
+        return StreamBuilder<bool>(
+          stream: _controller.isBlockedStream(otherUserId),
+          initialData: false,
+          builder: (context, blockedSnapshot) {
+            final isBlocked = blockedSnapshot.data ?? false;
+            final isCleared = _controller.isCleared(chatId);
+            final lastMessage = chatData['lastMessage'] as String?;
+            final lastMessageTime = chatData['lastMessageTime'] as Timestamp?;
 
-                return _buildChatTile(
-                  id: chatId,
-                  name: displayName,
-                  photoURL: photoURL,
-                  isOnline: isOnline,
-                  isBlocked: isBlocked,
-                  lastMessage: isBlocked
-                      ? 'Contacto bloqueado'
-                      : (isCleared ? 'Inicia una conversación...' : (lastMessage ?? '')),
-                  time: isCleared ? '' : ChatUtils.formatChatTime(lastMessageTime),
-                  colorScheme: colorScheme,
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (context) => ChatDetailScreen(
-                        chatId: chatId,
-                        contactId: otherUserId,
-                        contactName: displayName,
-                      ),
-                    ),
+            return _buildChatTile(
+              id: chatId,
+              name: displayName,
+              photoURL: photoURL,
+              isOnline: isOnline,
+              isBlocked: isBlocked,
+              lastMessage: isBlocked
+                  ? 'Contacto bloqueado'
+                  : (isCleared ? 'Inicia una conversación...' : (lastMessage ?? '')),
+              time: isCleared ? '' : ChatUtils.formatChatTime(lastMessageTime),
+              colorScheme: colorScheme,
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => ChatDetailScreen(
+                    chatId: chatId,
+                    contactId: otherUserId,
+                    contactName: displayName,
                   ),
-                );
-              },
+                ),
+              ),
             );
           },
         );

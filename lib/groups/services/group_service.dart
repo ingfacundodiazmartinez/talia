@@ -194,8 +194,9 @@ class GroupService {
   Future<String?> uploadGroupAvatar(String groupId, File imageFile) async {
     try {
       final storage = FirebaseStorage.instance;
+      final userId = FirebaseAuth.instance.currentUser?.uid ?? '';
       final fileName = 'avatar_${DateTime.now().millisecondsSinceEpoch}.jpg';
-      final ref = storage.ref().child('groups_v2/$groupId/$fileName');
+      final ref = storage.ref().child('groups_v2/$groupId/$userId/$fileName');
 
       final uploadTask = await ref.putFile(
         imageFile,

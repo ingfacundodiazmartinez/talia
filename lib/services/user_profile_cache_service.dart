@@ -169,9 +169,20 @@ class UserProfileCacheService {
   }
 
   /// Stream de datos de usuario (sin caché)
-  /// NOTA: Los streams no pueden ser cacheados debido a su naturaleza en tiempo real
+  /// ✅ Usa distinct() para solo emitir cuando cambian los campos relevantes para display
+  /// (ignora cambios en lastSeen, isOnline, etc. que causan rebuilds innecesarios)
   Stream<DocumentSnapshot> getUserDataStream(String userId) {
-    return _firestore.collection('users').doc(userId).snapshots();
+    return _firestore.collection('users').doc(userId).snapshots().distinct(
+      (prev, next) {
+        final prevData = prev.data() as Map<String, dynamic>?;
+        final nextData = next.data() as Map<String, dynamic>?;
+
+        // Solo comparar campos relevantes para display
+        return prevData?['name'] == nextData?['name'] &&
+               prevData?['phone'] == nextData?['phone'] &&
+               prevData?['photoURL'] == nextData?['photoURL'];
+      },
+    );
   }
 
   /// Obtiene estadísticas del caché

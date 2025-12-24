@@ -12,7 +12,7 @@ import '../../../services/chats/chat_services.dart';
 import '../../../services/message_status_helper.dart';
 import '../../../services/local_unread_count_service.dart';
 import '../../../services/search_service.dart';
-import '../../../services/contact_alias_service.dart';
+import '../../../services/user_cache_service.dart';
 import '../../../services/block_service.dart';
 import '../../../models/chat_message.dart';
 import '../../../models/chat_list_item_type.dart';
@@ -52,7 +52,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
   late ChildChatsController _chatsController;
   final ChatService _chatService = ChatService();
   final LeaveGroupService _leaveGroupService = LeaveGroupService();
-  final ContactAliasService _aliasService = ContactAliasService();
+  final UserCacheService _userCacheService = UserCacheService();
   final BlockService _blockService = BlockService();
   final ChatPreferencesCache _preferencesCache = ChatPreferencesCache();
   // Búsqueda
@@ -71,11 +71,25 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
     _chatsController = ChildChatsController(userId: widget.childId);
     _chatsController.initialize();
 
+    // ✅ Inicializar cache de usuarios y forzar rebuild cuando termine
+    _userCacheService.initialize().then((_) {
+      if (mounted) setState(() {});
+    });
+
     // ✅ Escuchar cambios en contadores de no leídos para actualizar badges
     LocalUnreadCountService().addListener(_onUnreadCountsChanged);
 
     // ✅ Escuchar cambios en preferencias (archivado/silenciado/limpiado) para actualizar lista
     _preferencesCache.addListener(_onPreferencesChanged);
+
+    // ✅ Escuchar cambios en alias para actualizar nombres en la lista
+    _userCacheService.aliasChangedNotifier.addListener(_onAliasChanged);
+  }
+
+  void _onAliasChanged() {
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   void _onPreferencesChanged() {
@@ -94,6 +108,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
   void dispose() {
     LocalUnreadCountService().removeListener(_onUnreadCountsChanged);
     _preferencesCache.removeListener(_onPreferencesChanged);
+    _userCacheService.aliasChangedNotifier.removeListener(_onAliasChanged);
     _searchController.dispose();
     _searchQuery.dispose();
     _chatsController.dispose();
@@ -419,21 +434,16 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
             final fetchedUserData = userSnapshot.data!.data() as Map<String, dynamic>?;
             if (fetchedUserData == null) return SizedBox.shrink();
 
+            // ✅ OPTIMIZADO: Solo pasar el nombre de Firestore como fallback
+            // SyncedUserName en ChatListItem calculará el displayName correcto
+            // con prioridad: alias > agenda > Firestore
             final userName = fetchedUserData['name'] ?? 'Usuario';
 
-            return StreamBuilder<String>(
-              key: ValueKey('alias_$userId'),
-              stream: _aliasService.watchDisplayName(userId, userName),
-              initialData: userName,
-              builder: (context, aliasSnapshot) {
-                final displayName = aliasSnapshot.data ?? userName;
-                return _buildChatItemWidget(
-                  childId: userId,
-                  childData: fetchedUserData,
-                  chatDoc: chatDoc,
-                  displayName: displayName,
-                );
-              },
+            return _buildChatItemWidget(
+              childId: userId,
+              childData: fetchedUserData,
+              chatDoc: chatDoc,
+              displayName: userName,
             );
           },
         );
@@ -850,28 +860,22 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
                   if (userSnapshot.hasData && userSnapshot.data != null) {
                     final parentData = userSnapshot.data!;
                     final parentId = parentSnapshot.data!;
+                    // ✅ OPTIMIZADO: Solo pasar el nombre de Firestore como fallback
+                    // SyncedUserName en ChatListItem calculará el displayName correcto
                     final realName = parentData['name'] ?? 'Padre/Madre';
 
-                    return StreamBuilder<String>(
-                      stream: _chatsController.watchDisplayName(parentId, realName),
-                      initialData: realName,
-                      builder: (context, aliasSnapshot) {
-                        final displayName = aliasSnapshot.data ?? realName;
-
-                        return ChatListItem(
-                          chatId: _chatsController.getChatId(widget.childId, parentId),
-                          userId: parentId,
-                          name: displayName,
-                          lastMessage: 'Inicia una conversación',
-                          time: '',
-                          unreadCount: 0,
-                          photoURL: parentData['photoURL'],
-                          isEmpty: true,
-                          onArchived: () => setState(() => _preferencesVersion++),
-                          onMuted: () => setState(() => _preferencesVersion++),
-                          onCleared: () => setState(() => _preferencesVersion++),
-                        );
-                      },
+                    return ChatListItem(
+                      chatId: _chatsController.getChatId(widget.childId, parentId),
+                      userId: parentId,
+                      name: realName,
+                      lastMessage: 'Inicia una conversación',
+                      time: '',
+                      unreadCount: 0,
+                      photoURL: parentData['photoURL'],
+                      isEmpty: true,
+                      onArchived: () => setState(() => _preferencesVersion++),
+                      onMuted: () => setState(() => _preferencesVersion++),
+                      onCleared: () => setState(() => _preferencesVersion++),
                     );
                   }
                   return SizedBox.shrink();

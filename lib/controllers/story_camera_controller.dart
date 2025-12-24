@@ -593,6 +593,12 @@ class StoryCameraController {
 
   /// Aplicar filtro DeepAR
   Future<void> applyARFilter(String filterName) async {
+    // 🔒 Prevenir aplicar filtros durante inicialización de cámara
+    if (_isInitializingCamera || _isLoading) {
+      ReleaseLogger.log('⚠️ Ignorando filtro - cámara inicializando', tag: 'StoryCameraController');
+      return;
+    }
+
     try {
       // 🔄 VERIFICAR LÍMITES PARA FACE SWAP
       if (filterName == DeepARFilters.faceSwap) {

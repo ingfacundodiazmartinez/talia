@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../utils/release_logger.dart';
 import 'device_contact_name_cache.dart';
@@ -9,16 +10,30 @@ import 'device_contact_name_cache.dart';
 /// - Lazy load: solo consulta Firestore cuando se necesita y no está en cache
 /// - Cache persistente en Hive: sobrevive reinicios de app
 /// - Alias local: se guarda solo en Hive, no va a Firestore
+/// - Notifier para actualizaciones reactivas cuando cambian alias
 class UserCacheService {
   static final UserCacheService _instance = UserCacheService._internal();
   factory UserCacheService() => _instance;
-  UserCacheService._internal();
+
+  UserCacheService._internal() {
+    // Inicializar eagerly al crear el singleton
+    _initializeEagerly();
+  }
 
   static const String _boxName = 'user_cache';
   Box? _box;
   bool _isInitialized = false;
 
   final Map<String, Map<String, dynamic>?> _memoryCache = {};
+
+  /// Notifier que emite el userId cuando su alias cambia
+  /// Las pantallas pueden escuchar esto para rebuildearse
+  final ValueNotifier<String?> aliasChangedNotifier = ValueNotifier(null);
+
+  /// Inicialización eager que se ejecuta al crear el singleton
+  void _initializeEagerly() {
+    initialize();
+  }
 
   Future<void> initialize() async {
     if (_isInitialized) return;
@@ -106,16 +121,41 @@ class UserCacheService {
   }
 
   /// Obtener el nombre a mostrar
-  /// Prioridad: agenda del SO (por phone) > alias > name (Firestore) > fallback
+  /// Prioridad: alias > agenda del SO (por phone) > name (Firestore) > fallback
   ///
   /// @param userId: ID del usuario
   /// @param fallback: Nombre a usar si no se encuentra nada (default: 'Usuario')
   /// @param phoneHint: Teléfono del usuario (opcional, para buscar en agenda si no está en cache)
   String getDisplayName(String userId, {String fallback = 'Usuario', String? phoneHint}) {
-    final data = getUserDataSync(userId);
+    // Intentar obtener datos del cache (memoria o Hive)
+    var data = getUserDataSync(userId);
 
-    // 1. PRIMERO: Buscar en agenda del dispositivo por teléfono
-    // Usar phoneHint si se proporciona, sino usar el phone del cache
+    // Si no hay datos en memoria, intentar leer directamente de Hive
+    // (aunque _isInitialized sea false, el box puede estar abierto)
+    if (data == null) {
+      try {
+        // Verificar si el box ya está abierto (por otra inicialización)
+        if (Hive.isBoxOpen(_boxName)) {
+          final box = Hive.box(_boxName);
+          final cached = box.get(userId);
+          if (cached != null) {
+            data = Map<String, dynamic>.from(cached);
+            _memoryCache[userId] = data;
+          }
+        }
+      } catch (_) {
+        // Ignorar errores si el box no está abierto
+      }
+    }
+
+    // 1. PRIMERO: Alias (nombre personalizado puesto por el usuario)
+    // El alias tiene máxima prioridad porque es la preferencia explícita del usuario
+    final alias = data?['alias'] as String?;
+    if (alias != null && alias.isNotEmpty) {
+      return alias;
+    }
+
+    // 2. Buscar en agenda del dispositivo por teléfono
     final phone = phoneHint ?? data?['phone'] as String?;
     if (phone != null && phone.isNotEmpty) {
       final deviceName = DeviceContactNameCache().getNameByPhone(phone);
@@ -124,19 +164,21 @@ class UserCacheService {
       }
     }
 
-    if (data == null) return fallback;
-
-    // 2. Alias local (puesto por el usuario)
-    final alias = data['alias'] as String?;
-    if (alias != null && alias.isNotEmpty) return alias;
+    if (data == null) {
+      return fallback;
+    }
 
     // 3. Nombre de Firestore
     final name = data['name'] as String?;
-    if (name != null && name.isNotEmpty && name != 'Usuario') return name;
+    if (name != null && name.isNotEmpty && name != 'Usuario') {
+      return name;
+    }
 
     // 4. Nombre de la agenda guardado previamente (legacy)
     final localName = data['localName'] as String?;
-    if (localName != null && localName.isNotEmpty) return localName;
+    if (localName != null && localName.isNotEmpty) {
+      return localName;
+    }
 
     return fallback;
   }
@@ -167,18 +209,37 @@ class UserCacheService {
   }
 
   /// Establecer alias local para un usuario
+  /// Notifica a los listeners para que las pantallas se actualicen
   Future<void> setAlias(String userId, String? alias) async {
     if (userId.isEmpty) return;
     await initialize();
 
+    ReleaseLogger.log('💾 setAlias CALLED: userId=$userId, alias=$alias', tag: 'UserCache');
+
     var data = getUserDataSync(userId) ?? await getUserData(userId);
 
-    if (data != null) {
+    // Si no hay datos en cache, crear entrada básica
+    if (data == null) {
+      data = {
+        'name': null,
+        'photoURL': null,
+        'phone': null,
+        'alias': alias,
+        'localName': null,
+        'cachedAt': DateTime.now().millisecondsSinceEpoch,
+      };
+    } else {
       data['alias'] = alias;
       data['cachedAt'] = DateTime.now().millisecondsSinceEpoch;
-      await _box?.put(userId, data);
-      _memoryCache[userId] = data;
     }
+
+    await _box?.put(userId, data);
+    _memoryCache[userId] = data;
+
+    // Notificar a las pantallas que escuchan para que se actualicen
+    // Forzar notificación aunque sea el mismo userId (resetear primero a null)
+    aliasChangedNotifier.value = null;
+    aliasChangedNotifier.value = userId;
   }
 
   /// Establecer nombre de la agenda del dispositivo para un usuario

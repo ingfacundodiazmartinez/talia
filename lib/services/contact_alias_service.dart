@@ -1,9 +1,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'user_cache_service.dart';
 
 class ContactAliasService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
+  final UserCacheService _userCacheService = UserCacheService();
 
   /// Obtener el nombre a mostrar para un contacto (alias si existe, sino nombre real)
   Future<String> getDisplayName(String contactId, String realName) async {
@@ -55,29 +57,38 @@ class ContactAliasService {
   }
 
   /// Guardar un alias para un contacto
-  /// ✅ FIX: Usar update() en lugar de set() para no crear documento si no existe
+  /// Actualiza tanto Firestore como el cache local
   Future<void> setAlias(String contactId, String alias) async {
     try {
       final currentUser = _auth.currentUser;
       if (currentUser == null) throw Exception('Usuario no autenticado');
 
+      // Actualizar Firestore
       await _firestore.collection('users').doc(currentUser.uid).update({
         'contactAliases.$contactId': alias,
       });
+
+      // Actualizar cache local para que getDisplayName() refleje el cambio inmediatamente
+      await _userCacheService.setAlias(contactId, alias);
     } catch (e) {
       rethrow;
     }
   }
 
   /// Eliminar el alias de un contacto (restaurar nombre original)
+  /// Actualiza tanto Firestore como el cache local
   Future<void> removeAlias(String contactId) async {
     try {
       final currentUser = _auth.currentUser;
       if (currentUser == null) throw Exception('Usuario no autenticado');
 
+      // Eliminar de Firestore
       await _firestore.collection('users').doc(currentUser.uid).update({
         'contactAliases.$contactId': FieldValue.delete(),
       });
+
+      // Eliminar del cache local
+      await _userCacheService.setAlias(contactId, null);
     } catch (e) {
       rethrow;
     }

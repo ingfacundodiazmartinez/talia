@@ -310,8 +310,8 @@ class ContactPhotoCacheService {
   }
 
   /// Obtener nombre a mostrar con prioridad:
-  /// 1. Nombre de agenda del dispositivo (por teléfono)
-  /// 2. Alias personalizado
+  /// 1. Alias personalizado (máxima prioridad - preferencia explícita del usuario)
+  /// 2. Nombre de agenda del dispositivo (por teléfono)
   /// 3. Nombre cacheado de Firestore
   /// 4. Fallback
   /// @param contactId: ID del contacto
@@ -319,7 +319,14 @@ class ContactPhotoCacheService {
   String getDisplayName(String contactId, String fallbackName) {
     final cachedProfile = _userProfileCache[contactId];
 
-    // 1. Primero intentar con nombre de agenda del dispositivo (por teléfono)
+    // 1. PRIMERO: Alias (nombre personalizado puesto por el usuario)
+    // El alias tiene máxima prioridad porque es la preferencia explícita del usuario
+    final alias = _aliasCache[contactId];
+    if (alias != null && alias.isNotEmpty) {
+      return alias;
+    }
+
+    // 2. Nombre de agenda del dispositivo (por teléfono)
     if (cachedProfile?.phone != null && cachedProfile!.phone!.isNotEmpty) {
       final deviceName = DeviceContactNameCache().getNameByPhone(cachedProfile.phone);
       if (deviceName != null && deviceName.isNotEmpty) {
@@ -327,13 +334,7 @@ class ContactPhotoCacheService {
       }
     }
 
-    // 2. Verificar si hay alias
-    final alias = _aliasCache[contactId];
-    if (alias != null && alias.isNotEmpty) {
-      return alias;
-    }
-
-    // 3. Si no hay alias, usar nombre cacheado
+    // 3. Nombre cacheado de Firestore
     final cachedName = cachedProfile?.name;
     if (cachedName != null && cachedName.isNotEmpty) {
       return cachedName;

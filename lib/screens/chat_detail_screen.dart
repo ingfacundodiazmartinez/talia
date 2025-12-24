@@ -10,6 +10,7 @@ import '../notification_service.dart';
 import '../services/reaction_service.dart';
 import '../services/local_unread_count_service.dart';
 import '../services/notification_tracking_service.dart';
+import '../services/user_cache_service.dart';
 import '../calls_v2/screens/agora_call_screen.dart';
 import '../widgets/reaction_picker.dart';
 import 'chat/widgets/chat_app_bar.dart';
@@ -61,6 +62,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   final ScrollController _scrollController = ScrollController();
   final AudioRecorder _audioRecorder = AudioRecorder();
   final ReactionService _reactionService = ReactionService();
+  final UserCacheService _userCacheService = UserCacheService();
 
   // Local UI state
   bool _showEmojiPicker = false;
@@ -73,6 +75,12 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   bool _hasScrolledToMessage = false;
   Map<String, dynamic>? _editingBlockedMessage;
 
+  // Nombre reactivo del contacto (se actualiza si cambia el alias)
+  String? _displayName;
+
+  /// Getter que retorna el nombre a mostrar con fallback seguro
+  String get displayName => _displayName ?? widget.contactName;
+
   // Controller getter required by MediaHandlersMixin
   @override
   ChatControllerCacheFirst get controller => _controller;
@@ -82,17 +90,38 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
+    // Inicializar nombre del contacto (reactivo a cambios de alias)
+    _displayName = _userCacheService.getDisplayName(
+      widget.contactId,
+      fallback: widget.contactName,
+    );
+
     // ✅ Inicializar controller SÍNCRONAMENTE (sin spinner)
     _controller = ChatControllerCacheFirst(
       chatId: widget.chatId,
       contactId: widget.contactId,
-      contactName: widget.contactName,
+      contactName: displayName,
       isGroup: false,
     );
 
     // Listeners síncronos
     _messageController.addListener(_onTypingChanged);
     _scrollController.addListener(_onScroll);
+
+    // ✅ Escuchar cambios de alias para actualizar el nombre
+    _userCacheService.aliasChangedNotifier.addListener(_onAliasChanged);
+
+    // ✅ Inicializar cache de usuarios y forzar rebuild cuando termine
+    _userCacheService.initialize().then((_) {
+      if (mounted) {
+        setState(() {
+          _displayName = _userCacheService.getDisplayName(
+            widget.contactId,
+            fallback: widget.contactName,
+          );
+        });
+      }
+    });
 
     // ✅ Operaciones async en background (no bloquean UI)
     _initializeInBackground();
@@ -105,6 +134,19 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
         _scrollToBottom(animate: false);
       }
     });
+  }
+
+  void _onAliasChanged() {
+    // Solo actualizar si el alias que cambió es de este contacto
+    final changedUserId = _userCacheService.aliasChangedNotifier.value;
+    if (changedUserId == widget.contactId && mounted) {
+      setState(() {
+        _displayName = _userCacheService.getDisplayName(
+          widget.contactId,
+          fallback: widget.contactName,
+        );
+      });
+    }
   }
 
   /// Operaciones de inicialización en background (no bloquean UI)
@@ -131,6 +173,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     NotificationService().clearCurrentChat();
     LocalUnreadCountService().exitChat();
     WidgetsBinding.instance.removeObserver(this);
+    _userCacheService.aliasChangedNotifier.removeListener(_onAliasChanged);
     _controller.dispose();
     _messageController.removeListener(_onTypingChanged);
     _messageController.dispose();
@@ -525,7 +568,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
         builder: (context) => ForwardMessagesScreen(
           messages: selectedMessages,
           originalChatId: widget.chatId,
-          contactName: widget.contactName,
+          contactName: displayName,
         ),
       ),
     );
@@ -567,7 +610,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
             )
           : ChatAppBar(
               contactId: widget.contactId,
-              contactName: widget.contactName,
+              contactName: displayName,
               contactPhotoURL: _controller.contactPhotoURL,
               chatId: widget.chatId,
               onTap: () {
@@ -575,7 +618,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
                   MaterialPageRoute(
                     builder: (context) => ContactProfileScreen(
                       contactId: widget.contactId,
-                      contactName: widget.contactName,
+                      contactName: displayName,
                       chatId: widget.chatId,
                     ),
                   ),
@@ -621,7 +664,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
       controller: _controller,
       scrollController: _scrollController,
       chatId: widget.chatId,
-      contactName: widget.contactName,
+      contactName: displayName,
       isSelectionMode: _isSelectionMode,
       selectedMessageIds: _selectedMessageIds,
       highlightedMessageId: _highlightedMessageId,

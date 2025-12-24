@@ -64,9 +64,11 @@ android {
     }
 
     // Soporte para 16 KB page size (Android 15+ requirement)
+    // useLegacyPackaging = true es necesario porque bibliotecas de terceros
+    // (Agora, Firebase, DeepAR) aún no están compiladas con alineación de 16KB
     packaging {
         jniLibs {
-            useLegacyPackaging = false
+            useLegacyPackaging = true
         }
     }
 }

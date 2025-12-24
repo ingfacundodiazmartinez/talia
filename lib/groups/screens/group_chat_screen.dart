@@ -26,6 +26,7 @@ import '../../widgets/reaction_picker.dart';
 import '../../utils/release_logger.dart';
 import '../../services/local_unread_count_service.dart';
 import '../../services/notification_tracking_service.dart';
+import '../../screens/chat/widgets/recording_indicator.dart';
 
 /// Chat screen for Groups V2
 ///
@@ -277,11 +278,12 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
 
       final fileToUpload = compressedFile ?? File(image.path);
 
-      // Upload to Firebase Storage
+      // Upload to Firebase Storage (path includes userId for security rules)
+      final userId = FirebaseAuth.instance.currentUser?.uid ?? '';
       final fileName = 'img_${DateTime.now().millisecondsSinceEpoch}.jpg';
       final storageRef = FirebaseStorage.instance
           .ref()
-          .child('groups_v2/${widget.groupId}/images/$fileName');
+          .child('groups_v2/${widget.groupId}/$userId/images/$fileName');
 
       final uploadTask = await storageRef.putFile(
         fileToUpload,
@@ -400,11 +402,12 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
         try {
           final audioFile = File(path);
 
-          // Upload to Firebase Storage
+          // Upload to Firebase Storage (path includes userId for security rules)
+          final userId = FirebaseAuth.instance.currentUser?.uid ?? '';
           final fileName = 'audio_${DateTime.now().millisecondsSinceEpoch}.m4a';
           final storageRef = FirebaseStorage.instance
               .ref()
-              .child('groups_v2/${widget.groupId}/audios/$fileName');
+              .child('groups_v2/${widget.groupId}/$userId/audios/$fileName');
 
           final uploadTask = await storageRef.putFile(
             audioFile,
@@ -486,12 +489,25 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
 
     return Scaffold(
       appBar: _buildAppBar(colorScheme),
-      body: Column(
+      body: Stack(
         children: [
-          Expanded(child: _buildMessagesList()),
-          if (_replyingTo != null) _buildReplyBar(),
-          _buildInputBar(),
-          if (_showEmojiPicker) _buildEmojiPicker(),
+          Column(
+            children: [
+              Expanded(child: _buildMessagesList()),
+              if (_replyingTo != null) _buildReplyBar(),
+              _buildInputBar(),
+              if (_showEmojiPicker) _buildEmojiPicker(),
+            ],
+          ),
+          if (_isRecording)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: Container(
+                  color: Colors.black.withValues(alpha: 0.3),
+                  child: const RecordingIndicator(),
+                ),
+              ),
+            ),
         ],
       ),
     );

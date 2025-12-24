@@ -153,6 +153,7 @@ class GroupMessage {
       'videoUrl': videoUrl,
       'audioUrl': audioUrl,
       'thumbnailUrl': thumbnailUrl,
+      'type': contentType, // For notification formatting
       'replyTo': replyTo?.toMap(),
       'timestamp': Timestamp.fromDate(timestamp),
       'editedAt': editedAt != null ? Timestamp.fromDate(editedAt!) : null,

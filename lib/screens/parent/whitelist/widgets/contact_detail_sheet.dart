@@ -428,8 +428,23 @@ class _ContactDetailSheetState extends State<ContactDetailSheet> {
     final data = relation.data;
     final description = data['groupDescription'] as String?;
     final creatorName = data['groupCreatorName'] as String?;
-    final membersList = data['members'] as List<dynamic>? ?? [];
-    final memberCount = data['memberCount'] as int? ?? membersList.length;
+
+    // memberDetails es un Map<userId, {name, photoUrl, ...}>
+    final memberDetailsRaw = data['memberDetails'];
+    final memberDetails = memberDetailsRaw is Map ? memberDetailsRaw : <String, dynamic>{};
+
+    // Convertir memberDetails a lista para mostrar
+    final membersList = memberDetails.entries.map((entry) {
+      final details = entry.value is Map ? entry.value as Map : <String, dynamic>{};
+      return {
+        'id': entry.key,
+        'name': details['name'] ?? 'Usuario',
+        'role': details['role'] ?? 'adult',
+      };
+    }).toList();
+
+    final memberCountRaw = data['memberCount'];
+    final memberCount = memberCountRaw is int ? memberCountRaw : membersList.length;
 
     return Container(
       padding: EdgeInsets.all(10),
@@ -510,9 +525,8 @@ class _ContactDetailSheetState extends State<ContactDetailSheet> {
               spacing: 6,
               runSpacing: 6,
               children: membersList.take(5).map((member) {
-                final memberData = member as Map<String, dynamic>;
-                final name = memberData['name'] as String? ?? 'Usuario';
-                final role = memberData['role'] as String? ?? 'adult';
+                final name = member['name'] as String? ?? 'Usuario';
+                final role = member['role'] as String? ?? 'adult';
                 final isChild = role == 'child';
 
                 return Container(
