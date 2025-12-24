@@ -557,8 +557,6 @@ class _ParentArchivedChatsScreenState extends State<ParentArchivedChatsScreen> {
     final groupId = groupDoc.id;
     final groupName = groupData['name'] as String? ?? 'Grupo';
     final groupAvatar = groupData['avatar'] as String?;
-    final members = groupData['members'] as List? ?? [];
-    final memberCount = members.length;
     final lastMessage = groupData['lastMessage'] as String?;
     final lastActivity = groupData['lastActivity'] as Timestamp?;
 
@@ -630,21 +628,6 @@ class _ParentArchivedChatsScreenState extends State<ParentArchivedChatsScreen> {
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        Container(
-                          padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: Color(0xFF4CAF50).withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text(
-                            '$memberCount miembros',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: Color(0xFF4CAF50),
-                              fontWeight: FontWeight.w500,
-                            ),
                           ),
                         ),
                       ],

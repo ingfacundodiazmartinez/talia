@@ -25,10 +25,21 @@ class ReplyPreviewWidget extends StatelessWidget {
     final storyMediaUrl = replyTo['storyMediaUrl'] as String?;
     final hasStoryMedia = isStoryInteraction && storyMediaUrl != null && storyMediaUrl.isNotEmpty;
 
-    final hasImage = replyTo['imageUrl'] != null;
-    final hasVideo = replyTo['videoUrl'] != null;
-    final hasAudio = replyTo['audioUrl'] != null;
+    // Verificar URLs de media (con check de non-empty)
+    final imageUrl = replyTo['imageUrl'] as String?;
+    final videoUrl = replyTo['videoUrl'] as String?;
+    final audioUrl = replyTo['audioUrl'] as String?;
+
+    final hasImage = imageUrl != null && imageUrl.isNotEmpty;
+    final hasVideo = videoUrl != null && videoUrl.isNotEmpty;
+    final hasAudio = audioUrl != null && audioUrl.isNotEmpty;
     final hasText = replyTo['text'] != null && replyTo['text'].toString().isNotEmpty;
+
+    // Fallback: usar contentType si las URLs no están disponibles
+    final contentType = replyTo['contentType'] as String? ?? replyTo['type'] as String?;
+    final isImageType = contentType == 'image';
+    final isVideoType = contentType == 'video';
+    final isAudioType = contentType == 'audio';
 
     return GestureDetector(
       onTap: onTap,
@@ -48,7 +59,8 @@ class ReplyPreviewWidget extends StatelessWidget {
         child: Row(
         children: [
           // Miniatura de la foto/video/audio/historia si existe
-          if (hasStoryMedia || hasImage || hasVideo || hasAudio)
+          // Usar fallback de tipo si no hay URL disponible
+          if (hasStoryMedia || hasImage || hasVideo || hasAudio || isImageType || isVideoType || isAudioType)
             Padding(
               padding: const EdgeInsets.only(right: 8),
               child: ClipRRect(
@@ -79,7 +91,7 @@ class ReplyPreviewWidget extends StatelessWidget {
                         )
                       : hasImage
                           ? CachedNetworkImage(
-                              imageUrl: replyTo['imageUrl'],
+                              imageUrl: imageUrl,
                               fit: BoxFit.cover,
                               placeholder: (context, url) => Icon(
                                 Icons.image,
@@ -96,7 +108,7 @@ class ReplyPreviewWidget extends StatelessWidget {
                                     : colorScheme.primary.withValues(alpha: 0.6),
                               ),
                             )
-                          : hasVideo
+                          : (hasVideo || isVideoType)
                               ? Icon(
                                   Icons.play_circle_outline,
                                   size: 24,
@@ -104,13 +116,22 @@ class ReplyPreviewWidget extends StatelessWidget {
                                       ? Colors.white.withValues(alpha: 0.8)
                                       : colorScheme.primary.withValues(alpha: 0.8),
                                 )
-                              : Icon(
-                                  Icons.mic,
-                                  size: 24,
-                                  color: isMe
-                                      ? Colors.white.withValues(alpha: 0.8)
-                                      : colorScheme.primary.withValues(alpha: 0.8),
-                                ),
+                              : (hasAudio || isAudioType)
+                                  ? Icon(
+                                      Icons.mic,
+                                      size: 24,
+                                      color: isMe
+                                          ? Colors.white.withValues(alpha: 0.8)
+                                          : colorScheme.primary.withValues(alpha: 0.8),
+                                    )
+                                  // Fallback: usar icono según tipo si no hay URL
+                                  : Icon(
+                                      isImageType ? Icons.image : Icons.attach_file,
+                                      size: 24,
+                                      color: isMe
+                                          ? Colors.white.withValues(alpha: 0.8)
+                                          : colorScheme.primary.withValues(alpha: 0.8),
+                                    ),
                 ),
               ),
             ),
@@ -133,6 +154,7 @@ class ReplyPreviewWidget extends StatelessWidget {
                 const SizedBox(height: 2),
                 Text(
                   // ✅ FIX: Mostrar caption de historia o indicador (diferenciando reply de like)
+                  // ✅ FIX: Usar contentType como fallback si no hay URL
                   isStoryLike
                       ? '❤️ Tu historia'
                       : isStoryReply
@@ -141,17 +163,19 @@ class ReplyPreviewWidget extends StatelessWidget {
                               : '📖 Historia')
                           : hasText
                               ? replyTo['text']
-                              : hasImage
+                              : (hasImage || isImageType)
                                   ? '📷 Foto'
-                                  : hasVideo
+                                  : (hasVideo || isVideoType)
                                       ? '🎥 Video'
-                                      : '🎤 Audio',
+                                      : (hasAudio || isAudioType)
+                                          ? '🎤 Audio'
+                                          : 'Mensaje',
                   style: TextStyle(
                     fontSize: 12,
                     color: isMe
                         ? Colors.white.withValues(alpha: 0.8)
                         : colorScheme.onSurface.withValues(alpha: 0.8),
-                    fontStyle: (hasText || isStoryInteraction) ? FontStyle.normal : FontStyle.italic,
+                    fontStyle: hasText ? FontStyle.normal : FontStyle.italic,
                   ),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,

@@ -864,10 +864,14 @@ service cloud.firestore {
       // 4. Tienes acceso via story_approval_requests como padre
       allow get: if request.auth != null && canViewThisStory();
 
-      // 🔒 SEGURIDAD: Para queries (list), evaluar cada documento individualmente
-      // Esto previene que usuarios vean historias de usuarios con los que no tienen relación
-      // La app DEBE filtrar por userId o via story_approval_requests
-      allow list: if request.auth != null && canViewThisStory();
+      // 🔒 SEGURIDAD: Para queries (list), permitir si:
+      // 1. El usuario consulta sus PROPIAS historias (userId == auth.uid), O
+      // 2. Puede ver la historia según canViewThisStory()
+      // ✅ FIX: Permitir explícitamente queries por userId propio
+      allow list: if request.auth != null && (
+        resource.data.userId == request.auth.uid ||
+        canViewThisStory()
+      );
 
       // Solo el creador puede crear su propia historia
       allow create: if request.auth != null &&
@@ -1548,7 +1552,8 @@ service cloud.firestore {
     }
 
     // Character transformations - Analytics de transformaciones
-    match /characterTransformations/{transformId} {
+    // ✅ RENAMED: characterTransformations → character_transformations (snake_case)
+    match /character_transformations/{transformId} {
       // Solo lectura para el usuario que hizo la transformación o admins
       allow read: if request.auth != null && (
         resource.data.userId == request.auth.uid ||
@@ -1563,7 +1568,8 @@ service cloud.firestore {
     }
 
     // Estado de transformaciones en tiempo real
-    match /transformationStatus/{statusId} {
+    // ✅ RENAMED: transformationStatus → transformation_status (snake_case)
+    match /transformation_status/{statusId} {
       // Solo lectura para el usuario que hizo la transformación
       // Permite snapshots() en tiempo real
       allow read: if request.auth != null &&
@@ -1663,12 +1669,21 @@ service cloud.firestore {
       );
 
       // Función para verificar si es padre de algún miembro o pendiente
+      // Usa linkedChildrenIds para verificar si alguno de sus hijos está en el grupo
       function isParentOfAnyMemberOrPending(groupData) {
-        // Verificar si el caller es padre de algún miembro
-        let allUsers = groupData.members;
-        // No podemos iterar en rules, pero podemos verificar vía parent_children
-        // Esta función se usa principalmente para read, update ya tiene verificación específica
-        return false; // Se verificará en update específicamente por childId
+        let parentDoc = get(/databases/$(database)/documents/users/$(request.auth.uid));
+        let myChildren = parentDoc.data.linkedChildrenIds;
+
+        // Si no tiene hijos vinculados, no es padre de nadie
+        let hasChildren = myChildren != null;
+
+        // Verificar si alguno de sus hijos está en members o pendingMembers
+        let hasChildInMembers = hasChildren && groupData.members.hasAny(myChildren);
+        let hasChildInPending = hasChildren &&
+                                groupData.pendingMembers != null &&
+                                groupData.pendingMembers.hasAny(myChildren);
+
+        return hasChildInMembers || hasChildInPending;
       }
 
       // Solo Cloud Functions pueden crear grupos
@@ -1683,11 +1698,22 @@ service cloud.firestore {
 
       // Validar cambios en admins cuando alguien sale
       function isValidAdminsChangeOnLeave() {
-        // Sin cambios O el usuario se remueve a sí mismo (tamaño -1 y ya no está)
-        return request.resource.data.admins == resource.data.admins ||
-               (request.auth.uid in resource.data.admins &&
-                !(request.auth.uid in request.resource.data.admins) &&
-                request.resource.data.admins.size() == resource.data.admins.size() - 1);
+        // Caso 1: Sin cambios en admins
+        let noChange = request.resource.data.admins == resource.data.admins;
+
+        // Caso 2: Usuario se remueve de admins (tamaño -1)
+        let removingSelf = request.auth.uid in resource.data.admins &&
+                           !(request.auth.uid in request.resource.data.admins) &&
+                           request.resource.data.admins.size() == resource.data.admins.size() - 1;
+
+        // Caso 3: Último admin sale y promueve a otro (tamaño igual, usuario cambia)
+        // El usuario era el ÚNICO admin, se remueve, y hay exactamente 1 nuevo admin
+        let lastAdminPromoting = resource.data.admins.size() == 1 &&
+                                  request.auth.uid in resource.data.admins &&
+                                  !(request.auth.uid in request.resource.data.admins) &&
+                                  request.resource.data.admins.size() == 1;
+
+        return noChange || removingSelf || lastAdminPromoting;
       }
 
       // Validar cambios en pendingMembers cuando alguien sale
@@ -1721,11 +1747,30 @@ service cloud.firestore {
       }
 
       // Función para verificar si es padre modificando membresía de su hijo
-      // Campos permitidos para padres: members, memberDetails, memberCount, pendingMembers, updatedAt
+      // Verifica que: 1) Solo modifica campos permitidos, 2) Tiene hijos vinculados,
+      // 3) Al menos uno de sus hijos está en pendingMembers o members del grupo
       function isParentModifyingChildMembership() {
         let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
-        let allowedParentFields = ['members', 'memberDetails', 'memberCount', 'pendingMembers', 'updatedAt'];
-        return changedKeys.hasOnly(allowedParentFields);
+        let allowedParentFields = ['members', 'memberDetails', 'memberCount', 'pendingMembers', 'pendingMemberDetails', 'pendingCount', 'updatedAt'];
+
+        // Obtener los hijos vinculados del padre
+        let parentDoc = get(/databases/$(database)/documents/users/$(request.auth.uid));
+        let myChildren = parentDoc.data.linkedChildrenIds;
+
+        // Verificar que:
+        // 1. Solo se modifican campos permitidos
+        // 2. El caller tiene hijos vinculados
+        // 3. Al menos uno de sus hijos está en pendingMembers (para aprobar) O en members (para revocar)
+        let hasChildInPending = resource.data.pendingMembers != null &&
+                                myChildren != null &&
+                                resource.data.pendingMembers.hasAny(myChildren);
+        let hasChildInMembers = resource.data.members != null &&
+                                myChildren != null &&
+                                resource.data.members.hasAny(myChildren);
+
+        return changedKeys.hasOnly(allowedParentFields) &&
+               myChildren != null &&
+               (hasChildInPending || hasChildInMembers);
       }
 
       // Miembros pueden actualizar campos de actividad y su propio unreadCount
@@ -1828,10 +1873,10 @@ service cloud.firestore {
       allow create: if false;
 
       // Padre puede actualizar sus propias solicitudes (approve/reject)
-      // Campos permitidos: status, respondedAt, respondedBy
+      // Campos permitidos expandidos para cubrir todos los casos
       function isParentUpdatingOwnRequest() {
         let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
-        let allowedFields = ['status', 'respondedAt', 'respondedBy'];
+        let allowedFields = ['status', 'respondedAt', 'respondedBy', 'updatedAt', 'processedAt', 'expiresAt'];
         return resource.data.parentId == request.auth.uid &&
                resource.data.status == 'pending' &&
                changedKeys.hasOnly(allowedFields) &&
@@ -1840,8 +1885,8 @@ service cloud.firestore {
 
       allow update: if request.auth != null && isParentUpdatingOwnRequest();
 
-      // Solo Cloud Functions pueden eliminar solicitudes
-      allow delete: if false;
+      // Permitir delete al padre (para limpiar después de procesar)
+      allow delete: if request.auth != null && resource.data.parentId == request.auth.uid;
     }
 
     // ============================================================================

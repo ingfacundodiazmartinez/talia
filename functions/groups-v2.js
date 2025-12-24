@@ -226,7 +226,10 @@ async function movePendingToApproved(groupId, userId, userData) {
     const groupData = groupDoc.data();
     const pendingDetails = groupData.pendingMemberDetails?.[userId];
 
-    transaction.update(groupRef, {
+    // Check if the user being approved is the group creator
+    const isCreator = groupData.createdBy === userId;
+
+    const updateData = {
       // Remove from pending
       pendingMembers: admin.firestore.FieldValue.arrayRemove(userId),
       [`pendingMemberDetails.${userId}`]: admin.firestore.FieldValue.delete(),
@@ -243,7 +246,15 @@ async function movePendingToApproved(groupId, userId, userData) {
       },
       memberCount: admin.firestore.FieldValue.increment(1),
       updatedAt: now,
-    });
+    };
+
+    // If this is the creator being approved, also make them admin
+    if (isCreator) {
+      updateData.admins = admin.firestore.FieldValue.arrayUnion(userId);
+      console.log(`👑 [movePendingToApproved] Creator ${userId} approved - adding as admin`);
+    }
+
+    transaction.update(groupRef, updateData);
   });
 }
 
@@ -505,6 +516,7 @@ exports.createGroupV2 = onCall(
         groupId,
         approvedCount: approvedMembers.length,
         pendingCount: pendingChildren.length,
+        creatorPending: creatorNeedsApproval,
       };
     } catch (error) {
       console.error("❌ [createGroupV2] Error:", error);

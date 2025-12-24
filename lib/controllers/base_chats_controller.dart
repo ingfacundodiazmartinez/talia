@@ -98,6 +98,17 @@ abstract class BaseChatsController {
         });
   }
 
+  /// Stream de grupos donde el usuario está pendiente de aprobación (Groups V2)
+  Stream<QuerySnapshot> getPendingGroupsStream({int limit = 20}) {
+    return _firestore
+        .collection('groups_v2')
+        .where('pendingMembers', arrayContains: userId)
+        .where('isActive', isEqualTo: true)
+        .orderBy('createdAt', descending: true)
+        .limit(limit)
+        .snapshots(includeMetadataChanges: false);
+  }
+
   /// Stream de datos de un usuario específico
   /// ✅ FIX: Maneja errores de permisos gracefully (ej: cuando se revoca un contacto)
   Stream<DocumentSnapshot?> getUserDataStream(String targetUserId) {

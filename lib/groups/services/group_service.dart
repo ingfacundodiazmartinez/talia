@@ -12,6 +12,7 @@ class CreateGroupResult {
   final String? groupId;
   final int approvedCount;
   final int pendingCount;
+  final bool creatorPending; // Si el creador del grupo está pendiente de aprobación
   final String? error;
 
   const CreateGroupResult({
@@ -19,6 +20,7 @@ class CreateGroupResult {
     this.groupId,
     this.approvedCount = 0,
     this.pendingCount = 0,
+    this.creatorPending = false,
     this.error,
   });
 
@@ -28,6 +30,7 @@ class CreateGroupResult {
       groupId: data['groupId'] as String?,
       approvedCount: data['approvedCount'] as int? ?? 0,
       pendingCount: data['pendingCount'] as int? ?? 0,
+      creatorPending: data['creatorPending'] as bool? ?? false,
     );
   }
 

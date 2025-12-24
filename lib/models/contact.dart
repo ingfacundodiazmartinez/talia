@@ -235,7 +235,14 @@ class Contact {
   bool isBlockedByUser(String userId) => blocked && blockedBy == userId;
 
   /// Obtener el estado del contacto para un usuario específico
-  /// Retorna: approved, pending, rejected, potential, revoked
+  /// Retorna: approved, pending, pending_other, rejected, potential, revoked
+  ///
+  /// - 'approved': El contacto está totalmente aprobado (ambos lados)
+  /// - 'pending': El padre de ESTE usuario aún no ha aprobado
+  /// - 'pending_other': Mi padre aprobó, pero el padre del otro usuario no
+  /// - 'rejected': El contacto fue rechazado
+  /// - 'revoked': El contacto fue revocado
+  /// - 'potential': Contacto sugerido (no solicitado aún)
   String getStatusForUser(String userId) {
     if (isApproved) return 'approved';
     if (isRevoked) return 'revoked';
@@ -245,6 +252,12 @@ class Contact {
     if (myApproval != null) {
       if (myApproval.isPending) return 'pending';
       if (myApproval.isRejected) return 'rejected';
+    }
+
+    // Mi aprobación está completa, pero verificar si hay otras pendientes
+    // Esto ocurre cuando MI padre aprobó, pero el padre del otro usuario no
+    if (!allApprovalsComplete) {
+      return 'pending_other';
     }
 
     return 'approved';

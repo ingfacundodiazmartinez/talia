@@ -75,12 +75,17 @@ class ChildChatsController extends BaseChatsController with ChangeNotifier {
 
   /// Construye la lista de items para mostrar en la UI
   /// Combina chats y grupos ordenados por última actividad (igual que parent)
+  /// Incluye grupos pendientes de aprobación con isPending=true
   List<ChatListItemType> buildListItems({
     required List<QueryDocumentSnapshot> chatDocs,
     required List<QueryDocumentSnapshot> groups,
+    List<QueryDocumentSnapshot> pendingGroups = const [],
   }) {
     // Crear lista combinada de items con timestamps para ordenar
     final List<_SortableItem> sortableItems = [];
+
+    // Set de IDs de grupos activos para evitar duplicados
+    final activeGroupIds = groups.map((g) => g.id).toSet();
 
     // Agregar chats a la lista con su timestamp
     for (final chatDoc in chatDocs) {
@@ -101,15 +106,27 @@ class ChildChatsController extends BaseChatsController with ChangeNotifier {
       }
     }
 
-    // Agregar grupos a la lista con su timestamp
+    // Agregar grupos activos a la lista con su timestamp
     for (final groupDoc in groups) {
       final groupData = groupDoc.data() as Map<String, dynamic>;
       final timestamp = groupData['lastActivity'] as Timestamp? ??
           groupData['createdAt'] as Timestamp?;
       sortableItems.add(_SortableItem(
-        item: GroupItem(groupId: groupDoc.id, groupData: groupData),
+        item: GroupItem(groupId: groupDoc.id, groupData: groupData, isPending: false),
         timestamp: timestamp,
       ));
+    }
+
+    // Agregar grupos pendientes (si no están ya en activos)
+    for (final groupDoc in pendingGroups) {
+      if (!activeGroupIds.contains(groupDoc.id)) {
+        final groupData = groupDoc.data() as Map<String, dynamic>;
+        final timestamp = groupData['createdAt'] as Timestamp?;
+        sortableItems.add(_SortableItem(
+          item: GroupItem(groupId: groupDoc.id, groupData: groupData, isPending: true),
+          timestamp: timestamp,
+        ));
+      }
     }
 
     // Ordenar todos los items juntos por timestamp (más reciente primero)

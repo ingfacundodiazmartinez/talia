@@ -16,6 +16,7 @@ class ContactCardWidget extends StatelessWidget {
   final String displayName;
   final String realName;
   final int age;
+  final String? phone;
   final String status;
   final Color statusColor;
   final bool isChild;
@@ -29,6 +30,7 @@ class ContactCardWidget extends StatelessWidget {
     required this.displayName,
     required this.realName,
     required this.age,
+    this.phone,
     this.status = 'Offline',
     this.statusColor = Colors.grey,
     this.isChild = false,
@@ -133,21 +135,37 @@ class ContactCardWidget extends StatelessWidget {
                       color: colorScheme.onSurface,
                     ),
                   ),
-                  SizedBox(height: 4),
+                  SizedBox(height: 2),
+                  // Teléfono (si está disponible)
+                  if (phone != null && phone!.isNotEmpty) ...[
+                    Text(
+                      phone!,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    SizedBox(height: 2),
+                  ],
+                  // Nombre real + edad
                   Row(
                     children: [
                       if (displayName != realName) ...[
-                        Text(
-                          realName,
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: colorScheme.onSurfaceVariant,
+                        Flexible(
+                          child: Text(
+                            realName,
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: colorScheme.onSurfaceVariant,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                         Text(
                           ' • ',
                           style: TextStyle(
-                            fontSize: 14,
+                            fontSize: 13,
                             color: colorScheme.onSurfaceVariant,
                           ),
                         ),
@@ -155,7 +173,7 @@ class ContactCardWidget extends StatelessWidget {
                       Text(
                         '$age años',
                         style: TextStyle(
-                          fontSize: 14,
+                          fontSize: 13,
                           color: colorScheme.onSurfaceVariant,
                         ),
                       ),

@@ -170,6 +170,19 @@ class GroupMessage {
   /// Check if message has any media
   bool get hasMedia => imageUrl != null || videoUrl != null || audioUrl != null;
 
+  /// Get content type for reply preview
+  /// Verifica URLs y también localPaths (para mensajes en cache sin URL)
+  String get contentType {
+    if (imageUrl != null && imageUrl!.isNotEmpty) return 'image';
+    if (localImagePath != null && localImagePath!.isNotEmpty) return 'image';
+    if (videoUrl != null && videoUrl!.isNotEmpty) return 'video';
+    if (localVideoPath != null && localVideoPath!.isNotEmpty) return 'video';
+    if (audioUrl != null && audioUrl!.isNotEmpty) return 'audio';
+    if (localAudioPath != null && localAudioPath!.isNotEmpty) return 'audio';
+    if (text != null && text!.isNotEmpty) return 'text';
+    return 'unknown';
+  }
+
   /// Check if message is a text-only message
   bool get isTextOnly => text != null && !hasMedia;
 

@@ -1008,27 +1008,48 @@ class NotificationService {
     );
 
     try {
+      // ✅ FIX: Removido orderBy('timestamp') porque serverTimestamp() puede ser null
+      // cuando el documento se acaba de crear, causando que no aparezca en la query
       _notificationsStreamSubscription = _firestore
           .collection('notifications')
           .where('userId', isEqualTo: currentUser.uid)
-          .orderBy('timestamp', descending: true)
-          .limit(10)
+          .where('read', isEqualTo: false)
+          .limit(20)
           .snapshots()
           .listen(
         (snapshot) async {
+          ReleaseLogger.log(
+            '📬 [NotificationsListener] Snapshot recibido: ${snapshot.docChanges.length} cambios, ${snapshot.docs.length} docs totales',
+            tag: 'NotificationService',
+          );
+
           for (final change in snapshot.docChanges) {
+            final doc = change.doc;
+            final data = doc.data();
+            final type = data?['type'] as String? ?? '';
+
+            ReleaseLogger.log(
+              '📬 [NotificationsListener] Cambio: ${change.type.name}, id=${doc.id}, type=$type',
+              tag: 'NotificationService',
+            );
+
             // Solo procesar documentos nuevos (added)
             if (change.type != DocumentChangeType.added) continue;
 
-            final doc = change.doc;
-            final data = doc.data();
-            if (data == null) continue;
+            if (data == null) {
+              ReleaseLogger.log('⚠️ [NotificationsListener] data es null, skip', tag: 'NotificationService');
+              continue;
+            }
 
             // Deduplicación
-            if (_processedNotificationIds.contains(doc.id)) continue;
+            if (_processedNotificationIds.contains(doc.id)) {
+              ReleaseLogger.log('⚠️ [NotificationsListener] Ya procesado: ${doc.id}, skip', tag: 'NotificationService');
+              continue;
+            }
             _processedNotificationIds.add(doc.id);
 
             // Filtrar notificaciones anteriores al inicio del listener
+            // ✅ FIX: Agregar margen de 30 segundos para compensar diferencia cliente/servidor
             final timestamp = data['timestamp'];
             if (timestamp != null) {
               DateTime? notifTime;
@@ -1038,26 +1059,41 @@ class NotificationService {
                 notifTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
               }
 
-              if (notifTime != null && notifTime.isBefore(_notificationsListenerStartTime!)) {
+              // Restar 30 segundos al tiempo de inicio para dar margen
+              final startTimeWithMargin = _notificationsListenerStartTime!.subtract(const Duration(seconds: 30));
+              if (notifTime != null && notifTime.isBefore(startTimeWithMargin)) {
+                ReleaseLogger.log(
+                  '⚠️ [NotificationsListener] Notificación antigua (${notifTime.toIso8601String()} < ${startTimeWithMargin.toIso8601String()}), skip',
+                  tag: 'NotificationService',
+                );
                 continue;
               }
             }
+            // Si timestamp es null, permitir la notificación (puede ser serverTimestamp pendiente)
 
             // Ignorar notificaciones de chat (ya manejadas por ChatStreamManager)
-            final type = data['type'] as String? ?? '';
             if (type == 'chat_message' || type == 'message' || type == 'group_message') {
+              ReleaseLogger.log('⚠️ [NotificationsListener] Chat message, skip', tag: 'NotificationService');
               continue;
             }
 
             // Ignorar notificaciones de llamadas (ya manejadas por CallKit)
             if (type == 'incoming_call' || type == 'video_call' || type == 'audio_call' ||
                 type == 'group_video_call' || type == 'group_audio_call' || type == 'emergency_call') {
+              ReleaseLogger.log('⚠️ [NotificationsListener] Call notification, skip', tag: 'NotificationService');
               continue;
             }
 
             // Ignorar notificaciones ya leídas
-            if (data['read'] == true) continue;
+            if (data['read'] == true) {
+              ReleaseLogger.log('⚠️ [NotificationsListener] Already read, skip', tag: 'NotificationService');
+              continue;
+            }
 
+            ReleaseLogger.log(
+              '✅ [NotificationsListener] Mostrando notificación: ${doc.id}, type=$type',
+              tag: 'NotificationService',
+            );
             await _showNotificationFromFirestore(doc.id, data, type);
           }
         },
@@ -1111,6 +1147,7 @@ class NotificationService {
             priority: Priority.high,
             enableVibration: true,
             playSound: true,
+            icon: '@mipmap/ic_launcher',
           ),
         );
       } else {
@@ -1145,6 +1182,68 @@ class NotificationService {
     } catch (e) {
       ReleaseLogger.error(
         '❌ [NotificationsListener] Error mostrando notificación: $e',
+        tag: 'NotificationService',
+      );
+    }
+  }
+
+  /// Mostrar notificación local desde mensaje FCM (foreground)
+  Future<void> _showLocalNotificationFromFCM({
+    required String title,
+    required String body,
+    required Map<String, dynamic> data,
+    required String type,
+  }) async {
+    try {
+      // Generar ID único para la notificación
+      final notificationId = DateTime.now().millisecondsSinceEpoch % 100000;
+
+      // Configurar detalles según plataforma
+      NotificationDetails details;
+      if (Platform.isAndroid) {
+        details = const NotificationDetails(
+          android: AndroidNotificationDetails(
+            'high_importance_channel',
+            'Notificaciones Importantes',
+            channelDescription: 'Canal para notificaciones importantes de Talia',
+            importance: Importance.high,
+            priority: Priority.high,
+            enableVibration: true,
+            playSound: true,
+            icon: '@mipmap/ic_launcher',
+          ),
+        );
+      } else {
+        details = const NotificationDetails(
+          iOS: DarwinNotificationDetails(
+            presentAlert: true,
+            presentBadge: true,
+            presentSound: true,
+          ),
+        );
+      }
+
+      // Preparar payload para navegación al tocar
+      final payload = jsonEncode({
+        'type': type,
+        ...data,
+      });
+
+      await _localNotifications.show(
+        notificationId,
+        title,
+        body,
+        details,
+        payload: payload,
+      );
+
+      ReleaseLogger.log(
+        '✅ [FCM Foreground] Notificación mostrada: type=$type, id=$notificationId',
+        tag: 'NotificationService',
+      );
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [FCM Foreground] Error mostrando notificación: $e',
         tag: 'NotificationService',
       );
     }
@@ -1516,6 +1615,28 @@ class NotificationService {
           );
         }
         // Continuar para mostrar notificación local si corresponde
+      }
+
+      // ═══════════════════════════════════════════════════════════════
+      // 5. OTROS TIPOS DE NOTIFICACIÓN: Mostrar notificación local
+      // ═══════════════════════════════════════════════════════════════
+      // story_approval_request, contact_request, emergency, etc.
+      // Mostrar notificación local para que el usuario la vea
+      final title = message.data['title'] as String? ?? 'Talia';
+      final body = message.data['body'] as String? ?? '';
+
+      if (title.isNotEmpty || body.isNotEmpty) {
+        ReleaseLogger.log(
+          '🔔 [Foreground $platform] Mostrando notificación local: type=$messageType',
+          tag: 'NotificationService',
+        );
+
+        await _showLocalNotificationFromFCM(
+          title: title,
+          body: body,
+          data: message.data,
+          type: messageType ?? 'unknown',
+        );
       }
     });
 

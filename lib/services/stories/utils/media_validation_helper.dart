@@ -9,8 +9,13 @@ import 'dart:io';
 class MediaValidationHelper {
 
   // Extensiones válidas para imágenes
+  // Incluye formatos comunes: JPEG, PNG, GIF, WebP, HEIC/HEIF (iPhone), BMP, TIFF, AVIF
   static const List<String> _imageExtensions = [
-    '.jpg', '.jpeg', '.png', '.gif'
+    '.jpg', '.jpeg', '.jfif', '.png', '.gif', '.webp',
+    '.heic', '.heif',  // iPhone iOS 11+
+    '.bmp',            // Bitmap
+    '.tiff', '.tif',   // TIFF
+    '.avif',           // AV1 Image Format (moderno)
   ];
 
   // Extensiones válidas para videos

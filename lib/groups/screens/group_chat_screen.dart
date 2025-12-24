@@ -503,13 +503,19 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
       foregroundColor: Colors.white,
       title: GestureDetector(
         onTap: () {
-          Navigator.of(context).push(
+          Navigator.of(context).push<String>(
             MaterialPageRoute(
               builder: (context) => GroupProfileScreenV2(
                 groupId: widget.groupId,
+                onBeforeLeave: _controller.cancelSubscriptions,
               ),
             ),
-          );
+          ).then((result) {
+            if (result == 'left' && mounted) {
+              // Usuario salió del grupo - navegar a la pantalla principal
+              Navigator.of(context).pop();
+            }
+          });
         },
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -535,13 +541,19 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
         IconButton(
           icon: const Icon(Icons.info_outline),
           onPressed: () {
-            Navigator.of(context).push(
+            Navigator.of(context).push<String>(
               MaterialPageRoute(
                 builder: (context) => GroupProfileScreenV2(
                   groupId: widget.groupId,
+                  onBeforeLeave: _controller.cancelSubscriptions,
                 ),
               ),
-            );
+            ).then((result) {
+              if (result == 'left' && mounted) {
+                // Usuario salió del grupo - navegar a la pantalla principal
+                Navigator.of(context).pop();
+              }
+            });
           },
         ),
       ],
@@ -657,9 +669,13 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
             'text': message.text ?? '',
             'senderId': message.senderId,
             'senderName': message.senderName,
-            if (message.imageUrl != null) 'imageUrl': message.imageUrl,
-            if (message.videoUrl != null) 'videoUrl': message.videoUrl,
-            if (message.audioUrl != null) 'audioUrl': message.audioUrl,
+            'contentType': message.contentType,
+            if (message.imageUrl != null && message.imageUrl!.isNotEmpty)
+              'imageUrl': message.imageUrl,
+            if (message.videoUrl != null && message.videoUrl!.isNotEmpty)
+              'videoUrl': message.videoUrl,
+            if (message.audioUrl != null && message.audioUrl!.isNotEmpty)
+              'audioUrl': message.audioUrl,
           };
         });
       },

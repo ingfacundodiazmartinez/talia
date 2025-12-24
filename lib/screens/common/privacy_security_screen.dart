@@ -4,7 +4,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../../services/data_export_service.dart';
 import '../../services/two_factor_auth_service.dart';
 import '../../services/user_settings_service.dart';
-import '../../services/account_deletion_service.dart';
 import '../../services/online_status_service.dart';
 import '../../services/screenshot_protection_service.dart';
 import 'widgets/enable_2fa_dialog.dart';
@@ -20,7 +19,6 @@ class PrivacySecurityScreen extends StatefulWidget {
 class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final _settingsService = UserSettingsService();
-  final _accountDeletionService = AccountDeletionService();
 
   bool _twoFactorEnabled = false;
   bool _showOnlineStatus = true;
@@ -764,11 +762,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
   void _showDeleteAccountDialog() {
     showDialog(
       context: context,
-      builder: (context) => DeleteAccountDialog(
-        onConfirm: (password) async {
-          await _accountDeletionService.deleteAccount(password);
-        },
-      ),
+      builder: (context) => const DeleteAccountDialog(),
     );
   }
 

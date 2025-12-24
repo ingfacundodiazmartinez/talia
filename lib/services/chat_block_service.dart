@@ -113,10 +113,13 @@ class ChatBlockService {
       final chatId = _getChatId(childId, contactId);
 
       // Marcar como inactivo el bloqueo
+      // ✅ TTL: 7 días después de desbloquear para Firestore TTL Policy
+      final deleteAt = DateTime.now().add(const Duration(days: 7));
       await _firestore.collection('blocked_chats').doc(chatId).update({
         'isActive': false,
         'unblockedAt': FieldValue.serverTimestamp(),
         'unblockedBy': _auth.currentUser?.uid,
+        'deleteAt': Timestamp.fromDate(deleteAt), // TTL: 7 días
       });
 
       // Desbloquear en la colección de chats

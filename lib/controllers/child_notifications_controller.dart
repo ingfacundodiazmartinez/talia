@@ -106,7 +106,7 @@ class ChildNotificationsController {
       final firestoreSnapshot = await _firestore
           .collection('notifications')
           .where('userId', isEqualTo: userId)
-          .orderBy('createdAt', descending: true)
+          .orderBy('timestamp', descending: true)
           .limit(100)
           .get();
 

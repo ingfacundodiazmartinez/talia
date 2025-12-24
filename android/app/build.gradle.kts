@@ -15,7 +15,7 @@ plugins {
 android {
     namespace = "com.talia.chat"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = "27.2.12479018"  // Required by hmssdk_flutter
+    ndkVersion = "28.0.13004108"  // NDK r28 - 16KB page size support by default
 
     compileOptions {
         isCoreLibraryDesugaringEnabled = true
@@ -60,6 +60,13 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+    }
+
+    // Soporte para 16 KB page size (Android 15+ requirement)
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
         }
     }
 }

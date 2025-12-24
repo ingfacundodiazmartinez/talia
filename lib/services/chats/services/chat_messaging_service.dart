@@ -303,6 +303,7 @@ class ChatMessagingService {
         'text': replyTo['text'],              // Texto del mensaje original
         'senderId': replyTo['senderId'],      // Quien envió el mensaje original
         'senderName': replyTo['senderName'],  // Nombre del remitente
+        if (replyTo['contentType'] != null) 'contentType': replyTo['contentType'],
         if (replyTo['imageUrl'] != null) 'imageUrl': replyTo['imageUrl'],
         if (replyTo['videoUrl'] != null) 'videoUrl': replyTo['videoUrl'],
         if (replyTo['audioUrl'] != null) 'audioUrl': replyTo['audioUrl'],

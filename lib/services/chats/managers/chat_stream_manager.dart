@@ -827,6 +827,31 @@ class ChatStreamManager {
       final lastMessage = chatData['lastMessage'] as String? ?? '';
       final lastMessageType = chatData['lastMessageType'] as String?;
 
+      // ✅ FIX: Filtrar mensajes de llamada
+      // - answered_call: NO mostrar notificación (la llamada se concretó, no es necesario)
+      // - missed_call: Solo mostrar al RECEPTOR (senderId es el caller)
+      if (lastMessageType == 'answered_call') {
+        ReleaseLogger.log(
+          '⏭️ [StreamDetector] Llamada contestada - NO mostrar notificación',
+        );
+        return;
+      }
+
+      if (lastMessageType == 'missed_call') {
+        final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+        if (senderId == currentUserId) {
+          // Soy el caller, no necesito notificación de que mi llamada no fue contestada
+          ReleaseLogger.log(
+            '⏭️ [StreamDetector] Llamada perdida pero soy el caller - NO mostrar notificación',
+          );
+          return;
+        }
+        // Soy el receptor, sí mostrar notificación de llamada perdida
+        ReleaseLogger.log(
+          '📞 [StreamDetector] Llamada perdida y soy el receptor - SÍ mostrar notificación',
+        );
+      }
+
       // Determinar el preview del mensaje
       String messagePreview;
       if (lastMessageType == 'image') {

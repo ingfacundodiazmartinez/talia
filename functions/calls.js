@@ -682,12 +682,17 @@ async function trackCallMinutes(userId, durationMinutes) {
 
     const usageRef = db.collection('call_usage').doc(`${userId}_${monthKey}`);
 
+    // TTL: 90 días después del fin del mes
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+    const deleteAt = new Date(endOfMonth.getTime() + 90 * 24 * 60 * 60 * 1000);
+
     // Incrementar minutos usados (usar FieldValue.increment para atomicidad)
     await usageRef.set({
       userId: userId,
       month: monthKey,
       minutesUsed: admin.firestore.FieldValue.increment(durationMinutes),
       lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+      deleteAt: admin.firestore.Timestamp.fromDate(deleteAt), // TTL: 90 días después del mes
     }, { merge: true });
 
     console.log(`📊 [trackCallMinutes] Usuario ${userId}: +${durationMinutes} minutos en ${monthKey}`);

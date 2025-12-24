@@ -282,6 +282,26 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
         userData?['photoURL'] as String?;
     final status = contact.getStatusForUser(currentUserId);
 
+    // Calcular edad desde birthDate
+    int? age;
+    final birthDate = userData?['birthDate'];
+    if (birthDate != null) {
+      DateTime? birthDateTime;
+      if (birthDate is DateTime) {
+        birthDateTime = birthDate;
+      } else if (birthDate is String) {
+        birthDateTime = DateTime.tryParse(birthDate);
+      }
+      if (birthDateTime != null) {
+        final now = DateTime.now();
+        age = now.year - birthDateTime.year;
+        if (now.month < birthDateTime.month ||
+            (now.month == birthDateTime.month && now.day < birthDateTime.day)) {
+          age--;
+        }
+      }
+    }
+
     // Si el nombre es "Usuario", intentar resolver desde la agenda
     if (displayName == 'Usuario' && phone.isNotEmpty) {
       // Intentar resolver de forma asíncrona
@@ -303,6 +323,7 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
       otherUserId: otherUserId,
       displayName: displayName,
       phone: phone,
+      age: age,
       photoURL: photoURL,
       status: status,
       isSelfCancelled: isSelfCancelled,
@@ -346,6 +367,9 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
         break;
       case 'pending':
         _showPendingInfo(contact, displayName);
+        break;
+      case 'pending_other':
+        _showPendingOtherInfo(contact, displayName);
         break;
       case 'rejected':
         _showRejectedInfo(contact, displayName, isSelfCancelled);
@@ -457,6 +481,48 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: Text('Cerrar'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showPendingOtherInfo(contact_model.Contact contact, String displayName) {
+    final dateText = DateFormat('dd/MM/yyyy HH:mm').format(contact.createdAt);
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.hourglass_empty, color: Colors.blue.shade600),
+            SizedBox(width: 8),
+            Expanded(child: Text(displayName, style: TextStyle(fontSize: 18))),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Estado: Esperando aprobación'),
+            SizedBox(height: 8),
+            Text('Solicitado: $dateText', style: TextStyle(color: Colors.grey)),
+            SizedBox(height: 12),
+            Text(
+              'Tu padre ya aprobó esta solicitud, pero el padre de $displayName aún no la ha aprobado.',
+              style: TextStyle(fontSize: 14, color: Colors.grey.shade700),
+            ),
+            SizedBox(height: 8),
+            Text(
+              'Podrán chatear cuando ambos padres aprueben el contacto.',
+              style: TextStyle(fontSize: 14, color: Colors.blue.shade700, fontWeight: FontWeight.w500),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Entendido'),
           ),
         ],
       ),
@@ -617,6 +683,7 @@ class _ContactItemCard extends StatelessWidget {
   final String otherUserId;
   final String displayName;
   final String phone;
+  final int? age;
   final String? photoURL;
   final String status;
   final bool isSelfCancelled;
@@ -631,6 +698,7 @@ class _ContactItemCard extends StatelessWidget {
     required this.otherUserId,
     required this.displayName,
     required this.phone,
+    this.age,
     required this.photoURL,
     required this.status,
     required this.isSelfCancelled,
@@ -676,6 +744,8 @@ class _ContactItemCard extends StatelessWidget {
     switch (status) {
       case 'pending':
         return Border.all(color: Colors.amber.shade600, width: 2);
+      case 'pending_other':
+        return Border.all(color: Colors.blue.shade400, width: 2);
       case 'rejected':
         return Border.all(
           color: isSelfCancelled ? Colors.orange.shade400 : Colors.red.shade300,
@@ -698,6 +768,10 @@ class _ContactItemCard extends StatelessWidget {
       case 'pending':
         bgColor = Colors.amber.shade100;
         textColor = Colors.amber.shade800;
+        break;
+      case 'pending_other':
+        bgColor = Colors.blue.shade50;
+        textColor = Colors.blue.shade700;
         break;
       case 'rejected':
         bgColor = isSelfCancelled ? Colors.orange.shade50 : Colors.red.shade50;
@@ -750,11 +824,31 @@ class _ContactItemCard extends StatelessWidget {
             decoration: status == 'revoked' ? TextDecoration.lineThrough : null,
           ),
         ),
-        if (phone.isNotEmpty) ...[
+        // Teléfono y edad en la misma línea
+        if (phone.isNotEmpty || (age != null && age! > 0)) ...[
           SizedBox(height: 2),
-          Text(
-            phone,
-            style: TextStyle(fontSize: 13, color: colorScheme.onSurfaceVariant),
+          Row(
+            children: [
+              if (phone.isNotEmpty)
+                Flexible(
+                  child: Text(
+                    phone,
+                    style: TextStyle(fontSize: 13, color: colorScheme.onSurfaceVariant),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              if (phone.isNotEmpty && age != null && age! > 0)
+                Text(
+                  ' • ',
+                  style: TextStyle(fontSize: 13, color: colorScheme.onSurfaceVariant),
+                ),
+              if (age != null && age! > 0)
+                Text(
+                  '$age años',
+                  style: TextStyle(fontSize: 13, color: colorScheme.onSurfaceVariant),
+                ),
+            ],
           ),
         ],
         SizedBox(height: 2),
@@ -769,6 +863,11 @@ class _ContactItemCard extends StatelessWidget {
         return Text(
           'Pendiente de aprobación',
           style: TextStyle(fontSize: 12, color: Colors.amber.shade700),
+        );
+      case 'pending_other':
+        return Text(
+          'Esperando aprobación del otro padre',
+          style: TextStyle(fontSize: 12, color: Colors.blue.shade600),
         );
       case 'rejected':
         return Text(
@@ -810,6 +909,8 @@ class _ContactItemCard extends StatelessWidget {
               ),
           ],
         );
+      case 'pending_other':
+        return Icon(Icons.hourglass_empty, color: Colors.blue.shade500, size: 20);
       case 'rejected':
         return Row(
           mainAxisSize: MainAxisSize.min,

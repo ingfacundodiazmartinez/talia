@@ -9,6 +9,7 @@ const { checkRateLimit, RATE_LIMITS, sendDirectPushNotification } = require("./h
 
 const TTL_SUPERVISED_DAYS = 7;       // 7 días para chats supervisados (para reportes)
 const TTL_UNSUPERVISED_DAYS = 7;     // 7 días para chats no supervisados (fallback)
+const TTL_MODERATION_DAYS = 1;       // 1 día para chats con moderación activa (para contexto IA)
 // NOTA: Los mensajes se eliminan cuando son leídos (read_receipts_service.dart)
 // Este TTL es solo un fallback de seguridad si el mensaje nunca es leído
 
@@ -43,20 +44,29 @@ async function hasAnySupervisedParticipant(participants) {
 }
 
 /**
- * Calcula el timestamp de deleteAt basado en si el chat es supervisado
+ * Calcula el timestamp de deleteAt basado en supervisión y moderación
  * @param {boolean} isSupervised - Si el chat tiene participantes supervisados
- * @returns {Timestamp} - Timestamp de expiración (7 días para ambos tipos)
+ * @param {boolean} hasModerationActive - Si el chat tiene moderación activa
+ * @returns {Timestamp} - Timestamp de expiración
+ *
+ * Prioridad:
+ * 1. Si es supervisado → 7 días (para reportes de padres)
+ * 2. Si tiene moderación activa → 1 día (para contexto de IA)
+ * 3. Sino → 7 días (fallback)
  *
  * NOTA: Este TTL es un fallback de seguridad.
  * Los mensajes se eliminan principalmente cuando son marcados como leídos
  * (ver read_receipts_service.dart en Flutter)
  */
-function calculateDeleteAt(isSupervised) {
+function calculateDeleteAt(isSupervised, hasModerationActive = false) {
   const now = new Date();
 
   if (isSupervised) {
-    // 7 días para chats supervisados
+    // 7 días para chats supervisados (para reportes de padres)
     now.setDate(now.getDate() + TTL_SUPERVISED_DAYS);
+  } else if (hasModerationActive) {
+    // 1 día para chats con moderación activa (para contexto de IA)
+    now.setDate(now.getDate() + TTL_MODERATION_DAYS);
   } else {
     // 7 días para chats no supervisados (fallback)
     now.setDate(now.getDate() + TTL_UNSUPERVISED_DAYS);
@@ -157,7 +167,12 @@ exports.incrementUnreadCount = onDocumentCreated(
       try {
         // Verificar si algún participante es supervisado (child con parent)
         const isSupervised = await hasAnySupervisedParticipant(participants);
-        const deleteAt = calculateDeleteAt(isSupervised);
+
+        // Verificar si el chat tiene moderación activa (para extender TTL para contexto IA)
+        const freshChatDoc = await chatRef.get();
+        const hasModerationActive = freshChatDoc.exists && freshChatDoc.data()?.moderationEnabled === true;
+
+        const deleteAt = calculateDeleteAt(isSupervised, hasModerationActive);
 
         // Agregar deleteAt al mensaje
         await db
@@ -167,7 +182,8 @@ exports.incrementUnreadCount = onDocumentCreated(
           .doc(messageId)
           .update({ deleteAt });
 
-        console.log(`🕐 TTL configurado para mensaje ${messageId}: ${isSupervised ? '7 días (supervisado)' : '5 min (no supervisado)'}`);
+        const ttlDescription = isSupervised ? '7 días (supervisado)' : hasModerationActive ? '1 día (moderación activa)' : '7 días (fallback)';
+        console.log(`🕐 TTL configurado para mensaje ${messageId}: ${ttlDescription}`);
       } catch (ttlError) {
         // No fallar el trigger si hay error en TTL (mensaje ya fue creado)
         console.error(`⚠️ Error configurando TTL para mensaje ${messageId}:`, ttlError);
@@ -305,7 +321,11 @@ exports.incrementGroupUnreadCount = onDocumentCreated(
       try {
         // Verificar si algún miembro del grupo es supervisado (child con parent)
         const isSupervised = await hasAnySupervisedParticipant(members);
-        const deleteAt = calculateDeleteAt(isSupervised);
+
+        // Verificar si el grupo tiene moderación activa (para extender TTL para contexto IA)
+        const hasModerationActive = groupData.moderationEnabled === true;
+
+        const deleteAt = calculateDeleteAt(isSupervised, hasModerationActive);
 
         // Agregar deleteAt al mensaje
         await db
@@ -315,7 +335,8 @@ exports.incrementGroupUnreadCount = onDocumentCreated(
           .doc(messageId)
           .update({ deleteAt });
 
-        console.log(`🕐 TTL configurado para mensaje de grupo ${messageId}: ${isSupervised ? '7 días (supervisado)' : '5 min (no supervisado)'}`);
+        const ttlDescription = isSupervised ? '7 días (supervisado)' : hasModerationActive ? '1 día (moderación activa)' : '7 días (fallback)';
+        console.log(`🕐 TTL configurado para mensaje de grupo ${messageId}: ${ttlDescription}`);
       } catch (ttlError) {
         // No fallar el trigger si hay error en TTL (mensaje ya fue creado)
         console.error(`⚠️ Error configurando TTL para mensaje de grupo ${messageId}:`, ttlError);

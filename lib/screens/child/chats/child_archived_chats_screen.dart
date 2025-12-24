@@ -327,7 +327,6 @@ class _ChildArchivedChatsScreenState extends State<ChildArchivedChatsScreen> {
     final groupId = groupDoc.id;
     final groupName = groupData['name'] as String? ?? 'Grupo';
     final groupAvatar = groupData['avatar'] as String?;
-    final members = groupData['members'] as List? ?? [];
     final lastMessage = groupData['lastMessage'] as String?;
     final lastActivity = groupData['lastActivity'] as Timestamp?;
     final isCleared = _controller.isCleared(groupId);
@@ -385,21 +384,6 @@ class _ChildArchivedChatsScreenState extends State<ChildArchivedChatsScreen> {
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        Container(
-                          padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: Color(0xFF4CAF50).withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text(
-                            '${members.length} miembros',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: Color(0xFF4CAF50),
-                              fontWeight: FontWeight.w500,
-                            ),
                           ),
                         ),
                       ],

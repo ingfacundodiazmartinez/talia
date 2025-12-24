@@ -193,7 +193,7 @@ class MessageUploadManager {
 
     // Determinar tipo de media por extensión
     String mediaType;
-    if (['.jpg', '.jpeg', '.png', '.gif', '.webp'].contains(extension)) {
+    if (['.jpg', '.jpeg', '.jfif', '.png', '.gif', '.webp', '.heic', '.heif', '.bmp', '.tiff', '.tif', '.avif'].contains(extension)) {
       mediaType = 'images';
     } else if (['.mp4', '.mov', '.avi', '.webm'].contains(extension)) {
       mediaType = 'videos';

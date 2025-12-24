@@ -16,10 +16,14 @@ import '../../services/favorite_service.dart';
 /// Shows group details, members, and admin controls.
 class GroupProfileScreenV2 extends StatefulWidget {
   final String groupId;
+  /// Callback to cancel subscriptions before leaving the group
+  /// This prevents Firestore permission errors
+  final VoidCallback? onBeforeLeave;
 
   const GroupProfileScreenV2({
     super.key,
     required this.groupId,
+    this.onBeforeLeave,
   });
 
   @override
@@ -136,11 +140,17 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
     );
 
     if (confirmed == true) {
+      // ✅ FIX: Cancelar suscripciones ANTES de salir del grupo
+      // Esto evita errores de permisos de Firestore
+      widget.onBeforeLeave?.call();
+      _groupSubscription?.cancel();
+
       final success = await _groupService.leaveGroup(widget.groupId);
 
       if (mounted) {
         if (success) {
-          Navigator.of(context).popUntil((route) => route.isFirst);
+          // Devolver 'left' al GroupChatScreen para que maneje la navegación
+          Navigator.of(context).pop('left');
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -751,24 +761,13 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
   }) {
     double height = 16; // Padding vertical
 
-    // Botón agregar miembros (solo admin)
+    // Barra de acciones unificada (Agregar + Seleccionar) - solo admin
     if (_isAdmin) {
-      height += addButtonHeight;
-    }
-
-    // Header de selección (solo admin con miembros seleccionables)
-    final members = _group!.memberDetails.values.toList();
-    final selectableMembers = members.where((m) {
-      final isCreator = _group!.createdBy == m.userId;
-      final isCurrentUser = m.userId == _currentUserId;
-      return !isCreator && !isCurrentUser;
-    }).toList();
-
-    if (_isAdmin && selectableMembers.isNotEmpty) {
-      height += selectionHeaderHeight;
+      height += 56; // Altura de la fila de botones
     }
 
     // Miembros activos
+    final members = _group!.memberDetails.values.toList();
     height += members.length * listTileHeight;
 
     // Miembros optimistas
@@ -803,97 +802,109 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
       physics: const NeverScrollableScrollPhysics(),
       shrinkWrap: true,
       children: [
-        // ✅ FIX #10: Botón agregar miembros (solo admin)
+        // ✅ Barra de acciones unificada (Agregar + Seleccionar)
         if (_isAdmin)
-          ListTile(
-            leading: CircleAvatar(
-              backgroundColor: colorScheme.primary.withValues(alpha: 0.1),
-              child: Icon(Icons.person_add, color: colorScheme.primary),
-            ),
-            title: const Text('Agregar participantes'),
-            onTap: _showAddMembersDialog,
-          ),
-
-        // Selection header (only for admins)
-        if (_isAdmin && selectableMembers.isNotEmpty)
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Row(
-              children: [
-                if (_isSelectionMode) ...[
-                  // Cancel button
-                  TextButton(
-                    onPressed: () {
-                      setState(() {
-                        _isSelectionMode = false;
-                        _selectedMembers.clear();
-                      });
-                    },
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                    ),
-                    child: const Text('Cancelar'),
-                  ),
-                  const Spacer(),
-                  // Select all button
-                  TextButton(
-                    onPressed: () {
-                      setState(() {
-                        if (_selectedMembers.length == selectableMembers.length) {
-                          _selectedMembers.clear();
-                        } else {
-                          _selectedMembers.clear();
-                          for (final m in selectableMembers) {
-                            _selectedMembers.add(m.userId);
-                          }
-                        }
-                      });
-                    },
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                    ),
-                    child: Text(
-                      _selectedMembers.length == selectableMembers.length
-                          ? 'Ninguno'
-                          : 'Todos',
-                    ),
-                  ),
-                  // Delete selected button
-                  if (_selectedMembers.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(left: 8),
-                      child: ElevatedButton(
-                        onPressed: _handleBatchRemoveMembers,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.red,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.delete, size: 16),
-                            const SizedBox(width: 4),
-                            Text('${_selectedMembers.length}'),
-                          ],
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: _isSelectionMode
+                // Modo selección: Cancelar, Todos/Ninguno, Eliminar
+                ? Row(
+                    children: [
+                      // Cancel button
+                      TextButton.icon(
+                        onPressed: () {
+                          setState(() {
+                            _isSelectionMode = false;
+                            _selectedMembers.clear();
+                          });
+                        },
+                        icon: const Icon(Icons.close, size: 18),
+                        label: const Text('Cancelar'),
+                        style: TextButton.styleFrom(
+                          foregroundColor: colorScheme.onSurfaceVariant,
                         ),
                       ),
-                    ),
-                ] else ...[
-                  const Spacer(),
-                  // Enter selection mode button
-                  TextButton.icon(
-                    onPressed: () {
-                      setState(() {
-                        _isSelectionMode = true;
-                      });
-                    },
-                    icon: const Icon(Icons.checklist, size: 18),
-                    label: const Text('Seleccionar'),
+                      const Spacer(),
+                      // Select all button
+                      TextButton(
+                        onPressed: () {
+                          setState(() {
+                            if (_selectedMembers.length == selectableMembers.length) {
+                              _selectedMembers.clear();
+                            } else {
+                              _selectedMembers.clear();
+                              for (final m in selectableMembers) {
+                                _selectedMembers.add(m.userId);
+                              }
+                            }
+                          });
+                        },
+                        child: Text(
+                          _selectedMembers.length == selectableMembers.length
+                              ? 'Ninguno'
+                              : 'Todos',
+                        ),
+                      ),
+                      // Delete selected button
+                      if (_selectedMembers.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(left: 8),
+                          child: ElevatedButton.icon(
+                            onPressed: _handleBatchRemoveMembers,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.red,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 12),
+                            ),
+                            icon: const Icon(Icons.delete, size: 16),
+                            label: Text('${_selectedMembers.length}'),
+                          ),
+                        ),
+                    ],
+                  )
+                // Modo normal: Agregar + Seleccionar
+                : Row(
+                    children: [
+                      // Agregar participantes
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: _showAddMembersDialog,
+                          icon: const Icon(Icons.person_add_rounded, size: 18),
+                          label: const Text('Agregar'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: colorScheme.primary,
+                            side: BorderSide(color: colorScheme.primary.withValues(alpha: 0.5)),
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      // Seleccionar (solo si hay miembros seleccionables)
+                      if (selectableMembers.isNotEmpty)
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () {
+                              setState(() {
+                                _isSelectionMode = true;
+                              });
+                            },
+                            icon: const Icon(Icons.checklist_rounded, size: 18),
+                            label: const Text('Seleccionar'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: colorScheme.onSurfaceVariant,
+                              side: BorderSide(color: colorScheme.outlineVariant),
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
-                ],
-              ],
-            ),
           ),
 
         // Active members

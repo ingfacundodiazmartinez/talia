@@ -43,9 +43,11 @@ class ChatItem extends ChatListItemType {
 class GroupItem extends ChatListItemType {
   final String groupId;
   final Map<String, dynamic> groupData;
+  final bool isPending; // Si el usuario está pendiente de aprobación
 
   const GroupItem({
     required this.groupId,
     required this.groupData,
+    this.isPending = false,
   });
 }

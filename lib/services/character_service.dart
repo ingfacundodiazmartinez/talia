@@ -193,8 +193,9 @@ class CharacterService {
       final characterName = createResult.data['characterName'] as String?;
 
       // 2. Escuchar cambios en Firestore en tiempo real
+      // ✅ RENAMED: transformationStatus → transformation_status (snake_case)
       final statusDoc = _firestore
-          .collection('transformationStatus')
+          .collection('transformation_status')
           .doc(statusDocId);
 
       // Crear un Completer para esperar el resultado

@@ -52,7 +52,7 @@ class CreateGroupController {
   Function(List<GroupContactInfo>)? onContactsLoaded;
   Function(String)? onError;
   Function(String)? onSuccess;
-  Function(String groupId, String groupName)? onGroupCreated;
+  Function(String groupId, String groupName, bool creatorPending)? onGroupCreated;
 
   CreateGroupController({
     GroupService? groupService,
@@ -213,12 +213,17 @@ class CreateGroupController {
 
       if (result.success && result.groupId != null) {
         ReleaseLogger.log(
-          'Group created successfully: ${result.groupId}',
+          'Group created successfully: ${result.groupId}, creatorPending: ${result.creatorPending}',
           tag: 'CreateGroupController',
         );
 
         // Build success message
-        if (result.pendingCount > 0) {
+        if (result.creatorPending) {
+          // El creador (child) necesita aprobación del padre
+          onSuccess?.call(
+            'Grupo "$name" creado. Tu padre debe aprobar tu participación.',
+          );
+        } else if (result.pendingCount > 0) {
           onSuccess?.call(
             'Grupo "$name" creado. ${result.pendingCount} solicitudes de aprobación enviadas.',
           );
@@ -226,7 +231,7 @@ class CreateGroupController {
           onSuccess?.call('Grupo "$name" creado exitosamente');
         }
 
-        onGroupCreated?.call(result.groupId!, name);
+        onGroupCreated?.call(result.groupId!, name, result.creatorPending);
         return true;
       } else {
         _setError(result.error ?? 'Error creando grupo');

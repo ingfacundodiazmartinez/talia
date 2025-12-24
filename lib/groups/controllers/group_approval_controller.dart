@@ -1,13 +1,18 @@
 import 'dart:async';
 import '../models/models.dart';
 import '../services/services.dart';
+import '../../services/whitelist/approve_group_membership_service.dart';
+import '../../services/whitelist/reject_group_membership_service.dart';
 import '../../utils/release_logger.dart';
 
 /// Controller for group approval management
 ///
 /// Handles the parent approval flow for child group membership.
+/// Migrado a escritura directa (Security Rules) en lugar de Cloud Functions.
 class GroupApprovalController {
   final GroupApprovalService _approvalService;
+  final ApproveGroupMembershipService _approveService;
+  final RejectGroupMembershipService _rejectService;
 
   // State
   List<GroupApprovalRequest> _pendingRequests = [];
@@ -27,7 +32,11 @@ class GroupApprovalController {
 
   GroupApprovalController({
     GroupApprovalService? approvalService,
-  }) : _approvalService = approvalService ?? GroupApprovalService();
+    ApproveGroupMembershipService? approveService,
+    RejectGroupMembershipService? rejectService,
+  })  : _approvalService = approvalService ?? GroupApprovalService(),
+        _approveService = approveService ?? ApproveGroupMembershipService(),
+        _rejectService = rejectService ?? RejectGroupMembershipService();
 
   // Getters
   List<GroupApprovalRequest> get pendingRequests => _pendingRequests;
@@ -78,24 +87,37 @@ class GroupApprovalController {
   }
 
   /// Approve a request
+  /// Usa escritura directa a Firestore (no Cloud Functions)
   Future<bool> approveRequest(String requestId) async {
     _setProcessingRequest(requestId);
     _clearError();
 
     try {
-      final success = await _approvalService.approveRequest(requestId);
+      // Obtener el request de la cache para tener groupId y childId
+      final request = getRequest(requestId);
+      if (request == null) {
+        _setError('Solicitud no encontrada');
+        return false;
+      }
 
-      if (success) {
+      // Usar el servicio de escritura directa
+      final result = await _approveService.call(
+        requestId: requestId,
+        groupId: request.groupId,
+        childId: request.childId,
+      );
+
+      if (result.success) {
         onSuccess?.call('Solicitud aprobada');
         ReleaseLogger.log(
           'Request approved: $requestId',
           tag: 'GroupApprovalController',
         );
       } else {
-        _setError('No se pudo aprobar la solicitud');
+        _setError(result.message);
       }
 
-      return success;
+      return result.success;
     } catch (e) {
       _setError('Error aprobando solicitud: $e');
       return false;
@@ -105,24 +127,26 @@ class GroupApprovalController {
   }
 
   /// Reject a request
+  /// Usa escritura directa a Firestore (no Cloud Functions)
   Future<bool> rejectRequest(String requestId) async {
     _setProcessingRequest(requestId);
     _clearError();
 
     try {
-      final success = await _approvalService.rejectRequest(requestId);
+      // Usar el servicio de escritura directa
+      final result = await _rejectService.call(requestId: requestId);
 
-      if (success) {
+      if (result.success) {
         onSuccess?.call('Solicitud rechazada');
         ReleaseLogger.log(
           'Request rejected: $requestId',
           tag: 'GroupApprovalController',
         );
       } else {
-        _setError('No se pudo rechazar la solicitud');
+        _setError(result.message);
       }
 
-      return success;
+      return result.success;
     } catch (e) {
       _setError('Error rechazando solicitud: $e');
       return false;

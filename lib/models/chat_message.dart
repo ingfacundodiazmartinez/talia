@@ -260,10 +260,18 @@ class ChatMessage {
   bool get hasMedia => imageUrl != null || videoUrl != null || audioUrl != null;
 
   /// Getter para obtener el tipo de contenido
+  /// IMPORTANTE: Usa el campo 'type' de Firestore/Hive como fuente primaria
+  /// porque las URLs pueden ser null si el archivo fue eliminado por TTL
   String get contentType {
+    // 1. Usar type de Firestore/Hive si está disponible (más confiable)
+    if (type != null && type!.isNotEmpty) return type!;
+
+    // 2. Fallback: derivar de URLs
     if (imageUrl != null) return 'image';
     if (videoUrl != null) return 'video';
     if (audioUrl != null) return 'audio';
+
+    // 3. Fallback final: texto
     if (text != null && text!.isNotEmpty) return 'text';
     return 'unknown';
   }

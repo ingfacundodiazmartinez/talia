@@ -499,6 +499,16 @@ class GroupChatController {
     ReleaseLogger.error(message, tag: 'GroupChatController');
   }
 
+  /// Cancel all subscriptions (called before leaving group)
+  /// This prevents permission errors when the user loses access
+  void cancelSubscriptions() {
+    _isDisposed = true;
+    _groupSubscription?.cancel();
+    _messagesSubscription?.cancel();
+    _reactionsSubscription?.cancel();
+    ReleaseLogger.log('Subscriptions cancelled for group $groupId', tag: 'GroupChatController');
+  }
+
   /// Dispose resources
   void dispose() {
     _isDisposed = true;  // ✅ FIX: Marcar como disposed PRIMERO para ignorar errores pendientes

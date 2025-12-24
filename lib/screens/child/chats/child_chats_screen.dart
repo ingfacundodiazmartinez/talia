@@ -256,19 +256,28 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
 
   // Método separado para construir el contenido con grupos
   // ✅ UNIFICADO: Usa el mismo enfoque que parent_chats_screen
+  // ✅ Incluye grupos pendientes de aprobación
   Widget _buildChatListContent(List<QueryDocumentSnapshot> chatDocs, ColorScheme colorScheme) {
     return StreamBuilder<QuerySnapshot>(
       key: ValueKey('groups_$_preferencesVersion'),
       stream: _chatsController.getGroupsStream(),
       builder: (context, groupsSnapshot) {
-        final allGroups = groupsSnapshot.data?.docs ?? [];
-        final groups = _chatsController.filterArchivedGroups(allGroups);
+        // También escuchar grupos pendientes
+        return StreamBuilder<QuerySnapshot>(
+          stream: _chatsController.getPendingGroupsStream(),
+          builder: (context, pendingGroupsSnapshot) {
+            final allGroups = groupsSnapshot.data?.docs ?? [];
+            final groups = _chatsController.filterArchivedGroups(allGroups);
 
-        // Construir lista de items usando controller (igual que parent)
-        final listItems = _chatsController.buildListItems(
-          chatDocs: chatDocs,
-          groups: groups,
-        );
+            // Grupos pendientes (no se filtran por archivados)
+            final pendingGroups = pendingGroupsSnapshot.data?.docs ?? [];
+
+            // Construir lista de items usando controller
+            final listItems = _chatsController.buildListItems(
+              chatDocs: chatDocs,
+              groups: groups,
+              pendingGroups: pendingGroups,
+            );
 
         return Column(
           children: [
@@ -386,6 +395,8 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
             ),
           ],
         );
+          },
+        );
       },
     );
   }
@@ -427,8 +438,8 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
           },
         );
 
-      case GroupItem(:final groupId, :final groupData):
-        return _buildGroupItemWidget(groupId, groupData);
+      case GroupItem(:final groupId, :final groupData, :final isPending):
+        return _buildGroupItemWidget(groupId, groupData, isPending: isPending);
 
       default:
         return SizedBox.shrink();
@@ -544,11 +555,30 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
     );
   }
 
-  Widget _buildGroupItemWidget(String groupId, Map<String, dynamic> groupData) {
+  Widget _buildGroupItemWidget(String groupId, Map<String, dynamic> groupData, {bool isPending = false}) {
     final groupName = groupData['name'] ?? 'Grupo';
     final groupMembers = (groupData['members'] as List?)?.cast<String>() ?? <String>[];
-    // ✅ Leer contador de mensajes no leídos desde cache local
-    final unreadCount = LocalUnreadCountService().getUnreadCount(groupId);
+    // ✅ Leer contador de mensajes no leídos desde cache local (0 si está pendiente)
+    final unreadCount = isPending ? 0 : LocalUnreadCountService().getUnreadCount(groupId);
+
+    // Si está pendiente, mostrar versión simplificada sin stream de mensajes
+    if (isPending) {
+      return GroupChatListItem(
+        groupId: groupId,
+        groupName: groupName,
+        memberCount: (groupData['members'] as List?)?.length ?? 0,
+        lastMessage: 'Pendiente de aprobación',
+        messageCount: 0,
+        groupImageUrl: groupData['avatar'],
+        unreadCount: 0,
+        isPending: true,
+        onLeaveGroup: null, // No puede salir si está pendiente
+        onArchived: null,
+        onMuted: null,
+        onCleared: null,
+        timeString: '',
+      );
+    }
 
     return StreamBuilder<QuerySnapshot>(
       stream: _chatsController.getGroupLastMessageStream(groupId),

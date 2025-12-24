@@ -1153,30 +1153,66 @@ exports.setOwnModeration = onCall(
 
       if (chatDoc.exists) {
         if (shouldEnable) {
+          // Obtener el nivel más restrictivo entre todas las moderaciones activas
+          const updatedContactDoc = await db.collection("contacts").doc(contactId).get();
+          const moderationSettings = updatedContactDoc.data()?.moderationSettings || {};
+
+          // Determinar nivel más restrictivo (high > medium > low)
+          const levelPriority = { high: 3, medium: 2, low: 1 };
+          let mostRestrictiveLevel = effectiveLevel;
+
+          for (const [key, settings] of Object.entries(moderationSettings)) {
+            if (settings?.enabled === true && settings?.level) {
+              const currentPriority = levelPriority[mostRestrictiveLevel] || 2;
+              const settingPriority = levelPriority[settings.level] || 2;
+              if (settingPriority > currentPriority) {
+                mostRestrictiveLevel = settings.level;
+              }
+            }
+          }
+
           await chatRef.update({
             moderationEnabled: true,
+            moderationLevel: mostRestrictiveLevel,
             moderationUpdatedAt: FieldValue.serverTimestamp(),
           });
-          console.log(`✅ [SetOwnModeration] Chat ${contactId}: moderationEnabled=true`);
+          console.log(`✅ [SetOwnModeration] Chat ${contactId}: moderationEnabled=true, level=${mostRestrictiveLevel}`);
         } else {
           // Verificar si hay otras moderaciones activas
           const updatedContactDoc = await db.collection("contacts").doc(contactId).get();
           const moderationSettings = updatedContactDoc.data()?.moderationSettings || {};
 
           let anyModerationActive = false;
+          let mostRestrictiveLevel = "medium";
+          const levelPriority = { high: 3, medium: 2, low: 1 };
+
           for (const [key, settings] of Object.entries(moderationSettings)) {
             if (settings?.enabled === true) {
               anyModerationActive = true;
-              break;
+              if (settings?.level) {
+                const currentPriority = levelPriority[mostRestrictiveLevel] || 2;
+                const settingPriority = levelPriority[settings.level] || 2;
+                if (settingPriority > currentPriority) {
+                  mostRestrictiveLevel = settings.level;
+                }
+              }
             }
           }
 
           if (!anyModerationActive) {
             await chatRef.update({
               moderationEnabled: false,
+              moderationLevel: null,
               moderationUpdatedAt: FieldValue.serverTimestamp(),
             });
             console.log(`✅ [SetOwnModeration] Chat ${contactId}: moderationEnabled=false (ninguna activa)`);
+          } else {
+            // Actualizar con el nivel más restrictivo de las moderaciones restantes
+            await chatRef.update({
+              moderationLevel: mostRestrictiveLevel,
+              moderationUpdatedAt: FieldValue.serverTimestamp(),
+            });
+            console.log(`✅ [SetOwnModeration] Chat ${contactId}: level actualizado a ${mostRestrictiveLevel}`);
           }
         }
       }

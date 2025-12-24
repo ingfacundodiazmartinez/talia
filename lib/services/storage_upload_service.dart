@@ -138,16 +138,68 @@ class StorageUploadService {
       // Detectar tipo de imagen por magic bytes
       String contentType = 'image/jpeg'; // Default
 
-      if (imageBytes.length >= 4) {
+      if (imageBytes.length >= 12) {
+        // Formatos comunes por magic bytes
         final isJPEG = imageBytes[0] == 0xFF && imageBytes[1] == 0xD8 && imageBytes[2] == 0xFF;
         final isPNG = imageBytes[0] == 0x89 && imageBytes[1] == 0x50 && imageBytes[2] == 0x4E && imageBytes[3] == 0x47;
+        final isGIF = imageBytes[0] == 0x47 && imageBytes[1] == 0x49 && imageBytes[2] == 0x46;
+        final isBMP = imageBytes[0] == 0x42 && imageBytes[1] == 0x4D; // "BM"
+        final isWebP = imageBytes[0] == 0x52 && imageBytes[1] == 0x49 && imageBytes[2] == 0x46 && imageBytes[3] == 0x46 &&
+                       imageBytes[8] == 0x57 && imageBytes[9] == 0x45 && imageBytes[10] == 0x42 && imageBytes[11] == 0x50;
+
+        // TIFF: "II" (little-endian) o "MM" (big-endian) + magic number 42
+        final isTIFF = (imageBytes[0] == 0x49 && imageBytes[1] == 0x49 && imageBytes[2] == 0x2A && imageBytes[3] == 0x00) ||
+                       (imageBytes[0] == 0x4D && imageBytes[1] == 0x4D && imageBytes[2] == 0x00 && imageBytes[3] == 0x2A);
+
+        // HEIC/HEIF: bytes 4-7 = "ftyp", bytes 8-11 = brand (heic, mif1, heif, msf1, avif, etc.)
+        final isFtyp = imageBytes.length >= 12 &&
+                       imageBytes[4] == 0x66 && imageBytes[5] == 0x74 && imageBytes[6] == 0x79 && imageBytes[7] == 0x70; // "ftyp"
+
+        final isHEIC = isFtyp && (
+          // heic
+          (imageBytes[8] == 0x68 && imageBytes[9] == 0x65 && imageBytes[10] == 0x69 && imageBytes[11] == 0x63) ||
+          // heif
+          (imageBytes[8] == 0x68 && imageBytes[9] == 0x65 && imageBytes[10] == 0x69 && imageBytes[11] == 0x66) ||
+          // mif1
+          (imageBytes[8] == 0x6D && imageBytes[9] == 0x69 && imageBytes[10] == 0x66 && imageBytes[11] == 0x31)
+        );
+
+        // AVIF: ftyp + "avif" o "avis"
+        final isAVIF = isFtyp && (
+          (imageBytes[8] == 0x61 && imageBytes[9] == 0x76 && imageBytes[10] == 0x69 && imageBytes[11] == 0x66) || // avif
+          (imageBytes[8] == 0x61 && imageBytes[9] == 0x76 && imageBytes[10] == 0x69 && imageBytes[11] == 0x73)    // avis
+        );
 
         if (isPNG) {
           contentType = 'image/png';
         } else if (isJPEG) {
           contentType = 'image/jpeg';
+        } else if (isGIF) {
+          contentType = 'image/gif';
+        } else if (isBMP) {
+          contentType = 'image/bmp';
+        } else if (isWebP) {
+          contentType = 'image/webp';
+        } else if (isTIFF) {
+          contentType = 'image/tiff';
+        } else if (isAVIF) {
+          contentType = 'image/avif';
+        } else if (isHEIC) {
+          contentType = 'image/heic';
         } else {
-          appLogger.log('⚠️ [StorageUpload] No se pudo detectar tipo de imagen, usando JPEG por defecto', level: 'WARNING');
+          // Fallback: detectar por extensión del archivo
+          final ext = filePath.toLowerCase();
+          if (ext.endsWith('.heic') || ext.endsWith('.heif')) {
+            contentType = 'image/heic';
+          } else if (ext.endsWith('.avif')) {
+            contentType = 'image/avif';
+          } else if (ext.endsWith('.tiff') || ext.endsWith('.tif')) {
+            contentType = 'image/tiff';
+          } else if (ext.endsWith('.bmp')) {
+            contentType = 'image/bmp';
+          } else {
+            appLogger.log('⚠️ [StorageUpload] No se pudo detectar tipo de imagen, usando JPEG por defecto', level: 'WARNING');
+          }
         }
 
         appLogger.log('📷 [StorageUpload] Tipo detectado: $contentType', level: 'INFO');

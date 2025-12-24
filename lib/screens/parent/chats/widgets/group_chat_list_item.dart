@@ -26,6 +26,8 @@ class GroupChatListItem extends StatefulWidget {
   final MessageStatus? lastMessageStatus;
   final ModerationStatus? lastMessageModerationStatus;
   final String? timeString;
+  /// Si el usuario está pendiente de aprobación para este grupo
+  final bool isPending;
 
   const GroupChatListItem({
     super.key,
@@ -44,6 +46,7 @@ class GroupChatListItem extends StatefulWidget {
     this.lastMessageStatus,
     this.lastMessageModerationStatus,
     this.timeString,
+    this.isPending = false,
   });
 
   @override
@@ -155,8 +158,140 @@ class _GroupChatListItemState extends State<GroupChatListItem> {
     );
   }
 
+  void _showPendingInfoDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        title: Row(
+          children: [
+            Icon(Icons.hourglass_empty_rounded, color: Colors.amber),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Pendiente de aprobación',
+                style: TextStyle(fontSize: 18),
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          'Tu solicitud para unirte a "${widget.groupName}" está pendiente de aprobación por el administrador del grupo.\n\n'
+          'Podrás acceder al chat una vez que sea aprobada.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: Text('Entendido'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPendingGroupItem(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: 8),
+      child: GestureDetector(
+        onTap: () => _showPendingInfoDialog(context),
+        child: Container(
+          padding: EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
+            children: [
+              // Avatar igual que los otros grupos
+              Stack(
+                children: [
+                  CircleAvatar(
+                    radius: 28,
+                    backgroundColor: colorScheme.primaryContainer.withValues(alpha: 0.5),
+                    backgroundImage: widget.groupImageUrl != null && widget.groupImageUrl!.isNotEmpty
+                        ? CachedNetworkImageProvider(widget.groupImageUrl!)
+                        : null,
+                    child: widget.groupImageUrl == null || widget.groupImageUrl!.isEmpty
+                        ? Icon(
+                            Icons.group,
+                            color: colorScheme.primary.withValues(alpha: 0.7),
+                            size: 28,
+                          )
+                        : null,
+                  ),
+                  // Pequeño badge de reloj en la esquina
+                  Positioned(
+                    right: 0,
+                    bottom: 0,
+                    child: Container(
+                      padding: EdgeInsets.all(3),
+                      decoration: BoxDecoration(
+                        color: colorScheme.surface,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        Icons.schedule_rounded,
+                        color: colorScheme.onSurfaceVariant,
+                        size: 14,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Nombre del grupo
+                    Text(
+                      widget.groupName,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: colorScheme.onSurface,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    SizedBox(height: 4),
+                    // Subtítulo sutil
+                    Text(
+                      'Esperando aprobación',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              // Icono de info sutil
+              Icon(
+                Icons.info_outline_rounded,
+                color: colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
+                size: 20,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Si está pendiente, mostrar versión simplificada sin Slidable
+    if (widget.isPending) {
+      return _buildPendingGroupItem(context);
+    }
+
     final firestore = FirebaseFirestore.instance;
     final auth = FirebaseAuth.instance;
     final colorScheme = Theme.of(context).colorScheme;
@@ -354,21 +489,6 @@ class _GroupChatListItemState extends State<GroupChatListItem> {
                                         color: colorScheme.onSurfaceVariant,
                                       ),
                                     ),
-                                  Container(
-                                    padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color: Color(0xFF4CAF50).withValues(alpha: 0.1),
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    child: Text(
-                                      '${widget.memberCount} miembros',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        color: Color(0xFF4CAF50),
-                                        fontWeight: FontWeight.w500,
-                                      ),
-                                    ),
-                                  ),
                                   if (widget.timeString != null && widget.timeString!.isNotEmpty) ...[
                                     SizedBox(width: 8),
                                     Text(

@@ -77,10 +77,14 @@ class ApproveGroupMembershipService {
         return (success: false, message: 'Grupo no encontrado');
       }
 
+      final groupData = groupDoc.data()!;
       final now = FieldValue.serverTimestamp();
 
+      // Verificar si el child es el creador del grupo
+      final isCreator = groupData['createdBy'] == childId;
+
       // 7. Actualizar grupo: agregar miembro, remover de pendientes
-      await groupRef.update({
+      final updateData = <String, dynamic>{
         'members': FieldValue.arrayUnion([childId]),
         'memberDetails.$childId': {
           'name': childName,
@@ -92,7 +96,18 @@ class ApproveGroupMembershipService {
         'pendingMembers': FieldValue.arrayRemove([childId]),
         'pendingMemberDetails.$childId': FieldValue.delete(),
         'updatedAt': now,
-      });
+      };
+
+      // Si es el creador, también agregarlo como admin
+      if (isCreator) {
+        updateData['admins'] = FieldValue.arrayUnion([childId]);
+        ReleaseLogger.log(
+          '👑 Creador $childId aprobado - agregando como admin',
+          tag: 'ApproveGroupMembership',
+        );
+      }
+
+      await groupRef.update(updateData);
 
       // 8. Actualizar solicitud a aprobada
       await requestRef.update({

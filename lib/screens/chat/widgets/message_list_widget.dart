@@ -165,21 +165,25 @@ class MessageListWidget extends StatelessWidget {
           : null,  // ✅ NEW: Callback para reenviar
       onReply: () {
         // Construir datos completos del mensaje incluyendo media
+        // IMPORTANTE: Usar message.type como fuente primaria (se guarda en Firestore)
+        // porque las URLs pueden ser null si el archivo fue eliminado por TTL
         final replyData = {
           'id': message.id,
           'text': message.text ?? '',
           'senderId': message.senderId,
           'senderName': contactName,
+          // Usar type del mensaje (más confiable que derivar de URLs)
+          'contentType': message.type ?? message.contentType,
         };
 
         // Incluir URLs de media si existen
-        if (message.imageUrl != null) {
+        if (message.imageUrl != null && message.imageUrl!.isNotEmpty) {
           replyData['imageUrl'] = message.imageUrl!;
         }
-        if (message.videoUrl != null) {
+        if (message.videoUrl != null && message.videoUrl!.isNotEmpty) {
           replyData['videoUrl'] = message.videoUrl!;
         }
-        if (message.audioUrl != null) {
+        if (message.audioUrl != null && message.audioUrl!.isNotEmpty) {
           replyData['audioUrl'] = message.audioUrl!;
         }
 

@@ -166,12 +166,19 @@ class GroupedContactCard extends StatelessWidget {
           .join(', ');
 
       if (pendingCount == 1) {
-        text = 'Solicitud de $pendingNames';
+        // Mostrar claramente si es grupo o contacto
+        if (isGroup) {
+          text = 'Grupo · Solicitud de $pendingNames';
+          icon = Icons.group;
+        } else {
+          text = 'Solicitud de $pendingNames';
+          icon = Icons.schedule;
+        }
       } else {
-        text = '$pendingCount solicitudes pendientes';
+        text = isGroup ? 'Grupo · $pendingCount solicitudes' : '$pendingCount solicitudes pendientes';
+        icon = isGroup ? Icons.group : Icons.schedule;
       }
       color = Colors.orange[700]!;
-      icon = Icons.schedule;
     } else if (hasApproved) {
       final approvedNames = contact.childRelations
           .where((r) => r.status == 'approved')

@@ -40,6 +40,7 @@ class _CreateGroupScreenV2State extends State<CreateGroupScreenV2> {
   // For navigation after group creation
   String? _createdGroupId;
   String? _createdGroupName;
+  bool _creatorPending = false;
 
   @override
   void initState() {
@@ -93,9 +94,10 @@ class _CreateGroupScreenV2State extends State<CreateGroupScreenV2> {
       }
     };
 
-    _controller.onGroupCreated = (groupId, groupName) {
+    _controller.onGroupCreated = (groupId, groupName, creatorPending) {
       _createdGroupId = groupId;
       _createdGroupName = groupName;
+      _creatorPending = creatorPending;
     };
   }
 
@@ -142,6 +144,7 @@ class _CreateGroupScreenV2State extends State<CreateGroupScreenV2> {
     // Clear navigation variables
     _createdGroupId = null;
     _createdGroupName = null;
+    _creatorPending = false;
 
     final success = await _controller.createGroup(
       name: groupName,
@@ -150,16 +153,43 @@ class _CreateGroupScreenV2State extends State<CreateGroupScreenV2> {
       avatarFile: _groupImageFile,
     );
 
-    // Navigate to group if created successfully
+    // Navigate after group creation
     if (success && mounted && _createdGroupId != null) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (context) => GroupChatScreenV2(
-            groupId: _createdGroupId!,
-            groupName: _createdGroupName ?? groupName,
+      if (_creatorPending) {
+        // El creador (child) está pendiente de aprobación del padre
+        // Volver a la lista de chats con un warning
+        Navigator.of(context).pop(); // Cerrar pantalla de creación
+
+        // Mostrar snackbar con advertencia
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.info_outline, color: Colors.white),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Grupo "$groupName" creado. Tu padre debe aprobar tu participación para poder acceder.',
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: Colors.orange.shade700,
+            duration: const Duration(seconds: 5),
+            behavior: SnackBarBehavior.floating,
           ),
-        ),
-      );
+        );
+      } else {
+        // El creador tiene acceso inmediato - navegar al grupo
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (context) => GroupChatScreenV2(
+              groupId: _createdGroupId!,
+              groupName: _createdGroupName ?? groupName,
+            ),
+          ),
+        );
+      }
     }
   }
 

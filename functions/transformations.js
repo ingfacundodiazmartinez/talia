@@ -185,13 +185,17 @@ exports.transformCharacter = onCall(
       }
 
       // 5. Registrar analytics (opcional)
-      await db.collection("characterTransformations").add({
+      // ✅ RENAMED: characterTransformations → character_transformations (snake_case)
+      // TTL: 30 días para analytics
+      const analyticsDeleteAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+      await db.collection("character_transformations").add({
         userId: userId,
         characterId: characterId,
         characterName: characterData.name,
         originalImageUrl: imageUrl,
         transformedImageUrl: transformedImageUrl,
         timestamp: new Date(),
+        deleteAt: Timestamp.fromDate(analyticsDeleteAt), // TTL: 30 días
       });
 
       console.log(`📊 [TransformCharacter] Analytics guardado`);
@@ -275,8 +279,12 @@ exports.createCharacterTransformation = onCall(
       });
 
       // 4. Crear documento de estado en Firestore PRIMERO
-      const statusDocRef = db.collection("transformationStatus").doc();
+      // ✅ RENAMED: transformationStatus → transformation_status (snake_case)
+      const statusDocRef = db.collection("transformation_status").doc();
       const statusDocId = statusDocRef.id;
+
+      // TTL: 24 horas después de crear (se actualizará cuando complete)
+      const deleteAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
       await statusDocRef.set({
         userId: userId,
@@ -287,6 +295,7 @@ exports.createCharacterTransformation = onCall(
         message: "Iniciando transformación...",
         createdAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
+        deleteAt: Timestamp.fromDate(deleteAt), // TTL: 24 horas
       });
 
       console.log(`📄 [CreateCharacterTransformation] Documento de estado creado: ${statusDocId}`);
@@ -328,8 +337,10 @@ exports.createCharacterTransformation = onCall(
             console.error(`❌ [PollPrediction] Error: ${error.message}`);
           });
 
-      // 8. Guardar registro en characterTransformations
-      await db.collection("characterTransformations").add({
+      // 8. Guardar registro en character_transformations (snake_case)
+      // TTL: 30 días para analytics
+      const analyticsDeleteAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+      await db.collection("character_transformations").add({
         userId: userId,
         characterId: characterId,
         characterName: characterData.name,
@@ -338,6 +349,7 @@ exports.createCharacterTransformation = onCall(
         statusDocId: statusDocId,
         status: prediction.status,
         createdAt: FieldValue.serverTimestamp(),
+        deleteAt: Timestamp.fromDate(analyticsDeleteAt), // TTL: 30 días
       });
 
       // 9. Retornar inmediatamente - el cliente escuchará Firestore

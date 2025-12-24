@@ -64,15 +64,22 @@ service firebase.storage {
 
     function isValidImage() {
       return request.resource.contentType.matches('image/.*')
-             && request.resource.contentType in ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+             && request.resource.contentType in [
+               'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+               'image/heic', 'image/heif',  // iPhone
+               'image/bmp',                  // Bitmap
+               'image/tiff',                 // TIFF
+               'image/avif'                  // AV1 Image Format
+             ];
     }
 
     function isValidMediaFile() {
-      return request.resource.contentType.matches('image/.*')
-             || request.resource.contentType.matches('video/.*')
-             && request.resource.contentType in [
+      return request.resource.contentType in [
+               // Imágenes
                'image/jpeg', 'image/png', 'image/gif', 'image/webp',
-               'video/mp4', 'video/mov', 'video/avi', 'video/webm'
+               'image/heic', 'image/heif', 'image/bmp', 'image/tiff', 'image/avif',
+               // Videos
+               'video/mp4', 'video/mov', 'video/avi', 'video/webm', 'video/quicktime'
              ];
     }
 
@@ -103,21 +110,16 @@ service firebase.storage {
     }
 
     function canViewStory(storyUserId, viewerId) {
-      // Story owner can always view
-      if (storyUserId == viewerId) {
-        return true;
-      }
-
-      // Check if viewer is an approved contact who can see stories
-      return isApprovedContact(storyUserId, viewerId);
+      // Story owner can always view, or check if approved contact
+      return storyUserId == viewerId || isApprovedContact(storyUserId, viewerId);
     }
 
     function isApprovedContact(profileUserId, viewerId) {
       // Allow self-access always
-      if (profileUserId == viewerId) {
-        return true;
-      }
+      return profileUserId == viewerId ? true : checkContactApproval(profileUserId, viewerId);
+    }
 
+    function checkContactApproval(profileUserId, viewerId) {
       // Check using consistent contact document ID (smaller_id + '_' + larger_id)
       let contactDocId = profileUserId < viewerId ?
                         profileUserId + '_' + viewerId :

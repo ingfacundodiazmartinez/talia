@@ -99,6 +99,9 @@ const stories = require("./stories");
 // Story Approval (Cloud Functions for secure approval)
 const storyApproval = require("./story-approval");
 
+// Account Deletion (eliminación segura de cuentas)
+const accountDeletion = require("./account-deletion");
+
 // ❌ Voice Changer (ElevenLabs) - ELIMINADO
 // ❌ Replicate Voice (TTS) - ELIMINADO
 
@@ -256,5 +259,11 @@ exports.onCallV2Updated = callsV2.onCallV2Updated; // Trigger para mensaje de ll
 // ═══════════════════════════════════════════════════════════════
 // ❌ VOICE CHANGER y TTS - ELIMINADOS
 // ═══════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════
+// ACCOUNT DELETION (Eliminación segura de cuentas)
+// ═══════════════════════════════════════════════════════════════
+
+exports.deleteUserAccount = accountDeletion.deleteUserAccount;
 
 console.log("✅ Todas las funciones exportadas correctamente (incluye Agora V2)");

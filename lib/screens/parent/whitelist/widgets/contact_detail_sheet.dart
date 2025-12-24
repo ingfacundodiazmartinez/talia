@@ -404,6 +404,11 @@ class _ContactDetailSheetState extends State<ContactDetailSheet> {
                 _buildActions(relation, colorScheme),
             ],
           ),
+          // Info del grupo (para grupos V2)
+          if (relation.type == 'group_v2') ...[
+            SizedBox(height: 12),
+            _buildGroupInfo(relation, colorScheme),
+          ],
           // Moderación (solo para contactos aprobados, NO para grupos)
           if (relation.status == 'approved' && relation.type != 'group_v2') ...[
             SizedBox(height: 12),
@@ -412,6 +417,144 @@ class _ContactDetailSheetState extends State<ContactDetailSheet> {
               _buildModerationLoading(colorScheme)
             else if (modState != null)
               _buildModerationSection(relation, modState, isLoadingMod, colorScheme),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Información del grupo (descripción, creador, miembros)
+  Widget _buildGroupInfo(ChildRelation relation, ColorScheme colorScheme) {
+    final data = relation.data;
+    final description = data['groupDescription'] as String?;
+    final creatorName = data['groupCreatorName'] as String?;
+    final membersList = data['members'] as List<dynamic>? ?? [];
+    final memberCount = data['memberCount'] as int? ?? membersList.length;
+
+    return Container(
+      padding: EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Tipo de item (Grupo)
+          Row(
+            children: [
+              Icon(Icons.group, size: 16, color: colorScheme.primary),
+              SizedBox(width: 6),
+              Text(
+                'Grupo',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: colorScheme.primary,
+                ),
+              ),
+              if (memberCount > 0) ...[
+                Text(
+                  ' · $memberCount miembros',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ],
+          ),
+          // Descripción (si existe)
+          if (description != null && description.isNotEmpty) ...[
+            SizedBox(height: 8),
+            Text(
+              description,
+              style: TextStyle(
+                fontSize: 13,
+                color: colorScheme.onSurface,
+              ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+          // Creador
+          if (creatorName != null && creatorName.isNotEmpty) ...[
+            SizedBox(height: 8),
+            Row(
+              children: [
+                Icon(Icons.person_outline, size: 14, color: colorScheme.onSurfaceVariant),
+                SizedBox(width: 4),
+                Text(
+                  'Creado por $creatorName',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ],
+          // Lista de miembros (mostrar hasta 5)
+          if (membersList.isNotEmpty) ...[
+            SizedBox(height: 10),
+            Text(
+              'Miembros actuales:',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                color: colorScheme.onSurface,
+              ),
+            ),
+            SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: membersList.take(5).map((member) {
+                final memberData = member as Map<String, dynamic>;
+                final name = memberData['name'] as String? ?? 'Usuario';
+                final role = memberData['role'] as String? ?? 'adult';
+                final isChild = role == 'child';
+
+                return Container(
+                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: isChild
+                        ? Colors.blue.withValues(alpha: 0.1)
+                        : colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(12),
+                    border: isChild
+                        ? Border.all(color: Colors.blue.withValues(alpha: 0.3))
+                        : null,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (isChild)
+                        Icon(Icons.child_care, size: 12, color: Colors.blue),
+                      if (isChild) SizedBox(width: 4),
+                      Text(
+                        name,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: isChild ? Colors.blue : colorScheme.onSurface,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }).toList(),
+            ),
+            if (membersList.length > 5)
+              Padding(
+                padding: EdgeInsets.only(top: 4),
+                child: Text(
+                  '+${membersList.length - 5} más',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
           ],
         ],
       ),
