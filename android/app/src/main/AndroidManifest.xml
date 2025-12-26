@@ -47,7 +47,8 @@
         android:label="Talia"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
-        android:extractNativeLibs="true">
+        android:extractNativeLibs="true"
+        android:pageSizeCompat="enabled">
         
         <activity
             android:name=".MainActivity"
