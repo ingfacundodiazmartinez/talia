@@ -33,7 +33,8 @@ android {
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
+        // TEMP: targetSdk 34 hasta que Agora/DeepAR soporten 16KB page size (requerido en SDK 35)
+        targetSdk = 34
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
