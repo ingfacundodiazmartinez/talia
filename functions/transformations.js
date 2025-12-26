@@ -5,6 +5,102 @@ const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestor
 const { getMessaging } = require("firebase-admin/messaging");
 const { getStorage } = require("firebase-admin/storage");
 const Replicate = require("replicate");
+const sharp = require("sharp");
+const axios = require("axios");
+const { v4: uuidv4 } = require("uuid");
+
+// ═══════════════════════════════════════════════════════════════
+// HELPER: Normalizar orientación de imagen (fix EXIF rotation)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Descarga una imagen, corrige su orientación EXIF, y la sube a Storage temporal.
+ * Necesario porque iPhones guardan la orientación en EXIF metadata y algunos
+ * modelos de IA (como p-image-edit) no la respetan.
+ *
+ * @param {string} imageUrl - URL de la imagen original
+ * @param {string} userId - ID del usuario (para organizar en Storage)
+ * @returns {Promise<{url: string, filePath: string|null}>} - URL y path del archivo temporal
+ */
+async function normalizeImageOrientation(imageUrl, userId) {
+  console.log(`🔄 [NormalizeImage] Procesando imagen para corregir orientación EXIF`);
+  console.log(`   URL original: ${imageUrl}`);
+
+  try {
+    // 1. Descargar la imagen
+    const response = await axios.get(imageUrl, {
+      responseType: "arraybuffer",
+      timeout: 30000,
+    });
+
+    const imageBuffer = Buffer.from(response.data);
+    console.log(`   Imagen descargada: ${imageBuffer.length} bytes`);
+
+    // 2. Leer metadata para diagnosticar
+    const metadata = await sharp(imageBuffer).metadata();
+    console.log(`   Metadata: ${metadata.width}x${metadata.height}, orientation: ${metadata.orientation || 'none'}, format: ${metadata.format}`);
+
+    // 3. Procesar con sharp: rotate() auto-rota según EXIF y elimina el tag
+    // Usamos keepExif: false para asegurar que no quede metadata conflictiva
+    const processedBuffer = await sharp(imageBuffer)
+        .rotate() // Auto-rotate based on EXIF orientation (if present)
+        .withMetadata({ orientation: undefined }) // Remove orientation tag
+        .jpeg({ quality: 90 }) // Re-encode as JPEG to ensure clean output
+        .toBuffer();
+
+    // 4. Verificar resultado
+    const outputMetadata = await sharp(processedBuffer).metadata();
+    console.log(`   Output: ${outputMetadata.width}x${outputMetadata.height}, orientation: ${outputMetadata.orientation || 'none'}`);
+    console.log(`   Imagen procesada: ${processedBuffer.length} bytes`);
+
+    // 3. Subir a Firebase Storage (carpeta temporal con TTL)
+    const bucket = getStorage().bucket();
+    const fileName = `temp_transformations/${userId}/${uuidv4()}.jpg`;
+    const file = bucket.file(fileName);
+
+    await file.save(processedBuffer, {
+      metadata: {
+        contentType: "image/jpeg",
+        // Metadata para limpieza automática (24 horas)
+        customMetadata: {
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        },
+      },
+      public: true, // Hacer público temporalmente para que p-image-edit pueda acceder
+    });
+
+    // Generar URL pública directa (más confiable que signed URLs)
+    const publicUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+
+    console.log(`   Imagen normalizada subida: ${fileName}`);
+    console.log(`   URL pública: ${publicUrl}`);
+
+    return { url: publicUrl, filePath: fileName };
+  } catch (error) {
+    console.error(`❌ [NormalizeImage] Error: ${error.message}`);
+    // Si falla, retornar la URL original (mejor que fallar completamente)
+    console.log(`   Usando URL original como fallback`);
+    return { url: imageUrl, filePath: null };
+  }
+}
+
+/**
+ * Elimina un archivo temporal de Firebase Storage
+ * @param {string|null} filePath - Path del archivo a eliminar
+ */
+async function cleanupTempFile(filePath) {
+  if (!filePath) return;
+
+  try {
+    const bucket = getStorage().bucket();
+    await bucket.file(filePath).delete();
+    console.log(`🧹 [Cleanup] Archivo temporal eliminado: ${filePath}`);
+  } catch (error) {
+    // No es crítico si falla - el archivo expirará eventualmente
+    console.warn(`⚠️ [Cleanup] No se pudo eliminar ${filePath}: ${error.message}`);
+  }
+}
 
 // ═══════════════════════════════════════════════════════════════
 // TRANSFORMATIONS
@@ -65,29 +161,59 @@ exports.transformCharacter = onCall(
         auth: replicateToken,
       });
 
-      console.log(`🤖 [TransformCharacter] Llamando a Replicate API...`);
-      console.log(`   input_image (personaje): ${characterData.referenceImageUrl}`);
-      console.log(`   swap_image (usuario): ${imageUrl}`);
+      // 4. Determinar qué modelo usar:
+      // - Si tiene prompt → p-image-edit (transformación por prompt)
+      // - Si no tiene prompt → face-swap (intercambio de cara tradicional)
+      const usePromptTransformation = characterData.prompt && characterData.prompt.trim().length > 0;
 
-      // 4. Llamar a codeplugtech Face Swap model (82% más barato)
-      // Model: codeplugtech/face-swap
-      // Costo: ~$0.0025 por transformación (400 runs por $1) - 82% ahorro vs cdingram
-      // Corre en GPU A100, tarda ~10-12 segundos
-      //
-      // OPTIMIZACIÓN: Usar predictions.create + polling para obtener progreso en tiempo real
+      console.log(`🤖 [TransformCharacter] Llamando a Replicate API...`);
+      console.log(`   Modo: ${usePromptTransformation ? "p-image-edit (prompt)" : "face-swap (tradicional)"}`);
+      if (!usePromptTransformation) {
+        console.log(`   input_image (personaje): ${characterData.referenceImageUrl}`);
+        console.log(`   swap_image (usuario): ${imageUrl}`);
+      } else {
+        console.log(`   Prompt: ${characterData.prompt}`);
+        console.log(`   Imagen usuario: ${imageUrl}`);
+      }
+
       let output;
       let predictionId;
       try {
         console.log(`🚀 [TransformCharacter] Creando predicción...`);
 
-        // Crear predicción (no espera a que termine)
-        const prediction = await replicate.predictions.create({
-          version: "278a81e7ebb22db98bcba54de985d22cc1abeead2754eb1f2af717247be69b34",
-          input: {
-            input_image: characterData.referenceImageUrl, // Imagen del personaje (objetivo)
-            swap_image: imageUrl, // Imagen del usuario (cara a intercambiar)
-          },
-        });
+        // Crear predicción según el tipo de transformación
+        let prediction;
+
+        // Variable para guardar el path del archivo temporal (para limpieza)
+        let tempFilePath = null;
+
+        if (usePromptTransformation) {
+          // Usar prunaai/p-image-edit para transformaciones con prompt
+          // Normalizar orientación EXIF (fix para fotos de iPhone rotadas)
+          const normalized = await normalizeImageOrientation(imageUrl, userId);
+          tempFilePath = normalized.filePath;
+          console.log(`   Imagen normalizada: ${normalized.url.substring(0, 100)}...`);
+
+          prediction = await replicate.predictions.create({
+            model: "prunaai/p-image-edit",
+            input: {
+              prompt: characterData.prompt,
+              images: [normalized.url], // Imagen con orientación corregida
+              turbo: true,
+              aspect_ratio: "match_input_image",
+              disable_safety_checker: false,
+            },
+          });
+        } else {
+          // Usar codeplugtech/face-swap para intercambio de cara tradicional
+          prediction = await replicate.predictions.create({
+            version: "278a81e7ebb22db98bcba54de985d22cc1abeead2754eb1f2af717247be69b34",
+            input: {
+              input_image: characterData.referenceImageUrl,
+              swap_image: imageUrl,
+            },
+          });
+        }
 
         predictionId = prediction.id;
         console.log(`✅ [TransformCharacter] Predicción creada: ${predictionId}`);
@@ -200,12 +326,22 @@ exports.transformCharacter = onCall(
 
       console.log(`📊 [TransformCharacter] Analytics guardado`);
 
+      // Limpiar archivo temporal si existe
+      if (tempFilePath) {
+        await cleanupTempFile(tempFilePath);
+      }
+
       return {
         transformedImageUrl: transformedImageUrl,
         characterName: characterData.name,
       };
     } catch (error) {
       console.error("❌ [TransformCharacter] Error:", error);
+
+      // Limpiar archivo temporal incluso si hay error
+      if (typeof tempFilePath !== "undefined" && tempFilePath) {
+        await cleanupTempFile(tempFilePath).catch(() => {});
+      }
 
       // Si es un HttpsError, lanzarlo directamente
       if (error.code) {
@@ -301,22 +437,68 @@ exports.createCharacterTransformation = onCall(
       console.log(`📄 [CreateCharacterTransformation] Documento de estado creado: ${statusDocId}`);
 
       // 5. Crear predicción en Replicate
+      // Determinar qué modelo usar:
+      // - Si tiene prompt → p-image-edit (transformación por prompt)
+      // - Si no tiene prompt → face-swap (intercambio de cara tradicional)
+      const usePromptTransformation = characterData.prompt && characterData.prompt.trim().length > 0;
+
       console.log(`🚀 [CreateCharacterTransformation] Creando predicción en Replicate...`);
+      console.log(`   Modo: ${usePromptTransformation ? "p-image-edit (prompt)" : "face-swap (tradicional)"}`);
 
       await statusDocRef.update({
         status: "creating_prediction",
         progress: 0.1,
-        message: "Conectando con IA...",
+        message: usePromptTransformation ? "Aplicando transformación..." : "Conectando con IA...",
+        transformationType: usePromptTransformation ? "prompt" : "faceSwap",
         updatedAt: FieldValue.serverTimestamp(),
       });
 
-      const prediction = await replicate.predictions.create({
-        version: "278a81e7ebb22db98bcba54de985d22cc1abeead2754eb1f2af717247be69b34",
-        input: {
-          input_image: characterData.referenceImageUrl,
-          swap_image: imageUrl,
-        },
-      });
+      let prediction;
+      let tempFilePath = null; // Para limpieza de archivo temporal después del polling
+
+      if (usePromptTransformation) {
+        // Usar prunaai/p-image-edit para transformaciones con prompt
+        // Model: prunaai/p-image-edit
+        // Costo: ~$0.01 por imagen (100 runs por $1)
+        // Ejecución: <1 segundo en H100 GPU
+        console.log(`🎨 [CreateCharacterTransformation] Usando p-image-edit`);
+        console.log(`   Prompt: ${characterData.prompt}`);
+        console.log(`   Imagen usuario: ${imageUrl}`);
+
+        // Normalizar orientación EXIF (fix para fotos de iPhone rotadas)
+        await statusDocRef.update({
+          status: "processing_image",
+          progress: 0.15,
+          message: "Preparando imagen...",
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+
+        const normalized = await normalizeImageOrientation(imageUrl, userId);
+        tempFilePath = normalized.filePath;
+        console.log(`   Imagen normalizada: ${normalized.url.substring(0, 100)}...`);
+
+        prediction = await replicate.predictions.create({
+          model: "prunaai/p-image-edit",
+          input: {
+            prompt: characterData.prompt,
+            images: [normalized.url], // Imagen con orientación corregida
+            turbo: true, // Modo rápido
+            aspect_ratio: "match_input_image",
+            disable_safety_checker: false,
+          },
+        });
+      } else {
+        // Usar codeplugtech/face-swap para intercambio de cara tradicional
+        // Model: codeplugtech/face-swap
+        // Costo: ~$0.0025 por transformación (400 runs por $1)
+        prediction = await replicate.predictions.create({
+          version: "278a81e7ebb22db98bcba54de985d22cc1abeead2754eb1f2af717247be69b34",
+          input: {
+            input_image: characterData.referenceImageUrl,
+            swap_image: imageUrl,
+          },
+        });
+      }
 
       console.log(`✅ [CreateCharacterTransformation] Predicción creada: ${prediction.id}`);
       console.log(`   Estado: ${prediction.status}`);
@@ -332,7 +514,7 @@ exports.createCharacterTransformation = onCall(
 
       // 7. Hacer polling en background y actualizar Firestore
       // Esto ocurre de forma asíncrona - no esperamos a que termine
-      pollPredictionAndUpdateFirestore(replicate, prediction.id, statusDocRef, characterData.name)
+      pollPredictionAndUpdateFirestore(replicate, prediction.id, statusDocRef, characterData.name, tempFilePath)
           .catch((error) => {
             console.error(`❌ [PollPrediction] Error: ${error.message}`);
           });
@@ -373,8 +555,9 @@ exports.createCharacterTransformation = onCall(
 
 /**
  * Función auxiliar para hacer polling de predicción y actualizar Firestore
+ * @param {string|null} tempFilePath - Path del archivo temporal a limpiar cuando termine
  */
-async function pollPredictionAndUpdateFirestore(replicate, predictionId, statusDocRef, characterName) {
+async function pollPredictionAndUpdateFirestore(replicate, predictionId, statusDocRef, characterName, tempFilePath = null) {
   let pollCount = 0;
   const maxPolls = 60; // 60 polls x 2 segundos = 2 minutos máximo
 
@@ -429,6 +612,8 @@ async function pollPredictionAndUpdateFirestore(replicate, predictionId, statusD
           });
 
           console.log(`✅ [PollPrediction] Completado: ${outputUrl}`);
+          // Limpiar archivo temporal
+          await cleanupTempFile(tempFilePath);
           return; // Terminar polling
         case "failed":
           await statusDocRef.update({
@@ -441,6 +626,8 @@ async function pollPredictionAndUpdateFirestore(replicate, predictionId, statusD
           });
 
           console.error(`❌ [PollPrediction] Falló: ${currentPrediction.error}`);
+          // Limpiar archivo temporal
+          await cleanupTempFile(tempFilePath);
           return; // Terminar polling
         case "canceled":
           await statusDocRef.update({
@@ -450,6 +637,8 @@ async function pollPredictionAndUpdateFirestore(replicate, predictionId, statusD
             canceledAt: FieldValue.serverTimestamp(),
             updatedAt: FieldValue.serverTimestamp(),
           });
+          // Limpiar archivo temporal
+          await cleanupTempFile(tempFilePath);
 
           console.log(`⚠️ [PollPrediction] Cancelado`);
           return; // Terminar polling
@@ -475,9 +664,15 @@ async function pollPredictionAndUpdateFirestore(replicate, predictionId, statusD
       updatedAt: FieldValue.serverTimestamp(),
     });
 
+    // Limpiar archivo temporal
+    await cleanupTempFile(tempFilePath);
+
     console.error(`⏰ [PollPrediction] Timeout después de ${pollCount} polls`);
   } catch (error) {
     console.error(`❌ [PollPrediction] Error durante polling: ${error.message}`);
+
+    // Limpiar archivo temporal
+    await cleanupTempFile(tempFilePath);
 
     // Intentar actualizar Firestore con el error
     try {

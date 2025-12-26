@@ -13,6 +13,7 @@ import 'dashboard/widgets/child_notifications_screen.dart';
 import '../../controllers/parent_main_shell_controller.dart';
 import '../../utils/release_logger.dart';
 import '../../notification_service.dart';
+import '../../reports_screen.dart';
 
 /// Clase para combinar todos los datos del BottomNavigationBar en un solo stream
 class BottomNavData {
@@ -368,22 +369,14 @@ class _ParentMainShellState extends State<ParentMainShell> {
   Future<void> _handleReportNotificationTap(Map<String, dynamic> data) async {
     try {
       final childId = data['childId'] as String?;
-      final childName = data['childName'] as String? ?? 'Hijo';
-      ReleaseLogger.log('Navigating to child notifications screen for report, childId=$childId', tag: 'ParentMainShell');
+      ReleaseLogger.log('Navigating to reports screen, childId=$childId', tag: 'ParentMainShell');
 
-      if (childId != null) {
-        await Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (context) => ChildNotificationsScreen(
-              childId: childId,
-              childName: childName,
-            ),
-          ),
-        );
-      } else {
-        // Si no hay childId, ir al dashboard
-        setState(() => _selectedIndex = 0);
-      }
+      // Navegar a la pantalla de reportes (con childId opcional para filtrar)
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => ReportsScreen(childId: childId),
+        ),
+      );
     } catch (e) {
       ReleaseLogger.error('Error handling report notification tap: $e', tag: 'ParentMainShell');
     }

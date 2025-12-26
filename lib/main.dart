@@ -273,6 +273,20 @@ void main() async {
 
   ReleaseLogger.log('✅ Crashlytics configurado', tag: 'MainApp');
 
+  // 🔑 AppConfigService PRIMERO (secuencial) - necesario para AdService (Remote Config IDs)
+  try {
+    await AppConfigService().initialize();
+    ReleaseLogger.log(
+      '✅ App Config Service inicializado (Remote Config)',
+      tag: 'MainApp',
+    );
+  } catch (e) {
+    ReleaseLogger.error(
+      '⚠️ Error inicializando App Config: $e (continuando con valores por defecto)',
+      tag: 'MainApp',
+    );
+  }
+
   // 🚀 PERFORMANCE OPTIMIZATION: Paralelizar servicios independientes post-Firebase
   ReleaseLogger.log(
     '🚀 Inicializando servicios principales en paralelo...',
@@ -481,28 +495,10 @@ void main() async {
   );
   late ThemeService themeService;
 
-  await Future.wait([
-    AppConfigService()
-        .initialize()
-        .then((_) {
-          ReleaseLogger.log(
-            '✅ App Config Service inicializado',
-            tag: 'MainApp',
-          );
-        })
-        .catchError((e) {
-          ReleaseLogger.log(
-            '⚠️ Error inicializando App Config: $e (continuando con valores por defecto)',
-            tag: 'MainApp',
-          );
-        }),
-
-    () async {
-      themeService = ThemeService();
-      await themeService.initialize();
-      ReleaseLogger.log('✅ ThemeService inicializado', tag: 'MainApp');
-    }(),
-  ]);
+  // ThemeService initialization (AppConfigService ya se inicializó antes)
+  themeService = ThemeService();
+  await themeService.initialize();
+  ReleaseLogger.log('✅ ThemeService inicializado', tag: 'MainApp');
   ReleaseLogger.log(
     '✅ Configuración final completada concurrentemente',
     tag: 'MainApp',
@@ -778,6 +774,11 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
     // ✅ FIX PERMISSION_DENIED: Only initialize LEGACY CallsOrchestrator when NOT using V2
     // V2 system uses VoIPService + CallServiceWrapper directly (no orchestrator needed)
     _initializeCallSystem();
+
+    // Procesar deep links pendientes después del primer frame
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      DeepLinkService().processPendingStory();
+    });
   }
 
   /// Initialize V2 Agora call system (legacy system removed)
@@ -921,6 +922,9 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
     // Esto evita que las notificaciones de background se muestren como foreground
     if (state == AppLifecycleState.resumed) {
       NotificationService().notifyAppResumed();
+
+      // ✅ Limpiar badge del icono de la app al abrirla
+      UnreadMessagesService().clearBadge();
 
       // ✅ AGORA WATCHDOG: Notificar que la app volvió a foreground
       AgoraEngineService().onAppForeground();

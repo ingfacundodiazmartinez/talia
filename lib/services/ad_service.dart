@@ -246,24 +246,27 @@ class AdService {
     }
   }
 
+  // Production Native Ad Unit IDs (hardcoded para bypass de Remote Config)
+  static const String _prodAndroidNativeAdUnitId2 = 'ca-app-pub-5189779496074211/3915483871';
+  static const String _prodIosNativeAdUnitId2 = 'ca-app-pub-5189779496074211/8559745396';
+
   /// Obtener el Ad Unit ID correcto según la plataforma y tipo de ad
-  /// Usa IDs de producción hardcodeados para mayor seguridad
+  /// TEMP: Usando IDs hardcodeados para verificar que funcionen
   String _getAdUnitId({bool isNativeAd = false}) {
     if (isNativeAd) {
-      // Native Ads: Usar IDs de producción
+      // Native Ads: Usando IDs de producción hardcodeados
       if (defaultTargetPlatform == TargetPlatform.android) {
         ReleaseLogger.log(
-          '📢 [AdService] Android Native Ad ID: $_prodAndroidNativeAdUnitId',
+          '📢 [AdService] Android Native Ad ID (PROD): $_prodAndroidNativeAdUnitId2',
           tag: 'AdService',
         );
-        return _prodAndroidNativeAdUnitId;
+        return _prodAndroidNativeAdUnitId2;
       } else if (defaultTargetPlatform == TargetPlatform.iOS) {
-        // ✅ Usar Production ID - fill rate puede ser bajo inicialmente
         ReleaseLogger.log(
-          '📢 [AdService] iOS Native Ad ID (PROD): $_prodIosNativeAdUnitId',
+          '📢 [AdService] iOS Native Ad ID (PROD): $_prodIosNativeAdUnitId2',
           tag: 'AdService',
         );
-        return _prodIosNativeAdUnitId;
+        return _prodIosNativeAdUnitId2;
       }
       return _testAndroidNativeAdUnitId; // Fallback
     } else {
@@ -812,22 +815,25 @@ class AdService {
   // REWARDED VIDEO ADS - Para desbloquear reportes y features premium
   // ═══════════════════════════════════════════════════════════════════════════
 
-  /// Obtener el Ad Unit ID para Rewarded Video desde Remote Config
+  // Production Rewarded Ad Unit IDs (hardcoded para bypass de Remote Config)
+  static const String _prodAndroidRewardedAdUnitId = 'ca-app-pub-5189779496074211/6223587981';
+  static const String _prodIosRewardedAdUnitId = 'ca-app-pub-5189779496074211/3792865761';
+
+  /// Obtener el Ad Unit ID para Rewarded Video
+  /// TEMP: Usando IDs hardcodeados para verificar que funcionen
   String _getRewardedAdUnitId() {
     if (defaultTargetPlatform == TargetPlatform.android) {
-      final adId = _appConfigService.admobAndroidRewardedAdId;
       ReleaseLogger.log(
-        '🎬 [AdService] Android Rewarded Ad ID: $adId',
+        '🎬 [AdService] Android Rewarded Ad ID (PROD): $_prodAndroidRewardedAdUnitId',
         tag: 'AdService',
       );
-      return adId;
+      return _prodAndroidRewardedAdUnitId;
     } else if (defaultTargetPlatform == TargetPlatform.iOS) {
-      final adId = _appConfigService.admobIosRewardedAdId;
       ReleaseLogger.log(
-        '🎬 [AdService] iOS Rewarded Ad ID: $adId',
+        '🎬 [AdService] iOS Rewarded Ad ID (PROD): $_prodIosRewardedAdUnitId',
         tag: 'AdService',
       );
-      return adId;
+      return _prodIosRewardedAdUnitId;
     }
     return _testAndroidRewardedAdUnitId; // Fallback
   }

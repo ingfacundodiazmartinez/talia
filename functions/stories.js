@@ -410,6 +410,74 @@ async function sendLikeMessage(senderId, receiverId, storyData, storyId) {
   }
 }
 
+/**
+ * ═══════════════════════════════════════════════════════════════
+ * GET STORY PREVIEW - HTTP endpoint para link previews (OG meta tags)
+ * ═══════════════════════════════════════════════════════════════
+ *
+ * Este endpoint es público y no requiere autenticación.
+ * WhatsApp, Facebook, Twitter y otros crawlers lo usan para generar previews.
+ */
+const { onRequest } = require("firebase-functions/v2/https");
+
+exports.getStoryPreview = onRequest(
+  {
+    region: "us-central1",
+    cors: true, // Permitir CORS para llamadas desde Vercel
+  },
+  async (req, res) => {
+    // Solo permitir GET
+    if (req.method !== 'GET') {
+      return res.status(405).json({ error: 'Method not allowed' });
+    }
+
+    const storyId = req.query.id || req.path.split('/').pop();
+
+    if (!storyId) {
+      return res.status(400).json({ error: 'Story ID is required' });
+    }
+
+    console.log(`📖 [StoryPreview] Fetching story: ${storyId}`);
+
+    try {
+      const storyDoc = await db.collection("stories").doc(storyId).get();
+
+      if (!storyDoc.exists) {
+        console.log(`📖 [StoryPreview] Story not found: ${storyId}`);
+        return res.status(404).json({
+          found: false,
+          error: 'Story not found'
+        });
+      }
+
+      const storyData = storyDoc.data();
+
+      // Solo devolver datos públicos para el preview
+      const previewData = {
+        found: true,
+        userName: storyData.userName || 'Usuario',
+        caption: storyData.caption || '',
+        mediaUrl: storyData.mediaUrl || '',
+        mediaType: storyData.mediaType || 'image',
+        // No incluir datos sensibles como userId, viewedBy, etc.
+      };
+
+      console.log(`✅ [StoryPreview] Returning preview for: ${storyId}`);
+
+      // Cache por 5 minutos
+      res.set('Cache-Control', 'public, max-age=300, s-maxage=300');
+      return res.status(200).json(previewData);
+
+    } catch (error) {
+      console.error(`❌ [StoryPreview] Error fetching story ${storyId}:`, error);
+      return res.status(500).json({
+        found: false,
+        error: 'Internal server error'
+      });
+    }
+  }
+);
+
 exports.replyToStory = onCall(
   { region: "us-central1", consumeAppCheckToken: true },
   async (request) => {

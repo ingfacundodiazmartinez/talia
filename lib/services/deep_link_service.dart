@@ -1,8 +1,11 @@
 import 'dart:async';
 import 'package:app_links/app_links.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import '../models/story.dart';
 import '../utils/release_logger.dart';
 import '../screens/add_contact_deeplink_screen.dart';
+import '../screens/story_viewer_screen.dart';
 
 /// Servicio para manejar deep links y universal links
 ///
@@ -140,15 +143,77 @@ class DeepLinkService {
   void Function(String storyId)? onViewStoryLink;
 
   /// Manejar acción de ver historia
-  void _handleViewStory(String storyId) {
-    // Intentar navegar usando el callback
-    if (onViewStoryLink != null) {
-      ReleaseLogger.log('🔗 [DeepLink] Calling onViewStoryLink for storyId: $storyId');
-      onViewStoryLink!(storyId);
-    } else {
-      ReleaseLogger.log('🔗 [DeepLink] No callback for story, saving for later');
+  Future<void> _handleViewStory(String storyId) async {
+    final navigator = navigatorKey.currentState;
+
+    if (navigator == null) {
+      ReleaseLogger.log('🔗 [DeepLink] No navigator available, saving story for later');
       _pendingViewStoryId = storyId;
+      return;
     }
+
+    try {
+      ReleaseLogger.log('🔗 [DeepLink] Fetching story: $storyId');
+
+      // 1. Obtener la historia desde Firestore
+      final storyDoc = await FirebaseFirestore.instance
+          .collection('stories')
+          .doc(storyId)
+          .get();
+
+      if (!storyDoc.exists) {
+        ReleaseLogger.log('🔗 [DeepLink] Story not found: $storyId');
+        _showErrorSnackBar(navigator.context, 'Historia no encontrada');
+        return;
+      }
+
+      final story = Story.fromFirestore(storyDoc);
+
+      // 2. Obtener info del usuario autor
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(story.userId)
+          .get();
+
+      final userData = userDoc.data();
+      final userName = userData?['name'] as String? ?? 'Usuario';
+      final userPhotoURL = userData?['photoURL'] as String?;
+
+      // 3. Crear UserStories con la historia
+      final userStories = UserStories(
+        userId: story.userId,
+        userName: userName,
+        userPhotoURL: userPhotoURL,
+        stories: [story],
+        hasUnviewed: true,
+      );
+
+      // 4. Navegar al StoryViewerScreen
+      ReleaseLogger.log('🔗 [DeepLink] Navigating to StoryViewerScreen for story: $storyId');
+      navigator.push(
+        MaterialPageRoute(
+          builder: (context) => StoryViewerScreen(
+            allUserStories: [userStories],
+            initialUserIndex: 0,
+          ),
+        ),
+      );
+
+    } catch (e) {
+      ReleaseLogger.error('🔗 [DeepLink] Error loading story: $e');
+      _showErrorSnackBar(navigator.context, 'Error al cargar la historia');
+    }
+  }
+
+  /// Mostrar error al usuario
+  void _showErrorSnackBar(BuildContext context, String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.red,
+        duration: const Duration(seconds: 3),
+      ),
+    );
   }
 
   /// Obtener y limpiar storyId pendiente
@@ -163,6 +228,16 @@ class DeepLinkService {
     final userId = _pendingAddContactUserId;
     _pendingAddContactUserId = null;
     return userId;
+  }
+
+  /// Procesar historia pendiente si existe
+  /// Llamar cuando el navigator esté disponible
+  Future<void> processPendingStory() async {
+    final storyId = consumePendingViewStory();
+    if (storyId != null) {
+      ReleaseLogger.log('🔗 [DeepLink] Processing pending story: $storyId');
+      await _handleViewStory(storyId);
+    }
   }
 
   /// Generar URL para compartir (agregar contacto)

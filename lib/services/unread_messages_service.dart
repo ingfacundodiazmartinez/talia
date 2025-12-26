@@ -213,4 +213,17 @@ class UnreadMessagesService {
       updateBadgeCount();
     });
   }
+
+  /// Limpiar el badge del icono de la app (poner en 0)
+  /// Llamar cuando la app se abre o vuelve a foreground
+  Future<void> clearBadge() async {
+    try {
+      final isSupported = await AppBadgePlus.isSupported();
+      if (isSupported) {
+        await AppBadgePlus.updateBadge(0);
+      }
+    } catch (e) {
+      // Silently handle error
+    }
+  }
 }

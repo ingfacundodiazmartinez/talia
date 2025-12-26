@@ -2568,6 +2568,7 @@ class NotificationService {
   Future<void> sendReportReadyNotification({
     required String parentId,
     required String childName,
+    required String childId,
   }) async {
     try {
       await _firestore.collection('notifications').add({
@@ -2575,7 +2576,11 @@ class NotificationService {
         'type': 'report_ready',
         'title': '📊 Reporte semanal disponible',
         'body': 'El reporte de $childName está listo para revisar',
-        'data': {'type': 'report_ready', 'childName': childName},
+        'data': {
+          'type': 'report_ready',
+          'childName': childName,
+          'childId': childId,
+        },
         'read': false,
         'timestamp': FieldValue.serverTimestamp(),
         'priority': 'normal',

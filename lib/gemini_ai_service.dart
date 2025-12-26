@@ -280,6 +280,7 @@ class GeminiAIService {
         await NotificationService().sendReportReadyNotification(
           parentId: parentId,
           childName: childName,
+          childId: childId,
         );
         ReleaseLogger.log('Notificación de reporte enviada al padre: $parentId', tag: 'GeminiAIService');
       }

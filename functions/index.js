@@ -231,6 +231,7 @@ exports.cleanupOldStickers = stickerFunctions.cleanupOldStickers;
 exports.onStoryApprovalRequestCreated = stories.onStoryApprovalRequestCreated;
 exports.replyToStory = stories.replyToStory;
 exports.likeStory = stories.likeStory;
+exports.getStoryPreview = stories.getStoryPreview;
 
 // Story Approval (Secure Cloud Functions)
 exports.createStory = storyApproval.createStory;

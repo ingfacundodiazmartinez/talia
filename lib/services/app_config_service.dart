@@ -231,25 +231,27 @@ class AppConfigService {
     try {
       // 1. Variable de entorno
       final envAdId = dotenv.env['ADMOB_IOS_REWARDED_AD_ID'];
+      ReleaseLogger.log('🔍 [iOS Rewarded] envAdId: "$envAdId", initialized: $_initialized', tag: 'AppConfig');
       if (envAdId != null && envAdId.isNotEmpty && envAdId != _testIosRewardedAdId) {
-        ReleaseLogger.log('Usando iOS Rewarded Ad ID desde variable de entorno', tag: 'AppConfig');
+        ReleaseLogger.log('✅ Usando iOS Rewarded Ad ID desde variable de entorno: $envAdId', tag: 'AppConfig');
         return envAdId;
       }
 
       // 2. Remote Config
       if (_initialized) {
         final remoteAdId = _remoteConfig.getString('admob_ios_rewarded_ad_id');
+        ReleaseLogger.log('🔍 [iOS Rewarded] remoteAdId: "$remoteAdId", testId: "$_testIosRewardedAdId"', tag: 'AppConfig');
         if (remoteAdId.isNotEmpty && remoteAdId != _testIosRewardedAdId) {
-          ReleaseLogger.log('Usando iOS Rewarded Ad ID desde Remote Config', tag: 'AppConfig');
+          ReleaseLogger.log('✅ Usando iOS Rewarded Ad ID desde Remote Config: $remoteAdId', tag: 'AppConfig');
           return remoteAdId;
         }
       }
 
       // 3. Fallback a test ID
-      ReleaseLogger.log('Usando iOS Rewarded Ad ID de prueba', tag: 'AppConfig');
+      ReleaseLogger.log('⚠️ Usando iOS Rewarded Ad ID de PRUEBA (no se encontró en env ni Remote Config)', tag: 'AppConfig');
       return _testIosRewardedAdId;
     } catch (e) {
-      ReleaseLogger.error('Error obteniendo iOS Rewarded Ad ID: $e', tag: 'AppConfig');
+      ReleaseLogger.error('❌ Error obteniendo iOS Rewarded Ad ID: $e', tag: 'AppConfig');
       return _testIosRewardedAdId;
     }
   }
