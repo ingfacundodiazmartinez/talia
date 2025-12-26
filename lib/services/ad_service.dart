@@ -247,8 +247,8 @@ class AdService {
   }
 
   // Production Native Ad Unit IDs (hardcoded para bypass de Remote Config)
-  static const String _prodAndroidNativeAdUnitId2 = 'ca-app-pub-5189779496074211/3915483871';
-  static const String _prodIosNativeAdUnitId2 = 'ca-app-pub-5189779496074211/8559745396';
+  static const String _prodAndroidNativeAdUnitId2 = 'ca-app-pub-5189779496074211/8120568482';
+  static const String _prodIosNativeAdUnitId2 = 'ca-app-pub-5189779496074211/1690891506';
 
   /// Obtener el Ad Unit ID correcto según la plataforma y tipo de ad
   /// TEMP: Usando IDs hardcodeados para verificar que funcionen
