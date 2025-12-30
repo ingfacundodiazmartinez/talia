@@ -793,7 +793,7 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
       return _buildActionButton(
         context: context,
         icon: Icons.notifications,
-        label: 'Alertas',
+        label: 'Notificaciones',
         color: Colors.orange,
         isDarkMode: isDarkMode,
         onTap: () {},
@@ -899,12 +899,12 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
                   ),
                   SizedBox(height: 6),
                   Text(
-                    'Alertas',
+                    'Notificaciones',
                     style: TextStyle(
                       color: isDarkMode
                           ? Colors.white
                           : Theme.of(context).colorScheme.onSurface,
-                      fontSize: 12,
+                      fontSize: 11,
                       fontWeight: FontWeight.w600,
                     ),
                     textAlign: TextAlign.center,

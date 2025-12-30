@@ -70,6 +70,82 @@ class _ReportsScreenState extends State<ReportsScreen> {
     }
   }
 
+  /// Eliminar un reporte
+  Future<void> _deleteReport(String reportId, String childName) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        icon: Icon(Icons.delete_outline, size: 48, color: Colors.red),
+        title: Text('Eliminar reporte'),
+        content: Text(
+          '¿Estás seguro de que quieres eliminar este reporte de $childName? Esta acción no se puede deshacer.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            child: Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        await _firestore.collection('weekly_reports').doc(reportId).delete();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Reporte eliminado'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } catch (e) {
+        ReleaseLogger.error('Error eliminando reporte: $e', tag: 'ReportsScreen');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Error al eliminar el reporte'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  /// Mostrar opciones del reporte (eliminar, etc.)
+  void _showReportOptions(String reportId, String childName) {
+    showModalBottomSheet(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: Icon(Icons.delete_outline, color: Colors.red),
+              title: Text('Eliminar reporte', style: TextStyle(color: Colors.red)),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _deleteReport(reportId, childName);
+              },
+            ),
+            ListTile(
+              leading: Icon(Icons.close),
+              title: Text('Cancelar'),
+              onTap: () => Navigator.pop(sheetContext),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -123,7 +199,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
           }
 
           return StreamBuilder<QuerySnapshot>(
-            stream: reportsQuery.orderBy('generatedAt', descending: true).snapshots(),
+            // ✅ Limitar a 50 reportes más recientes para evitar problemas de rendimiento
+            stream: reportsQuery.orderBy('generatedAt', descending: true).limit(50).snapshots(),
             builder: (context, reportsSnapshot) {
               // Manejo de errores
               if (reportsSnapshot.hasError) {
@@ -190,7 +267,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                           (context, index) {
                             final report = reportsSnapshot.data!.docs[index];
                             final reportData = report.data() as Map<String, dynamic>;
-                            return _buildReportCard(reportData, colorScheme, isDarkMode);
+                            return _buildReportCard(report.id, reportData, colorScheme, isDarkMode);
                           },
                           childCount: reportsSnapshot.data!.docs.length,
                         ),
@@ -361,7 +438,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   /// Construye una card para un reporte individual
-  Widget _buildReportCard(Map<String, dynamic> reportData, ColorScheme colorScheme, bool isDarkMode) {
+  Widget _buildReportCard(String reportId, Map<String, dynamic> reportData, ColorScheme colorScheme, bool isDarkMode) {
     final childId = reportData['childId'] as String?;
 
     if (childId == null) {
@@ -444,19 +521,16 @@ class _ReportsScreenState extends State<ReportsScreen> {
           borderColor = Colors.red.shade300;
         }
 
+        // Diseño limpio sin borde
         return Container(
-          margin: EdgeInsets.only(bottom: 16),
+          margin: EdgeInsets.only(bottom: 12),
           decoration: BoxDecoration(
-            color: isDarkMode ? colorScheme.surface : colorScheme.surface,
+            color: isDarkMode ? colorScheme.surfaceContainerHighest : colorScheme.surface,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: borderColor.withValues(alpha: isDarkMode ? 0.5 : 0.3),
-              width: 2,
-            ),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: isDarkMode ? 0.3 : 0.08),
-                blurRadius: 10,
+                color: Colors.black.withValues(alpha: isDarkMode ? 0.2 : 0.06),
+                blurRadius: 8,
                 offset: Offset(0, 2),
               ),
             ],
@@ -474,127 +548,159 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 ),
               );
             },
+            onLongPress: () => _showReportOptions(reportId, childName),
             borderRadius: BorderRadius.circular(16),
-            child: Padding(
-              padding: EdgeInsets.all(16),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(16),
               child: Row(
                 children: [
-                  // Avatar del niño
-                  CircleAvatar(
-                    radius: 28,
-                    backgroundColor: isDarkMode
-                        ? colorScheme.primaryContainer
-                        : colorScheme.primaryContainer,
-                    child: photoUrl != null
-                        ? ClipOval(
-                            child: CachedNetworkImage(
-                              imageUrl: photoUrl,
-                              width: 56,
-                              height: 56,
-                              fit: BoxFit.cover,
-                              placeholder: (context, url) => Icon(Icons.person, size: 28, color: colorScheme.onPrimaryContainer),
-                              errorWidget: (context, url, error) => Icon(Icons.person, size: 28, color: colorScheme.onPrimaryContainer),
-                            ),
-                          )
-                        : Text(
-                            childName.isNotEmpty ? childName[0].toUpperCase() : 'H',
-                            style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                              color: colorScheme.onPrimaryContainer,
-                            ),
-                          ),
-                  ),
-                  SizedBox(width: 16),
-                  // Icono de estado de ánimo
+                  // Indicador de estado (barra lateral sutil)
                   Container(
-                    width: 50,
-                    height: 50,
-                    decoration: BoxDecoration(
-                      color: borderColor.withValues(alpha: isDarkMode ? 0.2 : 0.1),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Center(
-                      child: Text(
-                        moodIcon,
-                        style: TextStyle(fontSize: 28),
-                      ),
-                    ),
+                    width: 4,
+                    height: 90,
+                    color: borderColor,
                   ),
-                  SizedBox(width: 16),
-                  // Información del reporte
+                  // Contenido principal
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          childName,
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: colorScheme.onSurface,
-                          ),
-                        ),
-                        SizedBox(height: 4),
-                        Text(
-                          shortTitle,
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w500,
-                            color: isDarkMode
-                                ? colorScheme.onSurfaceVariant
-                                : colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                        SizedBox(height: 4),
-                        Text(
-                          dateText,
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
-                          ),
-                        ),
-                        SizedBox(height: 6),
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.message,
-                              size: 14,
-                              color: colorScheme.onSurfaceVariant,
-                            ),
-                            SizedBox(width: 4),
-                            Text(
-                              '$totalMessages mensajes',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: colorScheme.onSurfaceVariant,
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                      child: Row(
+                        children: [
+                          // Avatar del niño con emoji superpuesto
+                          Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              CircleAvatar(
+                                radius: 26,
+                                backgroundColor: colorScheme.primaryContainer,
+                                child: photoUrl != null
+                                    ? ClipOval(
+                                        child: CachedNetworkImage(
+                                          imageUrl: photoUrl,
+                                          width: 52,
+                                          height: 52,
+                                          fit: BoxFit.cover,
+                                          placeholder: (context, url) => Icon(Icons.person, size: 26, color: colorScheme.onPrimaryContainer),
+                                          errorWidget: (context, url, error) => Icon(Icons.person, size: 26, color: colorScheme.onPrimaryContainer),
+                                        ),
+                                      )
+                                    : Text(
+                                        childName.isNotEmpty ? childName[0].toUpperCase() : 'H',
+                                        style: TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.bold,
+                                          color: colorScheme.onPrimaryContainer,
+                                        ),
+                                      ),
                               ),
-                            ),
-                            if (bullyingIncidents > 0) ...[
-                              SizedBox(width: 12),
-                              Icon(Icons.warning, size: 14, color: Colors.red),
-                              SizedBox(width: 4),
-                              Text(
-                                '$bullyingIncidents alertas',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.red,
-                                  fontWeight: FontWeight.w600,
+                              // Emoji de estado de ánimo como badge
+                              Positioned(
+                                right: -6,
+                                bottom: -4,
+                                child: Container(
+                                  padding: EdgeInsets.all(2),
+                                  decoration: BoxDecoration(
+                                    color: isDarkMode ? colorScheme.surfaceContainerHighest : colorScheme.surface,
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: Text(moodIcon, style: TextStyle(fontSize: 18)),
                                 ),
                               ),
                             ],
-                          ],
-                        ),
-                      ],
+                          ),
+                          SizedBox(width: 14),
+                          // Información del reporte
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        childName,
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w600,
+                                          color: colorScheme.onSurface,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    Text(
+                                      dateText,
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                SizedBox(height: 4),
+                                Text(
+                                  shortTitle,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w500,
+                                    color: borderColor,
+                                  ),
+                                ),
+                                SizedBox(height: 6),
+                                Row(
+                                  children: [
+                                    Icon(
+                                      Icons.message_outlined,
+                                      size: 14,
+                                      color: colorScheme.onSurfaceVariant,
+                                    ),
+                                    SizedBox(width: 4),
+                                    Text(
+                                      '$totalMessages mensajes',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: colorScheme.onSurfaceVariant,
+                                      ),
+                                    ),
+                                    if (bullyingIncidents > 0) ...[
+                                      SizedBox(width: 10),
+                                      Container(
+                                        padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: Colors.red.withValues(alpha: 0.15),
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(Icons.warning_rounded, size: 12, color: Colors.red),
+                                            SizedBox(width: 3),
+                                            Text(
+                                              '$bullyingIncidents',
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                color: Colors.red,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                          SizedBox(width: 8),
+                          // Flecha
+                          Icon(
+                            Icons.chevron_right,
+                            color: colorScheme.outlineVariant,
+                            size: 24,
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  // Flecha para indicar que es clickeable
-                  Icon(
-                    Icons.chevron_right,
-                    color: isDarkMode
-                        ? colorScheme.outlineVariant.withValues(alpha: 0.7)
-                        : colorScheme.outlineVariant,
-                    size: 28,
                   ),
                 ],
               ),
@@ -606,6 +712,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   Widget _buildAlertsSection() {
+    final colorScheme = Theme.of(context).colorScheme;
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
     return StreamBuilder<QuerySnapshot>(
       stream: _getUnreadAlerts(_auth.currentUser!.uid),
       builder: (context, snapshot) {
@@ -613,93 +722,217 @@ class _ReportsScreenState extends State<ReportsScreen> {
           return SizedBox.shrink();
         }
 
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '⚠️ Alertas Importantes',
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-                color: Colors.red,
+        return Padding(
+          padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(Icons.warning_rounded, color: Colors.red, size: 20),
+                  ),
+                  SizedBox(width: 12),
+                  Text(
+                    'Alertas Importantes',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: colorScheme.onSurface,
+                    ),
+                  ),
+                  SizedBox(width: 8),
+                  Container(
+                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.red,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      '${snapshot.data!.docs.length}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-            ),
-            SizedBox(height: 12),
-            ...snapshot.data!.docs.map((doc) {
-              final data = doc.data() as Map<String, dynamic>;
-              return _buildAlertCard(doc.id, data);
-            }),
-            SizedBox(height: 8),
-          ],
+              SizedBox(height: 12),
+              ...snapshot.data!.docs.map((doc) {
+                final data = doc.data() as Map<String, dynamic>;
+                return _buildAlertCard(doc.id, data, colorScheme, isDarkMode);
+              }),
+            ],
+          ),
         );
       },
     );
   }
 
-  Widget _buildAlertCard(String alertId, Map<String, dynamic> data) {
-    // final type = data['type'] ?? 'unknown';
+  Widget _buildAlertCard(String alertId, Map<String, dynamic> data, ColorScheme colorScheme, bool isDarkMode) {
     final severity = (data['severity'] ?? 0.0) as double;
-    // NO mostramos keywords para proteger privacidad
+    final createdAt = data['createdAt'] as dynamic;
+
+    // Formatear fecha
+    String timeText = '';
+    if (createdAt != null) {
+      try {
+        DateTime date;
+        if (createdAt is String) {
+          date = DateTime.parse(createdAt);
+        } else {
+          date = (createdAt as Timestamp).toDate();
+        }
+        final now = DateTime.now();
+        final diff = now.difference(date);
+        if (diff.inMinutes < 60) {
+          timeText = 'Hace ${diff.inMinutes} min';
+        } else if (diff.inHours < 24) {
+          timeText = 'Hace ${diff.inHours}h';
+        } else if (diff.inDays == 1) {
+          timeText = 'Ayer';
+        } else {
+          timeText = 'Hace ${diff.inDays} días';
+        }
+      } catch (e) {
+        timeText = '';
+      }
+    }
+
+    // Color según severidad
+    final severityColor = severity > 0.7 ? Colors.red : (severity > 0.4 ? Colors.orange : Colors.amber);
 
     return Container(
-      margin: EdgeInsets.only(bottom: 12),
-      padding: EdgeInsets.all(16),
+      margin: EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
-        color: Colors.red.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.red.withOpacity(0.3), width: 2),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.warning, color: Colors.red, size: 24),
-              SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  'Posible Bullying Detectado',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.red[800],
-                  ),
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: 12),
-          Text(
-            'Severidad: ${(severity * 100).toInt()}%',
-            style: TextStyle(fontSize: 14, color: Colors.grey[700]),
-          ),
-          SizedBox(height: 8),
-          Text(
-            'Se detectó lenguaje inapropiado en la conversación',
-            style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-          ),
-          SizedBox(height: 12),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              TextButton(
-                onPressed: () async {
-                  await _markAlertAsRead(alertId);
-                },
-                child: Text('Marcar como leída'),
-              ),
-              SizedBox(width: 8),
-              ElevatedButton(
-                onPressed: () {
-                  // Ver detalles del mensaje
-                  _showAlertDetails(data);
-                },
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                child: Text('Ver detalles'),
-              ),
-            ],
+        color: isDarkMode ? colorScheme.surfaceContainerHighest : colorScheme.surface,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: isDarkMode ? 0.2 : 0.06),
+            blurRadius: 8,
+            offset: Offset(0, 2),
           ),
         ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: Row(
+          children: [
+            // Indicador lateral rojo
+            Container(
+              width: 4,
+              height: 100,
+              color: Colors.red,
+            ),
+            // Contenido
+            Expanded(
+              child: Padding(
+                padding: EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Posible Bullying Detectado',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color: colorScheme.onSurface,
+                            ),
+                          ),
+                        ),
+                        if (timeText.isNotEmpty)
+                          Text(
+                            timeText,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                      ],
+                    ),
+                    SizedBox(height: 6),
+                    Text(
+                      'Se detectó lenguaje inapropiado en la conversación',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    SizedBox(height: 10),
+                    Row(
+                      children: [
+                        // Indicador de severidad
+                        Container(
+                          padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: severityColor.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                severity > 0.7 ? Icons.error : (severity > 0.4 ? Icons.warning : Icons.info),
+                                size: 14,
+                                color: severityColor,
+                              ),
+                              SizedBox(width: 4),
+                              Text(
+                                '${(severity * 100).toInt()}%',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: severityColor,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Spacer(),
+                        // Botones de acción
+                        TextButton(
+                          onPressed: () async {
+                            await _markAlertAsRead(alertId);
+                          },
+                          style: TextButton.styleFrom(
+                            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          child: Text('Ignorar', style: TextStyle(fontSize: 13)),
+                        ),
+                        SizedBox(width: 8),
+                        FilledButton(
+                          onPressed: () {
+                            _showAlertDetails(data);
+                          },
+                          style: FilledButton.styleFrom(
+                            backgroundColor: Colors.red,
+                            padding: EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          child: Text('Ver más', style: TextStyle(fontSize: 13)),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1047,6 +1280,9 @@ class DetailedReportScreen extends StatelessWidget {
     final neutralCount = report['neutralCount'] ?? 0;
     final bullyingIncidents = report['bullyingIncidents'] ?? 0;
     final percentageChange = report['percentageChange'] ?? 0;
+    // ✅ Mensajes analizados desde el último reporte
+    final messagesAnalyzed = report['messagesAnalyzed'] ?? report['messages_analyzed'] ?? totalMessages;
+    final bool fewMessages = messagesAnalyzed < 20;
 
     return Scaffold(
       appBar: AppBar(
@@ -1055,6 +1291,34 @@ class DetailedReportScreen extends StatelessWidget {
       body: ListView(
         padding: EdgeInsets.all(20),
         children: [
+          // ⚠️ Advertencia si pocos mensajes analizados
+          if (fewMessages) ...[
+            Container(
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.orange.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.orange.withOpacity(0.3)),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.orange, size: 20),
+                  SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Este reporte se basó en $messagesAnalyzed mensajes. Con pocos mensajes, el análisis puede ser menos preciso.',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.orange.shade800,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            SizedBox(height: 16),
+          ],
+
           // Título y periodo
           Text(
             'Reporte Semanal',
@@ -1091,18 +1355,29 @@ class DetailedReportScreen extends StatelessWidget {
                 Text(
                   'Estado de ánimo general',
                   style: TextStyle(
-                    fontSize: 16,
-                    color: colorScheme.onPrimaryContainer,
+                    fontSize: 14,
+                    color: colorScheme.onPrimaryContainer.withValues(alpha: 0.8),
                   ),
                 ),
                 SizedBox(height: 8),
-                Text(
-                  report['moodStatus'] ?? 'neutral',
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w600,
-                    color: colorScheme.onPrimaryContainer,
-                  ),
+                Builder(
+                  builder: (context) {
+                    final moodText = report['moodStatus'] ?? 'neutral';
+                    // Ajustar tamaño de fuente según longitud del texto
+                    final fontSize = moodText.length > 30 ? 16.0 : (moodText.length > 15 ? 18.0 : 20.0);
+                    return Text(
+                      moodText,
+                      style: TextStyle(
+                        fontSize: fontSize,
+                        fontWeight: FontWeight.w600,
+                        color: colorScheme.onPrimaryContainer,
+                        height: 1.3,
+                      ),
+                      textAlign: TextAlign.center,
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                    );
+                  },
                 ),
               ],
             ),

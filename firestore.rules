@@ -1348,7 +1348,11 @@ service cloud.firestore {
       allow read: if request.auth != null &&
         (resource.data.childId == request.auth.uid ||
          resource.data.parentId == request.auth.uid);
-      allow write: if false; // Solo Cloud Functions pueden escribir
+      // Solo Cloud Functions pueden crear/actualizar
+      allow create, update: if false;
+      // El padre puede eliminar sus propios reportes
+      allow delete: if request.auth != null &&
+        resource.data.parentId == request.auth.uid;
     }
 
     // Pending reports - Reportes en proceso de generación

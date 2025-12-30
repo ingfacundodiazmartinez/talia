@@ -96,6 +96,9 @@ class GroupChatController {
   /// Get member count
   int get memberCount => _group?.memberCount ?? 0;
 
+  /// Get group avatar URL
+  String? get groupAvatar => _group?.avatar;
+
   /// Check if current user is admin
   bool isAdmin(String userId) => _group?.isAdmin(userId) ?? false;
 

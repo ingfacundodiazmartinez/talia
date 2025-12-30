@@ -122,7 +122,7 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
     if (!_controller.isUserAuthenticated) {
       return Scaffold(
         appBar: AppBar(
-          title: Text('Alertas de ${widget.childName}'),
+          title: Text('Notificaciones de ${widget.childName}'),
           backgroundColor: Color(0xFF9D7FE8),
           foregroundColor: Colors.white,
         ),
@@ -134,7 +134,7 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Alertas de ${widget.childName}'),
+        title: Text('Notificaciones de ${widget.childName}'),
         backgroundColor: Color(0xFF9D7FE8),
         foregroundColor: Colors.white,
         actions: [
@@ -288,97 +288,132 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
     final notifStyle = _controller.getNotificationStyle(type, priority);
     final colorScheme = Theme.of(context).colorScheme;
 
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
     return Opacity(
-      opacity: isRead ? 0.7 : 1.0,
-      child: Card(
-        margin: EdgeInsets.only(bottom: 8),
-        elevation: isRead ? 0 : 1,
-        color: isRead ? colorScheme.surface : colorScheme.surfaceContainerHighest,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(10),
-          side: BorderSide(
-            color: isRead ? Colors.grey.shade200 : notifStyle.color.withValues(alpha: 0.3),
-            width: isRead ? 0.5 : 1,
-          ),
+      opacity: isRead ? 0.75 : 1.0,
+      child: Container(
+        margin: EdgeInsets.only(bottom: 10),
+        decoration: BoxDecoration(
+          color: isDarkMode ? colorScheme.surfaceContainerHighest : colorScheme.surface,
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: isDarkMode ? 0.2 : 0.06),
+              blurRadius: 8,
+              offset: Offset(0, 2),
+            ),
+          ],
         ),
-        child: InkWell(
-          onTap: () => _handleCachedNotificationTap(notificationId, type, notifData, isRead),
-          borderRadius: BorderRadius.circular(10),
-          child: Padding(
-            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: InkWell(
+            onTap: () => _handleCachedNotificationTap(notificationId, type, notifData, isRead),
+            borderRadius: BorderRadius.circular(14),
             child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Icono compacto
-                Icon(
-                  notifStyle.icon,
-                  color: notifStyle.color,
-                  size: 22,
+                // Indicador lateral de color
+                Container(
+                  width: 4,
+                  height: 76,
+                  color: isRead ? Colors.grey.shade400 : notifStyle.color,
                 ),
-                SizedBox(width: 10),
                 // Contenido principal
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Primera línea: Label + timestamp
-                      Row(
-                        children: [
-                          Text(
-                            notifStyle.label,
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: notifStyle.color,
-                            ),
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        // Icono en círculo sutil
+                        Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: colorScheme.primaryContainer.withValues(alpha: 0.5),
+                            borderRadius: BorderRadius.circular(10),
                           ),
-                          Spacer(),
-                          if (createdAt != null)
-                            Text(
-                              _controller.formatCachedTimestamp(createdAt),
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: colorScheme.onSurface.withValues(alpha: 0.5),
-                              ),
-                            ),
-                          // Indicador de no leída (punto)
-                          if (!isRead) ...[
-                            SizedBox(width: 6),
-                            Container(
-                              width: 8,
-                              height: 8,
-                              decoration: BoxDecoration(
-                                color: notifStyle.color,
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                      SizedBox(height: 4),
-                      // Título y body combinados
-                      Text(
-                        body.isNotEmpty ? body : title,
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: isRead ? FontWeight.normal : FontWeight.w500,
-                          color: colorScheme.onSurface.withValues(alpha: 0.9),
+                          child: Icon(
+                            notifStyle.icon,
+                            color: colorScheme.onPrimaryContainer,
+                            size: 20,
+                          ),
                         ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
+                        SizedBox(width: 12),
+                        // Contenido principal
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // Primera línea: Título + timestamp
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      notifStyle.label,
+                                      style: TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w600,
+                                        color: colorScheme.onSurface,
+                                      ),
+                                    ),
+                                  ),
+                                  if (createdAt != null)
+                                    Text(
+                                      _controller.formatCachedTimestamp(createdAt),
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                              SizedBox(height: 4),
+                              // Body/descripción
+                              Text(
+                                body.isNotEmpty ? body : title,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: colorScheme.onSurfaceVariant,
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              // Indicador de no leída
+                              if (!isRead) ...[
+                                SizedBox(height: 6),
+                                Container(
+                                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: notifStyle.color.withValues(alpha: 0.15),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Text(
+                                    'Nueva',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                      color: notifStyle.color,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                        // Flecha de acción
+                        if (_controller.hasAction(type)) ...[
+                          SizedBox(width: 8),
+                          Icon(
+                            Icons.chevron_right,
+                            color: colorScheme.outlineVariant,
+                            size: 22,
+                          ),
+                        ],
+                      ],
+                    ),
                   ),
                 ),
-                // Flecha de acción sutil
-                if (_controller.hasAction(type)) ...[
-                  SizedBox(width: 8),
-                  Icon(
-                    Icons.chevron_right,
-                    color: colorScheme.onSurface.withValues(alpha: 0.3),
-                    size: 20,
-                  ),
-                ],
               ],
             ),
           ),

@@ -27,6 +27,7 @@ import '../../utils/release_logger.dart';
 import '../../services/local_unread_count_service.dart';
 import '../../services/notification_tracking_service.dart';
 import '../../screens/chat/widgets/recording_indicator.dart';
+import '../../widgets/profile_photo_viewer.dart';
 
 /// Chat screen for Groups V2
 ///
@@ -533,21 +534,36 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
             }
           });
         },
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Row(
           children: [
-            Text(
-              _controller.groupName,
-              style: const TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-              ),
+            // Group avatar
+            ClickableAvatar(
+              photoUrl: _controller.groupAvatar,
+              name: _controller.groupName,
+              radius: 18,
             ),
-            Text(
-              '${_controller.memberCount} miembros',
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.white.withValues(alpha: 0.8),
+            const SizedBox(width: 12),
+            // Group name and member count
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _controller.groupName,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  Text(
+                    '${_controller.memberCount} miembros',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.white.withValues(alpha: 0.8),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],

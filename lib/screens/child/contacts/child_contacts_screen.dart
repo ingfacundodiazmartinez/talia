@@ -7,6 +7,7 @@ import '../../../models/contact.dart' as contact_model;
 import '../../../screens/add_contact_screen.dart';
 import '../../../screens/chat_detail_screen.dart';
 import '../../../widgets/contacts/contacts_permission_banner.dart';
+import '../../../theme_service.dart';
 
 /// Pantalla de contactos para niños
 ///
@@ -95,71 +96,123 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
-      appBar: _buildAppBar(colorScheme, isDarkMode),
-      body: Column(
-        children: [
-          _buildSearchBar(colorScheme, isDarkMode),
-          ContactsPermissionBanner(
-            onRequestPermission: _handleSync,
-            onPermissionChanged: _handleSync,
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              context.customColors.gradientStart,
+              context.customColors.gradientEnd,
+            ],
           ),
-          Expanded(
-            child: _buildContactsList(colorScheme),
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => Navigator.push(
-          context,
-          MaterialPageRoute(builder: (context) => AddContactScreen()),
         ),
-        backgroundColor: colorScheme.primary,
-        foregroundColor: colorScheme.onPrimary,
-        child: Icon(Icons.person_add),
-      ),
-    );
-  }
-
-  PreferredSizeWidget _buildAppBar(ColorScheme colorScheme, bool isDarkMode) {
-    return AppBar(
-      title: Text('Mis Contactos'),
-      backgroundColor: isDarkMode ? colorScheme.surface : colorScheme.primary,
-      foregroundColor: isDarkMode ? colorScheme.onSurface : colorScheme.onPrimary,
-      actions: [
-        IconButton(
-          onPressed: _isSyncing ? null : _handleSync,
-          icon: _isSyncing
-              ? SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: isDarkMode ? colorScheme.onSurface : colorScheme.onPrimary,
+        child: SafeArea(
+          child: Column(
+            children: [
+              // Header con título (igual que parent)
+              Padding(
+                padding: EdgeInsets.all(20),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Mis Contactos',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 28,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          'Tus amigos y familiares',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.8),
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                    Row(
+                      children: [
+                        // Botón de sincronizar contactos
+                        IconButton(
+                          icon: _isSyncing
+                              ? SizedBox(
+                                  width: 24,
+                                  height: 24,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : Icon(Icons.sync, color: Colors.white, size: 26),
+                          onPressed: _isSyncing ? null : _handleSync,
+                          padding: EdgeInsets.all(8),
+                          tooltip: 'Sincronizar contactos',
+                        ),
+                        // Botón de agregar contacto
+                        IconButton(
+                          icon: Icon(Icons.person_add, color: Colors.white, size: 26),
+                          onPressed: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(builder: (context) => AddContactScreen()),
+                            );
+                          },
+                          padding: EdgeInsets.all(8),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              // Contenido con esquinas redondeadas
+              Expanded(
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: colorScheme.surface,
+                    borderRadius: BorderRadius.only(
+                      topLeft: Radius.circular(30),
+                      topRight: Radius.circular(30),
+                    ),
                   ),
-                )
-              : Icon(Icons.refresh),
-          tooltip: 'Sincronizar contactos',
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.only(
+                      topLeft: Radius.circular(30),
+                      topRight: Radius.circular(30),
+                    ),
+                    child: Column(
+                      children: [
+                        _buildSearchBar(colorScheme),
+                        ContactsPermissionBanner(
+                          onRequestPermission: _handleSync,
+                          onPermissionChanged: _handleSync,
+                        ),
+                        Expanded(
+                          child: _buildContactsList(colorScheme),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
-      ],
+      ),
     );
   }
 
-  Widget _buildSearchBar(ColorScheme colorScheme, bool isDarkMode) {
+  Widget _buildSearchBar(ColorScheme colorScheme) {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
     return Container(
       padding: EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: colorScheme.surface,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 10,
-            offset: Offset(0, 4),
-          ),
-        ],
-      ),
       child: TextField(
         onChanged: (value) => _controller.setSearchQuery(value),
         decoration: InputDecoration(
@@ -711,50 +764,68 @@ class _ContactItemCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final indicatorColor = _getIndicatorColor();
+
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        margin: EdgeInsets.only(bottom: 12),
-        padding: EdgeInsets.all(16),
+        margin: EdgeInsets.only(bottom: 10),
         decoration: BoxDecoration(
-          color: colorScheme.surface,
-          borderRadius: BorderRadius.circular(16),
-          border: _getBorder(),
+          color: isDarkMode ? colorScheme.surfaceContainerHighest : colorScheme.surface,
+          borderRadius: BorderRadius.circular(14),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.05),
-              blurRadius: 10,
-              offset: Offset(0, 4),
+              color: Colors.black.withValues(alpha: isDarkMode ? 0.2 : 0.06),
+              blurRadius: 8,
+              offset: Offset(0, 2),
             ),
           ],
         ),
-        child: Row(
-          children: [
-            _buildAvatar(),
-            SizedBox(width: 16),
-            Expanded(child: _buildInfo()),
-            _buildTrailing(),
-          ],
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: Row(
+            children: [
+              // Indicador lateral de color (solo si tiene estado especial)
+              if (indicatorColor != null)
+                Container(
+                  width: 4,
+                  height: 80,
+                  color: indicatorColor,
+                ),
+              // Contenido principal
+              Expanded(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  child: Row(
+                    children: [
+                      _buildAvatar(),
+                      SizedBox(width: 14),
+                      Expanded(child: _buildInfo()),
+                      _buildTrailing(),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Border? _getBorder() {
+  Color? _getIndicatorColor() {
     switch (status) {
       case 'pending':
-        return Border.all(color: Colors.amber.shade600, width: 2);
+        return Colors.amber.shade600;
       case 'pending_other':
-        return Border.all(color: Colors.blue.shade400, width: 2);
+        return Colors.blue.shade400;
       case 'rejected':
-        return Border.all(
-          color: isSelfCancelled ? Colors.orange.shade400 : Colors.red.shade300,
-          width: 2,
-        );
+        return isSelfCancelled ? Colors.orange.shade400 : Colors.red.shade400;
       case 'potential':
-        return Border.all(color: Colors.teal.shade400, width: 2);
+        return Colors.teal.shade400;
       case 'revoked':
-        return Border.all(color: Colors.grey.shade400, width: 1);
+        return Colors.grey.shade400;
       default:
         return null;
     }
