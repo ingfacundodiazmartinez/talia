@@ -229,6 +229,7 @@ exports.cleanupOldStickers = stickerFunctions.cleanupOldStickers;
 
 // Stories
 exports.onStoryApprovalRequestCreated = stories.onStoryApprovalRequestCreated;
+exports.onStoryDeleted = stories.onStoryDeleted;
 exports.replyToStory = stories.replyToStory;
 exports.likeStory = stories.likeStory;
 exports.getStoryPreview = stories.getStoryPreview;

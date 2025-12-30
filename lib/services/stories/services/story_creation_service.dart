@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 
 import '../repositories/story_repository.dart';
@@ -127,8 +128,59 @@ class StoryCreationService {
       if (story != null) {
         _cacheManager.removeOptimisticStory(story.userId, storyId);
       }
+
+      // 5. ✅ FIX: Limpiar story_approval_requests asociados
+      // Esto evita que el padre vea solicitudes para historias eliminadas
+      await _cleanupStoryApprovalRequests(storyId);
     } catch (e) {
       throw Exception('Error eliminando historia: $e');
+    }
+  }
+
+  /// Limpiar solicitudes de aprobación y notificaciones asociadas a una historia eliminada
+  Future<void> _cleanupStoryApprovalRequests(String storyId) async {
+    try {
+      final firestore = FirebaseFirestore.instance;
+      final batch = firestore.batch();
+      int cleanedCount = 0;
+
+      // 1. Eliminar story_approval_requests
+      final approvalRequests = await firestore
+          .collection('story_approval_requests')
+          .where('storyId', isEqualTo: storyId)
+          .get();
+
+      for (final doc in approvalRequests.docs) {
+        batch.delete(doc.reference);
+        cleanedCount++;
+      }
+
+      // 2. Eliminar notificaciones asociadas
+      final notifications = await firestore
+          .collection('notifications')
+          .where('type', isEqualTo: 'story_approval_request')
+          .where('data.storyId', isEqualTo: storyId)
+          .get();
+
+      for (final doc in notifications.docs) {
+        batch.delete(doc.reference);
+        cleanedCount++;
+      }
+
+      if (cleanedCount > 0) {
+        await batch.commit();
+        ReleaseLogger.log(
+          'Cleanup: ${approvalRequests.docs.length} requests, ${notifications.docs.length} notificaciones para historia $storyId',
+          tag: 'StoryCreation',
+        );
+      }
+    } catch (e) {
+      // No fallar la eliminación principal si esto falla
+      // El trigger onStoryDeleted en Cloud Functions es el safety net
+      ReleaseLogger.error(
+        'Error en cleanup (trigger CF lo reintentará): $e',
+        tag: 'StoryCreation',
+      );
     }
   }
 

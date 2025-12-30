@@ -7,6 +7,7 @@ import '../controllers/story_camera_controller.dart';
 import '../theme_service.dart';
 import '../models/character.dart';
 import '../services/deepar_service.dart';
+import '../services/ad_service.dart';
 import '../utils/release_logger.dart';
 import '../widgets/permission_dialog.dart';
 import '../widgets/character_selector_dialog.dart';
@@ -33,6 +34,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   // ✅ CORRECTO: Solo controller y estado UI local
   late StoryCameraController _controller;
+  final AdService _adService = AdService();
 
   // Estado UI únicamente
   bool _isVideoMode = false; // Estado para modo foto/video
@@ -74,6 +76,9 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
     // Inicializar controller
     _controller.initialize(context: context);
+
+    // ✅ Pre-cargar rewarded ad para face-swap
+    _adService.loadRewardedAd();
   }
 
   /// Cargar estado de uso de face-swap
@@ -209,6 +214,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   /// Mostrar selector de personajes para Face Swap
   Future<void> _showFaceSwapSelector() async {
+    // Mostrar selector de personajes directamente
     final selectedCharacter = await showDialog<Character>(
       context: context,
       builder: (context) => const CharacterSelectorDialog(),
@@ -245,6 +251,77 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   Future<void> _processFaceSwapPhoto(String imagePath) async {
     final character = _selectedFaceSwapCharacter;
     if (character == null) return;
+
+    // ✅ Mostrar rewarded ad DESPUÉS de tomar la foto, ANTES de llamar a CF
+    final canShowAds = await _adService.canShowAds();
+    if (canShowAds) {
+      // Mostrar diálogo explicativo
+      final shouldContinue = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          backgroundColor: Colors.grey[900],
+          title: Row(
+            children: [
+              Icon(Icons.face_retouching_natural, color: Color(0xFF9D7FE8), size: 28),
+              SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Transformar foto',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+          content: Text(
+            'Mira un breve video para transformarte en ${character.name}.',
+            style: TextStyle(fontSize: 15, color: Colors.white70),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text('Cancelar', style: TextStyle(color: Colors.grey)),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Color(0xFF9D7FE8),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              child: Text('Ver video'),
+            ),
+          ],
+        ),
+      );
+
+      if (shouldContinue != true) {
+        // Usuario canceló, limpiar selección
+        setState(() {
+          _selectedFaceSwapCharacter = null;
+        });
+        return;
+      }
+
+      // Mostrar rewarded ad
+      final rewarded = await _adService.showRewardedAd();
+      if (!rewarded) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Debes ver el video completo para usar Face Swap'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+          // Limpiar selección
+          setState(() {
+            _selectedFaceSwapCharacter = null;
+          });
+        }
+        return;
+      }
+    }
 
     try {
       // Usar el método del controller para procesar con el personaje seleccionado

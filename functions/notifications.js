@@ -136,8 +136,23 @@ exports.sendNotificationOnCreate = onDocumentCreated(
 
       const isChatMessage = type === 'chat_message' || type === 'group_message';
 
+      // ✅ FIX: Tipos de notificación que deben mostrarse como alerta visible
+      // Incluye aprobaciones parentales, emergencias, y otras notificaciones importantes
+      const ALERT_NOTIFICATION_TYPES = [
+        'chat_message',
+        'group_message',
+        'story_approval_request',      // Solicitud de aprobación de historia
+        'contact_approval_request',    // Solicitud de aprobación de contacto
+        'group_approval_request',      // Solicitud de aprobación de grupo
+        'emergency_alert',             // Alertas de emergencia
+        'child_location_request',      // Solicitud de ubicación
+        'parent_child_link',           // Vinculación padre-hijo
+      ];
+
+      const shouldShowAlert = ALERT_NOTIFICATION_TYPES.includes(type);
+
       // ✅ FIX #4: Build apsPayload conditionally based on user preferences
-      const apsPayload = isChatMessage
+      const apsPayload = shouldShowAlert
         ? {
             alert: { title: title || "Talia", body: body || "" },
             // ✅ Only include sound if user has sound enabled
@@ -153,8 +168,8 @@ exports.sendNotificationOnCreate = onDocumentCreated(
         priority: "high",
       };
 
-      // Only add notification block for chat messages (for custom sound/vibration)
-      if (isChatMessage) {
+      // Only add notification block for alert notifications (for custom sound/vibration)
+      if (shouldShowAlert) {
         // ✅ Select channel based on combination of sound/vibration preferences
         let channelId;
         if (notificationPrefs.soundEnabled && notificationPrefs.vibrationEnabled) {
@@ -183,7 +198,7 @@ exports.sendNotificationOnCreate = onDocumentCreated(
         apns: {
           headers: {
             "apns-priority": "10",
-            "apns-push-type": isChatMessage ? "alert" : "background",
+            "apns-push-type": shouldShowAlert ? "alert" : "background",
           },
           payload: {
             aps: apsPayload,
@@ -198,7 +213,7 @@ exports.sendNotificationOnCreate = onDocumentCreated(
         },
       };
 
-      console.log(`📦 [NotificationTrigger] ${isChatMessage ? 'ALERT+NSE' : 'DATA-ONLY'} message`);
+      console.log(`📦 [NotificationTrigger] ${shouldShowAlert ? 'ALERT+NSE' : 'DATA-ONLY'} message (type: ${type})`);
 
       // Enviar notificación
       const response = await getMessaging().sendEachForMulticast(message);
@@ -487,8 +502,22 @@ exports.sendInstantPushNotification = onCall(
 
       const isChatMessage = type === 'chat_message' || type === 'group_message';
 
+      // ✅ FIX: Tipos de notificación que deben mostrarse como alerta visible
+      const ALERT_NOTIFICATION_TYPES = [
+        'chat_message',
+        'group_message',
+        'story_approval_request',
+        'contact_approval_request',
+        'group_approval_request',
+        'emergency_alert',
+        'child_location_request',
+        'parent_child_link',
+      ];
+
+      const shouldShowAlert = ALERT_NOTIFICATION_TYPES.includes(type);
+
       // ✅ FIX #4: Build apsPayload conditionally based on user preferences
-      const apsPayload = isChatMessage
+      const apsPayload = shouldShowAlert
         ? {
             alert: { title: finalTitle, body: finalBody },
             // ✅ Only include sound if user has sound enabled
@@ -504,8 +533,8 @@ exports.sendInstantPushNotification = onCall(
         priority: "high",
       };
 
-      // Only add notification block for chat messages (for custom sound/vibration)
-      if (isChatMessage) {
+      // Only add notification block for alert notifications (for custom sound/vibration)
+      if (shouldShowAlert) {
         // ✅ Select channel based on combination of sound/vibration preferences
         let channelId;
         if (notificationPrefs.soundEnabled && notificationPrefs.vibrationEnabled) {
@@ -539,7 +568,7 @@ exports.sendInstantPushNotification = onCall(
         apns: {
           headers: {
             "apns-priority": "10",
-            "apns-push-type": isChatMessage ? "alert" : "background",
+            "apns-push-type": shouldShowAlert ? "alert" : "background",
           },
           payload: {
             aps: apsPayload,
@@ -555,7 +584,7 @@ exports.sendInstantPushNotification = onCall(
         android: androidConfig,
       };
 
-      console.log(`📦 [INSTANT PUSH] ${isChatMessage ? 'ALERT+NSE' : 'DATA-ONLY'} message`);
+      console.log(`📦 [INSTANT PUSH] ${shouldShowAlert ? 'ALERT+NSE' : 'DATA-ONLY'} message (type: ${type})`);
 
       // ✅ Enviar FCM solo si hay tokens disponibles
       let fcmResponse = null;

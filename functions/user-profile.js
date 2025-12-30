@@ -543,6 +543,22 @@ exports.onUserRegistered = onDocumentCreated(
             phonesMap[childUserId] = childUserData.phone;
           }
 
+          // Obtener IDs de padres vinculados del niño
+          const childParentIds = parentLinks.docs.map(doc => doc.data().parentId);
+
+          // Determinar roles efectivos y requisitos de aprobación
+          // El nuevo usuario (userId) no tiene padres vinculados aún
+          // El child (childUserId) tiene padres vinculados
+          const newUserEffectiveRole = (userRole === 'parent' || userRole === 'adult') ? userRole : 'adult';
+          const childEffectiveRole = 'child'; // child con padres vinculados
+
+          // Matriz de aprobación:
+          // - Si nuevo usuario es adult/parent y el otro es child → requiere aprobación del padre del child
+          // - Si nuevo usuario es child, nunca debería llegar aquí (no tendría padres aún)
+          const needsInitiatorApproval = false; // El nuevo usuario nunca es child con padres en este contexto
+          const needsTargetApproval = true; // El child necesita aprobación de su padre
+          const approvalType = 'single_parent';
+
           batch.set(contactRef, {
             users: users,
             status: "potential",
@@ -552,9 +568,20 @@ exports.onUserRegistered = onDocumentCreated(
             phones: phonesMap,
             // Solo el niño que tiene al nuevo usuario en su agenda puede ver este contacto
             discoveredBy: childUserId,
+            // ✅ FIX: Campos necesarios para RequestContactApprovalService
+            user1Name: users[0] === userId ? userName : childUserData.name || "Usuario",
+            user2Name: users[1] === userId ? userName : childUserData.name || "Usuario",
+            user1Parents: users[0] === userId ? [] : childParentIds,
+            user2Parents: users[1] === userId ? [] : childParentIds,
+            user1EffectiveRole: users[0] === userId ? newUserEffectiveRole : childEffectiveRole,
+            user2EffectiveRole: users[1] === userId ? newUserEffectiveRole : childEffectiveRole,
+            needsInitiatorApproval: needsInitiatorApproval,
+            needsTargetApproval: needsTargetApproval,
+            approvalType: approvalType,
+            parentViewers: childParentIds,
           });
           potentialCreated++;
-          console.log(`   💡 Contacto POTENTIAL creado: ${userName} <-> ${childUserData.name} (visible solo para ${childUserData.name})`);
+          console.log(`   💡 Contacto POTENTIAL creado: ${userName} <-> ${childUserData.name} (visible solo para ${childUserData.name}, requiere aprobación de ${childParentIds.length} padre(s))`);
         } else {
           // Niño sin padre → auto-aprobar
           batch.set(contactRef, {

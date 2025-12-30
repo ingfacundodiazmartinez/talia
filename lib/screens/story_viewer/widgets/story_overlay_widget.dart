@@ -161,6 +161,9 @@ class StoryOverlayWidget extends StatelessWidget {
               // Mostrar likes si es la historia del usuario actual y tiene likes
               _buildLikesSection(context, currentStory, isCurrentUser),
 
+              // Mostrar vistas si es la historia del usuario actual
+              _buildViewedBySection(context, currentStory, isCurrentUser),
+
               // Mostrar respuestas si es la historia del usuario actual y tiene respuestas
               _buildResponsesSection(context, currentStory, isCurrentUser),
 
@@ -209,6 +212,62 @@ class StoryOverlayWidget extends StatelessWidget {
                 currentStory.likesCount == 1
                     ? 'Le gustó a 1 persona'
                     : 'Les gustó a ${currentStory.likesCount} personas',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  shadows: [
+                    Shadow(
+                      color: Colors.black.withValues(alpha: 0.5),
+                      blurRadius: 4,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildViewedBySection(BuildContext context, Story currentStory, bool isCurrentUser) {
+    if (!isCurrentUser || currentStory.viewedBy.isEmpty) {
+      return SizedBox.shrink();
+    }
+
+    // Filtrar el propio usuario de la lista de vistas
+    final viewedByOthers = currentStory.viewedBy
+        .where((id) => id != controller.currentUserId)
+        .toList();
+
+    if (viewedByOthers.isEmpty) {
+      return SizedBox.shrink();
+    }
+
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 16),
+      margin: EdgeInsets.only(bottom: 8),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTapDown: (_) {},
+        onTapUp: (_) {},
+        onTap: () => _showViewedByBottomSheet(context, viewedByOthers),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.start,
+          children: [
+            // Stacked avatars (up to 3)
+            _StackedAvatarsWidget(
+              userIds: viewedByOthers.take(3).toList(),
+              size: 24,
+            ),
+            SizedBox(width: 8),
+            // View count text with shadow
+            Flexible(
+              child: Text(
+                viewedByOthers.length == 1
+                    ? 'Visto por 1 persona'
+                    : 'Visto por ${viewedByOthers.length} personas',
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 14,
@@ -450,6 +509,68 @@ class StoryOverlayWidget extends StatelessWidget {
               ),
             ),
             SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+
+    // Resumir el timer cuando se cierra el bottom sheet
+    onResumeTimer?.call();
+  }
+
+  Future<void> _showViewedByBottomSheet(BuildContext context, List<String> viewedByIds) async {
+    // Pausar el timer mientras se muestra el bottom sheet
+    onPauseTimer?.call();
+
+    await showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => Container(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.6,
+        ),
+        decoration: BoxDecoration(
+          color: Color(0xFF262626),
+          borderRadius: BorderRadius.only(
+            topLeft: Radius.circular(12),
+            topRight: Radius.circular(12),
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              margin: EdgeInsets.only(top: 8),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade600,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                children: [
+                  Icon(Icons.visibility, color: Colors.white, size: 20),
+                  SizedBox(width: 8),
+                  Text(
+                    'Visto por ${viewedByIds.length}',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Divider(color: Colors.grey.shade800, height: 1),
+            Flexible(
+              child: _ViewedByListWidget(viewedByIds: viewedByIds),
+            ),
+            SizedBox(height: MediaQuery.of(context).padding.bottom + 8),
           ],
         ),
       ),
@@ -747,6 +868,127 @@ class _LikesListWidget extends StatelessWidget {
       // Fetch users in chunks of 10 (Firestore whereIn limit)
       for (int i = 0; i < likedByIds.length; i += 10) {
         final chunk = likedByIds.skip(i).take(10).toList();
+        final snapshot = await firestore
+            .collection('users')
+            .where(FieldPath.documentId, whereIn: chunk)
+            .get();
+
+        for (final doc in snapshot.docs) {
+          users.add({
+            'id': doc.id,
+            ...doc.data(),
+          });
+        }
+      }
+
+      return users;
+    } catch (e) {
+      return [];
+    }
+  }
+}
+
+/// Widget para mostrar la lista de usuarios que vieron la historia
+class _ViewedByListWidget extends StatelessWidget {
+  final List<String> viewedByIds;
+
+  const _ViewedByListWidget({required this.viewedByIds});
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _fetchUsers(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return Center(
+            child: Padding(
+              padding: EdgeInsets.all(32),
+              child: CircularProgressIndicator(
+                color: Colors.white,
+                strokeWidth: 2,
+              ),
+            ),
+          );
+        }
+
+        final users = snapshot.data ?? [];
+        if (users.isEmpty) {
+          return Center(
+            child: Padding(
+              padding: EdgeInsets.all(32),
+              child: Text(
+                'No se pudieron cargar los usuarios',
+                style: TextStyle(
+                  color: Colors.grey.shade500,
+                  fontSize: 14,
+                ),
+              ),
+            ),
+          );
+        }
+
+        return ListView.builder(
+          shrinkWrap: true,
+          padding: EdgeInsets.symmetric(vertical: 8),
+          itemCount: users.length,
+          itemBuilder: (context, index) {
+            final user = users[index];
+            final userName = user['displayName'] ?? user['name'] ?? 'Usuario';
+            final userPhotoURL = user['photoURL'] as String?;
+
+            return Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    radius: 20,
+                    backgroundColor: Colors.grey.shade800,
+                    backgroundImage: userPhotoURL != null
+                        ? CachedNetworkImageProvider(userPhotoURL)
+                        : null,
+                    child: userPhotoURL == null
+                        ? Text(
+                            userName.isNotEmpty ? userName[0].toUpperCase() : '?',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          )
+                        : null,
+                  ),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      userName,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w500,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                  Icon(
+                    Icons.visibility,
+                    color: Colors.grey.shade600,
+                    size: 16,
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchUsers() async {
+    try {
+      final firestore = FirebaseFirestore.instance;
+      final users = <Map<String, dynamic>>[];
+
+      for (int i = 0; i < viewedByIds.length; i += 10) {
+        final chunk = viewedByIds.skip(i).take(10).toList();
         final snapshot = await firestore
             .collection('users')
             .where(FieldPath.documentId, whereIn: chunk)

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_database/firebase_database.dart';
 
 import '../../../models/story.dart';
 import '../../../utils/release_logger.dart';
@@ -16,11 +17,48 @@ class StoryRepository {
   final FirebaseFirestore _firestore;
   final FirebaseAuth _auth;
 
+  /// Cache del offset de tiempo del servidor (en millisegundos)
+  static int _serverTimeOffset = 0;
+  static DateTime? _lastOffsetFetch;
+
   StoryRepository({
     required FirebaseFirestore firestore,
     required FirebaseAuth auth,
   }) : _firestore = firestore,
-       _auth = auth;
+       _auth = auth {
+    // Inicializar offset al crear el repository
+    _refreshServerTimeOffset();
+  }
+
+  /// Refrescar offset del servidor desde RTDB
+  Future<void> _refreshServerTimeOffset() async {
+    // Solo refrescar cada 5 minutos
+    if (_lastOffsetFetch != null &&
+        DateTime.now().difference(_lastOffsetFetch!) < Duration(minutes: 5)) {
+      return;
+    }
+
+    try {
+      final snapshot = await FirebaseDatabase.instance
+          .ref('.info/serverTimeOffset')
+          .get();
+      _serverTimeOffset = (snapshot.value as int?) ?? 0;
+      _lastOffsetFetch = DateTime.now();
+      ReleaseLogger.log(
+        '⏰ [StoryRepository] Server time offset: ${_serverTimeOffset}ms',
+        tag: 'StoryRepository',
+      );
+    } catch (e) {
+      ReleaseLogger.error(
+        '❌ [StoryRepository] Error fetching server time offset: $e',
+        tag: 'StoryRepository',
+      );
+    }
+  }
+
+  /// Obtener tiempo actual del servidor
+  DateTime get _serverNow =>
+      DateTime.now().add(Duration(milliseconds: _serverTimeOffset));
 
   // ═══════════════════════════════════════════════════════════════
   // BASIC CRUD OPERATIONS
@@ -662,9 +700,11 @@ class StoryRepository {
   // HELPER METHODS
   // ═══════════════════════════════════════════════════════════════
 
-  /// Obtener timestamp de hace 24 horas
+  /// Obtener timestamp de hace 24 horas (usando tiempo del servidor)
   Timestamp _get24HoursAgo() {
-    final twentyFourHoursAgo = DateTime.now().subtract(Duration(hours: 24));
+    // Refrescar offset en background si es necesario
+    _refreshServerTimeOffset();
+    final twentyFourHoursAgo = _serverNow.subtract(Duration(hours: 24));
     return Timestamp.fromDate(twentyFourHoursAgo);
   }
 

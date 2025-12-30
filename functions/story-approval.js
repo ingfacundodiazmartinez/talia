@@ -59,10 +59,15 @@ exports.approveStory = onCall({
 
     // 5. Aprobar historia (transacción atómica)
     await db.runTransaction(async (transaction) => {
+      // Calcular expiresAt: 24 horas desde AHORA (momento de aprobación)
+      const now = new Date();
+      const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+
       const updateData = {
         status: 'approved',
         approvedAt: FieldValue.serverTimestamp(),
         approvedBy: auth.uid,
+        expiresAt: expiresAt, // 24h desde aprobación, no desde creación
         updatedAt: FieldValue.serverTimestamp(),
       };
 

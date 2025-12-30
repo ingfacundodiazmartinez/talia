@@ -1306,6 +1306,7 @@ PODS:
     - SwiftyGif
   - emoji_picker_flutter (0.0.1):
     - Flutter
+  - FBAudienceNetwork (6.16.0)
   - file_picker (0.0.1):
     - DKImagePickerController/PhotoGallery
     - Flutter
@@ -1539,6 +1540,9 @@ PODS:
   - geolocator_apple (1.2.0):
     - Flutter
     - FlutterMacOS
+  - gma_mediation_meta (1.1.0):
+    - Flutter
+    - GoogleMobileAdsMediationFacebook (~> 6.16.0.0)
   - Google-Maps-iOS-Utils (6.1.0):
     - GoogleMaps (~> 9.0)
   - Google-Mobile-Ads-SDK (11.13.0):
@@ -1596,6 +1600,9 @@ PODS:
     - MLKitFaceDetection (~> 6.0.0)
   - GoogleMLKit/MLKitCore (7.0.0):
     - MLKitCommon (~> 12.0.0)
+  - GoogleMobileAdsMediationFacebook (6.16.0.0):
+    - FBAudienceNetwork (= 6.16.0)
+    - Google-Mobile-Ads-SDK (~> 11.0)
   - GoogleToolboxForMac/Defines (4.2.1)
   - GoogleToolboxForMac/Logger (4.2.1):
     - GoogleToolboxForMac/Defines (= 4.2.1)
@@ -1852,6 +1859,7 @@ DEPENDENCIES:
   - flutter_secure_storage (from `.symlinks/plugins/flutter_secure_storage/ios`)
   - gal (from `.symlinks/plugins/gal/darwin`)
   - geolocator_apple (from `.symlinks/plugins/geolocator_apple/darwin`)
+  - gma_mediation_meta (from `.symlinks/plugins/gma_mediation_meta/ios`)
   - google_maps_flutter_ios (from `.symlinks/plugins/google_maps_flutter_ios/ios`)
   - google_mlkit_commons (from `.symlinks/plugins/google_mlkit_commons/ios`)
   - google_mlkit_face_detection (from `.symlinks/plugins/google_mlkit_face_detection/ios`)
@@ -1890,6 +1898,7 @@ SPEC REPOS:
     - DeepAR
     - DKImagePickerController
     - DKPhotoGallery
+    - FBAudienceNetwork
     - Firebase
     - FirebaseABTesting
     - FirebaseAnalytics
@@ -1921,6 +1930,7 @@ SPEC REPOS:
     - GoogleDataTransport
     - GoogleMaps
     - GoogleMLKit
+    - GoogleMobileAdsMediationFacebook
     - GoogleToolboxForMac
     - GoogleUserMessagingPlatform
     - GoogleUtilities
@@ -2009,6 +2019,8 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/gal/darwin"
   geolocator_apple:
     :path: ".symlinks/plugins/geolocator_apple/darwin"
+  gma_mediation_meta:
+    :path: ".symlinks/plugins/gma_mediation_meta/ios"
   google_maps_flutter_ios:
     :path: ".symlinks/plugins/google_maps_flutter_ios/ios"
   google_mlkit_commons:
@@ -2084,6 +2096,7 @@ SPEC CHECKSUMS:
   DKImagePickerController: 946cec48c7873164274ecc4624d19e3da4c1ef3c
   DKPhotoGallery: b3834fecb755ee09a593d7c9e389d8b5d6deed60
   emoji_picker_flutter: ed468d9746c21711e66b2788880519a9de5de211
+  FBAudienceNetwork: d1670939884e3a2e0ad98dca98d7e0c841417228
   file_picker: a0560bc09d61de87f12d246fc47d2119e6ef37be
   Firebase: f07b15ae5a6ec0f93713e30b923d9970d144af3e
   firebase_analytics: 1d024068b1d4707d5ba7a42a12976ddf3316d835
@@ -2129,6 +2142,7 @@ SPEC CHECKSUMS:
   flutter_secure_storage: 1ed9476fba7e7a782b22888f956cce43e2c62f13
   gal: baecd024ebfd13c441269ca7404792a7152fde89
   geolocator_apple: ab36aa0e8b7d7a2d7639b3b4e48308394e8cef5e
+  gma_mediation_meta: 54e627e72c72310eced40e7b03c98d1365efe22b
   Google-Maps-iOS-Utils: 0a484b05ed21d88c9f9ebbacb007956edd508a96
   Google-Mobile-Ads-SDK: 14f57f2dc33532a24db288897e26494640810407
   google_maps_flutter_ios: 0291eb2aa252298a769b04d075e4a9d747ff7264
@@ -2140,6 +2154,7 @@ SPEC CHECKSUMS:
   GoogleDataTransport: aae35b7ea0c09004c3797d53c8c41f66f219d6a7
   GoogleMaps: 0608099d4870cac8754bdba9b6953db543432438
   GoogleMLKit: eff9e23ec1d90ea4157a1ee2e32a4f610c5b3318
+  GoogleMobileAdsMediationFacebook: 234b9cecc2f9c751567a71d035974c00e6803777
   GoogleToolboxForMac: d1a2cbf009c453f4d6ded37c105e2f67a32206d8
   GoogleUserMessagingPlatform: befe603da6501006420c206222acd449bba45a9c
   GoogleUtilities: 00c88b9a86066ef77f0da2fab05f65d7768ed8e1

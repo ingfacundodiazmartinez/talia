@@ -21,6 +21,9 @@ class _StoryNativeAdWidgetState extends State<StoryNativeAdWidget>
     with SingleTickerProviderStateMixin {
   late AnimationController _progressController;
 
+  // Tiempo mínimo antes de poder saltar (1 segundo)
+  bool _canSkip = false;
+
   @override
   void initState() {
     super.initState();
@@ -38,6 +41,15 @@ class _StoryNativeAdWidgetState extends State<StoryNativeAdWidget>
         widget.onAdCompleted?.call();
       }
     });
+
+    // Habilitar skip después de 1 segundo
+    Future.delayed(const Duration(seconds: 1), () {
+      if (mounted) {
+        setState(() {
+          _canSkip = true;
+        });
+      }
+    });
   }
 
   @override
@@ -48,124 +60,141 @@ class _StoryNativeAdWidgetState extends State<StoryNativeAdWidget>
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTapDown: (_) => _progressController.stop(),
-      onTapUp: (_) => _progressController.forward(),
-      onTapCancel: () => _progressController.forward(),
-      child: Container(
-        color: Colors.white,
+    final screenWidth = MediaQuery.of(context).size.width;
+    final screenHeight = MediaQuery.of(context).size.height;
+
+    return Material(
+      color: Colors.white,
+      child: GestureDetector(
+        // Detectar swipe horizontal en toda la pantalla
+        onHorizontalDragEnd: (details) {
+          if (_canSkip && details.primaryVelocity != null) {
+            // Swipe izquierda (negativo) o derecha (positivo) - ambos saltan el ad
+            if (details.primaryVelocity!.abs() > 200) {
+              widget.onAdCompleted?.call();
+            }
+          }
+        },
+        onLongPress: () => _progressController.stop(),
+        onLongPressUp: () => _progressController.forward(),
         child: Stack(
           children: [
-            // Native Ad content - ocupa toda la pantalla
-            Center(
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxWidth: MediaQuery.of(context).size.width * 0.9,
-                  maxHeight: MediaQuery.of(context).size.height * 0.7,
-                ),
+            // Fondo que recibe taps en zona derecha
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTapUp: (details) {
+                  // Si tap en el 30% derecho de la pantalla, saltar
+                  if (_canSkip && details.localPosition.dx > screenWidth * 0.7) {
+                    widget.onAdCompleted?.call();
+                  }
+                },
+                child: Container(color: Colors.white),
+              ),
+            ),
+
+            // Native Ad content - centrado vertical y horizontalmente
+            Positioned(
+              left: screenWidth * 0.15,
+              right: screenWidth * 0.15,
+              top: screenHeight * 0.20,
+              bottom: screenHeight * 0.20,
+              child: Center(
                 child: AdWidget(ad: widget.nativeAd),
               ),
             ),
 
             // Header con timer (igual que historias)
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.black.withOpacity(0.5),
-                      Colors.transparent,
-                    ],
-                  ),
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.black.withOpacity(0.5),
+                    Colors.transparent,
+                  ],
                 ),
-                child: SafeArea(
-                  bottom: false,
-                  child: Padding(
-                    padding: const EdgeInsets.all(12.0),
-                    child: Column(
-                      children: [
-                        // Progress bar (timer)
-                        AnimatedBuilder(
-                          animation: _progressController,
-                          builder: (context, child) {
-                            return LinearProgressIndicator(
-                              value: _progressController.value,
-                              backgroundColor: Colors.white.withOpacity(0.3),
-                              valueColor: const AlwaysStoppedAnimation<Color>(
-                                Colors.white,
+              ),
+              child: SafeArea(
+                bottom: false,
+                child: Padding(
+                  padding: const EdgeInsets.all(12.0),
+                  child: Column(
+                    children: [
+                      // Progress bar (timer)
+                      AnimatedBuilder(
+                        animation: _progressController,
+                        builder: (context, child) {
+                          return LinearProgressIndicator(
+                            value: _progressController.value,
+                            backgroundColor: Colors.white.withOpacity(0.3),
+                            valueColor: const AlwaysStoppedAnimation<Color>(
+                              Colors.white,
+                            ),
+                            minHeight: 2,
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      // Header info
+                      Row(
+                        children: [
+                          // Ícono de "Patrocinado"
+                          Container(
+                            width: 36,
+                            height: 36,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Colors.white,
+                              border: Border.all(
+                                color: const Color(0xFF6A1B9A),
+                                width: 2,
                               ),
-                              minHeight: 2,
-                            );
-                          },
-                        ),
-                        const SizedBox(height: 12),
-                        // Header info
-                        Row(
-                          children: [
-                            // Ícono de "Patrocinado"
-                            Container(
-                              width: 36,
-                              height: 36,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: Colors.white,
-                                border: Border.all(
-                                  color: const Color(0xFF6A1B9A),
-                                  width: 2,
+                            ),
+                            child: const Icon(
+                              Icons.campaign,
+                              color: Color(0xFF6A1B9A),
+                              size: 18,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          // Texto "Patrocinado"
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: const [
+                                Text(
+                                  'Patrocinado',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                  ),
                                 ),
-                              ),
-                              child: const Icon(
-                                Icons.campaign,
-                                color: Color(0xFF6A1B9A),
-                                size: 18,
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            // Texto "Patrocinado"
-                            const Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'Patrocinado',
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w600,
-                                    ),
+                                Text(
+                                  'Anuncio',
+                                  style: TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 12,
                                   ),
-                                  Text(
-                                    'Anuncio',
-                                    style: TextStyle(
-                                      color: Colors.white70,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                ],
-                              ),
+                                ),
+                              ],
                             ),
-                            // Botón cerrar
-                            IconButton(
-                              icon: const Icon(
-                                Icons.close,
-                                color: Colors.white,
-                                size: 24,
-                              ),
-                              onPressed: widget.onAdCompleted,
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
+                          ),
+                          // Sin botón - el usuario toca la derecha para saltar (después de 1s)
+                        ],
+                      ),
+                    ],
                   ),
                 ),
               ),
             ),
+          ),
           ],
         ),
       ),

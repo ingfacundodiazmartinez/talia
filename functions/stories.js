@@ -4,7 +4,7 @@
  * ═══════════════════════════════════════════════════════════════
  */
 
-const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/firestore");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
 
@@ -719,6 +719,75 @@ exports.replyToStory = onCall(
 
       // Otros errores como internal error
       throw new HttpsError("internal", `Error procesando respuesta a historia: ${error.message}`);
+    }
+  }
+);
+
+/**
+ * ═══════════════════════════════════════════════════════════════
+ * ON STORY DELETED - Cleanup de story_approval_requests
+ * ═══════════════════════════════════════════════════════════════
+ *
+ * Safety net: Cuando se elimina una historia, eliminar automáticamente
+ * las solicitudes de aprobación asociadas para evitar que el padre
+ * vea solicitudes de historias que ya no existen.
+ */
+exports.onStoryDeleted = onDocumentDeleted(
+  {
+    document: "stories/{storyId}",
+    region: "us-central1",
+  },
+  async (event) => {
+    const storyId = event.params.storyId;
+    console.log(`🗑️ [Story] Historia eliminada: ${storyId}`);
+
+    let cleanedRequests = 0;
+    let cleanedNotifications = 0;
+
+    try {
+      // 1. Buscar y eliminar story_approval_requests asociados
+      const approvalRequests = await db
+        .collection('story_approval_requests')
+        .where('storyId', '==', storyId)
+        .get();
+
+      if (!approvalRequests.empty) {
+        console.log(`🧹 [Story] Limpiando ${approvalRequests.size} story_approval_requests...`);
+
+        const batch = db.batch();
+        for (const doc of approvalRequests.docs) {
+          batch.delete(doc.ref);
+        }
+        await batch.commit();
+        cleanedRequests = approvalRequests.size;
+      }
+
+      // 2. Buscar y eliminar notificaciones asociadas
+      // Las notificaciones tienen data.storyId o data.requestId
+      const notifications = await db
+        .collection('notifications')
+        .where('type', '==', 'story_approval_request')
+        .where('data.storyId', '==', storyId)
+        .get();
+
+      if (!notifications.empty) {
+        console.log(`🧹 [Story] Limpiando ${notifications.size} notificaciones...`);
+
+        const notifBatch = db.batch();
+        for (const doc of notifications.docs) {
+          notifBatch.delete(doc.ref);
+        }
+        await notifBatch.commit();
+        cleanedNotifications = notifications.size;
+      }
+
+      console.log(`✅ [Story] Cleanup completado: ${cleanedRequests} requests, ${cleanedNotifications} notificaciones`);
+      return { cleanedRequests, cleanedNotifications };
+
+    } catch (error) {
+      console.error(`❌ [Story] Error en cleanup:`, error);
+      // No lanzar error para no bloquear la eliminación
+      return null;
     }
   }
 );

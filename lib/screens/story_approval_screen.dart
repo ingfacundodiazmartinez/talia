@@ -4,6 +4,7 @@ import '../services/story_service_refactored.dart';
 import '../services/story_upload_progress_service.dart';
 import '../services/unread_messages_service.dart';
 import '../services/notification_tracking_service.dart';
+import '../services/ad_service.dart';
 
 class StoryApprovalScreen extends StatefulWidget {
   final String? childId;
@@ -20,6 +21,7 @@ class StoryApprovalScreen extends StatefulWidget {
 class _StoryApprovalScreenState extends State<StoryApprovalScreen>
     with SingleTickerProviderStateMixin {
   final StoryService _storyService = StoryService();
+  final AdService _adService = AdService();
   late TabController _tabController;
 
   // Track loading and success states
@@ -39,6 +41,9 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
       type: NotificationContext.storyApproval,
       contextId: contextId,
     );
+
+    // ✅ Pre-cargar rewarded ad para aprobar historias
+    _adService.loadRewardedAd();
   }
 
   @override
@@ -872,6 +877,61 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
   }
 
   Future<void> _approveStory(Story story) async {
+    // ✅ Mostrar rewarded ad antes de aprobar (monetización)
+    final canShowAds = await _adService.canShowAds();
+    if (canShowAds) {
+      // Mostrar diálogo explicativo
+      final shouldContinue = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Row(
+            children: [
+              Icon(Icons.play_circle_filled, color: Color(0xFF9D7FE8), size: 28),
+              SizedBox(width: 12),
+              Text('Ver video para aprobar'),
+            ],
+          ),
+          content: Text(
+            'Mira un breve video para aprobar la historia de ${story.userName}.',
+            style: TextStyle(fontSize: 15),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text('Cancelar', style: TextStyle(color: Colors.grey)),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Color(0xFF9D7FE8),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              child: Text('Ver video'),
+            ),
+          ],
+        ),
+      );
+
+      if (shouldContinue != true) return;
+
+      // Mostrar rewarded ad
+      final rewarded = await _adService.showRewardedAd();
+      if (!rewarded) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Debes ver el video completo para aprobar la historia'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+    }
+
     setState(() {
       _loadingApprovalIds.add(story.id);
     });

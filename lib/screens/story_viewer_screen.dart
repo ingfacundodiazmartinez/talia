@@ -87,6 +87,10 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
   // Para trackear posición inicial del gesto
   Offset? _gestureStartPosition;
 
+  // Flag para saber si la navegación es programática (tap) o por swipe
+  // Si es programática, onUserChanged no debe mostrar ad (ya lo maneja _nextUser)
+  bool _isProgrammaticNavigation = false;
+
   // Obtener las historias apropiadas para cada usuario
   List<Story> _getStoriesForUser(UserStories userStories) {
     return _controller.getStoriesForUser(userStories);
@@ -526,6 +530,8 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
 
       // Ya no mostramos el mood poll aquí - se muestra al final de todas las historias
 
+      // Marcar navegación como programática para que onUserChanged no duplique lógica de ads
+      _isProgrammaticNavigation = true;
       setState(() {
         _currentUserIndex++;
         // Calcular índice inicial de la primera historia no vista del nuevo grupo
@@ -533,12 +539,23 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
         _currentStoryIndex = _getInitialStoryIndex(stories);
         _isCurrentStoryLoaded = false; // Reset para la nueva historia
       });
+      // ✅ FIX: Resetear el PageController de historias al índice correcto
+      // Esto evita que se muestre la misma historia repetida
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_storyPageController.hasClients) {
+          _storyPageController.jumpToPage(_currentStoryIndex);
+        }
+      });
       _userPageController.nextPage(
         duration: Duration(milliseconds: 300),
         curve: Curves.easeInOut,
       );
       // No iniciar timer aquí - esperará a que _onStoryLoaded() lo inicie
       _markCurrentStoryAsViewed();
+      // Reset flag después de un pequeño delay para asegurar que onUserChanged ya fue llamado
+      Future.delayed(Duration(milliseconds: 350), () {
+        _isProgrammaticNavigation = false;
+      });
     } else {
       // El usuario terminó de ver TODAS las historias
       // Mostrar mood poll antes de cerrar si hay una disponible
@@ -586,6 +603,8 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     _progressController.reset();
 
     if (_currentUserIndex > 0) {
+      // Marcar navegación como programática
+      _isProgrammaticNavigation = true;
       setState(() {
         _currentUserIndex--;
         // Calcular índice inicial de la primera historia no vista del nuevo grupo
@@ -593,12 +612,22 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
         _currentStoryIndex = _getInitialStoryIndex(stories);
         _isCurrentStoryLoaded = false; // Reset para la nueva historia
       });
+      // ✅ FIX: Resetear el PageController de historias al índice correcto
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_storyPageController.hasClients) {
+          _storyPageController.jumpToPage(_currentStoryIndex);
+        }
+      });
       _userPageController.previousPage(
         duration: Duration(milliseconds: 300),
         curve: Curves.easeInOut,
       );
       // No iniciar timer aquí - esperará a que _onStoryLoaded() lo inicie
       _markCurrentStoryAsViewed();
+      // Reset flag
+      Future.delayed(Duration(milliseconds: 350), () {
+        _isProgrammaticNavigation = false;
+      });
     }
   }
 
@@ -1197,13 +1226,57 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
               isCurrentStoryLoaded: _isCurrentStoryLoaded,
               videoControllers: _videoControllers,
               onStoryLoaded: _onStoryLoaded,
-              onUserChanged: (index) {
+              onUserChanged: (index) async {
+                // Si es navegación programática (tap), no hacer nada aquí
+                // La lógica de ads ya fue manejada en _nextUser()
+                if (_isProgrammaticNavigation) {
+                  return;
+                }
+
+                // Detectar si es swipe hacia adelante (siguiente grupo)
+                final isGoingForward = index > _currentUserIndex;
+
                 setState(() {
                   _currentUserIndex = index;
                   _currentStoryIndex = 0;
                   _isCurrentStoryLoaded = false;
                 });
                 _markCurrentStoryAsViewed();
+
+                // ✅ FIX: Resetear el PageController de historias al índice 0
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (_storyPageController.hasClients) {
+                    _storyPageController.jumpToPage(0);
+                  }
+                });
+
+                // Si es swipe hacia adelante, verificar si mostrar ad
+                if (isGoingForward) {
+                  _controller.nextUser(); // Incrementar contador de grupos
+
+                  final shouldShowAd = _controller.shouldShowAd();
+                  if (shouldShowAd && _isNativeAdLoaded && _nativeAd != null) {
+                    _controller.logAdShowing();
+                    _pauseStoryTimer();
+
+                    final adCompleted = await showDialog<bool>(
+                      context: context,
+                      barrierDismissible: false,
+                      barrierColor: Colors.black,
+                      builder: (context) => StoryNativeAdWidget(
+                        nativeAd: _nativeAd!,
+                        onAdCompleted: () {
+                          Navigator.of(context).pop(true);
+                        },
+                      ),
+                    );
+
+                    if (adCompleted == true) {
+                      _controller.logAdCompleted();
+                      _loadNativeAd();
+                    }
+                  }
+                }
               },
               onStoryChanged: (storyIndex) {
                 setState(() {

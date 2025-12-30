@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
+import 'package:firebase_database/firebase_database.dart';
 import '../notification_service.dart';
 import '../services/contacts_sync_service.dart';
 import '../services/app_state_service.dart';
@@ -332,17 +333,37 @@ class ParentMainShellController {
     return LocalUnreadCountService().watchTotalUnreadCount();
   }
 
-  /// Stream de solicitudes de historia pendientes
+  /// Stream de solicitudes de historia pendientes (solo no expiradas)
+  /// Usa tiempo del servidor via RTDB para evitar manipulación del reloj
   Stream<int> getPendingStoryRequestsStream() {
     return _firestore
         .collection('story_approval_requests')
         .where('parentId', isEqualTo: parentId)
         .where('status', isEqualTo: 'pending')
         .snapshots(includeMetadataChanges: false)
-        .map((snapshot) => snapshot.docs.length);
+        .asyncMap((snapshot) async {
+          // Obtener offset del servidor desde RTDB
+          final offsetSnapshot = await FirebaseDatabase.instance
+              .ref('.info/serverTimeOffset')
+              .get();
+          final offset = (offsetSnapshot.value as int?) ?? 0;
+
+          // Calcular tiempo del servidor
+          final serverNow = DateTime.now().add(Duration(milliseconds: offset));
+
+          return snapshot.docs.where((doc) {
+            final data = doc.data();
+            final expiresAt = data['expiresAt'];
+            if (expiresAt == null) return true;
+            if (expiresAt is Timestamp) {
+              return expiresAt.toDate().isAfter(serverNow);
+            }
+            return true;
+          }).length;
+        });
   }
 
-  /// Stream de emergencias activas para los hijos
+  /// Stream de emergencias activas para los hijos (solo no resueltas)
   Stream<int> getActiveEmergenciesStream(List<String> childrenIds) {
     if (childrenIds.isEmpty) {
       return Stream.value(0);
@@ -351,6 +372,7 @@ class ParentMainShellController {
     return _firestore
         .collection('emergencies')
         .where('childId', whereIn: childrenIds)
+        .where('resolved', isEqualTo: false)
         .snapshots(includeMetadataChanges: false)
         .map((snapshot) => snapshot.docs.length);
   }

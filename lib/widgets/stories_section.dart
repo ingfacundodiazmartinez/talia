@@ -78,12 +78,18 @@ class _StoriesSectionState extends State<StoriesSection> {
 
               final userStoriesList = snapshot.data ?? _cachedStories ?? [];
 
-              // Ordenar grupos: primero los que tienen historias no vistas, luego los que tienen todas vistas
+              // Ordenar grupos: 1) Mis historias, 2) No vistas, 3) Vistas
+              final currentUserId = FirebaseAuth.instance.currentUser?.uid;
               final sortedUserStoriesList = List<UserStories>.from(userStoriesList);
               sortedUserStoriesList.sort((a, b) {
-                // Si ambos tienen o no tienen historias no vistas, mantener orden original
+                // 1. Mis historias SIEMPRE van primero
+                final aIsCurrentUser = a.userId == currentUserId;
+                final bIsCurrentUser = b.userId == currentUserId;
+                if (aIsCurrentUser && !bIsCurrentUser) return -1;
+                if (bIsCurrentUser && !aIsCurrentUser) return 1;
+
+                // 2. Grupos con historias no vistas van primero
                 if (a.hasUnviewed == b.hasUnviewed) return 0;
-                // Grupos con historias no vistas van primero
                 return a.hasUnviewed ? -1 : 1;
               });
 

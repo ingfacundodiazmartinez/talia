@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_database/firebase_database.dart';
 import '../../../models/story.dart';
 import '../services/story_media_preload_service.dart';
 
@@ -300,12 +301,21 @@ class StoryCacheManager {
   // CACHE MAINTENANCE
   // ═══════════════════════════════════════════════════════════════
 
-  /// Remover historias expiradas (>24 horas)
-  void removeExpiredStories() {
+  /// Remover historias expiradas (>24 horas) usando tiempo del servidor
+  void removeExpiredStories() async {
     if (_cachedStories == null) return;
 
-    final now = DateTime.now();
-    final twentyFourHoursAgo = now.subtract(Duration(hours: 24));
+    // Obtener offset del servidor
+    int serverOffset = 0;
+    try {
+      final snapshot = await FirebaseDatabase.instance
+          .ref('.info/serverTimeOffset')
+          .get();
+      serverOffset = (snapshot.value as int?) ?? 0;
+    } catch (_) {}
+
+    final serverNow = DateTime.now().add(Duration(milliseconds: serverOffset));
+    final twentyFourHoursAgo = serverNow.subtract(Duration(hours: 24));
 
     final updatedUserStories = <UserStories>[];
 
@@ -652,16 +662,23 @@ class StoryCacheManager {
     return uniqueStories;
   }
 
-  /// Ordenar historias por prioridad (no vistas primero, luego por fecha)
+  /// Ordenar historias por prioridad (mis historias primero, no vistas, luego por fecha)
   List<UserStories> sortStoriesByPriority(List<UserStories> stories) {
     final sortedStories = List<UserStories>.from(stories);
+    final currentUserId = _getCurrentUserId();
 
     sortedStories.sort((a, b) {
-      // 1. Historias no vistas tienen prioridad
+      // 1. MIS historias SIEMPRE van primero
+      final aIsCurrentUser = a.userId == currentUserId;
+      final bIsCurrentUser = b.userId == currentUserId;
+      if (aIsCurrentUser && !bIsCurrentUser) return -1;
+      if (bIsCurrentUser && !aIsCurrentUser) return 1;
+
+      // 2. Historias no vistas tienen prioridad
       if (a.hasUnviewed && !b.hasUnviewed) return -1;
       if (!a.hasUnviewed && b.hasUnviewed) return 1;
 
-      // 2. Ordenar por historia más reciente
+      // 3. Ordenar por historia más reciente
       final aLatest = a.latestStory?.createdAt;
       final bLatest = b.latestStory?.createdAt;
 
