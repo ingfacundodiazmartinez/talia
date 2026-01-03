@@ -87,7 +87,7 @@ dependencies {
     implementation("androidx.exifinterface:exifinterface:1.3.7")
 
     // DeepAR SDK from official Maven repository
-    implementation("ai.deepar.ar:DeepAR:5.6.4")
+    implementation("ai.deepar.ar:DeepAR:5.6.20")  // 16KB page size support
 
     // CameraX dependencies
     val cameraxVersion = "1.3.0"

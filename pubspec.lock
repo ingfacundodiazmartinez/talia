@@ -1217,10 +1217,10 @@ packages:
     dependency: "direct main"
     description:
       name: gma_mediation_meta
-      sha256: "92331c11d513f00acfaf830bfecd96a890ed789a56bc035f6856195601813398"
+      sha256: "765367719c81043ee9cde12c854fae9c8de00c619bb0811fd8ce63541d962710"
       url: "https://pub.dev"
     source: hosted
-    version: "1.1.0"
+    version: "1.5.0"
   google_maps:
     dependency: transitive
     description:
@@ -1289,10 +1289,10 @@ packages:
     dependency: "direct main"
     description:
       name: google_mobile_ads
-      sha256: "0d4a3744b5e8ed1b8be6a1b452d309f811688855a497c6113fc4400f922db603"
+      sha256: a4f59019f2c32769fb6c60ed8aa321e9c21a36297e2c4f23452b3e779a3e7a26
       url: "https://pub.dev"
     source: hosted
-    version: "5.3.1"
+    version: "6.0.0"
   graphs:
     dependency: transitive
     description:
