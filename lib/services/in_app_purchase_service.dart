@@ -22,15 +22,14 @@ class InAppPurchaseService {
   final SubscriptionService _subscriptionService = SubscriptionService();
   final AppConfigService _appConfig = AppConfigService();
 
-  // Product IDs - deben coincidir con los configurados en las tiendas
-  static const String premiumMonthlyId = 'premium_monthly';
-  static const String premiumPlusMonthlyId = 'premium_plus_monthly';
-  static const String extraChildMonthlyId = 'extra_child_monthly';
-
-  // Product IDs para Android (sin prefijo - tal como están en Play Store)
-  static const String androidPremiumMonthlyId = 'premium_monthly';
-  static const String androidPremiumPlusMonthlyId = 'premium_plus_monthly';
-  static const String androidExtraChildMonthlyId = 'extra_child_monthly';
+  // Product IDs - ahora configurables desde Remote Config
+  // Los valores se obtienen de AppConfigService para poder cambiarlos sin actualizar la app
+  String get _iosPremiumMonthlyId => _appConfig.iapIosPremiumMonthlyId;
+  String get _iosPremiumPlusMonthlyId => _appConfig.iapIosPremiumPlusMonthlyId;
+  String get _iosExtraChildMonthlyId => _appConfig.iapIosExtraChildMonthlyId;
+  String get _androidPremiumMonthlyId => _appConfig.iapAndroidPremiumMonthlyId;
+  String get _androidPremiumPlusMonthlyId => _appConfig.iapAndroidPremiumPlusMonthlyId;
+  String get _androidExtraChildMonthlyId => _appConfig.iapAndroidExtraChildMonthlyId;
 
   // Stream de actualizaciones de compras
   StreamSubscription<List<PurchaseDetails>>? _purchaseSubscription;
@@ -95,8 +94,8 @@ class InAppPurchaseService {
   /// Cargar productos desde las tiendas
   Future<void> _loadProducts() async {
     final Set<String> productIds = Platform.isAndroid
-        ? {androidPremiumMonthlyId, androidPremiumPlusMonthlyId, androidExtraChildMonthlyId}
-        : {premiumMonthlyId, premiumPlusMonthlyId, extraChildMonthlyId};
+        ? {_androidPremiumMonthlyId, _androidPremiumPlusMonthlyId, _androidExtraChildMonthlyId}
+        : {_iosPremiumMonthlyId, _iosPremiumPlusMonthlyId, _iosExtraChildMonthlyId};
 
     final response = await _iap.queryProductDetails(productIds);
 
@@ -122,12 +121,12 @@ class InAppPurchaseService {
 
     if (Platform.isAndroid) {
       targetId = tier == SubscriptionTier.premium
-          ? androidPremiumMonthlyId
-          : androidPremiumPlusMonthlyId;
+          ? _androidPremiumMonthlyId
+          : _androidPremiumPlusMonthlyId;
     } else {
       targetId = tier == SubscriptionTier.premium
-          ? premiumMonthlyId
-          : premiumPlusMonthlyId;
+          ? _iosPremiumMonthlyId
+          : _iosPremiumPlusMonthlyId;
     }
 
     return products.where((p) => p.id == targetId).firstOrNull;
@@ -244,8 +243,8 @@ class InAppPurchaseService {
     try {
       final products = await getProducts();
       final productId = Platform.isAndroid
-          ? androidExtraChildMonthlyId
-          : extraChildMonthlyId;
+          ? _androidExtraChildMonthlyId
+          : _iosExtraChildMonthlyId;
 
       final product = products.where((p) => p.id == productId).firstOrNull;
       if (product == null) {

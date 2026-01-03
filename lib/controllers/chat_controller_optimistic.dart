@@ -18,6 +18,7 @@ import '../services/chat/message_pagination_service.dart';
 import '../services/chat/message_actions_service.dart';
 import '../services/chat/chat_state_service.dart';
 import '../services/audio_processing_service.dart';
+import '../services/message_status_helper.dart';
 
 /// Controller optimista para chat individual (REFACTORIZADO)
 ///
@@ -57,9 +58,11 @@ class ChatControllerOptimistic extends ChangeNotifier {
   // Subscripciones
   StreamSubscription? _notificationSubscription;
   StreamSubscription? _messagesSubscription;
-  StreamSubscription? _isBlockedSubscription;
-  StreamSubscription? _isBlockedBySubscription;
+  StreamSubscription? _chatDocSubscription; // ✅ Stream UNIFICADO: bloqueo + read receipts
   StreamSubscription? _chatBlockedSubscription;
+
+  // ✅ V2: Cache para timestamps del recipient
+  DateTime? _recipientLastOpenedAt;
 
   // Estado de carga
   bool _isLoading = false;
@@ -138,25 +141,43 @@ class ChatControllerOptimistic extends ChangeNotifier {
     await _loadFirestoreMessages();
     _setupNotificationListener();
     _setupMessagesListener();
-    setupBlockListeners();
+    setupBlockListeners(); // ✅ Stream unificado: bloqueo + read receipts V2
     ReleaseLogger.log('✅[Controller-$_controllerId] Inicialización completa');
   }
 
-  /// Configurar listeners para estado de bloqueo
+  /// ✅ Configurar listener UNIFICADO para el chat document
+  ///
+  /// Un solo listener que maneja:
+  /// - Estado de bloqueo (isBlocked, isBlockedBy)
+  /// - Read receipts V2 (lastOpenedAt)
   void setupBlockListeners() {
-    // Listener directo al documento de chat
-    _isBlockedSubscription = _blockService.isBlockedStream(contactId).listen((isBlocked) {
-      if (_isBlocked != isBlocked) {
-        ReleaseLogger.log('🔒[Controller-$_controllerId] isBlocked cambió: $_isBlocked -> $isBlocked', tag: 'ChatController');
-        _isBlocked = isBlocked;
-        notifyListeners();
-      }
-    });
+    // ✅ UN SOLO listener al chat document
+    _chatDocSubscription = _blockService.chatDocStream(contactId).listen((data) {
+      bool needsNotify = false;
 
-    _isBlockedBySubscription = _blockService.isBlockedByStream(contactId).listen((isBlockedBy) {
-      if (_isBlockedBy != isBlockedBy) {
-        ReleaseLogger.log('🔒[Controller-$_controllerId] isBlockedBy cambió: $_isBlockedBy -> $isBlockedBy', tag: 'ChatController');
-        _isBlockedBy = isBlockedBy;
+      // Actualizar estado de bloqueo
+      if (_isBlocked != data.isBlocked) {
+        ReleaseLogger.log('🔒[Controller-$_controllerId] isBlocked: $_isBlocked → ${data.isBlocked}', tag: 'ChatController');
+        _isBlocked = data.isBlocked;
+        needsNotify = true;
+      }
+
+      if (_isBlockedBy != data.isBlockedByContact) {
+        ReleaseLogger.log('🔒[Controller-$_controllerId] isBlockedBy: $_isBlockedBy → ${data.isBlockedByContact}', tag: 'ChatController');
+        _isBlockedBy = data.isBlockedByContact;
+        needsNotify = true;
+      }
+
+      // ✅ V2: Actualizar lastOpenedAt y recalcular status de mensajes
+      if (data.recipientLastOpenedAt != null &&
+          data.recipientLastOpenedAt != _recipientLastOpenedAt) {
+        ReleaseLogger.log('📖[V2] lastOpenedAt: $_recipientLastOpenedAt → ${data.recipientLastOpenedAt}', tag: 'ChatController');
+        _recipientLastOpenedAt = data.recipientLastOpenedAt;
+        _recalculateOwnMessagesStatus();
+        needsNotify = true;
+      }
+
+      if (needsNotify) {
         notifyListeners();
       }
     });
@@ -324,6 +345,45 @@ class ChatControllerOptimistic extends ChangeNotifier {
     );
 
     ReleaseLogger.log('👂[Realtime] Listener configurado');
+  }
+
+  /// ✅ V2: Recalcular status de mensajes propios basándose en lastOpenedAt
+  void _recalculateOwnMessagesStatus() {
+    if (_recipientLastOpenedAt == null) return;
+
+    bool anyChanged = false;
+    final updatedMessages = <ChatMessage>[];
+
+    for (final message in _stateService.messages) {
+      // Solo recalcular mensajes propios
+      if (message.senderId != currentUserId) {
+        updatedMessages.add(message);
+        continue;
+      }
+
+      final newStatus = MessageStatusHelper.calculateStatusV2(
+        messageTimestamp: message.timestamp?.toDate(),
+        senderId: message.senderId,
+        recipientLastOpenedAt: _recipientLastOpenedAt,
+        recipientLastReceivedAt: null, // Opcional: podríamos agregar esto también
+      );
+
+      if (newStatus != message.status) {
+        ReleaseLogger.log(
+          '✅[V2] Mensaje ${message.id.substring(0, 8)}... status: ${message.status} → $newStatus',
+          tag: 'ChatController',
+        );
+        updatedMessages.add(message.copyWith(status: newStatus));
+        anyChanged = true;
+      } else {
+        updatedMessages.add(message);
+      }
+    }
+
+    if (anyChanged) {
+      _stateService.replaceAllMessages(updatedMessages);
+      notifyListeners();
+    }
   }
 
   /// Manejar mensaje del listener en tiempo real
@@ -853,8 +913,7 @@ class ChatControllerOptimistic extends ChangeNotifier {
     stopTyping();
     _notificationSubscription?.cancel();
     _messagesSubscription?.cancel();
-    _isBlockedSubscription?.cancel();
-    _isBlockedBySubscription?.cancel();
+    _chatDocSubscription?.cancel(); // ✅ Stream unificado: bloqueo + read receipts
     _chatBlockedSubscription?.cancel();
     super.dispose();
   }

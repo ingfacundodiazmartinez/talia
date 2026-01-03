@@ -465,28 +465,38 @@ exports.onUserRegistered = onDocumentCreated(
 
         relationsCreated++;
 
-        // Enviar notificación silenciosa para refrescar UI
+        // Enviar notificación visible cuando un contacto se une a Talia
         try {
           const fcmToken = contactUserData.fcmToken;
           if (fcmToken) {
             await getMessaging().send({
               token: fcmToken,
+              notification: {
+                title: "¡Nuevo contacto en Talia!",
+                body: `${userName || 'Un contacto'} se unió a Talia. Ya puedes chatear.`,
+              },
               data: {
                 type: "new_contact_registered",
                 userId: userId,
-                userName: userName,
+                userName: userName || '',
               },
               apns: {
                 payload: {
                   aps: {
-                    contentAvailable: true,
+                    sound: "default",
+                    badge: 1,
                   },
                 },
               },
               android: {
                 priority: "high",
+                notification: {
+                  channelId: "talia_default",
+                  sound: "default",
+                },
               },
             });
+            console.log(`   📱 Notificación enviada a ${contactUserData.name || contactUserId}`);
           }
         } catch (notifError) {
           console.warn(`   ⚠️ Error enviando notificación: ${notifError.message}`);

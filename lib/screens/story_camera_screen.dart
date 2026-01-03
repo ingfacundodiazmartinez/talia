@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:camera/camera.dart' show FlashMode;
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import 'package:cached_network_image/cached_network_image.dart';
@@ -45,6 +46,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   double _baseZoom = 1.0; // Para pinch-to-zoom
   bool _showZoomIndicator = false; // Mostrar indicador de zoom temporalmente
   Character? _selectedFaceSwapCharacter; // Personaje seleccionado para Face Swap
+  bool _showScreenFlash = false; // ✅ Screen flash para Android (cámara frontal)
 
   // Face-swap pulsing animation (para usuarios que nunca lo han usado)
   late AnimationController _faceSwapPulseController;
@@ -55,6 +57,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+
+    // ✅ Bloquear orientación a portrait para evitar problemas de rotación de cámara
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+    ]);
 
     // Inicializar animación de pulso para face-swap
     _faceSwapPulseController = AnimationController(
@@ -165,6 +172,14 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     WidgetsBinding.instance.removeObserver(this);
     _faceSwapPulseController.dispose();
 
+    // ✅ Restaurar orientaciones permitidas al salir
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+
     // Dispose controller which will handle cleanup of any active modals
     _controller.dispose();
 
@@ -246,7 +261,22 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   }
 
   Future<void> _takePicture() async {
+    // ✅ Screen flash para Android: mostrar pantalla blanca antes de la foto
+    final useScreenFlash = Platform.isAndroid && _controller.shouldUseScreenFlash;
+
+    if (useScreenFlash) {
+      setState(() => _showScreenFlash = true);
+      // Esperar a que el flash se muestre y la pantalla brille
+      await Future.delayed(const Duration(milliseconds: 150));
+    }
+
     final imagePath = await _controller.takePhoto();
+
+    // Quitar screen flash
+    if (useScreenFlash && mounted) {
+      setState(() => _showScreenFlash = false);
+    }
+
     if (imagePath != null) {
       // Si hay un personaje seleccionado, procesar Face Swap
       if (_selectedFaceSwapCharacter != null) {
@@ -618,6 +648,9 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
               // (para operaciones como tomar foto, grabar, etc.)
               // Durante inicialización, _buildCameraView() ya muestra _buildLoadingUI()
               if (_controller.isLoading && _isCameraViewReady()) _buildLoadingOverlay(),
+
+              // ✅ Screen flash overlay para Android (cámara frontal)
+              if (_showScreenFlash) _buildScreenFlashOverlay(),
             ],
           ),
         ),
@@ -1278,6 +1311,15 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       color: Colors.black54,
       child: Center(
         child: CircularProgressIndicator(color: Color(0xFF9D7FE8)),
+      ),
+    );
+  }
+
+  /// ✅ Screen flash overlay para Android (simula flash de cámara frontal)
+  Widget _buildScreenFlashOverlay() {
+    return Positioned.fill(
+      child: Container(
+        color: Colors.white,
       ),
     );
   }

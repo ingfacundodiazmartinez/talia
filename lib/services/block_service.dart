@@ -13,6 +13,21 @@ class ParentBlockedException implements Exception {
   String toString() => message;
 }
 
+/// Datos del chat document relevantes para el controller
+class ChatDocData {
+  final bool isBlocked;
+  final bool isBlockedByContact;
+  final DateTime? recipientLastOpenedAt;
+
+  const ChatDocData({
+    this.isBlocked = false,
+    this.isBlockedByContact = false,
+    this.recipientLastOpenedAt,
+  });
+
+  static const empty = ChatDocData();
+}
+
 class BlockService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -192,6 +207,38 @@ class BlockService {
           final data = snapshot.data();
           // Está bloqueado Y fue bloqueado por el otro usuario
           return data?['isBlocked'] == true && data?['blockedBy'] == userId;
+        });
+  }
+
+  /// ✅ Stream UNIFICADO del chat document
+  ///
+  /// Retorna todos los datos relevantes en UN solo listener:
+  /// - isBlocked: si el chat está bloqueado
+  /// - isBlockedByContact: si fue bloqueado por el contacto
+  /// - recipientLastOpenedAt: para calcular read receipts (V2)
+  Stream<ChatDocData> chatDocStream(String contactId) {
+    final user = _auth.currentUser;
+    if (user == null) return Stream.value(ChatDocData.empty);
+
+    final chatId = _getChatId(user.uid, contactId);
+
+    return _firestore
+        .collection('chats')
+        .doc(chatId)
+        .snapshots()
+        .map((snapshot) {
+          if (!snapshot.exists) return ChatDocData.empty;
+
+          final data = snapshot.data()!;
+          final isBlocked = data['isBlocked'] == true;
+          final blockedBy = data['blockedBy'] as String?;
+          final lastOpenedAt = (data['lastOpenedAt_$contactId'] as Timestamp?)?.toDate();
+
+          return ChatDocData(
+            isBlocked: isBlocked,
+            isBlockedByContact: isBlocked && blockedBy == contactId,
+            recipientLastOpenedAt: lastOpenedAt,
+          );
         });
   }
 

@@ -475,11 +475,50 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
           final chatData = chatDoc.data() as Map<String, dynamic>;
           final unreadCount = LocalUnreadCountService().getUnreadCount(chatDoc.id);
 
+          // ✅ FIX: Usar lastMessageSender del documento del chat (denormalizado)
+          // para garantizar sincronización con lastMessage text
+          final lastMessageSenderFromDoc = chatData['lastMessageSender'] as String?;
+          final currentUserId = _chatsController.userId;
+          final isOwnLastMessage = lastMessageSenderFromDoc != null &&
+              lastMessageSenderFromDoc == currentUserId;
+
+          // Solo obtener estado del mensaje si es mensaje propio
+          // (evita inconsistencias cuando timestamps son iguales)
+          if (!isOwnLastMessage) {
+            // Mensaje recibido - no mostrar indicador de estado
+            final clearedAt = _preferencesCache.getClearedAt(chatDoc.id);
+            final lastMessageTime = chatData['lastMessageTime'] as Timestamp?;
+            final isChatCleared = clearedAt != null &&
+                (lastMessageTime == null || !clearedAt.isBefore(lastMessageTime.toDate()));
+
+            return ChatListItem(
+              chatId: chatDoc.id,
+              userId: childId,
+              name: displayName,
+              lastMessage: isBlocked
+                  ? '🔒 Contacto bloqueado'
+                  : (isChatCleared
+                      ? 'Inicia una conversación...'
+                      : (chatData['lastMessage'] ?? '')),
+              time: isChatCleared ? '' : ChatUtils.formatChatTime(chatData['lastMessageTime']),
+              unreadCount: isBlocked ? 0 : unreadCount,
+              photoURL: photoURL,
+              isEmpty: isChatCleared,
+              isBlocked: isBlocked,
+              lastMessageSenderId: null, // No mostrar icono para mensajes recibidos
+              lastMessageStatus: null,
+              lastMessageModerationStatus: null,
+              onArchived: () => setState(() => _preferencesVersion++),
+              onMuted: () => setState(() => _preferencesVersion++),
+              onCleared: () => setState(() => _preferencesVersion++),
+            );
+          }
+
+          // Mensaje propio - obtener estado del último mensaje via stream
           return StreamBuilder<QuerySnapshot>(
             key: ValueKey('last_msg_${chatDoc.id}'),
             stream: _chatsController.getChatLastMessageStream(chatDoc.id),
             builder: (context, messageSnapshot) {
-              String? lastMessageSenderId;
               MessageStatus? lastMessageStatus;
               ModerationStatus? lastMessageModerationStatus;
 
@@ -489,27 +528,28 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
                 final lastMessageDoc = messageSnapshot.data!.docs.first;
                 final lastMessageData = lastMessageDoc.data() as Map<String, dynamic>;
 
-                final senderId = lastMessageData['senderId'] as String? ?? '';
-                lastMessageSenderId = senderId;
+                // Solo calcular estado si el mensaje del stream coincide con el sender del doc
+                final streamSenderId = lastMessageData['senderId'] as String? ?? '';
+                if (streamSenderId == lastMessageSenderFromDoc) {
+                  lastMessageStatus = MessageStatusHelper.calculateStatus(
+                    data: lastMessageData,
+                    senderId: streamSenderId,
+                    hasServerTimestamp: lastMessageData['timestamp'] != null,
+                  );
 
-                lastMessageStatus = MessageStatusHelper.calculateStatus(
-                  data: lastMessageData,
-                  senderId: senderId,
-                  hasServerTimestamp: lastMessageData['timestamp'] != null,
-                );
-
-                final modStatusString = lastMessageData['moderationStatus'] as String?;
-                if (modStatusString != null) {
-                  switch (modStatusString) {
-                    case 'approved':
-                      lastMessageModerationStatus = ModerationStatus.approved;
-                      break;
-                    case 'blocked':
-                      lastMessageModerationStatus = ModerationStatus.blocked;
-                      break;
-                    case 'pending':
-                      lastMessageModerationStatus = ModerationStatus.pending;
-                      break;
+                  final modStatusString = lastMessageData['moderationStatus'] as String?;
+                  if (modStatusString != null) {
+                    switch (modStatusString) {
+                      case 'approved':
+                        lastMessageModerationStatus = ModerationStatus.approved;
+                        break;
+                      case 'blocked':
+                        lastMessageModerationStatus = ModerationStatus.blocked;
+                        break;
+                      case 'pending':
+                        lastMessageModerationStatus = ModerationStatus.pending;
+                        break;
+                    }
                   }
                 }
               }
@@ -534,7 +574,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
                 photoURL: photoURL,
                 isEmpty: isChatCleared,
                 isBlocked: isBlocked,
-                lastMessageSenderId: isChatCleared ? null : lastMessageSenderId,
+                lastMessageSenderId: isChatCleared ? null : lastMessageSenderFromDoc,
                 lastMessageStatus: isChatCleared ? null : lastMessageStatus,
                 lastMessageModerationStatus: isChatCleared ? null : lastMessageModerationStatus,
                 onArchived: () => setState(() => _preferencesVersion++),

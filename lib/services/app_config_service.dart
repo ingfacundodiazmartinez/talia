@@ -28,6 +28,14 @@ class AppConfigService {
   static const String _testAndroidRewardedAdId = 'ca-app-pub-3940256099942544/5224354917';
   static const String _testIosRewardedAdId = 'ca-app-pub-3940256099942544/1712485313';
 
+  // IAP Product IDs (defaults)
+  static const String _defaultIosPremiumMonthlyId = 'premium_monthly';
+  static const String _defaultIosPremiumPlusMonthlyId = 'premium_plus_monthly';
+  static const String _defaultIosExtraChildMonthlyId = 'extra_child_monthly';
+  static const String _defaultAndroidPremiumMonthlyId = 'premium_monthly';
+  static const String _defaultAndroidPremiumPlusMonthlyId = 'premium_plus_monthly';
+  static const String _defaultAndroidExtraChildMonthlyId = 'extra_child_monthly';
+
   /// Inicializa Remote Config y variables de entorno
   Future<void> initialize() async {
     if (_initialized) {
@@ -63,6 +71,13 @@ class AppConfigService {
         'admob_android_rewarded_ad_id': _testAndroidRewardedAdId,
         'admob_ios_rewarded_ad_id': _testIosRewardedAdId,
         'premium_enabled': true, // Feature flag para sistema premium
+        // IAP Product IDs (configurables desde Remote Config)
+        'iap_ios_premium_monthly_id': _defaultIosPremiumMonthlyId,
+        'iap_ios_premium_plus_monthly_id': _defaultIosPremiumPlusMonthlyId,
+        'iap_ios_extra_child_monthly_id': _defaultIosExtraChildMonthlyId,
+        'iap_android_premium_monthly_id': _defaultAndroidPremiumMonthlyId,
+        'iap_android_premium_plus_monthly_id': _defaultAndroidPremiumPlusMonthlyId,
+        'iap_android_extra_child_monthly_id': _defaultAndroidExtraChildMonthlyId,
       });
 
       // 4. Intentar obtener configuración remota
@@ -305,5 +320,63 @@ class AppConfigService {
     } catch (e) {
       ReleaseLogger.error('Error actualizando Remote Config: $e', tag: 'AppConfig');
     }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // IAP PRODUCT IDS (configurables desde Remote Config)
+  // ═══════════════════════════════════════════════════════════════
+
+  /// iOS Premium Monthly Product ID
+  String get iapIosPremiumMonthlyId {
+    if (_initialized && _remoteConfig != null) {
+      final remoteId = _remoteConfig!.getString('iap_ios_premium_monthly_id');
+      if (remoteId.isNotEmpty) return remoteId;
+    }
+    return _defaultIosPremiumMonthlyId;
+  }
+
+  /// iOS Premium+ Monthly Product ID
+  String get iapIosPremiumPlusMonthlyId {
+    if (_initialized && _remoteConfig != null) {
+      final remoteId = _remoteConfig!.getString('iap_ios_premium_plus_monthly_id');
+      if (remoteId.isNotEmpty) return remoteId;
+    }
+    return _defaultIosPremiumPlusMonthlyId;
+  }
+
+  /// iOS Extra Child Monthly Product ID
+  String get iapIosExtraChildMonthlyId {
+    if (_initialized && _remoteConfig != null) {
+      final remoteId = _remoteConfig!.getString('iap_ios_extra_child_monthly_id');
+      if (remoteId.isNotEmpty) return remoteId;
+    }
+    return _defaultIosExtraChildMonthlyId;
+  }
+
+  /// Android Premium Monthly Product ID
+  String get iapAndroidPremiumMonthlyId {
+    if (_initialized && _remoteConfig != null) {
+      final remoteId = _remoteConfig!.getString('iap_android_premium_monthly_id');
+      if (remoteId.isNotEmpty) return remoteId;
+    }
+    return _defaultAndroidPremiumMonthlyId;
+  }
+
+  /// Android Premium+ Monthly Product ID
+  String get iapAndroidPremiumPlusMonthlyId {
+    if (_initialized && _remoteConfig != null) {
+      final remoteId = _remoteConfig!.getString('iap_android_premium_plus_monthly_id');
+      if (remoteId.isNotEmpty) return remoteId;
+    }
+    return _defaultAndroidPremiumPlusMonthlyId;
+  }
+
+  /// Android Extra Child Monthly Product ID
+  String get iapAndroidExtraChildMonthlyId {
+    if (_initialized && _remoteConfig != null) {
+      final remoteId = _remoteConfig!.getString('iap_android_extra_child_monthly_id');
+      if (remoteId.isNotEmpty) return remoteId;
+    }
+    return _defaultAndroidExtraChildMonthlyId;
   }
 }
