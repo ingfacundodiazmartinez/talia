@@ -5,6 +5,7 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'utils/release_logger.dart';
 import 'services/ad_service.dart';
+import 'services/app_config_service.dart';
 import 'services/subscription_service.dart';
 import 'services/usage_limits_service.dart';
 import 'widgets/premium_paywall_dialog.dart';
@@ -1188,65 +1189,68 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     ),
                     SizedBox(height: 12),
 
-                    // Divider con "o"
-                    Row(
-                      children: [
-                        Expanded(child: Divider(color: Colors.white24)),
-                        Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 12),
-                          child: Text(
-                            'o',
-                            style: TextStyle(color: Colors.white54, fontSize: 13),
-                          ),
-                        ),
-                        Expanded(child: Divider(color: Colors.white24)),
-                      ],
-                    ),
-                    SizedBox(height: 12),
-
-                    // Botón Premium
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton(
-                        onPressed: () => Navigator.pop(dialogContext, 'premium'),
-                        style: OutlinedButton.styleFrom(
-                          side: BorderSide(
-                            color: Color(0xFFFFD700),
-                            width: 1.5,
-                          ),
-                          padding: EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.workspace_premium, color: Color(0xFFFFD700), size: 20),
-                            SizedBox(width: 8),
-                            Text(
-                              'Obtener Premium',
-                              style: TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w600,
-                                color: Color(0xFFFFD700),
-                              ),
+                    // Sección Premium (solo si el sistema premium está habilitado)
+                    if (AppConfigService().premiumEnabled) ...[
+                      // Divider con "o"
+                      Row(
+                        children: [
+                          Expanded(child: Divider(color: Colors.white24)),
+                          Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 12),
+                            child: Text(
+                              'o',
+                              style: TextStyle(color: Colors.white54, fontSize: 13),
                             ),
-                          ],
+                          ),
+                          Expanded(child: Divider(color: Colors.white24)),
+                        ],
+                      ),
+                      SizedBox(height: 12),
+
+                      // Botón Premium
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.pop(dialogContext, 'premium'),
+                          style: OutlinedButton.styleFrom(
+                            side: BorderSide(
+                              color: Color(0xFFFFD700),
+                              width: 1.5,
+                            ),
+                            padding: EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.workspace_premium, color: Color(0xFFFFD700), size: 20),
+                              SizedBox(width: 8),
+                              Text(
+                                'Obtener Premium',
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600,
+                                  color: Color(0xFFFFD700),
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
-                    ),
-                    SizedBox(height: 8),
+                      SizedBox(height: 8),
 
-                    // Texto Premium benefit
-                    Text(
-                      'Sin anuncios + hasta 30 reportes/mes',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFFFFD700).withValues(alpha: 0.7),
+                      // Texto Premium benefit
+                      Text(
+                        'Sin anuncios + hasta 30 reportes/mes',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFFFFD700).withValues(alpha: 0.7),
+                        ),
                       ),
-                    ),
-                    SizedBox(height: 16),
+                      SizedBox(height: 16),
+                    ],
 
                     // Botón Cancelar
                     TextButton(
