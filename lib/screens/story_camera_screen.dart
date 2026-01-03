@@ -8,9 +8,12 @@ import '../theme_service.dart';
 import '../models/character.dart';
 import '../services/deepar_service.dart';
 import '../services/ad_service.dart';
+import '../services/usage_limits_service.dart';
+import '../services/subscription_service.dart';
 import '../utils/release_logger.dart';
 import '../widgets/permission_dialog.dart';
 import '../widgets/character_selector_dialog.dart';
+import '../widgets/premium_paywall_dialog.dart';
 import '../widgets/camera/flutter_camera_view.dart';
 import '../widgets/camera/deepar_camera_view.dart';
 import 'package:flutter_story_editor/flutter_story_editor.dart';
@@ -35,6 +38,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   // ✅ CORRECTO: Solo controller y estado UI local
   late StoryCameraController _controller;
   final AdService _adService = AdService();
+  final UsageLimitsService _usageLimitsService = UsageLimitsService();
 
   // Estado UI únicamente
   bool _isVideoMode = false; // Estado para modo foto/video
@@ -214,10 +218,16 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   /// Mostrar selector de personajes para Face Swap
   Future<void> _showFaceSwapSelector() async {
-    // Mostrar selector de personajes directamente
+    // Obtener transformaciones restantes para mostrar en el dialog
+    final usageData = await _usageLimitsService.getFaceSwapDailyUsage();
+    final remaining = usageData['remaining'] as int;
+
+    // Mostrar selector de personajes
     final selectedCharacter = await showDialog<Character>(
       context: context,
-      builder: (context) => const CharacterSelectorDialog(),
+      builder: (context) => CharacterSelectorDialog(
+        remainingTransforms: remaining,
+      ),
     );
 
     if (selectedCharacter != null && mounted) {
@@ -252,11 +262,39 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     final character = _selectedFaceSwapCharacter;
     if (character == null) return;
 
-    // ✅ Mostrar rewarded ad DESPUÉS de tomar la foto, ANTES de llamar a CF
+    // ✅ PASO 1: Verificar límites de uso diario
+    final usageData = await _usageLimitsService.getFaceSwapDailyUsage();
+    final remaining = usageData['remaining'] as int;
+    final limit = usageData['limit'] as int;
+    final tier = usageData['tier'] as String;
+
+    // Si no quedan transformaciones, mostrar paywall
+    if (remaining <= 0) {
+      if (mounted) {
+        ReleaseLogger.log('⚠️ Límite de face-swap alcanzado ($limit/día para tier $tier)', tag: 'StoryCameraScreen');
+        PremiumPaywallDialog.show(
+          context,
+          feature: PremiumFeature(
+            id: 'face_swap_limit',
+            name: 'Face Swap',
+            description: 'Has alcanzado el límite de $limit transformaciones por día. Actualiza a Premium para obtener más transformaciones diarias.',
+            iconName: '🎭',
+            requiredTier: SubscriptionTier.premium,
+          ),
+        );
+        // Limpiar selección
+        setState(() {
+          _selectedFaceSwapCharacter = null;
+        });
+      }
+      return;
+    }
+
+    // ✅ PASO 2: Verificar si necesita ver ads o tiene Premium
     final canShowAds = await _adService.canShowAds();
     if (canShowAds) {
-      // Mostrar diálogo explicativo
-      final shouldContinue = await showDialog<bool>(
+      // Mostrar diálogo con opciones: Ver video O Activar Premium
+      final dialogResult = await showDialog<String>(
         context: context,
         barrierDismissible: false,
         builder: (context) => AlertDialog(
@@ -274,17 +312,58 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
               ),
             ],
           ),
-          content: Text(
-            'Mira un breve video para transformarte en ${character.name}.',
-            style: TextStyle(fontSize: 15, color: Colors.white70),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Mira un breve video para transformarte en ${character.name}.',
+                style: TextStyle(fontSize: 15, color: Colors.white70),
+              ),
+              SizedBox(height: 12),
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline, color: Colors.white54, size: 16),
+                    SizedBox(width: 8),
+                    Text(
+                      '$remaining de $limit restantes hoy',
+                      style: TextStyle(fontSize: 13, color: Colors.white54),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context, false),
+              onPressed: () => Navigator.pop(context, 'cancel'),
               child: Text('Cancelar', style: TextStyle(color: Colors.grey)),
             ),
+            // Botón Premium
+            OutlinedButton(
+              onPressed: () => Navigator.pop(context, 'premium'),
+              style: OutlinedButton.styleFrom(
+                side: BorderSide(color: Color(0xFFFFD700)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.star, color: Color(0xFFFFD700), size: 18),
+                  SizedBox(width: 4),
+                  Text('Premium', style: TextStyle(color: Color(0xFFFFD700))),
+                ],
+              ),
+            ),
+            // Botón Ver video
             ElevatedButton(
-              onPressed: () => Navigator.pop(context, true),
+              onPressed: () => Navigator.pop(context, 'watch'),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Color(0xFF9D7FE8),
                 foregroundColor: Colors.white,
@@ -296,7 +375,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         ),
       );
 
-      if (shouldContinue != true) {
+      if (dialogResult == 'cancel' || dialogResult == null) {
         // Usuario canceló, limpiar selección
         setState(() {
           _selectedFaceSwapCharacter = null;
@@ -304,7 +383,28 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         return;
       }
 
-      // Mostrar rewarded ad
+      if (dialogResult == 'premium') {
+        // Mostrar paywall de Premium
+        if (mounted) {
+          PremiumPaywallDialog.show(
+            context,
+            feature: PremiumFeature(
+              id: 'face_swap_no_ads',
+              name: 'Face Swap sin anuncios',
+              description: 'Con Premium puedes usar Face Swap sin ver anuncios y con más transformaciones diarias.',
+              iconName: '🎭',
+              requiredTier: SubscriptionTier.premium,
+            ),
+          );
+        }
+        // Limpiar selección
+        setState(() {
+          _selectedFaceSwapCharacter = null;
+        });
+        return;
+      }
+
+      // dialogResult == 'watch': Mostrar rewarded ad
       final rewarded = await _adService.showRewardedAd();
       if (!rewarded) {
         if (mounted) {
@@ -324,7 +424,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
 
     try {
-      // Usar el método del controller para procesar con el personaje seleccionado
+      // ✅ PASO 3: Procesar transformación
       final transformedPath = await _controller.applyFaceSwapWithCharacter(
         context,
         File(imagePath),
@@ -332,6 +432,9 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       );
 
       if (transformedPath != null && mounted) {
+        // ✅ PASO 4: Incrementar contador de uso
+        await _usageLimitsService.incrementFaceSwapDailyUsage();
+
         // Limpiar selección de personaje
         setState(() {
           _selectedFaceSwapCharacter = null;

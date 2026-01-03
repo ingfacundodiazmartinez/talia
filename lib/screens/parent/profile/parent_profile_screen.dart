@@ -6,10 +6,11 @@ import '../../common/privacy_security_screen.dart';
 import '../../common/help_support_screen.dart';
 import '../../common/privacy_policy_screen.dart';
 import '../../common/settings_screen.dart';
-import '../../premium/premium_screen.dart';
+import '../../settings/subscription_screen.dart';
 import '../../../controllers/profile_controller.dart';
 import '../../../models/parent.dart';
 import '../../../services/subscription_service.dart';
+import '../../../services/app_config_service.dart';
 import '../../../widgets/profile/profile_header_widget.dart';
 import '../../../widgets/profile/children_list_widget.dart';
 import '../../../utils/release_logger.dart';
@@ -90,6 +91,10 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
               ChildrenListWidget(parentId: currentUser.uid),
               SizedBox(height: 32),
 
+              // Suscripción Premium
+              _buildPremiumCard(),
+              SizedBox(height: 24),
+
               // Configuración
               _buildSectionTitle('Configuración'),
               SizedBox(height: 12),
@@ -138,6 +143,11 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
   }
 
   Widget _buildPremiumCard() {
+    // Feature flag: si premium está desactivado, no mostrar tarjeta
+    if (!AppConfigService().premiumEnabled) {
+      return const SizedBox.shrink();
+    }
+
     final colorScheme = Theme.of(context).colorScheme;
     final subscriptionService = SubscriptionService();
 
@@ -204,7 +214,7 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
                           Text(
                             isPremium
                                 ? 'Gestiona tu suscripción'
-                                : '7 días GRATIS - Filtros HD y efectos especiales',
+                                : 'Más face-swaps, sin anuncios, personajes exclusivos',
                             style: TextStyle(
                               color: Colors.white.withOpacity(0.9),
                               fontSize: 12,
@@ -403,7 +413,7 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
   // Navigation methods
   void _navigateToPremium() {
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (context) => PremiumScreen()),
+      MaterialPageRoute(builder: (context) => const SubscriptionScreen()),
     );
   }
 

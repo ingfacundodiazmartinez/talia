@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.83+138
+version: 1.0.84+139
 
 environment:
   sdk: ^3.9.2
@@ -112,6 +112,9 @@ dependencies:
   wakelock_plus: ^1.2.8  # Keep screen on during calls
   proximity_sensor: ^1.0.4  # Detect phone near ear for audio calls
   package_info_plus: ^8.0.0  # Get app version info
+  in_app_purchase: ^3.1.13  # In-App Purchases for Play Store and App Store
+  in_app_purchase_android: ^0.3.6  # Android-specific IAP (for upgrade/downgrade)
+  in_app_purchase_storekit: ^0.3.18  # iOS-specific IAP
 
   flutter_native_splash: any
   path: any

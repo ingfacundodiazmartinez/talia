@@ -4,8 +4,42 @@ const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
 const { getMessaging } = require("firebase-admin/messaging");
 const { getStorage } = require("firebase-admin/storage");
+const { getRemoteConfig } = require("firebase-admin/remote-config");
 const { mpClient, MP_ACCESS_TOKEN, MP_WEBHOOK_SECRET } = require("./helpers");
 const {MercadoPagoConfig, PreApprovalPlan, PreApproval, Payment} = require("mercadopago");
+
+// ═══════════════════════════════════════════════════════════════
+// REMOTE CONFIG: FEATURE FLAGS
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Verificar si el sistema premium está habilitado via Remote Config
+ * Si está deshabilitado, todos los usuarios tienen acceso Premium+
+ * @returns {Promise<boolean>} true si premium está habilitado, false si está deshabilitado
+ */
+async function isPremiumSystemEnabled() {
+  try {
+    const remoteConfig = getRemoteConfig();
+    const template = await remoteConfig.getTemplate();
+
+    if (template.parameters && template.parameters.premium_enabled) {
+      const defaultValue = template.parameters.premium_enabled.defaultValue;
+      if (defaultValue && defaultValue.value) {
+        const isEnabled = defaultValue.value.toLowerCase() === "true";
+        console.log(`🎛️ [RemoteConfig] premium_enabled = ${isEnabled}`);
+        return isEnabled;
+      }
+    }
+
+    // Default: premium system enabled
+    console.log("🎛️ [RemoteConfig] premium_enabled no encontrado, usando default: true");
+    return true;
+  } catch (error) {
+    console.error("❌ [RemoteConfig] Error obteniendo premium_enabled:", error.message);
+    // En caso de error, asumir que está habilitado (comportamiento por defecto)
+    return true;
+  }
+}
 
 // ═══════════════════════════════════════════════════════════════
 // PAYMENTS
@@ -17,6 +51,19 @@ exports.checkPremiumStatus = onCall(async (request) => {
 
     if (!request.auth) {
       throw new HttpsError("unauthenticated", "Usuario no autenticado");
+    }
+
+    // Verificar si el sistema premium está habilitado
+    const premiumEnabled = await isPremiumSystemEnabled();
+    if (!premiumEnabled) {
+      console.log("🎁 [checkPremiumStatus] Premium disabled - retornando acceso Premium+");
+      return {
+        isPremium: true,
+        subscriptionTier: "premium_plus",
+        expiresAt: null,
+        subscriptionType: "feature_flag_disabled",
+        premiumDisabled: true,
+      };
     }
 
     const data = request.data;

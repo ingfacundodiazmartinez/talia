@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../models/character.dart';
 import '../services/character_service.dart';
+import '../services/subscription_service.dart';
+import 'premium_paywall_dialog.dart';
 
 /// Dialog para seleccionar un personaje para transformación con IA
 class CharacterSelectorDialog extends StatefulWidget {
@@ -18,20 +20,31 @@ class CharacterSelectorDialog extends StatefulWidget {
 
 class _CharacterSelectorDialogState extends State<CharacterSelectorDialog> {
   final CharacterService _characterService = CharacterService();
+  final SubscriptionService _subscriptionService = SubscriptionService();
   List<Character> _characters = [];
   bool _isLoading = true;
   String? _errorMessage;
   String _selectedCategory = 'all';
+  SubscriptionTier _userTier = SubscriptionTier.free;
 
   @override
   void initState() {
     super.initState();
-    // Cargar personajes inmediatamente en background sin bloquear la UI
+    _loadUserTier();
     _loadCharactersAsync();
   }
 
+  /// Cargar el tier del usuario (forzar refresh para obtener estado actual)
+  Future<void> _loadUserTier() async {
+    final status = await _subscriptionService.checkPremiumStatus(forceRefresh: true);
+    if (mounted) {
+      setState(() {
+        _userTier = status.tier;
+      });
+    }
+  }
+
   /// Cargar personajes de forma asíncrona sin bloquear la UI
-  /// El diálogo se muestra inmediatamente mientras se cargan los personajes
   void _loadCharactersAsync() {
     _loadCharacters();
   }
@@ -381,65 +394,133 @@ class _CharacterSelectorDialogState extends State<CharacterSelectorDialog> {
     final colorScheme = Theme.of(context).colorScheme;
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
+    // Verificar si el usuario tiene acceso al personaje
+    final hasAccess = character.isAccessibleForTier(_userTier.name);
+    final isPremiumCharacter = character.accessLevel != CharacterAccessLevel.free;
+
     return GestureDetector(
       onTap: () {
-        Navigator.pop(context, character);
+        if (hasAccess) {
+          Navigator.pop(context, character);
+        } else {
+          // Mostrar paywall
+          _showPremiumPaywall(character);
+        }
       },
-      child: Container(
-        decoration: BoxDecoration(
-          color: isDarkMode
-              ? colorScheme.surfaceContainerHighest
-              : Colors.grey[100],
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: isDarkMode
-                ? colorScheme.outline.withValues(alpha: 0.3)
-                : Colors.grey[300]!,
-          ),
-        ),
-        child: Column(
-          children: [
-            Expanded(
-              child: ClipRRect(
-                borderRadius: BorderRadius.only(
-                  topLeft: Radius.circular(12),
-                  topRight: Radius.circular(12),
-                ),
-                child: character.thumbnailUrl.isNotEmpty &&
-                        !character.thumbnailUrl.contains('example.com')
-                    ? CachedNetworkImage(
-                        imageUrl: character.thumbnailUrl,
-                        fit: BoxFit.cover,
-                        width: double.infinity,
-                        placeholder: (context, url) => Center(
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Color(0xFF9D7FE8),
+      child: Stack(
+        children: [
+          Container(
+            decoration: BoxDecoration(
+              color: isDarkMode
+                  ? colorScheme.surfaceContainerHighest
+                  : Colors.grey[100],
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isPremiumCharacter && !hasAccess
+                    ? Color(0xFF6A1B9A).withValues(alpha: 0.5)
+                    : (isDarkMode
+                        ? colorScheme.outline.withValues(alpha: 0.3)
+                        : Colors.grey[300]!),
+                width: isPremiumCharacter && !hasAccess ? 2 : 1,
+              ),
+            ),
+            child: Column(
+              children: [
+                Expanded(
+                  child: Stack(
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.only(
+                          topLeft: Radius.circular(12),
+                          topRight: Radius.circular(12),
+                        ),
+                        child: character.thumbnailUrl.isNotEmpty &&
+                                !character.thumbnailUrl.contains('example.com')
+                            ? CachedNetworkImage(
+                                imageUrl: character.thumbnailUrl,
+                                fit: BoxFit.cover,
+                                width: double.infinity,
+                                placeholder: (context, url) => Center(
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Color(0xFF9D7FE8),
+                                  ),
+                                ),
+                                errorWidget: (context, url, error) {
+                                  return _buildPlaceholderIcon();
+                                },
+                              )
+                            : _buildPlaceholderIcon(),
+                      ),
+                      // Overlay oscuro si no tiene acceso
+                      if (!hasAccess)
+                        ClipRRect(
+                          borderRadius: BorderRadius.only(
+                            topLeft: Radius.circular(12),
+                            topRight: Radius.circular(12),
+                          ),
+                          child: Container(
+                            color: Colors.black.withValues(alpha: 0.4),
+                            child: Center(
+                              child: Icon(
+                                Icons.lock,
+                                color: Colors.white,
+                                size: 28,
+                              ),
+                            ),
                           ),
                         ),
-                        errorWidget: (context, url, error) {
-                          return _buildPlaceholderIcon();
-                        },
-                      )
-                    : _buildPlaceholderIcon(),
-              ),
-            ),
-            Container(
-              padding: EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-              child: Text(
-                character.name,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: isDarkMode ? colorScheme.onSurface : Colors.black87,
+                    ],
+                  ),
                 ),
-                textAlign: TextAlign.center,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+                Container(
+                  padding: EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                  child: Text(
+                    character.name,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: isDarkMode ? colorScheme.onSurface : Colors.black87,
+                    ),
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Badge Premium
+          if (isPremiumCharacter)
+            Positioned(
+              top: 6,
+              right: 6,
+              child: PremiumBadge(
+                requiredTier: character.accessLevel == CharacterAccessLevel.premiumPlus
+                    ? SubscriptionTier.premiumPlus
+                    : SubscriptionTier.premium,
+                mini: true,
               ),
             ),
-          ],
-        ),
+        ],
+      ),
+    );
+  }
+
+  /// Mostrar paywall cuando el usuario no tiene acceso al personaje
+  void _showPremiumPaywall(Character character) {
+    final requiredTier = character.accessLevel == CharacterAccessLevel.premiumPlus
+        ? SubscriptionTier.premiumPlus
+        : SubscriptionTier.premium;
+
+    PremiumPaywallDialog.show(
+      context,
+      feature: PremiumFeature(
+        id: 'character_${character.id}',
+        name: 'Personaje ${character.name}',
+        description: 'Este personaje está disponible para usuarios ${requiredTier.displayName}. Actualiza tu plan para desbloquear todos los personajes exclusivos.',
+        iconName: '🎭',
+        requiredTier: requiredTier,
       ),
     );
   }

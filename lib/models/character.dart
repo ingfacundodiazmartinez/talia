@@ -1,5 +1,34 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+/// Nivel de acceso requerido para usar el personaje
+enum CharacterAccessLevel {
+  free,      // Disponible para todos
+  premium,   // Solo Premium y Premium+
+  premiumPlus;  // Solo Premium+
+
+  static CharacterAccessLevel fromString(String? value) {
+    switch (value?.toLowerCase()) {
+      case 'premium':
+        return CharacterAccessLevel.premium;
+      case 'premium_plus':
+        return CharacterAccessLevel.premiumPlus;
+      default:
+        return CharacterAccessLevel.free;
+    }
+  }
+
+  String get name {
+    switch (this) {
+      case CharacterAccessLevel.free:
+        return 'free';
+      case CharacterAccessLevel.premium:
+        return 'premium';
+      case CharacterAccessLevel.premiumPlus:
+        return 'premium_plus';
+    }
+  }
+}
+
 /// Modelo de personaje para transformación con IA
 class Character {
   final String id;
@@ -11,6 +40,8 @@ class Character {
   final int order;
   final Map<String, dynamic>? modelConfig;
   final DateTime createdAt;
+  /// Nivel de acceso requerido para usar este personaje
+  final CharacterAccessLevel accessLevel;
 
   Character({
     required this.id,
@@ -22,6 +53,7 @@ class Character {
     this.order = 0,
     this.modelConfig,
     required this.createdAt,
+    this.accessLevel = CharacterAccessLevel.free,
   });
 
   /// Crear Character desde documento de Firestore
@@ -37,6 +69,7 @@ class Character {
       order: data['order'] ?? 0,
       modelConfig: data['modelConfig'] as Map<String, dynamic>?,
       createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      accessLevel: CharacterAccessLevel.fromString(data['accessLevel'] as String?),
     );
   }
 
@@ -51,7 +84,20 @@ class Character {
       'order': order,
       'modelConfig': modelConfig,
       'createdAt': Timestamp.fromDate(createdAt),
+      'accessLevel': accessLevel.name,
     };
+  }
+
+  /// Verificar si el personaje es accesible para un tier dado
+  bool isAccessibleForTier(String tierName) {
+    switch (accessLevel) {
+      case CharacterAccessLevel.free:
+        return true; // Todos pueden usar personajes free
+      case CharacterAccessLevel.premium:
+        return tierName == 'premium' || tierName == 'premium_plus';
+      case CharacterAccessLevel.premiumPlus:
+        return tierName == 'premium_plus';
+    }
   }
 
   /// Copiar con modificaciones
@@ -65,6 +111,7 @@ class Character {
     int? order,
     Map<String, dynamic>? modelConfig,
     DateTime? createdAt,
+    CharacterAccessLevel? accessLevel,
   }) {
     return Character(
       id: id ?? this.id,
@@ -76,6 +123,7 @@ class Character {
       order: order ?? this.order,
       modelConfig: modelConfig ?? this.modelConfig,
       createdAt: createdAt ?? this.createdAt,
+      accessLevel: accessLevel ?? this.accessLevel,
     );
   }
 }

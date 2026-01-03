@@ -127,7 +127,19 @@ class StoryRepository {
   }
 
   /// Stream de historias de un usuario específico
+  /// @deprecated Este método causa errores de permisos. Usar getStoriesAvailableForUser
+  @Deprecated('Use getStoriesAvailableForUser instead - causes permission errors')
   Stream<List<Story>> getByUserIdStream(String userId) {
+    // Log para identificar quién está llamando este método deprecated
+    ReleaseLogger.error(
+      '⚠️ [StoryRepository] DEPRECATED getByUserIdStream called for userId: $userId',
+      tag: 'StoryRepository',
+    );
+    // Imprimir stack trace para identificar el llamador
+    ReleaseLogger.error(
+      'Stack trace: ${StackTrace.current}',
+      tag: 'StoryRepository',
+    );
     return _firestore
         .collection('stories')
         .where('userId', isEqualTo: userId)

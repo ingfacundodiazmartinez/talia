@@ -84,6 +84,9 @@ const userProfile = require("./user-profile");
 // Pagos y suscripciones
 const payments = require("./payments");
 
+// IAP Verification (Play Store & App Store)
+const iapVerification = require("./iap-verification");
+
 // Tareas programadas
 const scheduledTasks = require("./scheduled-tasks");
 
@@ -210,6 +213,14 @@ exports.createCheckoutSession = payments.createCheckoutSession;
 exports.cancelSubscription = payments.cancelSubscription;
 exports.handleStripeWebhook = payments.handleStripeWebhook;
 exports.handleMercadoPagoWebhook = payments.handleMercadoPagoWebhook;
+
+// IAP Verification (In-App Purchases)
+exports.verifyPlayStorePurchase = iapVerification.verifyPlayStorePurchase;
+exports.verifyAppStorePurchase = iapVerification.verifyAppStorePurchase;
+exports.handlePlayStoreNotification = iapVerification.handlePlayStoreNotification;
+exports.handleAppStoreNotification = iapVerification.handleAppStoreNotification;
+exports.validateDiscountCode = iapVerification.validateDiscountCode;
+exports.applyDiscountCode = iapVerification.applyDiscountCode;
 
 // Tareas programadas
 exports.convertExpiredStoriesToPermanent = scheduledTasks.convertExpiredStoriesToPermanent;

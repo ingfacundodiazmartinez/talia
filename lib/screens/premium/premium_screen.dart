@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../services/subscription_service.dart';
+import '../../services/app_config_service.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 /// Pantalla principal de Premium
@@ -21,7 +22,20 @@ class _PremiumScreenState extends State<PremiumScreen> {
   @override
   void initState() {
     super.initState();
+    _checkPremiumEnabled();
     _loadPremiumStatus();
+  }
+
+  /// Verifica si el sistema premium está habilitado
+  /// Si está desactivado, cierra la pantalla
+  void _checkPremiumEnabled() {
+    if (!AppConfigService().premiumEnabled) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          Navigator.of(context).pop();
+        }
+      });
+    }
   }
 
   Future<void> _loadPremiumStatus() async {
@@ -262,7 +276,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
           const Icon(Icons.auto_awesome, color: Colors.amber, size: 60),
           const SizedBox(height: 20),
           const Text(
-            'Desbloquea el Poder de la IA',
+            'Mejora tu experiencia',
             style: TextStyle(
               color: Colors.white,
               fontSize: 28,
@@ -272,30 +286,12 @@ class _PremiumScreenState extends State<PremiumScreen> {
           ),
           const SizedBox(height: 10),
           const Text(
-            'Transforma tus fotos y videos con efectos premium de inteligencia artificial',
+            'Más transformaciones, personajes exclusivos y sin anuncios',
             style: TextStyle(
               color: Colors.white70,
               fontSize: 16,
             ),
             textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 15),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.2),
-              borderRadius: BorderRadius.circular(25),
-              border: Border.all(color: Colors.white, width: 2),
-            ),
-            child: const Text(
-              'Prueba GRATIS por 7 días',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 0.5,
-              ),
-            ),
           ),
         ],
       ),
@@ -413,26 +409,6 @@ class _PremiumScreenState extends State<PremiumScreen> {
                 fontSize: 14,
               ),
             ),
-            const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: isSelected ? Colors.white.withOpacity(0.2) : Colors.green.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: isSelected ? Colors.white : Colors.green,
-                  width: 1,
-                ),
-              ),
-              child: Text(
-                '7 días GRATIS',
-                style: TextStyle(
-                  color: isSelected ? Colors.white : Colors.green,
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
           ],
         ),
       ),
@@ -441,7 +417,6 @@ class _PremiumScreenState extends State<PremiumScreen> {
 
   Widget _buildFeaturesList() {
     final features = PremiumFeature.forTier(_selectedTier);
-    final allFeatures = PremiumFeature.all;
     final colorScheme = Theme.of(context).colorScheme;
 
     return Padding(
@@ -458,16 +433,15 @@ class _PremiumScreenState extends State<PremiumScreen> {
             ),
           ),
           const SizedBox(height: 15),
-          ...allFeatures.map((feature) {
-            final isIncluded = features.contains(feature);
+          ...features.map((feature) {
             return Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Icon(
-                    isIncluded ? Icons.check_circle : Icons.cancel,
-                    color: isIncluded ? Colors.green : colorScheme.outline,
+                    Icons.check_circle,
+                    color: Colors.green,
                     size: 24,
                   ),
                   const SizedBox(width: 12),
@@ -480,7 +454,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
-                            color: isIncluded ? colorScheme.onSurface : colorScheme.onSurfaceVariant,
+                            color: colorScheme.onSurface,
                           ),
                         ),
                         const SizedBox(height: 4),
@@ -488,7 +462,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
                           feature.description,
                           style: TextStyle(
                             fontSize: 14,
-                            color: isIncluded ? colorScheme.onSurfaceVariant : colorScheme.outline,
+                            color: colorScheme.onSurfaceVariant,
                           ),
                         ),
                       ],
@@ -498,20 +472,6 @@ class _PremiumScreenState extends State<PremiumScreen> {
               ),
             );
           }),
-          const SizedBox(height: 10),
-          if (_selectedTier == SubscriptionTier.premium ||
-              _selectedTier == SubscriptionTier.premiumPlus) ...[
-            _buildFeatureItem(
-              icon: Icons.block,
-              title: 'Sin anuncios',
-              description: 'Disfruta de una experiencia sin publicidad',
-            ),
-            _buildFeatureItem(
-              icon: Icons.cloud_upload,
-              title: 'Almacenamiento ampliado',
-              description: 'Guarda más historias y contenido',
-            ),
-          ],
         ],
       ),
     );

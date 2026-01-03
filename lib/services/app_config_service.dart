@@ -60,6 +60,7 @@ class AppConfigService {
         'admob_ios_native_ad_id': _testIosNativeAdId,
         'admob_android_rewarded_ad_id': _testAndroidRewardedAdId,
         'admob_ios_rewarded_ad_id': _testIosRewardedAdId,
+        'premium_enabled': true, // Feature flag para sistema premium
       });
 
       // 4. Intentar obtener configuración remota
@@ -121,6 +122,40 @@ class AppConfigService {
 
   /// Verifica si Remote Config está inicializado
   bool get isInitialized => _initialized;
+
+  /// Feature flag para sistema premium
+  ///
+  /// Cuando está desactivado (false):
+  /// - Todos los usuarios tienen acceso completo (como Premium+)
+  /// - No aparecen paywalls, badges premium, ni UI de suscripciones
+  /// - No se aplican límites de uso
+  /// - No se inicializa IAP
+  ///
+  /// Jerarquía: .env → Remote Config → default (true)
+  bool get premiumEnabled {
+    try {
+      // 1. Variable de entorno (para testing local)
+      final envValue = dotenv.env['PREMIUM_ENABLED'];
+      if (envValue != null && envValue.isNotEmpty) {
+        final enabled = envValue.toLowerCase() == 'true';
+        ReleaseLogger.log('Premium enabled desde .env: $enabled', tag: 'AppConfig');
+        return enabled;
+      }
+
+      // 2. Remote Config
+      if (_initialized) {
+        final remoteValue = _remoteConfig.getBool('premium_enabled');
+        ReleaseLogger.log('Premium enabled desde Remote Config: $remoteValue', tag: 'AppConfig');
+        return remoteValue;
+      }
+
+      // 3. Default: true (premium habilitado por defecto)
+      return true;
+    } catch (e) {
+      ReleaseLogger.error('Error obteniendo premium_enabled: $e', tag: 'AppConfig');
+      return true; // Default: habilitado
+    }
+  }
 
   /// Obtiene el AdMob Native Ad ID para Android
   ///

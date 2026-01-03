@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import '../models/character.dart';
 import '../utils/release_logger.dart';
+import 'subscription_service.dart';
 
 /// Servicio para gestionar personajes y transformaciones con IA
 class CharacterService {
@@ -13,6 +14,7 @@ class CharacterService {
 
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseFunctions _functions = FirebaseFunctions.instance;
+  final SubscriptionService _subscriptionService = SubscriptionService();
 
   // ✅ Cache de personajes para evitar queries repetidas
   List<Character>? _cachedCharacters;
@@ -76,6 +78,54 @@ class CharacterService {
       }
 
       return [];
+    }
+  }
+
+  /// Obtener personajes filtrados según el tier del usuario actual
+  /// - Free: solo personajes con accessLevel = 'free'
+  /// - Premium: personajes con accessLevel = 'free' o 'premium'
+  /// - Premium+: todos los personajes
+  Future<List<Character>> getCharactersForCurrentUser() async {
+    try {
+      // Obtener todos los personajes habilitados
+      final allCharacters = await getEnabledCharacters();
+
+      // Obtener el tier del usuario actual
+      final status = await _subscriptionService.checkPremiumStatus();
+      final tierName = status.tier.name;
+
+      ReleaseLogger.log('🎭 Filtrando personajes para tier: $tierName', tag: 'CharacterService');
+
+      // Filtrar según el tier
+      final filteredCharacters = allCharacters.where((character) {
+        return character.isAccessibleForTier(tierName);
+      }).toList();
+
+      ReleaseLogger.log('✅ ${filteredCharacters.length}/${allCharacters.length} personajes disponibles para $tierName', tag: 'CharacterService');
+
+      return filteredCharacters;
+    } catch (e) {
+      ReleaseLogger.error('❌ Error filtrando personajes por tier: $e', tag: 'CharacterService');
+      // En caso de error, retornar solo personajes free para seguridad
+      final allCharacters = await getEnabledCharacters();
+      return allCharacters.where((c) => c.accessLevel == CharacterAccessLevel.free).toList();
+    }
+  }
+
+  /// Verificar si el usuario actual puede usar un personaje específico
+  Future<bool> canUserAccessCharacter(String characterId) async {
+    try {
+      final status = await _subscriptionService.checkPremiumStatus();
+      final tierName = status.tier.name;
+
+      final allCharacters = await getEnabledCharacters();
+      final character = allCharacters.where((c) => c.id == characterId).firstOrNull;
+
+      if (character == null) return false;
+
+      return character.isAccessibleForTier(tierName);
+    } catch (e) {
+      return false;
     }
   }
 

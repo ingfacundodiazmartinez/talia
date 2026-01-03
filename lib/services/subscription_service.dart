@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'app_config_service.dart';
 
 /// Servicio para gestionar suscripciones premium
 /// Maneja la verificación de estado premium, compra de suscripciones,
@@ -13,6 +14,7 @@ class SubscriptionService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseFunctions _functions = FirebaseFunctions.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
+  final AppConfigService _appConfig = AppConfigService();
 
   // Cache del estado premium para evitar múltiples llamadas
   PremiumStatus? _cachedStatus;
@@ -21,8 +23,16 @@ class SubscriptionService {
 
   /// Verificar si el usuario actual tiene premium activo
   /// Usa caché local para evitar llamadas excesivas a Firestore
+  ///
+  /// Si el feature flag `premium_enabled` está desactivado, retorna Premium+
+  /// para todos los usuarios (acceso completo sin restricciones)
   Future<PremiumStatus> checkPremiumStatus({bool forceRefresh = false}) async {
     try {
+      // Feature flag: si premium está desactivado, todos son Premium+
+      if (!_appConfig.premiumEnabled) {
+        return PremiumStatus.allAccess();
+      }
+
       final user = _auth.currentUser;
       if (user == null) {
         return PremiumStatus.free();
@@ -177,7 +187,14 @@ class SubscriptionService {
 
   /// Stream del estado premium del usuario actual
   /// Escucha cambios en tiempo real desde Firestore
+  ///
+  /// Si el feature flag `premium_enabled` está desactivado, emite Premium+
   Stream<PremiumStatus> premiumStatusStream() {
+    // Feature flag: si premium está desactivado, todos son Premium+
+    if (!_appConfig.premiumEnabled) {
+      return Stream.value(PremiumStatus.allAccess());
+    }
+
     final user = _auth.currentUser;
     if (user == null) {
       return Stream.value(PremiumStatus.free());
@@ -217,6 +234,10 @@ class SubscriptionService {
     _cachedStatus = null;
     _cacheTimestamp = null;
   }
+
+  /// Verifica si el sistema premium está habilitado
+  /// Cuando está desactivado, toda la UI de premium debe ocultarse
+  bool get isPremiumSystemEnabled => _appConfig.premiumEnabled;
 }
 
 // ============================================================================
@@ -241,6 +262,16 @@ class PremiumStatus {
     return PremiumStatus(
       isPremium: false,
       tier: SubscriptionTier.free,
+    );
+  }
+
+  /// Factory para acceso completo (cuando feature flag está desactivado)
+  /// Simula Premium+ sin expiración
+  factory PremiumStatus.allAccess() {
+    return PremiumStatus(
+      isPremium: true,
+      tier: SubscriptionTier.premiumPlus,
+      subscriptionType: 'feature_flag_disabled',
     );
   }
 
@@ -294,9 +325,9 @@ enum SubscriptionTier {
       case SubscriptionTier.free:
         return 0.0;
       case SubscriptionTier.premium:
-        return 2.99;
-      case SubscriptionTier.premiumPlus:
         return 4.99;
+      case SubscriptionTier.premiumPlus:
+        return 9.99;
     }
   }
 
@@ -314,11 +345,39 @@ enum SubscriptionTier {
   String get description {
     switch (this) {
       case SubscriptionTier.free:
-        return 'Funciones básicas y filtros estándar';
+        return '3 face-swaps/día, personajes básicos';
       case SubscriptionTier.premium:
-        return 'Todos los filtros, face-swap HD, efectos avanzados';
+        return '50 face-swaps/mes, personajes exclusivos, sin anuncios';
       case SubscriptionTier.premiumPlus:
-        return 'Todo Premium + generador de avatares y video IA';
+        return '100 face-swaps/mes, todos los personajes, family plan';
+    }
+  }
+
+  /// Lista de beneficios por tier
+  List<String> get benefits {
+    switch (this) {
+      case SubscriptionTier.free:
+        return [
+          '3 face-swaps por día',
+          'Personajes básicos',
+          'Reportes con anuncios',
+        ];
+      case SubscriptionTier.premium:
+        return [
+          '50 face-swaps por mes',
+          'Personajes exclusivos',
+          'Sin anuncios',
+          '30 reportes por mes',
+        ];
+      case SubscriptionTier.premiumPlus:
+        return [
+          '100 face-swaps por mes',
+          'Todos los personajes',
+          'Sin anuncios',
+          '100 reportes por mes',
+          'Family plan (3 hijos incluidos)',
+          'Soporte prioritario',
+        ];
     }
   }
 }
@@ -339,76 +398,88 @@ class PremiumFeature {
     this.iconName = '✨',
   });
 
-  // Features predefinidas
-  static const faceSwapHD = PremiumFeature(
-    id: 'face_swap_hd',
-    name: 'Face Swap HD',
-    description: 'Face swap en alta calidad con mejor detección',
+  // Features reales del plan
+  static const moreFaceSwaps = PremiumFeature(
+    id: 'more_face_swaps',
+    name: 'Más Face Swaps',
+    description: '50 transformaciones por mes (vs 3/día en plan gratis)',
     requiredTier: SubscriptionTier.premium,
     iconName: '🎭',
   );
 
-  static const styleTransfer = PremiumFeature(
-    id: 'style_transfer',
-    name: 'Transformación de Estilo',
-    description: 'Convierte fotos en cartoon, anime, pixel art',
+  static const exclusiveCharacters = PremiumFeature(
+    id: 'exclusive_characters',
+    name: 'Personajes Exclusivos',
+    description: 'Accede a personajes premium para Face Swap',
     requiredTier: SubscriptionTier.premium,
-    iconName: '🎨',
+    iconName: '⭐',
   );
 
-  static const backgroundEffects = PremiumFeature(
-    id: 'background_effects',
-    name: 'Efectos de Fondo',
-    description: 'Cambia y transforma fondos de fotos',
+  static const noAds = PremiumFeature(
+    id: 'no_ads',
+    name: 'Sin Anuncios',
+    description: 'Usa la app sin interrupciones publicitarias',
     requiredTier: SubscriptionTier.premium,
-    iconName: '🌄',
+    iconName: '🚫',
   );
 
-  static const avatarGenerator = PremiumFeature(
-    id: 'avatar_generator',
-    name: 'Generador de Avatares IA',
-    description: 'Crea avatares únicos con IA',
+  static const monthlyReports = PremiumFeature(
+    id: 'monthly_reports',
+    name: 'Reportes Mensuales',
+    description: 'Hasta 30 reportes de actividad por mes',
+    requiredTier: SubscriptionTier.premium,
+    iconName: '📊',
+  );
+
+  static const maxFaceSwaps = PremiumFeature(
+    id: 'max_face_swaps',
+    name: 'Más Face Swaps',
+    description: '100 transformaciones por mes',
     requiredTier: SubscriptionTier.premiumPlus,
-    iconName: '👤',
+    iconName: '🎭',
   );
 
-  static const textToImage = PremiumFeature(
-    id: 'text_to_image',
-    name: 'Texto a Imagen',
-    description: 'Genera imágenes desde descripciones',
+  static const allCharacters = PremiumFeature(
+    id: 'all_characters',
+    name: 'Todos los Personajes',
+    description: 'Acceso completo a todos los personajes',
     requiredTier: SubscriptionTier.premiumPlus,
-    iconName: '🖼️',
+    iconName: '👑',
   );
 
-  static const videoEffects = PremiumFeature(
-    id: 'video_effects',
-    name: 'Efectos de Video IA',
-    description: 'Aplica efectos avanzados a videos',
+  static const maxReports = PremiumFeature(
+    id: 'max_reports',
+    name: 'Más Reportes',
+    description: 'Hasta 100 reportes de actividad por mes',
     requiredTier: SubscriptionTier.premiumPlus,
-    iconName: '🎬',
+    iconName: '📈',
   );
 
-  // Lista de todas las features
-  static const List<PremiumFeature> all = [
-    faceSwapHD,
-    styleTransfer,
-    backgroundEffects,
-    avatarGenerator,
-    textToImage,
-    videoEffects,
-  ];
+  static const familyPlan = PremiumFeature(
+    id: 'family_plan',
+    name: 'Plan Familiar',
+    description: '3 hijos incluidos en tu suscripción',
+    requiredTier: SubscriptionTier.premiumPlus,
+    iconName: '👨‍👩‍👧‍👦',
+  );
 
-  // Features por tier
+  static const prioritySupport = PremiumFeature(
+    id: 'priority_support',
+    name: 'Soporte Prioritario',
+    description: 'Atención preferencial para tus consultas',
+    requiredTier: SubscriptionTier.premiumPlus,
+    iconName: '💬',
+  );
+
+  // Lista de features por tier
   static List<PremiumFeature> forTier(SubscriptionTier tier) {
     switch (tier) {
       case SubscriptionTier.free:
         return [];
       case SubscriptionTier.premium:
-        return all.where((f) =>
-          f.requiredTier == SubscriptionTier.premium
-        ).toList();
+        return [moreFaceSwaps, exclusiveCharacters, noAds, monthlyReports];
       case SubscriptionTier.premiumPlus:
-        return all; // Todas las features
+        return [maxFaceSwaps, allCharacters, noAds, maxReports, familyPlan, prioritySupport];
     }
   }
 }

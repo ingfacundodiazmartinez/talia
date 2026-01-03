@@ -4,10 +4,202 @@ const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
 const { getMessaging } = require("firebase-admin/messaging");
 const { getStorage } = require("firebase-admin/storage");
+const { getRemoteConfig } = require("firebase-admin/remote-config");
 const Replicate = require("replicate");
 const sharp = require("sharp");
 const axios = require("axios");
 const { v4: uuidv4 } = require("uuid");
+
+// ═══════════════════════════════════════════════════════════════
+// REMOTE CONFIG: FEATURE FLAGS
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Verificar si el sistema premium está habilitado via Remote Config
+ * Si está deshabilitado, todos los usuarios tienen acceso Premium+
+ * @returns {Promise<boolean>} true si premium está habilitado, false si está deshabilitado
+ */
+async function isPremiumSystemEnabled() {
+  try {
+    const remoteConfig = getRemoteConfig();
+    const template = await remoteConfig.getTemplate();
+
+    if (template.parameters && template.parameters.premium_enabled) {
+      const defaultValue = template.parameters.premium_enabled.defaultValue;
+      if (defaultValue && defaultValue.value) {
+        const isEnabled = defaultValue.value.toLowerCase() === "true";
+        console.log(`🎛️ [RemoteConfig] premium_enabled = ${isEnabled}`);
+        return isEnabled;
+      }
+    }
+
+    // Default: premium system enabled
+    console.log("🎛️ [RemoteConfig] premium_enabled no encontrado, usando default: true");
+    return true;
+  } catch (error) {
+    console.error("❌ [RemoteConfig] Error obteniendo premium_enabled:", error.message);
+    // En caso de error, asumir que está habilitado (comportamiento por defecto)
+    return true;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// LÍMITES DE FACE-SWAP POR TIER (sincronizado con Flutter)
+// ═══════════════════════════════════════════════════════════════
+
+// Free: límite DIARIO (3/día)
+// Premium/Premium+: límite MENSUAL (50/mes y 100/mes)
+const FACE_SWAP_LIMITS = {
+  free: { limit: 3, period: "daily" },
+  premium: { limit: 50, period: "monthly" },
+  premium_plus: { limit: 100, period: "monthly" },
+};
+
+/**
+ * Obtener el día actual en formato YYYY-MM-DD
+ */
+function getCurrentDay() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * Obtener el mes actual en formato YYYY-MM
+ */
+function getCurrentMonth() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  return `${year}-${month}`;
+}
+
+/**
+ * Verificar si el usuario puede usar face-swap según su plan
+ * @param {string} userId - ID del usuario
+ * @returns {Promise<{canUse: boolean, remaining: number, limit: number, tier: string, period: string}>}
+ */
+async function checkFaceSwapLimit(userId) {
+  const db = getFirestore();
+
+  try {
+    // 0. Verificar si el sistema premium está habilitado
+    // Si está deshabilitado, todos los usuarios tienen acceso Premium+ sin límites
+    const premiumEnabled = await isPremiumSystemEnabled();
+    if (!premiumEnabled) {
+      console.log(`🎁 [FaceSwapLimit] Premium disabled - Usuario ${userId} tiene acceso Premium+ ilimitado`);
+      return {
+        canUse: true,
+        remaining: 999999, // Prácticamente ilimitado
+        limit: 999999,
+        tier: "premium_plus",
+        period: "unlimited",
+        premiumDisabled: true,
+      };
+    }
+
+    // 1. Obtener tier del usuario
+    const userDoc = await db.collection("users").doc(userId).get();
+    let tier = "free";
+
+    if (userDoc.exists) {
+      const userData = userDoc.data();
+      const isPremium = userData.isPremium === true;
+      const premiumExpiresAt = userData.premiumExpiresAt;
+
+      // Verificar si el premium ha expirado
+      if (isPremium && premiumExpiresAt) {
+        const expiryDate = premiumExpiresAt.toDate ? premiumExpiresAt.toDate() : new Date(premiumExpiresAt);
+        if (expiryDate > new Date()) {
+          tier = userData.subscriptionTier || "premium";
+        }
+      } else if (isPremium && !premiumExpiresAt) {
+        tier = userData.subscriptionTier || "premium";
+      }
+    }
+
+    // 2. Obtener configuración de límites para este tier
+    const limitConfig = FACE_SWAP_LIMITS[tier] || FACE_SWAP_LIMITS.free;
+    const { limit, period } = limitConfig;
+
+    // 3. Obtener uso actual
+    const limitsDoc = await db.collection("user_limits").doc(userId).get();
+
+    if (!limitsDoc.exists) {
+      // Primera vez, puede usar
+      return { canUse: true, remaining: limit, limit, tier, period };
+    }
+
+    const limitsData = limitsDoc.data();
+    let count = 0;
+    let isNewPeriod = false;
+
+    if (period === "daily") {
+      const currentDay = getCurrentDay();
+      const savedDay = limitsData.faceSwapDay;
+      count = limitsData.faceSwapDailyCount || 0;
+      isNewPeriod = savedDay !== currentDay;
+    } else {
+      const currentMonth = getCurrentMonth();
+      const savedMonth = limitsData.faceSwapMonth;
+      count = limitsData.faceSwapMonthlyCount || 0;
+      isNewPeriod = savedMonth !== currentMonth;
+    }
+
+    // Si es un nuevo período, resetear contador
+    if (isNewPeriod) {
+      count = 0;
+    }
+
+    const remaining = Math.max(0, limit - count);
+    const canUse = count < limit;
+
+    console.log(`🔒 [FaceSwapLimit] Usuario: ${userId}, Tier: ${tier}, Usado: ${count}/${limit}, Puede usar: ${canUse}`);
+
+    return { canUse, remaining, limit, tier, period, count };
+  } catch (error) {
+    console.error(`❌ [FaceSwapLimit] Error verificando límites: ${error.message}`);
+    // En caso de error, denegar por seguridad
+    return { canUse: false, remaining: 0, limit: 0, tier: "error", period: "unknown" };
+  }
+}
+
+/**
+ * Incrementar el contador de face-swap del usuario
+ * @param {string} userId - ID del usuario
+ * @param {string} tier - Tier del usuario (para saber si es diario o mensual)
+ */
+async function incrementFaceSwapCount(userId, tier) {
+  const db = getFirestore();
+  const limitConfig = FACE_SWAP_LIMITS[tier] || FACE_SWAP_LIMITS.free;
+  const { period } = limitConfig;
+
+  try {
+    const docRef = db.collection("user_limits").doc(userId);
+
+    if (period === "daily") {
+      const currentDay = getCurrentDay();
+      await docRef.set({
+        faceSwapDay: currentDay,
+        faceSwapDailyCount: FieldValue.increment(1),
+        lastFaceSwapDaily: FieldValue.serverTimestamp(),
+      }, { merge: true });
+    } else {
+      const currentMonth = getCurrentMonth();
+      await docRef.set({
+        faceSwapMonth: currentMonth,
+        faceSwapMonthlyCount: FieldValue.increment(1),
+        lastFaceSwapMonthly: FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+
+    console.log(`📈 [FaceSwapLimit] Contador incrementado para ${userId} (${period})`);
+  } catch (error) {
+    console.error(`❌ [FaceSwapLimit] Error incrementando contador: ${error.message}`);
+  }
+}
 
 // ═══════════════════════════════════════════════════════════════
 // HELPER: Normalizar orientación de imagen (fix EXIF rotation)
@@ -128,6 +320,17 @@ exports.transformCharacter = onCall(
 
     if (!imageUrl || !characterId) {
       throw new HttpsError("invalid-argument", "imageUrl y characterId son requeridos");
+    }
+
+    // ✅ VERIFICAR LÍMITES SEGÚN PLAN
+    const limitCheck = await checkFaceSwapLimit(userId);
+    if (!limitCheck.canUse) {
+      const periodText = limitCheck.period === "daily" ? "hoy" : "este mes";
+      throw new HttpsError(
+        "resource-exhausted",
+        `Has alcanzado el límite de ${limitCheck.limit} transformaciones ${periodText}. ` +
+        `Actualiza a Premium para obtener más transformaciones.`
+      );
     }
 
     const db = getFirestore();
@@ -326,6 +529,9 @@ exports.transformCharacter = onCall(
 
       console.log(`📊 [TransformCharacter] Analytics guardado`);
 
+      // ✅ INCREMENTAR CONTADOR DE USO
+      await incrementFaceSwapCount(userId, limitCheck.tier);
+
       // Limpiar archivo temporal si existe
       if (tempFilePath) {
         await cleanupTempFile(tempFilePath);
@@ -334,6 +540,7 @@ exports.transformCharacter = onCall(
       return {
         transformedImageUrl: transformedImageUrl,
         characterName: characterData.name,
+        remaining: limitCheck.remaining - 1,
       };
     } catch (error) {
       console.error("❌ [TransformCharacter] Error:", error);
@@ -384,6 +591,17 @@ exports.createCharacterTransformation = onCall(
 
     if (!imageUrl || !characterId) {
       throw new HttpsError("invalid-argument", "imageUrl y characterId son requeridos");
+    }
+
+    // ✅ VERIFICAR LÍMITES SEGÚN PLAN
+    const limitCheck = await checkFaceSwapLimit(userId);
+    if (!limitCheck.canUse) {
+      const periodText = limitCheck.period === "daily" ? "hoy" : "este mes";
+      throw new HttpsError(
+        "resource-exhausted",
+        `Has alcanzado el límite de ${limitCheck.limit} transformaciones ${periodText}. ` +
+        `Actualiza a Premium para obtener más transformaciones.`
+      );
     }
 
     const db = getFirestore();
@@ -534,12 +752,16 @@ exports.createCharacterTransformation = onCall(
         deleteAt: Timestamp.fromDate(analyticsDeleteAt), // TTL: 30 días
       });
 
-      // 9. Retornar inmediatamente - el cliente escuchará Firestore
+      // 9. Incrementar contador de uso (hacerlo aquí para evitar race conditions)
+      await incrementFaceSwapCount(userId, limitCheck.tier);
+
+      // 10. Retornar inmediatamente - el cliente escuchará Firestore
       return {
         statusDocId: statusDocId,
         predictionId: prediction.id,
         status: prediction.status,
         characterName: characterData.name,
+        remaining: limitCheck.remaining - 1,
       };
     } catch (error) {
       console.error("❌ [CreateCharacterTransformation] Error:", error);

@@ -6,6 +6,9 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'utils/release_logger.dart';
 import 'services/ad_service.dart';
 import 'services/subscription_service.dart';
+import 'services/usage_limits_service.dart';
+import 'widgets/premium_paywall_dialog.dart';
+import 'screens/settings/subscription_screen.dart';
 
 class ReportsScreen extends StatefulWidget {
   /// Opcional: si se proporciona, filtra alertas y reportes solo de este hijo
@@ -23,6 +26,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   late final FirebaseAuth _auth;
   late final FirebaseFirestore _firestore;
   final AdService _adService = AdService();
+  final UsageLimitsService _usageLimitsService = UsageLimitsService();
 
   @override
   void initState() {
@@ -941,13 +945,37 @@ class _ReportsScreenState extends State<ReportsScreen> {
     ReleaseLogger.log('_generateReport llamado para $childName ($childId)', tag: 'ReportsScreen');
     final scaffoldContext = context;
 
-    // ✅ PASO 1: Verificar si el usuario es Premium (no necesita ver ad)
-    ReleaseLogger.log('Verificando status Premium...', tag: 'ReportsScreen');
+    // ✅ PASO 1: Verificar status Premium y límites de uso
+    ReleaseLogger.log('Verificando status Premium y límites...', tag: 'ReportsScreen');
     final premiumStatus = await SubscriptionService().checkPremiumStatus();
-    final needsRewardedAd = !premiumStatus.isPremium;
-    ReleaseLogger.log('isPremium=${premiumStatus.isPremium}, needsRewardedAd=$needsRewardedAd', tag: 'ReportsScreen');
+    final usageData = await _usageLimitsService.getReportsMonthlyUsage();
+    final remaining = usageData['remaining'] as int;
+    final limit = usageData['limit'] as int;
+    final tier = usageData['tier'] as String;
 
-    // ✅ PASO 2: Si no es Premium, mostrar dialog de Rewarded Video
+    ReleaseLogger.log('isPremium=${premiumStatus.isPremium}, tier=$tier, remaining=$remaining/$limit', tag: 'ReportsScreen');
+
+    // ✅ PASO 2: Si es Premium/Premium+ pero llegó al límite mensual, mostrar paywall
+    if (premiumStatus.isPremium && remaining <= 0) {
+      if (mounted) {
+        ReleaseLogger.log('Usuario $tier alcanzó límite de reportes ($limit/mes)', tag: 'ReportsScreen');
+        PremiumPaywallDialog.show(
+          context,
+          feature: PremiumFeature(
+            id: 'reports_limit',
+            name: 'Reportes mensuales',
+            description: 'Has alcanzado el límite de $limit reportes este mes. Actualiza a Premium+ para obtener más reportes mensuales.',
+            iconName: '📊',
+            requiredTier: SubscriptionTier.premiumPlus,
+          ),
+        );
+      }
+      return;
+    }
+
+    final needsRewardedAd = !premiumStatus.isPremium;
+
+    // ✅ PASO 3: Si no es Premium, mostrar dialog de Rewarded Video con opción Premium
     if (needsRewardedAd && mounted) {
       ReleaseLogger.log('Usuario FREE, mostrando dialog de Rewarded Ad...', tag: 'ReportsScreen');
       final shouldProceed = await _showRewardedAdDialog(scaffoldContext, childName);
@@ -1010,49 +1038,251 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   /// Muestra el dialog de Rewarded Video para usuarios FREE
-  /// Retorna true si el usuario completó el video, false si canceló
+  /// Retorna true si el usuario completó el video, false si canceló o eligió premium
   Future<bool> _showRewardedAdDialog(BuildContext scaffoldContext, String childName) async {
     ReleaseLogger.log('Iniciando _showRewardedAdDialog para $childName', tag: 'ReportsScreen');
-    final colorScheme = Theme.of(scaffoldContext).colorScheme;
 
-    // Mostrar dialog inicial
-    final userWantsToWatch = await showDialog<bool>(
+    // Mostrar dialog inicial con opción Premium
+    final dialogResult = await showDialog<String>(
       context: scaffoldContext,
-      barrierDismissible: false,
-      builder: (dialogContext) => AlertDialog(
-        icon: Icon(
-          Icons.play_circle_filled,
-          size: 56,
-          color: colorScheme.primary,
-        ),
-        title: Text('Ver video para generar reporte'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'Ve un breve video para generar el reporte de $childName.',
-              textAlign: TextAlign.center,
+      barrierDismissible: true,
+      builder: (dialogContext) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: Container(
+          constraints: BoxConstraints(maxWidth: 340),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Color(0xFF1E1E2E),
+                Color(0xFF2D2D44),
+              ],
             ),
-          ],
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.3),
+                blurRadius: 20,
+                offset: Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Header con icono
+              Container(
+                width: double.infinity,
+                padding: EdgeInsets.symmetric(vertical: 28),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      Color(0xFF6A1B9A),
+                      Color(0xFF9C27B0),
+                    ],
+                  ),
+                  borderRadius: BorderRadius.only(
+                    topLeft: Radius.circular(24),
+                    topRight: Radius.circular(24),
+                  ),
+                ),
+                child: Column(
+                  children: [
+                    Container(
+                      padding: EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        Icons.play_arrow_rounded,
+                        size: 40,
+                        color: Colors.white,
+                      ),
+                    ),
+                    SizedBox(height: 12),
+                    Text(
+                      'Generar Reporte',
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // Contenido
+              Padding(
+                padding: EdgeInsets.all(24),
+                child: Column(
+                  children: [
+                    Text(
+                      'Ve un breve video para generar el reporte de $childName',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 15,
+                        color: Colors.white.withValues(alpha: 0.9),
+                        height: 1.4,
+                      ),
+                    ),
+                    SizedBox(height: 20),
+
+                    // Info de duración
+                    Container(
+                      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.timer_outlined, color: Colors.white70, size: 18),
+                          SizedBox(width: 8),
+                          Text(
+                            '15-30 segundos',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.white70,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    SizedBox(height: 24),
+
+                    // Botón Ver Video (Principal)
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.pop(dialogContext, 'watch'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Color(0xFF4CAF50),
+                          foregroundColor: Colors.white,
+                          padding: EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          elevation: 0,
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.play_circle_filled, size: 22),
+                            SizedBox(width: 10),
+                            Text(
+                              'Ver Video',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    SizedBox(height: 12),
+
+                    // Divider con "o"
+                    Row(
+                      children: [
+                        Expanded(child: Divider(color: Colors.white24)),
+                        Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 12),
+                          child: Text(
+                            'o',
+                            style: TextStyle(color: Colors.white54, fontSize: 13),
+                          ),
+                        ),
+                        Expanded(child: Divider(color: Colors.white24)),
+                      ],
+                    ),
+                    SizedBox(height: 12),
+
+                    // Botón Premium
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(dialogContext, 'premium'),
+                        style: OutlinedButton.styleFrom(
+                          side: BorderSide(
+                            color: Color(0xFFFFD700),
+                            width: 1.5,
+                          ),
+                          padding: EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.workspace_premium, color: Color(0xFFFFD700), size: 20),
+                            SizedBox(width: 8),
+                            Text(
+                              'Obtener Premium',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFFFFD700),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    SizedBox(height: 8),
+
+                    // Texto Premium benefit
+                    Text(
+                      'Sin anuncios + hasta 30 reportes/mes',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFFFFD700).withValues(alpha: 0.7),
+                      ),
+                    ),
+                    SizedBox(height: 16),
+
+                    // Botón Cancelar
+                    TextButton(
+                      onPressed: () => Navigator.pop(dialogContext, 'cancel'),
+                      child: Text(
+                        'Cancelar',
+                        style: TextStyle(
+                          color: Colors.white54,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: Text('Cancelar'),
-          ),
-          FilledButton.icon(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            icon: Icon(Icons.play_arrow),
-            label: Text('Ver video'),
-          ),
-        ],
       ),
     );
 
     // Si el usuario canceló, retornar false
-    ReleaseLogger.log('userWantsToWatch=$userWantsToWatch', tag: 'ReportsScreen');
-    if (userWantsToWatch != true) {
-      ReleaseLogger.log('Usuario NO quiere ver video, retornando false', tag: 'ReportsScreen');
+    ReleaseLogger.log('dialogResult=$dialogResult', tag: 'ReportsScreen');
+    if (dialogResult == 'cancel' || dialogResult == null) {
+      ReleaseLogger.log('Usuario canceló, retornando false', tag: 'ReportsScreen');
+      return false;
+    }
+
+    // Si eligió Premium, ir directamente a la pantalla de suscripción
+    if (dialogResult == 'premium') {
+      ReleaseLogger.log('Usuario eligió Premium, navegando a SubscriptionScreen', tag: 'ReportsScreen');
+      if (scaffoldContext.mounted) {
+        Navigator.of(scaffoldContext).push(
+          MaterialPageRoute(builder: (context) => const SubscriptionScreen()),
+        );
+      }
       return false;
     }
 
@@ -1129,6 +1359,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
       if (data['success'] == true && data['pending'] == true) {
         ReleaseLogger.log('Reporte en proceso: ${data['pendingReportId']}', tag: 'ReportsScreen');
+
+        // ✅ Incrementar contador de reportes mensuales
+        _usageLimitsService.incrementReportsUsage();
+
         // Escuchar el pending_report para mostrar progreso
         _listenToPendingReport(data['pendingReportId'] as String, childName);
       } else {
