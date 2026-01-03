@@ -251,6 +251,10 @@ class UsageLimitsService {
   /// Verificar si el usuario puede usar face swap
   Future<bool> canUseFaceSwap() async {
     try {
+      // Si el sistema premium está desactivado, no hay límites
+      final status = await _subscriptionService.checkPremiumStatus();
+      if (status.premiumSystemDisabled) return true;
+
       // Primero verificar si la feature está habilitada globalmente
       final featureEnabled = await isFaceSwapEnabled();
       if (!featureEnabled) return false;
@@ -438,15 +442,18 @@ class UsageLimitsService {
   /// Verificar si el usuario puede usar face-swap (límite diario para Free, mensual para Premium)
   Future<bool> canUseFaceSwapToday() async {
     try {
+      // Obtener tier del usuario
+      final status = await _subscriptionService.checkPremiumStatus();
+
+      // Si el sistema premium está desactivado, no hay límites
+      if (status.premiumSystemDisabled) return true;
+
       // Verificar si la feature está habilitada globalmente
       final featureEnabled = await isFaceSwapEnabled();
       if (!featureEnabled) return false;
 
       final user = _auth.currentUser;
       if (user == null) return false;
-
-      // Obtener tier del usuario
-      final status = await _subscriptionService.checkPremiumStatus();
       final limit = getFaceSwapLimit(status.tier);
       final isDaily = isFaceSwapLimitDaily(status.tier);
 
@@ -492,6 +499,22 @@ class UsageLimitsService {
   /// Obtener el uso de face-swap (diario para Free, mensual para Premium)
   Future<Map<String, dynamic>> getFaceSwapUsageByTier() async {
     try {
+      // Obtener tier del usuario
+      final status = await _subscriptionService.checkPremiumStatus();
+
+      // Si el sistema premium está desactivado, no hay límites
+      if (status.premiumSystemDisabled) {
+        return {
+          'count': 0,
+          'limit': -1,
+          'remaining': -1,
+          'tier': 'free',
+          'isDaily': false,
+          'periodLabel': '',
+          'unlimited': true,
+        };
+      }
+
       final user = _auth.currentUser;
       if (user == null) {
         return {
@@ -503,9 +526,6 @@ class UsageLimitsService {
           'periodLabel': 'hoy',
         };
       }
-
-      // Obtener tier del usuario
-      final status = await _subscriptionService.checkPremiumStatus();
       final limit = getFaceSwapLimit(status.tier);
       final isDaily = isFaceSwapLimitDaily(status.tier);
 
@@ -650,11 +670,15 @@ class UsageLimitsService {
   /// Verificar si el usuario puede generar un reporte este mes
   Future<bool> canGenerateReportThisMonth() async {
     try {
+      // Obtener tier del usuario
+      final status = await _subscriptionService.checkPremiumStatus();
+
+      // Si el sistema premium está desactivado, no hay límites
+      if (status.premiumSystemDisabled) return true;
+
       final user = _auth.currentUser;
       if (user == null) return false;
 
-      // Obtener tier del usuario
-      final status = await _subscriptionService.checkPremiumStatus();
       final limit = getReportsMonthlyLimit(status.tier);
 
       // Free tier: siempre puede pero con ads
@@ -689,6 +713,20 @@ class UsageLimitsService {
   /// Obtener el uso mensual de reportes
   Future<Map<String, dynamic>> getReportsMonthlyUsage() async {
     try {
+      final status = await _subscriptionService.checkPremiumStatus();
+
+      // Si el sistema premium está desactivado, no hay límites (pero sí ads)
+      if (status.premiumSystemDisabled) {
+        return {
+          'count': 0,
+          'limit': -1,
+          'remaining': -1,
+          'tier': 'free',
+          'showAds': true, // Ads se muestran cuando premium está desactivado
+          'unlimited': true,
+        };
+      }
+
       final user = _auth.currentUser;
       if (user == null) {
         return {
@@ -699,8 +737,6 @@ class UsageLimitsService {
           'showAds': true,
         };
       }
-
-      final status = await _subscriptionService.checkPremiumStatus();
       final limit = getReportsMonthlyLimit(status.tier);
       final showAds = status.tier == SubscriptionTier.free;
 

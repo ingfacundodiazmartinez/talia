@@ -26,11 +26,15 @@ class SubscriptionService {
   ///
   /// Si el feature flag `premium_enabled` está desactivado, retorna Premium+
   /// para todos los usuarios (acceso completo sin restricciones)
+  /// Verificar si el sistema premium está habilitado
+  bool get isPremiumSystemEnabled => _appConfig.premiumEnabled;
+
   Future<PremiumStatus> checkPremiumStatus({bool forceRefresh = false}) async {
     try {
-      // Feature flag: si premium está desactivado, todos son Premium+
+      // Feature flag: si premium está desactivado, retornar free (ads siguen)
+      // pero con flag especial para que otros servicios sepan que no hay límites
       if (!_appConfig.premiumEnabled) {
-        return PremiumStatus.allAccess();
+        return PremiumStatus.noPremiumSystem();
       }
 
       final user = _auth.currentUser;
@@ -234,10 +238,6 @@ class SubscriptionService {
     _cachedStatus = null;
     _cacheTimestamp = null;
   }
-
-  /// Verifica si el sistema premium está habilitado
-  /// Cuando está desactivado, toda la UI de premium debe ocultarse
-  bool get isPremiumSystemEnabled => _appConfig.premiumEnabled;
 }
 
 // ============================================================================
@@ -250,12 +250,16 @@ class PremiumStatus {
   final SubscriptionTier tier;
   final DateTime? expiresAt;
   final String? subscriptionType;
+  /// Indica si el sistema premium está desactivado globalmente
+  /// Cuando es true: ads se muestran, pero no hay límites ni paywalls
+  final bool premiumSystemDisabled;
 
   PremiumStatus({
     required this.isPremium,
     required this.tier,
     this.expiresAt,
     this.subscriptionType,
+    this.premiumSystemDisabled = false,
   });
 
   factory PremiumStatus.free() {
@@ -265,14 +269,22 @@ class PremiumStatus {
     );
   }
 
-  /// Factory para acceso completo (cuando feature flag está desactivado)
-  /// Simula Premium+ sin expiración
-  factory PremiumStatus.allAccess() {
+  /// Factory para cuando el sistema premium está desactivado
+  /// - isPremium = false → ads se muestran
+  /// - premiumSystemDisabled = true → sin límites, sin paywalls, todos los personajes
+  factory PremiumStatus.noPremiumSystem() {
     return PremiumStatus(
-      isPremium: true,
-      tier: SubscriptionTier.premiumPlus,
-      subscriptionType: 'feature_flag_disabled',
+      isPremium: false,
+      tier: SubscriptionTier.free,
+      subscriptionType: 'premium_system_disabled',
+      premiumSystemDisabled: true,
     );
+  }
+
+  /// Factory para acceso completo (cuando feature flag está desactivado)
+  /// @deprecated Usar noPremiumSystem() en su lugar
+  factory PremiumStatus.allAccess() {
+    return PremiumStatus.noPremiumSystem();
   }
 
   bool get isExpired {

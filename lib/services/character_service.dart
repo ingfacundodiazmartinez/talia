@@ -85,6 +85,7 @@ class CharacterService {
   /// - Free: solo personajes con accessLevel = 'free'
   /// - Premium: personajes con accessLevel = 'free' o 'premium'
   /// - Premium+: todos los personajes
+  /// - Si premium está desactivado: todos los personajes
   Future<List<Character>> getCharactersForCurrentUser() async {
     try {
       // Obtener todos los personajes habilitados
@@ -92,6 +93,13 @@ class CharacterService {
 
       // Obtener el tier del usuario actual
       final status = await _subscriptionService.checkPremiumStatus();
+
+      // Si el sistema premium está desactivado, todos tienen acceso a todos los personajes
+      if (status.premiumSystemDisabled) {
+        ReleaseLogger.log('🎭 Sistema premium desactivado - todos los personajes disponibles', tag: 'CharacterService');
+        return allCharacters;
+      }
+
       final tierName = status.tier.name;
 
       ReleaseLogger.log('🎭 Filtrando personajes para tier: $tierName', tag: 'CharacterService');
@@ -116,6 +124,10 @@ class CharacterService {
   Future<bool> canUserAccessCharacter(String characterId) async {
     try {
       final status = await _subscriptionService.checkPremiumStatus();
+
+      // Si el sistema premium está desactivado, todos pueden acceder a todos los personajes
+      if (status.premiumSystemDisabled) return true;
+
       final tierName = status.tier.name;
 
       final allCharacters = await getEnabledCharacters();

@@ -16,7 +16,7 @@ class AppConfigService {
   factory AppConfigService() => _instance;
   AppConfigService._internal();
 
-  late FirebaseRemoteConfig _remoteConfig;
+  FirebaseRemoteConfig? _remoteConfig;
   bool _initialized = false;
 
   // Constantes para valores por defecto (NUNCA cambiar en producción)
@@ -44,17 +44,19 @@ class AppConfigService {
       }
 
       // 2. Inicializar Firebase Remote Config
-      _remoteConfig = FirebaseRemoteConfig.instance;
+      final remoteConfig = FirebaseRemoteConfig.instance;
+      _remoteConfig = remoteConfig;
 
-      await _remoteConfig.setConfigSettings(
+      // minimumFetchInterval: Duration.zero para desarrollo, Duration(hours: 1) para producción
+      await remoteConfig.setConfigSettings(
         RemoteConfigSettings(
           fetchTimeout: const Duration(seconds: 30),
-          minimumFetchInterval: const Duration(hours: 1),
+          minimumFetchInterval: Duration.zero, // TODO: Cambiar a Duration(hours: 1) en producción
         ),
       );
 
       // 3. Configurar valores por defecto (NUNCA usar valores reales aquí)
-      await _remoteConfig.setDefaults({
+      await remoteConfig.setDefaults({
         'agora_app_id': _defaultAgoraAppId,
         'admob_android_native_ad_id': _testAndroidNativeAdId,
         'admob_ios_native_ad_id': _testIosNativeAdId,
@@ -65,7 +67,7 @@ class AppConfigService {
 
       // 4. Intentar obtener configuración remota
       try {
-        await _remoteConfig.fetchAndActivate();
+        await remoteConfig.fetchAndActivate();
         ReleaseLogger.log('Remote Config actualizado exitosamente', tag: 'AppConfig');
       } catch (e) {
         ReleaseLogger.log('No se pudo cargar Remote Config, usando valores por defecto: $e', tag: 'AppConfig');
@@ -104,7 +106,7 @@ class AppConfigService {
       }
 
       // 3. Intentar obtener desde Remote Config
-      final remoteAppId = _remoteConfig.getString('agora_app_id');
+      final remoteAppId = _remoteConfig?.getString('agora_app_id') ?? '';
       if (remoteAppId.isNotEmpty && remoteAppId != _defaultAgoraAppId) {
         ReleaseLogger.log('Usando Agora App ID desde Remote Config', tag: 'AppConfig');
         return remoteAppId;
@@ -133,28 +135,32 @@ class AppConfigService {
   ///
   /// Jerarquía: .env → Remote Config → default (true)
   bool get premiumEnabled {
+    // 1. Variable de entorno (para testing local)
     try {
-      // 1. Variable de entorno (para testing local)
       final envValue = dotenv.env['PREMIUM_ENABLED'];
       if (envValue != null && envValue.isNotEmpty) {
         final enabled = envValue.toLowerCase() == 'true';
-        ReleaseLogger.log('Premium enabled desde .env: $enabled', tag: 'AppConfig');
+        print('🎛️ [PremiumFlag] desde .env: $enabled');
         return enabled;
       }
-
-      // 2. Remote Config
-      if (_initialized) {
-        final remoteValue = _remoteConfig.getBool('premium_enabled');
-        ReleaseLogger.log('Premium enabled desde Remote Config: $remoteValue', tag: 'AppConfig');
-        return remoteValue;
-      }
-
-      // 3. Default: true (premium habilitado por defecto)
-      return true;
-    } catch (e) {
-      ReleaseLogger.error('Error obteniendo premium_enabled: $e', tag: 'AppConfig');
-      return true; // Default: habilitado
+    } catch (_) {
+      // dotenv no inicializado, continuar
     }
+
+    // 2. Remote Config (solo si está inicializado y no es null)
+    if (_initialized && _remoteConfig != null) {
+      try {
+        final remoteValue = _remoteConfig!.getBool('premium_enabled');
+        print('🎛️ [PremiumFlag] desde Remote Config: $remoteValue');
+        return remoteValue;
+      } catch (e) {
+        print('🎛️ [PremiumFlag] Remote Config error: $e');
+      }
+    }
+
+    // 3. Default: true (premium habilitado por defecto)
+    print('🎛️ [PremiumFlag] usando default: true');
+    return true;
   }
 
   /// Obtiene el AdMob Native Ad ID para Android
@@ -173,8 +179,8 @@ class AppConfigService {
       }
 
       // 2. Remote Config
-      if (_initialized) {
-        final remoteAdId = _remoteConfig.getString('admob_android_native_ad_id');
+      if (_initialized && _remoteConfig != null) {
+        final remoteAdId = _remoteConfig!.getString('admob_android_native_ad_id');
         if (remoteAdId.isNotEmpty && remoteAdId != _testAndroidNativeAdId) {
           ReleaseLogger.log('Usando Android Native Ad ID desde Remote Config', tag: 'AppConfig');
           return remoteAdId;
@@ -206,8 +212,8 @@ class AppConfigService {
       }
 
       // 2. Remote Config
-      if (_initialized) {
-        final remoteAdId = _remoteConfig.getString('admob_ios_native_ad_id');
+      if (_initialized && _remoteConfig != null) {
+        final remoteAdId = _remoteConfig!.getString('admob_ios_native_ad_id');
         if (remoteAdId.isNotEmpty && remoteAdId != _testIosNativeAdId) {
           ReleaseLogger.log('Usando iOS Native Ad ID desde Remote Config', tag: 'AppConfig');
           return remoteAdId;
@@ -239,8 +245,8 @@ class AppConfigService {
       }
 
       // 2. Remote Config
-      if (_initialized) {
-        final remoteAdId = _remoteConfig.getString('admob_android_rewarded_ad_id');
+      if (_initialized && _remoteConfig != null) {
+        final remoteAdId = _remoteConfig!.getString('admob_android_rewarded_ad_id');
         if (remoteAdId.isNotEmpty && remoteAdId != _testAndroidRewardedAdId) {
           ReleaseLogger.log('Usando Android Rewarded Ad ID desde Remote Config', tag: 'AppConfig');
           return remoteAdId;
@@ -273,8 +279,8 @@ class AppConfigService {
       }
 
       // 2. Remote Config
-      if (_initialized) {
-        final remoteAdId = _remoteConfig.getString('admob_ios_rewarded_ad_id');
+      if (_initialized && _remoteConfig != null) {
+        final remoteAdId = _remoteConfig!.getString('admob_ios_rewarded_ad_id');
         ReleaseLogger.log('🔍 [iOS Rewarded] remoteAdId: "$remoteAdId", testId: "$_testIosRewardedAdId"', tag: 'AppConfig');
         if (remoteAdId.isNotEmpty && remoteAdId != _testIosRewardedAdId) {
           ReleaseLogger.log('✅ Usando iOS Rewarded Ad ID desde Remote Config: $remoteAdId', tag: 'AppConfig');
@@ -294,7 +300,7 @@ class AppConfigService {
   /// Fuerza una actualización de los valores de Remote Config
   Future<void> refresh() async {
     try {
-      await _remoteConfig.fetchAndActivate();
+      await _remoteConfig?.fetchAndActivate();
       ReleaseLogger.log('Remote Config actualizado exitosamente', tag: 'AppConfig');
     } catch (e) {
       ReleaseLogger.error('Error actualizando Remote Config: $e', tag: 'AppConfig');
