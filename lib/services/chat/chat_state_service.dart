@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../models/chat_message.dart';
 import '../message_cache_service.dart';
+import '../../utils/release_logger.dart';
 
 /// Servicio para gestión del estado de mensajes en memoria
 ///
@@ -29,6 +30,12 @@ class ChatStateService {
     MessageCacheService? cacheService,
   }) : _cacheService = cacheService ?? MessageCacheService();
 
+  /// Trunca un string a los primeros 8 caracteres de forma segura (para logs)
+  String _truncateId(String? id) {
+    if (id == null) return 'null';
+    return id.length > 8 ? id.substring(0, 8) : id;
+  }
+
   /// Agregar mensaje optimista
   void addOptimisticMessage(ChatMessage message) {
     _messages.insert(0, message);
@@ -42,8 +49,19 @@ class ChatStateService {
     required String oldId,
     required ChatMessage newMessage,
   }) async {
+    final truncOldId = oldId.length > 8 ? oldId.substring(0, 8) : oldId;
+    final truncNewId = newMessage.id.length > 8 ? newMessage.id.substring(0, 8) : newMessage.id;
+
+    ReleaseLogger.log('🔄[StateService] updateMessage: oldId=$truncOldId... newId=$truncNewId... status=${newMessage.status}', tag: 'ChatState');
+    ReleaseLogger.log('🔄[StateService] _messages count=${_messages.length}, _pendingMessages count=${_pendingMessages.length}', tag: 'ChatState');
+
     final index = _messages.indexWhere((m) => m.id == oldId);
+    ReleaseLogger.log('🔄[StateService] indexWhere(id == oldId) = $index', tag: 'ChatState');
+
     if (index != -1) {
+      final oldMessage = _messages[index];
+      final truncOldMsgId = oldMessage.id.length > 8 ? oldMessage.id.substring(0, 8) : oldMessage.id;
+      ReleaseLogger.log('🔄[StateService] Encontrado mensaje existente: id=$truncOldMsgId... status=${oldMessage.status}', tag: 'ChatState');
       _messages[index] = newMessage;
       _sortMessages();
 
@@ -53,6 +71,14 @@ class ChatStateService {
       }
 
       await _cacheService.saveMessage(chatId, newMessage);
+      ReleaseLogger.log('✅[StateService] Mensaje actualizado exitosamente: newStatus=${newMessage.status}', tag: 'ChatState');
+    } else {
+      ReleaseLogger.log('⚠️[StateService] Mensaje NO encontrado con oldId=$truncOldId... - puede que ya fue reemplazado por Firestore listener', tag: 'ChatState');
+      // Buscar si existe con el nuevo ID (ya fue actualizado por el listener)
+      final existingWithNewId = _messages.indexWhere((m) => m.id == newMessage.id);
+      if (existingWithNewId != -1) {
+        ReleaseLogger.log('ℹ️[StateService] Mensaje ya existe con newId, status actual=${_messages[existingWithNewId].status}', tag: 'ChatState');
+      }
     }
   }
 
@@ -72,32 +98,51 @@ class ChatStateService {
     required List<ChatMessage> newMessages,
     required String currentUserId,
   }) async {
+    ReleaseLogger.log('📥[StateService] addMessages: ${newMessages.length} mensajes', tag: 'ChatState');
+
     for (final message in newMessages) {
+      final truncId = _truncateId(message.id);
+      final truncLocalId = _truncateId(message.localId);
+      ReleaseLogger.log('📥[StateService] Procesando mensaje: id=$truncId... localId=$truncLocalId... status=${message.status} sender=${message.senderId == currentUserId ? "yo" : "contacto"}', tag: 'ChatState');
+
       final index = _messages.indexWhere((m) => m.id == message.id);
+      ReleaseLogger.log('📥[StateService] indexWhere(id == message.id) = $index', tag: 'ChatState');
 
       if (index == -1) {
         // Verificar si es un mensaje propio que reemplaza uno pendiente
         if (message.senderId == currentUserId) {
+          ReleaseLogger.log('📥[StateService] Es mensaje propio, buscando pendiente...', tag: 'ChatState');
           final pendingIndex = _findMatchingPendingMessage(message);
+          ReleaseLogger.log('📥[StateService] _findMatchingPendingMessage returned: $pendingIndex', tag: 'ChatState');
+
           if (pendingIndex != -1) {
             // Reemplazar mensaje pendiente con el confirmado
             final pendingMessage = _messages[pendingIndex];
+            final truncPendingId = _truncateId(pendingMessage.id);
+            ReleaseLogger.log('✅[StateService] Reemplazando mensaje pendiente: oldId=$truncPendingId... oldStatus=${pendingMessage.status} → newStatus=${message.status}', tag: 'ChatState');
             _messages[pendingIndex] = message;
             _pendingMessages.removeWhere((m) => m.id == pendingMessage.id);
             continue;
+          } else {
+            ReleaseLogger.log('⚠️[StateService] No se encontró mensaje pendiente para reemplazar', tag: 'ChatState');
           }
         }
 
         // Mensaje nuevo
+        ReleaseLogger.log('📥[StateService] Agregando como mensaje nuevo', tag: 'ChatState');
         _messages.add(message);
       } else {
         // Mensaje existente - actualizar solo si es necesario
         final existingMessage = _messages[index];
+        ReleaseLogger.log('📥[StateService] Mensaje ya existe: existingStatus=${existingMessage.status} newStatus=${message.status}', tag: 'ChatState');
 
         // Solo actualizar si es mensaje del contacto o hay cambios importantes
         if (message.senderId != currentUserId ||
             _hasImportantChanges(existingMessage, message)) {
+          ReleaseLogger.log('📥[StateService] Actualizando mensaje existente (cambios importantes)', tag: 'ChatState');
           _messages[index] = message;
+        } else {
+          ReleaseLogger.log('📥[StateService] No hay cambios importantes, no actualizando', tag: 'ChatState');
         }
       }
     }
@@ -109,21 +154,42 @@ class ChatStateService {
   /// Encontrar mensaje pendiente que coincida con el mensaje de Firestore
   /// Ahora usa localId para un match preciso en lugar de heurísticas
   int _findMatchingPendingMessage(ChatMessage firestoreMessage) {
+    ReleaseLogger.log('🔍[StateService] _findMatchingPendingMessage: localId=${_truncateId(firestoreMessage.localId)}...', tag: 'ChatState');
+    ReleaseLogger.log('🔍[StateService] _pendingMessages: ${_pendingMessages.map((m) => _truncateId(m.id)).toList()}', tag: 'ChatState');
+    ReleaseLogger.log('🔍[StateService] _messages ids: ${_messages.map((m) => _truncateId(m.id)).toList()}', tag: 'ChatState');
+
     // Buscar por localId si existe (método nuevo y preciso)
     if (firestoreMessage.localId != null) {
+      ReleaseLogger.log('🔍[StateService] Buscando por localId: ${_truncateId(firestoreMessage.localId)}...', tag: 'ChatState');
+
       final index = _messages.indexWhere((m) =>
         m.id == firestoreMessage.localId &&
         _pendingMessages.any((p) => p.id == m.id)
       );
+
+      ReleaseLogger.log('🔍[StateService] indexWhere(id == localId) = $index', tag: 'ChatState');
+
       if (index != -1) {
+        ReleaseLogger.log('✅[StateService] Encontrado por localId en index $index', tag: 'ChatState');
         return index;
+      } else {
+        // Debug: verificar si el mensaje existe pero no está en pending
+        final msgIndex = _messages.indexWhere((m) => m.id == firestoreMessage.localId);
+        final inPending = _pendingMessages.any((p) => p.id == firestoreMessage.localId);
+        ReleaseLogger.log('⚠️[StateService] localId match failed: msgExists=$msgIndex inPending=$inPending', tag: 'ChatState');
       }
+    } else {
+      ReleaseLogger.log('⚠️[StateService] firestoreMessage.localId es null!', tag: 'ChatState');
     }
 
     // Fallback: buscar por contenido (para compatibilidad con mensajes viejos)
-    if (firestoreMessage.timestamp == null) return -1;
+    ReleaseLogger.log('🔍[StateService] Intentando fallback por contenido...', tag: 'ChatState');
+    if (firestoreMessage.timestamp == null) {
+      ReleaseLogger.log('⚠️[StateService] firestoreMessage.timestamp es null, no se puede usar fallback', tag: 'ChatState');
+      return -1;
+    }
 
-    return _messages.indexWhere((m) {
+    final fallbackIndex = _messages.indexWhere((m) {
       // Debe estar en la lista de pendientes
       if (!_pendingMessages.any((p) => p.id == m.id)) return false;
 
@@ -166,6 +232,9 @@ class ChatStateService {
 
       return false;
     });
+
+    ReleaseLogger.log('🔍[StateService] Fallback result: $fallbackIndex', tag: 'ChatState');
+    return fallbackIndex;
   }
 
   /// Verificar si hay cambios importantes entre mensajes

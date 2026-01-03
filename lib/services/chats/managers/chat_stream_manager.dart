@@ -352,7 +352,14 @@ class ChatStreamManager {
 
     final subscription = chatDocStream.listen(
       (snapshot) async {
-        if (!snapshot.exists || controller.isClosed) return;
+        if (!snapshot.exists) {
+          ReleaseLogger.log('📧 [V2-DEBUG] Chat doc no existe para $chatId');
+          return;
+        }
+        if (controller.isClosed) {
+          ReleaseLogger.log('📧 [V2-DEBUG] Controller cerrado para $chatId');
+          return;
+        }
 
         final data = snapshot.data()!;
         final participants = List<String>.from(data['participants'] ?? []);
@@ -361,7 +368,10 @@ class ChatStreamManager {
           orElse: () => '',
         );
 
-        if (otherUserId.isEmpty) return;
+        if (otherUserId.isEmpty) {
+          ReleaseLogger.log('📧 [V2-DEBUG] otherUserId vacío para $chatId');
+          return;
+        }
 
         // Obtener nuevos timestamps del recipient
         final newLastOpenedAt = (data['lastOpenedAt_$otherUserId'] as Timestamp?)?.toDate();
@@ -371,6 +381,10 @@ class ChatStreamManager {
         final cached = _recipientTimestampsCache[chatId];
         final lastOpenedAtChanged = cached == null || cached.lastOpenedAt != newLastOpenedAt;
         final lastReceivedAtChanged = cached == null || cached.lastReceivedAt != newLastReceivedAt;
+
+        // Log SIEMPRE que recibimos un snapshot
+        final truncChatId = chatId.length > 12 ? chatId.substring(0, 12) : chatId;
+        ReleaseLogger.log('📧 [V2-DEBUG] Snapshot recibido $truncChatId: lastOpenedAt=$newLastOpenedAt cached=${cached?.lastOpenedAt} changed=$lastOpenedAtChanged');
 
         // Siempre actualizar cache
         _recipientTimestampsCache[chatId] = (
@@ -386,12 +400,16 @@ class ChatStreamManager {
 
         if (shouldReemit) {
           ReleaseLogger.log('📧 [V2] lastOpenedAt cambió para chat $chatId - recalculando status');
+          ReleaseLogger.log('📧 [V2] newLastOpenedAt=$newLastOpenedAt newLastReceivedAt=$newLastReceivedAt');
 
           // Re-emitir mensajes del cache con status actualizado
           // ✅ Usar _cacheManager para mantener consistencia con el stream normal
           final cachedMessages = _cacheManager.getCachedMessages(chatId);
+          ReleaseLogger.log('📧 [V2] cachedMessages count=${cachedMessages.length}, controllerClosed=${controller.isClosed}');
+
           if (cachedMessages.isNotEmpty && !controller.isClosed) {
             // Recalcular status de mensajes propios
+            int statusChangedCount = 0;
             final updatedMessages = cachedMessages.map((msg) {
               if (msg.senderId != currentUserId) return msg;
 
@@ -403,10 +421,37 @@ class ChatStreamManager {
               );
 
               if (newStatus != msg.status) {
+                final truncId = msg.id.length > 8 ? msg.id.substring(0, 8) : msg.id;
+                ReleaseLogger.log('📧 [V2] ✅ Mensaje $truncId: ${msg.status} → $newStatus (ts=${msg.timestamp?.toDate()})');
+                statusChangedCount++;
                 return msg.copyWith(status: newStatus);
               }
               return msg;
             }).toList();
+
+            if (statusChangedCount == 0) {
+              // Debug: mostrar por qué no hubo cambios con MÁXIMO detalle
+              final myMsgs = cachedMessages.where((m) => m.senderId == currentUserId).toList();
+              ReleaseLogger.log('📧 [V2] ⚠️ No hubo cambios de status. Mis mensajes: ${myMsgs.length}');
+              ReleaseLogger.log('📧 [V2] lastOpenedAt ms: ${newLastOpenedAt?.millisecondsSinceEpoch} isUtc=${newLastOpenedAt?.isUtc}');
+              for (final msg in myMsgs.take(3)) {
+                final truncId = msg.id.length > 8 ? msg.id.substring(0, 8) : msg.id;
+                final ts = msg.timestamp?.toDate();
+                final tsMs = ts?.millisecondsSinceEpoch;
+                final openedMs = newLastOpenedAt?.millisecondsSinceEpoch;
+                final isBefore = ts != null && newLastOpenedAt != null ? ts.isBefore(newLastOpenedAt) : null;
+                // Comparación manual para debug
+                final manualIsBefore = (tsMs != null && openedMs != null) ? tsMs < openedMs : null;
+                ReleaseLogger.log('📧 [V2]   - $truncId: status=${msg.status}, ts=$ts (ms=$tsMs, utc=${ts?.isUtc}), isBefore=$isBefore, manualIsBefore=$manualIsBefore');
+              }
+            } else {
+              ReleaseLogger.log('📧 [V2] ✅ Actualizados $statusChangedCount mensajes a seen/delivered');
+
+              // ✅ FIX: Actualizar el cache con los status recalculados
+              // Sin esto, la UI que usa cache-first no ve los cambios
+              _cacheManager.updateCacheForChat(chatId, updatedMessages);
+              ReleaseLogger.log('📧 [V2] ✅ Cache actualizado con nuevos status');
+            }
 
             controller.add(updatedMessages);
           }

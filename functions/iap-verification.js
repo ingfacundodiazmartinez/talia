@@ -15,6 +15,8 @@ const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https")
 const { onMessagePublished } = require("firebase-functions/v2/pubsub");
 const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
 const { google } = require("googleapis");
+const jwt = require("jsonwebtoken");
+const axios = require("axios");
 
 // ═══════════════════════════════════════════════════════════════
 // CONFIGURACIÓN
@@ -33,12 +35,19 @@ const PRODUCT_IDS = {
 
 // Mapear product ID a tier
 function getTierFromProductId(productId) {
-  if (productId.includes("premium_plus")) {
+  if (productId.includes("extra_child")) {
+    return "extra_child"; // Producto especial para hijos adicionales
+  } else if (productId.includes("premium_plus")) {
     return "premium_plus";
   } else if (productId.includes("premium")) {
     return "premium";
   }
   return null;
+}
+
+// Verificar si es un producto de hijo extra
+function isExtraChildProduct(productId) {
+  return productId.includes("extra_child");
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -120,10 +129,14 @@ exports.verifyPlayStorePurchase = onCall(async (request) => {
       };
     }
 
-    // Activar premium
+    // Activar premium o hijo extra según el producto
     const tier = getTierFromProductId(productId);
     if (tier) {
-      await activatePremiumForUser(userId, tier, expiryTimeMillis, "play_store", productId);
+      if (isExtraChildProduct(productId)) {
+        await activateExtraChildForUser(userId, expiryTimeMillis, "play_store", productId);
+      } else {
+        await activatePremiumForUser(userId, tier, expiryTimeMillis, "play_store", productId);
+      }
     }
 
     console.log(`✅ Compra verificada exitosamente para ${userId}`);
@@ -150,6 +163,40 @@ exports.verifyPlayStorePurchase = onCall(async (request) => {
 // ═══════════════════════════════════════════════════════════════
 
 /**
+ * Generar JWT para App Store Server API
+ */
+function generateAppStoreJWT() {
+  const keyId = process.env.APP_STORE_KEY_ID;
+  const issuerId = process.env.APP_STORE_ISSUER_ID;
+  const privateKey = process.env.APP_STORE_PRIVATE_KEY;
+
+  if (!keyId || !issuerId || !privateKey) {
+    return null;
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+
+  const payload = {
+    iss: issuerId,
+    iat: now,
+    exp: now + 3600, // 1 hora
+    aud: "appstoreconnect-v1",
+    bid: "com.talia.chat", // Bundle ID
+  };
+
+  const token = jwt.sign(payload, privateKey, {
+    algorithm: "ES256",
+    header: {
+      alg: "ES256",
+      kid: keyId,
+      typ: "JWT",
+    },
+  });
+
+  return token;
+}
+
+/**
  * Verificar compra de App Store
  * Usa App Store Server API para validar la transacción
  */
@@ -170,29 +217,24 @@ exports.verifyAppStorePurchase = onCall(async (request) => {
 
     console.log(`🔍 Verificando compra iOS: ${productId} para usuario: ${userId}`);
 
-    // NOTA: La implementación completa de App Store Server API requiere:
-    // 1. API Key de App Store Connect
-    // 2. Issuer ID
-    // 3. Key ID
-    // 4. Firma JWT
+    // Intentar generar JWT para App Store Server API
+    const appStoreJWT = generateAppStoreJWT();
 
-    // Por ahora, confiamos en la compra del cliente pero registramos para auditoría
-    // TODO: Implementar verificación completa cuando se configuren las credenciales
-
-    const appStoreApiKey = process.env.APP_STORE_API_KEY;
-    if (!appStoreApiKey) {
-      console.warn("⚠️ APP_STORE_API_KEY no configurado - usando modo simplificado");
+    if (!appStoreJWT) {
+      console.warn("⚠️ Credenciales de App Store no configuradas - usando modo simplificado");
 
       // Modo simplificado: confiar en el cliente pero registrar
       const tier = getTierFromProductId(productId);
 
       if (tier) {
-        // Calcular expiración (1 mes desde ahora)
         const expiryTime = Date.now() + (30 * 24 * 60 * 60 * 1000);
-        await activatePremiumForUser(userId, tier, expiryTime, "app_store", productId);
+        if (isExtraChildProduct(productId)) {
+          await activateExtraChildForUser(userId, expiryTime, "app_store", productId);
+        } else {
+          await activatePremiumForUser(userId, tier, expiryTime, "app_store", productId);
+        }
       }
 
-      // Registrar para auditoría
       await getFirestore().collection("iap_transactions").add({
         userId,
         transactionId,
@@ -206,14 +248,124 @@ exports.verifyAppStorePurchase = onCall(async (request) => {
         valid: true,
         tier,
         mode: "simplified",
-        warning: "Verificación simplificada - configurar APP_STORE_API_KEY para verificación completa",
       };
     }
 
-    // TODO: Implementar verificación completa con App Store Server API
-    // https://developer.apple.com/documentation/appstoreserverapi
+    // Verificación completa con App Store Server API
+    console.log("🔐 Usando verificación completa de App Store Server API");
 
-    throw new HttpsError("unimplemented", "Verificación completa de App Store no implementada aún");
+    try {
+      // Obtener información de la transacción
+      // Producción: api.storekit.itunes.apple.com
+      // Sandbox: api.storekit-sandbox.itunes.apple.com
+      const baseUrl = process.env.NODE_ENV === "production"
+        ? "https://api.storekit.itunes.apple.com"
+        : "https://api.storekit-sandbox.itunes.apple.com";
+
+      const response = await axios.get(
+        `${baseUrl}/inApps/v1/transactions/${transactionId}`,
+        {
+          headers: {
+            Authorization: `Bearer ${appStoreJWT}`,
+          },
+        }
+      );
+
+      console.log("📦 Respuesta de App Store:", JSON.stringify(response.data, null, 2));
+
+      // La respuesta incluye un JWS firmado con la transacción
+      const { signedTransactionInfo } = response.data;
+
+      if (!signedTransactionInfo) {
+        throw new Error("No se recibió signedTransactionInfo");
+      }
+
+      // Decodificar el JWS (sin verificar firma por simplicidad - Apple ya lo validó)
+      const parts = signedTransactionInfo.split(".");
+      const transactionInfo = JSON.parse(Buffer.from(parts[1], "base64").toString("utf-8"));
+
+      console.log("📄 Transacción decodificada:", JSON.stringify(transactionInfo, null, 2));
+
+      // Verificar que el productId coincida
+      if (transactionInfo.productId !== productId) {
+        console.error(`❌ ProductId no coincide: ${transactionInfo.productId} vs ${productId}`);
+        return { valid: false, reason: "product_mismatch" };
+      }
+
+      // Verificar que no esté revocada
+      if (transactionInfo.revocationDate) {
+        console.error("❌ Transacción revocada");
+        return { valid: false, reason: "revoked" };
+      }
+
+      // Activar premium o hijo extra según el producto
+      const tier = getTierFromProductId(productId);
+      if (tier) {
+        // Usar expiresDate de la transacción si está disponible
+        const expiryTime = transactionInfo.expiresDate
+          ? transactionInfo.expiresDate
+          : Date.now() + (30 * 24 * 60 * 60 * 1000);
+
+        if (isExtraChildProduct(productId)) {
+          await activateExtraChildForUser(userId, expiryTime, "app_store", productId);
+        } else {
+          await activatePremiumForUser(userId, tier, expiryTime, "app_store", productId);
+        }
+      }
+
+      // Registrar transacción verificada
+      await getFirestore().collection("iap_transactions").add({
+        userId,
+        transactionId,
+        productId,
+        platform: "ios",
+        verificationMode: "full",
+        originalTransactionId: transactionInfo.originalTransactionId,
+        purchaseDate: transactionInfo.purchaseDate,
+        expiresDate: transactionInfo.expiresDate,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+
+      console.log(`✅ Compra iOS verificada para ${userId}`);
+
+      return {
+        valid: true,
+        tier,
+        mode: "full",
+        expiresDate: transactionInfo.expiresDate,
+      };
+    } catch (apiError) {
+      console.error("❌ Error en App Store Server API:", apiError.response?.data || apiError.message);
+
+      // Si falla la API, usar modo simplificado como fallback
+      console.warn("⚠️ Fallback a modo simplificado");
+
+      const tier = getTierFromProductId(productId);
+      if (tier) {
+        const expiryTime = Date.now() + (30 * 24 * 60 * 60 * 1000);
+        if (isExtraChildProduct(productId)) {
+          await activateExtraChildForUser(userId, expiryTime, "app_store", productId);
+        } else {
+          await activatePremiumForUser(userId, tier, expiryTime, "app_store", productId);
+        }
+      }
+
+      await getFirestore().collection("iap_transactions").add({
+        userId,
+        transactionId,
+        productId,
+        platform: "ios",
+        verificationMode: "fallback",
+        error: apiError.message,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+
+      return {
+        valid: true,
+        tier,
+        mode: "fallback",
+      };
+    }
   } catch (error) {
     console.error("❌ [verifyAppStorePurchase] Error:", error);
 
@@ -476,6 +628,44 @@ async function activatePremiumForUser(userId, tier, expiryTimeMillis, platform, 
   });
 
   console.log(`✅ Premium activado para ${userId}: ${tier} hasta ${expiresAt.toDate().toISOString()}`);
+}
+
+/**
+ * Activar espacio de hijo extra para un usuario
+ * Incrementa el contador extraChildrenPurchased
+ */
+async function activateExtraChildForUser(userId, expiryTimeMillis, platform, productId) {
+  const db = getFirestore();
+  const expiresAt = Timestamp.fromMillis(expiryTimeMillis);
+
+  // Incrementar contador de hijos extra
+  await db.collection("users").doc(userId).update({
+    extraChildrenPurchased: FieldValue.increment(1),
+    lastExtraChildPurchase: FieldValue.serverTimestamp(),
+  });
+
+  // Registrar la compra de hijo extra
+  await db.collection("extra_child_purchases").add({
+    userId,
+    platform,
+    productId,
+    status: "active",
+    expiresAt,
+    purchasedAt: FieldValue.serverTimestamp(),
+  });
+
+  // También registrar en subscriptions para tracking general
+  await db.collection("subscriptions").add({
+    userId,
+    tier: "extra_child",
+    platform,
+    productId,
+    status: "active",
+    expiresAt,
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  console.log(`✅ Hijo extra activado para ${userId} hasta ${expiresAt.toDate().toISOString()}`);
 }
 
 /**

@@ -3,6 +3,25 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'app_config_service.dart';
 
+/// Resultado de verificación de límite de hijos
+class ChildLimitResult {
+  final bool canAddChild;
+  final int currentChildren;
+  final int maxChildren;
+  final int extraChildrenPurchased;
+  final String? message;
+
+  ChildLimitResult({
+    required this.canAddChild,
+    required this.currentChildren,
+    required this.maxChildren,
+    this.extraChildrenPurchased = 0,
+    this.message,
+  });
+
+  int get remainingSlots => maxChildren - currentChildren;
+}
+
 /// Servicio para gestionar suscripciones premium
 /// Maneja la verificación de estado premium, compra de suscripciones,
 /// y sincronización con Cloud Functions
@@ -237,6 +256,134 @@ class SubscriptionService {
   void invalidateCache() {
     _cachedStatus = null;
     _cacheTimestamp = null;
+  }
+
+  // ============================================================================
+  // CHILD LIMIT MANAGEMENT
+  // ============================================================================
+
+  /// Límites de hijos por tier
+  static const int _freeChildLimit = 0;  // Free no puede vincular hijos (debe ser Premium+)
+  static const int _premiumChildLimit = 0;  // Premium no puede vincular hijos (debe ser Premium+)
+  static const int _premiumPlusChildLimit = 3;  // Premium+ puede hasta 3 hijos
+
+  /// Obtiene el número actual de hijos vinculados
+  Future<int> getLinkedChildrenCount() async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) return 0;
+
+      final userDoc = await _firestore.collection('users').doc(user.uid).get();
+      if (!userDoc.exists) return 0;
+
+      final linkedChildrenIds = userDoc.data()?['linkedChildrenIds'] as List<dynamic>? ?? [];
+      return linkedChildrenIds.length;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  /// Obtiene el número de hijos extra comprados
+  /// Cada compra de 'extra_child_monthly' aumenta el límite en 1
+  Future<int> getExtraChildrenPurchased() async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) return 0;
+
+      final userDoc = await _firestore.collection('users').doc(user.uid).get();
+      if (!userDoc.exists) return 0;
+
+      // El número de hijos extra se almacena en el documento del usuario
+      // Se actualiza cuando se verifica una compra de extra_child
+      return userDoc.data()?['extraChildrenPurchased'] as int? ?? 0;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  /// Obtiene el límite máximo de hijos según el tier + compras extra
+  Future<int> getMaxChildrenLimit() async {
+    final status = await checkPremiumStatus();
+
+    // Si el sistema premium está desactivado, permitir ilimitados
+    if (status.premiumSystemDisabled) {
+      return 999; // Prácticamente ilimitado
+    }
+
+    int baseLimit;
+    switch (status.tier) {
+      case SubscriptionTier.free:
+        baseLimit = _freeChildLimit;
+        break;
+      case SubscriptionTier.premium:
+        baseLimit = _premiumChildLimit;
+        break;
+      case SubscriptionTier.premiumPlus:
+        baseLimit = _premiumPlusChildLimit;
+        break;
+    }
+
+    // Agregar hijos extra comprados
+    final extraChildren = await getExtraChildrenPurchased();
+    return baseLimit + extraChildren;
+  }
+
+  /// Verifica si el usuario puede agregar más hijos
+  /// Retorna un ChildLimitResult con información detallada
+  Future<ChildLimitResult> checkChildLimit() async {
+    try {
+      final status = await checkPremiumStatus();
+
+      // Si el sistema premium está desactivado, siempre puede agregar
+      if (status.premiumSystemDisabled) {
+        final currentChildren = await getLinkedChildrenCount();
+        return ChildLimitResult(
+          canAddChild: true,
+          currentChildren: currentChildren,
+          maxChildren: 999,
+          message: null,
+        );
+      }
+
+      // Solo Premium+ puede vincular hijos
+      if (status.tier != SubscriptionTier.premiumPlus) {
+        return ChildLimitResult(
+          canAddChild: false,
+          currentChildren: 0,
+          maxChildren: 0,
+          message: 'Necesitas Premium+ para vincular hijos',
+        );
+      }
+
+      final currentChildren = await getLinkedChildrenCount();
+      final extraChildren = await getExtraChildrenPurchased();
+      final maxChildren = _premiumPlusChildLimit + extraChildren;
+
+      if (currentChildren >= maxChildren) {
+        return ChildLimitResult(
+          canAddChild: false,
+          currentChildren: currentChildren,
+          maxChildren: maxChildren,
+          extraChildrenPurchased: extraChildren,
+          message: 'Has alcanzado el límite de $maxChildren hijos. Puedes agregar más comprando espacios adicionales.',
+        );
+      }
+
+      return ChildLimitResult(
+        canAddChild: true,
+        currentChildren: currentChildren,
+        maxChildren: maxChildren,
+        extraChildrenPurchased: extraChildren,
+      );
+    } catch (e) {
+      // En caso de error, ser conservador y no permitir
+      return ChildLimitResult(
+        canAddChild: false,
+        currentChildren: 0,
+        maxChildren: 0,
+        message: 'Error verificando límite de hijos',
+      );
+    }
   }
 }
 

@@ -38,8 +38,23 @@ class MessageStatusHelper {
     }
 
     // Verificar si fue visto (mensaje antes de lastOpenedAt del recipient)
-    if (recipientLastOpenedAt != null && messageTimestamp.isBefore(recipientLastOpenedAt)) {
-      return MessageStatus.seen;
+    if (recipientLastOpenedAt != null) {
+      final msgMs = messageTimestamp.millisecondsSinceEpoch;
+      final openedMs = recipientLastOpenedAt.millisecondsSinceEpoch;
+      final isBefore = messageTimestamp.isBefore(recipientLastOpenedAt);
+      final manualIsBefore = msgMs < openedMs;
+
+      // Debug: Solo loguear si hay discrepancia entre isBefore y manual
+      if (isBefore != manualIsBefore) {
+        appLogger.log(
+          '⚠️ [StatusV2] DISCREPANCIA! isBefore=$isBefore manualIsBefore=$manualIsBefore msgMs=$msgMs openedMs=$openedMs msgUtc=${messageTimestamp.isUtc} openedUtc=${recipientLastOpenedAt.isUtc}',
+          level: 'ERROR',
+        );
+      }
+
+      if (isBefore) {
+        return MessageStatus.seen;
+      }
     }
 
     // Verificar si fue entregado (mensaje antes de lastReceivedAt del recipient)

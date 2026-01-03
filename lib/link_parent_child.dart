@@ -8,7 +8,9 @@ import 'package:geolocator/geolocator.dart';
 import 'dart:math';
 import 'services/user_role_service.dart';
 import 'services/user_cache_service.dart';
+import 'services/subscription_service.dart';
 import 'widgets/location_permission_dialog.dart';
+import 'widgets/extra_child_paywall_dialog.dart';
 import 'utils/release_logger.dart';
 
 // ================ PANTALLA PARA PADRES ================
@@ -22,8 +24,11 @@ class GenerateLinkCodeScreen extends StatefulWidget {
 class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final SubscriptionService _subscriptionService = SubscriptionService();
   String? _linkCode;
   bool _isGenerating = false;
+  bool _isCheckingLimit = true;
+  ChildLimitResult? _childLimitResult;
   DateTime? _expiryTime;
   Timer? _countdownTimer;
   Duration _timeRemaining = Duration.zero;
@@ -31,7 +36,28 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
   @override
   void initState() {
     super.initState();
-    _checkExistingCode();
+    _checkChildLimitAndExistingCode();
+  }
+
+  Future<void> _checkChildLimitAndExistingCode() async {
+    setState(() => _isCheckingLimit = true);
+
+    try {
+      // Verificar límite de hijos
+      final limitResult = await _subscriptionService.checkChildLimit();
+      setState(() {
+        _childLimitResult = limitResult;
+      });
+
+      // Solo verificar código existente si puede agregar hijos
+      if (limitResult.canAddChild) {
+        await _checkExistingCode();
+      }
+    } catch (e) {
+      ReleaseLogger.error('Error checking child limit: $e', tag: 'LinkParentChild');
+    } finally {
+      setState(() => _isCheckingLimit = false);
+    }
   }
 
   @override
@@ -113,6 +139,17 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
   }
 
   Future<void> _generateLinkCode() async {
+    // Verificar límite de hijos antes de generar código
+    if (_childLimitResult != null && !_childLimitResult!.canAddChild) {
+      // Mostrar paywall para comprar hijo extra
+      final purchased = await ExtraChildPaywallDialog.show(context, _childLimitResult!);
+      if (purchased) {
+        // Recargar límite después de la compra
+        await _checkChildLimitAndExistingCode();
+      }
+      return;
+    }
+
     setState(() => _isGenerating = true);
 
     try {
@@ -210,7 +247,9 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
           ),
         ),
         child: Center(
-          child: SingleChildScrollView(
+          child: _isCheckingLimit
+              ? CircularProgressIndicator()
+              : SingleChildScrollView(
             padding: EdgeInsets.all(24),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -240,6 +279,49 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
                 ),
 
                 SizedBox(height: 16),
+
+                // Mostrar contador de hijos si tiene Premium+
+                if (_childLimitResult != null && _childLimitResult!.maxChildren > 0) ...[
+                  Container(
+                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: _childLimitResult!.canAddChild
+                          ? Colors.green.withValues(alpha: 0.1)
+                          : Colors.orange.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: _childLimitResult!.canAddChild
+                            ? Colors.green.withValues(alpha: 0.3)
+                            : Colors.orange.withValues(alpha: 0.3),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          _childLimitResult!.canAddChild
+                              ? Icons.check_circle_outline
+                              : Icons.warning_amber_rounded,
+                          color: _childLimitResult!.canAddChild
+                              ? Colors.green
+                              : Colors.orange,
+                          size: 20,
+                        ),
+                        SizedBox(width: 8),
+                        Text(
+                          '${_childLimitResult!.currentChildren}/${_childLimitResult!.maxChildren} hijos vinculados',
+                          style: TextStyle(
+                            color: _childLimitResult!.canAddChild
+                                ? (isDarkMode ? Colors.green.shade200 : Colors.green.shade800)
+                                : (isDarkMode ? Colors.orange.shade200 : Colors.orange.shade800),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  SizedBox(height: 16),
+                ],
 
                 Text(
                   'Comparte este código con tu hijo para vincular su cuenta',
@@ -398,34 +480,182 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
                     ],
                   ),
                 ] else ...[
-                  SizedBox(
-                    width: double.infinity,
-                    height: 56,
-                    child: ElevatedButton.icon(
-                      onPressed: _isGenerating ? null : _generateLinkCode,
-                      icon: _isGenerating
-                          ? SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : Icon(Icons.add_link),
-                      label: Text(
-                        _isGenerating ? 'Generando...' : 'Generar Código',
-                        style: TextStyle(fontSize: 18),
+                  // Si no puede agregar más hijos, mostrar UI amigable
+                  if (_childLimitResult != null && !_childLimitResult!.canAddChild) ...[
+                    // Ilustracion amigable
+                    Container(
+                      width: 100,
+                      height: 100,
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            colorScheme.primary.withValues(alpha: 0.15),
+                            colorScheme.secondary.withValues(alpha: 0.15),
+                          ],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        shape: BoxShape.circle,
                       ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: colorScheme.primary,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
+                      child: Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          Icon(
+                            Icons.family_restroom,
+                            size: 50,
+                            color: colorScheme.primary,
+                          ),
+                          Positioned(
+                            right: 5,
+                            bottom: 5,
+                            child: Container(
+                              padding: EdgeInsets.all(6),
+                              decoration: BoxDecoration(
+                                color: colorScheme.primary,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: isDarkMode ? colorScheme.surface : Colors.white,
+                                  width: 2,
+                                ),
+                              ),
+                              child: Text(
+                                '${_childLimitResult!.currentChildren}',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    SizedBox(height: 24),
+
+                    // Mensaje amigable
+                    Text(
+                      'Todos tus hijos estan protegidos',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: colorScheme.onSurface,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+
+                    SizedBox(height: 8),
+
+                    Text(
+                      'Tu plan Premium+ incluye hasta ${_childLimitResult!.maxChildren} hijos y ya los tienes vinculados.',
+                      style: TextStyle(
+                        fontSize: 15,
+                        color: colorScheme.onSurfaceVariant,
+                        height: 1.4,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+
+                    SizedBox(height: 24),
+
+                    // Tarjeta informativa
+                    Container(
+                      padding: EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: colorScheme.primaryContainer.withValues(alpha: 0.5),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: colorScheme.primary.withValues(alpha: 0.15),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              Icons.lightbulb_outline,
+                              color: colorScheme.primary,
+                              size: 24,
+                            ),
+                          ),
+                          SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              'Tienes mas hijos? Puedes agregar espacios adicionales a tu plan.',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: colorScheme.onSurface,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    SizedBox(height: 20),
+
+                    // Boton principal
+                    SizedBox(
+                      width: double.infinity,
+                      height: 56,
+                      child: ElevatedButton(
+                        onPressed: _generateLinkCode, // Esto mostrará el paywall
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: colorScheme.primary,
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.add_circle_outline, size: 22),
+                            SizedBox(width: 8),
+                            Text(
+                              'Agregar Otro Hijo',
+                              style: TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
-                  ),
+                  ] else ...[
+                    SizedBox(
+                      width: double.infinity,
+                      height: 56,
+                      child: ElevatedButton.icon(
+                        onPressed: _isGenerating ? null : _generateLinkCode,
+                        icon: _isGenerating
+                            ? SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : Icon(Icons.add_link),
+                        label: Text(
+                          _isGenerating ? 'Generando...' : 'Generar Código',
+                          style: TextStyle(fontSize: 18),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: colorScheme.primary,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
 
                 SizedBox(height: 40),

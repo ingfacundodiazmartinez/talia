@@ -19,6 +19,7 @@ import '../services/message_cache_service.dart';
 import '../services/favorite_service.dart';  // ✅ NEW: For favorite tracking
 import '../services/media_compression_service.dart';
 import '../services/reaction_service.dart';  // ✅ NEW: For reactions
+import '../services/read_receipts_service.dart';  // ✅ FIX: For V2 read receipts
 import '../notification_service.dart';
 import '../utils/release_logger.dart';
 import 'package:uuid/uuid.dart';
@@ -1039,6 +1040,26 @@ class ChatControllerCacheFirst extends ChangeNotifier {
       ReleaseLogger.log('Chat $chatId marked as read');
     } catch (e) {
       ReleaseLogger.error('Failed to mark chat $chatId as read: $e');
+    }
+  }
+
+  /// ✅ FIX: Marca mensajes como vistos para actualizar lastOpenedAt (V2 read receipts)
+  ///
+  /// Esto actualiza lastOpenedAt_{userId} en el chat document, lo cual permite
+  /// que el sender vea sus mensajes como "seen" cuando message.timestamp < lastOpenedAt
+  ///
+  /// Llamar cuando:
+  /// - El usuario entra al chat
+  /// - El usuario resume la app con el chat abierto
+  Future<void> markAsSeenForReceipts() async {
+    try {
+      await ReadReceiptsService().markMessagesAsSeen(
+        chatId: chatId,
+        isGroupChat: isGroup,
+      );
+      ReleaseLogger.log('✅ Chat $chatId: lastOpenedAt actualizado para read receipts');
+    } catch (e) {
+      ReleaseLogger.error('Failed to mark messages as seen for chat $chatId: $e');
     }
   }
 

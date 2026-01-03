@@ -11,8 +11,6 @@ import '../utils/release_logger.dart';
 import '../notification_service.dart';
 import '../services/local_unread_count_service.dart';
 import '../services/reaction_service.dart';
-import '../services/read_receipts_service.dart';
-import '../services/delivery_receipts_service.dart';
 import '../services/audio_processing_service.dart';
 import '../widgets/reaction_picker.dart';
 import '../models/chat_message.dart';
@@ -59,8 +57,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   final ScrollController _scrollController = ScrollController();
   final AudioRecorder _audioRecorder = AudioRecorder();
   final ReactionService _reactionService = ReactionService();
-  final ReadReceiptsService _readReceiptsService = ReadReceiptsService();
-  final DeliveryReceiptsService _deliveryReceiptsService = DeliveryReceiptsService();
 
   // Estado local de UI SOLAMENTE
   bool _showEmojiPicker = false;
@@ -232,18 +228,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   }
 
   /// Marca los mensajes del grupo como entregados y leídos
+  /// Arquitectura: Screen → Controller → Service
   Future<void> _markMessagesAsDeliveredAndSeen() async {
-    // Marcar como entregados
-    await _deliveryReceiptsService.markMessagesAsDelivered(
-      chatId: widget.groupId,
-      isGroupChat: true,
-    );
+    // Marcar como entregados (via controller)
+    await _controller.markAsDeliveredForReceipts();
 
-    // Marcar como leídos
-    await _readReceiptsService.markMessagesAsSeen(
-      chatId: widget.groupId,
-      isGroupChat: true,
-    );
+    // Marcar como leídos (via controller)
+    await _controller.markAsSeenForReceipts();
   }
 
   Future<void> _cancelRecording() async {

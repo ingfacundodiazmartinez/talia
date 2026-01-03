@@ -14,6 +14,8 @@ import '../services/chats/managers/chat_cache_manager.dart';
 import '../services/user_settings_service.dart';
 import '../services/message_cache_service.dart';
 import '../services/favorite_service.dart';
+import '../services/read_receipts_service.dart';
+import '../services/delivery_receipts_service.dart';
 import '../models/chat_message.dart';
 import '../utils/release_logger.dart';
 
@@ -367,6 +369,41 @@ class GroupChatController extends ChangeNotifier {
       }
     } catch (e) {
       ReleaseLogger.error('⚠️ [markMessagesAsRead] Error marcando mensajes como leídos: $e', tag: 'GroupChatController');
+    }
+  }
+
+  /// ✅ FIX: Marca mensajes como vistos para actualizar lastOpenedAt (V2 read receipts)
+  ///
+  /// Esto actualiza lastOpenedAt_{userId} en el group document, lo cual permite
+  /// que el sender vea sus mensajes como "seen" cuando message.timestamp < lastOpenedAt
+  ///
+  /// Llamar cuando:
+  /// - El usuario entra al grupo
+  /// - El usuario resume la app con el grupo abierto
+  Future<void> markAsSeenForReceipts() async {
+    try {
+      await ReadReceiptsService().markMessagesAsSeen(
+        chatId: groupId,
+        isGroupChat: true,
+      );
+      ReleaseLogger.log('✅ Group $groupId: lastOpenedAt actualizado para read receipts');
+    } catch (e) {
+      ReleaseLogger.error('Failed to mark messages as seen for group $groupId: $e');
+    }
+  }
+
+  /// ✅ FIX: Marca mensajes como entregados (delivery receipts)
+  ///
+  /// Actualiza deliveredTo[] para indicar que el usuario recibió los mensajes
+  Future<void> markAsDeliveredForReceipts() async {
+    try {
+      await DeliveryReceiptsService().markMessagesAsDelivered(
+        chatId: groupId,
+        isGroupChat: true,
+      );
+      ReleaseLogger.log('✅ Group $groupId: mensajes marcados como entregados');
+    } catch (e) {
+      ReleaseLogger.error('Failed to mark messages as delivered for group $groupId: $e');
     }
   }
 

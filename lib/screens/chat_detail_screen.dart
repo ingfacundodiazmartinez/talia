@@ -156,6 +156,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     LocalUnreadCountService().enterChat(widget.chatId);
     NotificationService().clearChatNotifications(widget.chatId);
 
+    // ✅ FIX: Marcar mensajes como leídos cuando el usuario ENTRA al chat
+    // Esto actualiza lastOpenedAt para que el sender vea los mensajes como "seen"
+    // Arquitectura: Screen → Controller → Service
+    _controller.markAsSeenForReceipts();
+
     // ✅ Auto-dismiss: Limpiar notificaciones de este chat cuando el usuario entra
     NotificationTrackingService().dismissNotificationsForContext(
       type: NotificationContext.chat,
@@ -197,6 +202,12 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     } else if (state == AppLifecycleState.resumed) {
       // Restaurar el chat actual cuando vuelve a foreground
       NotificationService().setCurrentChat(widget.chatId);
+
+      // ✅ FIX: Marcar mensajes como leídos cuando la app resume con el chat abierto
+      // Esto cubre el escenario donde el usuario desbloquea el teléfono
+      // y el chat estaba abierto - actualiza lastOpenedAt para el sender
+      // Arquitectura: Screen → Controller → Service
+      _controller.markAsSeenForReceipts();
     }
   }
 

@@ -186,9 +186,12 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
   Widget _buildSliverAppBar() {
     final isPremium = _currentStatus?.isPremium ?? false;
     final tier = _currentStatus?.tier ?? SubscriptionTier.free;
+    // Calcular altura basada en si tiene fecha de expiración
+    final hasExpiry = _currentStatus?.expiresAt != null;
+    final expandedHeight = isPremium && hasExpiry ? 260.0 : 230.0;
 
     return SliverAppBar(
-      expandedHeight: isPremium ? 200 : 180,
+      expandedHeight: expandedHeight,
       pinned: true,
       backgroundColor: _primaryPurple,
       foregroundColor: Colors.white,
@@ -202,60 +205,64 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
             ),
           ),
           child: SafeArea(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const SizedBox(height: 40),
-                // Icono animado
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.2),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    isPremium ? Icons.workspace_premium : Icons.star_outline,
-                    size: 48,
-                    color: isPremium ? _accentGold : Colors.white,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  isPremium ? 'Eres ${tier.displayName}' : 'Talia Premium',
-                  style: const TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  isPremium
-                      ? 'Gracias por ser parte de Talia'
-                      : 'Desbloquea todas las funciones',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Colors.white.withValues(alpha: 0.9),
-                  ),
-                ),
-                if (_currentStatus?.expiresAt != null) ...[
-                  const SizedBox(height: 8),
+            bottom: false,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 50),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Icono
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                    padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
                       color: Colors.white.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(20),
+                      shape: BoxShape.circle,
                     ),
-                    child: Text(
-                      'Válido hasta ${_formatDate(_currentStatus!.expiresAt!)}',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: Colors.white,
-                      ),
+                    child: Icon(
+                      isPremium ? Icons.workspace_premium : Icons.star_outline,
+                      size: 40,
+                      color: isPremium ? _accentGold : Colors.white,
                     ),
                   ),
+                  const SizedBox(height: 12),
+                  Text(
+                    isPremium ? 'Eres ${tier.displayName}' : 'Talia Premium',
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    isPremium
+                        ? 'Gracias por ser parte de Talia'
+                        : 'Desbloquea todas las funciones',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.white.withValues(alpha: 0.9),
+                    ),
+                  ),
+                  if (hasExpiry) ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        'Válido hasta ${_formatDate(_currentStatus!.expiresAt!)}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
         ),
