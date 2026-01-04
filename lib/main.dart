@@ -923,8 +923,9 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       NotificationService().notifyAppResumed();
 
-      // ✅ Limpiar badge del icono de la app al abrirla
-      UnreadMessagesService().clearBadge();
+      // ✅ Actualizar badge con el conteo real al abrir la app
+      // (en lugar de clearBadge que lo ponía en 0, causando badges fantasma)
+      UnreadMessagesService().updateBadgeCount();
 
       // ✅ AGORA WATCHDOG: Notificar que la app volvió a foreground
       AgoraEngineService().onAppForeground();

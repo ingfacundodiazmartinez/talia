@@ -644,9 +644,24 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
       return _buildDeletedMessageBubble(message, isMe, timeString);
     }
 
-    // Handle optimistic messages (uploading)
-    if (message.isOptimistic) {
+    // Handle optimistic messages for MEDIA only (image, video, audio uploading)
+    // Text messages (with or without moderation) should go through MessageBubble
+    final isMediaOptimistic = message.isOptimistic &&
+        (message.localImagePath != null ||
+         message.localVideoPath != null ||
+         message.localAudioPath != null);
+    if (isMediaOptimistic) {
       return _buildOptimisticMessageBubble(message, timeString);
+    }
+
+    // Convert moderationStatus string to ModerationStatus enum
+    ModerationStatus? moderationStatus;
+    if (message.moderationStatus == 'blocked') {
+      moderationStatus = ModerationStatus.blocked;
+    } else if (message.moderationStatus == 'pending') {
+      moderationStatus = ModerationStatus.pending;
+    } else if (message.moderationStatus == 'approved') {
+      moderationStatus = ModerationStatus.approved;
     }
 
     // Convert reactions from Map<String, List<String>> to Map<String, dynamic>
@@ -667,6 +682,11 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
       };
     }
 
+    // Use 'sending' status for optimistic messages or pending moderation to show spinner
+    final messageStatus = (message.isOptimistic || moderationStatus == ModerationStatus.pending)
+        ? MessageStatus.sending
+        : MessageStatus.sent;
+
     return MessageBubble(
       key: ValueKey('msg_${message.id}'),
       messageId: message.id,
@@ -675,7 +695,7 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
       imageUrl: message.imageUrl,
       videoUrl: message.videoUrl,
       audioUrl: message.audioUrl,
-      status: MessageStatus.sent,
+      status: messageStatus,
       replyTo: replyToMap,
       reactions: reactionsMap.isNotEmpty ? reactionsMap : null,
       isMe: isMe,
@@ -689,6 +709,10 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
       // ✅ FIX #8: Pass forwarded message fields to MessageBubble
       isForwarded: message.isForwarded,
       originalContactName: message.originalContactName,
+      // Moderation fields for blocked messages
+      moderationStatus: moderationStatus,
+      moderationReason: message.moderationReason,
+      originalText: message.isBlocked ? message.text : null,
       isFavorite: _favoriteMessageIds.contains(message.id),
       onFavoriteToggled: () {
         // Force rebuild to update favorite indicator

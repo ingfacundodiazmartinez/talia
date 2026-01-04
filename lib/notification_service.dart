@@ -1090,6 +1090,14 @@ class NotificationService {
               continue;
             }
 
+            // ✅ FIX: Ignorar notificaciones con hideFromUI (story_approval_request, contact_request)
+            // Estas se manejan en sus propias secciones (Historias Pendientes, Whitelist)
+            // y reciben push via FCM, pero no deben mostrarse como notificación local
+            if (data['hideFromUI'] == true) {
+              ReleaseLogger.log('⚠️ [NotificationsListener] hideFromUI=true, skip local notification', tag: 'NotificationService');
+              continue;
+            }
+
             ReleaseLogger.log(
               '✅ [NotificationsListener] Mostrando notificación: ${doc.id}, type=$type',
               tag: 'NotificationService',

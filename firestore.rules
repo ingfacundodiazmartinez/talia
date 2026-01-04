@@ -1777,13 +1777,27 @@ service cloud.firestore {
                (hasChildInPending || hasChildInMembers);
       }
 
+      // Función para verificar si un admin está actualizando moderación
+      function isAdminUpdatingModeration() {
+        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+        let moderationFields = ['moderationEnabled', 'moderationLevel', 'moderationUpdatedAt', 'moderationUpdatedBy'];
+
+        // Verificar que el usuario es admin del grupo
+        let isAdmin = resource.data.admins != null && request.auth.uid in resource.data.admins;
+
+        // Solo se modifican campos de moderación
+        return isAdmin && changedKeys.hasOnly(moderationFields);
+      }
+
       // Miembros pueden actualizar campos de actividad y su propio unreadCount
       // O pueden salir del grupo (removerse a sí mismos del array members)
       // Padres pueden modificar membresía de sus hijos (approve/revoke)
+      // Admins pueden actualizar configuración de moderación
       allow update: if request.auth != null && (
         (request.auth.uid in resource.data.members && isUpdatingOnlyAllowedGroupFields()) ||
         isLeavingGroup() ||
-        isParentModifyingChildMembership()
+        isParentModifyingChildMembership() ||
+        isAdminUpdatingModeration()
       );
 
       // Solo Cloud Functions pueden eliminar grupos
@@ -1797,13 +1811,21 @@ service cloud.firestore {
           return request.auth.uid in groupDoc.data.members;
         }
 
+        // Función para verificar si el grupo tiene moderación activa
+        function groupHasModeration() {
+          let groupDoc = get(/databases/$(database)/documents/groups_v2/$(groupId));
+          return groupDoc.data.moderationEnabled == true;
+        }
+
         // Solo miembros pueden leer mensajes
         allow read: if request.auth != null && isGroupV2Member();
 
         // Solo miembros pueden crear mensajes (y deben ser el sender)
+        // IMPORTANTE: Si el grupo tiene moderación activa, solo Cloud Functions puede escribir
         allow create: if request.auth != null &&
           isGroupV2Member() &&
-          request.auth.uid == request.resource.data.senderId;
+          request.auth.uid == request.resource.data.senderId &&
+          !groupHasModeration();
 
         // Solo el sender puede actualizar su mensaje (editar)
         // O miembros pueden actualizar metadata (reactions, readBy)

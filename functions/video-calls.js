@@ -304,7 +304,7 @@ exports.initiateVideoCall = onCall(
                     title: 'Videollamada entrante',
                     body: `${callerName} te está llamando`,
                   },
-                  badge: 1,
+                  // badge manejado por la app, no desde server
                   sound: 'default',
                 },
               },

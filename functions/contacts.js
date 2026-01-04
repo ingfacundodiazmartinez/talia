@@ -410,9 +410,9 @@ exports.createContactRequest = onCall(
         };
       }
 
-      // Obtener nombres, emails y fotos de Firestore (fallback si no vienen en request.data)
-      const resolvedUser1Name = user1Data.name || "Usuario";
-      const resolvedUser2Name = user2Data.name || "Usuario";
+      // Obtener nombres, emails y fotos de Firestore (fallback: name → phone → "Usuario")
+      const resolvedUser1Name = user1Data.name?.trim() || user1Data.phone || "Usuario";
+      const resolvedUser2Name = user2Data.name?.trim() || user2Data.phone || "Usuario";
       const resolvedUser1Email = user1Data.email || "";
       const resolvedUser2Email = user2Data.email || "";
       const resolvedUser1PhotoURL = user1Data.photoURL || null;
@@ -488,9 +488,9 @@ exports.createContactRequest = onCall(
       // 10. Enviar notificaciones push solo al PRIMER padre de cada lado (1 aprobación suficiente)
       const messaging = getMessaging();
 
-      // Usar nombres ya obtenidos anteriormente
-      const user1Name = user1Data.name || "Usuario";
-      const user2Name = user2Data.name || "Usuario";
+      // Usar nombres ya obtenidos anteriormente (fallback: name → phone → "Usuario")
+      const user1Name = user1Data.name?.trim() || user1Data.phone || "Usuario";
+      const user2Name = user2Data.name?.trim() || user2Data.phone || "Usuario";
 
       // Determinar a qué padres notificar basándose en el nuevo sistema
       const parentsToNotifyForUser1 = approvalReqs.requiredApprovals.includes(participants[0])
@@ -970,6 +970,7 @@ exports.onContactApprovalRequested = onDocumentUpdated(
             read: false,
             pushSent: false,
             priority: "high",
+            hideFromUI: true, // ✅ No mostrar en sección Notificaciones, solo push + badge Whitelist
             createdAt: FieldValue.serverTimestamp(),
             deleteAt: Timestamp.fromDate(deleteAt),
           });

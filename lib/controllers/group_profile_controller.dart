@@ -6,6 +6,7 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import '../services/contact_alias_service.dart';
 import '../services/favorite_service.dart';
+import '../services/group_moderation_service.dart';
 import '../models/chat_message.dart';
 import '../utils/release_logger.dart';
 
@@ -23,6 +24,7 @@ class GroupProfileController {
   // Servicios privados
   final ContactAliasService _aliasService;
   final FavoriteService _favoriteService;
+  final GroupModerationService _moderationService;
   final FirebaseFirestore _firestore;
   final firebase_auth.FirebaseAuth _auth;
   final FirebaseStorage _storage;
@@ -60,12 +62,14 @@ class GroupProfileController {
     required this.groupId,
     ContactAliasService? aliasService,
     FavoriteService? favoriteService,
+    GroupModerationService? moderationService,
     FirebaseFirestore? firestore,
     firebase_auth.FirebaseAuth? auth,
     FirebaseStorage? storage,
     FirebaseFunctions? functions,
   }) : _aliasService = aliasService ?? ContactAliasService(),
        _favoriteService = favoriteService ?? FavoriteService(),
+       _moderationService = moderationService ?? GroupModerationService(),
        _firestore = firestore ?? FirebaseFirestore.instance,
        _auth = auth ?? firebase_auth.FirebaseAuth.instance,
        _storage = storage ?? FirebaseStorage.instance,
@@ -543,6 +547,49 @@ class GroupProfileController {
   void _clearError() {
     _hasError = false;
     _errorMessage = null;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // MODERACIÓN DEL GRUPO
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Verificar si el usuario actual puede modificar la moderación del grupo
+  ///
+  /// Retorna (canModify, reason)
+  Future<({bool canModify, String reason})> canModifyModeration() async {
+    return _moderationService.canModifyModeration(groupId);
+  }
+
+  /// Obtener estado actual de moderación
+  bool get moderationEnabled => _groupData?['moderationEnabled'] as bool? ?? false;
+  String get moderationLevel => _groupData?['moderationLevel'] as String? ?? 'high';
+
+  /// Actualizar configuración de moderación del grupo
+  ///
+  /// [enabled] - Activar o desactivar moderación
+  /// [level] - Nivel de moderación: 'high', 'medium', 'low'
+  Future<bool> setModeration({
+    required bool enabled,
+    String level = 'high',
+  }) async {
+    final result = await _moderationService.setModeration(
+      groupId: groupId,
+      enabled: enabled,
+      level: level,
+    );
+
+    if (result.success) {
+      onSuccess?.call(result.message);
+      return true;
+    } else {
+      onError?.call(result.message);
+      return false;
+    }
+  }
+
+  /// Stream del estado de moderación del grupo
+  Stream<GroupModerationState> watchModeration() {
+    return _moderationService.watchModeration(groupId);
   }
 
   /// Limpiar recursos

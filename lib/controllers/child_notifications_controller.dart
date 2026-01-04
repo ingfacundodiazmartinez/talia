@@ -119,6 +119,12 @@ class ChildNotificationsController {
         final data = doc.data();
         final notificationId = doc.id;
 
+        // ✅ FIX: Filtrar notificaciones con hideFromUI (story_approval_request, contact_request)
+        // Estas se manejan en sus propias secciones (Historias Pendientes, Whitelist)
+        if (data['hideFromUI'] == true) {
+          continue;
+        }
+
         // Verificar si ya está cacheada
         if (_cacheService.isNotificationCached(userId, notificationId)) {
           // Ya cacheada, skip (TTL eliminará de Firestore automáticamente)
@@ -274,6 +280,8 @@ class ChildNotificationsController {
         return Stream.empty();
       }
 
+      // Nota: El filtrado de hideFromUI se hace en filterNotificationsForChild()
+      // ya que QuerySnapshot no permite modificar sus docs
       return _firestore
           .collection('notifications')
           .where('userId', isEqualTo: userId)
@@ -344,6 +352,12 @@ class ChildNotificationsController {
         final data = doc.data() as Map<String, dynamic>;
         final notifData = data['data'] as Map<String, dynamic>?;
         final type = data['type'] as String?;
+
+        // ✅ FIX: Filtrar notificaciones con hideFromUI (story_approval_request, contact_request)
+        // Estas se manejan en sus propias secciones (Historias Pendientes, Whitelist)
+        if (data['hideFromUI'] == true) {
+          return false;
+        }
 
         // Excluir notificaciones de chat
         if (type == 'chat_message') {

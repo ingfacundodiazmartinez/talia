@@ -153,13 +153,25 @@ class UnreadMessagesService {
 
       // 3. Contar historias pendientes de los hijos
       // ACTUALIZADO: Usar story_approval_requests en lugar de stories
+      // FIX: Filtrar también por expiresAt para no contar requests expirados
       int pendingStoriesCount = 0;
       final storiesSnapshot = await _firestore
           .collection('story_approval_requests')
           .where('parentId', isEqualTo: user.uid)
           .where('status', isEqualTo: 'pending')
           .get();
-      pendingStoriesCount = storiesSnapshot.docs.length;
+
+      // Filtrar localmente los que no han expirado
+      final now = DateTime.now();
+      pendingStoriesCount = storiesSnapshot.docs.where((doc) {
+        final data = doc.data();
+        final expiresAt = data['expiresAt'];
+        if (expiresAt == null) return true; // Si no tiene expiresAt, contar
+        if (expiresAt is Timestamp) {
+          return expiresAt.toDate().isAfter(now);
+        }
+        return true;
+      }).length;
 
       // 4. Contar emergencias no resueltas de los hijos
       int unresolvedEmergenciesCount = 0;
@@ -175,17 +187,12 @@ class UnreadMessagesService {
             .length;
       }
 
-      // 5. Contar solicitudes de contacto pendientes (notificaciones)
-      final contactRequestsSnapshot = await _firestore
-          .collection('notifications')
-          .where('userId', isEqualTo: user.uid)
-          .where('read', isEqualTo: false)
-          .where('type', isEqualTo: 'contact_request')
-          .get();
-      final contactRequestsCount = contactRequestsSnapshot.docs.length;
+      // 5. Solicitudes de contacto: YA NO se cuentan aquí
+      // ✅ FIX: El badge de contactos pendientes se muestra en la sección Whitelist
+      // No duplicar en el app icon badge
 
       // Calcular total (suma de todos los badges del bottom nav)
-      final totalBadgeCount = totalUnreadMessages + pendingStoriesCount + unresolvedEmergenciesCount + contactRequestsCount;
+      final totalBadgeCount = totalUnreadMessages + pendingStoriesCount + unresolvedEmergenciesCount;
 
       // Verificar si el dispositivo soporta badges
       final isSupported = await AppBadgePlus.isSupported();

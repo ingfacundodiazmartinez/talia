@@ -131,6 +131,80 @@ exports.convertExpiredStoriesToPermanent = onSchedule(
   }
 );
 
+/**
+ * Limpia story_approval_requests expirados
+ * Ejecuta cada hora junto con convertExpiredStoriesToPermanent
+ * Marca como 'expired' los requests pendientes cuya historia ya expiró
+ */
+exports.cleanupExpiredStoryApprovalRequests = onSchedule(
+  {
+    schedule: "30 * * * *", // Cada hora a los :30 minutos
+    timeZone: "America/Argentina/Buenos_Aires",
+    memory: "256MiB",
+  },
+  async (event) => {
+    console.log("🧹 Limpiando story_approval_requests expirados...");
+
+    const db = getFirestore();
+    const now = Timestamp.now();
+
+    try {
+      // Obtener requests pendientes que ya expiraron
+      const expiredRequests = await db
+        .collection("story_approval_requests")
+        .where("status", "==", "pending")
+        .where("expiresAt", "<=", now)
+        .get();
+
+      console.log(`📊 Story approval requests expirados: ${expiredRequests.size}`);
+
+      if (expiredRequests.empty) {
+        console.log("✅ No hay requests expirados para limpiar");
+        return { success: true, updated: 0 };
+      }
+
+      // Usar batch para actualizar
+      const batches = [];
+      let currentBatch = db.batch();
+      let batchCount = 0;
+      let updatedCount = 0;
+
+      for (const requestDoc of expiredRequests.docs) {
+        currentBatch.update(requestDoc.ref, {
+          status: "expired",
+          expiredAt: FieldValue.serverTimestamp(),
+        });
+
+        batchCount++;
+        updatedCount++;
+
+        if (batchCount >= CONSTANTS.FIRESTORE_BATCH_LIMIT) {
+          batches.push(currentBatch);
+          currentBatch = db.batch();
+          batchCount = 0;
+        }
+      }
+
+      if (batchCount > 0) {
+        batches.push(currentBatch);
+      }
+
+      console.log(`📦 Ejecutando ${batches.length} batch(es)...`);
+      await Promise.all(batches.map((batch) => batch.commit()));
+
+      console.log(`✅ Limpieza completada: ${updatedCount} requests marcados como expirados`);
+
+      return {
+        success: true,
+        updated: updatedCount,
+      };
+    } catch (error) {
+      console.error("❌ Error en limpieza de story_approval_requests:", error);
+      throw error;
+    }
+  }
+);
+
 // ═══════════════════════════════════════════════════════════════
 // cleanupOldMessages - ELIMINADO
 // ═══════════════════════════════════════════════════════════════

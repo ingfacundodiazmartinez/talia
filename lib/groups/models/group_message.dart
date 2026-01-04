@@ -77,6 +77,13 @@ class GroupMessage {
   final String? originalChatId;
   final String? originalSenderId;
 
+  // Moderation fields
+  final String? moderationStatus; // 'pending', 'approved', 'blocked'
+  final String? moderationReason;
+
+  // Local ID for optimistic UI matching
+  final String? localId;
+
   const GroupMessage({
     required this.id,
     required this.senderId,
@@ -101,6 +108,9 @@ class GroupMessage {
     this.originalContactName,
     this.originalChatId,
     this.originalSenderId,
+    this.moderationStatus,
+    this.moderationReason,
+    this.localId,
   });
 
   factory GroupMessage.fromFirestore(String id, Map<String, dynamic> data) {
@@ -140,6 +150,11 @@ class GroupMessage {
       originalContactName: data['originalContactName'] as String?,
       originalChatId: data['originalChatId'] as String?,
       originalSenderId: data['originalSenderId'] as String?,
+      // Moderation fields
+      moderationStatus: data['moderationStatus'] as String?,
+      moderationReason: data['moderationReason'] as String?,
+      // Local ID for optimistic UI matching
+      localId: data['localId'] as String?,
     );
   }
 
@@ -165,6 +180,8 @@ class GroupMessage {
       if (originalContactName != null) 'originalContactName': originalContactName,
       if (originalChatId != null) 'originalChatId': originalChatId,
       if (originalSenderId != null) 'originalSenderId': originalSenderId,
+      // Local ID for optimistic UI matching
+      if (localId != null) 'localId': localId,
     };
   }
 
@@ -192,6 +209,15 @@ class GroupMessage {
 
   /// Check if message is a reply
   bool get isReply => replyTo != null;
+
+  /// Check if message was blocked by moderation
+  bool get isBlocked => moderationStatus == 'blocked';
+
+  /// Check if message is pending moderation
+  bool get isPending => moderationStatus == 'pending';
+
+  /// Check if message was approved or has no moderation
+  bool get isApproved => moderationStatus == null || moderationStatus == 'approved';
 
   /// Get total reaction count
   int get totalReactions => reactions.values.fold(0, (total, list) => total + list.length);
@@ -235,6 +261,9 @@ class GroupMessage {
     String? originalContactName,
     String? originalChatId,
     String? originalSenderId,
+    String? moderationStatus,
+    String? moderationReason,
+    String? localId,
   }) {
     return GroupMessage(
       id: id ?? this.id,
@@ -260,6 +289,9 @@ class GroupMessage {
       originalContactName: originalContactName ?? this.originalContactName,
       originalChatId: originalChatId ?? this.originalChatId,
       originalSenderId: originalSenderId ?? this.originalSenderId,
+      moderationStatus: moderationStatus ?? this.moderationStatus,
+      moderationReason: moderationReason ?? this.moderationReason,
+      localId: localId ?? this.localId,
     );
   }
 

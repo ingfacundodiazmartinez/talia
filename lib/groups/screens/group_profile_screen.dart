@@ -7,9 +7,13 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../models/models.dart';
 import '../services/services.dart';
 import '../../widgets/profile_photo_viewer.dart';
+import '../../widgets/group_moderation_dialog.dart';
 import '../../screens/child/profile/widgets/media_gallery_widget.dart';
 import '../../screens/group_profile/widgets/add_members_dialog.dart'; // ✅ FIX #10
 import '../../services/favorite_service.dart';
+import '../../services/group_moderation_service.dart';
+import '../../services/subscription_service.dart' show PremiumFeature;
+import '../../widgets/premium_paywall_dialog.dart';
 
 /// Profile screen for Groups V2
 ///
@@ -34,6 +38,7 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
     with TickerProviderStateMixin {
   final GroupService _groupService = GroupService();
   final FavoriteService _favoriteService = FavoriteService();
+  final GroupModerationService _moderationService = GroupModerationService();
   final ImagePicker _imagePicker = ImagePicker();
 
   Group? _group;
@@ -1624,6 +1629,11 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
       padding: const EdgeInsets.all(16),
       child: Column(
         children: [
+          // Sección de moderación (solo visible para admins)
+          if (_isAdmin) ...[
+            _buildModerationSection(colorScheme),
+            const SizedBox(height: 8),
+          ],
           const Divider(),
           const SizedBox(height: 8),
           ListTile(
@@ -1637,6 +1647,111 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
         ],
       ),
     );
+  }
+
+  /// Sección de moderación del grupo (solo admins)
+  Widget _buildModerationSection(ColorScheme colorScheme) {
+    final moderationEnabled = _group?.moderationEnabled ?? false;
+    final moderationLevel = _group?.moderationLevel ?? 'high';
+
+    return Container(
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: moderationEnabled
+              ? const Color(0xFF5C6BC0).withValues(alpha: 0.3)
+              : colorScheme.outlineVariant.withValues(alpha: 0.3),
+        ),
+      ),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        leading: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: moderationEnabled
+                ? const Color(0xFF5C6BC0).withValues(alpha: 0.1)
+                : colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(
+            Icons.psychology,
+            color: moderationEnabled ? const Color(0xFF5C6BC0) : colorScheme.onSurfaceVariant,
+            size: 24,
+          ),
+        ),
+        title: const Text(
+          'Moderacion con IA',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        subtitle: Text(
+          moderationEnabled
+              ? 'Activada - Nivel ${_getLevelLabel(moderationLevel)}'
+              : 'Desactivada',
+          style: TextStyle(
+            fontSize: 12,
+            color: moderationEnabled
+                ? const Color(0xFF5C6BC0)
+                : colorScheme.onSurfaceVariant,
+          ),
+        ),
+        trailing: Icon(
+          Icons.chevron_right,
+          color: colorScheme.onSurfaceVariant,
+        ),
+        onTap: _handleModerationTap,
+      ),
+    );
+  }
+
+  String _getLevelLabel(String level) {
+    switch (level) {
+      case 'high':
+        return 'Alto';
+      case 'medium':
+        return 'Medio';
+      case 'low':
+        return 'Bajo';
+      default:
+        return 'Alto';
+    }
+  }
+
+  /// Maneja el tap en la sección de moderación
+  Future<void> _handleModerationTap() async {
+    // Verificar permisos
+    final permissionCheck = await _moderationService.canModifyModeration(widget.groupId);
+
+    if (!permissionCheck.canModify) {
+      // Mostrar paywall si no tiene premium
+      if (permissionCheck.reason.contains('Premium') && mounted) {
+        PremiumPaywallDialog.show(
+          context,
+          feature: PremiumFeature.groupModeration,
+        );
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(permissionCheck.reason),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
+    // Mostrar dialog de configuración
+    if (mounted) {
+      GroupModerationDialog.show(
+        context,
+        groupId: widget.groupId,
+        initialEnabled: _group?.moderationEnabled ?? false,
+        initialLevel: _group?.moderationLevel ?? 'high',
+        onChanged: (enabled, level) {
+          // El stream de Firestore actualizará automáticamente _group
+        },
+      );
+    }
   }
 
   String _formatDate(DateTime date) {

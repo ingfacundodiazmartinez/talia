@@ -630,6 +630,14 @@ class PremiumFeature {
     iconName: '💬',
   );
 
+  static const groupModeration = PremiumFeature(
+    id: 'group_moderation',
+    name: 'Moderacion de grupos',
+    description: 'Protege tu grupo con moderacion IA que bloquea contenido inapropiado',
+    requiredTier: SubscriptionTier.premium,
+    iconName: '🛡️',
+  );
+
   // Lista de features por tier
   static List<PremiumFeature> forTier(SubscriptionTier tier) {
     switch (tier) {

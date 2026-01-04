@@ -31,6 +31,12 @@ class Group {
   final String? lastMessageSender;
   final DateTime? lastMessageTime;
 
+  // Moderation settings
+  final bool moderationEnabled;
+  final String? moderationLevel; // 'high', 'medium', 'low'
+  final DateTime? moderationUpdatedAt;
+  final String? moderationUpdatedBy;
+
   const Group({
     required this.id,
     required this.name,
@@ -51,6 +57,10 @@ class Group {
     this.lastMessage,
     this.lastMessageSender,
     this.lastMessageTime,
+    this.moderationEnabled = false,
+    this.moderationLevel,
+    this.moderationUpdatedAt,
+    this.moderationUpdatedBy,
   });
 
   /// Create from Firestore document
@@ -95,6 +105,10 @@ class Group {
       lastMessage: data['lastMessage'] as String?,
       lastMessageSender: data['lastMessageSender'] as String?,
       lastMessageTime: (data['lastMessageTime'] as Timestamp?)?.toDate(),
+      moderationEnabled: data['moderationEnabled'] as bool? ?? false,
+      moderationLevel: data['moderationLevel'] as String?,
+      moderationUpdatedAt: (data['moderationUpdatedAt'] as Timestamp?)?.toDate(),
+      moderationUpdatedBy: data['moderationUpdatedBy'] as String?,
     );
   }
 
@@ -119,6 +133,10 @@ class Group {
       if (lastMessage != null) 'lastMessage': lastMessage,
       if (lastMessageSender != null) 'lastMessageSender': lastMessageSender,
       if (lastMessageTime != null) 'lastMessageTime': Timestamp.fromDate(lastMessageTime!),
+      'moderationEnabled': moderationEnabled,
+      if (moderationLevel != null) 'moderationLevel': moderationLevel,
+      if (moderationUpdatedAt != null) 'moderationUpdatedAt': Timestamp.fromDate(moderationUpdatedAt!),
+      if (moderationUpdatedBy != null) 'moderationUpdatedBy': moderationUpdatedBy,
     };
   }
 
@@ -130,6 +148,9 @@ class Group {
 
   /// Check if user is an admin
   bool isAdmin(String userId) => adminIds.contains(userId);
+
+  /// Check if moderation is enabled
+  bool get hasModeration => moderationEnabled;
 
   /// Get member details by ID
   GroupMember? getMember(String userId) => memberDetails[userId];
@@ -164,6 +185,10 @@ class Group {
     String? lastMessage,
     String? lastMessageSender,
     DateTime? lastMessageTime,
+    bool? moderationEnabled,
+    String? moderationLevel,
+    DateTime? moderationUpdatedAt,
+    String? moderationUpdatedBy,
   }) {
     return Group(
       id: id ?? this.id,
@@ -185,6 +210,10 @@ class Group {
       lastMessage: lastMessage ?? this.lastMessage,
       lastMessageSender: lastMessageSender ?? this.lastMessageSender,
       lastMessageTime: lastMessageTime ?? this.lastMessageTime,
+      moderationEnabled: moderationEnabled ?? this.moderationEnabled,
+      moderationLevel: moderationLevel ?? this.moderationLevel,
+      moderationUpdatedAt: moderationUpdatedAt ?? this.moderationUpdatedAt,
+      moderationUpdatedBy: moderationUpdatedBy ?? this.moderationUpdatedBy,
     );
   }
 

@@ -1196,7 +1196,7 @@ exports.onPendingReportCreated = onDocumentCreated(
                     title: "Reporte listo",
                     body: `El reporte de ${childName} ya está disponible`,
                   },
-                  badge: 1,
+                  // badge manejado por la app, no desde server
                   ...(notificationPrefs.soundEnabled && { sound: "default" }),
                 },
               },

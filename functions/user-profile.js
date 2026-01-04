@@ -1,4 +1,4 @@
-const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/firestore");
+const { onDocumentCreated, onDocumentDeleted, onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { onValueWritten } = require("firebase-functions/v2/database");
@@ -687,6 +687,79 @@ exports.onPresenceChanged = onValueWritten(
         return;
       }
       console.error(`❌ [Presence] Error sincronizando ${userId}:`, error);
+    }
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
+// USER NAME SYNC TO CONTACTS
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Sincroniza el nombre del usuario a todos sus contactos cuando cambia.
+ * Esto asegura que las notificaciones y UI siempre muestren el nombre actualizado.
+ */
+exports.onUserNameUpdated = onDocumentUpdated(
+  {
+    document: "users/{userId}",
+    region: "us-central1",
+  },
+  async (event) => {
+    const db = getFirestore();
+    const userId = event.params.userId;
+
+    const beforeData = event.data.before.data();
+    const afterData = event.data.after.data();
+
+    // Solo procesar si cambió el nombre
+    const beforeName = beforeData?.name?.trim() || "";
+    const afterName = afterData?.name?.trim() || "";
+
+    if (beforeName === afterName) {
+      return; // Nombre no cambió
+    }
+
+    console.log(`📝 [UserNameSync] Nombre actualizado para ${userId}: "${beforeName}" → "${afterName}"`);
+
+    // Si el nuevo nombre está vacío, usar teléfono como fallback
+    const newDisplayName = afterName || afterData?.phone || "Usuario";
+
+    try {
+      // Buscar todos los contactos donde este usuario es participante
+      const contactsSnapshot = await db.collection("contacts")
+        .where("users", "array-contains", userId)
+        .get();
+
+      if (contactsSnapshot.empty) {
+        console.log(`   ⏭️ Usuario no tiene contactos, nada que sincronizar`);
+        return;
+      }
+
+      console.log(`   📋 Actualizando nombre en ${contactsSnapshot.size} contactos...`);
+
+      const batch = db.batch();
+      let updatedCount = 0;
+
+      for (const doc of contactsSnapshot.docs) {
+        const contactData = doc.data();
+        const users = contactData.users || [];
+
+        // Determinar si es user1 o user2
+        const isUser1 = users[0] === userId;
+        const fieldToUpdate = isUser1 ? "user1Name" : "user2Name";
+
+        batch.update(doc.ref, {
+          [fieldToUpdate]: newDisplayName,
+        });
+        updatedCount++;
+      }
+
+      await batch.commit();
+      console.log(`   ✅ Nombre actualizado en ${updatedCount} contactos`);
+
+    } catch (error) {
+      console.error(`❌ [UserNameSync] Error sincronizando nombre:`, error);
+      // No lanzar error para no bloquear otras operaciones
     }
   }
 );

@@ -260,6 +260,12 @@ class Contact {
       return 'pending_other';
     }
 
+    // FIX: Si el status base es 'pending', mantenerlo como 'pending_other'
+    // aunque no haya approval entry para este usuario (ej: user sin parent)
+    if (isPending) {
+      return 'pending_other';
+    }
+
     return 'approved';
   }
 

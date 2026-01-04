@@ -22,20 +22,23 @@ const { v4: uuidv4 } = require("uuid");
 async function isPremiumSystemEnabled() {
   try {
     const remoteConfig = getRemoteConfig();
-    const template = await remoteConfig.getTemplate();
 
-    if (template.parameters && template.parameters.premium_enabled) {
-      const defaultValue = template.parameters.premium_enabled.defaultValue;
-      if (defaultValue && defaultValue.value) {
-        const isEnabled = defaultValue.value.toLowerCase() === "true";
-        console.log(`🎛️ [RemoteConfig] premium_enabled = ${isEnabled}`);
-        return isEnabled;
-      }
-    }
+    // Usar getServerTemplate() para obtener los valores del servidor
+    const template = await remoteConfig.getServerTemplate({
+      defaultConfig: {
+        premium_enabled: true, // Default: premium habilitado
+      },
+    });
 
-    // Default: premium system enabled
-    console.log("🎛️ [RemoteConfig] premium_enabled no encontrado, usando default: true");
-    return true;
+    // Evaluar el template para obtener los valores
+    const config = template.evaluate();
+    const premiumEnabledValue = config.getString("premium_enabled");
+
+    // Convertir a boolean (Remote Config guarda como string)
+    const isEnabled = premiumEnabledValue.toLowerCase() !== "false";
+
+    console.log(`🎛️ [RemoteConfig] premium_enabled = ${isEnabled} (raw: "${premiumEnabledValue}")`);
+    return isEnabled;
   } catch (error) {
     console.error("❌ [RemoteConfig] Error obteniendo premium_enabled:", error.message);
     // En caso de error, asumir que está habilitado (comportamiento por defecto)

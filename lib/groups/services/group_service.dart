@@ -332,17 +332,51 @@ class GroupService {
   }
 
   /// Send a text message
+  /// Uses Cloud Function when group has moderation enabled
   Future<String?> sendTextMessage({
     required String groupId,
     required String text,
     String? senderName,
     String? senderPhotoURL,
     GroupMessage? replyTo,
+    String? localId, // For optimistic UI matching
   }) async {
     try {
       final currentUser = _auth.currentUser;
       if (currentUser == null) return null;
 
+      // Check if group has moderation enabled
+      final group = await _groupRepository.getById(groupId);
+      final hasModeration = group?.moderationEnabled ?? false;
+
+      if (hasModeration) {
+        // Use Cloud Function for moderated groups
+        ReleaseLogger.log(
+          'Sending message via Cloud Function (moderation enabled)',
+          tag: 'GroupService',
+        );
+
+        final functions = FirebaseFunctions.instanceFor(region: 'us-central1');
+        final result = await functions.httpsCallable('sendGroupV2Message').call({
+          'groupId': groupId,
+          'text': text,
+          'senderName': senderName ?? currentUser.displayName ?? 'Usuario',
+          'senderPhotoURL': senderPhotoURL ?? currentUser.photoURL,
+          if (localId != null) 'localId': localId,
+          if (replyTo != null) 'replyTo': {
+            'messageId': replyTo.id,
+            'senderId': replyTo.senderId,
+            'senderName': replyTo.senderName,
+            'text': replyTo.text,
+            'hasMedia': replyTo.hasMedia,
+          },
+        });
+
+        final data = Map<String, dynamic>.from(result.data as Map);
+        return data['messageId'] as String?;
+      }
+
+      // No moderation - direct write to Firestore
       final message = GroupMessage(
         id: '', // Will be set by Firestore
         senderId: currentUser.uid,
@@ -362,6 +396,7 @@ class GroupService {
         isDeleted: false,
         reactions: {},
         readBy: [currentUser.uid],
+        localId: localId, // For optimistic UI matching
       );
 
       return await _messageRepository.sendMessage(groupId, message);
@@ -375,6 +410,7 @@ class GroupService {
   }
 
   /// Send a media message
+  /// Uses Cloud Function when group has moderation enabled
   Future<String?> sendMediaMessage({
     required String groupId,
     String? text,
@@ -390,6 +426,41 @@ class GroupService {
       final currentUser = _auth.currentUser;
       if (currentUser == null) return null;
 
+      // Check if group has moderation enabled
+      final group = await _groupRepository.getById(groupId);
+      final hasModeration = group?.moderationEnabled ?? false;
+
+      if (hasModeration) {
+        // Use Cloud Function for moderated groups
+        ReleaseLogger.log(
+          'Sending media message via Cloud Function (moderation enabled)',
+          tag: 'GroupService',
+        );
+
+        final functions = FirebaseFunctions.instanceFor(region: 'us-central1');
+        final result = await functions.httpsCallable('sendGroupV2Message').call({
+          'groupId': groupId,
+          'text': text,
+          'senderName': senderName ?? currentUser.displayName ?? 'Usuario',
+          'senderPhotoURL': senderPhotoURL ?? currentUser.photoURL,
+          if (imageUrl != null) 'imageUrl': imageUrl,
+          if (videoUrl != null) 'videoUrl': videoUrl,
+          if (audioUrl != null) 'audioUrl': audioUrl,
+          if (thumbnailUrl != null) 'thumbnailUrl': thumbnailUrl,
+          if (replyTo != null) 'replyTo': {
+            'messageId': replyTo.id,
+            'senderId': replyTo.senderId,
+            'senderName': replyTo.senderName,
+            'text': replyTo.text,
+            'hasMedia': replyTo.hasMedia,
+          },
+        });
+
+        final data = Map<String, dynamic>.from(result.data as Map);
+        return data['messageId'] as String?;
+      }
+
+      // No moderation - direct write to Firestore
       final message = GroupMessage(
         id: '',
         senderId: currentUser.uid,

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:uuid/uuid.dart';
 import '../models/models.dart';
 import '../services/services.dart';
 import '../services/group_message_cache_service.dart';
@@ -250,6 +251,13 @@ class GroupChatController {
     // Actualizar con mensajes de Firestore (más recientes tienen prioridad)
     for (final msg in firestoreMessages) {
       existingById[msg.id] = msg;
+
+      // Remove corresponding optimistic message if localId matches
+      if (msg.localId != null) {
+        _optimisticMessages.removeWhere(
+          (m) => m.localId == msg.localId || m.id == msg.localId,
+        );
+      }
     }
 
     // Convertir a lista y ordenar
@@ -297,37 +305,98 @@ class GroupChatController {
     }
   }
 
-  /// Send a text message
+  /// Send a text message with optimistic UI updates
+  /// When moderation is enabled, message shows with pending status until moderated
   Future<bool> sendTextMessage(String text, {
     String? senderName,
     String? senderPhotoURL,
   }) async {
     if (text.trim().isEmpty) return false;
 
+    final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+    if (currentUserId == null) return false;
+
+    // Generate local ID for optimistic matching
+    final localId = const Uuid().v4();
+    final trimmedText = text.trim();
+
+    // Check if group has moderation enabled
+    final hasModeration = _group?.moderationEnabled ?? false;
+
+    // Create optimistic message (shows immediately)
+    final optimisticMessage = GroupMessage(
+      id: localId, // Use localId as temporary ID
+      senderId: currentUserId,
+      senderName: senderName ?? FirebaseAuth.instance.currentUser?.displayName ?? 'Usuario',
+      senderPhotoURL: senderPhotoURL ?? FirebaseAuth.instance.currentUser?.photoURL,
+      text: trimmedText,
+      timestamp: DateTime.now(),
+      isDeleted: false,
+      reactions: {},
+      readBy: [currentUserId],
+      // Show pending status if moderation is enabled
+      moderationStatus: hasModeration ? 'pending' : null,
+      isOptimistic: true,
+      localId: localId,
+      replyTo: _replyingTo != null
+          ? ReplyPreview(
+              messageId: _replyingTo!.id,
+              senderId: _replyingTo!.senderId,
+              senderName: _replyingTo!.senderName,
+              text: _replyingTo!.text,
+              hasMedia: _replyingTo!.hasMedia,
+            )
+          : null,
+    );
+
+    // Add optimistic message immediately
+    _optimisticMessages.add(optimisticMessage);
+    onMessagesChanged?.call(messages);
+
+    // Clear reply immediately for better UX
+    final replyToSend = _replyingTo;
+    clearReply();
+
     _setSending(true);
 
     try {
       final messageId = await _groupService.sendTextMessage(
         groupId: groupId,
-        text: text.trim(),
+        text: trimmedText,
         senderName: senderName,
         senderPhotoURL: senderPhotoURL,
-        replyTo: _replyingTo,
+        replyTo: replyToSend,
+        localId: localId,
       );
 
       if (messageId != null) {
-        clearReply();
+        // Message sent successfully - Firestore stream will bring the real message
+        // which will replace the optimistic one via localId matching
+        ReleaseLogger.log(
+          'Message sent: $messageId (localId: $localId)',
+          tag: 'GroupChatController',
+        );
         return true;
       } else {
+        // Failed to send - mark optimistic message as error
+        _removeOptimisticMessage(localId);
         _setError('Error enviando mensaje');
         return false;
       }
     } catch (e) {
+      // Error - remove optimistic message
+      _removeOptimisticMessage(localId);
       _setError('Error enviando mensaje: $e');
       return false;
     } finally {
       _setSending(false);
     }
+  }
+
+  /// Remove an optimistic message by its localId
+  void _removeOptimisticMessage(String localId) {
+    _optimisticMessages.removeWhere((m) => m.id == localId || m.localId == localId);
+    onMessagesChanged?.call(messages);
   }
 
   /// Send a media message

@@ -180,6 +180,7 @@ exports.expireGroupApprovalRequests = groupsV2.expireGroupApprovalRequests;
 exports.onGroupV2MessageCreated = groupsV2.onGroupV2MessageCreated;
 exports.promoteGroupAdmin = groupsV2.promoteGroupAdmin;
 exports.demoteGroupAdmin = groupsV2.demoteGroupAdmin;
+exports.sendGroupV2Message = groupsV2.sendGroupV2Message; // ✅ Envío de mensajes con moderación
 
 // Moderación de contenido
 // ✅ checkMessageBeforeSending - Usado para verificar moderación antes de enviar (incluye modo checkOnly para edición de mensajes bloqueados)
@@ -205,6 +206,7 @@ exports.checkPhoneDuplicate = userProfile.checkPhoneDuplicate;
 exports.generateUserCode = userProfile.generateUserCode;
 exports.onUserRegistered = userProfile.onUserRegistered;
 exports.onPresenceChanged = userProfile.onPresenceChanged;
+exports.onUserNameUpdated = userProfile.onUserNameUpdated;
 
 // Pagos y suscripciones
 exports.checkPremiumStatus = payments.checkPremiumStatus;
@@ -224,6 +226,7 @@ exports.applyDiscountCode = iapVerification.applyDiscountCode;
 
 // Tareas programadas
 exports.convertExpiredStoriesToPermanent = scheduledTasks.convertExpiredStoriesToPermanent;
+exports.cleanupExpiredStoryApprovalRequests = scheduledTasks.cleanupExpiredStoryApprovalRequests;
 // cleanupOldMessages ELIMINADO - Reemplazado por Firestore TTL Policy (campo deleteAt)
 exports.autoResolveEmergencies = scheduledTasks.autoResolveEmergencies;
 exports.cleanupOldRateLimits = scheduledTasks.cleanupOldRateLimits;

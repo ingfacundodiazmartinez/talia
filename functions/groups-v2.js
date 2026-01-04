@@ -10,6 +10,7 @@ const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const admin = require("firebase-admin");
 const { sendPushNotification } = require("./helpers");
+const { analyzeMessageWithGemini } = require("./groups");
 
 // Ensure Firebase Admin is initialized
 if (admin.apps.length === 0) {
@@ -1382,6 +1383,7 @@ exports.onParentChildUnlinkV2 = onDocumentUpdated(
 /**
  * Send push notification when a message is created in a groups_v2 chat
  * Notifies all group members except the sender
+ * Also handles AI moderation if enabled for the group
  */
 exports.onGroupV2MessageCreated = onDocumentCreated(
   {
@@ -1392,7 +1394,7 @@ exports.onGroupV2MessageCreated = onDocumentCreated(
     const messageData = event.data?.data();
     if (!messageData) return;
 
-    const { groupId } = event.params;
+    const { groupId, messageId } = event.params;
     const senderId = messageData.senderId;
     const senderName = messageData.senderName || "Alguien";
     const messageText = messageData.text || messageData.content || "";
@@ -1409,6 +1411,113 @@ exports.onGroupV2MessageCreated = onDocumentCreated(
       const groupData = groupDoc.data();
       const groupName = groupData.name || "Grupo";
       const members = groupData.members || [];
+
+      // ═══════════════════════════════════════════════════════════════
+      // MODERATION CHECK
+      // ═══════════════════════════════════════════════════════════════
+      const moderationEnabled = groupData.moderationEnabled === true;
+      const moderationLevel = groupData.moderationLevel || "high";
+      let moderationStatus = "approved";
+      let moderationReason = null;
+
+      if (moderationEnabled && messageText && messageText.trim().length > 0) {
+        console.log(`🔒 [onGroupV2MessageCreated] Moderación activa para grupo ${groupId} (nivel: ${moderationLevel})`);
+
+        try {
+          // Get conversation context (last 10 messages)
+          const contextMessages = await db
+            .collection("groups_v2")
+            .doc(groupId)
+            .collection("messages")
+            .orderBy("timestamp", "desc")
+            .limit(10)
+            .get();
+
+          let conversationContext = "";
+          if (!contextMessages.empty) {
+            const contextList = contextMessages.docs
+              .reverse()
+              .filter((doc) => doc.id !== messageId)
+              .map((doc) => {
+                const data = doc.data();
+                return `${data.senderName || "Usuario"}: ${data.text || "[media]"}`;
+              });
+            conversationContext = contextList.join("\n");
+          }
+
+          // Get participants ages for context
+          const participantsAges = [];
+          for (const memberId of members.slice(0, 10)) { // Limit to 10 for performance
+            try {
+              const userDoc = await db.collection("users").doc(memberId).get();
+              if (userDoc.exists) {
+                const userData = userDoc.data();
+                if (userData.birthDate) {
+                  const birthDate = userData.birthDate.toDate ? userData.birthDate.toDate() : new Date(userData.birthDate);
+                  const age = Math.floor((new Date() - birthDate) / (365.25 * 24 * 60 * 60 * 1000));
+                  participantsAges.push(age);
+                }
+              }
+            } catch (e) {
+              // Continue silently
+            }
+          }
+
+          console.log(`🤖 [onGroupV2MessageCreated] Analizando mensaje con Gemini...`);
+          const analysis = await analyzeMessageWithGemini(
+            messageText,
+            messageType,
+            conversationContext,
+            moderationLevel,
+            participantsAges,
+            []
+          );
+
+          // Determine if message should be blocked based on level
+          let shouldBlock = false;
+          if (moderationLevel === "high") {
+            shouldBlock = analysis.isInappropriate && ["low", "medium", "high"].includes(analysis.severity);
+          } else if (moderationLevel === "medium") {
+            shouldBlock = analysis.isInappropriate && ["medium", "high"].includes(analysis.severity);
+          } else {
+            shouldBlock = analysis.isInappropriate && analysis.severity === "high";
+          }
+
+          if (shouldBlock) {
+            moderationStatus = "blocked";
+            moderationReason = analysis.reason || "Contenido inapropiado detectado";
+            console.log(`🚫 [onGroupV2MessageCreated] Mensaje bloqueado: ${moderationReason} (severity: ${analysis.severity})`);
+          } else {
+            console.log(`✅ [onGroupV2MessageCreated] Mensaje aprobado (severity: ${analysis.severity || "none"})`);
+          }
+        } catch (moderationError) {
+          console.error(`⚠️ [onGroupV2MessageCreated] Error en moderación, aprobando por defecto:`, moderationError);
+          moderationStatus = "approved";
+        }
+
+        // Update message with moderation status
+        await event.data.ref.update({
+          moderationStatus: moderationStatus,
+          moderatedAt: new Date(),
+          ...(moderationReason && { moderationReason: moderationReason }),
+        });
+      } else if (moderationEnabled) {
+        // Media without text - approve by default
+        await event.data.ref.update({
+          moderationStatus: "approved",
+          moderatedAt: new Date(),
+        });
+      }
+
+      // If message was blocked, don't send notifications
+      if (moderationStatus === "blocked") {
+        console.log(`🔕 [onGroupV2MessageCreated] No se envían notificaciones para mensaje bloqueado`);
+        return;
+      }
+
+      // ═══════════════════════════════════════════════════════════════
+      // NOTIFICATIONS
+      // ═══════════════════════════════════════════════════════════════
 
       // Filter out the sender
       const recipientIds = members.filter((id) => id !== senderId);
@@ -1456,7 +1565,6 @@ exports.onGroupV2MessageCreated = onDocumentCreated(
 
       // Get sender photo URL for rich notifications
       const senderPhotoUrl = messageData.senderPhotoURL || "";
-      const messageId = event.params.messageId;
 
       // Send notifications to all recipients
       const notificationPromises = recipientIds.map((recipientId) =>
@@ -1685,6 +1793,225 @@ exports.expireGroupApprovalRequests = onSchedule(
     } catch (error) {
       console.error("❌ [expireGroupApprovalRequests] Error:", error);
       throw error;
+    }
+  }
+);
+
+/**
+ * Send a message in a groups_v2 chat with AI moderation support
+ * Used when the group has moderation enabled
+ *
+ * @param {string} groupId - The group ID
+ * @param {string} text - Message text
+ * @param {string} senderName - Sender's display name
+ * @param {string} senderPhotoURL - Sender's photo URL
+ * @param {object} replyTo - Reply preview (optional)
+ * @param {string} imageUrl - Image URL (optional)
+ * @param {string} videoUrl - Video URL (optional)
+ * @param {string} audioUrl - Audio URL (optional)
+ */
+exports.sendGroupV2Message = onCall(
+  {
+    region: "us-central1",
+    memory: "256MiB",
+    consumeAppCheckToken: true,
+  },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Debes iniciar sesión");
+    }
+
+    const senderId = request.auth.uid;
+    const {
+      groupId,
+      text,
+      senderName,
+      senderPhotoURL,
+      replyTo,
+      imageUrl,
+      videoUrl,
+      audioUrl,
+      thumbnailUrl,
+      localId, // For optimistic UI updates
+    } = request.data;
+
+    if (!groupId) {
+      throw new HttpsError("invalid-argument", "groupId es requerido");
+    }
+
+    try {
+      console.log(`📤 [sendGroupV2Message] Enviando mensaje de ${senderId} en grupo ${groupId}`);
+
+      // Get group data
+      const groupDoc = await db.collection("groups_v2").doc(groupId).get();
+      if (!groupDoc.exists) {
+        throw new HttpsError("not-found", "Grupo no encontrado");
+      }
+
+      const groupData = groupDoc.data();
+      const members = groupData.members || [];
+
+      // Verify sender is a member
+      if (!members.includes(senderId)) {
+        throw new HttpsError("permission-denied", "No eres miembro del grupo");
+      }
+
+      // Determine message type
+      let messageType = "text";
+      if (imageUrl) messageType = "image";
+      else if (videoUrl) messageType = "video";
+      else if (audioUrl) messageType = "audio";
+
+      // ═══════════════════════════════════════════════════════════════
+      // AI MODERATION
+      // ═══════════════════════════════════════════════════════════════
+      const moderationEnabled = groupData.moderationEnabled === true;
+      const moderationLevel = groupData.moderationLevel || "high";
+      let moderationStatus = "approved";
+      let moderationReason = null;
+
+      if (moderationEnabled && text && text.trim().length > 0) {
+        console.log(`🔒 [sendGroupV2Message] Moderación activa (nivel: ${moderationLevel})`);
+
+        try {
+          // Get conversation context (last 10 messages)
+          const contextMessages = await db
+            .collection("groups_v2")
+            .doc(groupId)
+            .collection("messages")
+            .orderBy("timestamp", "desc")
+            .limit(10)
+            .get();
+
+          let conversationContext = "";
+          if (!contextMessages.empty) {
+            const contextList = contextMessages.docs
+              .reverse()
+              .map((doc) => {
+                const data = doc.data();
+                return `${data.senderName || "Usuario"}: ${data.text || "[media]"}`;
+              });
+            conversationContext = contextList.join("\n");
+          }
+
+          // Get participants ages
+          const participantsAges = [];
+          for (const memberId of members.slice(0, 10)) {
+            try {
+              const userDoc = await db.collection("users").doc(memberId).get();
+              if (userDoc.exists) {
+                const userData = userDoc.data();
+                if (userData.birthDate) {
+                  const birthDate = userData.birthDate.toDate ? userData.birthDate.toDate() : new Date(userData.birthDate);
+                  const age = Math.floor((new Date() - birthDate) / (365.25 * 24 * 60 * 60 * 1000));
+                  participantsAges.push(age);
+                }
+              }
+            } catch (e) {
+              // Continue silently
+            }
+          }
+
+          console.log(`🤖 [sendGroupV2Message] Analizando con Gemini...`);
+          const analysis = await analyzeMessageWithGemini(
+            text,
+            messageType,
+            conversationContext,
+            moderationLevel,
+            participantsAges,
+            []
+          );
+
+          // Determine if should block based on level
+          let shouldBlock = false;
+          if (moderationLevel === "high") {
+            shouldBlock = analysis.isInappropriate && ["low", "medium", "high"].includes(analysis.severity);
+          } else if (moderationLevel === "medium") {
+            shouldBlock = analysis.isInappropriate && ["medium", "high"].includes(analysis.severity);
+          } else {
+            shouldBlock = analysis.isInappropriate && analysis.severity === "high";
+          }
+
+          if (shouldBlock) {
+            moderationStatus = "blocked";
+            moderationReason = analysis.reason || "Contenido inapropiado detectado";
+            console.log(`🚫 [sendGroupV2Message] Mensaje bloqueado: ${moderationReason}`);
+          } else {
+            console.log(`✅ [sendGroupV2Message] Mensaje aprobado (severity: ${analysis.severity || "none"})`);
+          }
+        } catch (moderationError) {
+          console.error(`⚠️ [sendGroupV2Message] Error en moderación, aprobando:`, moderationError);
+          moderationStatus = "approved";
+        }
+      }
+
+      // Create message data
+      const now = admin.firestore.Timestamp.now();
+      const messageData = {
+        senderId,
+        senderName: senderName || "Usuario",
+        senderPhotoURL: senderPhotoURL || null,
+        text: text || "",
+        type: messageType,
+        timestamp: now,
+        isDeleted: false,
+        reactions: {},
+        readBy: [senderId],
+        moderationStatus,
+        moderatedAt: new Date(),
+      };
+
+      // Include localId for optimistic UI matching
+      if (localId) {
+        messageData.localId = localId;
+      }
+
+      if (moderationReason) {
+        messageData.moderationReason = moderationReason;
+      }
+
+      if (imageUrl) messageData.imageUrl = imageUrl;
+      if (videoUrl) messageData.videoUrl = videoUrl;
+      if (audioUrl) messageData.audioUrl = audioUrl;
+      if (thumbnailUrl) messageData.thumbnailUrl = thumbnailUrl;
+
+      if (replyTo) {
+        messageData.replyTo = replyTo;
+      }
+
+      // Create message
+      const messageRef = await db
+        .collection("groups_v2")
+        .doc(groupId)
+        .collection("messages")
+        .add(messageData);
+
+      // Update group lastMessage
+      const lastMessagePreview = text ||
+        (messageType === "image" ? "📷 Imagen" :
+         messageType === "video" ? "🎥 Video" :
+         messageType === "audio" ? "🎤 Audio" : "");
+
+      await db.collection("groups_v2").doc(groupId).update({
+        lastMessage: lastMessagePreview,
+        lastMessageTime: now,
+        lastMessageSender: senderId,
+        lastMessageId: messageRef.id,
+        lastActivity: now,
+      });
+
+      console.log(`✅ [sendGroupV2Message] Mensaje ${messageRef.id} creado (moderationStatus: ${moderationStatus})`);
+
+      return {
+        success: true,
+        messageId: messageRef.id,
+        localId: localId || null, // For optimistic UI matching
+        moderationStatus,
+        moderationReason: moderationStatus === "blocked" ? moderationReason : undefined,
+      };
+    } catch (error) {
+      console.error("❌ [sendGroupV2Message] Error:", error);
+      throw new HttpsError("internal", error.message);
     }
   }
 );

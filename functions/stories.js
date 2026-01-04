@@ -157,6 +157,7 @@ exports.onStoryApprovalRequestCreated = onDocumentCreated(
         read: false,
         priority: "normal",
         pushSent: false, // ✅ CRITICAL: Requerido para que sendNotificationOnCreate envíe push
+        hideFromUI: true, // ✅ No mostrar en sección Notificaciones, solo push + card Historias Pendientes
         data: {
           childId: requestData.childId,
           childName: childName,

@@ -314,7 +314,7 @@ exports.createEmergency = onCall(
                     },
                     "content-available": 1,
                     sound: "default",
-                    badge: 1,
+                    // badge manejado por la app, no desde server
                   },
                 },
               },
