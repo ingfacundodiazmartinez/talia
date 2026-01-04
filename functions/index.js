@@ -102,6 +102,9 @@ const stories = require("./stories");
 // Story Approval (Cloud Functions for secure approval)
 const storyApproval = require("./story-approval");
 
+// Trivia (trivias personales en historias)
+const trivia = require("./trivia");
+
 // Account Deletion (eliminación segura de cuentas)
 const accountDeletion = require("./account-deletion");
 
@@ -282,4 +285,14 @@ exports.onCallV2Updated = callsV2.onCallV2Updated; // Trigger para mensaje de ll
 
 exports.deleteUserAccount = accountDeletion.deleteUserAccount;
 
-console.log("✅ Todas las funciones exportadas correctamente (incluye Agora V2)");
+// ═══════════════════════════════════════════════════════════════
+// TRIVIA (Trivias personales en historias)
+// ═══════════════════════════════════════════════════════════════
+
+exports.closeExpiredTrivias = trivia.closeExpiredTrivias;
+exports.onTriviaResponseCreated = trivia.onTriviaResponseCreated;
+exports.sendTriviaExpirationReminder = trivia.sendTriviaExpirationReminder;
+exports.onTriviaResultsPublished = trivia.onTriviaResultsPublished;
+exports.generateTriviaSuggestion = trivia.generateTriviaSuggestion;
+
+console.log("✅ Todas las funciones exportadas correctamente (incluye Agora V2, Trivia)");

@@ -1961,6 +1961,172 @@ service cloud.firestore {
     }
 
     // ============================================================================
+    // TRIVIAS - Trivias personales en historias
+    // ============================================================================
+
+    // Trivias - Colección principal de trivias
+    match /trivias/{triviaId} {
+      // 🔒 FUNCIÓN: Verificar si el usuario puede ver esta trivia
+      // Retorna true si:
+      // 1. Es el creador, O
+      // 2. Está en availableFor Y no está bloqueado
+      function canViewTrivia() {
+        let isCreator = request.auth.uid == resource.data.creatorId;
+        let isInAvailableFor = request.auth.uid in resource.data.get('availableFor', []);
+        let isBlocked = request.auth.uid in resource.data.get('blockedUsers', []);
+        return isCreator || (isInAvailableFor && !isBlocked);
+      }
+
+      // Permitir leer trivia individual
+      allow get: if request.auth != null && canViewTrivia();
+
+      // Permitir listar trivias si el documento cumple canViewTrivia
+      // Las queries DEBEN filtrar por creatorId O availableFor para que funcione
+      allow list: if request.auth != null && canViewTrivia();
+
+      // Solo puedes crear trivias con tu propio creatorId
+      allow create: if request.auth != null &&
+        request.resource.data.creatorId == request.auth.uid;
+
+      // 🔒 FUNCIÓN: Verificar si solo se actualizan campos permitidos (creador)
+      function isUpdatingAllowedCreatorFields() {
+        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+        let allowedCreatorFields = ['title', 'backgroundImageUrl', 'updatedAt', 'status', 'resultsStoryId', 'participantCount', 'hasResponses'];
+        return changedKeys.hasOnly(allowedCreatorFields);
+      }
+
+      // 🔒 FUNCIÓN: Verificar si solo se actualizan campos de participación
+      function isUpdatingParticipationFields() {
+        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+        // Campos que cualquier participante puede actualizar
+        let allowedFields = ['participantCount', 'hasResponses'];
+        return changedKeys.hasOnly(allowedFields);
+      }
+
+      // 🔒 FUNCIÓN: Verificar si la trivia tiene respuestas (inmutable)
+      function triviaHasNoResponses() {
+        return resource.data.get('hasResponses', false) == false;
+      }
+
+      // Permitir actualizar si:
+      // 1. Eres el creador Y (no hay respuestas O solo actualizas campos permitidos), O
+      // 2. Eres participante Y solo actualizas campos de participación
+      allow update: if request.auth != null && (
+        (request.auth.uid == resource.data.creatorId &&
+         (triviaHasNoResponses() || isUpdatingAllowedCreatorFields())) ||
+        (canViewTrivia() && isUpdatingParticipationFields())
+      );
+
+      // Solo el creador puede eliminar
+      allow delete: if request.auth != null &&
+        request.auth.uid == resource.data.creatorId;
+
+      // Subcolección de preguntas
+      match /questions/{questionId} {
+        // 🔒 FUNCIÓN: Verificar si el usuario puede ver las preguntas de esta trivia
+        function canViewTriviaQuestions() {
+          let triviaDoc = get(/databases/$(database)/documents/trivias/$(triviaId));
+          let isCreator = request.auth.uid == triviaDoc.data.creatorId;
+          let isAvailable = triviaDoc.data.availableFor != null &&
+                            request.auth.uid in triviaDoc.data.availableFor;
+          let isBlocked = triviaDoc.data.blockedUsers != null &&
+                          request.auth.uid in triviaDoc.data.blockedUsers;
+          return isCreator || (isAvailable && !isBlocked) || !isBlocked;
+        }
+
+        // 🔒 FUNCIÓN: Verificar si el usuario es creador de la trivia
+        function isTriviaCreator() {
+          let triviaDoc = get(/databases/$(database)/documents/trivias/$(triviaId));
+          return request.auth.uid == triviaDoc.data.creatorId;
+        }
+
+        // Permitir leer preguntas si puedes ver la trivia
+        allow read: if request.auth != null && canViewTriviaQuestions();
+
+        // Solo el creador puede crear preguntas (y solo si no hay respuestas)
+        allow create: if request.auth != null && isTriviaCreator();
+
+        // Solo el creador puede actualizar preguntas
+        allow update: if request.auth != null && isTriviaCreator();
+
+        // Solo el creador puede eliminar preguntas
+        allow delete: if request.auth != null && isTriviaCreator();
+      }
+    }
+
+    // Trivia Responses - Respuestas a trivias
+    // ID format: {oderId}_{triviaId}
+    match /trivia_responses/{responseId} {
+      // 🔒 FUNCIÓN: Verificar si el responseId pertenece al usuario actual
+      // El formato es oderId_triviaId, así que verificamos que empiece con nuestro uid
+      function isOwnResponseId() {
+        return responseId.matches(request.auth.uid + '_.*');
+      }
+
+      // 🔒 FUNCIÓN: Verificar si el usuario puede ver esta respuesta (cuando existe)
+      function canViewTriviaResponse() {
+        // El respondedor puede ver su propia respuesta
+        let isResponder = resource.data.oderId == request.auth.uid;
+
+        // El creador de la trivia puede ver todas las respuestas
+        let triviaDoc = get(/databases/$(database)/documents/trivias/$(resource.data.triviaId));
+        let isTriviaCreator = triviaDoc.data.creatorId == request.auth.uid;
+
+        return isResponder || isTriviaCreator;
+      }
+
+      // 🔒 FUNCIÓN: Verificar si la trivia está activa
+      function isTriviaActive() {
+        let triviaDoc = get(/databases/$(database)/documents/trivias/$(request.resource.data.triviaId));
+        return triviaDoc.data.status == 'active';
+      }
+
+      // 🔒 FUNCIÓN: Verificar si el usuario puede responder la trivia
+      function canRespondToTrivia() {
+        let triviaDoc = get(/databases/$(database)/documents/trivias/$(request.resource.data.triviaId));
+        // No puede ser el creador
+        let isNotCreator = triviaDoc.data.creatorId != request.auth.uid;
+        // No puede estar bloqueado
+        let isNotBlocked = !(request.auth.uid in triviaDoc.data.get('blockedUsers', []));
+        // Debe estar en availableFor
+        let canAccess = request.auth.uid in triviaDoc.data.get('availableFor', []);
+        return isNotCreator && isNotBlocked && canAccess;
+      }
+
+      // Permitir leer (get) si:
+      // 1. El responseId empieza con tu userId (para verificar existencia), O
+      // 2. El documento existe y puedes verlo
+      allow get: if request.auth != null && (
+        isOwnResponseId() ||
+        canViewTriviaResponse()
+      );
+
+      // Permitir listar si:
+      // 1. Eres el respondedor de la respuesta, O
+      // 2. Eres el creador de la trivia, O
+      // 3. Puedes ver la trivia (para leaderboard público)
+      allow list: if request.auth != null;
+
+      // Permitir crear respuesta si:
+      // 1. El oderId es tu propio uid, Y
+      // 2. La trivia está activa, Y
+      // 3. Puedes responder (no eres creador, no estás bloqueado)
+      allow create: if request.auth != null &&
+        request.resource.data.oderId == request.auth.uid &&
+        isTriviaActive() &&
+        canRespondToTrivia();
+
+      // Permitir actualizar solo tu propia respuesta (para guardar progreso)
+      allow update: if request.auth != null &&
+        resource.data.oderId == request.auth.uid;
+
+      // Permitir eliminar respuestas si:
+      // 1. Eres el creador de la trivia (para cuando elimina la trivia completa), O
+      // 2. Eres el dueño de la respuesta (para eliminar tu propia respuesta)
+      allow delete: if request.auth != null && canViewTriviaResponse();
+    }
+
+    // ============================================================================
     // COLLECTION GROUP QUERIES
     // ============================================================================
     // Reglas para queries usando collectionGroup() que atraviesan múltiples chats

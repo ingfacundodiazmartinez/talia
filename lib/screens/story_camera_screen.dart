@@ -19,6 +19,7 @@ import '../widgets/camera/flutter_camera_view.dart';
 import '../widgets/camera/deepar_camera_view.dart';
 import 'package:flutter_story_editor/flutter_story_editor.dart';
 import 'package:flutter_story_editor/src/controller/controller.dart';
+import 'trivia/trivia_creation_screen.dart';
 
 /// Pantalla de cámara para crear historias - REFACTORIZADA
 ///
@@ -297,12 +298,14 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     final remaining = usageData['remaining'] as int;
     final limit = usageData['limit'] as int;
     final tier = usageData['tier'] as String;
+    final isUnlimited = usageData['unlimited'] == true;
 
-    // Si no quedan transformaciones, mostrar paywall
-    if (remaining <= 0) {
+    // Si no quedan transformaciones (y NO es unlimited), mostrar paywall
+    // remaining == -1 significa unlimited, no límite alcanzado
+    if (!isUnlimited && remaining <= 0) {
       if (mounted) {
         ReleaseLogger.log('⚠️ Límite de face-swap alcanzado ($limit/día para tier $tier)', tag: 'StoryCameraScreen');
-        PremiumPaywallDialog.show(
+        await PremiumPaywallDialog.show(
           context,
           feature: PremiumFeature(
             id: 'face_swap_limit',
@@ -359,10 +362,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
                 ),
                 child: Row(
                   children: [
-                    Icon(Icons.info_outline, color: Colors.white54, size: 16),
+                    Icon(isUnlimited ? Icons.all_inclusive : Icons.info_outline, color: Colors.white54, size: 16),
                     SizedBox(width: 8),
                     Text(
-                      '$remaining de $limit restantes hoy',
+                      isUnlimited ? 'Sin límite de uso' : '$remaining de $limit restantes hoy',
                       style: TextStyle(fontSize: 13, color: Colors.white54),
                     ),
                   ],
@@ -375,22 +378,23 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
               onPressed: () => Navigator.pop(context, 'cancel'),
               child: Text('Cancelar', style: TextStyle(color: Colors.grey)),
             ),
-            // Botón Premium
-            OutlinedButton(
-              onPressed: () => Navigator.pop(context, 'premium'),
-              style: OutlinedButton.styleFrom(
-                side: BorderSide(color: Color(0xFFFFD700)),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            // Botón Premium (solo si premium está habilitado)
+            if (!isUnlimited)
+              OutlinedButton(
+                onPressed: () => Navigator.pop(context, 'premium'),
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: Color(0xFFFFD700)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.star, color: Color(0xFFFFD700), size: 18),
+                    SizedBox(width: 4),
+                    Text('Premium', style: TextStyle(color: Color(0xFFFFD700))),
+                  ],
+                ),
               ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.star, color: Color(0xFFFFD700), size: 18),
-                  SizedBox(width: 4),
-                  Text('Premium', style: TextStyle(color: Color(0xFFFFD700))),
-                ],
-              ),
-            ),
             // Botón Ver video
             ElevatedButton(
               onPressed: () => Navigator.pop(context, 'watch'),
@@ -471,10 +475,28 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         });
         // Navegar al editor con la imagen transformada
         await _navigateToStoryEditor(transformedPath, 'image');
+      } else if (mounted) {
+        // Face swap falló silenciosamente
+        ReleaseLogger.error('❌ Face swap retornó null', tag: 'StoryCameraScreen');
+        setState(() {
+          _selectedFaceSwapCharacter = null;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Error al procesar Face Swap. Intenta de nuevo.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
       }
     } catch (e) {
       ReleaseLogger.error('❌ Error procesando Face Swap: $e', tag: 'StoryCameraScreen');
       _controller.onError?.call('Error en Face Swap: $e');
+      // Limpiar selección en caso de error
+      if (mounted) {
+        setState(() {
+          _selectedFaceSwapCharacter = null;
+        });
+      }
     }
   }
 
@@ -967,18 +989,25 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: [
-            // Galería (o Face Swap si no está en modo video)
+            // Galería o botones de features (Face Swap + Trivia)
             _isVideoMode
                 ? _buildShadowedIconButton(
                     onPressed: _pickFromGallery,
                     icon: Icons.photo_library,
                   )
-                : _buildFaceSwapButton(),
+                : Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _buildFaceSwapButton(),
+                      const SizedBox(width: 12),
+                      _buildTriviaButton(),
+                    ],
+                  ),
 
             // Botón principal (cambia según modo)
             _isVideoMode ? _buildVideoButton() : _buildPhotoButton(),
 
-            // Galería (si estamos en modo foto con Face Swap disponible)
+            // Galería (si estamos en modo foto)
             _isVideoMode
                 ? SizedBox(width: 48)
                 : _buildShadowedIconButton(
@@ -1128,6 +1157,59 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Navegar a pantalla de creación de trivia
+  Future<void> _openTriviaCreation() async {
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const TriviaCreationScreen()),
+    );
+
+    if (result != null && mounted) {
+      // result es el triviaId - si quisieras hacer algo con él
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Trivia creada exitosamente!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
+  }
+
+  /// Botón de Trivia
+  Widget _buildTriviaButton() {
+    return GestureDetector(
+      onTap: _openTriviaCreation,
+      child: Container(
+        width: 56,
+        height: 56,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFF667eea), Color(0xFF764ba2)],
+          ),
+          border: Border.all(
+            color: Colors.white,
+            width: 2,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF667eea).withValues(alpha: 0.5),
+              blurRadius: 12,
+              spreadRadius: 2,
+            ),
+          ],
+        ),
+        child: const Icon(
+          Icons.quiz_rounded,
+          color: Colors.white,
+          size: 28,
+        ),
       ),
     );
   }

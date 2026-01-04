@@ -114,6 +114,27 @@ service firebase.storage {
     }
 
     // ═══════════════════════════════════════════════════════════════
+    // TRIVIAS
+    // Path: trivia_backgrounds/{userId}/{fileName}
+    // Path: trivia_questions/{userId}/{fileName}
+    // ═══════════════════════════════════════════════════════════════
+    match /trivia_backgrounds/{userId}/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+                   && request.auth.uid == userId
+                   && isValidImage()
+                   && request.resource.size < 10 * 1024 * 1024;
+    }
+
+    match /trivia_questions/{userId}/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+                   && request.auth.uid == userId
+                   && isValidImage()
+                   && request.resource.size < 10 * 1024 * 1024;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
     // LEGACY PATHS (compatibilidad con datos existentes)
     // ═══════════════════════════════════════════════════════════════
 

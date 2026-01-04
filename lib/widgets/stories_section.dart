@@ -1,12 +1,14 @@
 import 'dart:io';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:rxdart/rxdart.dart';
 import '../services/story_service_refactored.dart';
 import '../services/story_upload_progress_service.dart';
 import '../screens/story_camera_screen.dart';
 import '../screens/story_viewer_screen.dart';
+import '../models/trivia.dart';
 import '../theme_service.dart';
 import '../widgets/permission_dialog.dart';
 import '../widgets/synced_user_widgets.dart';
@@ -22,7 +24,10 @@ class _StoriesSectionState extends State<StoriesSection> {
   // ✅ CRÍTICO: Usar instancia directa del servicio (revertido para evitar late init error)
   final StoryService storyService = StoryService();
   List<UserStories>? _cachedStories;
+  List<Trivia>? _cachedTrivias;
   late Stream<List<UserStories>> _storiesStream;
+  late Stream<List<Trivia>> _triviasStream;
+  StreamSubscription<List<Trivia>>? _triviasSubscription;
 
   @override
   void initState() {
@@ -33,13 +38,119 @@ class _StoriesSectionState extends State<StoriesSection> {
 
     // CRÍTICO: Usar storiesFromCache que reacciona a los background streams
     _storiesStream = storyService.storiesFromCache;
+
+    // Stream de trivias activas (propias + de contactos)
+    final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+    if (currentUserId != null) {
+      // Combinar trivias del usuario con trivias disponibles para responder
+      // Usar startWith([]) para asegurar que ambos streams emitan inmediatamente
+      final myTrivias = Trivia.watchCreatedByUser(currentUserId)
+          .map((trivias) => trivias.where((t) => t.isActive).toList())
+          .startWith(<Trivia>[]);
+      final availableTrivias = Trivia.watchActiveForUser(currentUserId)
+          .startWith(<Trivia>[]);
+
+      _triviasStream = Rx.combineLatest2<List<Trivia>, List<Trivia>, List<Trivia>>(
+        myTrivias,
+        availableTrivias,
+        (mine, available) {
+          // Mis trivias van primero, luego las de otros
+          final allTrivias = <Trivia>[];
+          allTrivias.addAll(mine);
+          // Agregar solo las que no son mías (evitar duplicados)
+          for (final trivia in available) {
+            if (trivia.creatorId != currentUserId) {
+              allTrivias.add(trivia);
+            }
+          }
+          return allTrivias;
+        },
+      );
+
+      _triviasSubscription = _triviasStream.listen(
+        (trivias) {
+          if (mounted) {
+            _cachedTrivias = trivias;
+            setState(() {});
+          }
+        },
+      );
+    } else {
+      _triviasStream = Stream.value([]);
+    }
   }
 
   @override
   void dispose() {
     // Detener streams de background para evitar spinner infinito
     storyService.stopBackgroundCacheUpdates();
+    _triviasSubscription?.cancel();
     super.dispose();
+  }
+
+  /// Unificar trivias dentro de los grupos de usuarios
+  /// - Si el creador de la trivia tiene historias, marcar hasUnviewed si la trivia está activa
+  /// - Si el creador solo tiene trivias (sin historias), crear un UserStories sintético
+  List<UserStories> _mergeTriviasIntoUserStories(
+    List<UserStories> userStoriesList,
+    List<Trivia> triviasList,
+    String? currentUserId,
+  ) {
+    if (triviasList.isEmpty) return userStoriesList;
+
+    // Crear un mapa de userId -> UserStories para fácil acceso
+    final userStoriesMap = <String, UserStories>{};
+    for (final us in userStoriesList) {
+      userStoriesMap[us.userId] = us;
+    }
+
+    // Set de usuarios que ya tienen historias
+    final usersWithStories = userStoriesMap.keys.toSet();
+
+    // Agrupar trivias por creador
+    final triviasByCreator = <String, List<Trivia>>{};
+    for (final trivia in triviasList) {
+      triviasByCreator.putIfAbsent(trivia.creatorId, () => []).add(trivia);
+    }
+
+    // Resultado: copiar UserStories existentes y actualizar hasUnviewed si hay trivias activas
+    final result = <UserStories>[];
+
+    for (final us in userStoriesList) {
+      final creatorTrivias = triviasByCreator[us.userId];
+      if (creatorTrivias != null && creatorTrivias.any((t) => t.isActive)) {
+        // Este usuario tiene trivias activas, marcar como hasUnviewed
+        result.add(UserStories(
+          userId: us.userId,
+          userName: us.userName,
+          userPhotoURL: us.userPhotoURL,
+          stories: us.stories,
+          hasUnviewed: true, // Hay trivia activa
+        ));
+      } else {
+        result.add(us);
+      }
+    }
+
+    // Agregar usuarios que solo tienen trivias (sin historias)
+    for (final entry in triviasByCreator.entries) {
+      final creatorId = entry.key;
+      final creatorTrivias = entry.value;
+
+      if (!usersWithStories.contains(creatorId)) {
+        // Este usuario solo tiene trivias, crear UserStories sintético
+        final firstTrivia = creatorTrivias.first;
+        result.add(UserStories(
+          userId: creatorId,
+          userName: firstTrivia.creatorName,
+          userPhotoURL: firstTrivia.creatorPhotoURL,
+          stories: [], // Sin historias
+          hasUnviewed: creatorTrivias.any((t) => t.isActive),
+        ));
+      }
+    }
+
+    return result;
   }
 
   @override
@@ -56,9 +167,14 @@ class _StoriesSectionState extends State<StoriesSection> {
             stream: _storiesStream,
             initialData: _cachedStories,
             builder: (context, snapshot) {
-              // Actualizar cache cuando llegan datos nuevos
+              // ✅ FIX: Solo actualizar cache si hay datos reales
+              // No sobrescribir con lista vacía si ya tenemos datos cacheados
+              // Esto evita el parpadeo cuando el stream emite [] antes de datos reales
               if (snapshot.hasData && snapshot.data != null) {
-                _cachedStories = snapshot.data;
+                final newData = snapshot.data!;
+                if (newData.isNotEmpty || _cachedStories == null) {
+                  _cachedStories = newData;
+                }
               }
 
               // Solo mostrar loading si NO hay cache y estamos esperando
@@ -77,10 +193,18 @@ class _StoriesSectionState extends State<StoriesSection> {
               }
 
               final userStoriesList = snapshot.data ?? _cachedStories ?? [];
-
-              // Ordenar grupos: 1) Mis historias, 2) No vistas, 3) Vistas
+              final triviasList = _cachedTrivias ?? [];
               final currentUserId = FirebaseAuth.instance.currentUser?.uid;
-              final sortedUserStoriesList = List<UserStories>.from(userStoriesList);
+
+              // ✅ Unificar trivias dentro de los grupos de usuarios
+              final unifiedUserStoriesList = _mergeTriviasIntoUserStories(
+                userStoriesList,
+                triviasList,
+                currentUserId,
+              );
+
+              // Ordenar grupos: 1) Mis historias, 2) No vistas/activas, 3) Vistas
+              final sortedUserStoriesList = List<UserStories>.from(unifiedUserStoriesList);
               sortedUserStoriesList.sort((a, b) {
                 // 1. Mis historias SIEMPRE van primero
                 final aIsCurrentUser = a.userId == currentUserId;
@@ -93,12 +217,14 @@ class _StoriesSectionState extends State<StoriesSection> {
                 return a.hasUnviewed ? -1 : 1;
               });
 
+              // Total: 1 (botón crear) + usuarios unificados
+              final totalItems = 1 + sortedUserStoriesList.length;
+
               return ListView.builder(
                 key: const ValueKey('stories_list'),
                 scrollDirection: Axis.horizontal,
                 padding: EdgeInsets.symmetric(horizontal: 16),
-                itemCount:
-                    sortedUserStoriesList.length + 1, // +1 para el botón "Mi Historia"
+                itemCount: totalItems,
                 itemBuilder: (context, index) {
                   if (index == 0) {
                     // Botón para crear historia
@@ -117,7 +243,7 @@ class _StoriesSectionState extends State<StoriesSection> {
                     context: context,
                     userStories: userStories,
                     allUserStories: sortedUserStoriesList,
-                    userIndex: index - 1,
+                    userIndex: storyIndex,
                     uploadProgress: uploadProgress,
                   );
                 },
@@ -244,19 +370,34 @@ class _StoriesSectionState extends State<StoriesSection> {
     final currentUser = FirebaseAuth.instance.currentUser;
     final isCurrentUser = currentUser?.uid == userStories.userId;
 
+    // Verificar si este usuario tiene trivias activas
+    final userTrivias = (_cachedTrivias ?? [])
+        .where((t) => t.creatorId == userStories.userId && t.isActive)
+        .toList();
+    final hasActiveTrivias = userTrivias.isNotEmpty;
+    final hasTriviaOnly = userStories.stories.isEmpty && hasActiveTrivias;
+
     // Para el usuario actual, mostrar la historia más reciente (independiente del estado)
     // Para otros usuarios, mostrar solo historias aprobadas
     final latestStory = isCurrentUser
         ? (userStories.stories.isNotEmpty ? userStories.stories.first : null)
         : userStories.latestStory;
 
-    if (latestStory == null) return SizedBox.shrink();
+    // Si no hay historias ni trivias, no mostrar nada
+    if (latestStory == null && !hasActiveTrivias) return SizedBox.shrink();
 
-    // Determinar el color del borde basado en el estado de la historia
+    // Determinar el color del borde basado en el estado de la historia o trivia
     Color? borderColor;
     LinearGradient? borderGradient;
 
-    if (isCurrentUser) {
+    if (hasTriviaOnly) {
+      // Usuario con solo trivias: usar gradiente púrpura de trivia
+      borderGradient = LinearGradient(
+        begin: Alignment.topRight,
+        end: Alignment.bottomLeft,
+        colors: [Color(0xFF667EEA), Color(0xFF764BA2)],
+      );
+    } else if (isCurrentUser && latestStory != null) {
       // Para el usuario actual, mostrar estado de la historia (sin gradiente "no visto")
       // El usuario siempre ha "visto" sus propias historias
       switch (latestStory.status) {
@@ -290,7 +431,7 @@ class _StoriesSectionState extends State<StoriesSection> {
     }
 
     // Check if there's upload progress for this user's latest story
-    final progress = isCurrentUser
+    final progress = isCurrentUser && latestStory != null
         ? uploadProgress[latestStory.id]
         : null;
     final hasUploadProgress = progress != null && progress >= 0.0 && progress < 1.0;
@@ -304,6 +445,8 @@ class _StoriesSectionState extends State<StoriesSection> {
             builder: (context) => StoryViewerScreen(
               allUserStories: allUserStories,
               initialUserIndex: userIndex,
+              // Pasar trivias para integración unificada
+              trivias: _cachedTrivias,
             ),
           ),
         );
@@ -327,42 +470,13 @@ class _StoriesSectionState extends State<StoriesSection> {
                   ),
                   child: Padding(
                     padding: EdgeInsets.all(3),
-                    child: CircleAvatar(
+                    // ✅ Usar SyncedUserAvatar para que la foto se actualice en tiempo real
+                    child: SyncedUserAvatar(
+                      userId: userStories.userId,
+                      fallbackPhotoUrl: userStories.userPhotoURL,
+                      userName: userStories.userName,
                       radius: 24,
                       backgroundColor: Colors.grey[200],
-                      child: userStories.userPhotoURL != null
-                          ? ClipOval(
-                              child: CachedNetworkImage(
-                                imageUrl: userStories.userPhotoURL!,
-                                width: 48,
-                                height: 48,
-                                fit: BoxFit.cover,
-                                placeholder: (context, url) => Text(
-                                  userStories.userName[0].toUpperCase(),
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.bold,
-                                    color: Color(0xFF9D7FE8),
-                                  ),
-                                ),
-                                errorWidget: (context, url, error) => Text(
-                                  userStories.userName[0].toUpperCase(),
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.bold,
-                                    color: Color(0xFF9D7FE8),
-                                  ),
-                                ),
-                              ),
-                            )
-                          : Text(
-                              userStories.userName[0].toUpperCase(),
-                              style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFF9D7FE8),
-                              ),
-                            ),
                     ),
                   ),
                 ),
@@ -424,7 +538,7 @@ class _StoriesSectionState extends State<StoriesSection> {
 
                 // Indicadores de estado (solo mostrar si no hay upload en progreso)
                 if (!hasUploadProgress && !hasUploadError) ...[
-                  if (isCurrentUser && latestStory.status == StoryStatus.pending)
+                  if (isCurrentUser && latestStory != null && latestStory.status == StoryStatus.pending)
                     Positioned(
                       bottom: 2,
                       right: 2,
@@ -443,7 +557,7 @@ class _StoriesSectionState extends State<StoriesSection> {
                         ),
                       ),
                     ),
-                  if (isCurrentUser && latestStory.status == StoryStatus.rejected)
+                  if (isCurrentUser && latestStory != null && latestStory.status == StoryStatus.rejected)
                     Positioned(
                       bottom: 2,
                       right: 2,
@@ -458,7 +572,7 @@ class _StoriesSectionState extends State<StoriesSection> {
                         child: Icon(Icons.close, size: 8, color: Colors.white),
                       ),
                     ),
-                  if (!isCurrentUser && userStories.hasUnviewed)
+                  if (!isCurrentUser && userStories.hasUnviewed && !hasActiveTrivias)
                     Positioned(
                       bottom: 2,
                       right: 2,
@@ -469,6 +583,26 @@ class _StoriesSectionState extends State<StoriesSection> {
                           color: Color(0xFF9D7FE8),
                           shape: BoxShape.circle,
                           border: Border.all(color: Colors.white, width: 2),
+                        ),
+                      ),
+                    ),
+                  // ✅ Indicador de trivia para usuarios con trivias activas
+                  if (hasActiveTrivias)
+                    Positioned(
+                      bottom: 0,
+                      right: 0,
+                      child: Container(
+                        width: 20,
+                        height: 20,
+                        decoration: BoxDecoration(
+                          color: Color(0xFF667EEA),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 2),
+                        ),
+                        child: Icon(
+                          Icons.quiz_rounded,
+                          size: 11,
+                          color: Colors.white,
                         ),
                       ),
                     ),
@@ -537,7 +671,7 @@ class _StoriesSectionState extends State<StoriesSection> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     )
-                  else if (latestStory.status != StoryStatus.approved)
+                  else if (latestStory != null && latestStory.status != StoryStatus.approved)
                     Text(
                       latestStory.statusText,
                       style: TextStyle(

@@ -319,6 +319,12 @@ class NotificationService {
   Stream<Map<String, dynamic>> get groupMembershipApprovedNotificationTapStream =>
       _groupMembershipApprovedNotificationTapController.stream;
 
+  // Stream para notificar cuando se toca una notificación de trivia
+  final _triviaNotificationTapController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get triviaNotificationTapStream =>
+      _triviaNotificationTapController.stream;
+
   // Método público para emitir llamadas entrantes al stream
   void emitIncomingCall(Map<String, dynamic> callData) {
     _incomingCallController.add(callData);
@@ -2156,6 +2162,20 @@ class NotificationService {
           tag: 'NotificationService',
         );
         _reportNotificationTapController.add(data);
+        break;
+
+      // ═══════════════════════════════════════════════════════════════
+      // TRIVIAS
+      // ═══════════════════════════════════════════════════════════════
+      case 'trivia_response':
+      case 'trivia_expiring':
+      case 'trivia_expired':
+      case 'trivia_winner':
+        ReleaseLogger.log(
+          '🎯 Notificación de trivia ($type) tocada, navegando a trivia',
+          tag: 'NotificationService',
+        );
+        _triviaNotificationTapController.add(data);
         break;
 
       default:

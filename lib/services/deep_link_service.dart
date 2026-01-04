@@ -6,6 +6,7 @@ import '../models/story.dart';
 import '../utils/release_logger.dart';
 import '../screens/add_contact_deeplink_screen.dart';
 import '../screens/story_viewer_screen.dart';
+import '../screens/trivia/trivia_play_screen.dart';
 
 /// Servicio para manejar deep links y universal links
 ///
@@ -107,6 +108,16 @@ class DeepLinkService {
         }
         break;
 
+      case 'trivia':
+      case 't': // Alias corto
+        // talia://trivia/{triviaId} o https://taliachat.com/t/{triviaId}
+        if (pathSegments.length >= 2) {
+          final triviaId = pathSegments[1];
+          ReleaseLogger.log('🔗 [DeepLink] Open trivia: $triviaId');
+          _handleOpenTrivia(triviaId);
+        }
+        break;
+
       default:
         ReleaseLogger.log('🔗 [DeepLink] Unknown action: $action');
     }
@@ -138,6 +149,9 @@ class DeepLinkService {
 
   /// storyId pendiente de ver (si la app aún no está lista)
   String? _pendingViewStoryId;
+
+  /// triviaId pendiente de abrir (si la app aún no está lista)
+  String? _pendingOpenTriviaId;
 
   /// Callback para cuando se recibe un deep link de ver historia
   void Function(String storyId)? onViewStoryLink;
@@ -205,6 +219,24 @@ class DeepLinkService {
     }
   }
 
+  /// Manejar acción de abrir trivia
+  void _handleOpenTrivia(String triviaId) {
+    final navigator = navigatorKey.currentState;
+
+    if (navigator == null) {
+      ReleaseLogger.log('🔗 [DeepLink] No navigator available, saving trivia for later');
+      _pendingOpenTriviaId = triviaId;
+      return;
+    }
+
+    ReleaseLogger.log('🔗 [DeepLink] Navigating to TriviaPlayScreen for trivia: $triviaId');
+    navigator.push(
+      MaterialPageRoute(
+        builder: (context) => TriviaPlayScreen(triviaId: triviaId),
+      ),
+    );
+  }
+
   /// Mostrar error al usuario
   void _showErrorSnackBar(BuildContext context, String message) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -230,6 +262,13 @@ class DeepLinkService {
     return userId;
   }
 
+  /// Obtener y limpiar triviaId pendiente
+  String? consumePendingOpenTrivia() {
+    final triviaId = _pendingOpenTriviaId;
+    _pendingOpenTriviaId = null;
+    return triviaId;
+  }
+
   /// Procesar historia pendiente si existe
   /// Llamar cuando el navigator esté disponible
   Future<void> processPendingStory() async {
@@ -237,6 +276,16 @@ class DeepLinkService {
     if (storyId != null) {
       ReleaseLogger.log('🔗 [DeepLink] Processing pending story: $storyId');
       await _handleViewStory(storyId);
+    }
+  }
+
+  /// Procesar trivia pendiente si existe
+  /// Llamar cuando el navigator esté disponible
+  void processPendingTrivia() {
+    final triviaId = consumePendingOpenTrivia();
+    if (triviaId != null) {
+      ReleaseLogger.log('🔗 [DeepLink] Processing pending trivia: $triviaId');
+      _handleOpenTrivia(triviaId);
     }
   }
 
@@ -254,6 +303,12 @@ class DeepLinkService {
   /// Usa /s/ como alias corto para mejor UX en redes sociales
   String generateStoryUrl(String storyId) {
     return 'https://taliachat.com/s/$storyId';
+  }
+
+  /// Generar URL para compartir trivia
+  /// Usa /t/ como alias corto para mejor UX en redes sociales
+  String generateTriviaUrl(String triviaId) {
+    return 'https://taliachat.com/t/$triviaId';
   }
 
   /// Limpiar recursos

@@ -321,6 +321,27 @@ class ChildContactsController {
     return _userCache.getDisplayName(userId, fallback: fallback, phoneHint: phoneHint);
   }
 
+  /// Obtener nombre de la DB y alias por separado
+  /// Retorna: (dbName: nombre denormalizado del contacto, alias: nombre del cache si es diferente)
+  ({String dbName, String? alias}) getNameParts(
+    String userId, {
+    String? phoneHint,
+    String? contactNameHint,
+  }) {
+    // Nombre de la DB (denormalizado del contacto)
+    final dbName = (contactNameHint != null && contactNameHint.isNotEmpty)
+        ? contactNameHint
+        : 'Usuario';
+
+    // Nombre del cache (puede incluir alias de agenda o personalizado)
+    final cachedName = _userCache.getDisplayName(userId, fallback: dbName, phoneHint: phoneHint);
+
+    // El alias es diferente del dbName solo si hay un nombre personalizado
+    final alias = cachedName != dbName ? cachedName : null;
+
+    return (dbName: dbName, alias: alias);
+  }
+
   /// Obtener datos de usuario (para foto, etc)
   Map<String, dynamic>? getUserData(String odId) {
     return _userCache.getUserDataSync(odId);

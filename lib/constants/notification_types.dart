@@ -25,6 +25,12 @@ class NotificationTypes {
   static const String storyRejected = 'story_rejected';
   static const String storyReply = 'story_reply';
 
+  // Trivias
+  static const String triviaResponse = 'trivia_response';
+  static const String triviaExpiring = 'trivia_expiring';
+  static const String triviaExpired = 'trivia_expired';
+  static const String triviaWinner = 'trivia_winner';
+
   // Grupos
   static const String groupPermissionRequest = 'group_permission_request';
   static const String groupPermissionReminder = 'group_permission_reminder';
@@ -62,6 +68,12 @@ class NotificationTypes {
       case storyReply:
       case whitelistChange:
         return 'whitelistChangesEnabled';
+
+      case triviaResponse:
+      case triviaExpiring:
+      case triviaExpired:
+      case triviaWinner:
+        return 'whitelistChangesEnabled'; // Trivias usan la misma preferencia que stories
 
       case groupPermissionRequest:
       case groupPermissionReminder:

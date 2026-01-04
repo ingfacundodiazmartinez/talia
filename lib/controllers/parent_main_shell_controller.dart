@@ -41,6 +41,7 @@ class ParentMainShellController {
   StreamSubscription? _reportNotificationSubscription;
   StreamSubscription? _emergencyNotificationSubscription;
   StreamSubscription? _groupMembershipApprovedNotificationSubscription;
+  StreamSubscription? _triviaNotificationSubscription;
   StreamSubscription? _roleChangeSubscription;
   StreamSubscription? _appStateSubscription;
 
@@ -58,6 +59,7 @@ class ParentMainShellController {
   Function(Map<String, dynamic>)? onReportNotificationTap;
   Function(Map<String, dynamic>)? onEmergencyNotificationTap;
   Function(Map<String, dynamic>)? onGroupMembershipApprovedNotificationTap;
+  Function(Map<String, dynamic>)? onTriviaNotificationTap;
 
   // Constructor
   ParentMainShellController({
@@ -185,6 +187,14 @@ class ParentMainShellController {
         .listen((data) {
       ReleaseLogger.log('Group membership approved notification tapped: $data', tag: 'ParentMainShell');
       onGroupMembershipApprovedNotificationTap?.call(data);
+    });
+
+    // Trivias
+    _triviaNotificationSubscription = _notificationService
+        .triviaNotificationTapStream
+        .listen((data) {
+      ReleaseLogger.log('Trivia notification tapped: $data', tag: 'ParentMainShell');
+      onTriviaNotificationTap?.call(data);
     });
   }
 
@@ -390,6 +400,7 @@ class ParentMainShellController {
     _reportNotificationSubscription?.cancel();
     _emergencyNotificationSubscription?.cancel();
     _groupMembershipApprovedNotificationSubscription?.cancel();
+    _triviaNotificationSubscription?.cancel();
     _roleChangeSubscription?.cancel();
     _appStateSubscription?.cancel();
 

@@ -78,10 +78,19 @@ class UserCacheService {
       final existingLocalName = existingData?['localName'] as String?;
 
       final firestoreData = doc.data()!;
+
+      // Parsear birthDate si existe
+      dynamic birthDate = firestoreData['birthDate'];
+      if (birthDate is Timestamp) {
+        birthDate = birthDate.toDate().toIso8601String();
+      }
+
       final data = {
         'name': firestoreData['name'] ?? 'Usuario',
         'photoURL': firestoreData['photoURL'],
         'phone': firestoreData['phone'],
+        'birthDate': birthDate,
+        'isOnline': firestoreData['isOnline'] ?? false,
         'alias': existingAlias,  // Preservar alias local
         'localName': existingLocalName,  // Preservar nombre de agenda
         'cachedAt': DateTime.now().millisecondsSinceEpoch,
@@ -224,6 +233,8 @@ class UserCacheService {
         'name': null,
         'photoURL': null,
         'phone': null,
+        'birthDate': null,
+        'isOnline': false,
         'alias': alias,
         'localName': null,
         'cachedAt': DateTime.now().millisecondsSinceEpoch,
@@ -256,6 +267,8 @@ class UserCacheService {
         'name': null,
         'photoURL': null,
         'phone': null,
+        'birthDate': null,
+        'isOnline': false,
         'alias': null,
         'localName': localName,
         'cachedAt': DateTime.now().millisecondsSinceEpoch,
@@ -297,10 +310,18 @@ class UserCacheService {
         final existingAlias = existingData?['alias'] as String?;
         final existingLocalName = existingData?['localName'] as String?;
 
+        // Parsear birthDate si existe
+        dynamic birthDate = firestoreData['birthDate'];
+        if (birthDate is Timestamp) {
+          birthDate = birthDate.toDate().toIso8601String();
+        }
+
         final data = {
           'name': firestoreData['name'] ?? 'Usuario',
           'photoURL': firestoreData['photoURL'],
           'phone': firestoreData['phone'],
+          'birthDate': birthDate,
+          'isOnline': firestoreData['isOnline'] ?? false,
           'alias': existingAlias,
           'localName': existingLocalName,
           'cachedAt': DateTime.now().millisecondsSinceEpoch,

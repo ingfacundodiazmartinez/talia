@@ -118,6 +118,20 @@ class UserRoleService {
     }
   }
 
+  /// Stream de hijos vinculados a un padre
+  /// Útil para actualizaciones en tiempo real
+  Stream<List<String>> watchLinkedChildren(String parentId) {
+    return _firestore
+        .collection('users')
+        .doc(parentId)
+        .snapshots()
+        .map((snapshot) {
+      if (!snapshot.exists) return <String>[];
+      final data = snapshot.data() as Map<String, dynamic>;
+      return List<String>.from(data['linkedChildrenIds'] ?? []);
+    });
+  }
+
   /// Calcula y actualiza el rol del usuario en Firestore
   Future<bool> updateUserRole(String userId, int age) async {
     try {

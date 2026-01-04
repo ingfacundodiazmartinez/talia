@@ -323,12 +323,16 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
     // Obtener nombre denormalizado del contacto como fallback
     final contactName = contact.getOtherUserName(currentUserId);
 
-    // Obtener displayName con hints para priorizar nombre de agenda
-    var displayName = _controller.getDisplayName(
+    // Obtener dbName y alias por separado para mostrar correctamente
+    final nameParts = _controller.getNameParts(
       otherUserId,
       phoneHint: phone,
       contactNameHint: contactName,
     );
+    final dbName = nameParts.dbName;
+    final alias = nameParts.alias;
+    // displayName para compatibilidad (usado en diálogos, navegación, etc.)
+    final displayName = alias ?? dbName;
 
     // Foto: primero del contacto (denormalizado), fallback a userData
     final photoURL = contact.getOtherUserPhotoURL(currentUserId) ??
@@ -356,7 +360,7 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
     }
 
     // Si el nombre es "Usuario", intentar resolver desde la agenda
-    if (displayName == 'Usuario' && phone.isNotEmpty) {
+    if (dbName == 'Usuario' && phone.isNotEmpty) {
       // Intentar resolver de forma asíncrona
       _controller.resolveAndCacheLocalName(otherUserId, phone).then((localName) {
         if (localName != null && mounted) {
@@ -374,7 +378,8 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
     return _ContactItemCard(
       contact: contact,
       otherUserId: otherUserId,
-      displayName: displayName,
+      dbName: dbName,
+      alias: alias,
       phone: phone,
       age: age,
       photoURL: photoURL,
@@ -734,7 +739,10 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
 class _ContactItemCard extends StatelessWidget {
   final contact_model.Contact contact;
   final String otherUserId;
-  final String displayName;
+  /// Nombre de la base de datos (usado para ordenar) - se muestra como título principal
+  final String dbName;
+  /// Alias personalizado (puede ser null si no hay alias)
+  final String? alias;
   final String phone;
   final int? age;
   final String? photoURL;
@@ -749,7 +757,8 @@ class _ContactItemCard extends StatelessWidget {
   const _ContactItemCard({
     required this.contact,
     required this.otherUserId,
-    required this.displayName,
+    required this.dbName,
+    this.alias,
     required this.phone,
     this.age,
     required this.photoURL,
@@ -761,6 +770,9 @@ class _ContactItemCard extends StatelessWidget {
     this.onDeleteTap,
     this.onResendTap,
   });
+
+  /// Nombre para mostrar (alias si existe, sino dbName)
+  String get displayName => alias ?? dbName;
 
   @override
   Widget build(BuildContext context) {
@@ -869,7 +881,7 @@ class _ContactItemCard extends StatelessWidget {
           : null,
       child: (status != 'approved' || photoURL == null)
           ? Text(
-              displayName.isNotEmpty ? displayName[0].toUpperCase() : 'U',
+              dbName.isNotEmpty ? dbName[0].toUpperCase() : 'U',
               style: TextStyle(
                 fontSize: 20,
                 fontWeight: FontWeight.bold,
@@ -884,8 +896,9 @@ class _ContactItemCard extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // Nombre principal (de la DB - usado para ordenar)
         Text(
-          displayName,
+          dbName,
           style: TextStyle(
             fontSize: 16,
             fontWeight: FontWeight.w600,
@@ -894,32 +907,46 @@ class _ContactItemCard extends StatelessWidget {
                 : colorScheme.onSurface,
             decoration: status == 'revoked' ? TextDecoration.lineThrough : null,
           ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
         ),
-        // Teléfono y edad en la misma línea
-        if (phone.isNotEmpty || (age != null && age! > 0)) ...[
-          SizedBox(height: 2),
-          Row(
-            children: [
-              if (phone.isNotEmpty)
-                Flexible(
-                  child: Text(
-                    phone,
-                    style: TextStyle(fontSize: 13, color: colorScheme.onSurfaceVariant),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+        SizedBox(height: 2),
+        // Subtítulo: Alias + edad
+        Row(
+          children: [
+            if (alias != null) ...[
+              Flexible(
+                child: Text(
+                  alias!,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: colorScheme.primary,
+                    fontStyle: FontStyle.italic,
                   ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-              if (phone.isNotEmpty && age != null && age! > 0)
-                Text(
-                  ' • ',
-                  style: TextStyle(fontSize: 13, color: colorScheme.onSurfaceVariant),
-                ),
-              if (age != null && age! > 0)
-                Text(
-                  '$age años',
-                  style: TextStyle(fontSize: 13, color: colorScheme.onSurfaceVariant),
-                ),
+              ),
+              Text(
+                ' • ',
+                style: TextStyle(fontSize: 13, color: colorScheme.onSurfaceVariant),
+              ),
             ],
+            if (age != null && age! > 0)
+              Text(
+                '$age años',
+                style: TextStyle(fontSize: 13, color: colorScheme.onSurfaceVariant),
+              ),
+          ],
+        ),
+        // Teléfono en línea separada
+        if (phone.isNotEmpty) ...[
+          SizedBox(height: 2),
+          Text(
+            phone,
+            style: TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
         ],
         SizedBox(height: 2),

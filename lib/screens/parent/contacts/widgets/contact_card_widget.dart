@@ -1,20 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../../../../services/create_chat_service.dart';
-import '../../../../widgets/synced_user_widgets.dart';
 import '../../../child_location_screen.dart';
 
 /// Widget para mostrar una tarjeta de contacto
 ///
 /// Responsabilidades:
-/// - Mostrar información del contacto (nombre, edad, estado online)
+/// - Mostrar información del contacto (nombre DB como primario, alias como subtítulo)
 /// - Navegar al chat al tocar
 /// - Mostrar menú contextual para hijos (ubicación, desvincular)
 class ContactCardWidget extends StatelessWidget {
   final String currentUserId;
   final String contactId;
-  final String displayName;
-  final String realName;
+  /// Nombre de la base de datos (usado para ordenar) - se muestra como título principal
+  final String dbName;
+  /// Alias personalizado (puede ser null si no hay alias)
+  final String? alias;
   final int age;
   final String? phone;
   final String status;
@@ -27,8 +28,8 @@ class ContactCardWidget extends StatelessWidget {
     super.key,
     required this.currentUserId,
     required this.contactId,
-    required this.displayName,
-    required this.realName,
+    required this.dbName,
+    this.alias,
     required this.age,
     this.phone,
     this.status = 'Offline',
@@ -37,6 +38,9 @@ class ContactCardWidget extends StatelessWidget {
     this.photoURL,
     this.onUnlink,
   });
+
+  /// Nombre para mostrar en el chat (alias si existe, sino dbName)
+  String get displayName => alias ?? dbName;
 
   @override
   Widget build(BuildContext context) {
@@ -75,7 +79,7 @@ class ContactCardWidget extends StatelessWidget {
                             height: 56,
                             fit: BoxFit.cover,
                             placeholder: (context, url) => Text(
-                              displayName.isNotEmpty ? displayName[0].toUpperCase() : 'U',
+                              dbName.isNotEmpty ? dbName[0].toUpperCase() : 'U',
                               style: TextStyle(
                                 fontSize: 20,
                                 fontWeight: FontWeight.bold,
@@ -83,7 +87,7 @@ class ContactCardWidget extends StatelessWidget {
                               ),
                             ),
                             errorWidget: (context, url, error) => Text(
-                              displayName.isNotEmpty ? displayName[0].toUpperCase() : 'U',
+                              dbName.isNotEmpty ? dbName[0].toUpperCase() : 'U',
                               style: TextStyle(
                                 fontSize: 20,
                                 fontWeight: FontWeight.bold,
@@ -93,7 +97,7 @@ class ContactCardWidget extends StatelessWidget {
                           ),
                         )
                       : Text(
-                          displayName.isNotEmpty ? displayName[0].toUpperCase() : 'U',
+                          dbName.isNotEmpty ? dbName[0].toUpperCase() : 'U',
                           style: TextStyle(
                             fontSize: 20,
                             fontWeight: FontWeight.bold,
@@ -126,59 +130,65 @@ class ContactCardWidget extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  SyncedUserName(
-                    userId: contactId,
-                    fallbackName: displayName,
+                  // Nombre principal (de la DB - usado para ordenar)
+                  Text(
+                    dbName,
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
                       color: colorScheme.onSurface,
                     ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                   SizedBox(height: 2),
-                  // Teléfono (si está disponible)
-                  if (phone != null && phone!.isNotEmpty) ...[
-                    Text(
-                      phone!,
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                    SizedBox(height: 2),
-                  ],
-                  // Nombre real + edad
-                  Row(
-                    children: [
-                      if (displayName != realName) ...[
-                        Flexible(
-                          child: Text(
-                            realName,
+                  // Subtítulo: Alias + edad (solo si hay alias o edad > 0)
+                  if (alias != null || age > 0)
+                    Row(
+                      children: [
+                        if (alias != null) ...[
+                          Flexible(
+                            child: Text(
+                              alias!,
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: colorScheme.primary,
+                                fontStyle: FontStyle.italic,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (age > 0)
+                            Text(
+                              ' • ',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                        ],
+                        if (age > 0)
+                          Text(
+                            '$age años',
                             style: TextStyle(
                               fontSize: 13,
                               color: colorScheme.onSurfaceVariant,
                             ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
                           ),
-                        ),
-                        Text(
-                          ' • ',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: colorScheme.onSurfaceVariant,
-                          ),
-                        ),
                       ],
-                      Text(
-                        '$age años',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: colorScheme.onSurfaceVariant,
-                        ),
+                    ),
+                  // Teléfono (si está disponible)
+                  if (phone != null && phone!.isNotEmpty) ...[
+                    SizedBox(height: 2),
+                    Text(
+                      phone!,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: colorScheme.onSurfaceVariant,
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ],
               ),
             ),

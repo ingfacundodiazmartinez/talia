@@ -50,6 +50,9 @@ class CachedContactItem extends StatelessWidget {
           builder: (context, aliasSnapshot) {
             final displayName = aliasSnapshot.data ?? realName;
 
+            // El alias es diferente del nombre de DB solo si hay alias personalizado
+            final alias = displayName != realName ? displayName : null;
+
             return FilterableContactItem(
               searchQuery: searchQuery,
               realName: realName,
@@ -57,8 +60,8 @@ class CachedContactItem extends StatelessWidget {
               child: ContactCardWidget(
                 currentUserId: currentUserId,
                 contactId: contactId,
-                displayName: displayName,
-                realName: realName,
+                dbName: realName,
+                alias: alias,
                 age: child.age,
                 isChild: isChild,
                 photoURL: child.photoURL,

@@ -2,10 +2,14 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../../../models/story.dart';
+import '../../../models/trivia.dart';
+import '../../../models/trivia_response.dart';
+import '../../../models/viewer_item.dart';
 import '../../../controllers/story_viewer_controller.dart';
 import 'package:video_player/video_player.dart';
+import 'trivia_preview_widget.dart';
 
-/// Widget que maneja el contenido principal de las historias
+/// Widget que maneja el contenido principal de las historias y trivias
 class StoryContentWidget extends StatelessWidget {
   final PageController userPageController;
   final PageController? storyPageController;
@@ -21,6 +25,14 @@ class StoryContentWidget extends StatelessWidget {
   final Widget Function(Story) buildVideoPlayer;
   final bool showCaptionOverlay;
   final bool hasReplyInput;
+
+  // ✅ Parámetros opcionales para soporte de trivias
+  final List<UserContent>? userContentList;
+  final Map<String, TriviaViewerState>? triviaStates;
+  final Map<String, TriviaResponse?>? triviaResponses;
+  final void Function(Trivia)? onTriviaPlay;
+  final void Function(Trivia)? onTriviaViewResults;
+  final String? currentUserId;
 
   const StoryContentWidget({
     super.key,
@@ -38,48 +50,160 @@ class StoryContentWidget extends StatelessWidget {
     required this.buildVideoPlayer,
     this.showCaptionOverlay = true,
     this.hasReplyInput = false,
+    // Trivia support
+    this.userContentList,
+    this.triviaStates,
+    this.triviaResponses,
+    this.onTriviaPlay,
+    this.onTriviaViewResults,
+    this.currentUserId,
   });
 
   List<Story> _getStoriesForUser(UserStories userStories) {
     return controller.getStoriesForUser(userStories);
   }
 
+  /// Si userContentList está disponible, usarlo para contar items
+  int _getItemCount(int userIndex) {
+    if (userContentList != null && userIndex < userContentList!.length) {
+      return userContentList![userIndex].items.length;
+    }
+    if (userIndex < allUserStories.length) {
+      return _getStoriesForUser(allUserStories[userIndex]).length;
+    }
+    return 0;
+  }
+
+  /// Obtener el ViewerItem en una posición
+  ViewerItem? _getItem(int userIndex, int itemIndex) {
+    if (userContentList != null && userIndex < userContentList!.length) {
+      final content = userContentList![userIndex];
+      if (itemIndex < content.items.length) {
+        return content.items[itemIndex];
+      }
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Si hay userContentList, usar modo unificado (stories + trivias)
+    final useUnifiedMode = userContentList != null && userContentList!.isNotEmpty;
+    final itemCount = useUnifiedMode ? userContentList!.length : allUserStories.length;
+
     return Container(
       color: Colors.black,
       child: PageView.builder(
         controller: userPageController,
-        itemCount: allUserStories.length,
+        itemCount: itemCount,
         onPageChanged: onUserChanged,
         itemBuilder: (context, userIndex) {
-          final userStories = allUserStories[userIndex];
-          final stories = _getStoriesForUser(userStories);
+          // Determinar el ID del usuario para el key
+          String userId;
+          if (useUnifiedMode) {
+            userId = userContentList![userIndex].oderId;
+          } else {
+            userId = allUserStories[userIndex].userId;
+          }
+
+          final innerItemCount = _getItemCount(userIndex);
 
           return PageView.builder(
-            key: ValueKey('user_stories_${userStories.userId}'),
+            key: ValueKey('user_content_$userId'),
             controller: userIndex == currentUserIndex ? storyPageController : null,
             physics: const NeverScrollableScrollPhysics(),
-            itemCount: stories.length,
-            onPageChanged: (storyIndex) {
+            itemCount: innerItemCount,
+            onPageChanged: (itemIndex) {
               if (userIndex == currentUserIndex) {
-                onStoryChanged(storyIndex);
+                onStoryChanged(itemIndex);
               }
             },
-            itemBuilder: (context, storyIndex) {
-              final story = stories[storyIndex];
+            itemBuilder: (context, itemIndex) {
+              // ✅ Si hay userContentList, usar ViewerItem
+              if (useUnifiedMode) {
+                final item = _getItem(userIndex, itemIndex);
+                if (item == null) {
+                  return Container(color: Colors.black);
+                }
+
+                return Container(
+                  key: ValueKey('item_${item.id}'),
+                  color: Colors.black,
+                  width: double.infinity,
+                  height: double.infinity,
+                  child: _buildItemContent(context, item, userIndex, itemIndex),
+                );
+              }
+
+              // Modo legacy: solo stories
+              final userStories = allUserStories[userIndex];
+              final stories = _getStoriesForUser(userStories);
+              if (itemIndex >= stories.length) {
+                return Container(color: Colors.black);
+              }
+              final story = stories[itemIndex];
 
               return Container(
                 key: ValueKey('story_content_${story.id}'),
                 color: Colors.black,
                 width: double.infinity,
                 height: double.infinity,
-                child: _buildStoryContent(context, story, userIndex, storyIndex),
+                child: _buildStoryContent(context, story, userIndex, itemIndex),
               );
             },
           );
         },
       ),
+    );
+  }
+
+  /// Construir contenido para un ViewerItem (story, trivia, o ad)
+  Widget _buildItemContent(BuildContext context, ViewerItem item, int userIndex, int itemIndex) {
+    if (item.isStory && item.story != null) {
+      return _buildStoryContent(context, item.story!, userIndex, itemIndex);
+    }
+
+    if (item.isTrivia && item.trivia != null) {
+      return _buildTriviaContent(context, item.trivia!, userIndex, itemIndex);
+    }
+
+    // TODO: Handle ads
+    return Container(color: Colors.black);
+  }
+
+  /// Construir contenido de trivia
+  Widget _buildTriviaContent(BuildContext context, Trivia trivia, int userIndex, int itemIndex) {
+    final state = triviaStates?[trivia.id] ?? TriviaViewerState.preview;
+    final isCreator = currentUserId == trivia.creatorId;
+    // Obtener la respuesta del usuario actual para esta trivia
+    final userResponse = triviaResponses?[trivia.id];
+
+    // En modo preview o results, mostrar TriviaPreviewWidget
+    // En modo playing, se maneja por separado (fullscreen trivia play)
+    if (state == TriviaViewerState.playing) {
+      // Este estado se maneja en el widget padre (StoryViewerScreen)
+      // Aquí solo mostramos un placeholder mientras transiciona
+      return Container(
+        color: Colors.black,
+        child: const Center(
+          child: CircularProgressIndicator(color: Colors.white),
+        ),
+      );
+    }
+
+    return TriviaPreviewWidget(
+      trivia: trivia,
+      userResponse: userResponse,
+      isCreator: isCreator,
+      onPlay: () => onTriviaPlay?.call(trivia),
+      onViewResults: () => onTriviaViewResults?.call(trivia),
+      onLoaded: () {
+        if (!isCurrentStoryLoaded &&
+            userIndex == currentUserIndex &&
+            itemIndex == currentStoryIndex) {
+          onStoryLoaded();
+        }
+      },
     );
   }
 

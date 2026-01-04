@@ -9,6 +9,7 @@ import 'chats/child_chats_screen.dart';
 import 'contacts/child_contacts_screen.dart';
 import 'profile/child_profile_screen.dart';
 import '../chat_detail_screen.dart';
+import '../trivia/trivia_results_screen.dart';
 
 /// Observer para detectar cambios en la navegación anidada
 class _NavigatorObserver extends NavigatorObserver {
@@ -75,6 +76,7 @@ class _ChildMainShellState extends State<ChildMainShell> {
 
       // Configurar callback para navegación desde notificaciones
       _mainController.onChatNotificationTap = _handleChatNotificationTap;
+      _mainController.onTriviaNotificationTap = _handleTriviaNotificationTap;
 
       _mainController.initialize();
     }
@@ -146,6 +148,33 @@ class _ChildMainShellState extends State<ChildMainShell> {
           );
         }
       }
+    }
+  }
+
+  /// Manejar tap en notificación de trivia
+  Future<void> _handleTriviaNotificationTap(Map<String, dynamic> data) async {
+    try {
+      final triviaId = data['triviaId'] as String?;
+      final type = data['type'] as String?;
+      ReleaseLogger.log('Trivia notification tap: type=$type, triviaId=$triviaId', tag: 'ChildMainShell');
+
+      if (triviaId != null && mounted) {
+        // Determinar si es el creador basado en el tipo de notificación
+        final isCreator = type == 'trivia_response' ||
+                          type == 'trivia_expiring' ||
+                          type == 'trivia_expired';
+
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => TriviaResultsScreen(
+              triviaId: triviaId,
+              isCreator: isCreator,
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      ReleaseLogger.error('Error handling trivia notification tap: $e', tag: 'ChildMainShell');
     }
   }
 

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../models/story.dart';
+import '../../../models/viewer_item.dart';
 import '../../../controllers/story_viewer_controller.dart';
 import 'story_progress_indicators.dart';
 import 'story_user_header.dart';
@@ -78,6 +79,9 @@ class StoryOverlayWidget extends StatelessWidget {
   final VoidCallback? onPauseTimer;
   final VoidCallback? onResumeTimer;
 
+  // ✅ Parámetros opcionales para soporte de trivias
+  final List<UserContent>? userContentList;
+
   const StoryOverlayWidget({
     super.key,
     required this.allUserStories,
@@ -96,14 +100,63 @@ class StoryOverlayWidget extends StatelessWidget {
     required this.formatStoryTime,
     this.onPauseTimer,
     this.onResumeTimer,
+    this.userContentList,
   });
 
   @override
   Widget build(BuildContext context) {
-    final currentUserStories = allUserStories[currentUserIndex];
-    final stories = getStoriesForUser(currentUserStories);
-    final currentStory = stories[currentStoryIndex];
-    final isCurrentUser = currentUserStories.userId == controller.currentUserId;
+    // ✅ Usar userContentList si está disponible
+    final useUnifiedModel = userContentList != null && userContentList!.isNotEmpty;
+
+    // Variables para el contenido actual
+    String userId;
+    String userName;
+    String? userPhotoURL;
+    int totalItems;
+    Story? currentStory;
+    bool isCurrentUser;
+    bool isCurrentTrivia = false;
+    DateTime? itemCreatedAt;
+
+    if (useUnifiedModel && currentUserIndex < userContentList!.length) {
+      final content = userContentList![currentUserIndex];
+      userId = content.oderId;
+      userName = content.oderName;
+      userPhotoURL = content.oderPhotoURL;
+      totalItems = content.items.length;
+      isCurrentUser = userId == controller.currentUserId;
+
+      // Obtener la historia o trivia actual
+      if (currentStoryIndex < content.items.length) {
+        final item = content.items[currentStoryIndex];
+        currentStory = item.isStory ? item.story : null;
+        isCurrentTrivia = item.isTrivia;
+        // Obtener la fecha de creación del item actual
+        if (item.isStory && item.story != null) {
+          itemCreatedAt = item.story!.createdAt;
+        } else if (item.isTrivia && item.trivia != null) {
+          itemCreatedAt = item.trivia!.createdAt;
+        }
+      }
+    } else if (allUserStories.isNotEmpty && currentUserIndex < allUserStories.length) {
+      // Modo legacy
+      final currentUserStories = allUserStories[currentUserIndex];
+      final stories = getStoriesForUser(currentUserStories);
+
+      userId = currentUserStories.userId;
+      userName = currentUserStories.userName;
+      userPhotoURL = currentUserStories.userPhotoURL;
+      totalItems = stories.length;
+      isCurrentUser = userId == controller.currentUserId;
+
+      if (stories.isNotEmpty && currentStoryIndex < stories.length) {
+        currentStory = stories[currentStoryIndex];
+        itemCreatedAt = currentStory.createdAt;
+      }
+    } else {
+      // No hay contenido válido
+      return const SizedBox.shrink();
+    }
 
     return Stack(
       children: [
@@ -135,21 +188,23 @@ class StoryOverlayWidget extends StatelessWidget {
             children: [
               // Indicadores de progreso
               StoryProgressIndicators(
-                storyCount: stories.length,
+                storyCount: totalItems,
                 currentStoryIndex: currentStoryIndex,
                 progressAnimation: progressController,
               ),
 
               // Header con información del usuario
               StoryUserHeader(
-                userName: currentUserStories.userName,
-                userId: currentUserStories.userId,
-                userPhotoURL: currentUserStories.userPhotoURL,
-                timeAgo: formatStoryTime(currentStory.createdAt),
+                userName: userName,
+                userId: userId,
+                userPhotoURL: userPhotoURL,
+                timeAgo: itemCreatedAt != null ? formatStoryTime(itemCreatedAt) : '',
                 isCurrentUser: isCurrentUser,
-                onDelete: onDelete,
-                onDownload: onDownload,
-                onShare: onShare,
+                // ✅ Permitir eliminar para stories o trivias del usuario actual
+                onDelete: (currentStory != null || isCurrentTrivia) ? onDelete : null,
+                // Download y share solo para stories
+                onDownload: currentStory != null ? onDownload : null,
+                onShare: currentStory != null ? onShare : null,
                 onClose: onClose,
               ),
 
@@ -159,16 +214,16 @@ class StoryOverlayWidget extends StatelessWidget {
               // para que aparezca sobre el contenido del story, no en el letterbox
 
               // Mostrar likes si es la historia del usuario actual y tiene likes
-              _buildLikesSection(context, currentStory, isCurrentUser),
+              if (currentStory != null) _buildLikesSection(context, currentStory, isCurrentUser),
 
               // Mostrar vistas si es la historia del usuario actual
-              _buildViewedBySection(context, currentStory, isCurrentUser),
+              if (currentStory != null) _buildViewedBySection(context, currentStory, isCurrentUser),
 
               // Mostrar respuestas si es la historia del usuario actual y tiene respuestas
-              _buildResponsesSection(context, currentStory, isCurrentUser),
+              if (currentStory != null) _buildResponsesSection(context, currentStory, isCurrentUser),
 
               // Indicador de estado para historias del usuario actual
-              _buildStatusIndicator(context, currentStory, isCurrentUser),
+              if (currentStory != null) _buildStatusIndicator(context, currentStory, isCurrentUser),
 
               SizedBox(height: 20),
             ],

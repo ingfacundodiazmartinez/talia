@@ -9,6 +9,7 @@ import 'group_invitations_screen.dart';
 import '../chat_detail_screen.dart';
 import '../../groups/groups.dart'; // Groups V2
 import '../story_approval_screen.dart';
+import '../trivia/trivia_results_screen.dart';
 import 'dashboard/widgets/child_notifications_screen.dart';
 import '../../controllers/parent_main_shell_controller.dart';
 import '../../utils/release_logger.dart';
@@ -156,6 +157,7 @@ class _ParentMainShellState extends State<ParentMainShell> {
     _controller.onReportNotificationTap = _handleReportNotificationTap;
     _controller.onEmergencyNotificationTap = _handleEmergencyNotificationTap;
     _controller.onGroupMembershipApprovedNotificationTap = _handleGroupMembershipApprovedNotificationTap;
+    _controller.onTriviaNotificationTap = _handleTriviaNotificationTap;
 
     _controller.initialize();
 
@@ -422,6 +424,38 @@ class _ParentMainShellState extends State<ParentMainShell> {
       }
     } catch (e) {
       ReleaseLogger.error('Error handling group membership approved notification tap: $e', tag: 'ParentMainShell');
+    }
+  }
+
+  /// Manejar tap en notificación de trivia
+  Future<void> _handleTriviaNotificationTap(Map<String, dynamic> data) async {
+    try {
+      final triviaId = data['triviaId'] as String?;
+      final type = data['type'] as String?;
+      ReleaseLogger.log('Trivia notification tap: type=$type, triviaId=$triviaId', tag: 'ParentMainShell');
+
+      if (triviaId != null) {
+        // Determinar si es el creador basado en el tipo de notificación
+        // trivia_response, trivia_expiring, trivia_expired → van al creador
+        // trivia_winner → va al participante ganador
+        final isCreator = type == 'trivia_response' ||
+                          type == 'trivia_expiring' ||
+                          type == 'trivia_expired';
+
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => TriviaResultsScreen(
+              triviaId: triviaId,
+              isCreator: isCreator,
+            ),
+          ),
+        );
+      } else {
+        // Si no hay triviaId, ir al dashboard donde están las historias
+        setState(() => _selectedIndex = 0);
+      }
+    } catch (e) {
+      ReleaseLogger.error('Error handling trivia notification tap: $e', tag: 'ParentMainShell');
     }
   }
 

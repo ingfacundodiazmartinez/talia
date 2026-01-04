@@ -9,25 +9,39 @@ import 'package:path_provider/path_provider.dart';
 import 'package:gal/gal.dart';
 import 'package:share_plus/share_plus.dart';
 import '../models/mood_poll.dart';
+import '../models/trivia.dart';
+import '../models/trivia_response.dart';
+import '../models/viewer_item.dart';
 import '../controllers/story_viewer_controller.dart';
 import '../services/ad_service.dart';
 import '../services/mood_polls/mood_poll_service.dart';
 import '../services/story_service_refactored.dart';
+import '../services/trivia/trivia_creation_service.dart';
 import '../services/video_cache_service.dart';
 import '../services/deep_link_service.dart';
 import '../widgets/story_native_ad_widget.dart';
 import '../widgets/mood_poll_story_widget.dart';
 import 'story_viewer/widgets/story_content_widget.dart';
 import 'story_viewer/widgets/story_overlay_widget.dart';
+import 'trivia/trivia_play_screen.dart';
+import 'trivia/trivia_results_screen.dart';
 
 class StoryViewerScreen extends StatefulWidget {
   final List<UserStories> allUserStories;
   final int initialUserIndex;
 
+  /// Trivias opcionales para mostrar integradas con las historias
+  final List<Trivia>? trivias;
+
+  /// Si se especifica, comenzar mostrando esta trivia
+  final int? initialTriviaIndex;
+
   const StoryViewerScreen({
     super.key,
     required this.allUserStories,
     required this.initialUserIndex,
+    this.trivias,
+    this.initialTriviaIndex,
   });
 
   @override
@@ -48,7 +62,16 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
 
   final AdService _adService = AdService();
   final MoodPollService _moodPollService = MoodPollService();
+  final TriviaCreationService _triviaCreationService = TriviaCreationService();
   final Duration _storyDuration = Duration(seconds: 5);
+
+  // ✅ Estado de trivias integradas
+  // Mapa de triviaId -> TriviaViewerState (preview, playing, results)
+  final Map<String, TriviaViewerState> _triviaStates = {};
+  // Mapa de triviaId -> TriviaResponse? (respuestas del usuario actual)
+  final Map<String, TriviaResponse?> _triviaResponses = {};
+  // Lista unificada de contenido (UserContent con ViewerItem)
+  late List<UserContent> _userContentList;
 
   // Native Ad pre-cargado para mostrar entre historias
   NativeAd? _nativeAd;
@@ -159,12 +182,228 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     return true;
   }
 
+  /// Construir lista unificada de contenido (stories + trivias por usuario)
+  void _buildUserContentList() {
+    final trivias = widget.trivias ?? [];
+
+    if (trivias.isEmpty) {
+      // Sin trivias, usar UserStories directamente
+      _userContentList = _allUserStories
+          .map((us) => UserContent.fromUserStories(us))
+          .toList();
+    } else {
+      // Con trivias, integrarlas por usuario
+      _userContentList = _allUserStories
+          .map((us) => UserContent.fromUserStoriesAndTrivias(us, trivias))
+          .toList();
+
+      // Agregar trivias de usuarios que no tienen stories (solo trivias)
+      final usersWithStories = _allUserStories.map((us) => us.userId).toSet();
+      final triviasWithoutStories = trivias
+          .where((t) => !usersWithStories.contains(t.creatorId))
+          .toList();
+
+      // Agrupar por creador
+      final triviasByCreator = <String, List<Trivia>>{};
+      for (final trivia in triviasWithoutStories) {
+        triviasByCreator.putIfAbsent(trivia.creatorId, () => []).add(trivia);
+      }
+
+      // Crear UserContent para cada creador sin stories
+      for (final entry in triviasByCreator.entries) {
+        final firstTrivia = entry.value.first;
+        _userContentList.add(UserContent(
+          oderId: firstTrivia.creatorId,
+          oderName: firstTrivia.creatorName,
+          oderPhotoURL: firstTrivia.creatorPhotoURL,
+          items: entry.value.map((t) => ViewerItem.trivia(t)).toList(),
+          hasUnviewed: entry.value.any((t) => t.isActive),
+        ));
+      }
+    }
+
+    // Inicializar estados de trivias en preview
+    for (final content in _userContentList) {
+      for (final item in content.items) {
+        if (item.isTrivia) {
+          _triviaStates[item.trivia!.id] = TriviaViewerState.preview;
+        }
+      }
+    }
+  }
+
+  /// Cargar respuestas del usuario actual para todas las trivias
+  Future<void> _loadTriviaResponses() async {
+    final currentUserId = _controller.currentUserId;
+    if (currentUserId == null) return;
+
+    final triviaIds = <String>[];
+    for (final content in _userContentList) {
+      for (final item in content.items) {
+        if (item.isTrivia) {
+          triviaIds.add(item.trivia!.id);
+        }
+      }
+    }
+
+    // Cargar respuestas en paralelo
+    final futures = triviaIds.map((triviaId) async {
+      try {
+        final response = await TriviaResponse.getByUserAndTrivia(currentUserId, triviaId);
+        return MapEntry(triviaId, response);
+      } catch (_) {
+        return MapEntry(triviaId, null);
+      }
+    });
+
+    final results = await Future.wait(futures);
+
+    if (!mounted) return;
+
+    setState(() {
+      for (final entry in results) {
+        _triviaResponses[entry.key] = entry.value;
+      }
+    });
+  }
+
+  /// Obtener el ViewerItem actual
+  ViewerItem? _getCurrentItem() {
+    if (_currentUserIndex >= _userContentList.length) return null;
+    final content = _userContentList[_currentUserIndex];
+    if (_currentStoryIndex >= content.items.length) return null;
+    return content.items[_currentStoryIndex];
+  }
+
+  /// Verificar si el item actual es una trivia
+  bool _isCurrentItemTrivia() {
+    return _getCurrentItem()?.isTrivia ?? false;
+  }
+
+  /// Obtener la historia actual (o null si es trivia/ad)
+  Story? _getCurrentStory() {
+    final item = _getCurrentItem();
+    if (item != null && item.isStory) {
+      return item.story;
+    }
+    // Fallback legacy
+    if (_allUserStories.isNotEmpty && _currentUserIndex < _allUserStories.length) {
+      final userStories = _allUserStories[_currentUserIndex];
+      final stories = _getStoriesForUser(userStories);
+      if (stories.isNotEmpty && _currentStoryIndex < stories.length) {
+        return stories[_currentStoryIndex];
+      }
+    }
+    return null;
+  }
+
+  /// Obtener el userId del contenido actual
+  String? _getCurrentStoryUserId() {
+    if (_userContentList.isNotEmpty && _currentUserIndex < _userContentList.length) {
+      return _userContentList[_currentUserIndex].oderId;
+    }
+    if (_allUserStories.isNotEmpty && _currentUserIndex < _allUserStories.length) {
+      return _allUserStories[_currentUserIndex].userId;
+    }
+    return null;
+  }
+
+  /// Obtener el estado de la trivia actual
+  TriviaViewerState? _getCurrentTriviaState() {
+    final item = _getCurrentItem();
+    if (item == null || !item.isTrivia) return null;
+    return _triviaStates[item.trivia!.id];
+  }
+
+  /// Verificar si la trivia actual está en modo playing
+  bool _isTriviaPlaying() {
+    return _getCurrentTriviaState() == TriviaViewerState.playing;
+  }
+
+  /// Duración del item actual (5s para stories, sin timer para trivias)
+  Duration _getCurrentItemDuration() {
+    final item = _getCurrentItem();
+    if (item == null) return _storyDuration;
+    // Las trivias no tienen auto-avance - el usuario debe interactuar manualmente
+    if (item.isTrivia) {
+      return Duration.zero;
+    }
+    return _storyDuration;
+  }
+
+  /// Llamado cuando el usuario toca "Jugar" en una trivia
+  void _onTriviaPlay(Trivia trivia) async {
+    // Pausar timer cuando inicia el juego
+    _pauseStoryTimer();
+
+    // Navegar a la pantalla de juego
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => TriviaPlayScreen(triviaId: trivia.id),
+      ),
+    );
+
+    // Cuando regresa (sea porque terminó o salió), actualizar estado y continuar
+    if (mounted) {
+      // Recargar la respuesta del usuario para esta trivia
+      final currentUserId = _controller.currentUserId;
+      if (currentUserId != null) {
+        final response = await TriviaResponse.getByUserAndTrivia(currentUserId, trivia.id);
+        setState(() {
+          _triviaResponses[trivia.id] = response;
+          // Solo cambiar a results si realmente respondió
+          if (response != null && response.status != ResponseStatus.inProgress) {
+            _triviaStates[trivia.id] = TriviaViewerState.results;
+          }
+          _isCurrentStoryLoaded = true;
+        });
+      } else {
+        setState(() {
+          _isCurrentStoryLoaded = true;
+        });
+      }
+      _startStoryTimer();
+    }
+  }
+
+  /// Llamado cuando el usuario quiere ver resultados de una trivia
+  void _onTriviaViewResults(Trivia trivia) async {
+    // Pausar timer mientras ve resultados
+    _pauseStoryTimer();
+
+    final isCreator = _controller.currentUserId == trivia.creatorId;
+
+    // Navegar a la pantalla de resultados
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => TriviaResultsScreen(
+          triviaId: trivia.id,
+          isCreator: isCreator,
+        ),
+      ),
+    );
+
+    // Cuando regresa, reanudar timer
+    if (mounted) {
+      setState(() {
+        _triviaStates[trivia.id] = TriviaViewerState.results;
+        _isCurrentStoryLoaded = true;
+      });
+      _startStoryTimer();
+    }
+  }
+
   @override
   void initState() {
     super.initState();
 
     // Inicializar copia local mutable de las historias
     _allUserStories = List.from(widget.allUserStories);
+
+    // ✅ Construir lista unificada de contenido (stories + trivias por usuario)
+    _buildUserContentList();
 
     // Inicializar el controller
     _controller = StoryViewerController(
@@ -173,20 +412,43 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     );
     _controller.initialize();
 
+    // ✅ Cargar respuestas de trivias del usuario actual
+    _loadTriviaResponses();
+
     // Suscribirse al cache stream para actualizaciones en tiempo real
     _subscribeToCacheChanges();
 
-    // Validate and clamp initial user index
-    _currentUserIndex = widget.initialUserIndex.clamp(0, _allUserStories.length - 1);
+    // Determinar índice inicial basado en si se abre desde trivia o historia
+    int initialUserIdx = widget.initialUserIndex;
+    int initialItemIdx = 0;
 
-    // Calcular el índice de la primera historia NO vista del grupo actual
-    final currentUserStories = _allUserStories[_currentUserIndex];
-    final stories = _getStoriesForUser(currentUserStories);
-    final initialStoryIndex = stories.isNotEmpty ? _getInitialStoryIndex(stories) : 0;
+    if (widget.initialTriviaIndex != null && widget.trivias != null) {
+      // Si se abre desde una trivia, buscar el UserContent y item correspondiente
+      final trivia = widget.trivias![widget.initialTriviaIndex!];
+      for (int i = 0; i < _userContentList.length; i++) {
+        final content = _userContentList[i];
+        for (int j = 0; j < content.items.length; j++) {
+          if (content.items[j].isTrivia && content.items[j].trivia?.id == trivia.id) {
+            initialUserIdx = i;
+            initialItemIdx = j;
+            break;
+          }
+        }
+      }
+    } else {
+      // Validate and clamp initial user index
+      initialUserIdx = widget.initialUserIndex.clamp(0, _allUserStories.length - 1);
 
-    _currentStoryIndex = initialStoryIndex;
+      // Calcular el índice de la primera historia NO vista del grupo actual
+      final currentUserStories = _allUserStories[initialUserIdx];
+      final stories = _getStoriesForUser(currentUserStories);
+      initialItemIdx = stories.isNotEmpty ? _getInitialStoryIndex(stories) : 0;
+    }
+
+    _currentUserIndex = initialUserIdx;
+    _currentStoryIndex = initialItemIdx;
     _userPageController = PageController(initialPage: _currentUserIndex);
-    _storyPageController = PageController(initialPage: initialStoryIndex);
+    _storyPageController = PageController(initialPage: initialItemIdx);
     _progressController = AnimationController(
       vsync: this,
       duration: _storyDuration,
@@ -301,9 +563,16 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
   }
 
   void _startStoryTimer() {
-    // Solo iniciar si la historia actual está cargada
+    // Solo iniciar si el contenido actual está cargado
     if (!_isCurrentStoryLoaded) {
       _controller.logStoryNotLoaded();
+      return;
+    }
+
+    // ✅ Si es una trivia en modo playing, no iniciar timer
+    if (_isTriviaPlaying()) {
+      _storyTimer?.cancel();
+      _progressController.reset();
       return;
     }
 
@@ -314,14 +583,23 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     // Esto asegura que siempre empiece desde 0
     _progressController.reset();
 
+    // Obtener duración del item actual
+    final duration = _getCurrentItemDuration();
+    if (duration == Duration.zero) {
+      return; // No timer para trivias - usuario debe interactuar manualmente
+    }
+
+    // Actualizar duración del progress controller
+    _progressController.duration = duration;
+
     // Esperar un frame para asegurar que el reset visual se complete
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && _isCurrentStoryLoaded) {
+      if (mounted && _isCurrentStoryLoaded && !_isTriviaPlaying()) {
         // Iniciar animación desde 0
         _progressController.forward(from: 0.0);
 
         _storyTimer?.cancel();
-        _storyTimer = Timer(_storyDuration, () {
+        _storyTimer = Timer(duration, () {
           _nextStory();
         });
       }
@@ -428,12 +706,23 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
   }
 
   void _nextStory() {
-    final currentUserStories = _allUserStories[_currentUserIndex];
-    final stories = _getStoriesForUser(currentUserStories);
+    // ✅ Usar modelo unificado si está disponible
+    final totalItems = _userContentList.isNotEmpty && _currentUserIndex < _userContentList.length
+        ? _userContentList[_currentUserIndex].items.length
+        : (_allUserStories.isNotEmpty && _currentUserIndex < _allUserStories.length
+            ? _getStoriesForUser(_allUserStories[_currentUserIndex]).length
+            : 0);
+
+    if (totalItems == 0) {
+      _nextUser();
+      return;
+    }
 
     // CRÍTICO: Pausar el video actual antes de cambiar de historia
-    final currentStory = stories[_currentStoryIndex];
-    if (currentStory.mediaType == 'video' && _videoControllers.containsKey(currentStory.id)) {
+    final currentStory = _getCurrentStory();
+    if (currentStory != null &&
+        currentStory.mediaType == 'video' &&
+        _videoControllers.containsKey(currentStory.id)) {
       _videoControllers[currentStory.id]?.pause();
       _controller.logVideoPaused(currentStory.id);
     }
@@ -442,11 +731,11 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     _storyTimer?.cancel();
     _progressController.reset();
 
-    if (_currentStoryIndex < stories.length - 1) {
-      // Siguiente historia del mismo usuario
+    if (_currentStoryIndex < totalItems - 1) {
+      // Siguiente item del mismo usuario
       setState(() {
         _currentStoryIndex++;
-        _isCurrentStoryLoaded = false; // Reset para la nueva historia
+        _isCurrentStoryLoaded = false; // Reset para el nuevo item
       });
       _storyPageController.nextPage(
         duration: Duration(milliseconds: 300),
@@ -488,7 +777,12 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     _storyTimer?.cancel();
     _progressController.reset();
 
-    if (_currentUserIndex < _allUserStories.length - 1) {
+    // ✅ Usar modelo unificado si está disponible
+    final totalUsers = _userContentList.isNotEmpty
+        ? _userContentList.length
+        : _allUserStories.length;
+
+    if (_currentUserIndex < totalUsers - 1) {
       // Incrementar contador de grupos de historias visualizados
       _controller.nextUser();
 
@@ -534,10 +828,18 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       _isProgrammaticNavigation = true;
       setState(() {
         _currentUserIndex++;
-        // Calcular índice inicial de la primera historia no vista del nuevo grupo
-        final stories = _getStoriesForUser(_allUserStories[_currentUserIndex]);
-        _currentStoryIndex = _getInitialStoryIndex(stories);
-        _isCurrentStoryLoaded = false; // Reset para la nueva historia
+        // ✅ Calcular índice inicial usando modelo unificado
+        if (_userContentList.isNotEmpty && _currentUserIndex < _userContentList.length) {
+          // En modo unificado, empezar desde el primer item
+          _currentStoryIndex = 0;
+        } else if (_allUserStories.isNotEmpty && _currentUserIndex < _allUserStories.length) {
+          // Modo legacy: buscar primera historia no vista
+          final stories = _getStoriesForUser(_allUserStories[_currentUserIndex]);
+          _currentStoryIndex = _getInitialStoryIndex(stories);
+        } else {
+          _currentStoryIndex = 0;
+        }
+        _isCurrentStoryLoaded = false; // Reset para el nuevo item
       });
       // ✅ FIX: Resetear el PageController de historias al índice correcto
       // Esto evita que se muestre la misma historia repetida
@@ -607,10 +909,18 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       _isProgrammaticNavigation = true;
       setState(() {
         _currentUserIndex--;
-        // Calcular índice inicial de la primera historia no vista del nuevo grupo
-        final stories = _getStoriesForUser(_allUserStories[_currentUserIndex]);
-        _currentStoryIndex = _getInitialStoryIndex(stories);
-        _isCurrentStoryLoaded = false; // Reset para la nueva historia
+        // ✅ Calcular índice inicial usando modelo unificado
+        if (_userContentList.isNotEmpty && _currentUserIndex < _userContentList.length) {
+          // En modo unificado, empezar desde el primer item
+          _currentStoryIndex = 0;
+        } else if (_allUserStories.isNotEmpty && _currentUserIndex < _allUserStories.length) {
+          // Modo legacy: buscar primera historia no vista
+          final stories = _getStoriesForUser(_allUserStories[_currentUserIndex]);
+          _currentStoryIndex = _getInitialStoryIndex(stories);
+        } else {
+          _currentStoryIndex = 0;
+        }
+        _isCurrentStoryLoaded = false; // Reset para el nuevo item
       });
       // ✅ FIX: Resetear el PageController de historias al índice correcto
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -632,8 +942,27 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
   }
 
   void _markCurrentStoryAsViewed() {
+    // ✅ Usar el modelo unificado si está disponible
+    final item = _getCurrentItem();
+    if (item != null && item.isStory && item.story != null) {
+      _controller.markStoryAsViewed(item.story!.id);
+      return;
+    }
+
+    // Trivias no se marcan como "vistas" de la misma manera
+    if (item != null && item.isTrivia) {
+      return; // Las trivias tienen su propio tracking
+    }
+
+    // Fallback al método legacy si no hay userContentList
+    if (_allUserStories.isEmpty || _currentUserIndex >= _allUserStories.length) {
+      return;
+    }
     final currentUserStories = _allUserStories[_currentUserIndex];
     final stories = _getStoriesForUser(currentUserStories);
+    if (stories.isEmpty || _currentStoryIndex >= stories.length) {
+      return;
+    }
     final currentStory = stories[_currentStoryIndex];
     _controller.markStoryAsViewed(currentStory.id);
   }
@@ -688,6 +1017,88 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Error al eliminar la historia: $e'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 3),
+          ),
+        );
+        _resumeStoryTimer();
+      }
+    }
+  }
+
+  /// Método unificado para eliminar el item actual (story o trivia)
+  Future<void> _deleteCurrentItem() async {
+    final item = _getCurrentItem();
+    if (item == null) {
+      // Fallback: usar método legacy para historias
+      await _deleteCurrentStory();
+      return;
+    }
+
+    if (item.isTrivia) {
+      await _deleteCurrentTrivia();
+    } else if (item.isStory) {
+      await _deleteCurrentStory();
+    }
+  }
+
+  /// Eliminar la trivia actual (solo si el usuario es el creador)
+  Future<void> _deleteCurrentTrivia() async {
+    final item = _getCurrentItem();
+    if (item == null || !item.isTrivia) return;
+
+    final trivia = item.trivia!;
+
+    // Verificar que el usuario es el creador
+    if (trivia.creatorId != _controller.currentUserId) return;
+
+    // Pausar el timer mientras se muestra el diálogo
+    _pauseStoryTimer();
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Eliminar trivia'),
+        content: Text('¿Estás seguro de que deseas eliminar esta trivia? Se perderán todas las respuestas.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text('Cancelar'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) {
+      _resumeStoryTimer();
+      return;
+    }
+
+    try {
+      // Eliminar la trivia
+      await _triviaCreationService.deleteTrivia(trivia.id);
+
+      if (mounted) {
+        // Verificar si hay más items para este usuario
+        final content = _userContentList[_currentUserIndex];
+        if (content.items.length == 1) {
+          // Era el único item, cerrar el visor
+          Navigator.pop(context);
+        } else {
+          // Hay más items, ir al siguiente
+          _nextStory();
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al eliminar la trivia: $e'),
             backgroundColor: Colors.red,
             duration: Duration(seconds: 3),
           ),
@@ -1116,38 +1527,67 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
 
   @override
   Widget build(BuildContext context) {
+    // ✅ Usar userContentList para validación cuando está disponible
+    final hasUnifiedContent = _userContentList.isNotEmpty;
+
     // Bounds check: ensure indices are valid
-    if (_allUserStories.isEmpty) {
-      // No stories to show, close viewer
+    if (!hasUnifiedContent && _allUserStories.isEmpty) {
+      // No content to show, close viewer
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) Navigator.pop(context);
       });
       return const Scaffold(backgroundColor: Colors.black);
     }
 
-    // Clamp _currentUserIndex to valid range
-    if (_currentUserIndex >= _allUserStories.length) {
-      _currentUserIndex = _allUserStories.length - 1;
-    }
-    if (_currentUserIndex < 0) {
-      _currentUserIndex = 0;
-    }
+    if (hasUnifiedContent) {
+      // Validar índices usando userContentList
+      if (_currentUserIndex >= _userContentList.length) {
+        _currentUserIndex = _userContentList.length - 1;
+      }
+      if (_currentUserIndex < 0) {
+        _currentUserIndex = 0;
+      }
 
-    // Validate _currentStoryIndex for current user
-    final currentUserStories = _allUserStories[_currentUserIndex];
-    final stories = _getStoriesForUser(currentUserStories);
-    if (stories.isEmpty) {
-      // User has no viewable stories, close viewer
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) Navigator.pop(context);
-      });
-      return const Scaffold(backgroundColor: Colors.black);
-    }
-    if (_currentStoryIndex >= stories.length) {
-      _currentStoryIndex = stories.length - 1;
-    }
-    if (_currentStoryIndex < 0) {
-      _currentStoryIndex = 0;
+      final currentContent = _userContentList[_currentUserIndex];
+      if (currentContent.items.isEmpty) {
+        // User has no viewable content, close viewer
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) Navigator.pop(context);
+        });
+        return const Scaffold(backgroundColor: Colors.black);
+      }
+      if (_currentStoryIndex >= currentContent.items.length) {
+        _currentStoryIndex = currentContent.items.length - 1;
+      }
+      if (_currentStoryIndex < 0) {
+        _currentStoryIndex = 0;
+      }
+    } else {
+      // Legacy: usar _allUserStories
+      // Clamp _currentUserIndex to valid range
+      if (_currentUserIndex >= _allUserStories.length) {
+        _currentUserIndex = _allUserStories.length - 1;
+      }
+      if (_currentUserIndex < 0) {
+        _currentUserIndex = 0;
+      }
+
+      // Validate _currentStoryIndex for current user
+      final currentUserStories = _allUserStories[_currentUserIndex];
+      final stories = _getStoriesForUser(currentUserStories);
+      if (stories.isEmpty) {
+        // User has no viewable stories, close viewer
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) Navigator.pop(context);
+        });
+        return const Scaffold(backgroundColor: Colors.black);
+      }
+      if (_currentStoryIndex >= stories.length) {
+        _currentStoryIndex = stories.length - 1;
+      }
+      if (_currentStoryIndex < 0) {
+        _currentStoryIndex = 0;
+      }
     }
 
     return Scaffold(
@@ -1290,7 +1730,16 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
               // Mostrar caption en overlay sobre el contenido
               showCaptionOverlay: true,
               // Si NO es historia propia, hay input de respuesta abajo
-              hasReplyInput: _allUserStories[_currentUserIndex].userId != _controller.currentUserId,
+              hasReplyInput: _allUserStories.isNotEmpty && _currentUserIndex < _allUserStories.length
+                  ? _allUserStories[_currentUserIndex].userId != _controller.currentUserId
+                  : false,
+              // ✅ Parámetros de trivias integradas
+              userContentList: _userContentList,
+              triviaStates: _triviaStates,
+              triviaResponses: _triviaResponses,
+              onTriviaPlay: _onTriviaPlay,
+              onTriviaViewResults: _onTriviaViewResults,
+              currentUserId: _controller.currentUserId,
             ),
 
             // Overlay con controles
@@ -1301,7 +1750,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
               progressController: _progressController,
               controller: _controller,
               onClose: () => Navigator.pop(context),
-              onDelete: _deleteCurrentStory,
+              onDelete: _deleteCurrentItem,
               onDownload: _downloadCurrentStory,
               onShare: _shareCurrentStory,
               replyController: _replyController,
@@ -1311,18 +1760,21 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
               formatStoryTime: _formatStoryTime,
               onPauseTimer: _onBottomSheetOpened,
               onResumeTimer: _onBottomSheetClosed,
+              // ✅ Pasar userContentList para soporte de trivias
+              userContentList: _userContentList,
             ),
 
-            // Campo de respuesta (con botón de like)
-            StoryReplySection(
-              currentUserId: _controller.currentUserId ?? '',
-              storyUserId: _allUserStories[_currentUserIndex].userId,
-              replyController: _replyController,
-              replyFocusNode: _replyFocusNode,
-              onSendReply: _sendReply,
-              isLiked: _isStoryLiked(_getStoriesForUser(_allUserStories[_currentUserIndex])[_currentStoryIndex]),
-              onLikeToggle: _toggleLike,
-            ),
+            // Campo de respuesta (con botón de like) - Solo mostrar para historias
+            if (_getCurrentStoryUserId() != null && _getCurrentStory() != null)
+              StoryReplySection(
+                currentUserId: _controller.currentUserId ?? '',
+                storyUserId: _getCurrentStoryUserId()!,
+                replyController: _replyController,
+                replyFocusNode: _replyFocusNode,
+                onSendReply: _sendReply,
+                isLiked: _isStoryLiked(_getCurrentStory()!),
+                onLikeToggle: _toggleLike,
+              ),
           ],
         ),
           ),

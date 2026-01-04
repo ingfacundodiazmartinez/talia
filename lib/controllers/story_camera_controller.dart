@@ -20,6 +20,7 @@ import '../services/face_detection_service.dart';
 import '../models/character.dart';
 import '../widgets/character_selector_dialog.dart';
 import '../utils/release_logger.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 /// Controller para manejar la lógica de la cámara de historias
 ///
@@ -1155,6 +1156,9 @@ class StoryCameraController {
       // Give the dialog a moment to render
       await Future.delayed(const Duration(milliseconds: 50));
 
+      // Mantener pantalla encendida durante la transformación
+      await WakelockPlus.enable();
+
       _setLoading(true);
 
       // Subir imagen a Firebase Storage (con progreso)
@@ -1225,6 +1229,8 @@ class StoryCameraController {
         completer.complete(null);
       }
     } finally {
+      // Desactivar wakelock
+      await WakelockPlus.disable();
       // Solo cerrar modal en caso de error - en caso de éxito se mantiene para mostrar confirmación
       if (hasError) {
         _forceCloseProgressDialog();
@@ -1315,6 +1321,9 @@ class StoryCameraController {
       // Give the dialog a moment to render
       await Future.delayed(const Duration(milliseconds: 50));
 
+      // Mantener pantalla encendida durante la transformación
+      await WakelockPlus.enable();
+
       _setLoading(true);
 
       // Subir imagen a Firebase Storage
@@ -1369,6 +1378,14 @@ class StoryCameraController {
             ? '¡Transformación completada!'
             : '¡Transformación completada!\nTe quedan ${usage['remaining']} usos gratuitos este mes.';
         progressKey.currentState!.showSuccess(successMessage);
+        // El usuario debe clickear "Continuar" para completar el completer via onContinue callback
+      } else {
+        // ✅ FIX: El diálogo ya no está disponible, completar el completer directamente
+        ReleaseLogger.log('⚠️ Diálogo de progreso no disponible, completando directamente', tag: 'StoryCameraController');
+        _forceCloseProgressDialog();
+        if (!completer.isCompleted) {
+          completer.complete(transformedFilePath);
+        }
       }
 
     } catch (e) {
@@ -1380,6 +1397,8 @@ class StoryCameraController {
         completer.complete(null);
       }
     } finally {
+      // Desactivar wakelock
+      await WakelockPlus.disable();
       if (hasError) {
         _forceCloseProgressDialog();
       }

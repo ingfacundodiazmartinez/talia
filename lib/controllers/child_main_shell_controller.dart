@@ -40,6 +40,7 @@ class ChildMainShellController {
   StreamSubscription? _storyNotificationSubscription;
   StreamSubscription? _contactApprovedNotificationSubscription;
   StreamSubscription? _groupMembershipApprovedNotificationSubscription;
+  StreamSubscription? _triviaNotificationSubscription;
   StreamSubscription? _roleChangeSubscription;
   StreamSubscription? _appStateSubscription;
 
@@ -48,6 +49,7 @@ class ChildMainShellController {
   Function(Map<String, dynamic>)? onStoryNotificationTap;
   Function(Map<String, dynamic>)? onContactApprovedNotificationTap;
   Function(Map<String, dynamic>)? onGroupMembershipApprovedNotificationTap;
+  Function(Map<String, dynamic>)? onTriviaNotificationTap;
 
   /// Constructor
   ChildMainShellController({
@@ -211,6 +213,14 @@ class ChildMainShellController {
         onGroupMembershipApprovedNotificationTap?.call(data);
       });
 
+      // Trivias
+      _triviaNotificationSubscription = _notificationService
+          .triviaNotificationTapStream
+          .listen((data) {
+        ReleaseLogger.log('Trivia notification tapped: $data', tag: 'ChildMainShell');
+        onTriviaNotificationTap?.call(data);
+      });
+
       ReleaseLogger.log('Listeners de notificaciones configurados', tag: 'ChildMainShell');
     } catch (e) {
       ReleaseLogger.error('Error configurando listeners de notificaciones: $e', tag: 'ChildMainShell');
@@ -318,6 +328,7 @@ class ChildMainShellController {
     _storyNotificationSubscription?.cancel();
     _contactApprovedNotificationSubscription?.cancel();
     _groupMembershipApprovedNotificationSubscription?.cancel();
+    _triviaNotificationSubscription?.cancel();
     _roleChangeSubscription?.cancel();
     _appStateSubscription?.cancel();
     _childController?.dispose();

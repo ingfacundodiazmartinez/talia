@@ -1,29 +1,19 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
-import 'package:cloud_firestore/cloud_firestore.dart';
-import '../../../models/parent.dart';
 import '../../../widgets/contacts/contacts_permission_banner.dart';
-import '../../../models/child.dart';
-import '../../../models/user.dart';
-import '../../../services/user_role_service.dart';
-import '../../../services/contact_alias_service.dart';
-import '../../../services/auto_approval_service.dart';
-import '../../../services/block_service.dart';
-import '../../../services/contacts_sync_service.dart';
-import '../../../notification_service.dart';
 import '../../../theme_service.dart';
 import '../../../link_parent_child.dart';
 import '../../add_contact_screen.dart';
-import '../../../controllers/parent_dashboard_controller.dart';
+import '../../../controllers/parent_contacts_controller.dart';
 import 'widgets/contact_card_widget.dart';
-import 'widgets/filterable_contact_item.dart';
 import 'widgets/approval_requests_badge.dart';
 
 /// Pantalla de gestión de contactos del padre
 ///
 /// Muestra:
-/// - Lista de hijos vinculados
-/// - Lista de otros contactos
+/// - Lista de hijos vinculados (ordenados alfabéticamente)
+/// - Lista de otros contactos (ordenados alfabéticamente)
 /// - Buscador de contactos
 /// - Botón para agregar contactos
 /// - Botón para vincular hijos
@@ -37,18 +27,16 @@ class ParentContactsScreen extends StatefulWidget {
 class _ParentContactsScreenState extends State<ParentContactsScreen>
     with AutomaticKeepAliveClientMixin {
   final firebase_auth.FirebaseAuth _auth = firebase_auth.FirebaseAuth.instance;
-  late ParentDashboardController _controller;
-  final ContactAliasService _aliasService = ContactAliasService();
-  final BlockService _blockService = BlockService();
-  final ContactsSyncService _contactsSyncService = ContactsSyncService();
-  final ValueNotifier<String> _contactsSearchQuery = ValueNotifier('');
-  final TextEditingController _contactsSearchController = TextEditingController();
-
-  // Cache local para evitar rebuilds innecesarios
-  List<String>? _cachedLinkedChildren;
+  late ParentContactsController _controller;
+  final TextEditingController _searchController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
 
   // Estado de sincronización
   bool _isSyncing = false;
+
+  // Tracking de visibilidad para batch update
+  final Set<String> _visibleUserIds = {};
+  Timer? _visibilityTimer;
 
   @override
   bool get wantKeepAlive => true;
@@ -56,24 +44,52 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
   @override
   void initState() {
     super.initState();
-    _controller = ParentDashboardController(
-      parentId: _auth.currentUser!.uid,
-      context: context,
-      notificationService: NotificationService(),
-      autoApprovalService: AutoApprovalService(),
-    );
+    final currentUserId = _auth.currentUser?.uid;
+    if (currentUserId != null) {
+      _controller = ParentContactsController(parentId: currentUserId);
+      _controller.initialize();
+    }
+    _scrollController.addListener(_onScroll);
   }
 
-  /// Sincronizar contactos manualmente (forzado)
+  @override
+  void dispose() {
+    _visibilityTimer?.cancel();
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
+    _searchController.dispose();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    _resetVisibilityTimer();
+  }
+
+  /// Trackear un contacto como visible
+  void _trackVisibleContact(String userId) {
+    _visibleUserIds.add(userId);
+    _resetVisibilityTimer();
+  }
+
+  /// Resetear timer - después de 1s sin actividad, batch update
+  void _resetVisibilityTimer() {
+    _visibilityTimer?.cancel();
+    _visibilityTimer = Timer(const Duration(seconds: 1), () {
+      if (_visibleUserIds.isNotEmpty && mounted) {
+        _controller.batchUpdateVisibleUsers(Set.from(_visibleUserIds));
+        _visibleUserIds.clear();
+      }
+    });
+  }
+
   Future<void> _syncContacts() async {
     if (_isSyncing) return;
 
-    setState(() {
-      _isSyncing = true;
-    });
+    setState(() => _isSyncing = true);
 
     try {
-      await _contactsSyncService.syncContacts(force: true);
+      await _controller.syncContacts();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -86,26 +102,16 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
       }
     } finally {
       if (mounted) {
-        setState(() {
-          _isSyncing = false;
-        });
+        setState(() => _isSyncing = false);
       }
     }
   }
 
   @override
-  void dispose() {
-    _contactsSearchController.dispose();
-    _contactsSearchQuery.dispose();
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    super.build(context); // Necesario para AutomaticKeepAliveClientMixin
-    final userRoleService = UserRoleService();
+    super.build(context);
     final currentUserId = _auth.currentUser?.uid;
+    final colorScheme = Theme.of(context).colorScheme;
 
     return Scaffold(
       body: Container(
@@ -122,78 +128,14 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
         child: SafeArea(
           child: Column(
             children: [
-              // Header con título
-              Padding(
-                padding: EdgeInsets.all(20),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Mis Contactos',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 28,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        SizedBox(height: 4),
-                        Text(
-                          'Gestiona tus contactos',
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.8),
-                            fontSize: 14,
-                          ),
-                        ),
-                      ],
-                    ),
-                    Row(
-                      children: [
-                        // Botón de sincronizar contactos
-                        IconButton(
-                          icon: _isSyncing
-                              ? SizedBox(
-                                  width: 24,
-                                  height: 24,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white,
-                                  ),
-                                )
-                              : Icon(Icons.sync, color: Colors.white, size: 26),
-                          onPressed: _isSyncing ? null : _syncContacts,
-                          padding: EdgeInsets.all(8),
-                          tooltip: 'Sincronizar contactos',
-                        ),
-                        // Badge de solicitudes de aprobación pendientes
-                        ApprovalRequestsBadge(
-                          parentId: currentUserId ?? '',
-                          iconColor: Colors.white,
-                          iconSize: 26,
-                        ),
-                        // Botón de agregar contacto
-                        IconButton(
-                          icon: Icon(Icons.person_add, color: Colors.white, size: 26),
-                          onPressed: () {
-                            Navigator.of(context).push(
-                              MaterialPageRoute(builder: (context) => AddContactScreen()),
-                            );
-                          },
-                          padding: EdgeInsets.all(8),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
+              // Header
+              _buildHeader(currentUserId),
               SizedBox(height: 16),
               // Contenido
               Expanded(
                 child: Container(
                   decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.surface,
+                    color: colorScheme.surface,
                     borderRadius: BorderRadius.only(
                       topLeft: Radius.circular(30),
                       topRight: Radius.circular(30),
@@ -201,319 +143,13 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
                   ),
                   child: Column(
                     children: [
-                      // Buscador (estático, no se rebuildea)
-                      Padding(
-                        padding: EdgeInsets.all(16),
-                        child: TextField(
-                          key: ValueKey('contacts_search_field'),
-                          controller: _contactsSearchController,
-                          onChanged: (value) {
-                            _contactsSearchQuery.value = value.toLowerCase();
-                          },
-                          style: TextStyle(
-                            color: Theme.of(context).colorScheme.onSurface,
-                          ),
-                          decoration: InputDecoration(
-                            hintText: 'Buscar contactos...',
-                            hintStyle: TextStyle(
-                              color: Theme.of(context).colorScheme.onSurfaceVariant,
-                            ),
-                            prefixIcon: Icon(
-                              Icons.search,
-                              color: Theme.of(context).colorScheme.primary,
-                            ),
-                            suffixIcon: _contactsSearchController.text.isNotEmpty
-                                ? IconButton(
-                                    icon: Icon(Icons.clear, color: Colors.grey),
-                                    onPressed: () {
-                                      _contactsSearchController.clear();
-                                      _contactsSearchQuery.value = '';
-                                    },
-                                  )
-                                : null,
-                            filled: true,
-                            fillColor: context.customColors.searchBarBackground,
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide.none,
-                            ),
-                            contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                          ),
-                        ),
-                      ),
-                      // Banner de advertencia si no hay permiso de contactos
+                      _buildSearchBar(colorScheme),
                       ContactsPermissionBanner(
                         onRequestPermission: _syncContacts,
                         onPermissionChanged: _syncContacts,
                       ),
-                      // Lista de contactos (filtrable)
                       Expanded(
-                        child: FutureBuilder<List<String>>(
-                          future: userRoleService.getLinkedChildren(currentUserId!),
-                          builder: (context, childrenSnapshot) {
-                            // Actualizar cache cuando llegan datos
-                            if (childrenSnapshot.hasData) {
-                              _cachedLinkedChildren = childrenSnapshot.data;
-                            }
-
-                            // Solo mostrar loading si NO hay cache y estamos esperando
-                            if (childrenSnapshot.connectionState == ConnectionState.waiting &&
-                                _cachedLinkedChildren == null) {
-                              return Center(
-                                child: CircularProgressIndicator(
-                                  color: Theme.of(context).colorScheme.primary,
-                                ),
-                              );
-                            }
-
-                            final linkedChildren = childrenSnapshot.data ?? _cachedLinkedChildren ?? [];
-
-                            // Load contacts with users array format (using StreamBuilder for automatic caching)
-                            return StreamBuilder<List<String>>(
-                              stream: _blockService.getBlockedContactsStream(),
-                              builder: (context, blockedSnapshot) {
-                                final blockedContacts = blockedSnapshot.data ?? [];
-
-                                return StreamBuilder<QuerySnapshot>(
-                                  stream: Parent(id: currentUserId, name: '').watchAllContacts(),
-                                  builder: (context, contactsSnapshot) {
-                              if (contactsSnapshot.hasError) {
-                                return Center(
-                                  child: Text('Error: ${contactsSnapshot.error}'),
-                                );
-                              }
-
-                              // Solo mostrar loading si NO hay datos disponibles
-                              if (contactsSnapshot.connectionState == ConnectionState.waiting &&
-                                  !contactsSnapshot.hasData) {
-                                return Center(
-                                  child: CircularProgressIndicator(
-                                    color: Theme.of(context).colorScheme.primary,
-                                  ),
-                                );
-                              }
-
-                              final allContactDocs = contactsSnapshot.data?.docs ?? [];
-
-                              // Separar hijos y otros contactos
-                              final childrenContacts = <Widget>[];
-                              final otherContacts = <Widget>[];
-                              final processedUserIds = <String>{};
-
-                              for (var doc in allContactDocs) {
-                                final data = doc.data() as Map<String, dynamic>;
-
-                                // Extraer el otro usuario del array users
-                                final users = List<String>.from(data['users'] ?? []);
-                                final otherUserId = users.firstWhere(
-                                  (id) => id != currentUserId,
-                                  orElse: () => '',
-                                );
-
-                                // Filtrar usuarios bloqueados
-                                if (otherUserId.isEmpty ||
-                                    processedUserIds.contains(otherUserId) ||
-                                    blockedContacts.contains(otherUserId)) {
-                                  continue;
-                                }
-
-                                // IMPORTANTE: Solo mostrar contactos donde yo tengo al otro en mi agenda
-                                // Si discoveredBy está seteado y NO soy yo, no debo ver este contacto
-                                final discoveredBy = data['discoveredBy'] as String?;
-                                if (discoveredBy != null && discoveredBy != currentUserId) {
-                                  continue;
-                                }
-
-                                processedUserIds.add(otherUserId);
-                                final isChild = linkedChildren.contains(otherUserId);
-
-                                final widget = FutureBuilder<DocumentSnapshot?>(
-                                  future: User.getByIdSnapshot(otherUserId),
-                                  builder: (context, userSnapshot) {
-                                    if (!userSnapshot.hasData) return SizedBox();
-
-                                    final userData = userSnapshot.data!.data() as Map<String, dynamic>?;
-                                    final realName = userData?['name'] ?? 'Usuario';
-
-                                    return FutureBuilder<String>(
-                                      future: _aliasService.getDisplayName(otherUserId, realName),
-                                      builder: (context, aliasSnapshot) {
-                                        final displayName = aliasSnapshot.data ?? realName;
-                                        final child = userData != null ? Child.fromMap(otherUserId, userData) : null;
-
-                                        return FilterableContactItem(
-                                          searchQuery: _contactsSearchQuery,
-                                          realName: realName,
-                                          displayName: displayName,
-                                          child: ContactCardWidget(
-                                            currentUserId: currentUserId,
-                                            contactId: otherUserId,
-                                            displayName: displayName,
-                                            realName: realName,
-                                            age: child?.age ?? 0,
-                                            phone: userData?['phone'] as String?,
-                                            status: child?.isOnline == true ? 'En línea' : 'Desconectado',
-                                            statusColor: child?.isOnline == true ? Colors.green : Colors.grey,
-                                            isChild: isChild,
-                                            photoURL: child?.photoURL,
-                                            onUnlink: isChild ? () => _showUnlinkChildDialog(otherUserId, displayName) : null,
-                                          ),
-                                        );
-                                      },
-                                    );
-                                  },
-                                );
-
-                                if (isChild) {
-                                  childrenContacts.add(widget);
-                                } else {
-                                  otherContacts.add(widget);
-                                }
-                              }
-
-                              // Also add any linked children that don't have contact documents yet
-                              for (var childId in linkedChildren) {
-                                if (!processedUserIds.contains(childId) && !blockedContacts.contains(childId)) {
-                                  processedUserIds.add(childId);
-
-                                  final widget = FutureBuilder<DocumentSnapshot?>(
-                                    future: User.getByIdSnapshot(childId),
-                                    builder: (context, userSnapshot) {
-                                      if (!userSnapshot.hasData) return SizedBox();
-
-                                      final userData = userSnapshot.data!.data() as Map<String, dynamic>?;
-                                      final realName = userData?['name'] ?? 'Usuario';
-
-                                      return FutureBuilder<String>(
-                                        future: _aliasService.getDisplayName(childId, realName),
-                                        builder: (context, aliasSnapshot) {
-                                          final displayName = aliasSnapshot.data ?? realName;
-                                          final child = userData != null ? Child.fromMap(childId, userData) : null;
-
-                                          return FilterableContactItem(
-                                            searchQuery: _contactsSearchQuery,
-                                            realName: realName,
-                                            displayName: displayName,
-                                            child: ContactCardWidget(
-                                              currentUserId: currentUserId,
-                                              contactId: childId,
-                                              displayName: displayName,
-                                              realName: realName,
-                                              age: child?.age ?? 0,
-                                              phone: userData?['phone'] as String?,
-                                              status: child?.isOnline == true ? 'En línea' : 'Desconectado',
-                                              statusColor: child?.isOnline == true ? Colors.green : Colors.grey,
-                                              isChild: true,
-                                              photoURL: child?.photoURL,
-                                              onUnlink: () => _showUnlinkChildDialog(childId, displayName),
-                                            ),
-                                          );
-                                        },
-                                      );
-                                    },
-                                  );
-
-                                  childrenContacts.add(widget);
-                                }
-                              }
-
-                              if (childrenContacts.isEmpty && otherContacts.isEmpty) {
-                                return Center(
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(
-                                        Icons.people_outline,
-                                        size: 64,
-                                        color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
-                                      ),
-                                      SizedBox(height: 16),
-                                      Text(
-                                        'No tienes contactos aún',
-                                        style: TextStyle(
-                                          fontSize: 16,
-                                          color: Theme.of(context).colorScheme.onSurface,
-                                        ),
-                                      ),
-                                      SizedBox(height: 8),
-                                      Text(
-                                        'Agrega contactos o vincula un hijo',
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              }
-
-                                  return ListView(
-                                    padding: EdgeInsets.all(16),
-                                    children: [
-                                  if (childrenContacts.isNotEmpty) ...[
-                                    Padding(
-                                      padding: EdgeInsets.only(bottom: 12, left: 4),
-                                      child: Row(
-                                        children: [
-                                          Container(
-                                            padding: EdgeInsets.all(6),
-                                            decoration: BoxDecoration(
-                                              color: Colors.green.withValues(alpha: 0.1),
-                                              borderRadius: BorderRadius.circular(8),
-                                            ),
-                                            child: Icon(Icons.family_restroom, size: 16, color: Colors.green),
-                                          ),
-                                          SizedBox(width: 8),
-                                          Text(
-                                            'Hijos',
-                                            style: TextStyle(
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.w600,
-                                              color: Theme.of(context).colorScheme.onSurface,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    ...childrenContacts,
-                                    if (otherContacts.isNotEmpty) SizedBox(height: 24),
-                                  ],
-                                  if (otherContacts.isNotEmpty) ...[
-                                    Padding(
-                                      padding: EdgeInsets.only(bottom: 12, left: 4),
-                                      child: Row(
-                                        children: [
-                                          Container(
-                                            padding: EdgeInsets.all(6),
-                                            decoration: BoxDecoration(
-                                              color: Colors.blue.withValues(alpha: 0.1),
-                                              borderRadius: BorderRadius.circular(8),
-                                            ),
-                                            child: Icon(Icons.people, size: 16, color: Colors.blue),
-                                          ),
-                                          SizedBox(width: 8),
-                                          Text(
-                                            'Otros Contactos',
-                                            style: TextStyle(
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.w600,
-                                              color: Theme.of(context).colorScheme.onSurface,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    ...otherContacts,
-                                      ],
-                                    ],
-                                  );
-                                },
-                              );
-                              },
-                            );
-                          },
-                        ),
+                        child: _buildContactsList(colorScheme, currentUserId),
                       ),
                     ],
                   ),
@@ -531,6 +167,248 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
         },
         icon: Icon(Icons.link),
         label: Text('Vincular Hijo'),
+      ),
+    );
+  }
+
+  Widget _buildHeader(String? currentUserId) {
+    return Padding(
+      padding: EdgeInsets.all(20),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Mis Contactos',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              SizedBox(height: 4),
+              Text(
+                'Gestiona tus contactos',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.8),
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+          Row(
+            children: [
+              IconButton(
+                icon: _isSyncing
+                    ? SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : Icon(Icons.sync, color: Colors.white, size: 26),
+                onPressed: _isSyncing ? null : _syncContacts,
+                padding: EdgeInsets.all(8),
+                tooltip: 'Sincronizar contactos',
+              ),
+              ApprovalRequestsBadge(
+                parentId: currentUserId ?? '',
+                iconColor: Colors.white,
+                iconSize: 26,
+              ),
+              IconButton(
+                icon: Icon(Icons.person_add, color: Colors.white, size: 26),
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (context) => AddContactScreen()),
+                  );
+                },
+                padding: EdgeInsets.all(8),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSearchBar(ColorScheme colorScheme) {
+    return Padding(
+      padding: EdgeInsets.all(16),
+      child: TextField(
+        controller: _searchController,
+        onChanged: (value) {
+          _controller.setSearchQuery(value);
+        },
+        style: TextStyle(color: colorScheme.onSurface),
+        decoration: InputDecoration(
+          hintText: 'Buscar contactos...',
+          hintStyle: TextStyle(color: colorScheme.onSurfaceVariant),
+          prefixIcon: Icon(Icons.search, color: colorScheme.primary),
+          suffixIcon: _searchController.text.isNotEmpty
+              ? IconButton(
+                  icon: Icon(Icons.clear, color: Colors.grey),
+                  onPressed: () {
+                    _searchController.clear();
+                    _controller.setSearchQuery('');
+                  },
+                )
+              : null,
+          filled: true,
+          fillColor: context.customColors.searchBarBackground,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide.none,
+          ),
+          contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildContactsList(ColorScheme colorScheme, String? currentUserId) {
+    if (currentUserId == null) {
+      return Center(child: Text('Usuario no autenticado'));
+    }
+
+    return StreamBuilder<({List<ProcessedContact> children, List<ProcessedContact> others})>(
+      stream: _controller.separatedContactsStream,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return Center(child: Text('Error: ${snapshot.error}'));
+        }
+
+        if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
+          return Center(
+            child: CircularProgressIndicator(color: colorScheme.primary),
+          );
+        }
+
+        final children = snapshot.data?.children ?? [];
+        final others = snapshot.data?.others ?? [];
+
+        if (children.isEmpty && others.isEmpty) {
+          return _buildEmptyState(colorScheme);
+        }
+
+        return ListView(
+          controller: _scrollController,
+          padding: EdgeInsets.all(16),
+          children: [
+            if (children.isNotEmpty) ...[
+              _buildSectionHeader(
+                'Hijos',
+                Icons.family_restroom,
+                Colors.green,
+                colorScheme,
+              ),
+              ...children.map((c) => _buildContactCard(c, currentUserId, colorScheme)),
+              if (others.isNotEmpty) SizedBox(height: 24),
+            ],
+            if (others.isNotEmpty) ...[
+              _buildSectionHeader(
+                'Otros Contactos',
+                Icons.people,
+                Colors.blue,
+                colorScheme,
+              ),
+              ...others.map((c) => _buildContactCard(c, currentUserId, colorScheme)),
+            ],
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildSectionHeader(
+    String title,
+    IconData icon,
+    Color color,
+    ColorScheme colorScheme,
+  ) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: 12, left: 4),
+      child: Row(
+        children: [
+          Container(
+            padding: EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, size: 16, color: color),
+          ),
+          SizedBox(width: 8),
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: colorScheme.onSurface,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildContactCard(
+    ProcessedContact contact,
+    String currentUserId,
+    ColorScheme colorScheme,
+  ) {
+    // Trackear como visible para batch update
+    _trackVisibleContact(contact.oderId);
+
+    return ContactCardWidget(
+      key: ValueKey('contact_${contact.oderId}'),
+      currentUserId: currentUserId,
+      contactId: contact.oderId,
+      dbName: contact.dbName,
+      alias: contact.alias,
+      age: contact.age ?? 0,
+      phone: contact.phone,
+      status: contact.isOnline ? 'En línea' : 'Desconectado',
+      statusColor: contact.isOnline ? Colors.green : Colors.grey,
+      isChild: contact.isChild,
+      photoURL: contact.photoURL,
+      onUnlink: contact.isChild
+          ? () => _showUnlinkChildDialog(contact.oderId, contact.dbName)
+          : null,
+    );
+  }
+
+  Widget _buildEmptyState(ColorScheme colorScheme) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.people_outline,
+            size: 64,
+            color: colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+          ),
+          SizedBox(height: 16),
+          Text(
+            'No tienes contactos aún',
+            style: TextStyle(
+              fontSize: 16,
+              color: colorScheme.onSurface,
+            ),
+          ),
+          SizedBox(height: 8),
+          Text(
+            'Agrega contactos o vincula un hijo',
+            style: TextStyle(
+              fontSize: 14,
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -558,14 +436,14 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
           ),
           ElevatedButton(
             onPressed: () async {
+              final scaffoldMessenger = ScaffoldMessenger.of(context);
               Navigator.pop(context);
 
               try {
-                // Desvincular usando el controller
                 await _controller.unlinkChild(childId);
               } catch (e) {
                 if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
+                  scaffoldMessenger.showSnackBar(
                     SnackBar(
                       content: Text('Error al desvincular: $e'),
                       backgroundColor: Colors.red,
