@@ -786,8 +786,9 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       // Incrementar contador de grupos de historias visualizados
       _controller.nextUser();
 
-      // Verificar si debemos mostrar un ad
-      final shouldShowAd = _controller.shouldShowAd();
+      // Verificar si debemos mostrar un ad (NO durante trivia)
+      final isInTriviaMode = _isCurrentItemTrivia() || _isTriviaPlaying();
+      final shouldShowAd = !isInTriviaMode && _controller.shouldShowAd();
 
       if (shouldShowAd && _isNativeAdLoaded && _nativeAd != null) {
         _controller.logAdShowing();
@@ -1202,11 +1203,18 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     }
   }
 
-  /// Compartir la historia actual en redes sociales (Instagram, WhatsApp, etc.)
+  /// Compartir la historia o trivia actual en redes sociales (Instagram, WhatsApp, etc.)
   Future<void> _shareCurrentStory() async {
     _pauseStoryTimer();
 
     try {
+      // ✅ Verificar si es una trivia primero
+      final currentItem = _getCurrentItem();
+      if (currentItem != null && currentItem.isTrivia && currentItem.trivia != null) {
+        await _shareTrivia(currentItem.trivia!);
+        return;
+      }
+
       final currentUserStories = _allUserStories[_currentUserIndex];
       final stories = _getStoriesForUser(currentUserStories);
       final currentStory = stories[_currentStoryIndex];
@@ -1255,6 +1263,27 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
           ),
         );
       }
+    } finally {
+      _resumeStoryTimer();
+    }
+  }
+
+  /// Compartir una trivia
+  Future<void> _shareTrivia(Trivia trivia) async {
+    try {
+      // Generar URL de la trivia usando DeepLinkService
+      final triviaUrl = DeepLinkService().generateTriviaUrl(trivia.id);
+
+      // Texto a compartir
+      final shareText = '¡Responde mi trivia "${trivia.title}" en Talia!\n$triviaUrl';
+
+      // Compartir el link
+      await SharePlus.instance.share(
+        ShareParams(
+          text: shareText,
+          subject: 'Trivia de Talia',
+        ),
+      );
     } finally {
       _resumeStoryTimer();
     }
@@ -1694,7 +1723,9 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
                 if (isGoingForward) {
                   _controller.nextUser(); // Incrementar contador de grupos
 
-                  final shouldShowAd = _controller.shouldShowAd();
+                  // ✅ NO mostrar ads durante trivia gameplay
+                  final isInTriviaMode = _isCurrentItemTrivia() || _isTriviaPlaying();
+                  final shouldShowAd = !isInTriviaMode && _controller.shouldShowAd();
                   if (shouldShowAd && _isNativeAdLoaded && _nativeAd != null) {
                     _controller.logAdShowing();
                     _pauseStoryTimer();

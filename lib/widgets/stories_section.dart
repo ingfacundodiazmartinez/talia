@@ -9,6 +9,7 @@ import '../services/story_upload_progress_service.dart';
 import '../screens/story_camera_screen.dart';
 import '../screens/story_viewer_screen.dart';
 import '../models/trivia.dart';
+import '../models/trivia_response.dart';
 import '../theme_service.dart';
 import '../widgets/permission_dialog.dart';
 import '../widgets/synced_user_widgets.dart';
@@ -25,9 +26,11 @@ class _StoriesSectionState extends State<StoriesSection> {
   final StoryService storyService = StoryService();
   List<UserStories>? _cachedStories;
   List<Trivia>? _cachedTrivias;
+  Set<String>? _respondedTriviaIds; // IDs de trivias que el usuario ya respondió
   late Stream<List<UserStories>> _storiesStream;
   late Stream<List<Trivia>> _triviasStream;
   StreamSubscription<List<Trivia>>? _triviasSubscription;
+  StreamSubscription<Set<String>>? _respondedTriviasSubscription;
 
   @override
   void initState() {
@@ -75,6 +78,16 @@ class _StoriesSectionState extends State<StoriesSection> {
           }
         },
       );
+
+      // ✅ Suscribirse a las trivias respondidas por el usuario
+      _respondedTriviasSubscription = TriviaResponse.watchRespondedTriviaIds(currentUserId)
+          .listen((respondedIds) {
+        if (mounted) {
+          setState(() {
+            _respondedTriviaIds = respondedIds;
+          });
+        }
+      });
     } else {
       _triviasStream = Stream.value([]);
     }
@@ -85,11 +98,12 @@ class _StoriesSectionState extends State<StoriesSection> {
     // Detener streams de background para evitar spinner infinito
     storyService.stopBackgroundCacheUpdates();
     _triviasSubscription?.cancel();
+    _respondedTriviasSubscription?.cancel();
     super.dispose();
   }
 
   /// Unificar trivias dentro de los grupos de usuarios
-  /// - Si el creador de la trivia tiene historias, marcar hasUnviewed si la trivia está activa
+  /// - NO modificar hasUnviewed de usuarios existentes (el sistema de vistas lo maneja)
   /// - Si el creador solo tiene trivias (sin historias), crear un UserStories sintético
   List<UserStories> _mergeTriviasIntoUserStories(
     List<UserStories> userStoriesList,
@@ -98,14 +112,11 @@ class _StoriesSectionState extends State<StoriesSection> {
   ) {
     if (triviasList.isEmpty) return userStoriesList;
 
-    // Crear un mapa de userId -> UserStories para fácil acceso
-    final userStoriesMap = <String, UserStories>{};
-    for (final us in userStoriesList) {
-      userStoriesMap[us.userId] = us;
-    }
-
     // Set de usuarios que ya tienen historias
-    final usersWithStories = userStoriesMap.keys.toSet();
+    final usersWithStories = <String>{};
+    for (final us in userStoriesList) {
+      usersWithStories.add(us.userId);
+    }
 
     // Agrupar trivias por creador
     final triviasByCreator = <String, List<Trivia>>{};
@@ -113,24 +124,9 @@ class _StoriesSectionState extends State<StoriesSection> {
       triviasByCreator.putIfAbsent(trivia.creatorId, () => []).add(trivia);
     }
 
-    // Resultado: copiar UserStories existentes y actualizar hasUnviewed si hay trivias activas
-    final result = <UserStories>[];
-
-    for (final us in userStoriesList) {
-      final creatorTrivias = triviasByCreator[us.userId];
-      if (creatorTrivias != null && creatorTrivias.any((t) => t.isActive)) {
-        // Este usuario tiene trivias activas, marcar como hasUnviewed
-        result.add(UserStories(
-          userId: us.userId,
-          userName: us.userName,
-          userPhotoURL: us.userPhotoURL,
-          stories: us.stories,
-          hasUnviewed: true, // Hay trivia activa
-        ));
-      } else {
-        result.add(us);
-      }
-    }
+    // Resultado: copiar UserStories existentes SIN modificar hasUnviewed
+    // El sistema de tracking de vistas del story viewer maneja el gradiente
+    final result = List<UserStories>.from(userStoriesList);
 
     // Agregar usuarios que solo tienen trivias (sin historias)
     for (final entry in triviasByCreator.entries) {
@@ -139,13 +135,14 @@ class _StoriesSectionState extends State<StoriesSection> {
 
       if (!usersWithStories.contains(creatorId)) {
         // Este usuario solo tiene trivias, crear UserStories sintético
+        // hasUnviewed será manejado por el sistema de vistas del story viewer
         final firstTrivia = creatorTrivias.first;
         result.add(UserStories(
           userId: creatorId,
           userName: firstTrivia.creatorName,
           userPhotoURL: firstTrivia.creatorPhotoURL,
           stories: [], // Sin historias
-          hasUnviewed: creatorTrivias.any((t) => t.isActive),
+          hasUnviewed: true, // Inicialmente no visto, el viewer lo actualizará
         ));
       }
     }
@@ -371,10 +368,15 @@ class _StoriesSectionState extends State<StoriesSection> {
     final isCurrentUser = currentUser?.uid == userStories.userId;
 
     // Verificar si este usuario tiene trivias activas
-    final userTrivias = (_cachedTrivias ?? [])
+    final respondedIds = _respondedTriviaIds ?? <String>{};
+    final allUserTrivias = (_cachedTrivias ?? [])
         .where((t) => t.creatorId == userStories.userId && t.isActive)
         .toList();
-    final hasActiveTrivias = userTrivias.isNotEmpty;
+    final hasActiveTrivias = allUserTrivias.isNotEmpty;
+    // Trivias no respondidas (para el gradiente visual)
+    // ✅ FIX: Para el usuario actual (creador), no mostrar gradiente de "no respondida"
+    // El creador no necesita responder su propia trivia
+    final hasUnrespondedTrivias = !isCurrentUser && allUserTrivias.any((t) => !respondedIds.contains(t.id));
     final hasTriviaOnly = userStories.stories.isEmpty && hasActiveTrivias;
 
     // Para el usuario actual, mostrar la historia más reciente (independiente del estado)
@@ -391,12 +393,16 @@ class _StoriesSectionState extends State<StoriesSection> {
     LinearGradient? borderGradient;
 
     if (hasTriviaOnly) {
-      // Usuario con solo trivias: usar gradiente púrpura de trivia
-      borderGradient = LinearGradient(
-        begin: Alignment.topRight,
-        end: Alignment.bottomLeft,
-        colors: [Color(0xFF667EEA), Color(0xFF764BA2)],
-      );
+      // Usuario con solo trivias: gradiente púrpura solo si hay trivias no respondidas
+      if (hasUnrespondedTrivias) {
+        borderGradient = LinearGradient(
+          begin: Alignment.topRight,
+          end: Alignment.bottomLeft,
+          colors: [Color(0xFF667EEA), Color(0xFF764BA2)],
+        );
+      } else {
+        borderColor = Colors.grey[300]; // Ya respondidas
+      }
     } else if (isCurrentUser && latestStory != null) {
       // Para el usuario actual, mostrar estado de la historia (sin gradiente "no visto")
       // El usuario siempre ha "visto" sus propias historias
@@ -621,9 +627,10 @@ class _StoriesSectionState extends State<StoriesSection> {
                       fontWeight: userStories.hasUnviewed
                           ? FontWeight.w600
                           : FontWeight.w500,
+                      // ✅ Color adaptable a modo oscuro/claro
                       color: userStories.hasUnviewed
-                          ? Color(0xFF2D3142)
-                          : Colors.grey[600],
+                          ? Theme.of(context).textTheme.bodyMedium?.color
+                          : Theme.of(context).textTheme.bodySmall?.color?.withOpacity(0.7),
                     ),
                     textAlign: TextAlign.center,
                     maxLines: 1,
@@ -638,9 +645,10 @@ class _StoriesSectionState extends State<StoriesSection> {
                       fontWeight: userStories.hasUnviewed
                           ? FontWeight.w600
                           : FontWeight.w500,
+                      // ✅ Color adaptable a modo oscuro/claro
                       color: userStories.hasUnviewed
-                          ? Color(0xFF2D3142)
-                          : Colors.grey[600],
+                          ? Theme.of(context).textTheme.bodyMedium?.color
+                          : Theme.of(context).textTheme.bodySmall?.color?.withOpacity(0.7),
                     ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,

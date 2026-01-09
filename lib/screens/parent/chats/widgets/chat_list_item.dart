@@ -440,30 +440,40 @@ class _ChatListItemState extends State<ChatListItem> {
                             ],
                           ),
                           SizedBox(height: 4),
-                          StreamBuilder<bool>(
-                            stream: TypingIndicatorService().watchOtherUserTyping(
+                          StreamBuilder<UserActivityState>(
+                            stream: TypingIndicatorService().watchOtherUserActivity(
                               widget.chatId,
                               widget.userId,
                             ),
-                            builder: (context, typingSnapshot) {
-                              final isTyping = typingSnapshot.data ?? false;
+                            initialData: UserActivityState.none,
+                            builder: (context, activitySnapshot) {
+                              final activityState = activitySnapshot.data ?? UserActivityState.none;
+                              final isTyping = activityState == UserActivityState.typing;
+                              final isRecording = activityState == UserActivityState.recording;
 
-                              if (isTyping && !widget.isBlocked) {
+                              if ((isTyping || isRecording) && !widget.isBlocked) {
                                 return Row(
                                   children: [
-                                    SizedBox(
-                                      width: 12,
-                                      height: 12,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 1.5,
-                                        valueColor: AlwaysStoppedAnimation<Color>(
-                                          colorScheme.primary,
+                                    if (isRecording)
+                                      Icon(
+                                        Icons.mic,
+                                        size: 14,
+                                        color: colorScheme.primary,
+                                      )
+                                    else
+                                      SizedBox(
+                                        width: 12,
+                                        height: 12,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 1.5,
+                                          valueColor: AlwaysStoppedAnimation<Color>(
+                                            colorScheme.primary,
+                                          ),
                                         ),
                                       ),
-                                    ),
                                     SizedBox(width: 6),
                                     Text(
-                                      'Escribiendo...',
+                                      isRecording ? 'Grabando audio...' : 'Escribiendo...',
                                       style: TextStyle(
                                         fontSize: 14,
                                         color: colorScheme.primary,

@@ -19,6 +19,20 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
 const { getStorage } = require("firebase-admin/storage");
 const { checkRateLimit } = require("./helpers");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+
+// Configurar Gemini API
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const genAI = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
+
+// Categorías disponibles para trivias
+const TRIVIA_CATEGORIES = {
+  familia: { name: "Familia", emoji: "👨‍👩‍👧‍👦", description: "Preguntas sobre tu familia" },
+  gustos: { name: "Gustos", emoji: "❤️", description: "Tus cosas favoritas" },
+  personalidad: { name: "Personalidad", emoji: "🎭", description: "Cómo eres" },
+  cultura: { name: "Cultura", emoji: "🎬", description: "Películas, música, series" },
+  curiosidades: { name: "Curiosidades", emoji: "🤔", description: "Datos interesantes" },
+};
 
 // ═══════════════════════════════════════════════════════════════
 // CIERRE AUTOMÁTICO DE TRIVIAS EXPIRADAS
@@ -591,4 +605,153 @@ async function generateFallbackSuggestion(categoryId) {
   const randomIndex = Math.floor(Math.random() * categorySuggestions.length);
 
   return categorySuggestions[randomIndex];
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GENERADOR MASIVO DE SUGERENCIAS (BACKOFFICE)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Callable function: Genera múltiples preguntas de trivia usando IA (para backoffice)
+ *
+ * Input: { categoryId: string, count: number }
+ * Output: { suggestions: Array<{ question, options, correctOptionIndex, categoryId }> }
+ *
+ * Solo accesible desde el backoffice (admin)
+ */
+exports.generateTriviaSuggestions = onCall(
+  {
+    region: "us-central1",
+    enforceAppCheck: false,
+  },
+  async (request) => {
+    // Verificar autenticación
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Debes iniciar sesión");
+    }
+
+    const userId = request.auth.uid;
+    const { categoryId, count = 5 } = request.data || {};
+
+    // Validar count
+    const actualCount = Math.min(Math.max(1, count), 20); // Entre 1 y 20
+
+    console.log(
+      `🎯 [Trivia] Generating ${actualCount} suggestions for category: ${categoryId || "random"} (user: ${userId})`
+    );
+
+    // Verificar que es un admin (verificar en colección admins o similar)
+    const db = getFirestore();
+    const userDoc = await db.collection("users").doc(userId).get();
+
+    if (!userDoc.exists) {
+      throw new HttpsError("permission-denied", "Usuario no encontrado");
+    }
+
+    // Verificar si Gemini está configurado
+    if (!genAI) {
+      console.warn("⚠️ [Trivia] Gemini API no configurado, usando fallback");
+      const fallbackSuggestions = [];
+      for (let i = 0; i < actualCount; i++) {
+        const suggestion = await generateFallbackSuggestion(categoryId);
+        fallbackSuggestions.push({
+          ...suggestion,
+          categoryId: categoryId || suggestion.category,
+          enabled: true,
+        });
+      }
+      return { suggestions: fallbackSuggestions };
+    }
+
+    try {
+      const suggestions = await generateWithGemini(categoryId, actualCount);
+      return { suggestions };
+    } catch (error) {
+      console.error("❌ [Trivia] Error generating with AI:", error);
+
+      // Fallback a preguntas predefinidas
+      const fallbackSuggestions = [];
+      for (let i = 0; i < actualCount; i++) {
+        const suggestion = await generateFallbackSuggestion(categoryId);
+        fallbackSuggestions.push({
+          ...suggestion,
+          categoryId: categoryId || suggestion.category,
+          enabled: true,
+        });
+      }
+      return { suggestions: fallbackSuggestions };
+    }
+  }
+);
+
+/**
+ * Genera preguntas de trivia usando Gemini AI
+ */
+async function generateWithGemini(categoryId, count) {
+  const category = TRIVIA_CATEGORIES[categoryId];
+  const categoryName = category ? category.name : "General";
+  const categoryDescription = category ? category.description : "Preguntas variadas";
+
+  const prompt = `Genera ${count} preguntas de trivia para una app de chat familiar.
+
+CATEGORÍA: ${categoryName} - ${categoryDescription}
+
+REGLAS IMPORTANTES:
+1. Las preguntas deben ser sobre el CREADOR de la trivia (quien hace la pregunta sobre sí mismo)
+2. NO incluir preguntas sobre relaciones entre personas (nada de "cómo nos conocimos", "desde cuándo somos amigos")
+3. Las preguntas deben ser apropiadas para toda la familia (niños incluidos)
+4. Cada pregunta debe tener entre 2 y 4 opciones
+5. Las opciones deben ser variadas y plausibles
+6. El índice de respuesta correcta es 0 (el creador debe ajustar la respuesta correcta)
+
+FORMATO DE RESPUESTA (JSON válido):
+{
+  "suggestions": [
+    {
+      "question": "¿Cuál es mi...?",
+      "options": ["Opción 1", "Opción 2", "Opción 3", "Opción 4"],
+      "correctOptionIndex": 0,
+      "categoryId": "${categoryId || 'curiosidades'}"
+    }
+  ]
+}
+
+Genera exactamente ${count} preguntas creativas y variadas. Solo responde con el JSON, sin explicaciones.`;
+
+  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+  const result = await model.generateContent(prompt);
+  const response = await result.response;
+  const text = response.text();
+
+  // Parsear la respuesta JSON
+  let parsedResponse;
+  try {
+    // Limpiar posibles markdown code blocks
+    const cleanText = text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+    parsedResponse = JSON.parse(cleanText);
+  } catch (parseError) {
+    console.error("❌ [Trivia] Error parsing Gemini response:", parseError);
+    console.log("Raw response:", text);
+    throw new Error("Error parsing AI response");
+  }
+
+  if (!parsedResponse.suggestions || !Array.isArray(parsedResponse.suggestions)) {
+    throw new Error("Invalid AI response format");
+  }
+
+  // Validar y normalizar cada sugerencia
+  const validSuggestions = parsedResponse.suggestions
+    .filter(s => s.question && Array.isArray(s.options) && s.options.length >= 2)
+    .map(s => ({
+      question: s.question,
+      options: s.options.slice(0, 4), // Máximo 4 opciones
+      correctOptionIndex: Math.min(s.correctOptionIndex || 0, s.options.length - 1),
+      categoryId: categoryId || s.categoryId || "curiosidades",
+      enabled: true,
+    }));
+
+  console.log(`✅ [Trivia] Generated ${validSuggestions.length} suggestions with Gemini`);
+
+  return validSuggestions;
 }

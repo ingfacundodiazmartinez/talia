@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../../models/trivia.dart';
@@ -183,7 +184,8 @@ class TriviaResultsService {
 
   /// Compartir resultados como historia
   ///
-  /// Genera una imagen con el podio y la comparte como historia
+  /// Crea una historia especial de tipo 'trivia_results' que muestra
+  /// el podio y los resultados de la trivia.
   /// Retorna el ID de la historia creada
   Future<String> shareResultsAsStory(String triviaId) async {
     final user = _auth.currentUser;
@@ -205,17 +207,100 @@ class TriviaResultsService {
       throw TriviaResultsException('Los resultados ya fueron compartidos');
     }
 
-    // TODO: Implementar generación de imagen con podio
-    // Por ahora, solo retornamos un ID placeholder
-    // La implementación real usaría un servicio de renderizado de imagen
+    // Obtener el leaderboard/podio
+    final leaderboard = await getLeaderboard(triviaId);
+    final podium = leaderboard.where((e) => e.isOnPodium).toList();
 
-    final storyId = 'trivia_results_$triviaId';
+    // Obtener datos del usuario creador
+    final userDoc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .get();
+    final userData = userDoc.data() ?? {};
+    final userName = userData['name'] as String? ?? 'Usuario';
+    final userPhotoURL = userData['photoURL'] as String?;
+
+    // Obtener datos actualizados de los usuarios del podio desde Firestore
+    final podiumUserIds = podium.map((e) => e.oderId).toList();
+    final podiumUsersData = <String, Map<String, dynamic>>{};
+
+    for (final oderId in podiumUserIds) {
+      try {
+        final oderDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(oderId)
+            .get();
+        if (oderDoc.exists) {
+          podiumUsersData[oderId] = oderDoc.data() ?? {};
+        }
+      } catch (e) {
+        // Si falla, usar datos del response
+        ReleaseLogger.log('⚠️ [TriviaResults] Error obteniendo datos de usuario $oderId: $e');
+      }
+    }
+
+    // Generar ID único para la historia
+    final storyId = FirebaseFirestore.instance.collection('stories').doc().id;
+
+    final now = DateTime.now();
+    final expiresAt = now.add(const Duration(hours: 24));
+
+    // Preparar datos del podio para el filter (con fotos actualizadas de Firestore)
+    final podiumData = podium.map((entry) {
+      final oderData = podiumUsersData[entry.oderId];
+      final photoURL = oderData?['photoURL'] as String? ?? entry.oderPhotoURL;
+      final name = oderData?['name'] as String? ?? entry.oderName;
+
+      return <String, dynamic>{
+        'rank': entry.rank,
+        'oderId': entry.oderId,
+        'oderName': name,
+        'oderPhotoURL': photoURL,
+        'totalScore': entry.score,
+        'correctCount': entry.correctCount,
+        'totalQuestions': entry.totalQuestions,
+      };
+    }).toList();
+
+    // Crear documento de historia
+    final storyData = {
+      'userId': user.uid,
+      'userName': userName,
+      'userPhotoURL': userPhotoURL,
+      'mediaUrl': 'trivia://results/$triviaId',
+      'mediaType': 'trivia_results',
+      'caption': '🏆 Resultados de mi trivia: ${trivia.title}',
+      'createdAt': Timestamp.fromDate(now),
+      'expiresAt': Timestamp.fromDate(expiresAt),
+      'viewedBy': <String>[],
+      'replies': <Map<String, dynamic>>[],
+      'filter': {
+        'type': 'trivia_results',
+        'triviaId': triviaId,
+        'triviaTitle': trivia.title,
+        'triviaBackgroundImageUrl': trivia.backgroundImageUrl,
+        'participantCount': trivia.participantCount,
+        'questionCount': trivia.questionCount,
+        'podium': podiumData,
+      },
+      'status': 'approved',
+      'visibility': 'temporary',
+      'availableFor': trivia.availableFor,
+      'parentViewers': <String>[],
+      'likedBy': <String>[],
+    };
+
+    // Guardar historia en Firestore
+    await FirebaseFirestore.instance
+        .collection('stories')
+        .doc(storyId)
+        .set(storyData);
 
     // Guardar referencia en la trivia
     await _repository.saveResultsStoryId(triviaId, storyId);
 
     ReleaseLogger.log(
-        '📤 [TriviaResults] Resultados compartidos como historia: $storyId');
+        '📤 [TriviaResults] Resultados compartidos como historia: $storyId (podio: ${podium.length} participantes)');
 
     return storyId;
   }

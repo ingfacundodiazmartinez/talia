@@ -72,15 +72,31 @@ class _ChatAppBarState extends State<ChatAppBar> {
             final photoURL = contactData['photoURL'] as String;
             final isOnline = contactData['isOnline'] as bool;
 
-            // Escuchar el estado de typing
-            return StreamBuilder<bool>(
-              stream: TypingIndicatorService().watchOtherUserTyping(
+            // Escuchar el estado de actividad (typing o recording)
+            return StreamBuilder<UserActivityState>(
+              stream: TypingIndicatorService().watchOtherUserActivity(
                 widget.chatId,
                 widget.contactId,
               ),
-              initialData: false,
-              builder: (context, typingSnapshot) {
-                final isTyping = typingSnapshot.data ?? false;
+              initialData: UserActivityState.none,
+              builder: (context, activitySnapshot) {
+                final activityState = activitySnapshot.data ?? UserActivityState.none;
+                final isTyping = activityState == UserActivityState.typing;
+                final isRecording = activityState == UserActivityState.recording;
+
+                // Determinar texto de estado
+                String statusText;
+                Color? statusColor;
+                if (isRecording) {
+                  statusText = 'grabando audio...';
+                  statusColor = Colors.red;
+                } else if (isTyping) {
+                  statusText = 'escribiendo...';
+                  statusColor = null; // Usar color por defecto
+                } else {
+                  statusText = isOnline ? 'En línea' : 'Desconectado';
+                  statusColor = null;
+                }
 
                 return Row(
                   children: [
@@ -102,17 +118,28 @@ class _ChatAppBarState extends State<ChatAppBar> {
                             style: const TextStyle(fontSize: 16),
                             overflow: TextOverflow.ellipsis,
                           ),
-                          // Mostrar "escribiendo..." si está escribiendo, sino el estado normal
-                          Text(
-                            isTyping ? 'escribiendo...' : (isOnline ? 'En línea' : 'Desconectado'),
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: isDarkMode
-                                  ? colorScheme.onSurface
-                                      .withValues(alpha: 0.7)
-                                  : colorScheme.onPrimary
-                                      .withValues(alpha: 0.7),
-                            ),
+                          // Mostrar estado de actividad o estado normal
+                          Row(
+                            children: [
+                              if (isRecording)
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 4),
+                                  child: Icon(
+                                    Icons.mic,
+                                    size: 12,
+                                    color: Colors.red,
+                                  ),
+                                ),
+                              Text(
+                                statusText,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: statusColor ?? (isDarkMode
+                                      ? colorScheme.onSurface.withValues(alpha: 0.7)
+                                      : colorScheme.onPrimary.withValues(alpha: 0.7)),
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),

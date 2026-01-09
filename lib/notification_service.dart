@@ -1800,25 +1800,33 @@ class NotificationService {
       // Obtener configuración de sonido
       final soundConfig = await _filter.getSoundConfig(currentUser.uid);
 
-      // Preparar la foto del remitente para Android (SIEMPRE usar foto del sender)
+      // Preparar la foto para Android (grupo: foto del grupo, 1-1: foto del sender)
       String? largeIconPath;
 
-      // Descargar foto del remitente para Android (LargeIcon) y iOS (Attachment)
+      // Descargar foto para Android (LargeIcon) y iOS (Attachment)
       if (Platform.isAndroid || Platform.isIOS) {
+        // ✅ Para grupos usar foto del grupo, para chats 1-1 usar foto del sender
+        final isGroupNotification = message.data['isGroup'] == 'true';
+        final groupPhotoUrl = message.data['groupPhotoUrl'];
         final senderPhotoUrl = message.data['senderPhotoUrl'];
 
-        if (senderPhotoUrl != null &&
-            senderPhotoUrl.isNotEmpty &&
-            senderPhotoUrl != 'null') {
+        // Prioridad: para grupos usar groupPhotoUrl, fallback a senderPhotoUrl
+        final photoUrlToUse = isGroupNotification && groupPhotoUrl != null && groupPhotoUrl.isNotEmpty && groupPhotoUrl != 'null'
+            ? groupPhotoUrl
+            : senderPhotoUrl;
+
+        if (photoUrlToUse != null &&
+            photoUrlToUse.isNotEmpty &&
+            photoUrlToUse != 'null') {
           try {
             ReleaseLogger.log(
-              '📥 [Android] Descargando foto del remitente: $senderPhotoUrl',
+              '📥 [Android] Descargando foto ${isGroupNotification ? "del grupo" : "del remitente"}: $photoUrlToUse',
               tag: 'NotificationService',
             );
             // ✅ FIX #8: Timeout agresivo de 1s (igual que iOS AppDelegate.swift:323)
             // Evita bloquear notificación por 10s si descarga falla
             final response = await http
-                .get(Uri.parse(senderPhotoUrl))
+                .get(Uri.parse(photoUrlToUse))
                 .timeout(Duration(seconds: 5));
 
             if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
@@ -1869,7 +1877,7 @@ class NotificationService {
           }
         } else {
           ReleaseLogger.log(
-            '⚠️ [Android] No hay senderPhotoUrl disponible',
+            '⚠️ [Android] No hay ${isGroupNotification ? "groupPhotoUrl" : "senderPhotoUrl"} disponible',
             tag: 'NotificationService',
           );
         }
@@ -2014,6 +2022,30 @@ class NotificationService {
       '📍 Navegando según tipo: $type',
       tag: 'NotificationService',
     );
+
+    // ✅ FIX: Deduplicación para evitar navegación duplicada
+    // Esto ocurre cuando múltiples handlers (getInitialMessage, Android native, iOS Communication)
+    // disparan al mismo tiempo al abrir la app desde notificación
+    final chatId = data['chatId'] as String?;
+    final messageId = data['messageId'] as String?;
+    final groupId = data['groupId'] as String?;
+
+    // Crear key único para deduplicación
+    final deduplicationKey = '${type}_${chatId ?? groupId ?? ''}_${messageId ?? DateTime.now().millisecondsSinceEpoch}';
+
+    if (_processedNotificationIds.contains(deduplicationKey)) {
+      ReleaseLogger.log(
+        '⚠️ Notificación duplicada ignorada: $deduplicationKey',
+        tag: 'NotificationService',
+      );
+      return;
+    }
+
+    // Marcar como procesada (limpiar después de 5 segundos para no acumular memoria)
+    _processedNotificationIds.add(deduplicationKey);
+    Future.delayed(Duration(seconds: 5), () {
+      _processedNotificationIds.remove(deduplicationKey);
+    });
 
     switch (type) {
       // ═══════════════════════════════════════════════════════════════

@@ -6,7 +6,7 @@ import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:record/record.dart';
+import 'package:audio_waveforms/audio_waveforms.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -26,7 +26,7 @@ import '../../widgets/reaction_picker.dart';
 import '../../utils/release_logger.dart';
 import '../../services/local_unread_count_service.dart';
 import '../../services/notification_tracking_service.dart';
-import '../../screens/chat/widgets/recording_indicator.dart';
+import '../../screens/chat/widgets/recording_input_bar.dart';
 import '../../widgets/profile_photo_viewer.dart';
 
 /// Chat screen for Groups V2
@@ -57,7 +57,7 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
   // UI Controllers
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-  final AudioRecorder _audioRecorder = AudioRecorder();
+  final RecorderController _recorderController = RecorderController();
   final ReactionService _reactionService = ReactionService();
   final FavoriteService _favoriteService = FavoriteService();
 
@@ -68,6 +68,7 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
   // Local UI state
   bool _showEmojiPicker = false;
   bool _isRecording = false;
+  String? _currentRecordingPath;
   Map<String, dynamic>? _replyingTo;
   OverlayEntry? _reactionOverlay;
 
@@ -165,7 +166,7 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
     _controller.dispose();
     _messageController.dispose();
     _scrollController.dispose();
-    _audioRecorder.dispose();
+    _recorderController.dispose();
     _reactionOverlay?.remove();
     super.dispose();
   }
@@ -186,7 +187,8 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
 
   Future<void> _cancelRecording() async {
     try {
-      await _audioRecorder.stop();
+      await _recorderController.stop();
+      _currentRecordingPath = null;
       setState(() => _isRecording = false);
     } catch (e) {
       setState(() => _isRecording = false);
@@ -330,25 +332,17 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
 
   Future<void> _startRecording() async {
     try {
-      final hasPermission = await _audioRecorder.hasPermission();
-
-      if (!hasPermission) {
-        return;
-      }
-
       HapticFeedback.heavyImpact();
 
       final directory = await getApplicationDocumentsDirectory();
       final path =
           '${directory.path}/audio_${DateTime.now().millisecondsSinceEpoch}.m4a';
+      _currentRecordingPath = path;
 
-      await _audioRecorder.start(
-        const RecordConfig(
-          encoder: AudioEncoder.aacLc,
-          bitRate: 128000,
-          sampleRate: 44100,
-        ),
+      await _recorderController.record(
         path: path,
+        bitRate: 48000,
+        sampleRate: 22050,
       );
 
       setState(() {
@@ -358,7 +352,7 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Error al iniciar grabacion'),
+            content: Text('Error al iniciar grabación'),
             backgroundColor: Colors.red,
           ),
         );
@@ -368,10 +362,12 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
 
   Future<void> _stopRecording() async {
     try {
-      final path = await _audioRecorder.stop();
+      final path = await _recorderController.stop();
+      final recordedPath = path ?? _currentRecordingPath;
+      _currentRecordingPath = null;
       setState(() => _isRecording = false);
 
-      if (path != null && path.isNotEmpty) {
+      if (recordedPath != null && recordedPath.isNotEmpty) {
         // Get current user info first
         final currentUser = FirebaseAuth.instance.currentUser;
         final userDoc = await FirebaseFirestore.instance
@@ -389,7 +385,7 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
           senderId: currentUser?.uid ?? '',
           senderName: senderName,
           senderPhotoURL: senderPhotoURL,
-          localAudioPath: path,
+          localAudioPath: recordedPath,
           isOptimistic: true,
           timestamp: DateTime.now(),
           isDeleted: false,
@@ -401,7 +397,7 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
         _controller.addOptimisticMessage(optimisticMessage);
 
         try {
-          final audioFile = File(path);
+          final audioFile = File(recordedPath);
 
           // Upload to Firebase Storage (path includes userId for security rules)
           final userId = FirebaseAuth.instance.currentUser?.uid ?? '';
@@ -500,15 +496,6 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
               if (_showEmojiPicker) _buildEmojiPicker(),
             ],
           ),
-          if (_isRecording)
-            Positioned.fill(
-              child: IgnorePointer(
-                child: Container(
-                  color: Colors.black.withValues(alpha: 0.3),
-                  child: const RecordingIndicator(),
-                ),
-              ),
-            ),
         ],
       ),
     );
@@ -1124,6 +1111,15 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
   }
 
   Widget _buildInputBar() {
+    // Mostrar UI de grabación estilo Instagram cuando está grabando
+    if (_isRecording) {
+      return RecordingInputBar(
+        recorderController: _recorderController,
+        onCancel: _cancelRecording,
+        onSend: _stopRecording,
+      );
+    }
+
     return ChatInputBar(
       messageController: _messageController,
       showEmojiPicker: _showEmojiPicker,

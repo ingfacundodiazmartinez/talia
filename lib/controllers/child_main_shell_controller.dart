@@ -10,6 +10,7 @@ import '../services/chats/chat_orchestrator.dart';
 import '../services/local_unread_count_service.dart';
 import '../services/contacts_sync_service.dart';
 import '../services/app_state_service.dart';
+import '../widgets/contacts_sync_consent_dialog.dart';
 
 /// Controller para el shell principal de niños
 ///
@@ -159,22 +160,45 @@ class ChildMainShellController {
   }
 
   /// Sincronizar contactos en background (para todos los usuarios)
+  ///
+  /// Verifica si hay consentimiento del usuario antes de sincronizar.
+  /// Si no hay consentimiento, muestra un diálogo explicativo (Apple Guideline 5.1.2)
   void _syncContactsInBackground() {
-    // ignore: avoid_print
-    print('📞📞📞 [ChildMainShell] _syncContactsInBackground() LLAMADO');
     // Usar WidgetsBinding para ejecutar después del primer frame
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      // ignore: avoid_print
-      print('📞📞📞 [ChildMainShell] PostFrameCallback ejecutado, llamando syncContacts()');
-      ReleaseLogger.log('Iniciando sincronización de contactos', tag: 'ChildMainShell');
-      _contactsSyncService.syncContacts().then((_) {
-        // ignore: avoid_print
-        print('✅✅✅ [ChildMainShell] syncContacts() completado exitosamente');
-      }).catchError((error) {
-        // ignore: avoid_print
-        print('❌❌❌ [ChildMainShell] Error en syncContacts(): $error');
-        ReleaseLogger.error('Error syncing contacts: $error', tag: 'ChildMainShell');
-      });
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      ReleaseLogger.log('Verificando consentimiento para sincronización de contactos', tag: 'ChildMainShell');
+
+      // Verificar si ya hay consentimiento
+      final hasConsent = await _contactsSyncService.hasConsent();
+
+      if (hasConsent) {
+        // Ya tiene consentimiento, sincronizar directamente
+        ReleaseLogger.log('Consentimiento existente, iniciando sincronización', tag: 'ChildMainShell');
+        _contactsSyncService.syncContacts().then((_) {
+          ReleaseLogger.log('Sincronización de contactos completada', tag: 'ChildMainShell');
+        }).catchError((error) {
+          ReleaseLogger.error('Error syncing contacts: $error', tag: 'ChildMainShell');
+        });
+      } else {
+        // No hay consentimiento, mostrar diálogo
+        ReleaseLogger.log('No hay consentimiento, mostrando diálogo', tag: 'ChildMainShell');
+        if (context.mounted) {
+          final userAccepted = await ContactsSyncConsentDialog.show(context);
+
+          if (userAccepted) {
+            // Usuario aceptó, guardar consentimiento y sincronizar
+            await _contactsSyncService.setConsent(true);
+            ReleaseLogger.log('Usuario aceptó consentimiento, sincronizando', tag: 'ChildMainShell');
+            _contactsSyncService.syncContacts(skipConsentCheck: true).catchError((error) {
+              ReleaseLogger.error('Error syncing contacts: $error', tag: 'ChildMainShell');
+            });
+          } else {
+            // Usuario rechazó
+            await _contactsSyncService.setConsent(false);
+            ReleaseLogger.log('Usuario rechazó consentimiento de sincronización', tag: 'ChildMainShell');
+          }
+        }
+      }
     });
   }
 

@@ -514,6 +514,8 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         val title = data["title"] ?: data["senderName"] ?: "Talia"
         val body = data["body"] ?: data["messagePreview"] ?: ""
         val senderPhotoUrl = data["senderPhotoUrl"]
+        val groupPhotoUrl = data["groupPhotoUrl"] // ✅ Foto del grupo
+        val isGroup = data["isGroup"] == "true"
         val chatId = data["chatId"]
         val type = data["type"]
 
@@ -526,7 +528,9 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         Log.e(TAG, "✅ Datos del mensaje:")
         Log.e(TAG, "   Título: $title")
         Log.e(TAG, "   Cuerpo: $body")
-        Log.e(TAG, "   Foto: $senderPhotoUrl")
+        Log.e(TAG, "   Foto sender: $senderPhotoUrl")
+        Log.e(TAG, "   Foto grupo: $groupPhotoUrl")
+        Log.e(TAG, "   Es grupo: $isGroup")
         Log.e(TAG, "   ChatId: $chatId")
         Log.e(TAG, "   Type: $type")
 
@@ -610,7 +614,9 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
 
         // Solo mostrar notificaciones para mensajes de chat
         Log.e(TAG, "💬 Mensaje de chat - mostrando notificación nativa")
-        showNotification(title, body, senderPhotoUrl, data)
+        // ✅ Para grupos usar foto del grupo, para chats 1-1 usar foto del sender
+        val photoUrlToUse = if (isGroup && !groupPhotoUrl.isNullOrEmpty()) groupPhotoUrl else senderPhotoUrl
+        showNotification(title, body, photoUrlToUse, data)
     }
 
     private fun showNotification(

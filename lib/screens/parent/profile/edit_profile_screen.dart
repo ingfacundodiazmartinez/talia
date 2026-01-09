@@ -28,7 +28,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   late TextEditingController _phoneController;
   DateTime? _selectedBirthDate;
   bool _isLoading = false;
-  bool _isUploadingImage = false;
   String? _profileImageUrl;
 
   @override
@@ -92,9 +91,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     ReleaseLogger.log('Iniciando cambio de foto de perfil...', tag: 'EditProfile');
 
     try {
-      setState(() => _isUploadingImage = true);
-      ReleaseLogger.log('Loading state activado', tag: 'EditProfile');
-
       // Mostrar selector de fuente de imagen
       ReleaseLogger.log('Mostrando selector de fuente...', tag: 'EditProfile');
       final ImageSource? source = await _imageService.showImageSourceSelection(
@@ -104,13 +100,12 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
       if (source == null) {
         ReleaseLogger.log('Usuario canceló la selección', tag: 'EditProfile');
-        setState(() => _isUploadingImage = false);
         return;
       }
 
       ReleaseLogger.log('Iniciando selección y subida de imagen desde ${source == ImageSource.camera ? 'cámara' : 'galería'}...', tag: 'EditProfile');
 
-      // Seleccionar imagen
+      // Seleccionar imagen (pickAndUploadProfileImage maneja el loading dialog internamente)
       final String? imageUrl = await _imageService.pickAndUploadProfileImage(
         source: source,
         context: context,
@@ -118,10 +113,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
       ReleaseLogger.log('Resultado de pickAndUploadProfileImage: ${imageUrl != null ? 'URL obtenida' : 'null'}', tag: 'EditProfile');
 
-      // Si la imagen fue subida exitosamente, actualizar en Firestore via controller
+      // Si la imagen fue subida exitosamente, actualizar el estado local
+      // (pickAndUploadProfileImage ya actualizó Firestore y Storage)
       if (imageUrl != null && mounted) {
-        ReleaseLogger.log('Actualizando foto de perfil en Firestore...', tag: 'EditProfile');
-        await _controller.uploadProfilePhoto(imageUrl);
         setState(() {
           _profileImageUrl = imageUrl;
         });
@@ -133,11 +127,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       ReleaseLogger.error('Error al cambiar foto: $e', tag: 'EditProfile');
       if (mounted) {
         _showErrorSnackBar('Error al cambiar foto: ${EditProfileController.getErrorMessage(e)}');
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isUploadingImage = false);
-        ReleaseLogger.log('Loading state desactivado', tag: 'EditProfile');
       }
     }
   }
@@ -250,21 +239,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                     color: colorScheme.primary,
                   ),
           ),
-          if (_isUploadingImage)
-            Positioned.fill(
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.5),
-                  shape: BoxShape.circle,
-                ),
-                child: Center(
-                  child: CircularProgressIndicator(
-                    strokeWidth: 3,
-                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                  ),
-                ),
-              ),
-            ),
           Positioned(
             bottom: 0,
             right: 0,
@@ -273,12 +247,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               child: InkWell(
                 onTap: () {
                   ReleaseLogger.log('Botón de cámara tocado', tag: 'EditProfile');
-                  ReleaseLogger.log('_isUploadingImage: $_isUploadingImage', tag: 'EditProfile');
-                  if (!_isUploadingImage) {
-                    _changeProfilePhoto();
-                  } else {
-                    ReleaseLogger.log('Bloqueado porque _isUploadingImage es true', tag: 'EditProfile');
-                  }
+                  _changeProfilePhoto();
                 },
                 customBorder: CircleBorder(),
                 child: Container(

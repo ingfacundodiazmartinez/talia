@@ -2,6 +2,13 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:async';
 
+/// Estado de actividad del usuario en un chat
+enum UserActivityState {
+  none,
+  typing,
+  recording,
+}
+
 class TypingIndicatorService {
   static final TypingIndicatorService _instance = TypingIndicatorService._internal();
   factory TypingIndicatorService() => _instance;
@@ -11,6 +18,7 @@ class TypingIndicatorService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
   Timer? _typingTimer;
+  Timer? _recordingTimer;
   String? _currentChatId;
   bool _isCurrentGroup = false;
 
@@ -129,5 +137,146 @@ class TypingIndicatorService {
     if (_currentChatId != null) {
       setTyping(_currentChatId!, false, isGroup: _isCurrentGroup);
     }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // INDICADOR DE GRABACIÓN DE AUDIO
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Indicar que el usuario está grabando audio
+  Future<void> setRecording(String chatId, bool isRecording, {bool isGroup = false}) async {
+    final user = _auth.currentUser;
+    if (user == null) return;
+
+    _currentChatId = chatId;
+    _isCurrentGroup = isGroup;
+
+    try {
+      if (isRecording) {
+        // Cancelar el timer anterior si existe
+        _recordingTimer?.cancel();
+        // También cancelar typing si está activo
+        _typingTimer?.cancel();
+
+        // Marcar como grabando con timestamp
+        final collection = isGroup ? 'groups' : 'chats';
+        await _firestore
+            .collection(collection)
+            .doc(chatId)
+            .collection('typing')
+            .doc(user.uid)
+            .set({
+          'userId': user.uid,
+          'isTyping': false,
+          'isRecording': true,
+          'timestamp': FieldValue.serverTimestamp(),
+        });
+
+        // Auto-remover después de 60 segundos (máximo tiempo de grabación)
+        _recordingTimer = Timer(const Duration(seconds: 60), () {
+          setRecording(chatId, false, isGroup: isGroup);
+        });
+      } else {
+        // Eliminar indicador de grabación
+        _recordingTimer?.cancel();
+        final collection = isGroup ? 'groups' : 'chats';
+        await _firestore
+            .collection(collection)
+            .doc(chatId)
+            .collection('typing')
+            .doc(user.uid)
+            .delete();
+      }
+    } catch (e) {
+      // Silently ignore errors
+    }
+  }
+
+  /// Escuchar estado de actividad del otro usuario (typing o recording)
+  Stream<UserActivityState> watchOtherUserActivity(String chatId, String otherUserId) {
+    return _firestore
+        .collection('chats')
+        .doc(chatId)
+        .collection('typing')
+        .doc(otherUserId)
+        .snapshots()
+        .handleError((error) {
+          // Ignorar errores de permisos cuando el chat es bloqueado
+        })
+        .map((doc) {
+      if (!doc.exists) return UserActivityState.none;
+
+      final data = doc.data();
+      if (data == null) return UserActivityState.none;
+
+      final timestamp = data['timestamp'] as Timestamp?;
+
+      // Solo considerar si fue en los últimos 5 segundos
+      if (timestamp != null) {
+        final now = DateTime.now();
+        final diff = now.difference(timestamp.toDate());
+        if (diff.inSeconds < 5) {
+          final isRecording = data['isRecording'] as bool? ?? false;
+          final isTyping = data['isTyping'] as bool? ?? false;
+
+          if (isRecording) return UserActivityState.recording;
+          if (isTyping) return UserActivityState.typing;
+        }
+      }
+
+      return UserActivityState.none;
+    });
+  }
+
+  /// Escuchar usuarios activos en un grupo (typing o recording)
+  Stream<Map<String, UserActivityState>> watchGroupActivity(String groupId, String currentUserId) {
+    return _firestore
+        .collection('groups')
+        .doc(groupId)
+        .collection('typing')
+        .snapshots()
+        .map((snapshot) {
+      final activity = <String, UserActivityState>{};
+
+      for (final doc in snapshot.docs) {
+        // No incluir al usuario actual
+        if (doc.id == currentUserId) continue;
+
+        final data = doc.data();
+        final timestamp = data['timestamp'] as Timestamp?;
+
+        // Solo considerar si fue en los últimos 5 segundos
+        if (timestamp != null) {
+          final now = DateTime.now();
+          final diff = now.difference(timestamp.toDate());
+          if (diff.inSeconds < 5) {
+            final isRecording = data['isRecording'] as bool? ?? false;
+            final isTyping = data['isTyping'] as bool? ?? false;
+
+            if (isRecording) {
+              activity[doc.id] = UserActivityState.recording;
+            } else if (isTyping) {
+              activity[doc.id] = UserActivityState.typing;
+            }
+          }
+        }
+      }
+
+      return activity;
+    });
+  }
+
+  /// Limpiar indicador de grabación al cancelar/enviar
+  void stopRecording() {
+    _recordingTimer?.cancel();
+    if (_currentChatId != null) {
+      setRecording(_currentChatId!, false, isGroup: _isCurrentGroup);
+    }
+  }
+
+  /// Limpiar todo al salir del chat
+  void stopAll() {
+    stopTyping();
+    stopRecording();
   }
 }

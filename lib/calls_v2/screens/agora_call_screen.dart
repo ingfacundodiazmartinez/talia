@@ -20,6 +20,7 @@ import '../widgets/caller_avatar.dart';
 import '../services/add_participant_service.dart';
 import '../../services/voip_service.dart';
 import '../../services/ringtone_service.dart';
+import '../../services/app_config_service.dart';
 import '../../utils/release_logger.dart';
 
 class AgoraCallScreen extends StatefulWidget {
@@ -96,6 +97,9 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
   bool _isRecipientBusy = false;
   Timer? _busyAutoEndTimer;
 
+  // ✅ Ring timeout: Auto-end call if no one answers within configured timeout
+  Timer? _ringTimeoutTimer;
+
   // Participants
   final Set<int> _remoteUsers = {};
   int? _localUid;
@@ -164,6 +168,45 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
       ReleaseLogger.log('✅ WakeLock disabled', tag: _tag);
     } catch (e) {
       ReleaseLogger.error('Failed to disable WakeLock', error: e, tag: _tag);
+    }
+  }
+
+  /// Start ring timeout timer for outgoing calls
+  /// If no one answers within the configured timeout, end the call automatically
+  void _startRingTimeoutTimer() {
+    // Get timeout from Remote Config (default: 30 seconds)
+    final timeoutSeconds = AppConfigService().callRingTimeoutSeconds;
+    ReleaseLogger.log(
+      '⏱️ [AgoraCallScreen] Starting ring timeout timer: ${timeoutSeconds}s',
+      tag: _tag,
+    );
+
+    _ringTimeoutTimer?.cancel();
+    _ringTimeoutTimer = Timer(Duration(seconds: timeoutSeconds), () {
+      if (!mounted) return;
+
+      // Only timeout if no one has answered yet
+      if (_remoteUsers.isEmpty && !_isEnding && !_isRecipientBusy) {
+        ReleaseLogger.log(
+          '⏱️ [AgoraCallScreen] Ring timeout expired after ${timeoutSeconds}s - no answer',
+          tag: _tag,
+        );
+
+        // End the call
+        _endCall();
+      }
+    });
+  }
+
+  /// Cancel ring timeout timer (called when someone answers)
+  void _cancelRingTimeoutTimer() {
+    if (_ringTimeoutTimer != null) {
+      ReleaseLogger.log(
+        '⏱️ [AgoraCallScreen] Cancelling ring timeout timer - call answered',
+        tag: _tag,
+      );
+      _ringTimeoutTimer?.cancel();
+      _ringTimeoutTimer = null;
     }
   }
 
@@ -565,6 +608,9 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
       // ✅ Start ringback tone while waiting for remote user to answer
       await _ringtoneService.playRingbackTone();
 
+      // ✅ Start ring timeout timer - will auto-end call if no one answers
+      _startRingTimeoutTimer();
+
       // ✅ FIX: Register event handlers NOW that engine is initialized
       // (They couldn't be registered earlier because engine was null)
       _setupAgoraEventHandlers();
@@ -663,6 +709,9 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
           if (_remoteUsers.isEmpty) {
             _ringtoneService.stop();
             _ringtoneService.playConnectedTone();
+
+            // ✅ Cancel ring timeout - someone answered!
+            _cancelRingTimeoutTimer();
           }
 
           setState(() {
@@ -1002,6 +1051,9 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
       return;
     }
     _isEnding = true;
+
+    // ✅ Cancel ring timeout timer
+    _cancelRingTimeoutTimer();
 
     // ✅ Stop any ringtone that might be playing
     await _ringtoneService.stop();
@@ -1597,6 +1649,9 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
 
     // ✅ FIX: Cancel busy auto-end timer
     _busyAutoEndTimer?.cancel();
+
+    // ✅ Cancel ring timeout timer
+    _ringTimeoutTimer?.cancel();
 
     // ✅ Stop and dispose ringtone service
     _ringtoneService.dispose();

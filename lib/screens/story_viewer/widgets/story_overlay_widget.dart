@@ -202,10 +202,14 @@ class StoryOverlayWidget extends StatelessWidget {
                 isCurrentUser: isCurrentUser,
                 // ✅ Permitir eliminar para stories o trivias del usuario actual
                 onDelete: (currentStory != null || isCurrentTrivia) ? onDelete : null,
-                // Download y share solo para stories
+                // Download solo para stories
                 onDownload: currentStory != null ? onDownload : null,
-                onShare: currentStory != null ? onShare : null,
+                // ✅ Share para stories y trivias
+                onShare: (currentStory != null || isCurrentTrivia) ? onShare : null,
                 onClose: onClose,
+                // ✅ Pausar/reanudar timer para el menú de opciones
+                onPauseTimer: onPauseTimer,
+                onResumeTimer: onResumeTimer,
               ),
 
               Spacer(),

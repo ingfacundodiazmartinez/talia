@@ -446,6 +446,7 @@ async function sendDirectPushNotification(params) {
     senderId,
     senderName,
     senderPhotoUrl,
+    groupPhotoUrl, // ✅ Foto del grupo para notificaciones
     groupName,
     isGroup,
   } = params;
@@ -515,6 +516,7 @@ async function sendDirectPushNotification(params) {
     if (senderId) fcmData.senderId = senderId;
     if (senderName) fcmData.senderName = senderName;
     if (senderPhotoUrl) fcmData.senderPhotoUrl = senderPhotoUrl;
+    if (groupPhotoUrl) fcmData.groupPhotoUrl = groupPhotoUrl; // ✅ Foto del grupo
     if (chatId) fcmData.chatId = chatId;
     if (messageId) fcmData.messageId = messageId;
     if (groupName) fcmData.groupName = groupName;

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dashboard/parent_dashboard_screen.dart';
 import 'chats/parent_chats_screen.dart';
 import 'contacts/parent_contacts_screen.dart';
@@ -144,7 +145,7 @@ class _ParentMainShellState extends State<ParentMainShell> {
   void initState() {
     super.initState();
     // ✅ CORRECTO: Solo inicializar controller
-    _controller = ParentMainShellController();
+    _controller = ParentMainShellController(context: context);
 
     // Configurar callbacks para navegación desde notificaciones
     _controller.onChatNotificationTap = _handleChatNotificationTap;
@@ -188,8 +189,23 @@ class _ParentMainShellState extends State<ParentMainShell> {
       final chatId = data['chatId'] as String?;
       final isGroup = data['isGroup'] == true || data['isGroup'] == 'true';
 
-      // ✅ FIX: Verificar si el chat ya está abierto para evitar navegación duplicada
-      final currentOpenChatId = NotificationService().currentChatId;
+      // ✅ FIX: Verificar chat abierto en memoria Y SharedPreferences
+      // El memory check puede fallar si la app fue reiniciada/terminada
+      String? currentOpenChatId = NotificationService().currentChatId;
+
+      // Si memoria está vacía, verificar SharedPreferences (para cuando app fue terminada)
+      if (currentOpenChatId == null) {
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          currentOpenChatId = prefs.getString('current_chat_id');
+          ReleaseLogger.log(
+            '📱 [ParentMainShell] currentChatId desde SharedPreferences: $currentOpenChatId',
+            tag: 'ParentMainShell',
+          );
+        } catch (e) {
+          ReleaseLogger.error('Error leyendo current_chat_id: $e', tag: 'ParentMainShell');
+        }
+      }
 
       // Primero cambiar al tab de chats
       setState(() => _selectedIndex = 1);
@@ -208,6 +224,11 @@ class _ParentMainShellState extends State<ParentMainShell> {
         }
 
         ReleaseLogger.log('Navigating to group chat: $groupName (groupId: $effectiveGroupId)', tag: 'ParentMainShell');
+
+        // ✅ FIX: Pop hasta la raíz antes de navegar para evitar duplicados
+        // Esto maneja el caso de app reiniciada donde currentOpenChatId es null
+        // pero hay un chat en el stack de navegación
+        Navigator.of(context).popUntil((route) => route.isFirst);
 
         await Navigator.of(context).push(
           MaterialPageRoute(
@@ -240,6 +261,9 @@ class _ParentMainShellState extends State<ParentMainShell> {
         ReleaseLogger.log('Navigating to 1-on-1 chat with ${contactInfo.name}', tag: 'ParentMainShell');
         ReleaseLogger.log('Notification chatId: $chatId', tag: 'ParentMainShell');
         ReleaseLogger.log('Correct chatId: $correctChatId', tag: 'ParentMainShell');
+
+        // ✅ FIX: Pop hasta la raíz antes de navegar para evitar duplicados
+        Navigator.of(context).popUntil((route) => route.isFirst);
 
         await Navigator.of(context).push(
           MaterialPageRoute(

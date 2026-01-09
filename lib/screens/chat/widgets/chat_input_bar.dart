@@ -89,6 +89,12 @@ class ChatInputBar extends StatelessWidget {
                         child: TextField(
                           controller: messageController,
                           textCapitalization: TextCapitalization.sentences,
+                          keyboardType: TextInputType.multiline,
+                          autocorrect: true,
+                          enableSuggestions: true,
+                          // Desactivar smart dashes/quotes que reemplazan caracteres automáticamente
+                          smartDashesType: SmartDashesType.disabled,
+                          smartQuotesType: SmartQuotesType.disabled,
                           style: TextStyle(color: colorScheme.onSurface),
                           decoration: InputDecoration(
                             hintText: 'Mensaje...',

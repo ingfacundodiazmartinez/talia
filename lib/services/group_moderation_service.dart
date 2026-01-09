@@ -72,8 +72,11 @@ class GroupModerationService {
 
   /// Verificar si el usuario actual puede modificar moderación del grupo
   ///
+  /// [wantsToEnable] - true si quiere activar, false si quiere desactivar
   /// Retorna (canModify, reason)
-  Future<({bool canModify, String reason})> canModifyModeration(String groupId) async {
+  ///
+  /// ✅ FIX: Non-premium admins can DISABLE moderation (but not enable)
+  Future<({bool canModify, String reason})> canModifyModeration(String groupId, {bool wantsToEnable = true}) async {
     final userId = _auth.currentUser?.uid;
     if (userId == null) {
       return (canModify: false, reason: 'Usuario no autenticado');
@@ -95,10 +98,16 @@ class GroupModerationService {
       return (canModify: true, reason: 'Premium deshabilitado - acceso permitido');
     }
 
-    // Verificar suscripción premium
+    // ✅ FIX: Cualquier admin puede DESACTIVAR moderación sin premium
+    // Solo se requiere premium para ACTIVAR
+    if (!wantsToEnable) {
+      return (canModify: true, reason: 'Admin puede desactivar moderación');
+    }
+
+    // Verificar suscripción premium para ACTIVAR
     final premiumStatus = await _subscriptionService.checkPremiumStatus();
     if (!premiumStatus.isPremium) {
-      return (canModify: false, reason: 'Requiere suscripción Premium');
+      return (canModify: false, reason: 'Requiere suscripción Premium para activar');
     }
 
     return (canModify: true, reason: 'Admin con Premium');
@@ -125,8 +134,8 @@ class GroupModerationService {
         );
       }
 
-      // Verificar permisos
-      final permissionCheck = await canModifyModeration(groupId);
+      // Verificar permisos (pasar wantsToEnable para diferenciar activar vs desactivar)
+      final permissionCheck = await canModifyModeration(groupId, wantsToEnable: enabled);
       if (!permissionCheck.canModify) {
         return GroupModerationResult(
           success: false,

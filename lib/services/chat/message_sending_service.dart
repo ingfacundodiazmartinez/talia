@@ -272,11 +272,16 @@ class MessageSendingService {
     if (audioUrl == null) throw Exception('Error subiendo audio');
 
     // 4. Actualización optimista del lastMessage (solo para el sender)
+    // ✅ FIX: Incluir todos los campos necesarios para evitar inconsistencias
     try {
       await _firestore.collection('chats').doc(chatId).update({
         'lastMessage': '🎤 Audio',
+        'lastMessageType': 'audio',
         'lastMessageTime': FieldValue.serverTimestamp(),
+        'lastMessageAt': FieldValue.serverTimestamp(),
         'lastMessageSender': currentUserId,
+        'lastActivity': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
       });
     } catch (e) {
       // Continuar - la Cloud Function creará el chat

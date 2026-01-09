@@ -33,7 +33,9 @@ class TriviaPreviewWidget extends StatelessWidget {
 
     final hasResponded = userResponse != null &&
         userResponse!.status != ResponseStatus.inProgress;
-    final canPlay = !isCreator && !hasResponded && trivia.isActive;
+    // ✅ FIX: No permitir jugar si la trivia no tiene preguntas
+    final hasQuestions = trivia.questionIds.isNotEmpty;
+    final canPlay = !isCreator && !hasResponded && trivia.isActive && hasQuestions;
     final hasBackgroundImage = trivia.backgroundImageUrl != null;
 
     return Stack(
@@ -138,7 +140,12 @@ class TriviaPreviewWidget extends StatelessWidget {
                 const SizedBox(height: 16),
 
                 // Mensaje de estado
-                if (!trivia.isActive)
+                if (!hasQuestions)
+                  _StatusMessage(
+                    icon: Icons.warning_amber_rounded,
+                    text: 'Esta trivia no tiene preguntas',
+                  )
+                else if (!trivia.isActive)
                   _StatusMessage(
                     icon: Icons.lock_clock_rounded,
                     text: 'Esta trivia ha finalizado',
@@ -156,7 +163,8 @@ class TriviaPreviewWidget extends StatelessWidget {
                 else
                   const SizedBox(height: 20),
 
-                const SizedBox(height: 60), // Espacio para UI inferior
+                // Espacio para UI inferior (input bar ~100px + safe area)
+                const SizedBox(height: 120),
               ],
             ),
           ),
@@ -194,9 +202,12 @@ class TriviaPreviewWidget extends StatelessWidget {
 
   Widget _buildActionButton(
       BuildContext context, bool canPlay, bool hasResponded) {
+    final hasQuestions = trivia.questionIds.isNotEmpty;
+
     if (canPlay) {
       return _PlayButton(onPressed: onPlay);
-    } else if (hasResponded || isCreator || !trivia.isActive) {
+    } else if (hasResponded || isCreator || !trivia.isActive || !hasQuestions) {
+      // ✅ FIX: Mostrar "Ver resultados" también para trivias sin preguntas
       return _ResultsButton(onPressed: onViewResults);
     }
     return const SizedBox.shrink();

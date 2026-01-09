@@ -468,9 +468,69 @@ exports.moderateMessage = onDocumentCreated(
         return;
       }
 
-      // ✅ IMPORTANTE: Si el mensaje ya está aprobado, no re-analizar
+      // ✅ IMPORTANTE: Si el mensaje ya está aprobado, enviar push y actualizar lastMessage
       if (messageData.moderationStatus === "approved") {
-        console.log(`⏭️ Mensaje ya aprobado, saltando análisis de IA`);
+        console.log(`⏭️ Mensaje ya aprobado, enviando push y actualizando lastMessage`);
+
+        const senderId = messageData.senderId;
+        const chatDoc = await db.collection("chats").doc(chatId).get();
+        if (chatDoc.exists) {
+          const chatData = chatDoc.data();
+          const participants = chatData.participants || [];
+          const receiverId = participants.find((p) => p !== senderId);
+
+          if (receiverId) {
+            // Determinar preview del mensaje
+            let messagePreview = messageData.text || "";
+            if (messageData.audioUrl) {
+              messagePreview = "🎤 Audio";
+            } else if (messageData.imageUrl) {
+              messagePreview = "📷 Foto";
+            } else if (messageData.videoUrl) {
+              messagePreview = "🎥 Video";
+            } else if (messagePreview.length > 100) {
+              messagePreview = messagePreview.substring(0, 100) + "...";
+            }
+
+            // ✅ FIX: Obtener nombre del sender para el push
+            const senderDoc = await db.collection("users").doc(senderId).get();
+            const senderName = senderDoc.exists ? (senderDoc.data().name || "Usuario") : "Usuario";
+            const senderPhotoUrl = senderDoc.exists ? (senderDoc.data().photoURL || null) : null;
+
+            // ✅ FIX: Enviar push notification para mensajes aprobados
+            try {
+              await sendDirectPushNotification({
+                userId: receiverId,
+                type: "chat_message",
+                title: senderName,
+                body: messagePreview,
+                chatId: chatId,
+                messageId: messageId,
+                senderId: senderId,
+                senderName: senderName,
+                senderPhotoUrl: senderPhotoUrl,
+              });
+              console.log(`✅ [Pre-aprobado] Push enviado a ${receiverId}`);
+            } catch (pushError) {
+              console.error(`❌ [Pre-aprobado] Error enviando push:`, pushError);
+            }
+
+            // Actualizar lastMessage
+            console.log(`📝 [Pre-aprobado] Actualizando lastMessage="${messagePreview}" para chat ${chatId}`);
+
+            try {
+              await db.collection("chats").doc(chatId).update({
+                lastMessage: messagePreview,
+                lastMessageTime: FieldValue.serverTimestamp(),
+                lastMessageSender: senderId,
+                lastMessageId: messageId,
+              });
+              console.log(`✅ [Pre-aprobado] lastMessage actualizado correctamente`);
+            } catch (updateError) {
+              console.error(`❌ [Pre-aprobado] Error actualizando lastMessage:`, updateError);
+            }
+          }
+        }
         return;
       }
 
@@ -519,6 +579,20 @@ exports.moderateMessage = onDocumentCreated(
             senderName: senderName,
             senderPhotoUrl: senderPhotoUrl,
           });
+
+          // ✅ FIX: Actualizar lastMessage también para mensajes pre-moderados
+          // sendChatMessage no lo hace cuando requiresModeration=true
+          try {
+            await db.collection("chats").doc(chatId).update({
+              lastMessage: messagePreview,
+              lastMessageTime: FieldValue.serverTimestamp(),
+              lastMessageSender: senderId,
+              lastMessageId: messageId,
+            });
+            console.log(`📝 Chat sincronizado (pre-moderado): lastMessage="${messagePreview}"`);
+          } catch (updateError) {
+            console.error("Error actualizando chat (pre-moderado):", updateError);
+          }
 
           console.log(`✅ Push enviado (mensaje pre-aprobado)`);
         }
@@ -851,15 +925,25 @@ exports.moderateMessage = onDocumentCreated(
         // Ya tenemos senderName y senderPhotoUrl del inicio (no volver a consultar)
 
         // Crear preview del mensaje (truncar si es muy largo)
+        // ✅ FIX: Usar messageType que ya fue determinado correctamente al inicio
         let messagePreview = messageText;
-        if (messageData.imageUrl) {
+        if (messageType === "image") {
           messagePreview = "📷 Foto";
-        } else if (messageData.videoUrl) {
+        } else if (messageType === "video") {
           messagePreview = "🎥 Video";
-        } else if (messageData.audioUrl) {
+        } else if (messageType === "audio") {
           messagePreview = "🎤 Audio";
         } else if (messageText.length > 100) {
           messagePreview = messageText.substring(0, 100) + "...";
+        }
+
+        // ✅ FIX: Fallback adicional por si messageType no se estableció
+        if (!messagePreview && messageData.audioUrl) {
+          messagePreview = "🎤 Audio";
+        } else if (!messagePreview && messageData.imageUrl) {
+          messagePreview = "📷 Foto";
+        } else if (!messagePreview && messageData.videoUrl) {
+          messagePreview = "🎥 Video";
         }
 
         // ✅ OPTIMIZACIÓN: Enviar push directo SIN guardar en DB

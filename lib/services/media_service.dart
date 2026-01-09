@@ -3,6 +3,7 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as path;
+import 'package:talia/utils/release_logger.dart';
 
 class MediaService {
   final FirebaseStorage _storage = FirebaseStorage.instance;
@@ -60,6 +61,10 @@ class MediaService {
       final String fileName = '${DateTime.now().millisecondsSinceEpoch}_audio.m4a';
       final String storagePath = 'chats/$chatId/audios/$fileName';
 
+      ReleaseLogger.log(
+        '📤 Upload audio - chatId: $chatId, userId: $userId, path: $storagePath',
+        tag: 'MediaService',
+      );
 
       final UploadTask uploadTask = _storage.ref(storagePath).putFile(audioFile);
       final TaskSnapshot snapshot = await uploadTask;
@@ -67,7 +72,11 @@ class MediaService {
 
       return downloadUrl;
     } catch (e) {
-      return null;
+      ReleaseLogger.error(
+        '❌ Upload audio FAILED - chatId: $chatId, userId: $userId, error: $e',
+        tag: 'MediaService',
+      );
+      rethrow;
     }
   }
 

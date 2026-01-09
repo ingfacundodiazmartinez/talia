@@ -43,6 +43,10 @@ class ChatStreamManager {
   // ✅ GLOBAL MESSAGE LISTENER: Detecta mensajes en TODOS los chats para notificaciones instantáneas
   Set<String> _processedMessageIds = {}; // Evitar procesar el mismo mensaje múltiples veces
 
+  // ✅ PRE-CARGA DE MENSAJES: Cache para trackear chats que necesitan sync al volver a foreground
+  final Set<String> _chatsModifiedInBackground = {};
+  StreamSubscription? _foregroundStateSubscription;
+
   // ✅ OPTIMIZACIÓN: Límites de memoria para caches
   static const int _maxProcessedMessageIds = 1000;
   static const int _maxCacheEntries = 100;
@@ -676,6 +680,9 @@ class ChatStreamManager {
 
       ReleaseLogger.log('✅ [ChatDocsListener] Listeners iniciados (2 listeners: chats + grupos)');
 
+      // ✅ Inicializar listener de foreground para sincronizar caches
+      _initializeForegroundListener();
+
       // ❌ REMOVED: Heartbeat timer ya no es necesario
       // DATA-ONLY strategy: StreamDetector NO muestra notificaciones
       // Por lo tanto, NO debemos decirle a iOS que estamos "healthy"
@@ -831,6 +838,17 @@ class ChatStreamManager {
       await LocalUnreadCountService().incrementUnreadCount(chatId);
       await _unreadService.updateBadgeCount();
       ReleaseLogger.log('📊 [ChatDocsListener] Unread count incrementado para $chatId');
+
+      // ✅ PRE-CARGA: Actualizar cache del chat para UX instantáneo al abrir
+      final isAppInForeground = AppStateService().isInForeground;
+      if (isAppInForeground) {
+        // En foreground: pre-cargar mensajes inmediatamente
+        prefetchMessagesForChat(chatId, isGroup: isGroup);
+      } else {
+        // En background: marcar para sincronizar cuando vuelva a foreground
+        _chatsModifiedInBackground.add('$chatId:$isGroup');
+        ReleaseLogger.log('📝 [Prefetch] Chat $chatId marcado para sync al volver a foreground');
+      }
 
       // ═══════════════════════════════════════════════════════════════
       // ⚡ STREAM DETECTOR: Mostrar notificación instantánea (<100ms)
@@ -1009,6 +1027,11 @@ class ChatStreamManager {
       _groupDocsSubscription = null;
       _lastSeenMessageTimestamps.clear();
       ReleaseLogger.log('⚡ [ChatDocsListener] Listeners de documentos detenidos');
+
+      // ✅ Detener listener de foreground
+      _foregroundStateSubscription?.cancel();
+      _foregroundStateSubscription = null;
+      _chatsModifiedInBackground.clear();
 
       // ❌ DEPRECATED: Heartbeat timer ya no se usa
       // _heartbeatTimer?.cancel();
@@ -1390,6 +1413,7 @@ class ChatStreamManager {
     _clearedAtCache.clear();
     _prefsCache = null;
     _cachedCurrentChatId = null;
+    _chatsModifiedInBackground.clear();
 
     ReleaseLogger.log('✅ [ChatStreamManager] Limpieza completa de sesión finalizada');
   }
@@ -1442,6 +1466,92 @@ class ChatStreamManager {
         _lastEmittedMessageIds.remove(key);
       }
     }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // PRE-CARGA DE MENSAJES - Cache anticipado para UX instantáneo
+  // ═══════════════════════════════════════════════════════════════
+
+  /// ⚡ Pre-cargar mensajes de un chat en el cache (Hive)
+  /// Esto permite que al abrir un chat, los mensajes ya estén disponibles
+  Future<void> prefetchMessagesForChat(String chatId, {bool isGroup = false, int limit = 20}) async {
+    try {
+      ReleaseLogger.log('📥 [Prefetch] Iniciando pre-carga de mensajes para ${isGroup ? "grupo" : "chat"} $chatId');
+
+      final messagesCollection = isGroup ? 'groups_v2/$chatId/messages' : 'chats/$chatId/messages';
+
+      // Obtener los últimos N mensajes ordenados por timestamp
+      final snapshot = await FirebaseFirestore.instance
+          .collection(messagesCollection)
+          .orderBy('timestamp', descending: true)
+          .limit(limit)
+          .get();
+
+      if (snapshot.docs.isEmpty) {
+        ReleaseLogger.log('📥 [Prefetch] No hay mensajes para $chatId');
+        return;
+      }
+
+      final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+
+      // Convertir a ChatMessage
+      final messages = snapshot.docs
+          .map((doc) => ChatMessage.fromFirestore(doc, currentUserId: currentUserId))
+          .toList();
+
+      // Guardar en Hive cache
+      await MessageCacheService().saveMessages(chatId, messages);
+
+      ReleaseLogger.log('✅ [Prefetch] Pre-cargados ${messages.length} mensajes para $chatId en Hive cache');
+    } catch (e) {
+      ReleaseLogger.error('❌ [Prefetch] Error pre-cargando mensajes para $chatId: $e');
+    }
+  }
+
+  /// ⚡ Sincronizar caches cuando la app vuelve a foreground
+  /// Obtiene mensajes nuevos de todos los chats que fueron modificados en background
+  Future<void> _syncChatsOnForegroundResume() async {
+    if (_chatsModifiedInBackground.isEmpty) {
+      ReleaseLogger.log('📱 [ForegroundSync] No hay chats modificados para sincronizar');
+      return;
+    }
+
+    ReleaseLogger.log('📱 [ForegroundSync] Sincronizando ${_chatsModifiedInBackground.length} chats modificados en background');
+
+    // Copiar y limpiar la lista para evitar modificaciones concurrentes
+    final chatsToSync = Set<String>.from(_chatsModifiedInBackground);
+    _chatsModifiedInBackground.clear();
+
+    // Sincronizar cada chat en paralelo
+    final futures = <Future<void>>[];
+    for (final chatInfo in chatsToSync) {
+      // chatInfo tiene formato: "chatId:isGroup"
+      final parts = chatInfo.split(':');
+      if (parts.length != 2) continue;
+
+      final chatId = parts[0];
+      final isGroup = parts[1] == 'true';
+
+      futures.add(prefetchMessagesForChat(chatId, isGroup: isGroup));
+    }
+
+    await Future.wait(futures);
+    ReleaseLogger.log('✅ [ForegroundSync] Sincronización completada para ${chatsToSync.length} chats');
+  }
+
+  /// Inicializar listener para cambios de estado foreground/background
+  void _initializeForegroundListener() {
+    // Evitar múltiples subscripciones
+    if (_foregroundStateSubscription != null) return;
+
+    _foregroundStateSubscription = AppStateService().foregroundStateStream.listen((isInForeground) async {
+      if (isInForeground) {
+        ReleaseLogger.log('📱 [ChatStreamManager] App volvió a foreground - sincronizando caches');
+        await _syncChatsOnForegroundResume();
+      }
+    });
+
+    ReleaseLogger.log('✅ [ChatStreamManager] Listener de foreground inicializado');
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -1578,6 +1688,7 @@ class ChatStreamManager {
     _previousReadByState.clear();
     _processedMessageIds.clear();
     _lastEmittedMessageIds.clear(); // ✅ Cleanup emitted message IDs
+    _chatsModifiedInBackground.clear(); // ✅ Cleanup prefetch tracking
 
     // ✅ V2: Cancelar todas las subscripciones de chat documents
     for (final sub in _chatDocSubscriptions.values) {

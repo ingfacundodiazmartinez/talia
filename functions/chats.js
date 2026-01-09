@@ -118,6 +118,17 @@ exports.incrementUnreadCount = onDocumentCreated(
 
         // ✅ Crear documento del chat con isValidChat: true por defecto
         const now = Timestamp.now();  // ✅ FIX: Timestamp inmediato
+
+        // ✅ FIX: Para mensajes de media, usar preview apropiado
+        let initialLastMessage = messageData.text || "";
+        if (messageData.audioUrl) {
+          initialLastMessage = "🎤 Audio";
+        } else if (messageData.imageUrl) {
+          initialLastMessage = "📷 Foto";
+        } else if (messageData.videoUrl) {
+          initialLastMessage = "🎥 Video";
+        }
+
         await chatRef.set({
           participants: participants,
           isValidChat: true, // ✅ NUEVO CAMPO: indica si el chat es válido para mensajes
@@ -125,7 +136,7 @@ exports.incrementUnreadCount = onDocumentCreated(
           createdAt: now,
           lastMessageTime: now,
           lastMessageAt: now,  // ✅ FIX: Agregar campo que el listener espera
-          lastMessage: messageData.text || "",  // ✅ FIX: Usar texto del mensaje
+          lastMessage: initialLastMessage,
           lastMessageSender: messageData.senderId || "",  // ✅ FIX: Usar sender real
           deletedBy: [],
         }, {merge: true});  // ✅ CRITICAL FIX: merge=true para no sobrescribir si Flutter ya creó el chat
@@ -238,14 +249,24 @@ exports.incrementUnreadCount = onDocumentCreated(
         console.log(`🔒 Mensaje con moderación pendiente para ${receiverId}, SOLO actualizando visible (moderateMessage manejará el resto)`);
       } else {
         // For regular messages (no moderation), update everything including lastMessage
+        // ✅ FIX: Para mensajes de media (audio, video, imagen), usar preview apropiado
+        let lastMessagePreview = messageData.text || "";
+        if (messageData.audioUrl) {
+          lastMessagePreview = "🎤 Audio";
+        } else if (messageData.imageUrl) {
+          lastMessagePreview = "📷 Foto";
+        } else if (messageData.videoUrl) {
+          lastMessagePreview = "🎥 Video";
+        }
+
         await chatRef.update({
           visible: true,
           lastMessageAt: Timestamp.now(),
           lastMessageTime: Timestamp.now(),
-          lastMessage: messageData.text || "",
+          lastMessage: lastMessagePreview,
           lastMessageSender: senderId,
         });
-        console.log(`✅ Mensaje procesado para ${receiverId}, chat visible: true`);
+        console.log(`✅ Mensaje procesado para ${receiverId}, chat visible: true, lastMessage: "${lastMessagePreview}"`);
       }
 
       return null;
@@ -287,6 +308,7 @@ exports.incrementGroupUnreadCount = onDocumentCreated(
       const groupData = groupDoc.data();
       const members = groupData.members || [];
       const groupName = groupData.name || "Grupo";
+      const groupPhotoUrl = groupData.avatar || ""; // Foto del grupo
 
       console.log(`📊 DEBUG - Grupo: ${groupName}, Miembros: [${members.join(", ")}]`);
 
@@ -377,8 +399,19 @@ exports.incrementGroupUnreadCount = onDocumentCreated(
       // Esto evita el crecimiento ilimitado de la colección 'notifications'
       const pushPromises = [];
 
+      // ✅ FIX: Obtener lista de usuarios para los que el mensaje está bloqueado
+      // Estos usuarios NO deben recibir notificación porque no verán el mensaje
+      const blockedFor = messageData.blockedFor || [];
+      const blockedSet = new Set(blockedFor);
+
       for (const memberId of members) {
         if (memberId !== senderId) {
+          // ✅ FIX: No enviar notificación si el mensaje está bloqueado para este usuario
+          if (blockedSet.has(memberId)) {
+            console.log(`⏭️ Saltando notificación a ${memberId} - mensaje bloqueado por moderación`);
+            continue;
+          }
+
           // ✅ Enviar push directo (en paralelo para mejor performance)
           pushPromises.push(
             sendDirectPushNotification({
@@ -391,6 +424,7 @@ exports.incrementGroupUnreadCount = onDocumentCreated(
               senderId: senderId,
               senderName: senderName,
               senderPhotoUrl: senderPhotoUrl,
+              groupPhotoUrl: groupPhotoUrl, // ✅ Foto del grupo para notificaciones
               groupName: groupName,
               isGroup: true,
             }).then(() => {
@@ -795,6 +829,12 @@ exports.sendChatMessage = onCall(
         if (requiresModeration) {
           messageData.moderationStatus = "pending";
           console.log(`🔒 [sendChatMessage] Mensaje guardado con moderationStatus: pending`);
+        } else {
+          // ✅ FIX: Establecer approved cuando NO hay moderación para evitar race condition
+          // Sin esto, el trigger moderateMessage marca como pending temporalmente,
+          // y si Flutter recibe el snapshot en ese momento, descarta el mensaje
+          messageData.moderationStatus = "approved";
+          console.log(`✅ [sendChatMessage] Mensaje guardado con moderationStatus: approved (sin moderación)`);
         }
 
         // Añadir mensaje

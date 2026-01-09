@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import '../../../utils/release_logger.dart';
 import '../../../link_parent_child.dart';
@@ -14,10 +13,11 @@ import '../../../screens/my_code_screen.dart';
 import '../../parent/profile/edit_profile_screen.dart';
 import '../../../controllers/child_profile_controller.dart';
 import '../../../services/child_profile_service.dart';
+import '../../../services/image_service.dart';
 import 'widgets/profile_header_widget.dart';
 import 'widgets/link_status_widget.dart';
+import 'widgets/premium_status_widget.dart';
 import 'widgets/profile_option_item.dart';
-import 'widgets/image_picker_dialog.dart';
 
 class ChildProfileScreen extends StatefulWidget {
   const ChildProfileScreen({super.key});
@@ -29,6 +29,7 @@ class ChildProfileScreen extends StatefulWidget {
 class _ChildProfileScreenState extends State<ChildProfileScreen> {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final ChildProfileService _service = ChildProfileService();
+  final ImageService _imageService = ImageService();
   late ChildProfileController _controller;
 
   @override
@@ -87,7 +88,27 @@ class _ChildProfileScreenState extends State<ChildProfileScreen> {
                 role: role,
               ),
 
-              const SizedBox(height: 32),
+              const SizedBox(height: 16),
+
+              // Estado premium (solo para children)
+              if (role == 'child')
+                StreamBuilder<QuerySnapshot>(
+                  stream: FirebaseFirestore.instance
+                      .collection('parent_children')
+                      .where('childId', isEqualTo: user.uid)
+                      .where('status', isEqualTo: 'approved')
+                      .snapshots(),
+                  builder: (context, linksSnapshot) {
+                    final hasLinkedParent = linksSnapshot.hasData &&
+                        linksSnapshot.data!.docs.isNotEmpty;
+                    return PremiumStatusWidget(
+                      userId: user.uid,
+                      hasLinkedParent: hasLinkedParent,
+                    );
+                  },
+                ),
+
+              const SizedBox(height: 16),
 
               // Opciones
               Text(
@@ -260,86 +281,42 @@ class _ChildProfileScreenState extends State<ChildProfileScreen> {
     );
   }
 
-  void _showImageOptions() {
-    ImagePickerDialog.show(
-      context,
-      onCamera: () => _pickImage(ImageSource.camera),
-      onGallery: () => _pickImage(ImageSource.gallery),
-      onDelete: _deleteImage,
-    );
-  }
-
-  Future<void> _pickImage(ImageSource source) async {
-    Navigator.pop(context); // Cerrar bottom sheet
-
-    // Guardar referencia al contexto de la pantalla antes de mostrar cualquier diálogo
-    final scaffoldContext = context;
+  /// Muestra opciones de imagen usando el flujo de ImageService
+  /// (Mismo enfoque que EditProfileScreen - funciona en iOS)
+  Future<void> _showImageOptions() async {
+    ReleaseLogger.log('Iniciando cambio de foto de perfil...', tag: 'ChildProfile');
 
     try {
-      // Primero, permitir al usuario seleccionar la imagen
-      // El ImageService maneja la selección y LUEGO procesa
-      // NO mostrar loading todavía - esperar a que el usuario seleccione
+      // Mostrar selector de fuente de imagen (maneja el bottom sheet internamente)
+      final source = await _imageService.showImageSourceSelection(context);
+      ReleaseLogger.log('Selector cerrado. Source seleccionado: $source', tag: 'ChildProfile');
 
-      await _controller.pickAndUploadImage(
-        source,
-        scaffoldContext,
-      );
+      if (source == null) {
+        ReleaseLogger.log('Usuario canceló la selección', tag: 'ChildProfile');
+        return;
+      }
 
-      // Si llegamos aquí, la imagen se procesó exitosamente
-      // El diálogo de loading se maneja dentro de ImageService
+      ReleaseLogger.log('Iniciando selección y subida de imagen...', tag: 'ChildProfile');
+
+      // Seleccionar imagen (pickAndUploadProfileImage maneja el loading dialog internamente)
+      final String? imageUrl = await _controller.pickAndUploadImage(source, context);
+
+      ReleaseLogger.log('Resultado: ${imageUrl != null ? 'URL obtenida' : 'null'}', tag: 'ChildProfile');
+
+      if (imageUrl != null && mounted) {
+        ReleaseLogger.log('Foto de perfil actualizada exitosamente', tag: 'ChildProfile');
+      }
     } catch (e) {
-      // Si hay error, mostrar mensaje
-      final errorMessage = ChildProfileController.getErrorMessage(e, source);
-
+      ReleaseLogger.error('Error al cambiar foto: $e', tag: 'ChildProfile');
       if (mounted) {
-        ScaffoldMessenger.of(scaffoldContext).showSnackBar(
+        final errorMsg = e.toString().replaceAll('Exception: ', '');
+        ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(errorMessage),
+            content: Text(errorMsg),
             backgroundColor: Colors.red,
             duration: const Duration(seconds: 4),
           ),
         );
-      }
-    }
-  }
-
-  Future<void> _deleteImage() async {
-    Navigator.pop(context); // Cerrar bottom sheet
-
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Eliminar foto'),
-        content:
-            const Text('¿Estás seguro que deseas eliminar tu foto de perfil?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancelar'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            child: const Text('Eliminar'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirm == true) {
-      try {
-        await _controller.deleteProfileImage();
-
-        // Image deleted successfully
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Error al eliminar la foto'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
       }
     }
   }

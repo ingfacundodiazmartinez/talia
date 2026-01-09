@@ -740,6 +740,21 @@ class GroupChatController extends ChangeNotifier {
     _typingService.stopTyping();
   }
 
+  /// Establecer estado de grabación de audio
+  void setRecording(bool isRecording) {
+    _typingService.setRecording(groupId, isRecording, isGroup: true);
+  }
+
+  /// Detener grabación
+  void stopRecording() {
+    _typingService.stopRecording();
+  }
+
+  /// Stream de actividad de usuarios (typing/recording)
+  Stream<Map<String, UserActivityState>> watchGroupActivity() {
+    return _typingService.watchGroupActivity(groupId, currentUserId);
+  }
+
   /// Obtener nombre de usuario por ID
   String getUserName(String userId) {
     return _userNames[userId] ?? 'Usuario';

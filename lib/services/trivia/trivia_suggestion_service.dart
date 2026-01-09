@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 
 import '../../models/trivia_question.dart';
@@ -53,20 +54,28 @@ class TriviaSuggestionService {
   static TriviaSuggestionService? _instance;
 
   final FirebaseFunctions _functions;
+  final FirebaseFirestore _firestore;
   final Random _random = Random();
 
   /// Historial de sugerencias usadas para evitar repeticiones
   final Set<String> _usedSuggestionKeys = {};
 
+  /// Cache de sugerencias cargadas desde Firestore
+  Map<String, List<TriviaSuggestion>>? _cachedSuggestions;
+
   TriviaSuggestionService._internal({
     FirebaseFunctions? functions,
-  }) : _functions = functions ?? FirebaseFunctions.instance;
+    FirebaseFirestore? firestore,
+  })  : _functions = functions ?? FirebaseFunctions.instance,
+        _firestore = firestore ?? FirebaseFirestore.instance;
 
   factory TriviaSuggestionService({
     FirebaseFunctions? functions,
+    FirebaseFirestore? firestore,
   }) {
     _instance ??= TriviaSuggestionService._internal(
       functions: functions,
+      firestore: firestore,
     );
     return _instance!;
   }
@@ -163,13 +172,95 @@ class TriviaSuggestionService {
     } catch (e) {
       ReleaseLogger.error('❌ [TriviaSuggestion] Error generando pregunta: $e');
 
-      // Fallback a pregunta predefinida
-      return _getFallbackSuggestion(actualCategory);
+      // Fallback a pregunta desde DB o hardcoded
+      return await _getFallbackSuggestionAsync(actualCategory);
+    }
+  }
+
+  /// Cargar sugerencias desde Firestore y cachearlas
+  Future<Map<String, List<TriviaSuggestion>>> _loadSuggestionsFromDb() async {
+    if (_cachedSuggestions != null) return _cachedSuggestions!;
+
+    try {
+      final snapshot = await _firestore.collection('trivia_suggestions').get();
+      final result = <String, List<TriviaSuggestion>>{};
+
+      for (final doc in snapshot.docs) {
+        final data = doc.data();
+        final categoryId = data['categoryId'] as String? ?? 'random';
+        final category = getCategoryById(categoryId) ?? categories.last;
+
+        final suggestion = TriviaSuggestion(
+          question: data['question'] as String? ?? '',
+          options: List<String>.from(data['options'] ?? []),
+          correctOptionIndex: data['correctOptionIndex'] as int? ?? 0,
+          category: category,
+        );
+
+        result.putIfAbsent(categoryId, () => []).add(suggestion);
+      }
+
+      _cachedSuggestions = result;
+      ReleaseLogger.log('📦 [TriviaSuggestion] Cargadas ${snapshot.docs.length} sugerencias desde DB');
+      return result;
+    } catch (e) {
+      ReleaseLogger.error('❌ [TriviaSuggestion] Error cargando desde DB: $e');
+      return {};
     }
   }
 
   /// Obtener pregunta predefinida como fallback (sin repetir)
+  /// Primero intenta desde Firestore, luego usa hardcoded como último recurso
+  Future<TriviaSuggestion> _getFallbackSuggestionAsync(TriviaCategory category) async {
+    // Intentar cargar desde DB
+    final dbSuggestions = await _loadSuggestionsFromDb();
+    final suggestions = dbSuggestions[category.id];
+
+    if (suggestions != null && suggestions.isNotEmpty) {
+      return _selectFromList(suggestions, category);
+    }
+
+    // Fallback a hardcoded si no hay en DB
+    return _getFallbackSuggestionHardcoded(category);
+  }
+
+  /// Obtener pregunta predefinida como fallback (sin repetir) - versión sincrónica
   TriviaSuggestion _getFallbackSuggestion(TriviaCategory category) {
+    // Usar cache si existe
+    if (_cachedSuggestions != null) {
+      final suggestions = _cachedSuggestions![category.id];
+      if (suggestions != null && suggestions.isNotEmpty) {
+        return _selectFromList(suggestions, category);
+      }
+    }
+
+    // Fallback a hardcoded
+    return _getFallbackSuggestionHardcoded(category);
+  }
+
+  /// Seleccionar una sugerencia de la lista sin repetir
+  TriviaSuggestion _selectFromList(List<TriviaSuggestion> suggestions, TriviaCategory category) {
+    // Filtrar sugerencias no usadas
+    final availableSuggestions = suggestions.where((s) {
+      final key = '${category.id}_${s.question}';
+      return !_usedSuggestionKeys.contains(key);
+    }).toList();
+
+    // Si todas fueron usadas, limpiar historial de esta categoría
+    if (availableSuggestions.isEmpty) {
+      _usedSuggestionKeys.removeWhere((k) => k.startsWith('${category.id}_'));
+      return _selectFromList(suggestions, category); // Recursivo con historial limpio
+    }
+
+    // Seleccionar aleatoriamente y marcar como usada
+    final suggestion = availableSuggestions[_random.nextInt(availableSuggestions.length)];
+    _usedSuggestionKeys.add('${category.id}_${suggestion.question}');
+
+    return suggestion;
+  }
+
+  /// Fallback con preguntas hardcoded (último recurso)
+  TriviaSuggestion _getFallbackSuggestionHardcoded(TriviaCategory category) {
     final suggestions = _predefinedSuggestions[category.id] ?? [];
     if (suggestions.isEmpty) {
       // Pregunta genérica
@@ -181,23 +272,7 @@ class TriviaSuggestionService {
       );
     }
 
-    // Filtrar sugerencias no usadas
-    final availableSuggestions = suggestions.where((s) {
-      final key = '${category.id}_${s.question}';
-      return !_usedSuggestionKeys.contains(key);
-    }).toList();
-
-    // Si todas fueron usadas, limpiar historial de esta categoría
-    if (availableSuggestions.isEmpty) {
-      _usedSuggestionKeys.removeWhere((k) => k.startsWith('${category.id}_'));
-      return _getFallbackSuggestion(category); // Recursivo con historial limpio
-    }
-
-    // Seleccionar aleatoriamente y marcar como usada
-    final suggestion = availableSuggestions[_random.nextInt(availableSuggestions.length)];
-    _usedSuggestionKeys.add('${category.id}_${suggestion.question}');
-
-    return suggestion;
+    return _selectFromList(suggestions, category);
   }
 
   /// Preguntas predefinidas por categoría (generales, no específicas)

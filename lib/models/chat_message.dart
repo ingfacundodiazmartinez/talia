@@ -246,6 +246,11 @@ class ChatMessage {
     // ✅ FIX: Incluir localId para deduplicación
     if (localId != null) map['localId'] = localId;
 
+    // ✅ FIX: Incluir moderationStatus para evitar race condition con trigger
+    if (moderationStatus != null) {
+      map['moderationStatus'] = moderationStatus!.name;
+    }
+
     return map;
   }
 

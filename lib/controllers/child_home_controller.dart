@@ -5,8 +5,6 @@ import 'package:geolocator/geolocator.dart';
 import '../services/location_service.dart';
 import '../notification_service.dart';
 import '../services/user_role_service.dart';
-import '../groups/groups.dart'; // Groups V2
-import '../screens/chat_detail_screen.dart';
 import '../widgets/location_permission_dialog.dart';
 import '../utils/release_logger.dart';
 import '../services/permission_sync_service.dart';
@@ -151,50 +149,20 @@ class ChildHomeController {
   }
 
   /// Escuchar notificaciones de chat
+  /// ✅ FIX: Removida navegación duplicada - ChildMainShell ya maneja la navegación
+  /// Este listener solo se mantiene para logging/debugging
   void _listenForChatNotifications() {
     _chatNotificationSubscription = _notificationService.chatNotificationTapStream.listen(
       (data) async {
-        ReleaseLogger.log('Notificación de chat tocada: $data', tag: 'ChildHomeController');
-
-        final chatId = data['chatId'] as String?;
-        final senderId = data['senderId'] as String?;
-        final senderName = data['senderName'] as String?;
-        final isGroup = data['isGroup'] == true || data['isGroup'] == 'true';
-        final groupName = data['groupName'] as String?;
-
-        if (chatId != null) {
-          if (isGroup && groupName != null) {
-            // Navegar al chat de grupo (Groups V2)
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => GroupChatScreenV2(
-                  groupId: chatId,
-                  groupName: groupName,
-                ),
-              ),
-            );
-          } else if (senderId != null && senderName != null) {
-            // Navegar al chat individual
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => ChatDetailScreen(
-                  contactId: senderId,
-                  contactName: senderName,
-                  chatId: chatId,
-                ),
-              ),
-            );
-          }
-        }
+        // ✅ Solo logging - la navegación la maneja ChildMainShell para evitar duplicados
+        ReleaseLogger.log('📩 [ChildHomeController] Notificación de chat recibida (navegación delegada a ChildMainShell)', tag: 'ChildHomeController');
       },
       onError: (error) {
         ReleaseLogger.error('Error en listener de notificaciones de chat: $error', tag: 'ChildHomeController');
       },
     );
 
-    ReleaseLogger.log('Escuchando notificaciones de chat', tag: 'ChildHomeController');
+    ReleaseLogger.log('Escuchando notificaciones de chat (solo logging)', tag: 'ChildHomeController');
   }
 
   /// Limpiar recursos

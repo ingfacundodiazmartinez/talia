@@ -84,6 +84,8 @@ class SubscriptionService {
             ? DateTime.parse(data['expiresAt'] as String)
             : null,
         subscriptionType: data['subscriptionType'] as String?,
+        familyOwner: data['familyOwner'] as String?,
+        familyOwnerName: data['familyOwnerName'] as String?,
       );
 
       // Actualizar caché
@@ -400,6 +402,10 @@ class PremiumStatus {
   /// Indica si el sistema premium está desactivado globalmente
   /// Cuando es true: ads se muestran, pero no hay límites ni paywalls
   final bool premiumSystemDisabled;
+  /// ID del padre que comparte premium (solo para family_sharing)
+  final String? familyOwner;
+  /// Nombre del padre que comparte premium (solo para family_sharing)
+  final String? familyOwnerName;
 
   PremiumStatus({
     required this.isPremium,
@@ -407,7 +413,12 @@ class PremiumStatus {
     this.expiresAt,
     this.subscriptionType,
     this.premiumSystemDisabled = false,
+    this.familyOwner,
+    this.familyOwnerName,
   });
+
+  /// Indica si el premium es compartido por un padre
+  bool get isFamilySharing => subscriptionType == 'family_sharing';
 
   factory PremiumStatus.free() {
     return PremiumStatus(

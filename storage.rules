@@ -190,7 +190,10 @@ service firebase.storage {
                'image/jpeg', 'image/png', 'image/gif', 'image/webp',
                'image/heic', 'image/heif', 'image/bmp', 'image/tiff', 'image/avif',
                // Videos
-               'video/mp4', 'video/mov', 'video/avi', 'video/webm', 'video/quicktime'
+               'video/mp4', 'video/mov', 'video/avi', 'video/webm', 'video/quicktime',
+               // Audio
+               'audio/mpeg', 'audio/mp4', 'audio/m4a', 'audio/aac', 'audio/wav',
+               'audio/ogg', 'audio/webm', 'audio/x-m4a'
              ];
     }
 

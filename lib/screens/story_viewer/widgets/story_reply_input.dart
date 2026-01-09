@@ -61,6 +61,12 @@ class StoryReplyInput extends StatelessWidget {
                           controller: controller,
                           focusNode: focusNode,
                           textCapitalization: TextCapitalization.sentences,
+                          keyboardType: TextInputType.text,
+                          autocorrect: true,
+                          enableSuggestions: true,
+                          // Desactivar smart dashes/quotes que reemplazan caracteres automáticamente
+                          smartDashesType: SmartDashesType.disabled,
+                          smartQuotesType: SmartQuotesType.disabled,
                           style: const TextStyle(color: Colors.white),
                           decoration: const InputDecoration(
                             hintText: 'Responder...',

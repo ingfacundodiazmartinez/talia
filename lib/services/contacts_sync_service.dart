@@ -26,6 +26,7 @@ class ContactsSyncService {
   static const String _deviceNumbersKey = 'device_phone_numbers';
   static const String _lastSyncKey = 'last_sync_timestamp';
   static const String _nameIndexBoxName = 'device_contacts_name_index';
+  static const String _consentKey = 'contacts_sync_consent_granted';
 
   Box? _cacheBox;
   Box? _nameIndexBox;
@@ -36,8 +37,41 @@ class ContactsSyncService {
     _nameIndexBox ??= await Hive.openBox(_nameIndexBoxName);
   }
 
+  /// Verificar si el usuario ha dado consentimiento para sincronizar contactos
+  ///
+  /// Apple Guideline 5.1.2 requiere consentimiento explícito antes de
+  /// subir datos de contactos a un servidor
+  Future<bool> hasConsent() async {
+    await initialize();
+    return _cacheBox?.get(_consentKey) == true;
+  }
+
+  /// Establecer el consentimiento del usuario
+  ///
+  /// Debe llamarse después de mostrar el diálogo de consentimiento
+  /// y obtener aceptación explícita del usuario
+  Future<void> setConsent(bool granted) async {
+    await initialize();
+    await _cacheBox?.put(_consentKey, granted);
+    ReleaseLogger.log('Consentimiento de sincronización de contactos: $granted', tag: 'ContactsSync');
+  }
+
+  /// Revocar el consentimiento y limpiar datos sincronizados
+  Future<void> revokeConsent() async {
+    await initialize();
+    await _cacheBox?.put(_consentKey, false);
+    await _cacheBox?.delete(_deviceNumbersKey);
+    await _cacheBox?.delete(_lastSyncKey);
+    await _nameIndexBox?.clear();
+    ReleaseLogger.log('Consentimiento de sincronización revocado y datos limpiados', tag: 'ContactsSync');
+  }
+
   /// Sincronizar contactos del dispositivo con Cloud Function
-  Future<void> syncContacts({bool force = false}) async {
+  ///
+  /// [force] - Forzar sincronización aunque no haya cambios
+  /// [skipConsentCheck] - Omitir verificación de consentimiento (usar solo cuando
+  ///                      se acaba de obtener consentimiento en el mismo flujo)
+  Future<void> syncContacts({bool force = false, bool skipConsentCheck = false}) async {
     if (_isSyncing) return;
 
     _isSyncing = true;
@@ -47,6 +81,15 @@ class ContactsSyncService {
 
       final currentUser = _auth.currentUser;
       if (currentUser == null) return;
+
+      // Verificar consentimiento del usuario (Apple Guideline 5.1.2)
+      if (!skipConsentCheck) {
+        final consentGranted = await hasConsent();
+        if (!consentGranted) {
+          ReleaseLogger.log('Sincronización cancelada: usuario no ha dado consentimiento', tag: 'ContactsSync');
+          return;
+        }
+      }
 
       // Verificar permiso de contactos
       bool hasPermission = await _deviceContacts.hasPermission();

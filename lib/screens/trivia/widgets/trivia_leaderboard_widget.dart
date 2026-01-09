@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../../../models/trivia_response.dart';
+import '../../../widgets/synced_user_widgets.dart';
 
 /// Widget de leaderboard completo de trivia
 class TriviaLeaderboardWidget extends StatelessWidget {
@@ -18,7 +18,7 @@ class TriviaLeaderboardWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (entries.isEmpty) {
-      return _buildEmptyState();
+      return _buildEmptyState(context);
     }
 
     return Column(
@@ -26,16 +26,21 @@ class TriviaLeaderboardWidget extends StatelessWidget {
       children: [
         if (showHeader)
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             child: Row(
               children: [
-                const Icon(Icons.leaderboard_rounded, size: 20),
+                Icon(
+                  Icons.leaderboard_rounded,
+                  size: 20,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
                 const SizedBox(width: 8),
                 Text(
                   'Ranking (${entries.length} participantes)',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
+                    color: Theme.of(context).colorScheme.onSurface,
                   ),
                 ),
               ],
@@ -57,21 +62,21 @@ class TriviaLeaderboardWidget extends StatelessWidget {
     );
   }
 
-  Widget _buildEmptyState() {
-    return const Center(
+  Widget _buildEmptyState(BuildContext context) {
+    return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(
             Icons.people_outline_rounded,
             size: 48,
-            color: Colors.grey,
+            color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
           ),
-          SizedBox(height: 16),
+          const SizedBox(height: 16),
           Text(
             'Sin participantes aún',
             style: TextStyle(
-              color: Colors.grey,
+              color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
               fontSize: 16,
             ),
           ),
@@ -94,18 +99,26 @@ class _LeaderboardTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final currentUserId = FirebaseAuth.instance.currentUser?.uid;
     final isCurrentUser = entry.response.oderId == currentUserId;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: isCurrentUser
-            ? const Color(0xFF667eea).withValues(alpha: 0.1)
-            : Colors.grey.shade50,
+            ? const Color(0xFF667eea).withValues(alpha: isDark ? 0.2 : 0.1)
+            : isDark
+                ? theme.colorScheme.surfaceContainerHighest
+                : theme.colorScheme.surfaceContainerLowest,
         borderRadius: BorderRadius.circular(12),
         border: isCurrentUser
             ? Border.all(color: const Color(0xFF667eea), width: 2)
-            : Border.all(color: Colors.grey.shade200),
+            : Border.all(
+                color: isDark
+                    ? theme.colorScheme.outline.withValues(alpha: 0.3)
+                    : theme.colorScheme.outline.withValues(alpha: 0.2),
+              ),
       ),
       child: Row(
         children: [
@@ -123,7 +136,7 @@ class _LeaderboardTile extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.bold,
-                        color: Colors.grey.shade600,
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
                       ),
                     ),
             ),
@@ -131,16 +144,13 @@ class _LeaderboardTile extends StatelessWidget {
 
           const SizedBox(width: 12),
 
-          // Avatar
-          CircleAvatar(
+          // Avatar usando SyncedUserAvatar para foto correcta
+          SyncedUserAvatar(
+            userId: entry.response.oderId,
+            fallbackPhotoUrl: entry.response.oderPhotoURL,
+            userName: entry.response.oderName,
             radius: 20,
-            backgroundColor: Colors.grey.shade200,
-            backgroundImage: entry.response.oderPhotoURL != null
-                ? CachedNetworkImageProvider(entry.response.oderPhotoURL!)
-                : null,
-            child: entry.response.oderPhotoURL == null
-                ? Icon(Icons.person, color: Colors.grey.shade400)
-                : null,
+            backgroundColor: theme.colorScheme.primaryContainer,
           ),
 
           const SizedBox(width: 12),
@@ -153,13 +163,14 @@ class _LeaderboardTile extends StatelessWidget {
                 Row(
                   children: [
                     Flexible(
-                      child: Text(
-                        entry.response.oderName,
+                      child: SyncedUserName(
+                        userId: entry.response.oderId,
+                        fallbackName: entry.response.oderName,
                         style: TextStyle(
                           fontWeight: FontWeight.w600,
                           color: isCurrentUser
                               ? const Color(0xFF667eea)
-                              : null,
+                              : theme.colorScheme.onSurface,
                         ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -192,7 +203,7 @@ class _LeaderboardTile extends StatelessWidget {
                   '${entry.response.correctCount}/${entry.response.totalQuestions} correctas • ${(entry.response.accuracy * 100).round()}%',
                   style: TextStyle(
                     fontSize: 12,
-                    color: Colors.grey.shade600,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
                   ),
                 ),
               ],
@@ -226,7 +237,7 @@ class _LeaderboardTile extends StatelessWidget {
                 'pts',
                 style: TextStyle(
                   fontSize: 10,
-                  color: Colors.grey.shade500,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
                 ),
               ),
             ],

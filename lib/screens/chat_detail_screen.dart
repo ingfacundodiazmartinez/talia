@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:record/record.dart';
+import 'package:audio_waveforms/audio_waveforms.dart';
 import 'package:path_provider/path_provider.dart';
 import '../controllers/chat_controller_cache_first.dart';
 import '../utils/release_logger.dart';
@@ -18,7 +18,7 @@ import 'chat/widgets/chat_input_bar.dart';
 import 'chat/widgets/reply_bar.dart';
 import 'chat/widgets/editing_bar.dart';
 import 'chat/widgets/attachment_options.dart';
-import 'chat/widgets/recording_indicator.dart';
+import 'chat/widgets/recording_input_bar.dart';
 import 'chat/widgets/blocked_message_bar.dart';
 import 'chat/widgets/emoji_picker_widget.dart';
 import 'chat/widgets/message_list_widget.dart';
@@ -60,9 +60,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   // UI Controllers
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-  final AudioRecorder _audioRecorder = AudioRecorder();
+  final RecorderController _recorderController = RecorderController();
   final ReactionService _reactionService = ReactionService();
   final UserCacheService _userCacheService = UserCacheService();
+  String? _currentRecordingPath;
 
   // Local UI state
   bool _showEmojiPicker = false;
@@ -184,7 +185,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     _messageController.dispose();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
-    _audioRecorder.dispose();
+    _recorderController.dispose();
     _reactionOverlay?.remove();
     super.dispose();
   }
@@ -195,11 +196,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
       _cancelRecording();
     }
 
-    // ✅ FIX: Limpiar current_chat_id cuando la app va a background
-    // para que las notificaciones nativas se muestren correctamente
-    if (state == AppLifecycleState.paused) {
-      NotificationService().clearCurrentChat();
-    } else if (state == AppLifecycleState.resumed) {
+    // ✅ FIX: NO limpiar current_chat_id cuando la app va a background
+    // Mantenerlo permite detectar que el chat ya está abierto cuando el usuario
+    // toca una notificación, evitando duplicar la pantalla en el stack
+    // Las notificaciones nativas se manejan por el sistema operativo independientemente
+    if (state == AppLifecycleState.resumed) {
       // Restaurar el chat actual cuando vuelve a foreground
       NotificationService().setCurrentChat(widget.chatId);
 
@@ -378,32 +379,39 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
 
   Future<void> _cancelRecording() async {
     try {
-      await _audioRecorder.stop();
+      await _recorderController.stop();
+      _currentRecordingPath = null;
+      // ✅ Detener indicador de grabación
+      _controller.setRecording(false);
       setState(() => _isRecording = false);
     } catch (e) {
-      // ReleaseLogger.error('Error cancelando grabación: $e', tag: 'ChatDetail');
+      _controller.setRecording(false);
       setState(() => _isRecording = false);
     }
   }
 
   Future<void> _startRecording() async {
     try {
-      final hasPermission = await _audioRecorder.hasPermission();
+      final hasPermission = await _recorderController.checkPermission();
       if (!hasPermission) return;
 
       HapticFeedback.heavyImpact();
 
       final directory = await getApplicationDocumentsDirectory();
       final path = '${directory.path}/audio_${DateTime.now().millisecondsSinceEpoch}.m4a';
+      _currentRecordingPath = path;
 
-      await _audioRecorder.start(
-        const RecordConfig(
-          encoder: AudioEncoder.aacLc,
-          bitRate: 128000,
-          sampleRate: 44100,
-        ),
+      // ✅ COMPRESIÓN MEJORADA: Usar bitRate y sampleRate más bajos para archivos más pequeños
+      // Valores anteriores: defaults (~128kbps, 44100Hz) → ~960KB/minuto
+      // Valores nuevos: 48kbps, 22050Hz → ~360KB/minuto (60% menos)
+      await _recorderController.record(
         path: path,
+        bitRate: 48000,      // 48 kbps (suficiente para voz)
+        sampleRate: 22050,   // 22.05 kHz (calidad teléfono)
       );
+
+      // ✅ Indicar que estamos grabando audio
+      _controller.setRecording(true);
 
       if (mounted) {
         setState(() {
@@ -411,7 +419,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
         });
       }
     } catch (e) {
-      // ReleaseLogger.error('Error iniciando grabación: $e', tag: 'ChatDetail');
       if (mounted) {
         setState(() => _isRecording = false);
         ScaffoldMessenger.of(context).showSnackBar(
@@ -426,15 +433,21 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
 
   Future<void> _stopRecording() async {
     try {
-      final path = await _audioRecorder.stop();
+      final path = await _recorderController.stop();
+      final recordedPath = path ?? _currentRecordingPath;
+      _currentRecordingPath = null;
+
+      // ✅ Detener indicador de grabación
+      _controller.setRecording(false);
+
       setState(() => _isRecording = false);
 
-      if (path != null && path.isNotEmpty) {
+      if (recordedPath != null && recordedPath.isNotEmpty) {
         // 1. Crear burbuja optimista inmediatamente con waveform real
-        await _controller.createOptimisticAudioBubble(path);
+        await _controller.createOptimisticAudioBubble(recordedPath);
 
         // 2. Subir en background
-        _controller.processAndUploadAudio(path).catchError((e) {
+        _controller.processAndUploadAudio(recordedPath).catchError((e) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
@@ -446,7 +459,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
         });
       }
     } catch (e) {
-      // Error al detener grabación
+      // ✅ También detener indicador si hay error
+      _controller.setRecording(false);
     }
   }
 
@@ -655,15 +669,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
               if (_showEmojiPicker) _buildEmojiPicker(),
             ],
           ),
-          if (_isRecording)
-            Positioned.fill(
-              child: IgnorePointer(
-                child: Container(
-                  color: Colors.black.withValues(alpha: 0.3),
-                  child: const RecordingIndicator(),
-                ),
-              ),
-            ),
         ],
       ),
     ),
@@ -735,6 +740,15 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   Widget _buildInputBar() {
     if (_controller.isBlocked == true || _controller.isBlockedBy == true) {
       return const SizedBox.shrink();
+    }
+
+    // Mostrar UI de grabación estilo Instagram cuando está grabando
+    if (_isRecording) {
+      return RecordingInputBar(
+        recorderController: _recorderController,
+        onCancel: _cancelRecording,
+        onSend: _stopRecording,
+      );
     }
 
     return ChatInputBar(

@@ -15,7 +15,7 @@ plugins {
 android {
     namespace = "com.talia.chat"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = "28.0.13004108"  // NDK r28 - 16KB page size support by default
+    ndkVersion = "28.2.13676358"  // NDK r28b - Required by integration_test
 
     compileOptions {
         isCoreLibraryDesugaringEnabled = true

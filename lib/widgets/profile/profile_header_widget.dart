@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../../controllers/profile_controller.dart';
+import '../../services/image_service.dart';
+import '../../utils/release_logger.dart';
 
 /// Widget que muestra el header del perfil con foto, nombre y email
 class ProfileHeaderWidget extends StatefulWidget {
@@ -24,7 +25,7 @@ class ProfileHeaderWidget extends StatefulWidget {
 }
 
 class _ProfileHeaderWidgetState extends State<ProfileHeaderWidget> {
-  bool _isUploadingImage = false;
+  final ImageService _imageService = ImageService();
 
   @override
   Widget build(BuildContext context) {
@@ -66,26 +67,11 @@ class _ProfileHeaderWidgetState extends State<ProfileHeaderWidget> {
                           )
                         : Icon(Icons.person, size: 60, color: Colors.white),
                   ),
-                  if (_isUploadingImage)
-                    Positioned.fill(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.6),
-                          shape: BoxShape.circle,
-                        ),
-                        child: Center(
-                          child: CircularProgressIndicator(
-                            strokeWidth: 3,
-                            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                          ),
-                        ),
-                      ),
-                    ),
                   Positioned(
                     bottom: 0,
                     right: 0,
                     child: GestureDetector(
-                      onTap: _isUploadingImage ? null : () => _showImageOptions(context, photoURL),
+                      onTap: () => _showImageOptions(context, photoURL),
                       child: Container(
                         padding: EdgeInsets.all(8),
                         decoration: BoxDecoration(
@@ -99,9 +85,7 @@ class _ProfileHeaderWidgetState extends State<ProfileHeaderWidget> {
                         child: Icon(
                           Icons.camera_alt,
                           size: 20,
-                          color: _isUploadingImage
-                              ? colorScheme.primary.withValues(alpha: 0.5)
-                              : colorScheme.primary,
+                          color: colorScheme.primary,
                         ),
                       ),
                     ),
@@ -148,138 +132,34 @@ class _ProfileHeaderWidgetState extends State<ProfileHeaderWidget> {
     );
   }
 
-  void _showImageOptions(BuildContext context, String? photoURL) {
-    print('📸 [ProfileHeader] _showImageOptions llamado');
-    final colorScheme = Theme.of(context).colorScheme;
-
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: colorScheme.surface,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) {
-        print('📸 [ProfileHeader] Builder del modal ejecutándose');
-        return Container(
-          padding: EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-            Text(
-              'Cambiar foto de perfil',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: colorScheme.onSurface,
-              ),
-            ),
-            SizedBox(height: 20),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                _buildImageOption(
-                  context: context,
-                  icon: Icons.camera_alt,
-                  label: 'Cámara',
-                  onTap: () {
-                    print('📸 [ProfileHeader] Opción CÁMARA seleccionada');
-                    _pickImage(context, ImageSource.camera);
-                  },
-                ),
-                _buildImageOption(
-                  context: context,
-                  icon: Icons.photo_library,
-                  label: 'Galería',
-                  onTap: () {
-                    print('📸 [ProfileHeader] Opción GALERÍA seleccionada');
-                    _pickImage(context, ImageSource.gallery);
-                  },
-                ),
-                if (photoURL != null)
-                  _buildImageOption(
-                    context: context,
-                    icon: Icons.delete,
-                    label: 'Eliminar',
-                    onTap: () => _deleteImage(context),
-                    isDestructive: true,
-                  ),
-              ],
-            ),
-            SizedBox(height: 20),
-          ],
-        ),
-      );
-      },
-    );
-  }
-
-  Widget _buildImageOption({
-    required BuildContext context,
-    required IconData icon,
-    required String label,
-    required VoidCallback onTap,
-    bool isDestructive = false,
-  }) {
-    final colorScheme = Theme.of(context).colorScheme;
-
-    return GestureDetector(
-      onTap: onTap,
-      child: Column(
-        children: [
-          Container(
-            padding: EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: isDestructive
-                  ? Colors.red.withValues(alpha: 0.1)
-                  : colorScheme.primary.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Icon(
-              icon,
-              size: 32,
-              color: isDestructive ? Colors.red : colorScheme.primary,
-            ),
-          ),
-          SizedBox(height: 8),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 12,
-              color: isDestructive ? Colors.red : colorScheme.onSurface,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _pickImage(BuildContext context, ImageSource source) async {
-    print('📸 [ProfileHeader] _pickImage llamado con source: ${source == ImageSource.camera ? 'CÁMARA' : 'GALERÍA'}');
-
-    // Cerrar el modal inmediatamente
-    Navigator.pop(context);
-    print('📸 [ProfileHeader] Bottom sheet cerrado');
-
-    // Pequeña espera para que el modal se cierre visualmente
-    await Future.delayed(Duration(milliseconds: 100));
-
-    // Activar el estado de carga para mostrar el spinner sobre la foto
-    setState(() {
-      _isUploadingImage = true;
-    });
-    print('📸 [ProfileHeader] Estado de carga activado');
+  /// Muestra opciones de imagen usando el flujo de ImageService
+  /// (Mismo enfoque que EditProfileScreen - funciona en iOS)
+  Future<void> _showImageOptions(BuildContext context, String? photoURL) async {
+    ReleaseLogger.log('Iniciando cambio de foto de perfil...', tag: 'ProfileHeader');
 
     try {
-      print('📸 [ProfileHeader] Llamando a widget.controller.pickAndUploadImage...');
-      final downloadUrl = await widget.controller.pickAndUploadImage(source);
-      print('📸 [ProfileHeader] Resultado: ${downloadUrl != null ? 'URL obtenida' : 'null'}');
+      // Mostrar selector de fuente de imagen (maneja el bottom sheet internamente)
+      final source = await _imageService.showImageSourceSelection(context);
+      ReleaseLogger.log('Selector cerrado. Source seleccionado: $source', tag: 'ProfileHeader');
 
-      if (downloadUrl != null && mounted) {
+      if (source == null) {
+        ReleaseLogger.log('Usuario canceló la selección', tag: 'ProfileHeader');
+        return;
+      }
+
+      ReleaseLogger.log('Iniciando selección y subida de imagen...', tag: 'ProfileHeader');
+
+      // Seleccionar imagen (pickAndUploadProfileImage maneja el loading dialog internamente)
+      final String? imageUrl = await widget.controller.pickAndUploadImage(source, context: context);
+
+      ReleaseLogger.log('Resultado: ${imageUrl != null ? 'URL obtenida' : 'null'}', tag: 'ProfileHeader');
+
+      if (imageUrl != null && mounted) {
         widget.onImageChanged();
-        print('✅ [ProfileHeader] Foto actualizada exitosamente');
+        ReleaseLogger.log('Foto de perfil actualizada exitosamente', tag: 'ProfileHeader');
       }
     } catch (e) {
-      print('❌ [ProfileHeader] Error al subir imagen: $e');
+      ReleaseLogger.error('Error al cambiar foto: $e', tag: 'ProfileHeader');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -288,56 +168,6 @@ class _ProfileHeaderWidgetState extends State<ProfileHeaderWidget> {
             duration: Duration(seconds: 4),
           ),
         );
-      }
-    } finally {
-      // Desactivar el estado de carga
-      if (mounted) {
-        setState(() {
-          _isUploadingImage = false;
-        });
-        print('📸 [ProfileHeader] Estado de carga desactivado');
-      }
-    }
-  }
-
-  Future<void> _deleteImage(BuildContext context) async {
-    Navigator.pop(context); // Cerrar bottom sheet
-
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Eliminar foto'),
-        content: Text('¿Estás seguro que deseas eliminar tu foto de perfil?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text('Cancelar'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            child: Text('Eliminar'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirm == true) {
-      try {
-        await widget.controller.deleteProfileImage();
-
-        if (mounted) {
-          widget.onImageChanged();
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Error al eliminar la foto'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
       }
     }
   }

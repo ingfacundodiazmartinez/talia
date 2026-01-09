@@ -213,6 +213,8 @@ class StoryContentWidget extends StatelessWidget {
         return _buildImageContent(context, story, userIndex, storyIndex);
       case 'mood':
         return _buildMoodContent(context, story, userIndex, storyIndex);
+      case 'trivia_results':
+        return _buildTriviaResultsContent(context, story, userIndex, storyIndex);
       case 'video':
       default:
         return _buildVideoContent(context, story, userIndex, storyIndex);
@@ -447,6 +449,347 @@ class StoryContentWidget extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildTriviaResultsContent(BuildContext context, Story story, int userIndex, int storyIndex) {
+    // Extraer datos del filter
+    final filter = story.filter ?? {};
+    final triviaTitle = filter['triviaTitle'] as String? ?? '¿Cuánto me conoces?';
+    final participantCount = filter['participantCount'] as int? ?? 0;
+    final questionCount = filter['questionCount'] as int? ?? 0;
+    final podiumData = filter['podium'] as List<dynamic>? ?? [];
+
+    // Notificar que el contenido está cargado
+    if (!isCurrentStoryLoaded &&
+        userIndex == currentUserIndex &&
+        storyIndex == currentStoryIndex) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        onStoryLoaded();
+      });
+    }
+
+    return Container(
+      width: double.infinity,
+      height: double.infinity,
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFF1a1a2e), Color(0xFF16213e)],
+        ),
+      ),
+      child: Stack(
+        children: [
+          // Decoración de fondo
+          Positioned(
+            top: -100,
+            right: -100,
+            child: Container(
+              width: 300,
+              height: 300,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: RadialGradient(
+                  colors: [
+                    const Color(0xFFFFD700).withValues(alpha: 0.15),
+                    Colors.transparent,
+                  ],
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: -80,
+            left: -80,
+            child: Container(
+              width: 250,
+              height: 250,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: RadialGradient(
+                  colors: [
+                    const Color(0xFFC0C0C0).withValues(alpha: 0.1),
+                    Colors.transparent,
+                  ],
+                ),
+              ),
+            ),
+          ),
+
+          // Contenido principal
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Column(
+                children: [
+                  const SizedBox(height: 60),
+
+                  // Título
+                  const Text(
+                    '🏆 Resultados',
+                    style: TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    triviaTitle,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      color: Colors.white70,
+                    ),
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '$participantCount participantes · $questionCount preguntas',
+                    style: const TextStyle(
+                      fontSize: 14,
+                      color: Colors.white54,
+                    ),
+                  ),
+
+                  const SizedBox(height: 40),
+
+                  // Podio
+                  if (podiumData.isNotEmpty)
+                    Expanded(
+                      child: _buildPodiumWidget(context, podiumData),
+                    ),
+
+                  const SizedBox(height: 100), // Espacio para reply input
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Construir el widget del podio
+  Widget _buildPodiumWidget(BuildContext context, List<dynamic> podiumData) {
+    // Reorganizar para mostrar 2do, 1ro, 3ro
+    final first = podiumData.isNotEmpty ? podiumData[0] as Map<String, dynamic> : null;
+    final second = podiumData.length > 1 ? podiumData[1] as Map<String, dynamic> : null;
+    final third = podiumData.length > 2 ? podiumData[2] as Map<String, dynamic> : null;
+
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        // 2do lugar (izquierda)
+        if (second != null)
+          _buildPodiumPosition(
+            context,
+            rank: 2,
+            name: second['oderName'] as String? ?? 'Usuario',
+            photoURL: second['oderPhotoURL'] as String?,
+            score: second['totalScore'] as int? ?? 0,
+            correct: second['correctCount'] as int? ?? 0,
+            total: second['totalQuestions'] as int? ?? 0,
+            height: 100,
+            medalColor: const Color(0xFFC0C0C0), // Plata
+          ),
+        if (second != null) const SizedBox(width: 8),
+
+        // 1er lugar (centro)
+        if (first != null)
+          _buildPodiumPosition(
+            context,
+            rank: 1,
+            name: first['oderName'] as String? ?? 'Usuario',
+            photoURL: first['oderPhotoURL'] as String?,
+            score: first['totalScore'] as int? ?? 0,
+            correct: first['correctCount'] as int? ?? 0,
+            total: first['totalQuestions'] as int? ?? 0,
+            height: 140,
+            medalColor: const Color(0xFFFFD700), // Oro
+          ),
+
+        if (third != null) const SizedBox(width: 8),
+        // 3er lugar (derecha)
+        if (third != null)
+          _buildPodiumPosition(
+            context,
+            rank: 3,
+            name: third['oderName'] as String? ?? 'Usuario',
+            photoURL: third['oderPhotoURL'] as String?,
+            score: third['totalScore'] as int? ?? 0,
+            correct: third['correctCount'] as int? ?? 0,
+            total: third['totalQuestions'] as int? ?? 0,
+            height: 80,
+            medalColor: const Color(0xFFCD7F32), // Bronce
+          ),
+      ],
+    );
+  }
+
+  /// Construir una posición individual del podio
+  Widget _buildPodiumPosition(
+    BuildContext context, {
+    required int rank,
+    required String name,
+    String? photoURL,
+    required int score,
+    required int correct,
+    required int total,
+    required double height,
+    required Color medalColor,
+  }) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final positionWidth = (screenWidth - 80) / 3;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Avatar con medalla
+        Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Container(
+              width: rank == 1 ? 80 : 64,
+              height: rank == 1 ? 80 : 64,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: medalColor,
+                  width: rank == 1 ? 4 : 3,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: medalColor.withValues(alpha: 0.4),
+                    blurRadius: 12,
+                    spreadRadius: 2,
+                  ),
+                ],
+              ),
+              child: ClipOval(
+                child: photoURL != null && photoURL.isNotEmpty
+                    ? Image.network(
+                        photoURL,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => _buildDefaultAvatar(name),
+                      )
+                    : _buildDefaultAvatar(name),
+              ),
+            ),
+            // Medalla
+            Positioned(
+              bottom: -8,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Container(
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    color: medalColor,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.3),
+                        blurRadius: 4,
+                      ),
+                    ],
+                  ),
+                  child: Center(
+                    child: Text(
+                      '$rank',
+                      style: TextStyle(
+                        color: rank == 1 ? Colors.black : Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        // Nombre
+        SizedBox(
+          width: positionWidth,
+          child: Text(
+            name,
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: rank == 1 ? 16 : 14,
+              fontWeight: rank == 1 ? FontWeight.bold : FontWeight.w500,
+            ),
+            textAlign: TextAlign.center,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        const SizedBox(height: 4),
+
+        // Puntuación
+        Text(
+          '$score pts',
+          style: TextStyle(
+            color: medalColor,
+            fontSize: rank == 1 ? 18 : 14,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 2),
+
+        // Aciertos
+        Text(
+          '$correct/$total',
+          style: const TextStyle(
+            color: Colors.white54,
+            fontSize: 12,
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // Pedestal
+        Container(
+          width: positionWidth,
+          height: height,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                medalColor.withValues(alpha: 0.6),
+                medalColor.withValues(alpha: 0.3),
+              ],
+            ),
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(8),
+              topRight: Radius.circular(8),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Construir avatar por defecto
+  Widget _buildDefaultAvatar(String name) {
+    return Container(
+      color: const Color(0xFF667eea),
+      child: Center(
+        child: Text(
+          name.isNotEmpty ? name[0].toUpperCase() : '?',
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 24,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
       ),
     );
   }

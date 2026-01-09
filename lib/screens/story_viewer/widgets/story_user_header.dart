@@ -16,6 +16,8 @@ class StoryUserHeader extends StatefulWidget {
   final VoidCallback? onDownload;
   final VoidCallback? onShare;
   final VoidCallback onClose;
+  final VoidCallback? onPauseTimer; // ✅ Pausar timer al abrir menú
+  final VoidCallback? onResumeTimer; // ✅ Reanudar timer al cerrar menú
 
   const StoryUserHeader({
     super.key,
@@ -28,6 +30,8 @@ class StoryUserHeader extends StatefulWidget {
     this.onDownload,
     this.onShare,
     required this.onClose,
+    this.onPauseTimer,
+    this.onResumeTimer,
   });
 
   @override
@@ -181,7 +185,17 @@ class _StoryUserHeaderState extends State<StoryUserHeader> {
                 shadows: _textShadows,
               ),
               color: Colors.black87,
+              // ✅ Pausar timer cuando se abre el menú
+              onOpened: () {
+                widget.onPauseTimer?.call();
+              },
+              // ✅ Reanudar timer cuando se cancela (cierra sin seleccionar)
+              onCanceled: () {
+                widget.onResumeTimer?.call();
+              },
               onSelected: (value) async {
+                // ✅ Reanudar timer al seleccionar una opción
+                widget.onResumeTimer?.call();
                 if (value == 'delete') {
                   widget.onDelete?.call();
                 } else if (value == 'download') {

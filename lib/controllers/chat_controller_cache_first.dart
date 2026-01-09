@@ -1032,6 +1032,20 @@ class ChatControllerCacheFirst extends ChangeNotifier {
     );
   }
 
+  /// Set recording indicator
+  void setRecording(bool isRecording) {
+    _typingService.setRecording(
+      chatId,
+      isRecording,
+      isGroup: isGroup,
+    );
+  }
+
+  /// Stop recording indicator
+  void stopRecording() {
+    _typingService.stopRecording();
+  }
+
   /// Mark chat as read
   /// ✅ Usa nuevo servicio atómico MarkMessagesReadService
   Future<void> markChatAsRead() async {

@@ -23,22 +23,27 @@ async function isPremiumSystemEnabled() {
   try {
     const remoteConfig = getRemoteConfig();
 
-    // Usar getServerTemplate() para obtener los valores del servidor
-    const template = await remoteConfig.getServerTemplate({
-      defaultConfig: {
-        premium_enabled: true, // Default: premium habilitado
-      },
-    });
+    // Usar getTemplate() para leer el Client Remote Config template
+    const template = await remoteConfig.getTemplate();
 
-    // Evaluar el template para obtener los valores
-    const config = template.evaluate();
-    const premiumEnabledValue = config.getString("premium_enabled");
+    // Buscar el parámetro premium_enabled
+    if (template.parameters && template.parameters.premium_enabled) {
+      const param = template.parameters.premium_enabled;
+      // El defaultValue puede ser un objeto con 'value' o directamente un string
+      let premiumEnabledValue = "true";
+      if (param.defaultValue) {
+        premiumEnabledValue = param.defaultValue.value || "true";
+      }
 
-    // Convertir a boolean (Remote Config guarda como string)
-    const isEnabled = premiumEnabledValue.toLowerCase() !== "false";
+      // Convertir a boolean (Remote Config guarda como string)
+      const isEnabled = premiumEnabledValue.toLowerCase() !== "false";
 
-    console.log(`🎛️ [RemoteConfig] premium_enabled = ${isEnabled} (raw: "${premiumEnabledValue}")`);
-    return isEnabled;
+      console.log(`🎛️ [RemoteConfig] premium_enabled = ${isEnabled} (raw: "${premiumEnabledValue}")`);
+      return isEnabled;
+    }
+
+    console.log("🎛️ [RemoteConfig] premium_enabled no encontrado, usando default: true");
+    return true;
   } catch (error) {
     console.error("❌ [RemoteConfig] Error obteniendo premium_enabled:", error.message);
     // En caso de error, asumir que está habilitado (comportamiento por defecto)

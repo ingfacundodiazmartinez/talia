@@ -887,7 +887,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
           const SizedBox(height: 8),
           Text(
             'La suscripción se renovará automáticamente cada mes. '
-            'Puedes cancelar en cualquier momento desde la configuración de tu cuenta de Google Play o App Store.',
+            'Puedes cancelar en cualquier momento desde la configuración de tu cuenta de ${Platform.isIOS ? "App Store" : "Google Play"}.',
             textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 12,
@@ -895,9 +895,52 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
               height: 1.4,
             ),
           ),
+          const SizedBox(height: 12),
+          // Links requeridos por Apple para suscripciones
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              GestureDetector(
+                onTap: () => _openUrl('https://taliachat.com/terms'),
+                child: Text(
+                  'Términos de Uso',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: colorScheme.primary,
+                    decoration: TextDecoration.underline,
+                  ),
+                ),
+              ),
+              Text(
+                '  •  ',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+              GestureDetector(
+                onTap: () => _openUrl('https://taliachat.com/privacy'),
+                child: Text(
+                  'Política de Privacidad',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: colorScheme.primary,
+                    decoration: TextDecoration.underline,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
+  }
+
+  Future<void> _openUrl(String urlString) async {
+    final url = Uri.parse(urlString);
+    if (await canLaunchUrl(url)) {
+      await launchUrl(url, mode: LaunchMode.externalApplication);
+    }
   }
 
   String _formatDate(DateTime date) {

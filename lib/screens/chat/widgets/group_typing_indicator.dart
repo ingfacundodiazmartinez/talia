@@ -1,41 +1,67 @@
 import 'package:flutter/material.dart';
+import '../../../services/typing_indicator_service.dart';
 
-/// Indicador que muestra cuando varios usuarios están escribiendo en un grupo
+/// Indicador que muestra cuando varios usuarios están escribiendo o grabando en un grupo
 class GroupTypingIndicator extends StatelessWidget {
-  final List<String> typingUserNames;
+  /// Mapa de nombre de usuario -> estado de actividad
+  final Map<String, UserActivityState> userActivity;
 
   const GroupTypingIndicator({
     super.key,
-    required this.typingUserNames,
+    required this.userActivity,
   });
 
   @override
   Widget build(BuildContext context) {
-    if (typingUserNames.isEmpty) return const SizedBox();
+    if (userActivity.isEmpty) return const SizedBox();
 
     final colorScheme = Theme.of(context).colorScheme;
-    final String message = _buildTypingMessage();
+
+    // Separar usuarios por tipo de actividad
+    final typingUsers = <String>[];
+    final recordingUsers = <String>[];
+
+    for (final entry in userActivity.entries) {
+      if (entry.value == UserActivityState.typing) {
+        typingUsers.add(entry.key);
+      } else if (entry.value == UserActivityState.recording) {
+        recordingUsers.add(entry.key);
+      }
+    }
+
+    // Priorizar grabación sobre escritura si hay ambos
+    final bool hasRecording = recordingUsers.isNotEmpty;
+    final String message = hasRecording
+        ? _buildRecordingMessage(recordingUsers)
+        : _buildTypingMessage(typingUsers);
 
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        SizedBox(
-          width: 16,
-          height: 16,
-          child: CircularProgressIndicator(
-            strokeWidth: 2,
-            valueColor: AlwaysStoppedAnimation<Color>(
-              colorScheme.primary,
+        if (hasRecording)
+          const Icon(
+            Icons.mic,
+            size: 16,
+            color: Colors.red,
+          )
+        else
+          SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              valueColor: AlwaysStoppedAnimation<Color>(
+                colorScheme.primary,
+              ),
             ),
           ),
-        ),
         const SizedBox(width: 8),
         Flexible(
           child: Text(
             message,
             style: TextStyle(
               fontSize: 12,
-              color: colorScheme.onSurfaceVariant,
+              color: hasRecording ? Colors.red : colorScheme.onSurfaceVariant,
               fontStyle: FontStyle.italic,
             ),
             overflow: TextOverflow.ellipsis,
@@ -46,17 +72,31 @@ class GroupTypingIndicator extends StatelessWidget {
     );
   }
 
-  String _buildTypingMessage() {
-    if (typingUserNames.isEmpty) return '';
+  String _buildTypingMessage(List<String> names) {
+    if (names.isEmpty) return '';
 
-    if (typingUserNames.length == 1) {
-      return '${typingUserNames[0]} está escribiendo...';
-    } else if (typingUserNames.length == 2) {
-      return '${typingUserNames[0]} y ${typingUserNames[1]} están escribiendo...';
-    } else if (typingUserNames.length == 3) {
-      return '${typingUserNames[0]}, ${typingUserNames[1]} y ${typingUserNames[2]} están escribiendo...';
+    if (names.length == 1) {
+      return '${names[0]} está escribiendo...';
+    } else if (names.length == 2) {
+      return '${names[0]} y ${names[1]} están escribiendo...';
+    } else if (names.length == 3) {
+      return '${names[0]}, ${names[1]} y ${names[2]} están escribiendo...';
     } else {
-      return '${typingUserNames[0]}, ${typingUserNames[1]} y ${typingUserNames.length - 2} más están escribiendo...';
+      return '${names[0]}, ${names[1]} y ${names.length - 2} más están escribiendo...';
+    }
+  }
+
+  String _buildRecordingMessage(List<String> names) {
+    if (names.isEmpty) return '';
+
+    if (names.length == 1) {
+      return '${names[0]} está grabando audio...';
+    } else if (names.length == 2) {
+      return '${names[0]} y ${names[1]} están grabando audio...';
+    } else if (names.length == 3) {
+      return '${names[0]}, ${names[1]} y ${names[2]} están grabando audio...';
+    } else {
+      return '${names[0]}, ${names[1]} y ${names.length - 2} más están grabando audio...';
     }
   }
 }

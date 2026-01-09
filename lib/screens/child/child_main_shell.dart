@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../controllers/child_main_shell_controller.dart';
 import '../../notification_service.dart';
 import '../../utils/release_logger.dart';
@@ -94,8 +95,23 @@ class _ChildMainShellState extends State<ChildMainShell> {
     // Delegar toda la lógica al controller
     await _mainController.handleChatNotificationTap(data);
 
-    // ✅ FIX: Verificar si el chat ya está abierto para evitar navegación duplicada
-    final currentOpenChatId = NotificationService().currentChatId;
+    // ✅ FIX: Verificar chat abierto en memoria Y SharedPreferences
+    // El memory check puede fallar si la app fue reiniciada/terminada
+    String? currentOpenChatId = NotificationService().currentChatId;
+
+    // Si memoria está vacía, verificar SharedPreferences (para cuando app fue terminada)
+    if (currentOpenChatId == null) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        currentOpenChatId = prefs.getString('current_chat_id');
+        ReleaseLogger.log(
+          '📱 [ChildMainShell] currentChatId desde SharedPreferences: $currentOpenChatId',
+          tag: 'ChildMainShell',
+        );
+      } catch (e) {
+        ReleaseLogger.error('Error leyendo current_chat_id: $e', tag: 'ChildMainShell');
+      }
+    }
 
     // Primero cambiar al tab de chats
     setState(() => _selectedIndex = 0);
@@ -117,6 +133,11 @@ class _ChildMainShellState extends State<ChildMainShell> {
       }
 
       if (mounted) {
+        // ✅ FIX: Pop hasta la raíz antes de navegar para evitar duplicados
+        // Esto maneja el caso de app reiniciada donde currentOpenChatId es null
+        // pero hay un chat en el stack de navegación
+        Navigator.of(context).popUntil((route) => route.isFirst);
+
         await Navigator.of(context).push(
           MaterialPageRoute(
             builder: (context) => GroupChatScreenV2(
@@ -137,6 +158,9 @@ class _ChildMainShellState extends State<ChildMainShell> {
         }
 
         if (mounted) {
+          // ✅ FIX: Pop hasta la raíz antes de navegar para evitar duplicados
+          Navigator.of(context).popUntil((route) => route.isFirst);
+
           await Navigator.of(context).push(
             MaterialPageRoute(
               builder: (context) => ChatDetailScreen(

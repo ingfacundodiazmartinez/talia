@@ -96,7 +96,7 @@
 		<key>NSPhotoLibraryUsageDescription</key>
 		<string>Esta aplicación necesita acceso a la galería de fotos para seleccionar imágenes de perfil.</string>
 		<key>NSContactsUsageDescription</key>
-		<string>Esta aplicación necesita acceso a tus contactos para ayudarte a encontrar amigos que ya usan Talia.</string>
+		<string>Talia puede acceder a tus contactos para ayudarte a encontrar amigos que ya usan la aplicación. Los números de teléfono se convierten a códigos anónimos antes de enviarse a nuestros servidores. No almacenamos nombres ni otros datos de tus contactos. Se te pedirá consentimiento antes de sincronizar.</string>
 		<key>NSLocationWhenInUseUsageDescription</key>
 		<string>Esta aplicación necesita acceso a tu ubicación para compartirla con tus padres para tu seguridad.</string>
 		<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>

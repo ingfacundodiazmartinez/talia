@@ -20,8 +20,48 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const admin = require('firebase-admin');
+const { getRemoteConfig } = require("firebase-admin/remote-config");
 const { v4: uuidv4 } = require('uuid');
 const { sendVoIPPush } = require('./helpers');
+
+// ═══════════════════════════════════════════════════════════════
+// CALL TIMEOUT CONFIGURATION
+// ═══════════════════════════════════════════════════════════════
+
+// Default timeout: 30 segundos (configurable via Remote Config)
+const DEFAULT_CALL_RING_TIMEOUT_SECONDS = 30;
+
+/**
+ * Obtener el timeout de llamada desde Remote Config
+ * @returns {Promise<number>} Timeout en segundos
+ */
+async function getCallRingTimeoutSeconds() {
+  try {
+    const remoteConfig = getRemoteConfig();
+    const template = await remoteConfig.getTemplate();
+
+    if (template.parameters && template.parameters.call_ring_timeout_seconds) {
+      const param = template.parameters.call_ring_timeout_seconds;
+      let timeoutValue = DEFAULT_CALL_RING_TIMEOUT_SECONDS;
+
+      if (param.defaultValue && param.defaultValue.value) {
+        timeoutValue = parseInt(param.defaultValue.value, 10);
+        if (isNaN(timeoutValue) || timeoutValue <= 0) {
+          timeoutValue = DEFAULT_CALL_RING_TIMEOUT_SECONDS;
+        }
+      }
+
+      console.log(`⏱️ [RemoteConfig] call_ring_timeout_seconds = ${timeoutValue}`);
+      return timeoutValue;
+    }
+
+    console.log(`⏱️ [RemoteConfig] call_ring_timeout_seconds no encontrado, usando default: ${DEFAULT_CALL_RING_TIMEOUT_SECONDS}`);
+    return DEFAULT_CALL_RING_TIMEOUT_SECONDS;
+  } catch (error) {
+    console.error("❌ [RemoteConfig] Error obteniendo call_ring_timeout_seconds:", error.message);
+    return DEFAULT_CALL_RING_TIMEOUT_SECONDS;
+  }
+}
 // Helper functions were not defined, using direct validation instead
 
 // Usar admin ya inicializado si existe
@@ -483,9 +523,15 @@ exports.updateCallStatus = onDocumentUpdated(
       // - Quedan menos de 2 participantes activos (ya no es una conversación viable)
       // - O todos los participantes declinaron
       // - O es llamada 1-1 y alguien declinó
-      // - O no hay participantes activos Y la llamada tiene más de 2 minutos (timeout)
+      // - O no hay participantes activos Y la llamada excedió el timeout (configurable via Remote Config)
       const callAge = Date.now() - afterData.createdAt.toDate().getTime();
-      const isOldCall = callAge > 2 * 60 * 1000; // 2 minutos
+
+      // Obtener timeout desde Remote Config (default: 30 segundos)
+      const ringTimeoutSeconds = await getCallRingTimeoutSeconds();
+      const ringTimeoutMs = ringTimeoutSeconds * 1000;
+      const isOldCall = callAge > ringTimeoutMs;
+
+      console.log(`⏱️ [updateCallStatus] callAge=${Math.round(callAge/1000)}s, timeout=${ringTimeoutSeconds}s, isOldCall=${isOldCall}`);
 
       // ✅ FIX: Cambiar hasEnded por activeCount < 2 para permitir llamadas grupales → 1-1
       // ✅ FIX RACE CONDITION: Para llamadas 1-1, NO terminar si hay alguien waiting (puede estar aceptando)

@@ -72,7 +72,8 @@ exports.checkPremiumStatus = onCall(async (request) => {
     const userId = data.userId || context.auth.uid;
 
     // Verificar en el documento del usuario
-    const userDoc = await getFirestore().collection("users").doc(userId).get();
+    const db = getFirestore();
+    const userDoc = await db.collection("users").doc(userId).get();
 
     if (!userDoc.exists) {
       throw new HttpsError("not-found", "Usuario no encontrado");
@@ -92,18 +93,121 @@ exports.checkPremiumStatus = onCall(async (request) => {
       // Si expiró, actualizar el documento
       if (isExpired) {
         console.log(`⏰ [checkPremiumStatus] Premium expirado para ${userId}, actualizando...`);
-        await getFirestore().collection("users").doc(userId).update({
+        await db.collection("users").doc(userId).update({
           isPremium: false,
           subscriptionTier: "free",
         });
       }
     }
 
+    // Si el usuario tiene premium directo, retornarlo
+    if (isPremium && !isExpired) {
+      const result = {
+        isPremium: true,
+        subscriptionTier: subscriptionTier,
+        expiresAt: premiumExpiresAt ? premiumExpiresAt.toDate().toISOString() : null,
+        subscriptionType: userData.subscriptionType || null,
+      };
+      console.log("✅ [checkPremiumStatus] Usuario con premium directo:", result);
+      return result;
+    }
+
+    // ============================================
+    // FAMILY SHARING: Verificar si tiene padres con Premium+
+    // ============================================
+    const linkedParentIds = userData.linkedParentIds || [];
+    console.log(`👨‍👩‍👧 [checkPremiumStatus] linkedParentIds para ${userId}:`, JSON.stringify(linkedParentIds));
+
+    if (linkedParentIds.length > 0) {
+      console.log(`👨‍👩‍👧 [checkPremiumStatus] Usuario tiene ${linkedParentIds.length} padres vinculados, verificando premium familiar...`);
+
+      for (const parentId of linkedParentIds) {
+        console.log(`   🔍 Verificando padre: ${parentId}`);
+        const parentDoc = await db.collection("users").doc(parentId).get();
+        if (!parentDoc.exists) {
+          console.log(`   ⚠️ Documento de padre ${parentId} no existe`);
+          continue;
+        }
+
+        const parentData = parentDoc.data();
+        const parentIsPremium = parentData.isPremium || false;
+        const parentTier = parentData.subscriptionTier || "free";
+        const parentExpiresAt = parentData.premiumExpiresAt;
+
+        console.log(`   📊 Padre ${parentId}: isPremium=${parentIsPremium}, tier=${parentTier}`);
+
+        // Verificar si el padre tiene Premium+ activo
+        if (!parentIsPremium) {
+          console.log(`   ❌ Padre ${parentId} no tiene premium activo`);
+          continue;
+        }
+
+        if (parentTier !== "premium_plus") {
+          console.log(`   ❌ Padre ${parentId} tiene tier "${parentTier}" (necesita "premium_plus" para family sharing)`);
+          continue;
+        }
+
+        // Verificar que no haya expirado
+        if (parentExpiresAt) {
+          const now = Timestamp.now();
+          if (parentExpiresAt.toMillis() < now.toMillis()) {
+            console.log(`   ⏰ Premium del padre ${parentId} expirado`);
+            continue;
+          }
+        }
+
+        // Verificar límite de 3 hijos con premium
+        // Obtener todos los hijos vinculados al padre, ordenados por fecha de creación
+        let childLinksSnapshot;
+        try {
+          childLinksSnapshot = await db.collection("parent_children")
+            .where("parentId", "==", parentId)
+            .where("status", "==", "approved")
+            .orderBy("linkedAt", "asc")
+            .limit(3)
+            .get();
+        } catch (queryError) {
+          console.error(`   ❌ Error en query parent_children para ${parentId}:`, queryError.message);
+          // Si falla el query (posiblemente por índice faltante), intentar sin orderBy
+          console.log(`   ⚠️ Reintentando query sin orderBy...`);
+          childLinksSnapshot = await db.collection("parent_children")
+            .where("parentId", "==", parentId)
+            .where("status", "==", "approved")
+            .limit(3)
+            .get();
+        }
+
+        const premiumChildIds = childLinksSnapshot.docs.map(doc => doc.data().childId);
+        console.log(`   👨‍👩‍👧 Padre ${parentId} tiene ${premiumChildIds.length} hijos aprobados: ${premiumChildIds.join(", ")}`);
+
+        // Verificar si este usuario está en los primeros 3 hijos
+        if (premiumChildIds.includes(userId)) {
+          const result = {
+            isPremium: true,
+            subscriptionTier: "premium_plus",
+            expiresAt: parentExpiresAt ? parentExpiresAt.toDate().toISOString() : null,
+            subscriptionType: "family_sharing",
+            familyOwner: parentId,
+            familyOwnerName: parentData.name || parentData.displayName || "Padre/Madre",
+          };
+          console.log(`✅ [checkPremiumStatus] Usuario ${userId} tiene premium via padre ${parentId}:`, result);
+          return result;
+        } else {
+          console.log(`   ⚠️ Usuario ${userId} no está en los primeros 3 hijos del padre ${parentId}`);
+        }
+      }
+
+      console.log(`ℹ️ [checkPremiumStatus] Ningún padre vinculado tiene Premium+ activo con espacio disponible`);
+    } else {
+      console.log(`ℹ️ [checkPremiumStatus] Usuario ${userId} no tiene padres vinculados (linkedParentIds vacío)`);
+    }
+
+    // Usuario sin premium
     const result = {
-      isPremium: isPremium && !isExpired,
-      subscriptionTier: isExpired ? "free" : subscriptionTier,
-      expiresAt: premiumExpiresAt ? premiumExpiresAt.toDate().toISOString() : null,
-      subscriptionType: userData.subscriptionType || null,
+      isPremium: false,
+      subscriptionTier: "free",
+      expiresAt: null,
+      subscriptionType: null,
     };
 
     console.log("✅ [checkPremiumStatus] Resultado:", result);

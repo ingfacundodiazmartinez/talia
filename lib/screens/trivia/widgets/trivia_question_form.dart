@@ -194,6 +194,11 @@ class _TriviaQuestionFormState extends State<TriviaQuestionForm> {
           // Campo de pregunta
           TextField(
             controller: _questionController,
+            textCapitalization: TextCapitalization.sentences,
+            autocorrect: true,
+            enableSuggestions: true,
+            smartDashesType: SmartDashesType.disabled,
+            smartQuotesType: SmartQuotesType.disabled,
             decoration: InputDecoration(
               labelText: 'Pregunta',
               hintText: 'Ej: Cuál es mi comida favorita?',
@@ -204,7 +209,6 @@ class _TriviaQuestionFormState extends State<TriviaQuestionForm> {
             ),
             maxLines: 2,
             maxLength: 200,
-            textCapitalization: TextCapitalization.sentences,
           ),
           const SizedBox(height: 16),
 
@@ -307,6 +311,11 @@ class _TriviaQuestionFormState extends State<TriviaQuestionForm> {
               Expanded(
                 child: TextField(
                   controller: _optionControllers[i],
+                  textCapitalization: TextCapitalization.sentences,
+                  autocorrect: true,
+                  enableSuggestions: true,
+                  smartDashesType: SmartDashesType.disabled,
+                  smartQuotesType: SmartQuotesType.disabled,
                   decoration: InputDecoration(
                     hintText: 'Opción ${labels[i]}',
                     border: OutlineInputBorder(
@@ -322,7 +331,6 @@ class _TriviaQuestionFormState extends State<TriviaQuestionForm> {
                         : colorScheme.surfaceContainerHighest,
                   ),
                   enabled: _questionType != QuestionType.trueFalse,
-                  textCapitalization: TextCapitalization.sentences,
                 ),
               ),
             ],

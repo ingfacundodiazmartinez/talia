@@ -93,15 +93,22 @@ class TriviaResultsController {
       _triviaSubscription = _orchestrator.watchTrivia(triviaId).listen(
         (trivia) {
           _trivia = trivia;
-          onTriviaChanged?.call(trivia!);
-
-          if (_state == TriviaResultsState.loading && trivia != null) {
-            _setState(TriviaResultsState.loaded);
+          if (trivia != null) {
+            onTriviaChanged?.call(trivia);
+            if (_state == TriviaResultsState.loading) {
+              _setState(TriviaResultsState.loaded);
+            }
+          } else {
+            // ✅ Manejar caso de trivia no encontrada
+            ReleaseLogger.error('❌ [TriviaResults] Trivia no encontrada: $triviaId');
+            _setError('Trivia no encontrada');
+            _setState(TriviaResultsState.error);
           }
         },
         onError: (e) {
           ReleaseLogger.error('❌ [TriviaResults] Error en stream de trivia: $e');
           _setError('Error cargando trivia');
+          _setState(TriviaResultsState.error);
         },
       );
 

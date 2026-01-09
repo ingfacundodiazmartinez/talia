@@ -1,10 +1,9 @@
 import 'dart:async';
-import 'dart:io';
+import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import 'package:image_picker/image_picker.dart';
 import '../models/parent.dart';
 import '../services/image_service.dart';
-import '../services/media_compression_service.dart';
 import '../services/data_management_service.dart';
 import '../utils/release_logger.dart';
 
@@ -53,36 +52,20 @@ class ProfileController {
 
   /// Maneja la selección y subida de una imagen de perfil
   /// Retorna la URL de la imagen subida o null si hubo error
-  Future<String?> pickAndUploadImage(ImageSource source) async {
+  Future<String?> pickAndUploadImage(ImageSource source, {BuildContext? context}) async {
     try {
       ReleaseLogger.log('Iniciando selección de imagen desde: ${source == ImageSource.camera ? 'cámara' : 'galería'}', tag: 'ProfileController');
 
-      final pickedFile = await ImagePicker().pickImage(
+      // Si no hay contexto, no podemos mostrar el cropper - error
+      if (context == null) {
+        throw Exception('Se requiere BuildContext para seleccionar imagen');
+      }
+
+      // Usar el flujo completo de ImageService que incluye crop circular
+      final String? downloadUrl = await _imageService.pickAndUploadProfileImage(
         source: source,
-        maxWidth: 800,
-        maxHeight: 800,
-        imageQuality: 80,
+        context: context,
       );
-
-      if (pickedFile == null) {
-        ReleaseLogger.log('Usuario canceló la selección de imagen', tag: 'ProfileController');
-        return null;
-      }
-
-      ReleaseLogger.log('Imagen seleccionada: ${pickedFile.path}', tag: 'ProfileController');
-
-      // ✅ OPTIMIZACIÓN AGRESIVA: Comprimir foto de perfil (512x512, alta compresión)
-      final imageFile = File(pickedFile.path);
-      final compressedFile = await MediaCompressionService().compressProfilePhoto(imageFile);
-      final fileToUpload = compressedFile ?? imageFile;
-
-      // Subir imagen
-      final String? downloadUrl = await _imageService.uploadImageToStorage(fileToUpload.path);
-
-      if (downloadUrl != null && _parent != null) {
-        // Actualizar Firestore
-        await _parent!.updatePhotoURL(downloadUrl);
-      }
 
       return downloadUrl;
     } catch (e) {

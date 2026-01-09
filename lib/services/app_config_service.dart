@@ -36,6 +36,9 @@ class AppConfigService {
   static const String _defaultAndroidPremiumPlusMonthlyId = 'premium_plus_monthly';
   static const String _defaultAndroidExtraChildMonthlyId = 'extra_child_monthly';
 
+  // Call timeout defaults
+  static const int _defaultCallRingTimeoutSeconds = 30;
+
   /// Inicializa Remote Config y variables de entorno
   Future<void> initialize() async {
     if (_initialized) {
@@ -78,6 +81,8 @@ class AppConfigService {
         'iap_android_premium_monthly_id': _defaultAndroidPremiumMonthlyId,
         'iap_android_premium_plus_monthly_id': _defaultAndroidPremiumPlusMonthlyId,
         'iap_android_extra_child_monthly_id': _defaultAndroidExtraChildMonthlyId,
+        // Call configuration
+        'call_ring_timeout_seconds': _defaultCallRingTimeoutSeconds,
       });
 
       // 4. Intentar obtener configuración remota
@@ -379,4 +384,28 @@ class AppConfigService {
     }
     return _defaultAndroidExtraChildMonthlyId;
   }
+
+  // ═══════════════════════════════════════════════════════════════
+  // CALL CONFIGURATION
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Timeout en segundos para llamadas sin respuesta (ring timeout)
+  ///
+  /// Después de estos segundos, la llamada se termina automáticamente
+  /// si no es contestada.
+  ///
+  /// Jerarquía: Remote Config → default (30 segundos)
+  int get callRingTimeoutSeconds {
+    if (_initialized && _remoteConfig != null) {
+      final remoteValue = _remoteConfig!.getInt('call_ring_timeout_seconds');
+      if (remoteValue > 0) {
+        ReleaseLogger.log('Usando call_ring_timeout_seconds desde Remote Config: $remoteValue', tag: 'AppConfig');
+        return remoteValue;
+      }
+    }
+    return _defaultCallRingTimeoutSeconds;
+  }
+
+  /// Timeout en milisegundos para llamadas sin respuesta
+  int get callRingTimeoutMs => callRingTimeoutSeconds * 1000;
 }

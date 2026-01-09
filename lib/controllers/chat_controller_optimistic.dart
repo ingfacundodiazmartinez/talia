@@ -302,8 +302,15 @@ class ChatControllerOptimistic extends ChangeNotifier {
     }
   }
 
+  // Retry counter for listener recovery
+  int _listenerRetryCount = 0;
+  static const int _maxListenerRetries = 3;
+
   /// Configurar listener en tiempo real para nuevos mensajes
   void _setupMessagesListener() {
+    // Cancel existing subscription if any
+    _messagesSubscription?.cancel();
+
     var query = _firestore
         .collection('chats')
         .doc(chatId)
@@ -313,6 +320,9 @@ class ChatControllerOptimistic extends ChangeNotifier {
 
     _messagesSubscription = query.snapshots().listen(
       (snapshot) {
+        // Reset retry count on successful snapshot
+        _listenerRetryCount = 0;
+
         if (!_listenerInitialized) {
           _listenerInitialized = true;
           ReleaseLogger.log('👂[Realtime] Listener inicializado');
@@ -339,12 +349,40 @@ class ChatControllerOptimistic extends ChangeNotifier {
         if (error.toString().contains('permission-denied')) {
           ReleaseLogger.log('💬[Realtime] Chat vacío, esperando primer mensaje...');
         } else {
-          ReleaseLogger.error('❌[Realtime] Error: $error');
+          ReleaseLogger.error('❌[Realtime] Error en listener: $error');
+          // ✅ FIX: Auto-recovery del listener después de error
+          _attemptListenerRecovery();
         }
+      },
+      onDone: () {
+        ReleaseLogger.log('⚠️[Realtime] Stream cerrado inesperadamente');
+        // ✅ FIX: Auto-recovery si el stream se cierra
+        _attemptListenerRecovery();
       },
     );
 
     ReleaseLogger.log('👂[Realtime] Listener configurado');
+  }
+
+  /// Intentar recuperar el listener después de un error
+  void _attemptListenerRecovery() {
+    if (_listenerRetryCount >= _maxListenerRetries) {
+      ReleaseLogger.error('❌[Realtime] Max reintentos alcanzados ($_maxListenerRetries)');
+      return;
+    }
+
+    _listenerRetryCount++;
+    final delay = Duration(seconds: _listenerRetryCount * 2); // Backoff: 2s, 4s, 6s
+
+    ReleaseLogger.log('🔄[Realtime] Reintentando listener en ${delay.inSeconds}s (intento $_listenerRetryCount/$_maxListenerRetries)');
+
+    Future.delayed(delay, () {
+      if (_messagesSubscription != null) {
+        ReleaseLogger.log('🔄[Realtime] Reiniciando listener...');
+        _listenerInitialized = false;
+        _setupMessagesListener();
+      }
+    });
   }
 
   /// ✅ V2: Recalcular status de mensajes propios basándose en lastOpenedAt
@@ -814,6 +852,21 @@ class ChatControllerOptimistic extends ChangeNotifier {
   /// Detener escritura
   void stopTyping() {
     _typingService.stopTyping();
+  }
+
+  /// Stream de actividad del otro usuario (typing o recording)
+  Stream<UserActivityState> watchOtherUserActivity() {
+    return _typingService.watchOtherUserActivity(chatId, contactId);
+  }
+
+  /// Establecer estado de grabación de audio
+  void setRecording(bool isRecording) {
+    _typingService.setRecording(chatId, isRecording, isGroup: false);
+  }
+
+  /// Detener grabación
+  void stopRecording() {
+    _typingService.stopRecording();
   }
 
   /// Actualizar mensaje bloqueado

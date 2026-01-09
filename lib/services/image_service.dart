@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:image_cropper/image_cropper.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:image/image.dart' as img;
@@ -35,11 +36,30 @@ class ImageService {
 
       ReleaseLogger.log('✅ Imagen seleccionada: ${image.path}', tag: 'ImageService');
 
-      // ⏱️ Pequeño delay para dar tiempo a que el selector de imágenes se cierre visualmente
-      // Esto mejora la UX evitando que el diálogo aparezca mientras el selector aún está visible
-      await Future.delayed(const Duration(milliseconds: 300));
+      // ⏱️ Delay para dar tiempo a que el selector de imágenes se cierre visualmente
+      // iOS necesita más tiempo para estabilizar el view controller
+      final delayMs = Platform.isIOS ? 500 : 300;
+      await Future.delayed(Duration(milliseconds: delayMs));
 
-      // ✅ AHORA que el selector se cerró, mostrar loading
+      // ✂️ Crop circular de la imagen
+      ReleaseLogger.log('🔍 Verificando context.mounted antes del crop...', tag: 'ImageService');
+      if (!context.mounted) {
+        ReleaseLogger.error('❌ Context no está mounted - no se puede mostrar crop', tag: 'ImageService');
+        return null;
+      }
+      ReleaseLogger.log('✅ Context está mounted, mostrando crop...', tag: 'ImageService');
+
+      final CroppedFile? croppedFile = await _cropImageCircular(image.path, context);
+      ReleaseLogger.log('🔍 Resultado del crop: ${croppedFile != null ? 'archivo obtenido' : 'null'}', tag: 'ImageService');
+
+      if (croppedFile == null) {
+        ReleaseLogger.log('⚠️ Usuario canceló el crop de imagen', tag: 'ImageService');
+        return null;
+      }
+
+      ReleaseLogger.log('✅ Imagen recortada: ${croppedFile.path}', tag: 'ImageService');
+
+      // ✅ AHORA que el crop terminó, mostrar loading
       if (context.mounted) {
         showDialog(
           context: context,
@@ -58,7 +78,7 @@ class ImageService {
 
       try {
         // Subir imagen a Firebase Storage con retry
-        final String? downloadUrl = await uploadImageWithRetry(image.path);
+        final String? downloadUrl = await uploadImageWithRetry(croppedFile.path);
 
         if (downloadUrl != null) {
           // Actualizar URL en Firestore y Authentication
@@ -96,6 +116,56 @@ class ImageService {
     } catch (e) {
       ReleaseLogger.error('❌ Error picking and uploading image: $e', tag: 'ImageService');
       rethrow;
+    }
+  }
+
+  /// Abre el cropper circular para recortar la imagen de perfil
+  Future<CroppedFile?> _cropImageCircular(String imagePath, BuildContext context) async {
+    ReleaseLogger.log('🔧 _cropImageCircular llamado con path: $imagePath', tag: 'ImageService');
+
+    try {
+      final colorScheme = Theme.of(context).colorScheme;
+      ReleaseLogger.log('🔧 Iniciando ImageCropper.cropImage...', tag: 'ImageService');
+
+      final result = await ImageCropper().cropImage(
+        sourcePath: imagePath,
+        aspectRatio: const CropAspectRatio(ratioX: 1, ratioY: 1),
+        maxWidth: 512,
+        maxHeight: 512,
+        compressQuality: 85,
+        compressFormat: ImageCompressFormat.jpg,
+        uiSettings: [
+          AndroidUiSettings(
+            toolbarTitle: 'Recortar foto',
+            toolbarColor: colorScheme.primary,
+            toolbarWidgetColor: Colors.white,
+            activeControlsWidgetColor: colorScheme.primary,
+            cropStyle: CropStyle.circle,
+            lockAspectRatio: true,
+            hideBottomControls: true,
+            dimmedLayerColor: Colors.black.withValues(alpha: 0.8),
+            cropFrameColor: colorScheme.primary,
+            cropGridColor: Colors.white.withValues(alpha: 0.5),
+          ),
+          IOSUiSettings(
+            title: 'Recortar foto',
+            cropStyle: CropStyle.circle,
+            aspectRatioLockEnabled: true,
+            rotateButtonsHidden: true,
+            rotateClockwiseButtonHidden: true,
+            resetButtonHidden: true,
+            hidesNavigationBar: false,
+            showCancelConfirmationDialog: true,
+          ),
+        ],
+      );
+
+      ReleaseLogger.log('🔧 ImageCropper completado, resultado: ${result != null ? 'OK' : 'null'}', tag: 'ImageService');
+      return result;
+    } catch (e, stackTrace) {
+      ReleaseLogger.error('❌ Error en _cropImageCircular: $e', tag: 'ImageService');
+      ReleaseLogger.error('Stack trace: $stackTrace', tag: 'ImageService');
+      return null;
     }
   }
 

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import '../../../../services/reaction_service.dart';
 import '../../../../models/chat_message.dart';
 import '../../../../utils/release_logger.dart';
@@ -102,10 +103,42 @@ class MessageOptionsDialog {
                         ),
                       ),
                       SizedBox(height: 12),
-                      // Emojis de reacción
+                      // Emojis de reacción rápida + botón para más
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceAround,
                         children: [
+                          _buildReactionButton(
+                            context: dialogContext,
+                            emoji: '❤️',
+                            onTap: () {
+                              Navigator.pop(dialogContext);
+                              _reactToMessage(chatId, messageId, '❤️', isGroupChat);
+                            },
+                          ),
+                          _buildReactionButton(
+                            context: dialogContext,
+                            emoji: '😂',
+                            onTap: () {
+                              Navigator.pop(dialogContext);
+                              _reactToMessage(chatId, messageId, '😂', isGroupChat);
+                            },
+                          ),
+                          _buildReactionButton(
+                            context: dialogContext,
+                            emoji: '😮',
+                            onTap: () {
+                              Navigator.pop(dialogContext);
+                              _reactToMessage(chatId, messageId, '😮', isGroupChat);
+                            },
+                          ),
+                          _buildReactionButton(
+                            context: dialogContext,
+                            emoji: '😢',
+                            onTap: () {
+                              Navigator.pop(dialogContext);
+                              _reactToMessage(chatId, messageId, '😢', isGroupChat);
+                            },
+                          ),
                           _buildReactionButton(
                             context: dialogContext,
                             emoji: '🔥',
@@ -116,42 +149,18 @@ class MessageOptionsDialog {
                           ),
                           _buildReactionButton(
                             context: dialogContext,
-                            emoji: '🙌',
+                            emoji: '👍',
                             onTap: () {
                               Navigator.pop(dialogContext);
-                              _reactToMessage(chatId, messageId, '🙌', isGroupChat);
+                              _reactToMessage(chatId, messageId, '👍', isGroupChat);
                             },
                           ),
-                          _buildReactionButton(
+                          // Botón "+" para más emojis
+                          _buildMoreReactionsButton(
                             context: dialogContext,
-                            emoji: '😭',
-                            onTap: () {
+                            onEmojiSelected: (emoji) {
                               Navigator.pop(dialogContext);
-                              _reactToMessage(chatId, messageId, '😭', isGroupChat);
-                            },
-                          ),
-                          _buildReactionButton(
-                            context: dialogContext,
-                            emoji: '🙈',
-                            onTap: () {
-                              Navigator.pop(dialogContext);
-                              _reactToMessage(chatId, messageId, '🙈', isGroupChat);
-                            },
-                          ),
-                          _buildReactionButton(
-                            context: dialogContext,
-                            emoji: '🙏',
-                            onTap: () {
-                              Navigator.pop(dialogContext);
-                              _reactToMessage(chatId, messageId, '🙏', isGroupChat);
-                            },
-                          ),
-                          _buildReactionButton(
-                            context: dialogContext,
-                            emoji: '😤',
-                            onTap: () {
-                              Navigator.pop(dialogContext);
-                              _reactToMessage(chatId, messageId, '😤', isGroupChat);
+                              _reactToMessage(chatId, messageId, emoji, isGroupChat);
                             },
                           ),
                         ],
@@ -298,8 +307,8 @@ class MessageOptionsDialog {
       onTap: onTap,
       borderRadius: BorderRadius.circular(12),
       child: Container(
-        width: 44,
-        height: 44,
+        width: 40,
+        height: 40,
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.5),
           borderRadius: BorderRadius.circular(12),
@@ -307,8 +316,107 @@ class MessageOptionsDialog {
         child: Center(
           child: Text(
             emoji,
-            style: TextStyle(fontSize: 24),
+            style: TextStyle(fontSize: 22),
           ),
+        ),
+      ),
+    );
+  }
+
+  /// Construye el botón "+" para mostrar más emojis
+  static Widget _buildMoreReactionsButton({
+    required BuildContext context,
+    required Function(String) onEmojiSelected,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return InkWell(
+      onTap: () => _showFullEmojiPicker(context, onEmojiSelected),
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: colorScheme.primary.withOpacity(0.15),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Center(
+          child: Icon(
+            Icons.add,
+            size: 22,
+            color: colorScheme.primary,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Muestra el picker completo de emojis
+  static void _showFullEmojiPicker(BuildContext context, Function(String) onEmojiSelected) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final colorScheme = Theme.of(context).colorScheme;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: isDark ? const Color(0xFF1C1B1F) : Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SizedBox(
+        height: 350,
+        child: Column(
+          children: [
+            // Handle bar
+            Container(
+              margin: const EdgeInsets.only(top: 12, bottom: 8),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: colorScheme.onSurfaceVariant.withOpacity(0.3),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            // Emoji picker
+            Expanded(
+              child: EmojiPicker(
+                onEmojiSelected: (category, emoji) {
+                  Navigator.of(ctx).pop();
+                  onEmojiSelected(emoji.emoji);
+                },
+                config: Config(
+                  height: 300,
+                  checkPlatformCompatibility: true,
+                  emojiViewConfig: EmojiViewConfig(
+                    columns: 8,
+                    emojiSizeMax: 28,
+                    verticalSpacing: 0,
+                    horizontalSpacing: 0,
+                    gridPadding: EdgeInsets.zero,
+                    backgroundColor: isDark ? const Color(0xFF1C1B1F) : Colors.white,
+                    recentsLimit: 28,
+                    loadingIndicator: const SizedBox.shrink(),
+                    noRecents: Text(
+                      'Sin recientes',
+                      style: TextStyle(fontSize: 14, color: colorScheme.onSurfaceVariant),
+                    ),
+                  ),
+                  categoryViewConfig: CategoryViewConfig(
+                    initCategory: Category.SMILEYS,
+                    backgroundColor: isDark ? const Color(0xFF1C1B1F) : Colors.white,
+                    indicatorColor: colorScheme.primary,
+                    iconColorSelected: colorScheme.primary,
+                    iconColor: colorScheme.onSurfaceVariant,
+                  ),
+                  bottomActionBarConfig: const BottomActionBarConfig(enabled: false),
+                  searchViewConfig: SearchViewConfig(
+                    backgroundColor: isDark ? const Color(0xFF1C1B1F) : Colors.white,
+                    buttonIconColor: colorScheme.primary,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );

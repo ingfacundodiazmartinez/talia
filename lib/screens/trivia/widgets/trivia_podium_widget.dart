@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 
 import '../../../models/trivia_response.dart';
+import '../../../widgets/synced_user_widgets.dart';
 
 /// Widget de podio para los ganadores de trivia
 class TriviaPodiumWidget extends StatelessWidget {
@@ -15,7 +15,7 @@ class TriviaPodiumWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (winners.isEmpty) {
-      return _buildEmptyPodium();
+      return _buildEmptyPodium(context);
     }
 
     // Obtener los 3 primeros lugares (o null si no existen)
@@ -24,7 +24,7 @@ class TriviaPodiumWidget extends StatelessWidget {
     final third = winners.length >= 3 ? winners[2] : null;
 
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.end,
@@ -67,7 +67,8 @@ class TriviaPodiumWidget extends StatelessWidget {
     );
   }
 
-  Widget _buildEmptyPodium() {
+  Widget _buildEmptyPodium(BuildContext context) {
+    final theme = Theme.of(context);
     return Container(
       padding: const EdgeInsets.all(32),
       child: Column(
@@ -76,22 +77,22 @@ class TriviaPodiumWidget extends StatelessWidget {
           Icon(
             Icons.emoji_events_outlined,
             size: 64,
-            color: Colors.grey.shade400,
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
           ),
           const SizedBox(height: 16),
-          const Text(
+          Text(
             'Aún no hay participantes',
             style: TextStyle(
               fontSize: 16,
-              color: Colors.grey,
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
             ),
           ),
           const SizedBox(height: 8),
-          const Text(
+          Text(
             'Comparte tu trivia para ver el podio',
             style: TextStyle(
               fontSize: 14,
-              color: Colors.grey,
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
             ),
           ),
         ],
@@ -139,14 +140,16 @@ class _PodiumPosition extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Avatar y medal
+        // Avatar con medalla
         Stack(
           alignment: Alignment.bottomCenter,
           children: [
-            // Avatar
+            // Avatar usando SyncedUserAvatar
             Container(
               width: position == 1 ? 70 : 60,
               height: position == 1 ? 70 : 60,
@@ -165,23 +168,13 @@ class _PodiumPosition extends StatelessWidget {
                 ],
               ),
               child: ClipOval(
-                child: entry.response.oderPhotoURL != null
-                    ? CachedNetworkImage(
-                        imageUrl: entry.response.oderPhotoURL!,
-                        fit: BoxFit.cover,
-                        placeholder: (_, __) => Container(
-                          color: Colors.grey.shade200,
-                          child: const Icon(Icons.person, color: Colors.grey),
-                        ),
-                        errorWidget: (_, __, ___) => Container(
-                          color: Colors.grey.shade200,
-                          child: const Icon(Icons.person, color: Colors.grey),
-                        ),
-                      )
-                    : Container(
-                        color: Colors.grey.shade200,
-                        child: const Icon(Icons.person, color: Colors.grey),
-                      ),
+                child: SyncedUserAvatar(
+                  userId: entry.response.oderId,
+                  fallbackPhotoUrl: entry.response.oderPhotoURL,
+                  userName: entry.response.oderName,
+                  radius: position == 1 ? 32 : 27,
+                  backgroundColor: theme.colorScheme.primaryContainer,
+                ),
               ),
             ),
             // Medal badge
@@ -211,18 +204,21 @@ class _PodiumPosition extends StatelessWidget {
 
         const SizedBox(height: 12),
 
-        // Nombre
+        // Nombre usando SyncedUserName
         SizedBox(
           width: 80,
-          child: Text(
-            entry.response.oderName,
-            style: TextStyle(
-              fontWeight: FontWeight.w600,
-              fontSize: position == 1 ? 14 : 12,
+          child: Center(
+            child: SyncedUserName(
+              userId: entry.response.oderId,
+              fallbackName: entry.response.oderName,
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                fontSize: position == 1 ? 14 : 12,
+                color: theme.colorScheme.onSurface,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
-            textAlign: TextAlign.center,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
           ),
         ),
 
@@ -290,21 +286,14 @@ class _EmptyPodiumPosition extends StatelessWidget {
     required this.height,
   });
 
-  Color get _podiumColor {
-    switch (position) {
-      case 1:
-        return Colors.grey.shade300;
-      case 2:
-        return Colors.grey.shade300;
-      case 3:
-        return Colors.grey.shade300;
-      default:
-        return Colors.grey.shade300;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final emptyColor = isDark
+        ? theme.colorScheme.surfaceContainerHighest
+        : Colors.grey.shade300;
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -314,15 +303,15 @@ class _EmptyPodiumPosition extends StatelessWidget {
           height: position == 1 ? 70 : 60,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: Colors.grey.shade200,
+            color: theme.colorScheme.surfaceContainerHighest,
             border: Border.all(
-              color: _podiumColor,
+              color: emptyColor,
               width: 3,
             ),
           ),
           child: Icon(
             Icons.person_outline,
-            color: Colors.grey.shade400,
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
             size: 32,
           ),
         ),
@@ -335,7 +324,7 @@ class _EmptyPodiumPosition extends StatelessWidget {
           child: Text(
             '---',
             style: TextStyle(
-              color: Colors.grey.shade400,
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
               fontSize: position == 1 ? 14 : 12,
             ),
             textAlign: TextAlign.center,
@@ -348,7 +337,7 @@ class _EmptyPodiumPosition extends StatelessWidget {
         Text(
           '-- pts',
           style: TextStyle(
-            color: Colors.grey.shade400,
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
             fontSize: position == 1 ? 16 : 14,
           ),
         ),
@@ -360,7 +349,7 @@ class _EmptyPodiumPosition extends StatelessWidget {
           width: position == 1 ? 90 : 80,
           height: height,
           decoration: BoxDecoration(
-            color: _podiumColor,
+            color: emptyColor,
             borderRadius: const BorderRadius.only(
               topLeft: Radius.circular(8),
               topRight: Radius.circular(8),
@@ -370,7 +359,7 @@ class _EmptyPodiumPosition extends StatelessWidget {
             child: Text(
               '$position',
               style: TextStyle(
-                color: Colors.grey.shade500,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
                 fontSize: 32,
                 fontWeight: FontWeight.bold,
               ),

@@ -271,6 +271,20 @@ class TriviaResponse {
     });
   }
 
+  /// Stream de IDs de trivias que el usuario ha respondido (completadas o parciales)
+  /// Usado para determinar si mostrar el gradiente "no visto" en stories_section
+  static Stream<Set<String>> watchRespondedTriviaIds(String oderId) {
+    return _collection
+        .where('oderId', isEqualTo: oderId)
+        .where('status', whereIn: ['completed', 'partial'])
+        .snapshots()
+        .map((snapshot) =>
+            snapshot.docs.map((doc) {
+              final data = doc.data();
+              return data['triviaId'] as String? ?? '';
+            }).where((id) => id.isNotEmpty).toSet());
+  }
+
   // ==================== Copy With ====================
 
   TriviaResponse copyWith({

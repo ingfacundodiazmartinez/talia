@@ -1991,7 +1991,7 @@ service cloud.firestore {
       // 🔒 FUNCIÓN: Verificar si solo se actualizan campos permitidos (creador)
       function isUpdatingAllowedCreatorFields() {
         let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
-        let allowedCreatorFields = ['title', 'backgroundImageUrl', 'updatedAt', 'status', 'resultsStoryId', 'participantCount', 'hasResponses'];
+        let allowedCreatorFields = ['title', 'backgroundImageUrl', 'updatedAt', 'status', 'closedAt', 'resultsStoryId', 'participantCount', 'hasResponses', 'reminderSent'];
         return changedKeys.hasOnly(allowedCreatorFields);
       }
 

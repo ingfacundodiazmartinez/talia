@@ -140,6 +140,11 @@ class _TriviaCreationScreenState extends State<TriviaCreationScreen> {
                   // Campo de pregunta editable
                   TextField(
                     controller: questionController,
+                    textCapitalization: TextCapitalization.sentences,
+                    autocorrect: true,
+                    enableSuggestions: true,
+                    smartDashesType: SmartDashesType.disabled,
+                    smartQuotesType: SmartQuotesType.disabled,
                     decoration: InputDecoration(
                       labelText: 'Pregunta',
                       border: OutlineInputBorder(
@@ -195,6 +200,11 @@ class _TriviaCreationScreenState extends State<TriviaCreationScreen> {
                           Expanded(
                             child: TextField(
                               controller: optionControllers[index],
+                              textCapitalization: TextCapitalization.sentences,
+                              autocorrect: true,
+                              enableSuggestions: true,
+                              smartDashesType: SmartDashesType.disabled,
+                              smartQuotesType: SmartQuotesType.disabled,
                               decoration: InputDecoration(
                                 hintText: 'Opción ${index + 1}',
                                 border: OutlineInputBorder(
@@ -383,6 +393,11 @@ class _TriviaCreationScreenState extends State<TriviaCreationScreen> {
           TextField(
             controller: _titleController,
             onChanged: _controller.setTitle,
+            textCapitalization: TextCapitalization.sentences,
+            autocorrect: true,
+            enableSuggestions: true,
+            smartDashesType: SmartDashesType.disabled,
+            smartQuotesType: SmartQuotesType.disabled,
             decoration: InputDecoration(
               hintText: 'Ej: "Cuánto me conoces?"',
               border: OutlineInputBorder(
@@ -391,7 +406,6 @@ class _TriviaCreationScreenState extends State<TriviaCreationScreen> {
               prefixIcon: const Icon(Icons.quiz_rounded),
             ),
             maxLength: 50,
-            textCapitalization: TextCapitalization.sentences,
           ),
 
           const SizedBox(height: 32),
