@@ -2069,6 +2069,7 @@ exports.sendGroupV2Message = onCall(
         lastMessageTime: now,
         lastMessageSender: senderId,
         lastMessageId: messageRef.id,
+        lastMessageType: messageType, // ✅ FIX: Evitar cursiva incorrecta
         lastActivity: now,
       });
 

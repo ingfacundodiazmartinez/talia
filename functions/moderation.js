@@ -379,6 +379,7 @@ exports.checkMessageBeforeSending = onCall(
             lastMessage: "🚫 Mensaje bloqueado",
             lastMessageTime: FieldValue.serverTimestamp(),
             lastMessageSender: userId,
+            lastMessageType: "text", // ✅ FIX: Evitar cursiva incorrecta
           });
           console.log(`📝 [Pre-moderación] Chat sincronizado: lastMessage="🚫 Mensaje bloqueado"`);
         } catch (e) {
@@ -490,6 +491,7 @@ exports.moderateMessage = onDocumentCreated(
                 lastMessageTime: FieldValue.serverTimestamp(),
                 lastMessageSender: senderId,
                 lastMessageId: messageId,
+                lastMessageType: messageData.type || "text", // ✅ FIX: Evitar cursiva incorrecta
               });
               console.log(`✅ [Pre-aprobado] lastMessage actualizado correctamente`);
             } catch (updateError) {
@@ -550,6 +552,7 @@ exports.moderateMessage = onDocumentCreated(
               lastMessageTime: FieldValue.serverTimestamp(),
               lastMessageSender: senderId,
               lastMessageId: messageId,
+              lastMessageType: messageData.type || "text", // ✅ FIX: Evitar cursiva incorrecta
             });
             console.log(`📝 Chat sincronizado (pre-moderado): lastMessage="${messagePreview}"`);
           } catch (updateError) {
@@ -881,6 +884,7 @@ exports.moderateMessage = onDocumentCreated(
             lastMessageTime: FieldValue.serverTimestamp(),
             lastMessageSender: senderId,
             lastMessageId: messageId, // ✅ FIX: Incluir ID para que ChatDocsListener trackee correctamente
+            lastMessageType: messageData.type || "text", // ✅ FIX: Evitar cursiva incorrecta
           });
           console.log(`📝 Chat sincronizado: lastMessage="${messagePreview.substring(0, 30)}...", lastMessageId=${messageId}`);
         } catch (updateError) {
@@ -912,6 +916,7 @@ exports.moderateMessage = onDocumentCreated(
             lastMessageTime: FieldValue.serverTimestamp(),
             lastMessageSender: senderId,
             lastMessageId: messageId, // ✅ FIX: Incluir ID para que ChatDocsListener trackee correctamente
+            lastMessageType: "text", // ✅ FIX: Evitar cursiva incorrecta
           });
 
           console.log(`📝 Chat sincronizado: lastMessage="🚫 Mensaje bloqueado", lastMessageId=${messageId}`);
@@ -943,6 +948,7 @@ exports.moderateMessage = onDocumentCreated(
             lastMessage: messagePreview,
             lastMessageTime: FieldValue.serverTimestamp(),
             lastMessageSender: senderId,
+            lastMessageType: messageData?.type || "text", // ✅ FIX: Evitar cursiva incorrecta
           });
           console.log(`📝 Chat ${chatId} actualizado con lastMessage (después de error en moderación)`);
         }
@@ -1020,6 +1026,7 @@ exports.createApprovedMessage = onCall(
         lastMessage: text,
         lastMessageTime: FieldValue.serverTimestamp(),
         lastMessageSender: senderId,
+        lastMessageType: "text", // ✅ FIX: Evitar cursiva incorrecta
       });
 
       console.log(`✅ [CreateApprovedMessage] Chat actualizado con lastMessage: "${text.substring(0, 30)}..."`);

@@ -140,12 +140,16 @@ exports.onChatMessageCreated = onDocumentCreated(
         // ✅ FIX: Para mensajes de media, usar preview apropiado
         // ✅ FIX: Usar "Imagen" (no "Foto") para consistencia con el cliente Flutter
         let initialLastMessage = messageData.text || "";
+        let initialMessageType = messageData.type || "text";
         if (messageData.audioUrl) {
           initialLastMessage = "🎤 Audio";
+          initialMessageType = "audio";
         } else if (messageData.imageUrl) {
           initialLastMessage = "📷 Imagen";
+          initialMessageType = "image";
         } else if (messageData.videoUrl) {
           initialLastMessage = "🎥 Video";
+          initialMessageType = "video";
         }
 
         await chatRef.set({
@@ -157,6 +161,7 @@ exports.onChatMessageCreated = onDocumentCreated(
           lastMessageAt: now,  // ✅ FIX: Agregar campo que el listener espera
           lastMessage: initialLastMessage,
           lastMessageSender: messageData.senderId || "",  // ✅ FIX: Usar sender real
+          lastMessageType: initialMessageType, // ✅ FIX: Evitar cursiva incorrecta
           deletedBy: [],
         }, {merge: true});  // ✅ CRITICAL FIX: merge=true para no sobrescribir si Flutter ya creó el chat
 
@@ -271,12 +276,16 @@ exports.onChatMessageCreated = onDocumentCreated(
         // ✅ FIX: Para mensajes de media (audio, video, imagen), usar preview apropiado
         // ✅ FIX: Usar "Imagen" (no "Foto") para consistencia con el cliente Flutter
         let lastMessagePreview = messageData.text || "";
+        let lastMsgType = messageData.type || "text";
         if (messageData.audioUrl) {
           lastMessagePreview = "🎤 Audio";
+          lastMsgType = "audio";
         } else if (messageData.imageUrl) {
           lastMessagePreview = "📷 Imagen";
+          lastMsgType = "image";
         } else if (messageData.videoUrl) {
           lastMessagePreview = "🎥 Video";
+          lastMsgType = "video";
         }
 
         await chatRef.update({
@@ -286,6 +295,7 @@ exports.onChatMessageCreated = onDocumentCreated(
           lastMessage: lastMessagePreview,
           lastMessageSender: senderId,
           lastMessageId: messageId, // ✅ FIX: Guardar ID para excluir de cleanup
+          lastMessageType: lastMsgType, // ✅ FIX: Evitar cursiva incorrecta
         });
         console.log(`✅ Mensaje procesado para ${receiverId}, chat visible: true, lastMessage: "${lastMessagePreview}"`);
       }
@@ -428,6 +438,7 @@ exports.onGroupMessageCreated = onDocumentCreated(
         lastMessageTime: now,
         lastMessageAt: now,  // ✅ FIX: Agregar campo que el listener espera
         lastMessageSender: senderId,
+        lastMessageType: messageType, // ✅ FIX: Evitar cursiva incorrecta
       };
 
       // 🔔 ENVIAR NOTIFICACIONES PUSH para cada miembro (excepto el sender)
@@ -484,6 +495,7 @@ exports.onGroupMessageCreated = onDocumentCreated(
         lastMessage: groupUpdateData.lastMessage,
         lastMessageTime: groupUpdateData.lastMessageTime,
         lastMessageSender: groupUpdateData.lastMessageSender,
+        lastMessageType: groupUpdateData.lastMessageType, // ✅ FIX: Evitar cursiva incorrecta
       });
 
       console.log(`✅ Grupo ${groupId} actualizado con ${members.length - 1} notificaciones enviadas`);
@@ -1038,6 +1050,7 @@ exports.sendChatMessage = onCall(
             lastMessageSender: senderId,
             lastMessageId: messageRef.id, // ✅ FIX: Incluir ID para que ChatDocsListener trackee correctamente
             lastMessage: text || (messageType === "image" ? "📷 Imagen" : messageType === "video" ? "🎥 Video" : messageType === "audio" ? "🎤 Audio" : ""),
+            lastMessageType: messageType, // ✅ FIX: Incluir tipo para evitar cursiva incorrecta
             updatedAt: lastMessageNow,
             visible: true,
           };
