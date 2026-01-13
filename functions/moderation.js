@@ -6,6 +6,7 @@ const { getMessaging } = require("firebase-admin/messaging");
 const { getStorage } = require("firebase-admin/storage");
 const { analyzeMessageWithGemini } = require("./groups");
 const { sendDirectPushNotification } = require("./helpers");
+const { shouldBlockByModerationLevel } = require("./moderation-utils");
 
 // ═══════════════════════════════════════════════════════════════
 // CONTEXT CACHE - Reduce Firestore reads for moderation
@@ -258,17 +259,7 @@ exports.checkMessageBeforeSending = onCall(
       );
 
       // 7. Determinar si se aprueba o bloquea según el nivel de moderación
-      let shouldBlock = false;
-      if (moderationLevel === "high") {
-        // HIGH: Bloquear severity 'low', 'medium', 'high'
-        shouldBlock = analysis.isInappropriate && ["low", "medium", "high"].includes(analysis.severity);
-      } else if (moderationLevel === "medium") {
-        // MEDIUM: Bloquear severity 'medium', 'high'
-        shouldBlock = analysis.isInappropriate && ["medium", "high"].includes(analysis.severity);
-      } else {
-        // LOW: Solo bloquear severity 'high'
-        shouldBlock = analysis.isInappropriate && analysis.severity === "high";
-      }
+      const shouldBlock = shouldBlockByModerationLevel(analysis, moderationLevel);
 
       if (!shouldBlock) {
         console.log(`✅ [Pre-moderación] Mensaje aprobado (severity: ${analysis.severity}, level: ${moderationLevel})`);
@@ -840,18 +831,7 @@ exports.moderateMessage = onDocumentCreated(
       );
 
           // 6. Determinar acción basada en análisis y nivel de moderación
-          let shouldBlock = false;
-
-          if (moderationLevel === "high") {
-            // HIGH: Bloquear severity 'low', 'medium', 'high'
-            shouldBlock = analysis.isInappropriate && ["low", "medium", "high"].includes(analysis.severity);
-          } else if (moderationLevel === "medium") {
-            // MEDIUM: Bloquear severity 'medium', 'high'
-            shouldBlock = analysis.isInappropriate && ["medium", "high"].includes(analysis.severity);
-          } else {
-            // LOW: Solo bloquear severity 'high'
-            shouldBlock = analysis.isInappropriate && analysis.severity === "high";
-          }
+          const shouldBlock = shouldBlockByModerationLevel(analysis, moderationLevel);
 
           if (!shouldBlock) {
             moderationStatus = "approved";
@@ -1622,14 +1602,7 @@ async function moderateAudioInternal(audioUrl, moderationLevel = "high", clientT
     );
 
     // Determinar si bloquear basado en nivel
-    let shouldBlock = false;
-    if (moderationLevel === "high") {
-      shouldBlock = analysis.isInappropriate && ["low", "medium", "high"].includes(analysis.severity);
-    } else if (moderationLevel === "medium") {
-      shouldBlock = analysis.isInappropriate && ["medium", "high"].includes(analysis.severity);
-    } else {
-      shouldBlock = analysis.isInappropriate && analysis.severity === "high";
-    }
+    const shouldBlock = shouldBlockByModerationLevel(analysis, moderationLevel);
 
     return {
       flagged: shouldBlock,
@@ -2212,14 +2185,7 @@ exports.moderateAudioWithWhisper = onCall(
       );
 
       // 8. Determinar si debe bloquearse según el nivel
-      let shouldBlock = false;
-      if (moderationLevel === "high") {
-        shouldBlock = analysis.isInappropriate && ["low", "medium", "high"].includes(analysis.severity);
-      } else if (moderationLevel === "medium") {
-        shouldBlock = analysis.isInappropriate && ["medium", "high"].includes(analysis.severity);
-      } else {
-        shouldBlock = analysis.isInappropriate && analysis.severity === "high";
-      }
+      const shouldBlock = shouldBlockByModerationLevel(analysis, moderationLevel);
 
       const result = {
         flagged: shouldBlock,
@@ -2423,14 +2389,7 @@ exports.moderateMultimedia = onCall(
               []
             );
 
-            let shouldBlock = false;
-            if (moderationLevel === "high") {
-              shouldBlock = analysis.isInappropriate && ["low", "medium", "high"].includes(analysis.severity);
-            } else if (moderationLevel === "medium") {
-              shouldBlock = analysis.isInappropriate && ["medium", "high"].includes(analysis.severity);
-            } else {
-              shouldBlock = analysis.isInappropriate && analysis.severity === "high";
-            }
+            const shouldBlock = shouldBlockByModerationLevel(analysis, moderationLevel);
 
             return {
               flagged: shouldBlock,
