@@ -3,6 +3,8 @@ import 'package:cloud_functions/cloud_functions.dart';
 import '../models/parent.dart';
 import '../models/user.dart';
 import '../services/image_service.dart';
+import '../services/multimedia_moderation_service.dart';
+import '../services/subscription_service.dart';
 import '../utils/release_logger.dart';
 
 /// Controller para manejar la lógica de edición de perfil
@@ -64,6 +66,9 @@ class EditProfileController {
   }
 
   /// Maneja la subida de foto de perfil (la selección se hace en el screen)
+  ///
+  /// Si el usuario tiene Premium+ y multimedia moderation habilitada,
+  /// la imagen será moderada antes de guardarla en el perfil.
   Future<String?> uploadProfilePhoto(String imagePath) async {
     try {
       final String? imageUrl = await _imageService.uploadImageToStorage(
@@ -71,6 +76,51 @@ class EditProfileController {
       );
 
       if (imageUrl != null && _parent != null) {
+        // Check if user has Premium+ for multimedia moderation
+        final subscriptionService = SubscriptionService();
+        final premiumStatus = await subscriptionService.checkPremiumStatus();
+
+        if (premiumStatus.tier == SubscriptionTier.premiumPlus) {
+          // Run multimedia moderation on the uploaded image
+          ReleaseLogger.log(
+            'Moderating profile photo for Premium+ user',
+            tag: 'EditProfile',
+          );
+
+          try {
+            final moderationService = MultimediaModerationService();
+            final result = await moderationService.moderateImage(
+              imageUrl: imageUrl,
+            );
+
+            if (result.flagged) {
+              ReleaseLogger.log(
+                'Profile photo blocked: ${result.reason}',
+                tag: 'EditProfile',
+              );
+              // Note: The uploaded image remains in storage but won't be linked to profile
+              // Consider implementing cleanup later
+              throw Exception(
+                'Imagen bloqueada: ${result.reason.isNotEmpty ? result.reason : "Contenido inapropiado detectado"}',
+              );
+            }
+
+            ReleaseLogger.log(
+              'Profile photo approved (severity: ${result.severity})',
+              tag: 'EditProfile',
+            );
+          } catch (e) {
+            // If moderation fails but it's not a blocking error, allow upload
+            if (e.toString().contains('Imagen bloqueada')) {
+              rethrow;
+            }
+            ReleaseLogger.error(
+              'Moderation error (allowing upload): $e',
+              tag: 'EditProfile',
+            );
+          }
+        }
+
         await _parent!.updatePhotoURL(imageUrl);
         return imageUrl;
       }

@@ -294,6 +294,12 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
               pendingGroups: pendingGroups,
             );
 
+            // Cachear chats para iOS Share Extension (fire and forget)
+            _chatsController.cacheChatsForShareExtension(
+              chatDocs: chatDocs,
+              groups: groups,
+            );
+
         return Column(
           children: [
             // Historias (estáticas, fuera del ListView)
@@ -508,6 +514,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
               lastMessageSenderId: null, // No mostrar icono para mensajes recibidos
               lastMessageStatus: null,
               lastMessageModerationStatus: null,
+              lastMessageType: chatData['lastMessageType'] as String?, // ✅ Para cursiva
               onArchived: () => setState(() => _preferencesVersion++),
               onMuted: () => setState(() => _preferencesVersion++),
               onCleared: () => setState(() => _preferencesVersion++),
@@ -531,10 +538,23 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
                 // Solo calcular estado si el mensaje del stream coincide con el sender del doc
                 final streamSenderId = lastMessageData['senderId'] as String? ?? '';
                 if (streamSenderId == lastMessageSenderFromDoc) {
-                  lastMessageStatus = MessageStatusHelper.calculateStatus(
-                    data: lastMessageData,
+                  // ✅ V2: Usar lastOpenedAt del recipient para calcular status
+                  // Obtener el ID del recipient (el otro participante del chat)
+                  final chatParticipants = List<String>.from(chatData['participants'] ?? []);
+                  final recipientId = chatParticipants.firstWhere(
+                    (id) => id != currentUserId,
+                    orElse: () => '',
+                  );
+
+                  final lastMessageTimestamp = lastMessageData['timestamp'] as Timestamp?;
+                  final recipientLastOpenedAt = chatData['lastOpenedAt_$recipientId'] as Timestamp?;
+                  final recipientLastReceivedAt = chatData['lastReceivedAt_$recipientId'] as Timestamp?;
+
+                  lastMessageStatus = MessageStatusHelper.calculateStatusV2(
+                    messageTimestamp: lastMessageTimestamp?.toDate(),
                     senderId: streamSenderId,
-                    hasServerTimestamp: lastMessageData['timestamp'] != null,
+                    recipientLastOpenedAt: recipientLastOpenedAt?.toDate(),
+                    recipientLastReceivedAt: recipientLastReceivedAt?.toDate(),
                   );
 
                   final modStatusString = lastMessageData['moderationStatus'] as String?;
@@ -577,6 +597,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
                 lastMessageSenderId: isChatCleared ? null : lastMessageSenderFromDoc,
                 lastMessageStatus: isChatCleared ? null : lastMessageStatus,
                 lastMessageModerationStatus: isChatCleared ? null : lastMessageModerationStatus,
+                lastMessageType: chatData['lastMessageType'] as String?, // ✅ Para cursiva
                 onArchived: () => setState(() => _preferencesVersion++),
                 onMuted: () => setState(() => _preferencesVersion++),
                 onCleared: () => setState(() => _preferencesVersion++),
@@ -741,6 +762,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
           lastMessageSenderId: lastMessageSenderId,
           lastMessageStatus: lastMessageStatus,
           lastMessageModerationStatus: lastMessageModerationStatus,
+          lastMessageType: groupData['lastMessageType'] as String?, // ✅ Para cursiva
           timeString: timeString,
         );
       },

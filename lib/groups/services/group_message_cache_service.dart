@@ -217,6 +217,10 @@ class GroupMessageCacheService {
       'originalSenderId': message.originalSenderId,
       'originalChatId': message.originalChatId,
       'originalContactName': message.originalContactName,
+      // ✅ FIX: Campos de moderación
+      'moderationStatus': message.moderationStatus,
+      'moderationReason': message.moderationReason,
+      'localId': message.localId,
     };
   }
 
@@ -273,6 +277,10 @@ class GroupMessageCacheService {
       originalSenderId: data['originalSenderId'] as String?,
       originalChatId: data['originalChatId'] as String?,
       originalContactName: data['originalContactName'] as String?,
+      // ✅ FIX: Campos de moderación
+      moderationStatus: data['moderationStatus'] as String?,
+      moderationReason: data['moderationReason'] as String?,
+      localId: data['localId'] as String?,
     );
   }
 

@@ -164,7 +164,7 @@ class ReplyPreviewWidget extends StatelessWidget {
                           : hasText
                               ? replyTo['text']
                               : (hasImage || isImageType)
-                                  ? '📷 Foto'
+                                  ? '📷 Imagen'
                                   : (hasVideo || isVideoType)
                                       ? '🎥 Video'
                                       : (hasAudio || isAudioType)

@@ -33,7 +33,7 @@ class ReplyBar extends StatelessWidget {
     if (hasText) {
       displayText = text;
     } else if (hasImage) {
-      displayText = '📷 Foto';
+      displayText = '📷 Imagen';
     } else if (hasVideo) {
       displayText = '🎥 Video';
     } else if (hasAudio) {

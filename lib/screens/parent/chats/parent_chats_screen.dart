@@ -281,6 +281,12 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                                             groups: groups,
                                           );
 
+                                      // Cachear chats para iOS Share Extension (fire and forget)
+                                      _controller.cacheChatsForShareExtension(
+                                        chatDocs: chatDocs,
+                                        groups: groups,
+                                      );
+
                                       return ValueListenableBuilder<String>(
                                         valueListenable: _searchQuery,
                                         builder: (context, query, _) {
@@ -642,6 +648,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
               lastMessageSenderId: lastMessageSenderId,
               lastMessageStatus: lastMessageStatus,
               lastMessageModerationStatus: lastMessageModerationStatus,
+              lastMessageType: groupData['lastMessageType'] as String?, // ✅ Para cursiva
               timeString: timeString,
             );
           },
@@ -719,6 +726,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                   lastMessageSenderId: null, // No mostrar icono para mensajes recibidos
                   lastMessageStatus: null,
                   lastMessageModerationStatus: null,
+                  lastMessageType: chatData['lastMessageType'] as String?, // ✅ Para cursiva
                   onArchived: () => setState(() => _preferencesVersion++),
                   onMuted: () => setState(() => _preferencesVersion++),
                   onCleared: () => setState(() => _preferencesVersion++),
@@ -743,11 +751,23 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                     // Solo calcular estado si el mensaje del stream coincide con el sender del doc
                     final streamSenderId = lastMessageData['senderId'] as String? ?? '';
                     if (streamSenderId == lastMessageSenderFromDoc) {
-                      // Calcular el estado del mensaje
-                      lastMessageStatus = MessageStatusHelper.calculateStatus(
-                        data: lastMessageData,
+                      // ✅ V2: Usar lastOpenedAt del recipient para calcular status
+                      // Obtener el ID del recipient (el otro participante del chat)
+                      final chatParticipants = List<String>.from(chatData['participants'] ?? []);
+                      final recipientId = chatParticipants.firstWhere(
+                        (id) => id != currentUserId,
+                        orElse: () => '',
+                      );
+
+                      final lastMessageTimestamp = lastMessageData['timestamp'] as Timestamp?;
+                      final recipientLastOpenedAt = chatData['lastOpenedAt_$recipientId'] as Timestamp?;
+                      final recipientLastReceivedAt = chatData['lastReceivedAt_$recipientId'] as Timestamp?;
+
+                      lastMessageStatus = MessageStatusHelper.calculateStatusV2(
+                        messageTimestamp: lastMessageTimestamp?.toDate(),
                         senderId: streamSenderId,
-                        hasServerTimestamp: lastMessageData['timestamp'] != null,
+                        recipientLastOpenedAt: recipientLastOpenedAt?.toDate(),
+                        recipientLastReceivedAt: recipientLastReceivedAt?.toDate(),
                       );
 
                       // Obtener estado de moderación
@@ -804,6 +824,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                     lastMessageModerationStatus: isChatCleared
                         ? null
                         : lastMessageModerationStatus,
+                    lastMessageType: chatData['lastMessageType'] as String?, // ✅ Para cursiva
                     onArchived: () => setState(() => _preferencesVersion++),
                     onMuted: () => setState(() => _preferencesVersion++),
                     onCleared: () => setState(() => _preferencesVersion++),

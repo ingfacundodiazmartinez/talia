@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/group_moderation_service.dart';
+import '../services/subscription_service.dart';
 
 /// Widget para el diálogo de configuración de moderación de grupos
 class GroupModerationDialog extends StatefulWidget {
@@ -42,10 +43,13 @@ class GroupModerationDialog extends StatefulWidget {
 class _GroupModerationDialogState extends State<GroupModerationDialog> {
   static const _aiColor = Color(0xFF5C6BC0);
   final _moderationService = GroupModerationService();
+  final _subscriptionService = SubscriptionService();
 
   late bool _enabled;
   late String _level;
   bool _isLoading = false;
+  bool _isPremiumPlus = false;
+  bool _checkingPremium = true;
 
   String get _currentValue => _enabled ? _level : 'none';
 
@@ -54,6 +58,26 @@ class _GroupModerationDialogState extends State<GroupModerationDialog> {
     super.initState();
     _enabled = widget.initialEnabled;
     _level = widget.initialLevel;
+    _checkPremiumStatus();
+  }
+
+  Future<void> _checkPremiumStatus() async {
+    try {
+      final status = await _subscriptionService.checkPremiumStatus();
+      if (mounted) {
+        setState(() {
+          _isPremiumPlus = status.tier == SubscriptionTier.premiumPlus;
+          _checkingPremium = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isPremiumPlus = false;
+          _checkingPremium = false;
+        });
+      }
+    }
   }
 
   @override
@@ -103,6 +127,11 @@ class _GroupModerationDialogState extends State<GroupModerationDialog> {
           ),
           const SizedBox(height: 20),
           _buildLevelSelector(colorScheme),
+          // Info message about multimedia moderation for Premium+
+          if (_enabled && _isPremiumPlus) ...[
+            const SizedBox(height: 16),
+            _buildMultimediaInfoMessage(colorScheme),
+          ],
           const SizedBox(height: 20),
           Container(
             padding: const EdgeInsets.all(12),
@@ -119,7 +148,7 @@ class _GroupModerationDialogState extends State<GroupModerationDialog> {
               ],
             ),
           ),
-          if (_isLoading) ...[
+          if (_isLoading || _checkingPremium) ...[
             const SizedBox(height: 16),
             const Center(
               child: SizedBox(
@@ -249,6 +278,79 @@ class _GroupModerationDialogState extends State<GroupModerationDialog> {
         ),
       );
     }
+  }
+
+  /// Info message showing that multimedia moderation is included for Premium+
+  Widget _buildMultimediaInfoMessage(ColorScheme colorScheme) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _aiColor.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: _aiColor.withValues(alpha: 0.3),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.image_search,
+            color: _aiColor,
+            size: 24,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Text(
+                      'Multimedia incluido',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.green.withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.check, size: 10, color: Colors.green),
+                          SizedBox(width: 2),
+                          Text(
+                            'Premium+',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.green,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Imagenes y audios se moderan automaticamente',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildHelpItem(String level, String description, Color color) {

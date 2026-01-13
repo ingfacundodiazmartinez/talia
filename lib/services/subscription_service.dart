@@ -538,6 +538,7 @@ enum SubscriptionTier {
           'Personajes exclusivos',
           'Sin anuncios',
           '30 reportes por mes',
+          'Moderación de audio*',
         ];
       case SubscriptionTier.premiumPlus:
         return [
@@ -545,6 +546,7 @@ enum SubscriptionTier {
           'Todos los personajes',
           'Sin anuncios',
           '100 reportes por mes',
+          'Moderación de audio, imágenes y videos*',
           'Family plan (3 hijos incluidos)',
           'Soporte prioritario',
         ];

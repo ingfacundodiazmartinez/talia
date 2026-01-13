@@ -378,7 +378,9 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
     final price = _prices?[tier] ?? '\$${tier.monthlyPrice.toStringAsFixed(2)}';
 
     return GestureDetector(
-      onTap: isCurrentPlan ? null : () => setState(() => _selectedTier = tier),
+      // ✅ FIX: Permitir seleccionar cualquier plan (incluso el actual) para ver beneficios
+      // El botón de suscripción ya maneja el caso de plan actual mostrando "Plan Actual"
+      onTap: () => setState(() => _selectedTier = tier),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         padding: const EdgeInsets.all(16),
@@ -507,41 +509,56 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
             borderRadius: BorderRadius.circular(16),
           ),
           child: Column(
-            children: List.generate(benefits.length, (index) {
-              return Padding(
-                padding: EdgeInsets.only(
-                  bottom: index < benefits.length - 1 ? 12 : 0,
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 36,
-                      height: 36,
-                      decoration: BoxDecoration(
-                        color: _primaryPurple.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(8),
+            children: [
+              ...List.generate(benefits.length, (index) {
+                return Padding(
+                  padding: EdgeInsets.only(
+                    bottom: index < benefits.length - 1 ? 12 : 0,
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: _primaryPurple.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Center(
+                          child: Text(
+                            icons[index],
+                            style: const TextStyle(fontSize: 18),
+                          ),
+                        ),
                       ),
-                      child: Center(
+                      const SizedBox(width: 12),
+                      Expanded(
                         child: Text(
-                          icons[index],
-                          style: const TextStyle(fontSize: 18),
+                          benefits[index],
+                          style: TextStyle(
+                            fontSize: 15,
+                            color: colorScheme.onSurface,
+                          ),
                         ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        benefits[index],
-                        style: TextStyle(
-                          fontSize: 15,
-                          color: colorScheme.onSurface,
-                        ),
-                      ),
                     ),
                   ],
                 ),
               );
             }),
+              // Nota sobre moderación
+              if (_selectedTier != SubscriptionTier.free) ...[
+                const SizedBox(height: 12),
+                Text(
+                  '* La moderación de multimedia analiza contenido para detectar material inapropiado. '
+                  'Puede haber fallos ocasionales debido a límites de la API o errores de red.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontStyle: FontStyle.italic,
+                    color: colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
+                  ),
+                ),
+              ],
+            ],
           ),
         ),
       ],
@@ -553,9 +570,9 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
       case SubscriptionTier.free:
         return ['🎭', '👤', '📺'];
       case SubscriptionTier.premium:
-        return ['🎭', '⭐', '🚫', '📊'];
+        return ['🎭', '⭐', '🚫', '📊', '🎤'];
       case SubscriptionTier.premiumPlus:
-        return ['🎭', '👑', '🚫', '📊', '👨‍👩‍👧‍👦', '💬'];
+        return ['🎭', '👑', '🚫', '📊', '🛡️', '👨‍👩‍👧‍👦', '💬'];
     }
   }
 
@@ -871,6 +888,9 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
   }
 
   Widget _buildTermsSection(ColorScheme colorScheme) {
+    // Obtener precio del plan seleccionado para mostrar en términos
+    final selectedPrice = _prices?[_selectedTier] ?? '\$${_selectedTier.monthlyPrice.toStringAsFixed(2)}';
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -878,54 +898,103 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            Icons.info_outline,
-            size: 24,
-            color: colorScheme.onSurfaceVariant,
+          // Título de la sección
+          Row(
+            children: [
+              Icon(
+                Icons.info_outline,
+                size: 20,
+                color: colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Información de la suscripción',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: colorScheme.onSurface,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 12),
+
+          // ✅ Requisitos de Apple: Información clara de la suscripción
+          _buildSubscriptionInfoRow(
+            colorScheme,
+            'Suscripción:',
+            '${_selectedTier.displayName} (auto-renovable)',
+          ),
+          const SizedBox(height: 4),
+          _buildSubscriptionInfoRow(
+            colorScheme,
+            'Duración:',
+            '1 mes',
+          ),
+          const SizedBox(height: 4),
+          _buildSubscriptionInfoRow(
+            colorScheme,
+            'Precio:',
+            '$selectedPrice/mes',
+          ),
+
+          const SizedBox(height: 12),
+
+          // Texto de renovación automática
           Text(
-            'La suscripción se renovará automáticamente cada mes. '
-            'Puedes cancelar en cualquier momento desde la configuración de tu cuenta de ${Platform.isIOS ? "App Store" : "Google Play"}.',
-            textAlign: TextAlign.center,
+            'El pago se cargará a tu cuenta de ${Platform.isIOS ? "iTunes" : "Google Play"} al confirmar la compra. '
+            'La suscripción se renueva automáticamente cada mes a menos que se cancele al menos 24 horas antes del final del período actual. '
+            'Puedes gestionar y cancelar tu suscripción desde la configuración de tu cuenta de ${Platform.isIOS ? "App Store" : "Google Play"}.',
+            textAlign: TextAlign.left,
             style: TextStyle(
-              fontSize: 12,
+              fontSize: 11,
               color: colorScheme.onSurfaceVariant,
               height: 1.4,
             ),
           ),
-          const SizedBox(height: 12),
-          // Links requeridos por Apple para suscripciones
+
+          const SizedBox(height: 16),
+
+          // ✅ Links requeridos por Apple - más prominentes
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               GestureDetector(
                 onTap: () => _openUrl('https://taliachat.com/terms'),
-                child: Text(
-                  'Términos de Uso',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: colorScheme.primary,
-                    decoration: TextDecoration.underline,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: colorScheme.primary.withValues(alpha: 0.5)),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Text(
+                    'Términos de Uso (EULA)',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: colorScheme.primary,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
                 ),
               ),
-              Text(
-                '  •  ',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: colorScheme.onSurfaceVariant,
-                ),
-              ),
+              const SizedBox(width: 12),
               GestureDetector(
                 onTap: () => _openUrl('https://taliachat.com/privacy'),
-                child: Text(
-                  'Política de Privacidad',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: colorScheme.primary,
-                    decoration: TextDecoration.underline,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: colorScheme.primary.withValues(alpha: 0.5)),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Text(
+                    'Política de Privacidad',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: colorScheme.primary,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
                 ),
               ),
@@ -933,6 +1002,29 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildSubscriptionInfoRow(ColorScheme colorScheme, String label, String value) {
+    return Row(
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            color: colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: colorScheme.onSurface,
+          ),
+        ),
+      ],
     );
   }
 

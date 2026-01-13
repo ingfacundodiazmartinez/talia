@@ -24,40 +24,12 @@ class ImageService {
     required BuildContext context,
   }) async {
     try {
-      // En iOS, intentar directamente seleccionar la imagen
-      // ImagePicker maneja permisos automáticamente
-      ReleaseLogger.log('📸 Intentando seleccionar imagen desde ${source == ImageSource.camera ? 'cámara' : 'galería'}', tag: 'ImageService');
-
-      final XFile? image = await _pickImageWithErrorHandling(source);
-      if (image == null) {
-        ReleaseLogger.log('⚠️ Usuario canceló la selección de imagen', tag: 'ImageService');
-        return null;
-      }
-
-      ReleaseLogger.log('✅ Imagen seleccionada: ${image.path}', tag: 'ImageService');
-
-      // ⏱️ Delay para dar tiempo a que el selector de imágenes se cierre visualmente
-      // iOS necesita más tiempo para estabilizar el view controller
-      final delayMs = Platform.isIOS ? 500 : 300;
-      await Future.delayed(Duration(milliseconds: delayMs));
-
-      // ✂️ Crop circular de la imagen
-      ReleaseLogger.log('🔍 Verificando context.mounted antes del crop...', tag: 'ImageService');
-      if (!context.mounted) {
-        ReleaseLogger.error('❌ Context no está mounted - no se puede mostrar crop', tag: 'ImageService');
-        return null;
-      }
-      ReleaseLogger.log('✅ Context está mounted, mostrando crop...', tag: 'ImageService');
-
-      final CroppedFile? croppedFile = await _cropImageCircular(image.path, context);
-      ReleaseLogger.log('🔍 Resultado del crop: ${croppedFile != null ? 'archivo obtenido' : 'null'}', tag: 'ImageService');
+      // Reutilizar el método componentizado para pick + crop
+      final File? croppedFile = await pickAndCropCircularImage(context, source: source);
 
       if (croppedFile == null) {
-        ReleaseLogger.log('⚠️ Usuario canceló el crop de imagen', tag: 'ImageService');
         return null;
       }
-
-      ReleaseLogger.log('✅ Imagen recortada: ${croppedFile.path}', tag: 'ImageService');
 
       // ✅ AHORA que el crop terminó, mostrar loading
       if (context.mounted) {
@@ -119,8 +91,55 @@ class ImageService {
     }
   }
 
-  /// Abre el cropper circular para recortar la imagen de perfil
-  Future<CroppedFile?> _cropImageCircular(String imagePath, BuildContext context) async {
+  /// Selecciona una imagen y la recorta circularmente.
+  /// Retorna el File de la imagen cropped o null si se cancela.
+  /// Reutilizable para perfil de usuario, grupos, y otros avatares.
+  Future<File?> pickAndCropCircularImage(
+    BuildContext context, {
+    ImageSource source = ImageSource.gallery,
+  }) async {
+    try {
+      final sourceStr = source == ImageSource.camera ? 'cámara' : 'galería';
+      ReleaseLogger.log('📸 [pickAndCropCircularImage] Iniciando selección desde $sourceStr', tag: 'ImageService');
+
+      final XFile? image = await _pickImageWithErrorHandling(source);
+      if (image == null) {
+        ReleaseLogger.log('⚠️ [pickAndCropCircularImage] Usuario canceló la selección', tag: 'ImageService');
+        return null;
+      }
+
+      ReleaseLogger.log('✅ [pickAndCropCircularImage] Imagen seleccionada: ${image.path}', tag: 'ImageService');
+
+      // Delay para estabilizar UI antes de mostrar el crop
+      // iOS necesita más tiempo para cerrar el picker
+      final delayMs = Platform.isIOS ? 500 : 300;
+      await Future.delayed(Duration(milliseconds: delayMs));
+
+      if (!context.mounted) {
+        ReleaseLogger.error('❌ [pickAndCropCircularImage] Context no está mounted', tag: 'ImageService');
+        return null;
+      }
+
+      ReleaseLogger.log('✅ [pickAndCropCircularImage] Context mounted, mostrando crop...', tag: 'ImageService');
+
+      final CroppedFile? croppedFile = await cropImageCircular(image.path, context);
+
+      if (croppedFile == null) {
+        ReleaseLogger.log('⚠️ [pickAndCropCircularImage] Usuario canceló el crop', tag: 'ImageService');
+        return null;
+      }
+
+      ReleaseLogger.log('✅ [pickAndCropCircularImage] Imagen cropped: ${croppedFile.path}', tag: 'ImageService');
+      return File(croppedFile.path);
+    } catch (e) {
+      ReleaseLogger.error('❌ [pickAndCropCircularImage] Error: $e', tag: 'ImageService');
+      rethrow;
+    }
+  }
+
+  /// Abre el cropper circular para recortar la imagen de perfil.
+  /// Método público para ser reutilizado en otros módulos (ej: grupos).
+  Future<CroppedFile?> cropImageCircular(String imagePath, BuildContext context) async {
     ReleaseLogger.log('🔧 _cropImageCircular llamado con path: $imagePath', tag: 'ImageService');
 
     try {

@@ -25,6 +25,7 @@ class GroupChatListItem extends StatefulWidget {
   final String? lastMessageSenderId;
   final MessageStatus? lastMessageStatus;
   final ModerationStatus? lastMessageModerationStatus;
+  final String? lastMessageType; // ✅ Para estilo cursiva en mensajes eliminados
   final String? timeString;
   /// Si el usuario está pendiente de aprobación para este grupo
   final bool isPending;
@@ -45,6 +46,7 @@ class GroupChatListItem extends StatefulWidget {
     this.lastMessageSenderId,
     this.lastMessageStatus,
     this.lastMessageModerationStatus,
+    this.lastMessageType,
     this.timeString,
     this.isPending = false,
   });
@@ -530,6 +532,9 @@ class _GroupChatListItemState extends State<GroupChatListItem> {
                                             style: TextStyle(
                                               fontSize: 13,
                                               color: colorScheme.onSurfaceVariant,
+                                              fontStyle: widget.lastMessageType == 'deleted'
+                                                  ? FontStyle.italic
+                                                  : FontStyle.normal,
                                             ),
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
@@ -671,6 +676,9 @@ class _GroupChatListItemState extends State<GroupChatListItem> {
                                           style: TextStyle(
                                             fontSize: 13,
                                             color: colorScheme.onSurfaceVariant,
+                                            fontStyle: widget.lastMessageType == 'deleted'
+                                                ? FontStyle.italic
+                                                : FontStyle.normal,
                                           ),
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,

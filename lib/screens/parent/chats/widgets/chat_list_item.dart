@@ -27,6 +27,7 @@ class ChatListItem extends StatefulWidget {
   final String? lastMessageSenderId;
   final MessageStatus? lastMessageStatus;
   final ModerationStatus? lastMessageModerationStatus;
+  final String? lastMessageType; // ✅ Para estilo cursiva en mensajes eliminados
 
   const ChatListItem({
     super.key,
@@ -45,6 +46,7 @@ class ChatListItem extends StatefulWidget {
     this.lastMessageSenderId,
     this.lastMessageStatus,
     this.lastMessageModerationStatus,
+    this.lastMessageType,
   });
 
   @override
@@ -507,7 +509,8 @@ class _ChatListItemState extends State<ChatListItem> {
                                         color: widget.isBlocked
                                             ? Colors.red.withValues(alpha: 0.7)
                                             : colorScheme.onSurfaceVariant,
-                                        fontStyle: (widget.isEmpty || widget.isBlocked)
+                                        // ✅ Cursiva para: vacío, bloqueado, o mensaje eliminado
+                                        fontStyle: (widget.isEmpty || widget.isBlocked || widget.lastMessageType == 'deleted')
                                             ? FontStyle.italic
                                             : FontStyle.normal,
                                       ),

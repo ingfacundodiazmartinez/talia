@@ -28,7 +28,7 @@ exports.checkPhoneDuplicate = onCall(
   {
     region: "us-central1",
     timeoutSeconds: 30,
-    memory: "128MiB",
+    memory: "256MiB", // ✅ FIX: Aumentado de 128MiB para evitar healthcheck failures en cold start
     // ✅ Acceso público para Cloud Run Gen 2
     invoker: "public",
   },

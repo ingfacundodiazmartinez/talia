@@ -384,19 +384,39 @@ service cloud.firestore {
                  reactionsValid;
         }
 
+        // 🔒 FUNCIÓN: Verificar si el mensaje tiene menos de 10 minutos
+        function messageIsWithin10Minutes() {
+          return resource.data.timestamp != null &&
+                 request.time < resource.data.timestamp + duration.value(10, 'm');
+        }
+
+        // 🔒 FUNCIÓN: Verificar si solo se está marcando como eliminado
+        function isMarkingAsDeleted() {
+          let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+          let deletionFields = ['isDeletedForEveryone', 'isDeleted', 'deletedAt', 'deletedBy',
+                                'text', 'imageUrl', 'videoUrl', 'audioUrl', 'thumbnailUrl',
+                                'originalText', 'waveformData'];
+          return changedKeys.hasOnly(deletionFields) &&
+                 request.resource.data.isDeletedForEveryone == true;
+        }
+
         // Permitir actualizar SI:
         // 1. Eres el sender Y solo editas tu mensaje (text, edited, editedAt) Y NO hay moderación activa, O
-        // 2. Eres participante Y solo actualizas estado/reacciones (reactions, status, readBy, deliveredTo)
+        // 2. Eres participante Y solo actualizas estado/reacciones (reactions, status, readBy, deliveredTo), O
+        // 3. 🆕 Eres el sender Y marcas como eliminado Y el mensaje tiene menos de 10 minutos
         // 🔒 SEGURIDAD: Bloquear edición de texto cuando hay moderación para evitar bypass
         // (enviar mensaje inocente, esperar aprobación, luego editarlo a ofensivo)
         allow update: if request.auth != null && (
           (request.auth.uid == resource.data.senderId &&
            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'edited', 'editedAt']) &&
            !chatHasModeration()) ||
-          (isParticipant() && isUpdatingOnlyMetadata())
+          (isParticipant() && isUpdatingOnlyMetadata()) ||
+          (request.auth.uid == resource.data.senderId &&
+           isMarkingAsDeleted() &&
+           messageIsWithin10Minutes())
         );
 
-        // Permitir eliminar si eres el sender
+        // Permitir eliminar si eres el sender (hard delete, no usado actualmente)
         allow delete: if request.auth != null &&
           request.auth.uid == resource.data.senderId;
 
@@ -465,6 +485,29 @@ service cloud.firestore {
         // Permitir eliminar si eres quien reportó (para desbloquear)
         allow delete: if request.auth != null &&
           request.auth.uid == resource.data.reportedBy;
+      }
+
+      // 🆕 deletedMessages - Eventos de eliminación para sincronizar cache de receptores
+      // TTL: 7 días (limpieza por Cloud Function scheduled)
+      match /deletedMessages/{messageId} {
+        // Función auxiliar para verificar si es participante
+        function isParticipantForDeletedMessages() {
+          let chatDoc = get(/databases/$(database)/documents/chats/$(chatId));
+          return request.auth.uid in chatDoc.data.participants;
+        }
+
+        // Permitir leer si eres participante del chat
+        allow read: if request.auth != null && isParticipantForDeletedMessages();
+
+        // Permitir crear solo si:
+        // 1. Eres participante del chat, Y
+        // 2. Eres quien elimina (deletedBy == auth.uid)
+        allow create: if request.auth != null &&
+          isParticipantForDeletedMessages() &&
+          request.resource.data.deletedBy == request.auth.uid;
+
+        // No permitir actualizar ni eliminar (TTL lo limpia automáticamente)
+        allow update, delete: if false;
       }
     }
 
@@ -1697,7 +1740,8 @@ service cloud.firestore {
       function isUpdatingOnlyAllowedGroupFields() {
         let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
         // Campos que los miembros pueden actualizar
-        return changedKeys.hasOnly(['lastActivity', 'lastMessage', 'lastMessageTime', 'lastMessageSender', 'lastMessageId', 'unreadCount_' + request.auth.uid]);
+        // ✅ FIX: Agregado lastMessageType para cuando se elimina el último mensaje
+        return changedKeys.hasOnly(['lastActivity', 'lastMessage', 'lastMessageTime', 'lastMessageSender', 'lastMessageId', 'lastMessageType', 'unreadCount_' + request.auth.uid]);
       }
 
       // Validar cambios en admins cuando alguien sale
@@ -1817,6 +1861,37 @@ service cloud.firestore {
           return groupDoc.data.moderationEnabled == true;
         }
 
+        // 🔒 FUNCIÓN: Verificar si el mensaje tiene menos de 10 minutos
+        function groupMessageIsWithin10Minutes() {
+          return resource.data.timestamp != null &&
+                 request.time < resource.data.timestamp + duration.value(10, 'm');
+        }
+
+        // 🔒 FUNCIÓN: Verificar si solo se está marcando como eliminado
+        function isMarkingGroupMessageAsDeleted() {
+          let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+          let deletionFields = ['isDeletedForEveryone', 'isDeleted', 'deletedAt', 'deletedBy',
+                                'text', 'imageUrl', 'videoUrl', 'audioUrl', 'thumbnailUrl',
+                                'originalText', 'waveformData'];
+          return changedKeys.hasOnly(deletionFields) &&
+                 (request.resource.data.isDeletedForEveryone == true ||
+                  request.resource.data.isDeleted == true);
+        }
+
+        // 🔒 FUNCIÓN: Verificar si solo se actualiza metadata (reactions, readBy, readAt_*)
+        // ✅ FIX: Usar blacklist (campos prohibidos) en lugar de whitelist
+        // porque readAt_$userId es un campo dinámico que no se puede listar estáticamente
+        function isUpdatingGroupMessageMetadata() {
+          let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+          // Campos críticos que NO deben modificarse
+          let criticalFields = ['text', 'senderId', 'timestamp', 'imageUrl', 'videoUrl',
+                                'audioUrl', 'thumbnailUrl', 'type', 'senderName', 'senderPhotoURL',
+                                'replyTo', 'isForwarded', 'originalContactName', 'localId',
+                                'moderationStatus', 'moderationReason'];
+          // Verificar que NO se modifiquen campos críticos
+          return !changedKeys.hasAny(criticalFields);
+        }
+
         // Solo miembros pueden leer mensajes
         allow read: if request.auth != null && isGroupV2Member();
 
@@ -1827,14 +1902,17 @@ service cloud.firestore {
           request.auth.uid == request.resource.data.senderId &&
           !groupHasModeration();
 
-        // Solo el sender puede actualizar su mensaje (editar)
-        // O miembros pueden actualizar metadata (reactions, readBy)
+        // Permitir actualizar SI:
+        // 1. Eres miembro Y solo actualizas metadata (reactions, readBy), O
+        // 2. Eres el sender Y marcas como eliminado Y el mensaje tiene menos de 10 minutos
         allow update: if request.auth != null && (
-          request.auth.uid == resource.data.senderId ||
-          isGroupV2Member()
+          (isGroupV2Member() && isUpdatingGroupMessageMetadata()) ||
+          (request.auth.uid == resource.data.senderId &&
+           isMarkingGroupMessageAsDeleted() &&
+           groupMessageIsWithin10Minutes())
         );
 
-        // Solo el sender puede eliminar su mensaje
+        // Solo el sender puede eliminar su mensaje (hard delete, no usado)
         allow delete: if request.auth != null &&
           request.auth.uid == resource.data.senderId;
 
@@ -1886,6 +1964,29 @@ service cloud.firestore {
         allow write: if request.auth != null &&
           request.auth.uid == userId &&
           isGroupV2MemberForTyping();
+      }
+
+      // 🆕 deletedMessages - Eventos de eliminación para sincronizar cache de receptores
+      // TTL: 7 días (limpieza por Cloud Function scheduled)
+      match /deletedMessages/{messageId} {
+        // Función auxiliar para verificar si es miembro del grupo
+        function isGroupV2MemberForDeletedMessages() {
+          let groupDoc = get(/databases/$(database)/documents/groups_v2/$(groupId));
+          return request.auth.uid in groupDoc.data.members;
+        }
+
+        // Permitir leer si eres miembro del grupo
+        allow read: if request.auth != null && isGroupV2MemberForDeletedMessages();
+
+        // Permitir crear solo si:
+        // 1. Eres miembro del grupo, Y
+        // 2. Eres quien elimina (deletedBy == auth.uid)
+        allow create: if request.auth != null &&
+          isGroupV2MemberForDeletedMessages() &&
+          request.resource.data.deletedBy == request.auth.uid;
+
+        // No permitir actualizar ni eliminar (TTL lo limpia automáticamente)
+        allow update, delete: if false;
       }
     }
 

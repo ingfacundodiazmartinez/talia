@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:io';
-import 'package:image_picker/image_picker.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../models/models.dart';
@@ -14,6 +13,7 @@ import '../../services/favorite_service.dart';
 import '../../services/group_moderation_service.dart';
 import '../../services/subscription_service.dart' show PremiumFeature;
 import '../../widgets/premium_paywall_dialog.dart';
+import '../../services/image_service.dart';
 
 /// Profile screen for Groups V2
 ///
@@ -39,7 +39,6 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
   final GroupService _groupService = GroupService();
   final FavoriteService _favoriteService = FavoriteService();
   final GroupModerationService _moderationService = GroupModerationService();
-  final ImagePicker _imagePicker = ImagePicker();
 
   Group? _group;
   bool _isLoading = true;
@@ -66,7 +65,8 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    // 4 tabs si es admin (incluye Moderación), 3 si no
+    _tabController = TabController(length: 4, vsync: this);
     _loadGroup();
     _loadFavorites();
   }
@@ -287,22 +287,21 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
   Future<void> _handleChangeAvatar() async {
     if (!_isAdmin) return;
 
-    final XFile? image = await _imagePicker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 512,
-      maxHeight: 512,
-      imageQuality: 80,
-    );
-
-    if (image == null || !mounted) return;
-
     setState(() => _isUpdating = true);
 
     try {
-      // Upload image first
+      // Usar ImageService para pick + crop circular
+      final croppedFile = await ImageService().pickAndCropCircularImage(context);
+
+      if (croppedFile == null || !mounted) {
+        if (mounted) setState(() => _isUpdating = false);
+        return;
+      }
+
+      // Upload image
       final avatarUrl = await _groupService.uploadGroupAvatar(
         widget.groupId,
-        File(image.path),
+        croppedFile,
       );
 
       if (avatarUrl != null && mounted) {
@@ -356,9 +355,6 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
                     ),
                     SliverToBoxAdapter(
                       child: _buildTabs(colorScheme),
-                    ),
-                    SliverToBoxAdapter(
-                      child: _buildActions(colorScheme),
                     ),
                     const SliverToBoxAdapter(
                       child: SizedBox(height: 32),
@@ -504,59 +500,73 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
       backgroundColor: colorScheme.primary,
       foregroundColor: Colors.white,
       title: const Text('Perfil del grupo'),
-      actions: _isAdmin
-          ? [
-              if (_isUpdating)
-                const Padding(
-                  padding: EdgeInsets.all(16),
-                  child: SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                    ),
-                  ),
-                )
-              else
-                IconButton(
-                  icon: const Icon(Icons.edit),
-                  tooltip: 'Editar grupo',
-                  onPressed: _showEditOptions,
-                ),
-            ]
-          : null,
+      actions: [
+        if (_isUpdating)
+          const Padding(
+            padding: EdgeInsets.all(16),
+            child: SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+              ),
+            ),
+          )
+        else
+          IconButton(
+            icon: const Icon(Icons.more_vert),
+            tooltip: 'Opciones',
+            onPressed: _showOptionsMenu,
+          ),
+      ],
     );
   }
 
-  void _showEditOptions() {
+  void _showOptionsMenu() {
     showModalBottomSheet(
       context: context,
       builder: (context) => SafeArea(
         child: Wrap(
           children: [
+            // Opciones de edición solo para admins
+            if (_isAdmin) ...[
+              ListTile(
+                leading: const Icon(Icons.edit),
+                title: const Text('Cambiar nombre'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _handleEditName();
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.description),
+                title: const Text('Cambiar descripcion'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _handleEditDescription();
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_camera),
+                title: const Text('Cambiar foto'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _handleChangeAvatar();
+                },
+              ),
+              const Divider(),
+            ],
+            // Salir del grupo - disponible para todos
             ListTile(
-              leading: const Icon(Icons.edit),
-              title: const Text('Cambiar nombre'),
+              leading: const Icon(Icons.exit_to_app, color: Colors.red),
+              title: const Text(
+                'Salir del grupo',
+                style: TextStyle(color: Colors.red),
+              ),
               onTap: () {
                 Navigator.pop(context);
-                _handleEditName();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.description),
-              title: const Text('Cambiar descripcion'),
-              onTap: () {
-                Navigator.pop(context);
-                _handleEditDescription();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.photo_camera),
-              title: const Text('Cambiar foto'),
-              onTap: () {
-                Navigator.pop(context);
-                _handleChangeAvatar();
+                _handleLeaveGroup();
               },
             ),
           ],
@@ -664,8 +674,9 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
       selectionHeaderHeight: selectionHeaderHeight,
     );
 
-    // Altura mínima para multimedia y favoritos
+    // Altura mínima para multimedia, favoritos y moderación
     const double minTabHeight = 300.0;
+    const double moderationTabHeight = 400.0;
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -697,18 +708,21 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
               unselectedLabelColor: colorScheme.onSurfaceVariant,
               indicatorWeight: 3,
               dividerColor: Colors.transparent,
-              labelPadding: const EdgeInsets.symmetric(horizontal: 8),
+              labelPadding: const EdgeInsets.symmetric(horizontal: 4),
+              labelStyle: const TextStyle(fontSize: 11),
+              unselectedLabelStyle: const TextStyle(fontSize: 11),
               tabs: [
                 Tab(
                   icon: Badge(
                     label: Text('$membersCount'),
                     isLabelVisible: membersCount > 0,
-                    child: const Icon(Icons.people_outline),
+                    child: const Icon(Icons.people_outline, size: 22),
                   ),
                   text: 'Miembros',
                 ),
-                const Tab(icon: Icon(Icons.photo_library_outlined), text: 'Multimedia'),
-                const Tab(icon: Icon(Icons.star_outline), text: 'Favoritos'),
+                const Tab(icon: Icon(Icons.photo_library_outlined, size: 22), text: 'Multimedia'),
+                const Tab(icon: Icon(Icons.star_outline, size: 22), text: 'Favoritos'),
+                const Tab(icon: Icon(Icons.psychology_outlined, size: 22), text: 'Moderacion'),
               ],
             ),
           ),
@@ -724,6 +738,11 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
                   break;
                 case 1: // Multimedia
                 case 2: // Favoritos
+                  currentHeight = minTabHeight;
+                  break;
+                case 3: // Moderación
+                  currentHeight = moderationTabHeight;
+                  break;
                 default:
                   currentHeight = minTabHeight;
               }
@@ -747,6 +766,8 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
                     ),
                     // Tab 3: Favorites
                     _buildFavoritesTab(colorScheme),
+                    // Tab 4: Moderation
+                    _buildModerationTab(colorScheme),
                   ],
                 ),
               );
@@ -1624,82 +1645,200 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
     );
   }
 
-  Widget _buildActions(ColorScheme colorScheme) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        children: [
-          // Sección de moderación (solo visible para admins)
-          if (_isAdmin) ...[
-            _buildModerationSection(colorScheme),
-            const SizedBox(height: 8),
-          ],
-          const Divider(),
-          const SizedBox(height: 8),
-          ListTile(
-            leading: const Icon(Icons.exit_to_app, color: Colors.red),
-            title: const Text(
-              'Salir del grupo',
-              style: TextStyle(color: Colors.red),
-            ),
-            onTap: _handleLeaveGroup,
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Sección de moderación del grupo (solo admins)
-  Widget _buildModerationSection(ColorScheme colorScheme) {
+  /// Tab de moderación con IA
+  Widget _buildModerationTab(ColorScheme colorScheme) {
     final moderationEnabled = _group?.moderationEnabled ?? false;
     final moderationLevel = _group?.moderationLevel ?? 'high';
+    const Color aiColor = Color(0xFF5C6BC0);
 
-    return Container(
-      decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: moderationEnabled
-              ? const Color(0xFF5C6BC0).withValues(alpha: 0.3)
-              : colorScheme.outlineVariant.withValues(alpha: 0.3),
-        ),
-      ),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-        leading: Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: moderationEnabled
-                ? const Color(0xFF5C6BC0).withValues(alpha: 0.1)
-                : colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(10),
+    // Si no es admin, mostrar mensaje informativo
+    if (!_isAdmin) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: colorScheme.surfaceContainerHighest,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.psychology_outlined,
+                  color: colorScheme.onSurfaceVariant,
+                  size: 48,
+                ),
+              ),
+              const SizedBox(height: 24),
+              Text(
+                moderationEnabled ? 'Moderacion activa' : 'Moderacion no configurada',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: colorScheme.onSurface,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                moderationEnabled
+                    ? 'Este grupo tiene moderacion con IA activada (Nivel ${_getLevelLabel(moderationLevel)})'
+                    : 'Solo los administradores pueden configurar la moderacion',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: colorScheme.onSurfaceVariant,
+                  fontSize: 14,
+                  height: 1.4,
+                ),
+              ),
+            ],
           ),
-          child: Icon(
-            Icons.psychology,
-            color: moderationEnabled ? const Color(0xFF5C6BC0) : colorScheme.onSurfaceVariant,
-            size: 24,
+        ),
+      );
+    }
+
+    // Vista para admins
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  aiColor.withValues(alpha: 0.1),
+                  aiColor.withValues(alpha: 0.05),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: aiColor.withValues(alpha: 0.2),
+              ),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: aiColor.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    Icons.psychology,
+                    color: aiColor,
+                    size: 28,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Moderacion con IA',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Protege las conversaciones del grupo',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
-        title: const Text(
-          'Moderacion con IA',
-          style: TextStyle(fontWeight: FontWeight.w600),
-        ),
-        subtitle: Text(
-          moderationEnabled
-              ? 'Activada - Nivel ${_getLevelLabel(moderationLevel)}'
-              : 'Desactivada',
-          style: TextStyle(
-            fontSize: 12,
-            color: moderationEnabled
-                ? const Color(0xFF5C6BC0)
-                : colorScheme.onSurfaceVariant,
+          const SizedBox(height: 20),
+
+          // Estado actual
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: moderationEnabled
+                  ? Colors.green.withValues(alpha: 0.1)
+                  : colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: moderationEnabled
+                    ? Colors.green.withValues(alpha: 0.3)
+                    : colorScheme.outlineVariant.withValues(alpha: 0.3),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  moderationEnabled ? Icons.shield : Icons.shield_outlined,
+                  color: moderationEnabled ? Colors.green : colorScheme.onSurfaceVariant,
+                  size: 24,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        moderationEnabled ? 'Proteccion activa' : 'Proteccion desactivada',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: moderationEnabled ? Colors.green[700] : colorScheme.onSurface,
+                        ),
+                      ),
+                      if (moderationEnabled)
+                        Text(
+                          'Nivel: ${_getLevelLabel(moderationLevel)}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.green[600],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
-        trailing: Icon(
-          Icons.chevron_right,
-          color: colorScheme.onSurfaceVariant,
-        ),
-        onTap: _handleModerationTap,
+          const SizedBox(height: 16),
+
+          // Descripción
+          Text(
+            'La moderacion con IA analiza los mensajes del grupo para detectar contenido inapropiado, acoso o lenguaje ofensivo.',
+            style: TextStyle(
+              fontSize: 14,
+              color: colorScheme.onSurfaceVariant,
+              height: 1.5,
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // Botón de configuración
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: _handleModerationTap,
+              icon: Icon(moderationEnabled ? Icons.settings : Icons.add_moderator),
+              label: Text(moderationEnabled ? 'Configurar moderacion' : 'Activar moderacion'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: aiColor,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

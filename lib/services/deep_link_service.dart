@@ -7,6 +7,7 @@ import '../utils/release_logger.dart';
 import '../screens/add_contact_deeplink_screen.dart';
 import '../screens/story_viewer_screen.dart';
 import '../screens/trivia/trivia_play_screen.dart';
+import '../screens/share_target_selection_screen.dart';
 
 /// Servicio para manejar deep links y universal links
 ///
@@ -61,14 +62,21 @@ class DeepLinkService {
   void _handleDeepLink(Uri uri) {
     ReleaseLogger.log('🔗 [DeepLink] Handling: scheme=${uri.scheme}, host=${uri.host}, path=${uri.path}');
 
-    // Extraer path segments
+    // Para URLs como talia://share, el "share" está en el host
+    // Para URLs como https://taliachat.com/add/123, el "add" está en pathSegments[0]
     final pathSegments = uri.pathSegments;
-    if (pathSegments.isEmpty) {
-      ReleaseLogger.log('🔗 [DeepLink] No path segments');
+
+    // Determinar la acción: primero del host (para custom scheme), luego del path
+    String action;
+    if (uri.scheme == 'talia' && pathSegments.isEmpty) {
+      // talia://share -> host es "share"
+      action = uri.host;
+    } else if (pathSegments.isNotEmpty) {
+      action = pathSegments[0];
+    } else {
+      ReleaseLogger.log('🔗 [DeepLink] No action found');
       return;
     }
-
-    final action = pathSegments[0];
 
     switch (action) {
       case 'add':
@@ -116,6 +124,12 @@ class DeepLinkService {
           ReleaseLogger.log('🔗 [DeepLink] Open trivia: $triviaId');
           _handleOpenTrivia(triviaId);
         }
+        break;
+
+      case 'share':
+        // talia://share - Abre pantalla de selección de share target (desde iOS Share Extension)
+        ReleaseLogger.log('🔗 [DeepLink] Share action received');
+        _handleShare();
         break;
 
       default:
@@ -235,6 +249,36 @@ class DeepLinkService {
         builder: (context) => TriviaPlayScreen(triviaId: triviaId),
       ),
     );
+  }
+
+  /// Indica si hay una acción de share pendiente
+  bool _pendingShareAction = false;
+
+  /// Manejar acción de share (desde iOS Share Extension)
+  void _handleShare() {
+    final navigator = navigatorKey.currentState;
+
+    if (navigator == null) {
+      ReleaseLogger.log('🔗 [DeepLink] No navigator available, saving share for later');
+      _pendingShareAction = true;
+      return;
+    }
+
+    ReleaseLogger.log('🔗 [DeepLink] Navigating to ShareTargetSelectionScreen');
+    navigator.push(
+      MaterialPageRoute(
+        builder: (context) => const ShareTargetSelectionScreen(),
+      ),
+    );
+  }
+
+  /// Procesar share pendiente si existe
+  void processPendingShare() {
+    if (_pendingShareAction) {
+      _pendingShareAction = false;
+      ReleaseLogger.log('🔗 [DeepLink] Processing pending share action');
+      _handleShare();
+    }
   }
 
   /// Mostrar error al usuario

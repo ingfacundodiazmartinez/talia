@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 
 import '../../../models/chat_message.dart';
+import '../../video_frame_extractor.dart';
 import '../repositories/message_repository.dart';
 import '../managers/chat_cache_manager.dart';
 import '../managers/message_upload_manager.dart';
@@ -161,6 +162,7 @@ class ChatMessagingService {
         chatId: chatId,
         optimisticMessage: optimisticMessage,
         isGroup: isGroup,
+        metadata: metadata,
         onProgressUpdate: onProgressUpdate,
       );
 
@@ -339,12 +341,42 @@ class ChatMessagingService {
     required String chatId,
     required ChatMessage optimisticMessage,
     required bool isGroup,
+    Map<String, dynamic>? metadata,
     Function(String messageId, double progress)? onProgressUpdate,
   }) async {
     try {
       String? mediaUrl;
 
+      // ✅ FIX: Actualizar chat doc INMEDIATAMENTE (optimistic) para que la lista de chats
+      // muestre el mensaje antes de que termine el upload
+      if (optimisticMessage.localPath != null) {
+        await _updateChatDocOptimistic(
+          chatId: chatId,
+          messageType: optimisticMessage.type ?? 'text',
+          text: optimisticMessage.text,
+          isGroup: isGroup,
+        );
+      }
+
       // 1. Upload archivo si es necesario
+      // 🎬 Para videos: extraer frames ANTES del upload (para moderación)
+      List<String>? videoFrames;
+      if (optimisticMessage.localPath != null && optimisticMessage.type == 'video') {
+        try {
+          videoFrames = await VideoFrameExtractor().extractFrames(
+            optimisticMessage.localPath!,
+            frameCount: 4,
+          );
+          ReleaseLogger.log(
+            '🎬 Extraídos ${videoFrames.length} frames del video para moderación',
+            tag: 'ChatMessaging',
+          );
+        } catch (e) {
+          ReleaseLogger.error('Error extrayendo frames de video: $e', tag: 'ChatMessaging');
+          // Continuar sin frames - la moderación será más limitada
+        }
+      }
+
       if (optimisticMessage.localPath != null) {
         mediaUrl = await _uploadManager.uploadWithRetry(
           filePath: optimisticMessage.localPath!,
@@ -397,6 +429,11 @@ class ChatMessagingService {
         _cacheManager.removeOptimisticMessage(chatId, tempMessageId);
 
         final functions = FirebaseFunctions.instance;
+
+        // ✅ Extraer transcripción del metadata si está disponible (STT local gratis)
+        final transcription = metadata?['transcription'] as String?;
+        final isAiGenerated = metadata?['isAiGenerated'] as bool? ?? false;
+
         final result = await functions.httpsCallable('sendChatMessage').call({
           'chatId': chatId,
           'text': finalMessage.text ?? '',
@@ -407,6 +444,9 @@ class ChatMessagingService {
           if (finalMessage.videoUrl != null) 'videoUrl': finalMessage.videoUrl,
           if (finalMessage.audioUrl != null) 'audioUrl': finalMessage.audioUrl,
           if (finalMessage.replyTo != null) 'replyTo': finalMessage.replyTo,
+          if (transcription != null && transcription.isNotEmpty) 'transcription': transcription,
+          if (videoFrames != null && videoFrames.isNotEmpty) 'videoFrames': videoFrames,
+          if (isAiGenerated) 'isAiGenerated': true,
         });
 
         final data = Map<String, dynamic>.from(result.data as Map);
@@ -564,6 +604,64 @@ class ChatMessagingService {
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     final random = (timestamp % 10000).toString().padLeft(4, '0');
     return 'temp_message_${timestamp}_$random';
+  }
+
+  /// ✅ Actualizar chat doc optimisticamente ANTES del upload
+  /// Esto permite que la lista de chats muestre el mensaje inmediatamente
+  Future<void> _updateChatDocOptimistic({
+    required String chatId,
+    required String messageType,
+    String? text,
+    bool isGroup = false,
+  }) async {
+    try {
+      final currentUserId = _messageRepository.currentUserId;
+      if (currentUserId == null) return;
+
+      final collection = isGroup ? 'groups_v2' : 'chats';
+      final chatRef = FirebaseFirestore.instance.collection(collection).doc(chatId);
+
+      // Verificar que el chat existe
+      final chatDoc = await chatRef.get();
+      if (!chatDoc.exists) return;
+
+      // Generar preview del mensaje
+      String messagePreview = text ?? '';
+      if (messagePreview.isEmpty) {
+        switch (messageType) {
+          case 'image':
+            messagePreview = '📷 Imagen';
+            break;
+          case 'video':
+            messagePreview = '🎥 Video';
+            break;
+          case 'audio':
+            messagePreview = '🎤 Audio';
+            break;
+        }
+      }
+
+      // Actualizar chat doc inmediatamente
+      await chatRef.update({
+        'lastMessage': messagePreview,
+        'lastMessageType': messageType,
+        'lastMessageSender': currentUserId,
+        'lastMessageAt': FieldValue.serverTimestamp(),
+        'lastMessageTime': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      ReleaseLogger.log(
+        '⚡ [ChatMessaging] Chat doc actualizado optimisticamente: $messagePreview',
+        tag: 'ChatMessaging',
+      );
+    } catch (e) {
+      // No fallar si no podemos actualizar optimisticamente
+      ReleaseLogger.log(
+        '⚠️ [ChatMessaging] Error en update optimista: $e',
+        tag: 'ChatMessaging',
+      );
+    }
   }
 
   /// 🔒 Verificar moderación si está activada

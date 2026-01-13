@@ -12,6 +12,10 @@
 	<array>
 		<string>group.com.talia.chat</string>
 	</array>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.talia.chat.shared</string>
+	</array>
 	<key>com.apple.developer.associated-domains</key>
 	<array>
 		<string>applinks:taliachat.com</string>

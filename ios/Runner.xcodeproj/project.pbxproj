@@ -13,6 +13,7 @@
 		0C1CF6192E92AC2F00A03DF8 /* NotificationServiceExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 0C1CF6122E92AC2F00A03DF8 /* NotificationServiceExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		0C884D072ED3912700BD9711 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 0C884D052ED3912700BD9711 /* README.md */; };
 		0C884D092ED3912700BD9711 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C884D032ED3912700BD9711 /* NotificationService.swift */; };
+		0CB09DDE2F14613000278709 /* TaliaShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 0CB09DD42F14613000278709 /* TaliaShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */ = {isa = PBXBuildFile; fileRef = 1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */; };
 		331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807B294A618700263BE5 /* RunnerTests.swift */; };
 		3B3967161E833CAA004F5970 /* AppFrameworkInfo.plist in Resources */ = {isa = PBXBuildFile; fileRef = 3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */; };
@@ -26,6 +27,7 @@
 		B8FF55965FBDB001E786162A /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = 9CE1F99E8F5FEDCCE345689F /* GoogleService-Info.plist */; };
 		BASEBEAUTY001CD7B5D8C3A502 /* baseBeauty.deepar in Resources */ = {isa = PBXBuildFile; fileRef = BASEBEAUTY002CE8F7C9D4B601 /* baseBeauty.deepar */; };
 		BURNINGEFFECT001CD7B5D8C3A502 /* burning_effect.deepar in Resources */ = {isa = PBXBuildFile; fileRef = BURNINGEFFECT002CE8F7C9D4B601 /* burning_effect.deepar */; };
+		D43AAD1C23C0304BBB58B7C3 /* Pods_TaliaShareExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D861DB4AA869DE0DE6A8D7A9 /* Pods_TaliaShareExtension.framework */; };
 		EIGHTBITHEARTS001CD7B5D8C3A502 /* 8bitHearts.deepar in Resources */ = {isa = PBXBuildFile; fileRef = EIGHTBITHEARTS002CE8F7C9D4B601 /* 8bitHearts.deepar */; };
 		ELEPHANTTRUNK001CD7B5D8C3A502 /* Elephant_Trunk.deepar in Resources */ = {isa = PBXBuildFile; fileRef = ELEPHANTTRUNK002CE8F7C9D4B601 /* Elephant_Trunk.deepar */; };
 		EMOTIONMETER001CD7B5D8C3A502 /* Emotion_Meter.deepar in Resources */ = {isa = PBXBuildFile; fileRef = EMOTIONMETER002CE8F7C9D4B601 /* Emotion_Meter.deepar */; };
@@ -54,6 +56,13 @@
 			remoteGlobalIDString = 0C1CF6112E92AC2F00A03DF8;
 			remoteInfo = NotificationServiceExtension;
 		};
+		0CB09DDC2F14613000278709 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 97C146E61CF9000F007C117D /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0CB09DD32F14613000278709;
+			remoteInfo = TaliaShareExtension;
+		};
 		331C8085294A63A400263BE5 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 97C146E61CF9000F007C117D /* Project object */;
@@ -70,6 +79,7 @@
 			dstPath = "";
 			dstSubfolderSpec = 13;
 			files = (
+				0CB09DDE2F14613000278709 /* TaliaShareExtension.appex in Embed Foundation Extensions */,
 				0C1CF6192E92AC2F00A03DF8 /* NotificationServiceExtension.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
@@ -95,6 +105,7 @@
 		0C884D032ED3912700BD9711 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		0C884D042ED3912700BD9711 /* NotificationServiceExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = NotificationServiceExtension.entitlements; sourceTree = "<group>"; };
 		0C884D052ED3912700BD9711 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
+		0CB09DD42F14613000278709 /* TaliaShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TaliaShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		1498D2321E8E86230040F4C2 /* GeneratedPluginRegistrant.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = GeneratedPluginRegistrant.h; sourceTree = "<group>"; };
 		1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = GeneratedPluginRegistrant.m; sourceTree = "<group>"; };
 		14B45D19FDF08014AA4D977E /* Pods-RunnerTests.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RunnerTests.release.xcconfig"; path = "Target Support Files/Pods-RunnerTests/Pods-RunnerTests.release.xcconfig"; sourceTree = "<group>"; };
@@ -104,7 +115,9 @@
 		38DA80C91C2896D2F6105DA0 /* Pods-NotificationServiceExtension.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-NotificationServiceExtension.debug.xcconfig"; path = "Target Support Files/Pods-NotificationServiceExtension/Pods-NotificationServiceExtension.debug.xcconfig"; sourceTree = "<group>"; };
 		3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = AppFrameworkInfo.plist; path = Flutter/AppFrameworkInfo.plist; sourceTree = "<group>"; };
 		3F0F23BC7BD42B256C5FD203 /* Pods-Runner.profile.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.profile.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.profile.xcconfig"; sourceTree = "<group>"; };
+		5F4558F9C1AEE96AF4139718 /* Pods-TaliaShareExtension.profile.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TaliaShareExtension.profile.xcconfig"; path = "Target Support Files/Pods-TaliaShareExtension/Pods-TaliaShareExtension.profile.xcconfig"; sourceTree = "<group>"; };
 		5F50D490307FD542456DB7FD /* Pods-Runner.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.debug.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.debug.xcconfig"; sourceTree = "<group>"; };
+		73C868E042CC9A7820FD0BA4 /* Pods-TaliaShareExtension.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TaliaShareExtension.release.xcconfig"; path = "Target Support Files/Pods-TaliaShareExtension/Pods-TaliaShareExtension.release.xcconfig"; sourceTree = "<group>"; };
 		74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Runner-Bridging-Header.h"; sourceTree = "<group>"; };
 		74858FAE1ED2DC5600515810 /* AppDelegate.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		7485AF011ED2DC5600515810 /* ArFiltersPlugin.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ArFiltersPlugin.swift; sourceTree = "<group>"; };
@@ -112,6 +125,7 @@
 		7AFA3C8E1D35360C0083082E /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Release.xcconfig; path = Flutter/Release.xcconfig; sourceTree = "<group>"; };
 		82F14609FB722AB14AD38923 /* Pods_Runner.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Runner.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		88CCCE1C423A964B70D1F932 /* Pods-NotificationServiceExtension.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-NotificationServiceExtension.release.xcconfig"; path = "Target Support Files/Pods-NotificationServiceExtension/Pods-NotificationServiceExtension.release.xcconfig"; sourceTree = "<group>"; };
+		8C1A68703EE29C91D23F701B /* Pods-TaliaShareExtension.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TaliaShareExtension.debug.xcconfig"; path = "Target Support Files/Pods-TaliaShareExtension/Pods-TaliaShareExtension.debug.xcconfig"; sourceTree = "<group>"; };
 		9740EEB21CF90195004384FC /* Debug.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; name = Debug.xcconfig; path = Flutter/Debug.xcconfig; sourceTree = "<group>"; };
 		9740EEB31CF90195004384FC /* Generated.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; name = Generated.xcconfig; path = Flutter/Generated.xcconfig; sourceTree = "<group>"; };
 		97C146EE1CF9000F007C117D /* Runner.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Runner.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -126,6 +140,7 @@
 		BASEBEAUTY002CE8F7C9D4B601 /* baseBeauty.deepar */ = {isa = PBXFileReference; lastKnownFileType = file; path = baseBeauty.deepar; sourceTree = "<group>"; };
 		BURNINGEFFECT002CE8F7C9D4B601 /* burning_effect.deepar */ = {isa = PBXFileReference; lastKnownFileType = file; path = burning_effect.deepar; sourceTree = "<group>"; };
 		CEB24ADB57066FD9F64A0273 /* Pods-NotificationServiceExtension.profile.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-NotificationServiceExtension.profile.xcconfig"; path = "Target Support Files/Pods-NotificationServiceExtension/Pods-NotificationServiceExtension.profile.xcconfig"; sourceTree = "<group>"; };
+		D861DB4AA869DE0DE6A8D7A9 /* Pods_TaliaShareExtension.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_TaliaShareExtension.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		EIGHTBITHEARTS002CE8F7C9D4B601 /* 8bitHearts.deepar */ = {isa = PBXFileReference; lastKnownFileType = file; path = 8bitHearts.deepar; sourceTree = "<group>"; };
 		ELEPHANTTRUNK002CE8F7C9D4B601 /* Elephant_Trunk.deepar */ = {isa = PBXFileReference; lastKnownFileType = file; path = Elephant_Trunk.deepar; sourceTree = "<group>"; };
 		EMOTIONMETER002CE8F7C9D4B601 /* Emotion_Meter.deepar */ = {isa = PBXFileReference; lastKnownFileType = file; path = Emotion_Meter.deepar; sourceTree = "<group>"; };
@@ -146,12 +161,45 @@
 		VIKINGHELMET002CE8F7C9D4B601 /* viking_helmet.deepar */ = {isa = PBXFileReference; lastKnownFileType = file; path = viking_helmet.deepar; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		0CB09DE22F14613000278709 /* Exceptions for "TaliaShareExtension" folder in "TaliaShareExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 0CB09DD32F14613000278709 /* TaliaShareExtension */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		0CB09DD52F14613000278709 /* TaliaShareExtension */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				0CB09DE22F14613000278709 /* Exceptions for "TaliaShareExtension" folder in "TaliaShareExtension" target */,
+			);
+			explicitFileTypes = {
+			};
+			explicitFolders = (
+			);
+			path = TaliaShareExtension;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
 /* Begin PBXFrameworksBuildPhase section */
 		0C1CF60F2E92AC2F00A03DF8 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				0099E13B98E3F4B134A0D532 /* Pods_NotificationServiceExtension.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		0CB09DD12F14613000278709 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D43AAD1C23C0304BBB58B7C3 /* Pods_TaliaShareExtension.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -191,6 +239,7 @@
 				82F14609FB722AB14AD38923 /* Pods_Runner.framework */,
 				74BA43E1A6546579B9324102 /* Pods_RunnerTests.framework */,
 				A73B00BDBCA576C5F5247C36 /* Pods_NotificationServiceExtension.framework */,
+				D861DB4AA869DE0DE6A8D7A9 /* Pods_TaliaShareExtension.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -219,6 +268,7 @@
 			children = (
 				9740EEB11CF90186004384FC /* Flutter */,
 				97C146F01CF9000F007C117D /* Runner */,
+				0CB09DD52F14613000278709 /* TaliaShareExtension */,
 				97C146EF1CF9000F007C117D /* Products */,
 				331C8082294A63A400263BE5 /* RunnerTests */,
 				9CE1F99E8F5FEDCCE345689F /* GoogleService-Info.plist */,
@@ -233,6 +283,7 @@
 				97C146EE1CF9000F007C117D /* Runner.app */,
 				331C8081294A63A400263BE5 /* RunnerTests.xctest */,
 				0C1CF6122E92AC2F00A03DF8 /* NotificationServiceExtension.appex */,
+				0CB09DD42F14613000278709 /* TaliaShareExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -288,6 +339,9 @@
 				38DA80C91C2896D2F6105DA0 /* Pods-NotificationServiceExtension.debug.xcconfig */,
 				88CCCE1C423A964B70D1F932 /* Pods-NotificationServiceExtension.release.xcconfig */,
 				CEB24ADB57066FD9F64A0273 /* Pods-NotificationServiceExtension.profile.xcconfig */,
+				8C1A68703EE29C91D23F701B /* Pods-TaliaShareExtension.debug.xcconfig */,
+				73C868E042CC9A7820FD0BA4 /* Pods-TaliaShareExtension.release.xcconfig */,
+				5F4558F9C1AEE96AF4139718 /* Pods-TaliaShareExtension.profile.xcconfig */,
 			);
 			path = Pods;
 			sourceTree = "<group>";
@@ -311,6 +365,27 @@
 			name = NotificationServiceExtension;
 			productName = NotificationServiceExtension;
 			productReference = 0C1CF6122E92AC2F00A03DF8 /* NotificationServiceExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		0CB09DD32F14613000278709 /* TaliaShareExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0CB09DE32F14613000278709 /* Build configuration list for PBXNativeTarget "TaliaShareExtension" */;
+			buildPhases = (
+				C2FF8AEB1266DBEA84BF09AA /* [CP] Check Pods Manifest.lock */,
+				0CB09DD02F14613000278709 /* Sources */,
+				0CB09DD12F14613000278709 /* Frameworks */,
+				0CB09DD22F14613000278709 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				0CB09DD52F14613000278709 /* TaliaShareExtension */,
+			);
+			name = TaliaShareExtension;
+			productName = TaliaShareExtension;
+			productReference = 0CB09DD42F14613000278709 /* TaliaShareExtension.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
 		331C8080294A63A400263BE5 /* RunnerTests */ = {
@@ -352,6 +427,7 @@
 			);
 			dependencies = (
 				0C1CF6182E92AC2F00A03DF8 /* PBXTargetDependency */,
+				0CB09DDD2F14613000278709 /* PBXTargetDependency */,
 			);
 			name = Runner;
 			productName = Runner;
@@ -365,12 +441,15 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastSwiftUpdateCheck = 2600;
+				LastSwiftUpdateCheck = 2620;
 				LastUpgradeCheck = 1510;
 				ORGANIZATIONNAME = "";
 				TargetAttributes = {
 					0C1CF6112E92AC2F00A03DF8 = {
 						CreatedOnToolsVersion = 26.0.1;
+					};
+					0CB09DD32F14613000278709 = {
+						CreatedOnToolsVersion = 26.2;
 					};
 					331C8080294A63A400263BE5 = {
 						CreatedOnToolsVersion = 14.0;
@@ -398,6 +477,7 @@
 				97C146ED1CF9000F007C117D /* Runner */,
 				331C8080294A63A400263BE5 /* RunnerTests */,
 				0C1CF6112E92AC2F00A03DF8 /* NotificationServiceExtension */,
+				0CB09DD32F14613000278709 /* TaliaShareExtension */,
 			);
 		};
 /* End PBXProject section */
@@ -408,6 +488,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				0C884D072ED3912700BD9711 /* README.md in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		0CB09DD22F14613000278709 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -565,6 +652,28 @@
 			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
 			showEnvVarsInLog = 0;
 		};
+		C2FF8AEB1266DBEA84BF09AA /* [CP] Check Pods Manifest.lock */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"${PODS_PODFILE_DIR_PATH}/Podfile.lock",
+				"${PODS_ROOT}/Manifest.lock",
+			);
+			name = "[CP] Check Pods Manifest.lock";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/Pods-TaliaShareExtension-checkManifestLockResult.txt",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
+			showEnvVarsInLog = 0;
+		};
 		D9C7557387DCD724FFDF5473 /* [CP] Embed Pods Frameworks */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -616,6 +725,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		0CB09DD02F14613000278709 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		331C807D294A63A400263BE5 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -642,6 +758,11 @@
 			isa = PBXTargetDependency;
 			target = 0C1CF6112E92AC2F00A03DF8 /* NotificationServiceExtension */;
 			targetProxy = 0C1CF6172E92AC2F00A03DF8 /* PBXContainerItemProxy */;
+		};
+		0CB09DDD2F14613000278709 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 0CB09DD32F14613000278709 /* TaliaShareExtension */;
+			targetProxy = 0CB09DDC2F14613000278709 /* PBXContainerItemProxy */;
 		};
 		331C8086294A63A400263BE5 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -789,6 +910,136 @@
 				MTL_FAST_MATH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.talia.chat.NotificationServiceExtension;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Profile;
+		};
+		0CB09DDF2F14613000278709 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 8C1A68703EE29C91D23F701B /* Pods-TaliaShareExtension.debug.xcconfig */;
+			buildSettings = {
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CODE_SIGN_ENTITLEMENTS = TaliaShareExtension/TaliaShareExtensionProfile.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = J642AAS7WP;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = TaliaShareExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = TaliaShareExtension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MARKETING_VERSION = 1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.talia.chat.TaliaShareExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		0CB09DE02F14613000278709 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 73C868E042CC9A7820FD0BA4 /* Pods-TaliaShareExtension.release.xcconfig */;
+			buildSettings = {
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CODE_SIGN_ENTITLEMENTS = TaliaShareExtension/TaliaShareExtensionProfile.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = J642AAS7WP;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = TaliaShareExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = TaliaShareExtension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MARKETING_VERSION = 1.0;
+				MTL_FAST_MATH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.talia.chat.TaliaShareExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		0CB09DE12F14613000278709 /* Profile */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5F4558F9C1AEE96AF4139718 /* Pods-TaliaShareExtension.profile.xcconfig */;
+			buildSettings = {
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CODE_SIGN_ENTITLEMENTS = TaliaShareExtension/TaliaShareExtensionProfile.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = J642AAS7WP;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = TaliaShareExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = TaliaShareExtension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MARKETING_VERSION = 1.0;
+				MTL_FAST_MATH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.talia.chat.TaliaShareExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -1115,6 +1366,16 @@
 				0C1CF61B2E92AC2F00A03DF8 /* Debug */,
 				0C1CF61C2E92AC2F00A03DF8 /* Release */,
 				0C1CF61D2E92AC2F00A03DF8 /* Profile */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		0CB09DE32F14613000278709 /* Build configuration list for PBXNativeTarget "TaliaShareExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0CB09DDF2F14613000278709 /* Debug */,
+				0CB09DE02F14613000278709 /* Release */,
+				0CB09DE12F14613000278709 /* Profile */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

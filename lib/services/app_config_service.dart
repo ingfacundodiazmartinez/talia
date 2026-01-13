@@ -40,13 +40,16 @@ class AppConfigService {
   static const int _defaultCallRingTimeoutSeconds = 30;
 
   /// Inicializa Remote Config y variables de entorno
+  ///
+  /// OPTIMIZACIÓN: Esta función es no-bloqueante. Configura defaults inmediatamente
+  /// y actualiza desde la red en background para no bloquear el startup.
   Future<void> initialize() async {
     if (_initialized) {
       return;
     }
 
     try {
-      // 1. Cargar variables de entorno
+      // 1. Cargar variables de entorno (rápido, archivo local)
       try {
         await dotenv.load(fileName: '.env');
         ReleaseLogger.log('Variables de entorno cargadas exitosamente', tag: 'AppConfig');
@@ -58,11 +61,11 @@ class AppConfigService {
       final remoteConfig = FirebaseRemoteConfig.instance;
       _remoteConfig = remoteConfig;
 
-      // minimumFetchInterval: Duration.zero para desarrollo, Duration(hours: 1) para producción
+      // OPTIMIZACIÓN: Timeout reducido de 30s a 5s para no bloquear el startup
       await remoteConfig.setConfigSettings(
         RemoteConfigSettings(
-          fetchTimeout: const Duration(seconds: 30),
-          minimumFetchInterval: Duration.zero, // TODO: Cambiar a Duration(hours: 1) en producción
+          fetchTimeout: const Duration(seconds: 5),
+          minimumFetchInterval: const Duration(minutes: 5),
         ),
       );
 
@@ -85,22 +88,28 @@ class AppConfigService {
         'call_ring_timeout_seconds': _defaultCallRingTimeoutSeconds,
       });
 
-      // 4. Intentar obtener configuración remota
-      try {
-        await remoteConfig.fetchAndActivate();
-        ReleaseLogger.log('Remote Config actualizado exitosamente', tag: 'AppConfig');
-      } catch (e) {
-        ReleaseLogger.log('No se pudo cargar Remote Config, usando valores por defecto: $e', tag: 'AppConfig');
-      }
-
+      // Marcar como inicializado ANTES de fetch para no bloquear
       _initialized = true;
-      ReleaseLogger.log('AppConfigService inicializado exitosamente', tag: 'AppConfig');
+      ReleaseLogger.log('AppConfigService inicializado con defaults', tag: 'AppConfig');
+
+      // 4. OPTIMIZACIÓN: Fetch en background (no-bloqueante)
+      // Usa valores cached de la sesión anterior si existen
+      _fetchRemoteConfigInBackground();
+
     } catch (e) {
       ReleaseLogger.error('Error inicializando AppConfigService: $e', tag: 'AppConfig');
       // En caso de error, marcamos como inicializado para no bloquear la app
       _initialized = true;
-      rethrow;
     }
+  }
+
+  /// Fetch Remote Config en background sin bloquear el startup
+  void _fetchRemoteConfigInBackground() {
+    _remoteConfig?.fetchAndActivate().then((_) {
+      ReleaseLogger.log('Remote Config actualizado en background', tag: 'AppConfig');
+    }).catchError((e) {
+      ReleaseLogger.log('Remote Config fetch en background falló (usando cached/defaults): $e', tag: 'AppConfig');
+    });
   }
 
   /// Obtiene el Agora APP ID de manera segura

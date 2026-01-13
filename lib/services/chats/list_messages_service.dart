@@ -160,39 +160,7 @@ class ListMessagesService {
     }
   }
 
-  /// Contar mensajes no leídos en un chat
-  Future<int> countUnread({
-    required String chatId,
-    bool isGroup = false,
-  }) async {
-    final userId = _auth.currentUser?.uid;
-    if (userId == null) return 0;
-
-    try {
-      final collection = isGroup ? 'groups_v2' : 'chats';
-
-      // Contar mensajes donde el usuario no está en readBy
-      final snapshot = await _firestore
-          .collection(collection)
-          .doc(chatId)
-          .collection('messages')
-          .where('senderId', isNotEqualTo: userId)
-          .get();
-
-      int unreadCount = 0;
-      for (final doc in snapshot.docs) {
-        final readBy = List<String>.from(doc.data()['readBy'] ?? []);
-        if (!readBy.contains(userId)) {
-          unreadCount++;
-        }
-      }
-
-      return unreadCount;
-    } catch (e) {
-      ReleaseLogger.error('Error contando no leídos: $e', tag: 'ListMessages');
-      return 0;
-    }
-  }
+  // ✅ REMOVED: countUnread - V2 usa LocalUnreadCountService (cache local)
 
   /// Stream del último mensaje (para preview en lista de chats)
   Stream<ChatMessage?> watchLastMessage({

@@ -1,9 +1,9 @@
-import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 import 'dart:io';
+import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../controllers/controllers.dart';
 import 'group_chat_screen.dart';
+import '../../services/image_service.dart';
 
 /// Screen for creating a new group (Groups V2)
 ///
@@ -34,7 +34,6 @@ class _CreateGroupScreenV2State extends State<CreateGroupScreenV2> {
   List<GroupContactInfo> _filteredContacts = [];
   final List<GroupContactInfo> _selectedContacts = [];
   File? _groupImageFile;
-  final ImagePicker _imagePicker = ImagePicker();
   bool _isUploadingImage = false;
 
   // Two-step wizard state
@@ -119,24 +118,24 @@ class _CreateGroupScreenV2State extends State<CreateGroupScreenV2> {
         _isUploadingImage = true;
       });
 
-      final XFile? image = await _imagePicker.pickImage(
-        source: ImageSource.gallery,
-        maxWidth: 512,
-        maxHeight: 512,
-        imageQuality: 80,
-      );
+      // Usar ImageService para todo el flujo (pick + normalize + crop)
+      final croppedFile = await ImageService().pickAndCropCircularImage(context);
 
-      if (image != null) {
+      if (croppedFile != null && mounted) {
         setState(() {
-          _groupImageFile = File(image.path);
+          _groupImageFile = croppedFile;
         });
       }
     } catch (e) {
-      _showSnackbar('Error al seleccionar la imagen', isError: true);
+      if (mounted) {
+        _showSnackbar('Error al seleccionar la imagen', isError: true);
+      }
     } finally {
-      setState(() {
-        _isUploadingImage = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isUploadingImage = false;
+        });
+      }
     }
   }
 

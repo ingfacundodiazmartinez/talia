@@ -124,6 +124,11 @@ class MessageListWidget extends StatelessWidget {
     // Aplicar highlight si es el mensaje buscado
     final isHighlighted = highlightedMessageId == message.id;
 
+    // ✅ Handle deleted messages
+    if (message.isDeletedForEveryone) {
+      return _buildDeletedMessageBubble(context, message, isMe, timeString, showDateSeparator, index);
+    }
+
     Widget messageBubble = MessageBubble(
       key: ValueKey('msg_${message.id}'),
       messageId: message.id,
@@ -284,5 +289,75 @@ class MessageListWidget extends StatelessWidget {
           ? messages[index + 1].effectiveTimestamp
           : messages[index].effectiveTimestamp,
     );
+  }
+
+  /// ✅ Build placeholder for deleted messages
+  Widget _buildDeletedMessageBubble(
+    BuildContext context,
+    ChatMessage message,
+    bool isMe,
+    String timeString,
+    bool showDateSeparator,
+    int index,
+  ) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    final bubble = Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Align(
+        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+        child: Container(
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width * 0.75,
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            color: colorScheme.surfaceContainerHighest.withOpacity(0.5),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.block,
+                size: 16,
+                color: colorScheme.onSurfaceVariant.withOpacity(0.6),
+              ),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  'Este mensaje fue eliminado',
+                  style: TextStyle(
+                    fontStyle: FontStyle.italic,
+                    color: colorScheme.onSurfaceVariant.withOpacity(0.6),
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                timeString,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: colorScheme.onSurfaceVariant.withOpacity(0.5),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (showDateSeparator) {
+      return Column(
+        children: [
+          DateSeparatorWidget(date: message.effectiveTimestamp),
+          const SizedBox(height: 16),
+          bubble,
+        ],
+      );
+    }
+
+    return bubble;
   }
 }

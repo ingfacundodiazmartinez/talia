@@ -191,6 +191,10 @@ exports.checkMessageBeforeSending = moderation.checkMessageBeforeSending;
 exports.moderateMessage = moderation.moderateMessage;
 exports.createApprovedMessage = moderation.createApprovedMessage;
 exports.setOwnModeration = moderation.setOwnModeration; // ✅ Permite a adultos configurar su propia moderación
+exports.moderateImageWithOpenAI = moderation.moderateImageWithOpenAI; // ✅ Moderación de imágenes con OpenAI (Premium+)
+exports.moderateAudioWithWhisper = moderation.moderateAudioWithWhisper; // ✅ Moderación de audios con Whisper + Gemini (Premium+)
+exports.moderateMultimedia = moderation.moderateMultimedia; // ✅ Función unificada para moderar multimedia (Premium+)
+exports.checkMultimediaModerationStatus = moderation.checkMultimediaModerationStatus; // ✅ Verificar estado de moderación multimedia
 
 // Chats
 exports.incrementUnreadCount = chats.incrementUnreadCount;

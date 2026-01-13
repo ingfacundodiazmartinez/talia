@@ -2,6 +2,7 @@ const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
 const { checkRateLimit, RATE_LIMITS, sendDirectPushNotification } = require("./helpers");
+const { _moderateMultimediaInternal, _checkUserPremiumPlus } = require("./moderation");
 
 // ═══════════════════════════════════════════════════════════════
 // TTL CONFIGURATION FOR MESSAGE SECURITY
@@ -120,11 +121,12 @@ exports.incrementUnreadCount = onDocumentCreated(
         const now = Timestamp.now();  // ✅ FIX: Timestamp inmediato
 
         // ✅ FIX: Para mensajes de media, usar preview apropiado
+        // ✅ FIX: Usar "Imagen" (no "Foto") para consistencia con el cliente Flutter
         let initialLastMessage = messageData.text || "";
         if (messageData.audioUrl) {
           initialLastMessage = "🎤 Audio";
         } else if (messageData.imageUrl) {
-          initialLastMessage = "📷 Foto";
+          initialLastMessage = "📷 Imagen";
         } else if (messageData.videoUrl) {
           initialLastMessage = "🎥 Video";
         }
@@ -250,11 +252,12 @@ exports.incrementUnreadCount = onDocumentCreated(
       } else {
         // For regular messages (no moderation), update everything including lastMessage
         // ✅ FIX: Para mensajes de media (audio, video, imagen), usar preview apropiado
+        // ✅ FIX: Usar "Imagen" (no "Foto") para consistencia con el cliente Flutter
         let lastMessagePreview = messageData.text || "";
         if (messageData.audioUrl) {
           lastMessagePreview = "🎤 Audio";
         } else if (messageData.imageUrl) {
-          lastMessagePreview = "📷 Foto";
+          lastMessagePreview = "📷 Imagen";
         } else if (messageData.videoUrl) {
           lastMessagePreview = "🎥 Video";
         }
@@ -265,6 +268,7 @@ exports.incrementUnreadCount = onDocumentCreated(
           lastMessageTime: Timestamp.now(),
           lastMessage: lastMessagePreview,
           lastMessageSender: senderId,
+          lastMessageId: messageId, // ✅ FIX: Guardar ID para excluir de cleanup
         });
         console.log(`✅ Mensaje procesado para ${receiverId}, chat visible: true, lastMessage: "${lastMessagePreview}"`);
       }
@@ -687,7 +691,7 @@ exports.sendChatMessage = onCall(
         throw new HttpsError("unauthenticated", "Usuario no autenticado");
       }
 
-      const { chatId, text, imageUrl, videoUrl, audioUrl, waveformData, replyTo, localId, isAiGenerated } = request.data;
+      const { chatId, text, imageUrl, videoUrl, audioUrl, waveformData, replyTo, localId, isAiGenerated, transcription, videoFrames } = request.data;
       const senderId = request.auth.uid;
 
       if (!chatId) {
@@ -835,6 +839,135 @@ exports.sendChatMessage = onCall(
           // y si Flutter recibe el snapshot en ese momento, descarta el mensaje
           messageData.moderationStatus = "approved";
           console.log(`✅ [sendChatMessage] Mensaje guardado con moderationStatus: approved (sin moderación)`);
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // MULTIMEDIA MODERATION
+        // ═══════════════════════════════════════════════════════════════
+        // Tiers de moderación multimedia:
+        // - Audio: Premium o Premium+ (transcripción con STT local, gratis)
+        // - Imagen/Video: Solo Premium+ (análisis visual con Gemini)
+        // NOTA: La moderación puede fallar por límites de API o errores de red.
+        //       En caso de fallo, el contenido se aprueba para no bloquear comunicación.
+        console.log(`🔍 [sendChatMessage] Multimedia check: requiresModeration=${requiresModeration}, messageType=${messageType}, hasContentUrl=${!!contentUrl}, hasVideoFrames=${!!(videoFrames && videoFrames.length)}`);
+        if (requiresModeration && (messageType === "image" || messageType === "audio" || messageType === "video") && contentUrl) {
+          console.log(`🖼️ [sendChatMessage] Entering multimedia moderation block for ${messageType} with URL: ${contentUrl.substring(0, 80)}...`);
+
+          // Verificar tier del usuario o su parent
+          let userTier = "free";
+          let canUseAudioModeration = false; // Premium o Premium+
+          let canUseVisualModeration = false; // Solo Premium+
+          let moderationLevel = "high";
+
+          // 1. Check sender's tier
+          const { isPremiumPlus, tier } = await _checkUserPremiumPlus(senderId);
+          userTier = tier;
+          console.log(`🔍 [sendChatMessage] Tier check for ${senderId}: tier=${tier}, isPremiumPlus=${isPremiumPlus}`);
+
+          if (tier === "premium" || tier === "premium_plus") {
+            canUseAudioModeration = true;
+            console.log(`🎤 [sendChatMessage] Sender ${senderId} is ${tier} - audio moderation enabled`);
+          }
+          if (isPremiumPlus) {
+            canUseVisualModeration = true;
+            console.log(`🖼️ [sendChatMessage] Sender ${senderId} is Premium+ - image/video moderation enabled`);
+          }
+
+          // 2. If not Premium/Premium+, check if sender is child of Premium/Premium+ parent
+          if (!canUseAudioModeration) {
+            const parentQuery = await db.collection("users")
+              .where("linkedChildrenIds", "array-contains", senderId)
+              .limit(1)
+              .get();
+
+            if (!parentQuery.empty) {
+              const parentDoc = parentQuery.docs[0];
+              const parentId = parentDoc.id;
+              const { isPremiumPlus: parentIsPremiumPlus, tier: parentTier } = await _checkUserPremiumPlus(parentId);
+              const parentData = parentDoc.data();
+              const linkedChildren = parentData.linkedChildrenIds || [];
+
+              // Audio: Premium o Premium+ parent (max 3 children)
+              if ((parentTier === "premium" || parentTier === "premium_plus") && linkedChildren.length <= 3) {
+                canUseAudioModeration = true;
+                console.log(`🎤 [sendChatMessage] Sender ${senderId} is child of ${parentTier} parent ${parentId} - audio moderation enabled`);
+              }
+
+              // Visual: Solo Premium+ parent (max 3 children)
+              if (parentIsPremiumPlus && linkedChildren.length <= 3) {
+                canUseVisualModeration = true;
+                console.log(`🖼️ [sendChatMessage] Sender ${senderId} is child of Premium+ parent ${parentId} - image/video moderation enabled`);
+              }
+
+              if (linkedChildren.length > 3) {
+                console.log(`⚠️ [sendChatMessage] Parent ${parentId} has ${linkedChildren.length} children (max 3 for multimedia moderation)`);
+              }
+            }
+          }
+
+          // Get moderation level from chat or contact settings
+          const chatData = chatDoc.exists ? chatDoc.data() : {};
+          moderationLevel = chatData.moderationLevel || "high";
+
+          if (!moderationLevel && receiverId) {
+            const sortedUsers = [senderId, receiverId].sort();
+            const contactId = `${sortedUsers[0]}_${sortedUsers[1]}`;
+            const contactDoc = await db.collection("contacts").doc(contactId).get();
+            if (contactDoc.exists) {
+              const moderationSettings = contactDoc.data().moderationSettings || {};
+              const senderSettings = moderationSettings[senderId];
+              moderationLevel = senderSettings?.level || "high";
+            }
+          }
+
+          // Determinar si podemos moderar este tipo de contenido
+          const canModerateThisType =
+            (messageType === "audio" && canUseAudioModeration) ||
+            ((messageType === "image" || messageType === "video") && canUseVisualModeration);
+
+          if (canModerateThisType) {
+            console.log(`🖼️ [sendChatMessage] Running ${messageType} moderation at level ${moderationLevel}...`);
+          } else {
+            const reason = messageType === "audio"
+              ? "no Premium/Premium+ user found"
+              : "no Premium+ user found (image/video requires Premium+)";
+            console.log(`⚠️ [sendChatMessage] ${messageType} moderation SKIPPED - ${reason}`);
+          }
+
+          if (canModerateThisType) {
+
+            try {
+              // ✅ Para audio y video: usar transcripción del cliente (STT local, gratis) si está disponible
+              const clientTranscription = (messageType === "audio" || messageType === "video") ? transcription : null;
+              // 🎬 Para video: usar frames extraídos en el cliente
+              const clientVideoFrames = messageType === "video" ? videoFrames : null;
+
+              const result = await _moderateMultimediaInternal(
+                contentUrl,
+                messageType,
+                clientTranscription, // Transcripción del cliente para audio/video (gratis)
+                moderationLevel,
+                clientVideoFrames // 🎬 Frames de video extraídos en el cliente
+              );
+
+              if (result.flagged) {
+                console.log(`🚫 [sendChatMessage] Multimedia blocked: ${result.reason}`);
+                messageData.moderationStatus = "blocked";
+                messageData.moderationReason = result.reason || "Contenido multimedia inapropiado";
+                messageData.moderatedAt = Timestamp.now();
+              } else {
+                console.log(`✅ [sendChatMessage] Multimedia approved (severity: ${result.severity})`);
+              }
+
+              // Save transcription for audio messages
+              if (messageType === "audio" && result.transcription) {
+                messageData.transcription = result.transcription;
+              }
+            } catch (moderationError) {
+              console.error(`⚠️ [sendChatMessage] Multimedia moderation error (approving):`, moderationError.message);
+              // On error, approve to not block communication
+            }
+          }
         }
 
         // Añadir mensaje
@@ -1143,6 +1276,10 @@ exports.cleanupDeliveredMessages = onDocumentUpdated(
       const db = getFirestore();
       const messagesRef = db.collection("chats").doc(chatId).collection("messages");
 
+      // ✅ FIX: Obtener el ID del último mensaje para excluirlo de la eliminación
+      // Esto preserva el mensaje más reciente para que la UI pueda mostrar el status
+      const lastMessageId = after.lastMessageId;
+
       // Obtener mensajes que fueron VISTOS por todos (timestamp <= minLastOpened)
       const oldMessages = await messagesRef
         .where("timestamp", "<=", minLastOpened)
@@ -1153,17 +1290,28 @@ exports.cleanupDeliveredMessages = onDocumentUpdated(
         return null;
       }
 
-      // Eliminar en batch
+      // Eliminar en batch, EXCLUYENDO el último mensaje
       const batch = db.batch();
       let count = 0;
+      let skippedLast = false;
 
       for (const doc of oldMessages.docs) {
+        // ✅ FIX: No eliminar el último mensaje para que la UI pueda mostrar su status
+        if (lastMessageId && doc.id === lastMessageId) {
+          skippedLast = true;
+          continue;
+        }
         batch.delete(doc.ref);
         count++;
       }
 
+      if (count === 0) {
+        console.log(`ℹ️ [cleanupDeliveredMessages] Solo quedaba el último mensaje, nada que eliminar en chat ${chatId}`);
+        return null;
+      }
+
       await batch.commit();
-      console.log(`🗑️ [cleanupDeliveredMessages] ${count} mensajes eliminados en chat ${chatId} (vistos por todos)`);
+      console.log(`🗑️ [cleanupDeliveredMessages] ${count} mensajes eliminados en chat ${chatId} (vistos por todos)${skippedLast ? ' - último mensaje preservado' : ''}`);
 
       return null;
     } catch (error) {

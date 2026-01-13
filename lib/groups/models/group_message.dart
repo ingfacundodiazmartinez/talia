@@ -170,7 +170,9 @@ class GroupMessage {
       'thumbnailUrl': thumbnailUrl,
       'type': contentType, // For notification formatting
       'replyTo': replyTo?.toMap(),
-      'timestamp': Timestamp.fromDate(timestamp),
+      // ✅ FIX: Usar serverTimestamp() para que Firestore rules puedan validar
+      // el tiempo correctamente (request.time vs resource.data.timestamp)
+      'timestamp': FieldValue.serverTimestamp(),
       'editedAt': editedAt != null ? Timestamp.fromDate(editedAt!) : null,
       'isDeleted': isDeleted,
       'reactions': reactions,

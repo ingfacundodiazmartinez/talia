@@ -51,6 +51,7 @@ class ChatMessage {
   // Campos para audio
   final List<double>? waveformData;          // Datos de forma de onda para audio
   final bool isAiGenerated;                  // Indica si el audio fue generado con IA (TTS)
+  final String? transcription;               // Transcripción de audio (de moderación con Whisper)
 
   // Campos para mensajes reenviados
   final bool isForwarded;                    // Indica si el mensaje fue reenviado
@@ -60,6 +61,9 @@ class ChatMessage {
 
   // ✅ Campo para matching de mensajes optimistas
   final String? localId;                     // ID temporal del mensaje optimista (para reemplazo)
+
+  // ✅ Campo para eliminación
+  final bool isDeletedForEveryone;           // Mensaje eliminado para todos
 
   ChatMessage({
     required this.id,
@@ -87,11 +91,13 @@ class ChatMessage {
     this.originalText,
     this.waveformData,
     this.isAiGenerated = false,
+    this.transcription,
     this.isForwarded = false,
     this.originalSenderId,
     this.originalChatId,
     this.originalContactName,
     this.localId, // ✅ Agregar localId
+    this.isDeletedForEveryone = false, // ✅ Agregar isDeletedForEveryone
   });
 
   /// Factory constructor desde Firestore DocumentSnapshot
@@ -122,22 +128,21 @@ class ChatMessage {
       }
     }
 
-    // Calcular el status del mensaje basándose en readBy
-    MessageStatus status = MessageStatus.sent; // Por defecto
-
-    // Solo calcular status si es un mensaje propio
-    if (currentUserId != null && data['senderId'] == currentUserId) {
-      final readBy = List<String>.from(data['readBy'] ?? []);
-
-      // Si readBy contiene a otros usuarios (no solo a mí), el mensaje fue visto
-      final othersRead = readBy.where((userId) => userId != currentUserId).isNotEmpty;
-
-      if (othersRead) {
-        status = MessageStatus.seen;
-      } else {
-        // Podríamos distinguir entre 'sent' y 'delivered' aquí si tuviéramos ese campo
-        status = MessageStatus.sent;
-      }
+    // ✅ V2 ARCHITECTURE: Calcular status basado SOLO en presencia de timestamp
+    // El controller recalculará a seen/delivered usando lastOpenedAt del chat doc
+    //
+    // NOTA: Se elimina el sistema legacy (readBy) para chats 1-1 porque:
+    // 1. Causaba inconsistencias (último mensaje seen, penúltimo no)
+    // 2. V2 usa timestamps del chat doc para calcular read status
+    // 3. readBy[] se mantiene para grupos (tienen su propio modelo GroupMessage)
+    MessageStatus status;
+    if (data['timestamp'] == null) {
+      // Sin timestamp del servidor = aún enviando
+      status = MessageStatus.sending;
+    } else {
+      // Con timestamp = enviado al servidor
+      // El controller actualizará a seen/delivered según lastOpenedAt_{recipient}
+      status = MessageStatus.sent;
     }
 
     return ChatMessage(
@@ -165,11 +170,13 @@ class ChatMessage {
           ? (data['waveformData'] as List).map((e) => (e as num).toDouble()).toList()
           : null,
       isAiGenerated: data['isAiGenerated'] ?? false,
+      transcription: data['transcription'] as String?,
       isForwarded: data['isForwarded'] ?? false,
       originalSenderId: data['originalSenderId'] as String?,
       originalChatId: data['originalChatId'] as String?,
       originalContactName: data['originalContactName'] as String?,
       localId: data['localId'] as String?, // ✅ Parse localId desde Firestore
+      isDeletedForEveryone: data['isDeletedForEveryone'] ?? data['isDeleted'] ?? false, // ✅ Parse deletion flag
     );
   }
 
@@ -250,6 +257,9 @@ class ChatMessage {
     if (moderationStatus != null) {
       map['moderationStatus'] = moderationStatus!.name;
     }
+
+    // Transcripción de audio (de moderación con Whisper)
+    if (transcription != null) map['transcription'] = transcription;
 
     return map;
   }
@@ -358,7 +368,9 @@ class ChatMessage {
     String? originalText,
     List<double>? waveformData,
     bool? isAiGenerated,
+    String? transcription,
     String? localId, // ✅ FIX: Agregar localId como parámetro
+    bool? isDeletedForEveryone, // ✅ Agregar isDeletedForEveryone
   }) {
     return ChatMessage(
       id: id ?? this.id,
@@ -384,12 +396,14 @@ class ChatMessage {
       originalText: originalText ?? this.originalText,
       waveformData: waveformData ?? this.waveformData,
       isAiGenerated: isAiGenerated ?? this.isAiGenerated,
+      transcription: transcription ?? this.transcription,
       // Preservar campos de reenvío
       isForwarded: isForwarded,
       originalSenderId: originalSenderId,
       originalChatId: originalChatId,
       originalContactName: originalContactName,
       localId: localId ?? this.localId, // ✅ FIX: Usar valor pasado o preservar actual
+      isDeletedForEveryone: isDeletedForEveryone ?? this.isDeletedForEveryone,
     );
   }
 

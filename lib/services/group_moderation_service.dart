@@ -118,6 +118,9 @@ class GroupModerationService {
   /// [groupId] - ID del grupo
   /// [enabled] - Activar o desactivar moderación
   /// [level] - Nivel de moderación: 'high', 'medium', 'low'
+  ///
+  /// Note: Multimedia moderation is auto-enabled server-side when any group admin is Premium+.
+  /// No separate toggle is needed.
   Future<GroupModerationResult> setModeration({
     required String groupId,
     required bool enabled,

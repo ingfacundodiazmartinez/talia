@@ -53,6 +53,12 @@ target 'NotificationServiceExtension' do
   # No necesita pods - solo usa UserNotifications framework nativo
 end
 
+# Share Extension - recibe contenido compartido desde otras apps
+target 'TaliaShareExtension' do
+  use_frameworks!
+  # No necesita pods - solo usa frameworks nativos de iOS
+end
+
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)

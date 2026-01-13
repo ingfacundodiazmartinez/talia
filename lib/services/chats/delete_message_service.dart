@@ -13,8 +13,8 @@ class DeleteMessageService {
   final FirebaseFirestore _firestore;
   final FirebaseAuth _auth;
 
-  /// Tiempo máximo para eliminar "para todos" (1 hora)
-  static const Duration deleteForEveryoneWindow = Duration(hours: 1);
+  /// Tiempo máximo para eliminar "para todos" (10 minutos)
+  static const Duration deleteForEveryoneWindow = Duration(minutes: 10);
 
   DeleteMessageService({
     FirebaseFirestore? firestore,
@@ -97,11 +97,11 @@ class DeleteMessageService {
         );
       }
 
-      // Verificar tiempo
+      // Verificar tiempo (usar UTC para comparación consistente)
       final timestamp = data['timestamp'] as Timestamp?;
       if (timestamp != null) {
-        final messageTime = timestamp.toDate();
-        final now = DateTime.now();
+        final messageTime = timestamp.toDate().toUtc();
+        final now = DateTime.now().toUtc();
         if (now.difference(messageTime) > deleteForEveryoneWindow) {
           return (
             success: false,
@@ -111,8 +111,11 @@ class DeleteMessageService {
       }
 
       // Marcar como eliminado para todos
+      // ✅ FIX: Setear tanto isDeletedForEveryone como isDeleted
+      // (1-1 chats usan isDeletedForEveryone, groups usan isDeleted)
       await messageRef.update({
         'isDeletedForEveryone': true,
+        'isDeleted': true, // Para grupos que usan este campo
         'deletedAt': FieldValue.serverTimestamp(),
         'deletedBy': userId,
         // Limpiar contenido sensible
@@ -120,7 +123,23 @@ class DeleteMessageService {
         'imageUrl': null,
         'videoUrl': null,
         'audioUrl': null,
+        'thumbnailUrl': null, // Para videos
         'originalText': null,
+        'waveformData': null, // Para audios
+      });
+
+      // ✅ Crear evento de eliminación para que los receptores actualicen su cache
+      // TTL: 7 días (Firestore TTL nativo elimina automáticamente por expiresAt)
+      await _firestore
+          .collection(collection)
+          .doc(chatId)
+          .collection('deletedMessages')
+          .doc(messageId)
+          .set({
+        'messageId': messageId,
+        'deletedBy': userId,
+        'createdAt': FieldValue.serverTimestamp(),
+        'expiresAt': Timestamp.fromDate(DateTime.now().add(const Duration(days: 7))),
       });
 
       // Actualizar lastMessage del chat si era el último
@@ -144,7 +163,13 @@ class DeleteMessageService {
       return (success: true, message: 'Mensaje eliminado para todos');
     } catch (e) {
       ReleaseLogger.error('Error eliminando mensaje: $e', tag: 'DeleteMessage');
-      return (success: false, message: 'Error al eliminar mensaje');
+      // Dar mensaje más útil según el tipo de error
+      String errorMsg = 'Error al eliminar mensaje';
+      if (e.toString().contains('permission-denied') ||
+          e.toString().contains('PERMISSION_DENIED')) {
+        errorMsg = 'No tienes permiso para eliminar este mensaje (¿pasaron más de 10 minutos?)';
+      }
+      return (success: false, message: errorMsg);
     }
   }
 
@@ -248,11 +273,11 @@ class DeleteMessageService {
         return (canDelete: false, reason: 'El mensaje ya fue eliminado');
       }
 
-      // Verificar tiempo
+      // Verificar tiempo (usar UTC para comparación consistente)
       final timestamp = data['timestamp'] as Timestamp?;
       if (timestamp != null) {
-        final messageTime = timestamp.toDate();
-        final now = DateTime.now();
+        final messageTime = timestamp.toDate().toUtc();
+        final now = DateTime.now().toUtc();
         if (now.difference(messageTime) > deleteForEveryoneWindow) {
           return (
             canDelete: false,

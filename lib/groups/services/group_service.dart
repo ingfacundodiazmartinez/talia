@@ -1,10 +1,12 @@
 import 'dart:io';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import '../models/models.dart';
 import '../repositories/repositories.dart';
 import '../../utils/release_logger.dart';
+import '../../services/contact_alias_service.dart';
 
 /// Result of group creation
 class CreateGroupResult {
@@ -81,18 +83,98 @@ class GroupService {
   final GroupMessageRepository _messageRepository;
   final FirebaseFunctions _functions;
   final FirebaseAuth _auth;
+  final ContactAliasService _aliasService;
+
+  // Cache de alias para evitar llamadas repetidas a Firestore
+  Map<String, String>? _aliasCache;
+  DateTime? _aliasCacheTime;
+  static const _aliasCacheDuration = Duration(minutes: 5);
 
   GroupService({
     GroupRepository? groupRepository,
     GroupMessageRepository? messageRepository,
     FirebaseFunctions? functions,
     FirebaseAuth? auth,
+    ContactAliasService? aliasService,
   })  : _groupRepository = groupRepository ?? GroupRepository(),
         _messageRepository = messageRepository ?? GroupMessageRepository(),
         _functions = functions ?? FirebaseFunctions.instance,
-        _auth = auth ?? FirebaseAuth.instance;
+        _auth = auth ?? FirebaseAuth.instance,
+        _aliasService = aliasService ?? ContactAliasService();
 
   String get _currentUserId => _auth.currentUser?.uid ?? '';
+
+  /// Obtener cache de alias del usuario actual
+  Future<Map<String, String>> _getAliasCache() async {
+    // Si el cache es válido, usarlo
+    if (_aliasCache != null &&
+        _aliasCacheTime != null &&
+        DateTime.now().difference(_aliasCacheTime!) < _aliasCacheDuration) {
+      return _aliasCache!;
+    }
+
+    // Cargar alias del usuario actual
+    try {
+      final currentUser = _auth.currentUser;
+      if (currentUser == null) return {};
+
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .get();
+
+      if (!userDoc.exists) return {};
+
+      final userData = userDoc.data();
+      final aliases = userData?['contactAliases'] as Map<String, dynamic>?;
+
+      _aliasCache = aliases?.map((k, v) => MapEntry(k, v.toString())) ?? {};
+      _aliasCacheTime = DateTime.now();
+
+      return _aliasCache!;
+    } catch (e) {
+      return {};
+    }
+  }
+
+  /// Aplicar alias a los miembros del grupo
+  Future<Group> _applyAliasesToGroup(Group group) async {
+    final aliases = await _getAliasCache();
+    if (aliases.isEmpty) return group;
+
+    // Aplicar alias a memberDetails
+    final newMemberDetails = <String, GroupMember>{};
+    for (final entry in group.memberDetails.entries) {
+      final userId = entry.key;
+      final member = entry.value;
+      final alias = aliases[userId];
+
+      if (alias != null && userId != _currentUserId) {
+        newMemberDetails[userId] = member.copyWith(name: alias);
+      } else {
+        newMemberDetails[userId] = member;
+      }
+    }
+
+    // Aplicar alias a pendingMemberDetails
+    final newPendingDetails = <String, PendingMember>{};
+    for (final entry in group.pendingMemberDetails.entries) {
+      final userId = entry.key;
+      final member = entry.value;
+      final alias = aliases[userId];
+
+      if (alias != null && userId != _currentUserId) {
+        newPendingDetails[userId] = member.copyWith(name: alias);
+      } else {
+        newPendingDetails[userId] = member;
+      }
+    }
+
+    return group.copyWith(
+      memberDetails: newMemberDetails,
+      pendingMemberDetails: newPendingDetails,
+    );
+  }
 
   // ═══════════════════════════════════════════════════════════════
   // GROUP CRUD
@@ -143,14 +225,25 @@ class GroupService {
     }
   }
 
-  /// Get a group by ID
+  /// Get a group by ID (con alias aplicados)
   Future<Group?> getGroup(String groupId) async {
-    return _groupRepository.getById(groupId);
+    final group = await _groupRepository.getById(groupId);
+    if (group == null) return null;
+    return _applyAliasesToGroup(group);
   }
 
-  /// Watch a group
+  /// Limpiar cache de alias (llamar cuando el usuario cambia un alias)
+  void clearAliasCache() {
+    _aliasCache = null;
+    _aliasCacheTime = null;
+  }
+
+  /// Watch a group (con alias aplicados a los nombres de miembros)
   Stream<Group?> watchGroup(String groupId) {
-    return _groupRepository.watchById(groupId);
+    return _groupRepository.watchById(groupId).asyncMap((group) async {
+      if (group == null) return null;
+      return _applyAliasesToGroup(group);
+    });
   }
 
   /// Get all groups for current user
@@ -421,6 +514,7 @@ class GroupService {
     String? senderName,
     String? senderPhotoURL,
     GroupMessage? replyTo,
+    String? localId, // For optimistic UI matching
   }) async {
     try {
       final currentUser = _auth.currentUser;
@@ -443,6 +537,7 @@ class GroupService {
           'text': text,
           'senderName': senderName ?? currentUser.displayName ?? 'Usuario',
           'senderPhotoURL': senderPhotoURL ?? currentUser.photoURL,
+          if (localId != null) 'localId': localId, // For optimistic UI matching
           if (imageUrl != null) 'imageUrl': imageUrl,
           if (videoUrl != null) 'videoUrl': videoUrl,
           if (audioUrl != null) 'audioUrl': audioUrl,

@@ -327,12 +327,19 @@ class ChatPreferencesCache extends ChangeNotifier {
 
   /// Obtener timestamp de "chat limpiado"
   DateTime? getClearedAt(String chatId) {
-    if (_box == null) return null;
+    if (_box == null) {
+      ReleaseLogger.log('⚠️ [ChatPreferences] getClearedAt: _box es null', tag: 'ChatPreferences');
+      return null;
+    }
 
     final cleared = Map<String, dynamic>.from(_box!.get(_clearedAtKey) ?? {});
-    if (!cleared.containsKey(chatId)) return null;
+    if (!cleared.containsKey(chatId)) {
+      return null;
+    }
 
-    return DateTime.fromMillisecondsSinceEpoch(cleared[chatId] as int);
+    final clearedAt = DateTime.fromMillisecondsSinceEpoch(cleared[chatId] as int);
+    ReleaseLogger.log('📅 [ChatPreferences] getClearedAt para $chatId: $clearedAt', tag: 'ChatPreferences');
+    return clearedAt;
   }
 
   /// Limpiar el timestamp de "chat limpiado" (restaurar historial completo)

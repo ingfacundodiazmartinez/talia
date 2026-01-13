@@ -28,6 +28,7 @@ import '../../services/local_unread_count_service.dart';
 import '../../services/notification_tracking_service.dart';
 import '../../screens/chat/widgets/recording_input_bar.dart';
 import '../../widgets/profile_photo_viewer.dart';
+import '../../services/contact_alias_service.dart';
 
 /// Chat screen for Groups V2
 ///
@@ -60,6 +61,10 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
   final RecorderController _recorderController = RecorderController();
   final ReactionService _reactionService = ReactionService();
   final FavoriteService _favoriteService = FavoriteService();
+  final ContactAliasService _aliasService = ContactAliasService();
+
+  // Cache de alias para mostrar nombres personalizados
+  final Map<String, String> _aliasCache = {};
 
   // Favorites tracking
   Set<String> _favoriteMessageIds = {};
@@ -105,6 +110,8 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
     };
 
     _controller.onMessagesChanged = (messages) {
+      // Cargar alias para usuarios que no sean yo
+      _loadAliasesForMessages(messages);
       if (mounted) setState(() {});
     };
 
@@ -169,6 +176,37 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
     _recorderController.dispose();
     _reactionOverlay?.remove();
     super.dispose();
+  }
+
+  /// Cargar alias para los remitentes de los mensajes
+  Future<void> _loadAliasesForMessages(List<GroupMessage> messages) async {
+    final currentUserId = _currentUserId;
+    if (currentUserId == null) return;
+
+    // Obtener IDs únicos de remitentes que no soy yo y que no están en cache
+    final senderIds = messages
+        .where((m) => m.senderId != currentUserId && !_aliasCache.containsKey(m.senderId))
+        .map((m) => m.senderId)
+        .toSet();
+
+    if (senderIds.isEmpty) return;
+
+    // Cargar alias para cada sender
+    for (final senderId in senderIds) {
+      final message = messages.firstWhere((m) => m.senderId == senderId);
+      final displayName = await _aliasService.getDisplayName(senderId, message.senderName);
+      _aliasCache[senderId] = displayName;
+    }
+
+    // Rebuild si se agregaron alias nuevos
+    if (mounted && senderIds.isNotEmpty) {
+      setState(() {});
+    }
+  }
+
+  /// Obtener nombre a mostrar (alias si existe, sino nombre real)
+  String _getDisplayName(String senderId, String realName) {
+    return _aliasCache[senderId] ?? realName;
   }
 
   @override
@@ -295,14 +333,13 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
 
       final imageUrl = await uploadTask.ref.getDownloadURL();
 
-      // Remove optimistic message (real one will come from stream)
-      _controller.removeOptimisticMessage(tempId);
-
-      // Send message with image
+      // Send message with image - pass localId for optimistic UI matching
+      // The optimistic message will be replaced when Firestore returns the real message
       final success = await _controller.sendMediaMessage(
         imageUrl: imageUrl,
         senderName: senderName,
         senderPhotoURL: senderPhotoURL,
+        localId: tempId, // For optimistic UI matching
       );
 
       if (!success && mounted) {
@@ -413,14 +450,13 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
 
           final audioUrl = await uploadTask.ref.getDownloadURL();
 
-          // Remove optimistic message (real one will come from stream)
-          _controller.removeOptimisticMessage(tempId);
-
-          // Send message with audio
+          // Send message with audio - pass localId for optimistic UI matching
+          // The optimistic message will be replaced when Firestore returns the real message
           final success = await _controller.sendMediaMessage(
             audioUrl: audioUrl,
             senderName: senderName,
             senderPhotoURL: senderPhotoURL,
+            localId: tempId, // For optimistic UI matching
           );
 
           if (!success && mounted) {
@@ -664,7 +700,7 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
         'id': message.replyTo!.messageId,
         'text': message.replyTo!.text,
         'senderId': message.replyTo!.senderId,
-        'senderName': message.replyTo!.senderName,
+        'senderName': _getDisplayName(message.replyTo!.senderId, message.replyTo!.senderName),
         'hasMedia': message.replyTo!.hasMedia,
       };
     }
@@ -688,7 +724,7 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
       isMe: isMe,
       time: timeString,
       senderId: message.senderId,
-      senderName: message.senderName,
+      senderName: _getDisplayName(message.senderId, message.senderName),
       timestamp: timestamp,
       isGroupChat: true,
       senderPhotoURL: message.senderPhotoURL,
@@ -711,7 +747,7 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
             'id': message.id,
             'text': message.text ?? '',
             'senderId': message.senderId,
-            'senderName': message.senderName,
+            'senderName': _getDisplayName(message.senderId, message.senderName),
             'contentType': message.contentType,
             if (message.imageUrl != null && message.imageUrl!.isNotEmpty)
               'imageUrl': message.imageUrl,

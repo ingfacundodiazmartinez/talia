@@ -184,17 +184,24 @@ class InAppPurchaseService {
         return false;
       }
 
-      // Paso 3: Verificar si es un upgrade o downgrade (Android)
-      // _existingPurchaseDetails se setea en _processPurchase cuando hay una suscripción diferente
-      if (Platform.isAndroid && _existingPurchaseDetails != null && _currentTier != null) {
-        // Determinar si es upgrade o downgrade
-        final isUpgrade = tier == SubscriptionTier.premiumPlus &&
-                          _currentTier == SubscriptionTier.premium;
-        final isDowngrade = tier == SubscriptionTier.premium &&
-                            _currentTier == SubscriptionTier.premiumPlus;
+      // Paso 3: Verificar si es un upgrade o downgrade
+      // _existingPurchaseDetails y _currentTier se setean en _processPurchase cuando hay una suscripción diferente
+      final isUpgrade = tier == SubscriptionTier.premiumPlus &&
+                        _currentTier == SubscriptionTier.premium;
+      final isDowngrade = tier == SubscriptionTier.premium &&
+                          _currentTier == SubscriptionTier.premiumPlus;
 
-        if (isUpgrade || isDowngrade) {
-          // Upgrade: prorrateo inmediato | Downgrade: diferido al siguiente ciclo
+      if (isUpgrade || isDowngrade) {
+        onPurchaseResult?.call(PurchaseResult(
+          success: false,
+          pending: true,
+          message: isUpgrade
+              ? 'Procesando mejora de plan...'
+              : 'Procesando cambio de plan...',
+        ));
+
+        // Android: usar ChangeSubscriptionParam para prorrateo correcto
+        if (Platform.isAndroid && _existingPurchaseDetails != null) {
           final replacementMode = isUpgrade
               ? ReplacementMode.withTimeProration
               : ReplacementMode.deferred;
@@ -207,26 +214,24 @@ class InAppPurchaseService {
             ),
           );
 
-          onPurchaseResult?.call(PurchaseResult(
-            success: false,
-            pending: true,
-            message: isUpgrade
-                ? 'Procesando mejora de plan...'
-                : 'Procesando cambio de plan...',
-          ));
-
           final result = await _iap.buyNonConsumable(purchaseParam: googlePlayPurchaseParam);
           _requestedTier = null;
           _existingPurchaseDetails = null;
           _currentTier = null;
           return result;
         }
+
+        // iOS: la App Store maneja upgrades/downgrades automáticamente
+        // Solo necesitamos iniciar la compra del nuevo producto
+        // iOS detectará la suscripción existente y ofrecerá el cambio
       }
 
-      // Paso 4: Nueva compra normal
+      // Paso 4: Compra normal (nueva suscripción o upgrade en iOS)
       final purchaseParam = PurchaseParam(productDetails: product);
       final result = await _iap.buyNonConsumable(purchaseParam: purchaseParam);
       _requestedTier = null;
+      _existingPurchaseDetails = null;
+      _currentTier = null;
       return result;
     } catch (e) {
       onPurchaseResult?.call(PurchaseResult(
@@ -329,10 +334,12 @@ class InAppPurchaseService {
             _hasReceivedRestoreResult = true;
           } else {
             // El tier restaurado es diferente al solicitado - es un upgrade o downgrade
-            // Guardar el purchase details y tier actual para usar en changeSubscriptionParam
+            // Guardar el tier actual para detectar upgrade/downgrade (iOS y Android)
+            _currentTier = restoredTier;
+
+            // Para Android, también guardar purchase details para ChangeSubscriptionParam
             if (Platform.isAndroid && purchase is GooglePlayPurchaseDetails) {
               _existingPurchaseDetails = purchase;
-              _currentTier = restoredTier;
             }
             // No marcar como éxito para que continúe con el cambio de plan
             break;

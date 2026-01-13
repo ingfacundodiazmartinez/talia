@@ -260,6 +260,191 @@ import Intents  // ✅ Necesario para INPerson e INImage
       }
     }
 
+    // ✅ Share Extension Cache channel para sincronizar chats
+    let shareCacheChannel = FlutterMethodChannel(name: "com.talia.chat/share_cache", binaryMessenger: controller.binaryMessenger)
+    shareCacheChannel.setMethodCallHandler { (call: FlutterMethodCall, result: @escaping FlutterResult) in
+      let appGroupId = "group.com.talia.chat"
+
+      func getSharedContainerURL() -> URL? {
+        return FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId)
+      }
+
+      if call.method == "cacheChats" {
+        // Guardar lista de chats para la Share Extension
+        guard let jsonString = call.arguments as? String else {
+          result(FlutterError(code: "INVALID_ARGS", message: "Expected JSON string", details: nil))
+          return
+        }
+
+        guard let containerURL = getSharedContainerURL() else {
+          NSLog("❌ [ShareCache] App Group container not available")
+          result(false)
+          return
+        }
+
+        let cacheURL = containerURL.appendingPathComponent("chats_cache.json")
+        do {
+          try jsonString.write(to: cacheURL, atomically: true, encoding: .utf8)
+          NSLog("✅ [ShareCache] Cached chats to App Group")
+          result(true)
+        } catch {
+          NSLog("❌ [ShareCache] Error caching chats: \(error)")
+          result(false)
+        }
+
+      } else if call.method == "getPendingShare" {
+        // Leer share pendiente desde la Share Extension
+        guard let userDefaults = UserDefaults(suiteName: appGroupId) else {
+          result(nil)
+          return
+        }
+
+        if let jsonData = userDefaults.data(forKey: "pending_share") {
+          let jsonString = String(data: jsonData, encoding: .utf8)
+          NSLog("✅ [ShareCache] Found pending share")
+          result(jsonString)
+        } else {
+          result(nil)
+        }
+
+      } else if call.method == "clearPendingShare" {
+        // Limpiar share pendiente
+        guard let userDefaults = UserDefaults(suiteName: appGroupId) else {
+          result(false)
+          return
+        }
+
+        userDefaults.removeObject(forKey: "pending_share")
+        userDefaults.synchronize()
+        NSLog("✅ [ShareCache] Cleared pending share")
+        result(true)
+
+      } else if call.method == "saveCredentials" {
+        // ✅ Guardar credenciales de Firebase en App Group
+        guard let jsonString = call.arguments as? String else {
+          NSLog("❌ [ShareCache] saveCredentials: invalid arguments")
+          result(false)
+          return
+        }
+
+        guard let containerURL = getSharedContainerURL() else {
+          NSLog("❌ [ShareCache] App Group container not available")
+          result(false)
+          return
+        }
+
+        let credentialsURL = containerURL.appendingPathComponent("firebase_credentials.json")
+        do {
+          try jsonString.write(to: credentialsURL, atomically: true, encoding: .utf8)
+          NSLog("✅ [ShareCache] Credentials saved to App Group")
+          result(true)
+        } catch {
+          NSLog("❌ [ShareCache] Error saving credentials: \(error)")
+          result(false)
+        }
+
+      } else if call.method == "clearCredentials" {
+        // ✅ Limpiar credenciales del App Group
+        guard let containerURL = getSharedContainerURL() else {
+          result(false)
+          return
+        }
+
+        let credentialsURL = containerURL.appendingPathComponent("firebase_credentials.json")
+        do {
+          try FileManager.default.removeItem(at: credentialsURL)
+          NSLog("✅ [ShareCache] Credentials cleared")
+          result(true)
+        } catch {
+          // Si no existe, también es éxito
+          NSLog("✅ [ShareCache] Credentials cleared (file didn't exist)")
+          result(true)
+        }
+
+      } else {
+        result(FlutterMethodNotImplemented)
+      }
+    }
+
+    // ✅ Shared Keychain channel para compartir credenciales con Share Extension (legacy, no longer used)
+    let sharedKeychainChannel = FlutterMethodChannel(name: "com.talia.chat/shared_keychain", binaryMessenger: controller.binaryMessenger)
+    sharedKeychainChannel.setMethodCallHandler { (call: FlutterMethodCall, result: @escaping FlutterResult) in
+      let keychainService = "com.talia.chat.shared"
+
+      func saveToKeychain(account: String, value: String) -> Bool {
+        guard let data = value.data(using: .utf8) else { return false }
+
+        // Delete existing item first
+        let deleteQuery: [String: Any] = [
+          kSecClass as String: kSecClassGenericPassword,
+          kSecAttrService as String: keychainService,
+          kSecAttrAccount as String: account,
+          kSecAttrAccessGroup as String: keychainService
+        ]
+        SecItemDelete(deleteQuery as CFDictionary)
+
+        // Add new item
+        let addQuery: [String: Any] = [
+          kSecClass as String: kSecClassGenericPassword,
+          kSecAttrService as String: keychainService,
+          kSecAttrAccount as String: account,
+          kSecValueData as String: data,
+          kSecAttrAccessGroup as String: keychainService,
+          kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+        ]
+
+        let status = SecItemAdd(addQuery as CFDictionary, nil)
+        return status == errSecSuccess
+      }
+
+      func deleteFromKeychain(account: String) -> Bool {
+        let query: [String: Any] = [
+          kSecClass as String: kSecClassGenericPassword,
+          kSecAttrService as String: keychainService,
+          kSecAttrAccount as String: account,
+          kSecAttrAccessGroup as String: keychainService
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
+      }
+
+      if call.method == "saveCredentials" {
+        guard let args = call.arguments as? [String: Any],
+              let userId = args["userId"] as? String,
+              let idToken = args["idToken"] as? String else {
+          NSLog("❌ [SharedKeychain] Invalid arguments")
+          result(false)
+          return
+        }
+
+        let userIdSaved = saveToKeychain(account: "firebase_user_id", value: userId)
+        let tokenSaved = saveToKeychain(account: "firebase_id_token", value: idToken)
+
+        if userIdSaved && tokenSaved {
+          NSLog("✅ [SharedKeychain] Credentials saved to shared Keychain")
+          result(true)
+        } else {
+          NSLog("❌ [SharedKeychain] Failed to save credentials")
+          result(false)
+        }
+
+      } else if call.method == "clearCredentials" {
+        let userIdDeleted = deleteFromKeychain(account: "firebase_user_id")
+        let tokenDeleted = deleteFromKeychain(account: "firebase_id_token")
+
+        if userIdDeleted && tokenDeleted {
+          NSLog("✅ [SharedKeychain] Credentials cleared from shared Keychain")
+          result(true)
+        } else {
+          NSLog("⚠️ [SharedKeychain] Some credentials may not have been cleared")
+          result(true) // Still return true as this is cleanup
+        }
+
+      } else {
+        result(FlutterMethodNotImplemented)
+      }
+    }
+
     // ✅ REENVIAR token VoIP guardado si existe
     if let pendingToken = self.pendingVoIPToken {
       NSLog("🔄 [VoIP] Reenviando token guardado a Flutter")

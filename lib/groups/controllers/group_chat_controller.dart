@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:uuid/uuid.dart';
 import '../models/models.dart';
@@ -39,6 +40,10 @@ class GroupChatController {
   StreamSubscription? _groupSubscription;
   StreamSubscription? _messagesSubscription;
   StreamSubscription<Map<String, Map<String, List<String>>>>? _reactionsSubscription;  // ✅ NEW
+  StreamSubscription? _deletedMessagesSubscription;  // ✅ NEW: Para eventos de eliminación
+
+  // ✅ Track message IDs that failed to mark as read (prevent infinite retry loop)
+  final Set<String> _failedMarkAsReadIds = {};
 
   // Callbacks
   Function(Group?)? onGroupChanged;
@@ -161,6 +166,9 @@ class GroupChatController {
 
       // ✅ NEW: Suscribirse al stream de reacciones
       _startListeningToReactions();
+
+      // ✅ NEW: Suscribirse a eventos de eliminación de mensajes
+      _startListeningToDeletedMessages();
     } catch (e) {
       _setError('Error inicializando chat: $e');
     } finally {
@@ -188,6 +196,76 @@ class GroupChatController {
         }
         ReleaseLogger.error('Error in reactions stream for group $groupId: $error', tag: 'GroupChatController');
       },
+    );
+  }
+
+  /// ✅ NEW: Escuchar eventos de eliminación de mensajes
+  /// Cuando otro usuario elimina un mensaje, lo marcamos como eliminado localmente
+  void _startListeningToDeletedMessages() {
+    _deletedMessagesSubscription?.cancel();
+
+    _deletedMessagesSubscription = FirebaseFirestore.instance
+        .collection('groups_v2')
+        .doc(groupId)
+        .collection('deletedMessages')
+        .snapshots()
+        .listen(
+      (snapshot) {
+        if (_isDisposed) return;
+
+        for (final change in snapshot.docChanges) {
+          if (change.type == DocumentChangeType.added) {
+            final messageId = change.doc.id;
+            _markMessageAsDeletedLocally(messageId);
+          }
+        }
+      },
+      onError: (error) {
+        if (_isDisposed || _isPermissionError(error)) {
+          _deletedMessagesSubscription?.cancel();
+          return;
+        }
+        ReleaseLogger.error(
+          'Error in deletedMessages stream: $error',
+          tag: 'GroupChatController',
+        );
+      },
+    );
+  }
+
+  /// ✅ NEW: Marcar un mensaje como eliminado en memoria y cache
+  void _markMessageAsDeletedLocally(String messageId) {
+    final index = _messages.indexWhere((m) => m.id == messageId);
+    if (index == -1) return;
+
+    final message = _messages[index];
+    if (message.isDeleted) return; // Ya está eliminado
+
+    // Crear copia con isDeleted = true
+    final deletedMessage = GroupMessage(
+      id: message.id,
+      senderId: message.senderId,
+      senderName: message.senderName,
+      senderPhotoURL: message.senderPhotoURL,
+      text: null, // Limpiar texto
+      imageUrl: null,
+      videoUrl: null,
+      audioUrl: null,
+      timestamp: message.timestamp,
+      readBy: message.readBy,
+      reactions: message.reactions,
+      replyTo: message.replyTo,
+      isDeleted: true,
+      localId: message.localId,
+    );
+
+    _messages[index] = deletedMessage;
+    _cacheService.saveMessages(groupId, [deletedMessage]);
+    onMessagesChanged?.call(messages);
+
+    ReleaseLogger.log(
+      'Message $messageId marked as deleted locally',
+      tag: 'GroupChatController',
     );
   }
 
@@ -276,13 +354,18 @@ class GroupChatController {
   }
 
   /// Automatically mark unread messages as read
+  /// ✅ FIX: Track failed IDs to prevent infinite retry loop on PERMISSION_DENIED
   Future<void> _autoMarkMessagesAsRead(List<GroupMessage> newMessages) async {
     final currentUserId = FirebaseAuth.instance.currentUser?.uid;
     if (currentUserId == null) return;
 
     // Find messages not sent by current user and not yet read by them
+    // ✅ FIX: Exclude messages that previously failed (prevent infinite loop)
     final unreadMessageIds = newMessages
-        .where((m) => m.senderId != currentUserId && !m.readBy.contains(currentUserId))
+        .where((m) =>
+            m.senderId != currentUserId &&
+            !m.readBy.contains(currentUserId) &&
+            !_failedMarkAsReadIds.contains(m.id))
         .map((m) => m.id)
         .toList();
 
@@ -297,8 +380,10 @@ class GroupChatController {
           tag: 'GroupChatController',
         );
       } catch (e) {
+        // ✅ FIX: Add failed IDs to prevent infinite retry loop
+        _failedMarkAsReadIds.addAll(unreadMessageIds);
         ReleaseLogger.error(
-          'Error auto-marking messages as read: $e',
+          'Error auto-marking messages as read (will not retry): $e',
           tag: 'GroupChatController',
         );
       }
@@ -408,6 +493,7 @@ class GroupChatController {
     String? thumbnailUrl,
     String? senderName,
     String? senderPhotoURL,
+    String? localId, // For optimistic UI matching
   }) async {
     _setSending(true);
 
@@ -422,6 +508,7 @@ class GroupChatController {
         senderName: senderName,
         senderPhotoURL: senderPhotoURL,
         replyTo: _replyingTo,
+        localId: localId,
       );
 
       if (messageId != null) {
@@ -512,20 +599,66 @@ class GroupChatController {
     }
   }
 
-  /// Delete a message
-  /// ✅ Usa nuevo servicio atómico DeleteMessageService
+  /// Delete a message for everyone
+  /// ✅ FIX: Usar deleteForEveryone que setea isDeleted: true
+  /// (deleteForMe usa deletedFor[] que GroupMessage no parsea)
+  /// ✅ FIX: También maneja "ghost messages" que solo existen en cache
+  /// ✅ FIX: Marcar como eliminado en lugar de remover (mostrar "Este mensaje fue eliminado")
   Future<bool> deleteMessage(String messageId) async {
     try {
-      final result = await _deleteMessageService.deleteForMe(
+      ReleaseLogger.log(
+        'Attempting to delete message: $messageId',
+        tag: 'GroupChatController',
+      );
+
+      final result = await _deleteMessageService.deleteForEveryone(
         chatId: groupId,
         messageId: messageId,
         isGroup: true,
       );
-      if (!result.success) {
-        _setError('Error eliminando mensaje: ${result.message}');
+
+      ReleaseLogger.log(
+        'Delete result: success=${result.success}, message=${result.message}',
+        tag: 'GroupChatController',
+      );
+
+      // ✅ FIX: Marcar como eliminado en lugar de remover
+      // Esto permite mostrar "Este mensaje fue eliminado" en la UI
+      final index = _messages.indexWhere((m) => m.id == messageId);
+      if (index != -1) {
+        final deletedMessage = _messages[index].copyWith(
+          isDeleted: true,
+          text: null,
+          imageUrl: null,
+          videoUrl: null,
+          audioUrl: null,
+        );
+        _messages[index] = deletedMessage;
+        // Actualizar cache con el mensaje marcado como eliminado
+        await _cacheService.updateMessage(groupId, deletedMessage);
+        onMessagesChanged?.call(messages);
       }
-      return result.success;
+
+      if (!result.success) {
+        // Si el mensaje no existe en Firestore pero estaba en cache,
+        // lo marcamos como eliminado y consideramos éxito
+        if (result.message == 'Mensaje no encontrado') {
+          ReleaseLogger.log(
+            'Ghost message marked as deleted: $messageId',
+            tag: 'GroupChatController',
+          );
+          return true;
+        }
+        _setError('Error eliminando mensaje: ${result.message}');
+        return false;
+      }
+
+      return true;
     } catch (e) {
+      ReleaseLogger.error(
+        'Delete exception: $e',
+        tag: 'GroupChatController',
+      );
       _setError('Error eliminando mensaje: $e');
       return false;
     }
@@ -587,5 +720,6 @@ class GroupChatController {
     _groupSubscription?.cancel();
     _messagesSubscription?.cancel();
     _reactionsSubscription?.cancel();
+    _deletedMessagesSubscription?.cancel();
   }
 }

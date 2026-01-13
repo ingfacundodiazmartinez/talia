@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:audio_waveforms/audio_waveforms.dart' hide PlayerState;
 import 'package:path_provider/path_provider.dart';
@@ -36,8 +35,7 @@ class AudioPlayerWidget extends StatefulWidget {
   State<AudioPlayerWidget> createState() => _AudioPlayerWidgetState();
 }
 
-class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
-    with TickerProviderStateMixin {
+class _AudioPlayerWidgetState extends State<AudioPlayerWidget> {
   final AudioPlayer _audioPlayer = AudioPlayer();
   final WaveformCacheService _cacheService = WaveformCacheService();
   PlayerController? _waveController;
@@ -45,7 +43,7 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
   bool _isLoading = false;
   Duration _duration = Duration.zero;
   Duration _position = Duration.zero;
-  Ticker? _ticker;
+  StreamSubscription<Duration>? _positionSubscription;
   List<double>? _waveformData; // Datos reales del waveform
 
   // Playback speed control
@@ -77,8 +75,8 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
     // Cargar la duración del audio inmediatamente
     _loadAudioDuration();
 
-    // Solo extraer waveform si no lo tenemos ya
-    if (_waveformData == null) {
+    // Solo extraer waveform si no lo tenemos ya y no se proporcionó
+    if (_waveformData == null && widget.waveformData == null) {
       _extractWaveform();
     }
 
@@ -86,6 +84,15 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
       if (mounted) {
         setState(() {
           _duration = duration;
+        });
+      }
+    });
+
+    // Escuchar cambios de posición REAL del player (no estimada)
+    _positionSubscription = _audioPlayer.onPositionChanged.listen((position) {
+      if (mounted && _isPlaying) {
+        setState(() {
+          _position = position;
         });
       }
     });
@@ -100,14 +107,12 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
           // Empezando reproducción
           _isPlaying = true;
           _isLoading = false;
-          _startProgressTimer();
           _setupProximitySensor(); // ✅ Enable proximity sensor when playing
           _enableWakeLock(); // ✅ Keep screen on during playback
           setState(() {});
         } else if (wasPlaying && !shouldPlay) {
           // Pausando/deteniendo reproducción
           _isPlaying = false;
-          _stopProgressTimer();
           _teardownProximitySensor(); // ✅ Disable proximity sensor when stopped
           _disableWakeLock(); // ✅ Allow screen to sleep
           // Obtener posición real del player cuando se pausa
@@ -128,11 +133,32 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
           _isPlaying = false;
           _position = Duration.zero;
         });
-        _stopProgressTimer();
         _teardownProximitySensor(); // ✅ Cleanup when audio completes
         _disableWakeLock();
       }
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant AudioPlayerWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    // Si la URL cambió (de local a remoto), preservar el waveform existente
+    if (oldWidget.audioUrl != widget.audioUrl) {
+      ReleaseLogger.log(
+        'Audio URL changed from ${oldWidget.isLocal ? "local" : "remote"} to ${widget.isLocal ? "local" : "remote"}',
+        tag: 'AudioPlayer',
+      );
+
+      // Recargar duración para el nuevo audio
+      _loadAudioDuration();
+
+      // NO re-extraer waveform si ya tenemos uno - preservar el existente
+      // Esto evita el cambio visual cuando el mensaje pasa de optimista a confirmado
+      if (_waveformData == null && widget.waveformData != null) {
+        _waveformData = widget.waveformData;
+      }
+    }
   }
 
   /// Setup proximity sensor for earpiece switching (like WhatsApp)
@@ -227,7 +253,7 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
 
   @override
   void dispose() {
-    _ticker?.dispose();
+    _positionSubscription?.cancel();
     _proximitySubscription?.cancel();
     _audioPlayer.dispose();
     _waveController?.dispose();
@@ -398,34 +424,6 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
     }
   }
 
-  void _startProgressTimer() {
-    _ticker?.dispose();
-
-    // Guardar posición inicial cuando empieza el ticker
-    final startPosition = _position;
-
-    _ticker = createTicker((elapsed) {
-      if (mounted) {
-        // Posición = posición inicial + (tiempo transcurrido * velocidad de reproducción)
-        final adjustedElapsed = Duration(
-          microseconds: (elapsed.inMicroseconds * _playbackSpeed).round(),
-        );
-        final newPosition = startPosition + adjustedElapsed;
-
-        setState(() {
-          _position = newPosition >= _duration ? _duration : newPosition;
-        });
-      }
-    });
-    _ticker!.start();
-  }
-
-  void _stopProgressTimer() {
-    _ticker?.stop();
-    _ticker?.dispose();
-    _ticker = null;
-  }
-
   String _formatDuration(Duration duration) {
     String twoDigits(int n) => n.toString().padLeft(2, '0');
     final minutes = twoDigits(duration.inMinutes.remainder(60));
@@ -439,13 +437,6 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
       _currentSpeedIndex = (_currentSpeedIndex + 1) % _playbackSpeeds.length;
     });
     await _audioPlayer.setPlaybackRate(_playbackSpeed);
-
-    // Restart progress timer with new speed if playing
-    if (_isPlaying) {
-      _stopProgressTimer();
-      _startProgressTimer();
-    }
-
     ReleaseLogger.log('Playback speed set to ${_playbackSpeed}x', tag: 'AudioPlayer');
   }
 
@@ -459,97 +450,86 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget>
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(8),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           // Botón play/pause o spinner
           _isLoading
-              ? Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: SizedBox(
-                    width: 24,
-                    height: 24,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      valueColor: AlwaysStoppedAnimation<Color>(
-                        widget.isMe ? Colors.white : widget.colorScheme.primary,
-                      ),
+              ? SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      widget.isMe ? Colors.white : widget.colorScheme.primary,
                     ),
                   ),
                 )
-              : IconButton(
-                  icon: Icon(
-                    _isPlaying ? Icons.pause : Icons.play_arrow,
+              : GestureDetector(
+                  onTap: _togglePlayPause,
+                  child: Icon(
+                    _isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                    size: 28,
                     color: widget.isMe ? Colors.white : widget.colorScheme.primary,
                   ),
-                  onPressed: _togglePlayPause,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
                 ),
           const SizedBox(width: 8),
-          // Barra de progreso con waveform
+          // Waveform
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                GestureDetector(
-                  onTapDown: (details) async {
-                    if (_duration.inSeconds > 0) {
-                      final box = context.findRenderObject() as RenderBox?;
-                      if (box != null) {
-                        final localPosition = box.globalToLocal(details.globalPosition);
-                        final width = box.size.width - 80; // Restar espacio del botón y padding
-                        final relativePosition = (localPosition.dx - 40) / width;
-                        final clampedPosition = relativePosition.clamp(0.0, 1.0);
-                        final seekPosition = Duration(
-                          seconds: (_duration.inSeconds * clampedPosition).round(),
-                        );
-                        await _audioPlayer.seek(seekPosition);
-                      }
-                    }
-                  },
-                  child: _AudioWaveform(
-                    progress: _duration.inMilliseconds > 0
-                        ? _position.inMilliseconds / _duration.inMilliseconds
-                        : 0.0,
-                    activeColor: widget.isMe
-                        ? Colors.white
-                        : widget.colorScheme.primary,
-                    inactiveColor: widget.isMe
-                        ? Colors.white.withValues(alpha: 0.3)
-                        : widget.colorScheme.primary.withValues(alpha: 0.3),
-                    waveformData: _waveformData, // Pasar datos reales
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Text(
-                    '${_formatDuration(_position)} / ${_formatDuration(_duration)}',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: widget.isMe
-                          ? Colors.white.withValues(alpha: 0.7)
-                          : widget.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-              ],
+            child: GestureDetector(
+              onTapDown: (details) async {
+                if (_duration.inSeconds > 0) {
+                  final box = context.findRenderObject() as RenderBox?;
+                  if (box != null) {
+                    final localPosition = box.globalToLocal(details.globalPosition);
+                    final width = box.size.width - 100;
+                    final relativePosition = (localPosition.dx - 50) / width;
+                    final clampedPosition = relativePosition.clamp(0.0, 1.0);
+                    final seekPosition = Duration(
+                      seconds: (_duration.inSeconds * clampedPosition).round(),
+                    );
+                    await _audioPlayer.seek(seekPosition);
+                  }
+                }
+              },
+              child: _AudioWaveform(
+                progress: _duration.inMilliseconds > 0
+                    ? _position.inMilliseconds / _duration.inMilliseconds
+                    : 0.0,
+                activeColor: widget.isMe
+                    ? Colors.white
+                    : widget.colorScheme.primary,
+                inactiveColor: widget.isMe
+                    ? Colors.white.withValues(alpha: 0.3)
+                    : widget.colorScheme.primary.withValues(alpha: 0.3),
+                waveformData: _waveformData,
+              ),
             ),
           ),
-          const SizedBox(width: 4),
+          const SizedBox(width: 6),
+          // Tiempo
+          Text(
+            _formatDuration(_isPlaying ? _position : _duration),
+            style: TextStyle(
+              fontSize: 11,
+              color: widget.isMe
+                  ? Colors.white.withValues(alpha: 0.8)
+                  : widget.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(width: 6),
           // Playback speed button
           GestureDetector(
             onTap: _cyclePlaybackSpeed,
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
               decoration: BoxDecoration(
                 color: widget.isMe
                     ? Colors.white.withValues(alpha: _playbackSpeed != 1.0 ? 0.3 : 0.15)
                     : widget.colorScheme.primary.withValues(alpha: _playbackSpeed != 1.0 ? 0.2 : 0.1),
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(10),
                 border: _playbackSpeed != 1.0
                     ? Border.all(
                         color: widget.isMe
@@ -630,7 +610,7 @@ class _AudioWaveform extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 32,
+      height: 24,
       child: CustomPaint(
         painter: _WaveformPainter(
           progress: progress,

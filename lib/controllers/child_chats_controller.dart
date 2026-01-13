@@ -7,6 +7,8 @@ import '../services/user_role_service.dart';
 import '../services/contact_alias_service.dart';
 import '../services/search_service.dart';
 import '../services/user_profile_cache_service.dart';
+import '../services/user_cache_service.dart';
+import '../services/share_extension_cache_service.dart';
 import '../utils/release_logger.dart';
 
 /// Controller para la pantalla de chats de un niño
@@ -71,6 +73,79 @@ class ChildChatsController extends BaseChatsController with ChangeNotifier {
   Future<void> initialize() async {
     // Placeholder para inicialización futura si es necesaria
     notifyListeners();
+  }
+
+  /// Cachear lista de chats para iOS Share Extension
+  /// Se llama cuando la lista de chats se actualiza
+  Future<void> cacheChatsForShareExtension({
+    required List<QueryDocumentSnapshot> chatDocs,
+    required List<QueryDocumentSnapshot> groups,
+  }) async {
+    try {
+      final List<CachedChatData> cachedChats = [];
+      final userCacheService = UserCacheService();
+
+      // Cachear chats individuales
+      for (final chatDoc in chatDocs) {
+        final chatData = chatDoc.data() as Map<String, dynamic>;
+        final participants = List<String>.from(chatData['participants'] ?? []);
+        final otherUserId = participants.firstWhere(
+          (id) => id != userId,
+          orElse: () => '',
+        );
+
+        if (otherUserId.isEmpty) continue;
+
+        // Obtener nombre del usuario (usa cache o Firestore)
+        final userData = await userCacheService.getUserData(otherUserId);
+        final displayName = userCacheService.getDisplayName(
+          otherUserId,
+          fallback: 'Usuario',
+        );
+
+        final lastMessageTime = chatData['lastMessageTime'] as Timestamp?;
+
+        cachedChats.add(CachedChatData(
+          id: chatDoc.id,
+          name: displayName,
+          photoURL: userData?['photoURL'] as String?,
+          isGroup: false,
+          lastMessage: chatData['lastMessage'] as String?,
+          lastMessageTime: lastMessageTime?.millisecondsSinceEpoch.toDouble(),
+        ));
+      }
+
+      // Cachear grupos
+      for (final groupDoc in groups) {
+        final groupData = groupDoc.data() as Map<String, dynamic>;
+        final lastMessageTime = groupData['lastActivity'] as Timestamp? ??
+            groupData['lastMessageTime'] as Timestamp?;
+
+        cachedChats.add(CachedChatData(
+          id: groupDoc.id,
+          name: groupData['name'] as String? ?? 'Grupo',
+          photoURL: groupData['avatar'] as String?,
+          isGroup: true,
+          lastMessage: groupData['lastMessage'] as String?,
+          lastMessageTime: lastMessageTime?.millisecondsSinceEpoch.toDouble(),
+        ));
+      }
+
+      // Ordenar por última actividad (más reciente primero)
+      cachedChats.sort((a, b) {
+        final aTime = a.lastMessageTime ?? 0;
+        final bTime = b.lastMessageTime ?? 0;
+        return bTime.compareTo(aTime);
+      });
+
+      // Enviar al servicio de cache
+      await ShareExtensionCacheService().cacheChats(cachedChats);
+    } catch (e) {
+      ReleaseLogger.error(
+        'Error caching chats for Share Extension: $e',
+        tag: 'ChildChats',
+      );
+    }
   }
 
   /// Construye la lista de items para mostrar en la UI

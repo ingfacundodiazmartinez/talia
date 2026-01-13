@@ -18,7 +18,7 @@ import 'screens/parent/parent_main_shell.dart';
 import 'screens/child/child_main_shell.dart';
 import 'screens/common/profile_completion_screen.dart';
 import 'screens/auth/two_factor_verification_screen.dart';
-import 'screens/splash_wrapper.dart';
+import 'package:flutter_native_splash/flutter_native_splash.dart';
 import 'notification_service.dart';
 import 'theme_service.dart';
 import 'services/two_factor_session_service.dart';
@@ -47,6 +47,12 @@ import 'services/ad_service.dart';
 import 'services/story_service_refactored.dart';
 import 'services/contact_photo_cache_service.dart';
 import 'services/deep_link_service.dart';
+import 'services/share_target_service.dart';
+import 'services/shared_keychain_service.dart';
+import 'screens/share_target_selection_screen.dart';
+import 'models/shared_content.dart';
+import 'services/chats/chat_orchestrator.dart';
+import 'services/chats/services/chat_messaging_service.dart';
 import 'services/chats/chat_preferences_cache.dart';
 import 'calls_v2/services/agora_engine_service.dart';
 import 'calls_v2/config/agora_config.dart';
@@ -61,7 +67,9 @@ import 'services/device_contact_name_cache.dart';
 import 'firebase_options.dart';
 
 void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+  // Preservar splash nativo hasta que la app esté lista
+  WidgetsBinding widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
+  FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
 
   // 🔍 DEBUG: Detectar TODOS los widget rebuilds
   // Descomenta para ver qué widgets se reconstruyen (⚠️ MUY RUIDOSO)
@@ -121,70 +129,15 @@ void main() async {
     ReleaseLogger.log('✅ Firebase ya estaba inicializado', tag: 'MainApp');
   }
 
-  // ✅ Cargar Agora App ID desde Firebase Remote Config
-  await AgoraConfig.initialize();
-
   // 🚨 CRITICAL: Registrar background handler DESPUÉS de Firebase.initializeApp
   // ANTES de runApp() para que funcione correctamente
-  //
-  // PROBLEMA RESUELTO: Los handlers FCM no se ejecutaban porque estaban registrados
-  // dentro de NotificationService.initialize(), pero Flutter requiere que se registren
-  // aquí en main.dart para el manejo correcto de notificaciones en background.
-  //
-  // SOLUCIÓN: firebaseMessagingBackgroundHandler ahora está definido como función
-  // top-level en notification_service.dart con @pragma('vm:entry-point')
   FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
   ReleaseLogger.log(
     '✅ Background message handler registrado en main.dart',
     tag: 'MainApp',
   );
 
-  // Ahora DashboardCacheService puede usar Hive Y Firebase (remote logger)
-  try {
-    await DashboardCacheService().initialize();
-    ReleaseLogger.log('✅ DashboardCacheService inicializado', tag: 'MainApp');
-  } catch (e) {
-    ReleaseLogger.error(
-      '❌ Error inicializando DashboardCacheService: $e',
-      tag: 'MainApp',
-    );
-  }
-
-  // ✅ Inicializar NotificationCacheService para cache local de alertas
-  try {
-    await NotificationCacheService().initialize();
-    ReleaseLogger.log('✅ NotificationCacheService inicializado', tag: 'MainApp');
-  } catch (e) {
-    ReleaseLogger.error(
-      '❌ Error inicializando NotificationCacheService: $e',
-      tag: 'MainApp',
-    );
-  }
-
-  // ✅ Inicializar LocalUnreadCountService para contadores de mensajes no leídos
-  try {
-    await LocalUnreadCountService().initialize();
-    ReleaseLogger.log('✅ LocalUnreadCountService inicializado', tag: 'MainApp');
-  } catch (e) {
-    ReleaseLogger.error(
-      '❌ Error inicializando LocalUnreadCountService: $e',
-      tag: 'MainApp',
-    );
-  }
-
-  // ✅ Inicializar ChatPreferencesCache para preferencias de chat (archived, muted)
-  try {
-    await ChatPreferencesCache().initialize();
-    ReleaseLogger.log('✅ ChatPreferencesCache inicializado', tag: 'MainApp');
-  } catch (e) {
-    ReleaseLogger.error(
-      '❌ Error inicializando ChatPreferencesCache: $e',
-      tag: 'MainApp',
-    );
-  }
-
-  // 📱 CRÍTICO: Inicializar AppStateService para detectar foreground/background
-  // Esto es esencial para manejar correctamente las notificaciones de videollamadas
+  // 📱 CRÍTICO: Inicializar AppStateService para detectar foreground/background (sync, no bloquea)
   try {
     AppStateService().initialize();
     ReleaseLogger.log('✅ AppStateService inicializado', tag: 'MainApp');
@@ -194,6 +147,33 @@ void main() async {
       tag: 'MainApp',
     );
   }
+
+  // 🚀 PERFORMANCE OPTIMIZATION: Inicializar cache services en PARALELO
+  // Todos estos servicios usan Hive (ya inicializado) y son independientes entre sí
+  ReleaseLogger.log('🚀 Inicializando cache services en paralelo...', tag: 'MainApp');
+  await Future.wait([
+    DashboardCacheService().initialize().then((_) {
+      ReleaseLogger.log('✅ DashboardCacheService inicializado', tag: 'MainApp');
+    }).catchError((e) {
+      ReleaseLogger.error('❌ Error inicializando DashboardCacheService: $e', tag: 'MainApp');
+    }),
+    NotificationCacheService().initialize().then((_) {
+      ReleaseLogger.log('✅ NotificationCacheService inicializado', tag: 'MainApp');
+    }).catchError((e) {
+      ReleaseLogger.error('❌ Error inicializando NotificationCacheService: $e', tag: 'MainApp');
+    }),
+    LocalUnreadCountService().initialize().then((_) {
+      ReleaseLogger.log('✅ LocalUnreadCountService inicializado', tag: 'MainApp');
+    }).catchError((e) {
+      ReleaseLogger.error('❌ Error inicializando LocalUnreadCountService: $e', tag: 'MainApp');
+    }),
+    ChatPreferencesCache().initialize().then((_) {
+      ReleaseLogger.log('✅ ChatPreferencesCache inicializado', tag: 'MainApp');
+    }).catchError((e) {
+      ReleaseLogger.error('❌ Error inicializando ChatPreferencesCache: $e', tag: 'MainApp');
+    }),
+  ]);
+  ReleaseLogger.log('✅ Cache services inicializados en paralelo', tag: 'MainApp');
 
   // ✅ CRÍTICO: Inicializar StoryService manualmente si el usuario ya está autenticado
   // authStateChanges() solo se dispara en CAMBIOS, no en estados existentes
@@ -554,6 +534,8 @@ void main() async {
   // 🚀 BACKGROUND INITIALIZATION: Inicializar servicios pesados después del primer render
   // Esto mejora el perceived performance significativamente
   WidgetsBinding.instance.addPostFrameCallback((_) {
+    // Remover splash nativo ahora que la UI está lista
+    FlutterNativeSplash.remove();
     _initializeHeavyServicesInBackground();
   });
 }
@@ -568,6 +550,21 @@ Future<void> _initializeHeavyServicesInBackground() async {
 
   // Paralelizar servicios pesados para máximo performance
   await Future.wait([
+    // 🎥 Agora Config (diferido - solo necesario para llamadas)
+    AgoraConfig.initialize()
+        .then((_) {
+          ReleaseLogger.log(
+            '✅ AgoraConfig inicializado en background',
+            tag: 'BackgroundInit',
+          );
+        })
+        .catchError((e) {
+          ReleaseLogger.error(
+            '❌ Error inicializando AgoraConfig: $e',
+            tag: 'BackgroundInit',
+          );
+        }),
+
     // Deep Link Service (App Links / Universal Links)
     DeepLinkService()
         .initialize()
@@ -583,6 +580,62 @@ Future<void> _initializeHeavyServicesInBackground() async {
             tag: 'BackgroundInit',
           );
         }),
+
+    // Shared Keychain Service (share Firebase credentials with Share Extension)
+    () async {
+      await SharedKeychainService().initialize();
+      ReleaseLogger.log(
+        '✅ SharedKeychainService inicializado',
+        tag: 'BackgroundInit',
+      );
+    }().catchError((e) {
+      ReleaseLogger.error(
+        '❌ Error inicializando SharedKeychainService: $e',
+        tag: 'BackgroundInit',
+      );
+    }),
+
+    // Share Target Service (receive shared content from other apps)
+    () async {
+      final shareService = ShareTargetService();
+
+      // ✅ FIX: Configurar callback para cuando llega nuevo share via stream
+      shareService.onShareReceived = (contents) async {
+        ReleaseLogger.log(
+          '📥 [ShareTarget] New share received via stream: ${contents.length} items',
+          tag: 'ShareTarget',
+        );
+
+        // Verificar si hay chats pre-seleccionados
+        final preSelectedChatIds = shareService.pendingDestinationChatIds;
+        if (preSelectedChatIds != null && preSelectedChatIds.isNotEmpty) {
+          ReleaseLogger.log(
+            '📥 [ShareTarget] Sending directly to ${preSelectedChatIds.length} pre-selected chats',
+            tag: 'ShareTarget',
+          );
+          await _sendShareDirectly(contents, preSelectedChatIds);
+          return;
+        }
+
+        // Solo navegar a pantalla si no hay chats pre-seleccionados
+        _navigateToShareScreen();
+      };
+
+      await shareService.initialize();
+
+      ReleaseLogger.log(
+        '✅ ShareTargetService inicializado en background',
+        tag: 'BackgroundInit',
+      );
+
+      // Verificar si hay contenido pendiente del iOS Share Extension
+      _checkPendingShareContent();
+    }().catchError((e) {
+      ReleaseLogger.error(
+        '❌ Error inicializando ShareTargetService: $e',
+        tag: 'BackgroundInit',
+      );
+    }),
 
     // Notification Service (FCM setup)
     NotificationService()
@@ -750,6 +803,274 @@ Future<void> _initializeHeavyServicesInBackground() async {
   );
 }
 
+/// Verifica si hay contenido pendiente del iOS Share Extension
+/// y navega a ShareTargetSelectionScreen si es necesario
+Future<void> _checkPendingShareContent() async {
+  if (!Platform.isIOS) return;
+
+  final shareService = ShareTargetService();
+  if (!shareService.hasPendingContent) return;
+
+  final pendingContent = shareService.pendingContent;
+  final preSelectedChatIds = shareService.pendingDestinationChatIds;
+
+  ReleaseLogger.log(
+    '📤 [ShareTarget] Found pending content: ${pendingContent?.length ?? 0} items, '
+    'pre-selected chats: ${preSelectedChatIds?.length ?? 0}',
+    tag: 'ShareTarget',
+  );
+
+  // Si hay chats pre-seleccionados desde el Share Extension, enviar directamente
+  if (preSelectedChatIds != null && preSelectedChatIds.isNotEmpty && pendingContent != null) {
+    ReleaseLogger.log(
+      '📤 [ShareTarget] Sending directly to ${preSelectedChatIds.length} pre-selected chats',
+      tag: 'ShareTarget',
+    );
+    // ✅ FIX: Esperar a que termine el envío antes de continuar
+    await _sendShareDirectly(pendingContent, preSelectedChatIds);
+    return;
+  }
+
+  // Si no hay chats pre-seleccionados, mostrar pantalla de selección
+  _navigateToShareScreen();
+}
+
+/// ✅ NEW: Verificar shares pendientes al volver a foreground (iOS)
+Future<void> _checkPendingShareOnResume() async {
+  try {
+    final shareService = ShareTargetService();
+
+    // Forzar refresh del contenido pendiente
+    await shareService.refreshPendingContent();
+
+    if (!shareService.hasPendingContent) return;
+
+    final pendingContent = shareService.pendingContent;
+    final preSelectedChatIds = shareService.pendingDestinationChatIds;
+
+    ReleaseLogger.log(
+      '📤 [ShareTarget] Found pending content on resume: ${pendingContent?.length ?? 0} items, '
+      'pre-selected chats: ${preSelectedChatIds?.length ?? 0}',
+      tag: 'ShareTarget',
+    );
+
+    // ✅ FIX: Si hay chats pre-seleccionados, enviar directamente (no mostrar pantalla)
+    if (preSelectedChatIds != null && preSelectedChatIds.isNotEmpty && pendingContent != null) {
+      ReleaseLogger.log(
+        '📤 [ShareTarget] Sending directly to ${preSelectedChatIds.length} pre-selected chats',
+        tag: 'ShareTarget',
+      );
+      await _sendShareDirectly(pendingContent, preSelectedChatIds);
+      return;
+    }
+
+    // Solo mostrar pantalla si NO hay chats pre-seleccionados
+    _navigateToShareScreen();
+  } catch (e) {
+    ReleaseLogger.error(
+      '📤 [ShareTarget] Error checking pending share on resume: $e',
+      tag: 'ShareTarget',
+    );
+  }
+}
+
+/// ✅ NEW: Navegar a la pantalla de share
+/// Flag para evitar múltiples pantallas
+bool _isShareScreenShowing = false;
+
+void _navigateToShareScreen() {
+  // Evitar múltiples pantallas de share
+  if (_isShareScreenShowing) {
+    ReleaseLogger.log(
+      '📤 [ShareTarget] Share screen already showing, skipping navigation',
+      tag: 'ShareTarget',
+    );
+    return;
+  }
+
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    final navigator = DeepLinkService.navigatorKey.currentState;
+    if (navigator != null) {
+      ReleaseLogger.log(
+        '📤 [ShareTarget] Navigating to ShareTargetSelectionScreen',
+        tag: 'ShareTarget',
+      );
+      _isShareScreenShowing = true;
+      navigator.push(
+        MaterialPageRoute(
+          builder: (context) => const ShareTargetSelectionScreen(),
+        ),
+      ).then((_) {
+        // Reset flag cuando se cierra la pantalla
+        _isShareScreenShowing = false;
+        ReleaseLogger.log(
+          '📤 [ShareTarget] Share screen closed',
+          tag: 'ShareTarget',
+        );
+      });
+    } else {
+      ReleaseLogger.log(
+        '📤 [ShareTarget] Navigator not available, will retry',
+        tag: 'ShareTarget',
+      );
+    }
+  });
+}
+
+/// Enviar contenido compartido directamente a los chats pre-seleccionados
+/// ✅ OPTIMISTIC: Muestra feedback inmediato y envía en background
+Future<void> _sendShareDirectly(
+  List<SharedContent> content,
+  List<String> chatIds,
+) async {
+  final shareService = ShareTargetService();
+
+  // ✅ OPTIMISTIC: Mostrar feedback inmediato ANTES de empezar el envío
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    final context = DeepLinkService.navigatorKey.currentContext;
+    if (context != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text('Enviando a ${chatIds.length} chat${chatIds.length > 1 ? 's' : ''}...'),
+            ],
+          ),
+          backgroundColor: Colors.blue,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  });
+
+  // Limpiar contenido pendiente inmediatamente para evitar re-procesamiento
+  shareService.clearPendingContent();
+
+  // ✅ OPTIMISTIC: Enviar en background sin bloquear
+  _sendShareInBackground(content, chatIds);
+}
+
+/// Envía el contenido compartido en background
+/// Se ejecuta de forma asíncrona sin bloquear el UI
+Future<void> _sendShareInBackground(
+  List<SharedContent> content,
+  List<String> chatIds,
+) async {
+  try {
+    final chatOrchestrator = ChatOrchestrator();
+    final shareService = ShareTargetService();
+    int successCount = 0;
+    int totalItems = content.length * chatIds.length;
+
+    for (final chatId in chatIds) {
+      for (final item in content) {
+        try {
+          if (item.isMedia && item.mediaPath != null) {
+            // Copiar archivo a ubicación accesible
+            final copiedPath = await shareService.copyToTempDirectory(item.mediaPath!);
+            if (copiedPath == null) {
+              ReleaseLogger.error(
+                '📤 [ShareTarget] Failed to copy file: ${item.mediaPath}',
+                tag: 'ShareTarget',
+              );
+              continue;
+            }
+
+            final messageType = item.type == SharedContentType.image
+                ? MessageType.image
+                : MessageType.video;
+
+            // ✅ El sendMessage ya es optimista internamente
+            // El mensaje aparece inmediatamente en el cache del chat
+            await chatOrchestrator.sendMessage(
+              chatId: chatId,
+              content: item.text ?? '',
+              type: messageType,
+              mediaPath: copiedPath,
+            );
+
+            successCount++;
+            ReleaseLogger.log(
+              '📤 [ShareTarget] Sent ${item.type.name} to chat $chatId',
+              tag: 'ShareTarget',
+            );
+          } else if (item.isText && item.text != null) {
+            await chatOrchestrator.sendMessage(
+              chatId: chatId,
+              content: item.text!,
+              type: MessageType.text,
+            );
+            successCount++;
+          } else if (item.isUrl && item.url != null) {
+            await chatOrchestrator.sendMessage(
+              chatId: chatId,
+              content: item.url!,
+              type: MessageType.text,
+            );
+            successCount++;
+          }
+        } catch (itemError) {
+          ReleaseLogger.error(
+            '📤 [ShareTarget] Error sending item: $itemError',
+            tag: 'ShareTarget',
+          );
+        }
+      }
+    }
+
+    ReleaseLogger.log(
+      '📤 [ShareTarget] Background send complete: $successCount/$totalItems',
+      tag: 'ShareTarget',
+    );
+
+    // Mostrar resultado final
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final context = DeepLinkService.navigatorKey.currentContext;
+      if (context != null) {
+        final isSuccess = successCount > 0;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              isSuccess
+                ? '✓ Enviado correctamente'
+                : 'Error al enviar contenido',
+            ),
+            backgroundColor: isSuccess ? Colors.green : Colors.red,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    });
+  } catch (e) {
+    ReleaseLogger.error(
+      '📤 [ShareTarget] Error in background send: $e',
+      tag: 'ShareTarget',
+    );
+
+    // Mostrar error
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final context = DeepLinkService.navigatorKey.currentContext;
+      if (context != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Error al enviar contenido'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    });
+  }
+}
+
 class TaliaApp extends StatefulWidget {
   const TaliaApp({super.key});
 
@@ -778,6 +1099,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
     // Procesar deep links pendientes después del primer frame
     WidgetsBinding.instance.addPostFrameCallback((_) {
       DeepLinkService().processPendingStory();
+      DeepLinkService().processPendingShare();
     });
   }
 
@@ -943,6 +1265,12 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
       }).catchError((e) {
         ReleaseLogger.error('⚠️ Error refreshing story stream: $e', tag: 'AppLifecycle');
       });
+
+      // ✅ FIX: Verificar nuevos shares pendientes en iOS App Group
+      // Esto maneja el caso donde el usuario compartió algo mientras la app estaba en background
+      if (Platform.isIOS) {
+        _checkPendingShareOnResume();
+      }
     } else if (state == AppLifecycleState.paused ||
                state == AppLifecycleState.inactive) {
       // ✅ AGORA WATCHDOG: Notificar que la app va a background
@@ -1167,7 +1495,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
               ),
             );
           },
-          home: const SplashWrapper(nextScreen: AuthWrapper()),
+          home: const AuthWrapper(),
           onGenerateRoute: (settings) {
             // Rutas dinámicas removidas - moderación se maneja directamente desde whitelist
             return null;

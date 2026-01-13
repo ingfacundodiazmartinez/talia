@@ -29,14 +29,6 @@
 				<string>Editor</string>
 				<key>CFBundleURLSchemes</key>
 				<array>
-					<string>smartconvo</string>
-				</array>
-			</dict>
-			<dict>
-				<key>CFBundleTypeRole</key>
-				<string>Editor</string>
-				<key>CFBundleURLSchemes</key>
-				<array>
 					<string>app-1-858375352661-ios-cfdb7fe8506f903361bfdc</string>
 				</array>
 			</dict>
@@ -92,7 +84,9 @@
 		<key>NSCameraUsageDescription</key>
 		<string>Esta aplicación necesita acceso a la cámara para crear historias con filtros AR, tomar fotos y hacer videollamadas.</string>
 		<key>NSMicrophoneUsageDescription</key>
-		<string>Esta aplicación necesita acceso al micrófono para hacer videollamadas con tus contactos.</string>
+		<string>Esta aplicación necesita acceso al micrófono para grabar mensajes de voz y hacer videollamadas.</string>
+		<key>NSSpeechRecognitionUsageDescription</key>
+		<string>Esta aplicación usa reconocimiento de voz para transcribir mensajes de audio y mejorar la seguridad.</string>
 		<key>NSPhotoLibraryUsageDescription</key>
 		<string>Esta aplicación necesita acceso a la galería de fotos para seleccionar imágenes de perfil.</string>
 		<key>NSContactsUsageDescription</key>

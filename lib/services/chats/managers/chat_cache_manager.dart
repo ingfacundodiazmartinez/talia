@@ -252,6 +252,18 @@ class ChatCacheManager {
     _notifyChangesForChat(chatId);
   }
 
+  /// ✅ NEW: Actualizar mensaje completo en cache (para eliminación, etc.)
+  void updateMessageInCache(String chatId, ChatMessage updatedMessage) {
+    final messages = _messageCache[chatId];
+    if (messages != null) {
+      final index = messages.indexWhere((m) => m.id == updatedMessage.id);
+      if (index != -1) {
+        messages[index] = updatedMessage;
+        _notifyChangesForChat(chatId);
+      }
+    }
+  }
+
   /// Remover mensaje específico del cache
   void removeMessage(String chatId, String messageId) {
     // Remover del cache principal

@@ -194,6 +194,7 @@ class ChatOrchestrator {
     String? mediaPath,
     Map<String, dynamic>? replyTo,  // ✅ FIX: Cambiar de replyToId a replyTo completo
     Map<String, dynamic>? metadata,
+    bool isGroup = false,  // ✅ FIX: Agregar parámetro isGroup
     Function(String messageId, double progress)? onProgressUpdate,
   }) async {
     return await _messagingService.sendMessage(
@@ -203,6 +204,7 @@ class ChatOrchestrator {
       mediaPath: mediaPath,
       replyTo: replyTo,  // ✅ FIX: Pasar replyTo completo
       metadata: metadata,
+      isGroup: isGroup,  // ✅ FIX: Pasar isGroup al servicio
       onProgressUpdate: onProgressUpdate,
     );
   }

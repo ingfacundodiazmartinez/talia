@@ -67,8 +67,7 @@ class ChatStreamManager {
   final Map<String, DateTime> _lastUpdateTimes = {};
   static const Duration _rateLimitDuration = Duration(milliseconds: 500);
 
-  // Track previous readBy[] state to detect read receipt changes
-  final Map<String, Map<String, List<String>>> _previousReadByState = {};
+  // ✅ REMOVED: _previousReadByState - V2 usa lastOpenedAt del chat doc en lugar de readBy[]
 
   // ✅ FIX DUPLICATES: Track last emitted message IDs to prevent duplicate emissions
   final Map<String, Set<String>> _lastEmittedMessageIds = {};
@@ -81,6 +80,7 @@ class ChatStreamManager {
 
   // ✅ V2: Subscripciones a chat documents para detectar cambios en lastOpenedAt
   final Map<String, StreamSubscription<DocumentSnapshot>> _chatDocSubscriptions = {};
+  final Map<String, StreamSubscription<QuerySnapshot>> _deletedMessagesSubscriptions = {};
 
   // ✅ NUEVO: Cache de SharedPreferences para evitar delays de I/O (2-5 segundos)
   SharedPreferences? _prefsCache;
@@ -190,6 +190,10 @@ class ChatStreamManager {
     final currentUserId = FirebaseAuth.instance.currentUser?.uid;
     ReleaseLogger.log('⚙️ [_setupMessageStream] currentUserId: ${currentUserId?.substring(0, 8)}...');
     final clearedAt = await _getClearedAtCached(chatId, currentUserId, isGroup);
+    ReleaseLogger.log('⚙️ [_setupMessageStream] clearedAt para $chatId: ${clearedAt?.toDate()}');
+
+    // ✅ FIX: Guardar clearedAt para filtrado adicional en el listener
+    final clearedAtForFilter = clearedAt;
 
     final firestoreStream = _messageRepository.watchMessages(
       chatId: chatId,
@@ -224,8 +228,20 @@ class ChatStreamManager {
               })
               .toList();
 
+          // ✅ FIX: Filtrar mensajes anteriores a clearedAt (respaldo de seguridad)
+          if (clearedAtForFilter != null) {
+            final beforeFilter = messages.length;
+            messages = messages.where((msg) {
+              if (msg.timestamp == null) return true; // Mensajes pending siempre incluir
+              return msg.timestamp!.compareTo(clearedAtForFilter) > 0;
+            }).toList();
+            if (beforeFilter != messages.length) {
+              ReleaseLogger.log('🔒 [MessageStream] Filtrados ${beforeFilter - messages.length} mensajes anteriores a clearedAt para $chatId');
+            }
+          }
+
           // ✅ V2 ARCHITECTURE: Recalcular status de mensajes propios usando timestamps del chat doc
-          // Solo para chats 1-1 (grupos mantienen lógica de readBy[])
+          // Solo para chats 1-1 (grupos usan GroupMessage con lógica propia)
           if (!isGroup && currentUserId != null) {
             final recipientTimestamps = await _getRecipientTimestamps(chatId, currentUserId);
 
@@ -338,6 +354,9 @@ class ChatStreamManager {
     if (!isGroup) {
       _setupChatDocListener(chatId, controller);
     }
+
+    // ✅ NEW: Escuchar eventos de eliminación de mensajes
+    _setupDeletedMessagesListener(chatId, isGroup: isGroup);
   }
 
   /// ✅ V2: Configurar listener para el chat document
@@ -469,6 +488,73 @@ class ChatStreamManager {
     _chatDocSubscriptions[chatId] = subscription;
   }
 
+  /// ✅ NEW: Configurar listener para eventos de eliminación de mensajes
+  /// Cuando otro usuario elimina un mensaje, lo marcamos como eliminado localmente
+  void _setupDeletedMessagesListener(String chatId, {bool isGroup = false}) {
+    // Cancelar subscription anterior si existe
+    _deletedMessagesSubscriptions[chatId]?.cancel();
+
+    final collection = isGroup ? 'groups_v2' : 'chats';
+
+    final deletedMessagesStream = FirebaseFirestore.instance
+        .collection(collection)
+        .doc(chatId)
+        .collection('deletedMessages')
+        .snapshots();
+
+    final subscription = deletedMessagesStream.listen(
+      (snapshot) {
+        for (final change in snapshot.docChanges) {
+          if (change.type == DocumentChangeType.added) {
+            final messageId = change.doc.id;
+            _markMessageAsDeletedInCache(chatId, messageId);
+          }
+        }
+      },
+      onError: (error) {
+        ReleaseLogger.error('❌ Error en deletedMessages listener para $chatId: $error');
+      },
+    );
+
+    _deletedMessagesSubscriptions[chatId] = subscription;
+  }
+
+  /// ✅ NEW: Marcar un mensaje como eliminado en cache
+  Future<void> _markMessageAsDeletedInCache(String chatId, String messageId) async {
+    // 1. Actualizar en Hive cache
+    final messageCacheService = MessageCacheService();
+    final cachedMessages = await messageCacheService.getMessages(chatId);
+
+    final index = cachedMessages.indexWhere((m) => m.id == messageId);
+    if (index == -1) return; // Mensaje no está en cache
+
+    final message = cachedMessages[index];
+    if (message.isDeletedForEveryone) return; // Ya está eliminado
+
+    // Crear copia con isDeletedForEveryone = true
+    final deletedMessage = message.copyWith(
+      isDeletedForEveryone: true,
+      text: null,
+      imageUrl: null,
+      videoUrl: null,
+      audioUrl: null,
+    );
+
+    cachedMessages[index] = deletedMessage;
+    await messageCacheService.saveMessages(chatId, cachedMessages);
+
+    // 2. Actualizar en memoria cache y notificar
+    _cacheManager.updateMessageInCache(chatId, deletedMessage);
+
+    // 3. Notificar a listeners
+    _cacheChangeControllers[chatId]?.add(null);
+
+    ReleaseLogger.log(
+      '🗑️ Mensaje $messageId marcado como eliminado en cache de chat $chatId',
+      tag: 'ChatStreamManager',
+    );
+  }
+
   /// Verificar si debemos aplicar rate limiting
   bool _shouldRateLimit(String chatId) {
     final lastUpdate = _lastUpdateTimes[chatId];
@@ -478,52 +564,7 @@ class ChatStreamManager {
     return timeSinceLastUpdate < _rateLimitDuration;
   }
 
-  /// Detectar si hay cambios en readBy[] arrays comparado con el snapshot anterior
-  bool _hasReadByChanges(String chatId, QuerySnapshot snapshot) {
-    try {
-      // Construir map del estado actual: messageId -> readBy[]
-      final currentState = <String, List<String>>{};
-      for (final doc in snapshot.docs) {
-        final data = doc.data() as Map<String, dynamic>?;
-        if (data != null) {
-          final readBy = List<String>.from(data['readBy'] ?? []);
-          currentState[doc.id] = readBy;
-        }
-      }
-
-      // Si no tenemos estado previo, guardar el actual y retornar false (primera vez)
-      if (!_previousReadByState.containsKey(chatId)) {
-        _previousReadByState[chatId] = currentState;
-        return false;
-      }
-
-      // Comparar con estado previo
-      final previousState = _previousReadByState[chatId]!;
-      bool hasChanges = false;
-
-      // Verificar cada mensaje
-      for (final messageId in currentState.keys) {
-        final currentReadBy = currentState[messageId]!;
-        final previousReadBy = previousState[messageId] ?? [];
-
-        // Si las listas son diferentes, hay cambios
-        if (currentReadBy.length != previousReadBy.length ||
-            !currentReadBy.every((userId) => previousReadBy.contains(userId))) {
-          ReleaseLogger.log('📧 [ReadByChange] Mensaje $messageId: ${previousReadBy.length} -> ${currentReadBy.length} usuarios');
-          hasChanges = true;
-        }
-      }
-
-      // Actualizar estado previo
-      _previousReadByState[chatId] = currentState;
-
-      return hasChanges;
-    } catch (e) {
-      ReleaseLogger.error('❌ Error detectando cambios en readBy[]: $e');
-      // En caso de error, asumir que hay cambios para no bloquear actualizaciones
-      return true;
-    }
-  }
+  // ✅ REMOVED: _hasReadByChanges - V2 usa listener del chat doc para detectar cambios en lastOpenedAt
 
   // ═══════════════════════════════════════════════════════════════
   // STREAM MANAGEMENT - CHAT LIST
@@ -890,9 +931,17 @@ class ChatStreamManager {
       final lastMessage = chatData['lastMessage'] as String? ?? '';
       final lastMessageType = chatData['lastMessageType'] as String?;
 
-      // ✅ FIX: Filtrar mensajes de llamada
+      // ✅ FIX: Filtrar mensajes especiales
+      // - deleted: NO mostrar notificación (mensaje eliminado)
       // - answered_call: NO mostrar notificación (la llamada se concretó, no es necesario)
       // - missed_call: Solo mostrar al RECEPTOR (senderId es el caller)
+      if (lastMessageType == 'deleted') {
+        ReleaseLogger.log(
+          '⏭️ [StreamDetector] Mensaje eliminado - NO mostrar notificación',
+        );
+        return;
+      }
+
       if (lastMessageType == 'answered_call') {
         ReleaseLogger.log(
           '⏭️ [StreamDetector] Llamada contestada - NO mostrar notificación',
@@ -1126,12 +1175,18 @@ class ChatStreamManager {
 
     _chatIsGroupMap.remove(chatId);
     _lastUpdateTimes.remove(chatId);
-    _previousReadByState.remove(chatId); // ✅ Cleanup readBy[] state
     _lastEmittedMessageIds.remove(chatId); // ✅ Cleanup emitted message IDs
     _recipientTimestampsCache.remove(chatId); // ✅ V2: Cleanup recipient timestamps
     _chatDocSubscriptions[chatId]?.cancel(); // ✅ V2: Cleanup chat doc listener
     _chatDocSubscriptions.remove(chatId);
+    _deletedMessagesSubscriptions[chatId]?.cancel(); // ✅ NEW: Cleanup deletedMessages listener
+    _deletedMessagesSubscriptions.remove(chatId);
     _activeStreamCount = _messageControllers.length;
+
+    // ✅ FIX: Limpiar cache en memoria para evitar que mensajes viejos reaparezcan
+    // cuando se hace clearChat y luego llega un nuevo mensaje
+    _cacheManager.invalidateChatCache(chatId);
+    ReleaseLogger.log('🗑️ [closeChatStream] Cache invalidado para chat $chatId');
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -1189,23 +1244,11 @@ class ChatStreamManager {
         return; // No necesitamos calcular contador ni mostrar notificación
       }
 
-      // ✅ PASO 2: Contar cuántos de los mensajes recibidos NO están leídos
-      int newUnreadMessages = 0;
-      for (final receivedMessage in receivedMessages) {
-        final readBy = receivedMessage.readBy ?? [];
-        final isRead = readBy.contains(currentUserId);
-
-        if (!isRead) {
-          newUnreadMessages++;
-        }
-      }
-
-      ReleaseLogger.log('📊 [ChatStreamManager] Detectados $newUnreadMessages mensajes no leídos nuevos en ${isGroup ? 'grupo' : 'chat'} $chatId');
-
-      // ✅ NOTA: El incremento del unread count se hace en _fetchAndShowLatestMessage
-      // (ChatDocsListener) para evitar duplicados. Este listener de mensajes
-      // solo se usa para tracking interno.
-      ReleaseLogger.log('📊 [ChatStreamManager] Detectados $newUnreadMessages mensajes nuevos (increment en ChatDocsListener)');
+      // ✅ V2: El conteo de no leídos se hace comparando timestamps con lastOpenedAt
+      // El contador real se maneja en ChatDocsListener (_fetchAndShowLatestMessage)
+      // Aquí solo hacemos logging para debug
+      final newUnreadMessages = receivedMessages.length;
+      ReleaseLogger.log('📊 [ChatStreamManager] Detectados $newUnreadMessages mensajes nuevos en ${isGroup ? 'grupo' : 'chat'} $chatId (contador en ChatDocsListener)');
 
       // ⚡ NOTIFICACIÓN INSTANTÁNEA: Mostrar notificación local para el mensaje más reciente
       // Esto evita el delay de 2-5 segundos de las Cloud Functions
@@ -1246,8 +1289,7 @@ class ChatStreamManager {
   // ✅ SIMPLIFICADO: El ChatController ahora es el único responsable de marcar mensajes como leídos
   // Esto evita duplicación y respeta correctamente la configuración de privacidad del usuario
 
-  // ✅ FUNCIÓN ELIMINADA: Ya no necesitamos consultar Firestore por cada mensaje
-  // El conteo de no leídos ahora se hace directamente sobre el cache usando readBy[]
+  // ✅ V2: El conteo de no leídos se maneja en ChatDocsListener usando timestamps
 
   /// Actualizar contador de no leídos en Firestore
   Future<void> _updateUnreadCountInFirestore(String chatId, String userId, int unreadCount, {bool isGroup = false}) async {
@@ -1427,16 +1469,6 @@ class ChatStreamManager {
       _processedMessageIds = _processedMessageIds.skip(toRemove).toSet();
     }
 
-    // Limpiar _previousReadByState si excede el límite
-    if (_previousReadByState.length > _maxCacheEntries) {
-      final keysToRemove = _previousReadByState.keys
-          .take(_previousReadByState.length - _maxCacheEntries)
-          .toList();
-      for (final key in keysToRemove) {
-        _previousReadByState.remove(key);
-      }
-    }
-
     // Limpiar _clearedAtCache si excede el límite
     if (_clearedAtCache.length > _maxCacheEntries) {
       final keysToRemove = _clearedAtCache.keys
@@ -1478,26 +1510,53 @@ class ChatStreamManager {
     try {
       ReleaseLogger.log('📥 [Prefetch] Iniciando pre-carga de mensajes para ${isGroup ? "grupo" : "chat"} $chatId');
 
+      final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+
+      // ✅ FIX: Obtener clearedAt para respetar el chat limpiado
+      final clearedAt = ChatPreferencesCache().getClearedAt(chatId);
+      if (clearedAt != null) {
+        ReleaseLogger.log('📥 [Prefetch] clearedAt encontrado para $chatId: $clearedAt - filtrando mensajes');
+      }
+
       final messagesCollection = isGroup ? 'groups_v2/$chatId/messages' : 'chats/$chatId/messages';
 
       // Obtener los últimos N mensajes ordenados por timestamp
-      final snapshot = await FirebaseFirestore.instance
+      Query<Map<String, dynamic>> query = FirebaseFirestore.instance
           .collection(messagesCollection)
           .orderBy('timestamp', descending: true)
-          .limit(limit)
-          .get();
+          .limit(limit);
+
+      // ✅ FIX: Aplicar filtro de clearedAt en la query de Firestore
+      if (clearedAt != null) {
+        query = query.where(
+          'timestamp',
+          isGreaterThan: Timestamp.fromDate(clearedAt),
+        );
+      }
+
+      final snapshot = await query.get();
 
       if (snapshot.docs.isEmpty) {
-        ReleaseLogger.log('📥 [Prefetch] No hay mensajes para $chatId');
+        ReleaseLogger.log('📥 [Prefetch] No hay mensajes para $chatId${clearedAt != null ? " después de clearedAt" : ""}');
         return;
       }
 
-      final currentUserId = FirebaseAuth.instance.currentUser?.uid;
-
       // Convertir a ChatMessage
-      final messages = snapshot.docs
+      var messages = snapshot.docs
           .map((doc) => ChatMessage.fromFirestore(doc, currentUserId: currentUserId))
           .toList();
+
+      // ✅ FIX: Doble filtrado de seguridad (por si Firestore no aplicó bien el filtro)
+      if (clearedAt != null) {
+        final beforeFilter = messages.length;
+        messages = messages.where((msg) {
+          if (msg.timestamp == null) return true; // Mensajes pending siempre incluir
+          return msg.timestamp!.toDate().isAfter(clearedAt);
+        }).toList();
+        if (beforeFilter != messages.length) {
+          ReleaseLogger.log('📥 [Prefetch] Filtrados ${beforeFilter - messages.length} mensajes anteriores a clearedAt');
+        }
+      }
 
       // Guardar en Hive cache
       await MessageCacheService().saveMessages(chatId, messages);
@@ -1685,7 +1744,6 @@ class ChatStreamManager {
     _lastUpdateTimes.clear();
     _clearedAtCache.clear();
     _recipientTimestampsCache.clear(); // ✅ V2: Cleanup recipient timestamps
-    _previousReadByState.clear();
     _processedMessageIds.clear();
     _lastEmittedMessageIds.clear(); // ✅ Cleanup emitted message IDs
     _chatsModifiedInBackground.clear(); // ✅ Cleanup prefetch tracking
@@ -1695,6 +1753,12 @@ class ChatStreamManager {
       sub.cancel();
     }
     _chatDocSubscriptions.clear();
+
+    // ✅ NEW: Cancelar todas las subscripciones de deletedMessages
+    for (final sub in _deletedMessagesSubscriptions.values) {
+      sub.cancel();
+    }
+    _deletedMessagesSubscriptions.clear();
 
     _prefsCache = null;
     _cachedCurrentChatId = null;

@@ -4,6 +4,7 @@ const { initializeApp, getApps } = require('firebase-admin/app');
 const { getFirestore, FieldValue, Timestamp } = require('firebase-admin/firestore');
 const { getStorage } = require('firebase-admin/storage');
 const DOMPurify = require('isomorphic-dompurify');
+const { _moderateMultimediaInternal, _checkUserPremiumPlus } = require('./moderation');
 
 // Inicializar Firebase Admin SDK
 if (!getApps().length) {
@@ -436,6 +437,40 @@ exports.createStory = onCall({
     const userData = userDoc.data();
     const now = new Date();
     const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000); // 24 horas
+
+    // 4.5 MULTIMEDIA MODERATION (Auto-enabled for Premium+)
+    // If user is Premium+, multimedia moderation is automatically included - no separate toggle needed.
+    let multimediaModerationResult = null;
+    const { isPremiumPlus } = await _checkUserPremiumPlus(auth.uid);
+
+    if (isPremiumPlus) {
+      console.log(`🖼️ [CreateStory] User is Premium+ - running multimedia moderation for ${mediaType}...`);
+
+      try {
+        multimediaModerationResult = await _moderateMultimediaInternal(
+          mediaUrl,
+          mediaType,
+          caption, // Use caption as extracted text for images
+          'high' // Default to high level for stories
+        );
+
+        if (multimediaModerationResult.flagged) {
+          console.log(`🚫 [CreateStory] Content blocked: ${multimediaModerationResult.reason}`);
+          throw new HttpsError(
+            'failed-precondition',
+            `Contenido bloqueado: ${multimediaModerationResult.reason || 'Contenido inapropiado detectado'}`
+          );
+        }
+
+        console.log(`✅ [CreateStory] Multimedia approved (severity: ${multimediaModerationResult.severity})`);
+      } catch (error) {
+        if (error.code === 'failed-precondition') {
+          throw error; // Re-throw blocking errors
+        }
+        console.error(`⚠️ [CreateStory] Multimedia moderation error (allowing):`, error.message);
+        // On non-blocking errors, allow story creation
+      }
+    }
 
     // 5. Determinar estado inicial
     let initialStatus;

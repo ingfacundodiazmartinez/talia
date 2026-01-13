@@ -372,7 +372,8 @@ class ChatControllerCacheFirst extends ChangeNotifier {
     _messagesSubscription = _orchestrator.getMessagesStream(chatId).listen(
       (messages) {
         ReleaseLogger.log('Received ${messages.length} messages from cache for chat $chatId');
-        _messages = messages;
+        // ✅ FIX: Merge with locally deleted messages to preserve isDeletedForEveryone state
+        _messages = _mergeWithLocalDeletedState(messages);
         // ✅ FIX: Mark loading as done when first messages arrive
         if (_isLoading) {
           _isLoading = false;
@@ -388,6 +389,34 @@ class ChatControllerCacheFirst extends ChangeNotifier {
         }
       },
     );
+  }
+
+  /// ✅ Merge incoming messages with locally deleted state
+  /// Preserva el estado isDeletedForEveryone de mensajes marcados localmente
+  /// para evitar que el stream pise el estado de eliminación antes de que
+  /// Firestore propague el cambio
+  List<ChatMessage> _mergeWithLocalDeletedState(List<ChatMessage> incomingMessages) {
+    // Build a map of locally deleted message IDs
+    final locallyDeletedIds = <String>{};
+    for (final msg in _messages) {
+      if (msg.isDeletedForEveryone) {
+        locallyDeletedIds.add(msg.id);
+      }
+    }
+
+    // If no locally deleted messages, just return incoming
+    if (locallyDeletedIds.isEmpty) {
+      return incomingMessages;
+    }
+
+    // Merge: preserve isDeletedForEveryone for locally deleted messages
+    return incomingMessages.map((msg) {
+      if (locallyDeletedIds.contains(msg.id) && !msg.isDeletedForEveryone) {
+        // Incoming message doesn't have deleted flag but we deleted it locally
+        return msg.copyWith(isDeletedForEveryone: true);
+      }
+      return msg;
+    }).toList();
   }
 
   /// Get messages stream for UI (CACHE-FIRST)
@@ -723,14 +752,25 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   }
 
   /// Process and upload audio in background
-  Future<void> processAndUploadAudio(String audioPath, {bool isAiGenerated = false}) async {
+  ///
+  /// [transcription] - Transcripción local del audio (gratis, usando STT del dispositivo)
+  /// Se envía al servidor para moderación en lugar de usar APIs de pago como Whisper
+  Future<void> processAndUploadAudio(String audioPath, {bool isAiGenerated = false, String? transcription}) async {
     try {
+      // Construir metadata con transcripción si está disponible
+      final Map<String, dynamic> metadata = {};
+      if (isAiGenerated) metadata['isAiGenerated'] = true;
+      if (transcription != null && transcription.isNotEmpty) {
+        metadata['transcription'] = transcription;
+        ReleaseLogger.log('📝 Enviando audio con transcripción local', tag: 'Audio');
+      }
+
       await _orchestrator.sendMessage(
         chatId: chatId,
         content: '', // Audio messages don't need text content
         type: MessageType.audio,
         mediaPath: audioPath,
-        metadata: isAiGenerated ? {'isAiGenerated': true} : null,
+        metadata: metadata.isNotEmpty ? metadata : null,
       );
 
       // Remove from pending messages
@@ -925,33 +965,43 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   // MESSAGE MANAGEMENT
   // ═══════════════════════════════════════════════════════════════
 
-  /// Delete a message (optimistic delete)
-  /// ✅ Usa nuevo servicio atómico DeleteMessageService
+  /// Delete a message for everyone
+  /// ✅ Usa deleteForEveryone que crea evento de eliminación para sincronizar cache
+  /// Restricciones: Solo el sender puede eliminar, dentro de 10 minutos
   Future<bool> deleteMessage(String messageId, Timestamp? timestamp) async {
     ReleaseLogger.log('Deleting message $messageId from chat $chatId');
 
-    // 1. ✅ Optimistic: Remove from UI immediately
-    _messages.removeWhere((m) => m.id == messageId);
-    _pendingMessages.removeWhere((m) => m.id == messageId);
-    notifyListeners();
-
-    // 2. ✅ Remove from local cache
-    await MessageCacheService().deleteMessage(chatId, messageId);
-
     try {
-      // 3. ✅ Delete using new atomic service
-      final result = await _deleteMessageService.deleteForMe(
+      // 1. ✅ Delete using atomic service (creates deletion event)
+      final result = await _deleteMessageService.deleteForEveryone(
         chatId: chatId,
         messageId: messageId,
         isGroup: isGroup,
       );
 
       if (result.success) {
+        // 2. ✅ Marcar como eliminado localmente (no remover, mostrar "Mensaje eliminado")
+        final index = _messages.indexWhere((m) => m.id == messageId);
+        if (index != -1) {
+          _messages[index] = _messages[index].copyWith(
+            isDeletedForEveryone: true,
+            text: null,
+            imageUrl: null,
+            videoUrl: null,
+            audioUrl: null,
+          );
+          notifyListeners();
+        }
+
+        // 3. ✅ Actualizar cache
+        await MessageCacheService().saveMessages(chatId, _messages);
+
         ReleaseLogger.log('Message $messageId deleted successfully');
+        return true;
       } else {
         ReleaseLogger.error('Failed to delete message: ${result.message}');
+        return false;
       }
-      return result.success;
     } catch (e) {
       ReleaseLogger.error('Failed to delete message $messageId: $e');
       return false;

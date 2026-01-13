@@ -11,6 +11,7 @@ import '../services/reaction_service.dart';
 import '../services/local_unread_count_service.dart';
 import '../services/notification_tracking_service.dart';
 import '../services/user_cache_service.dart';
+import '../services/speech_to_text_service.dart';
 import '../calls_v2/screens/agora_call_screen.dart';
 import '../widgets/reaction_picker.dart';
 import 'chat/widgets/chat_app_bar.dart';
@@ -63,7 +64,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   final RecorderController _recorderController = RecorderController();
   final ReactionService _reactionService = ReactionService();
   final UserCacheService _userCacheService = UserCacheService();
+  final SpeechToTextService _sttService = SpeechToTextService();
   String? _currentRecordingPath;
+  String? _currentTranscription;
 
   // Local UI state
   bool _showEmojiPicker = false;
@@ -380,11 +383,14 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   Future<void> _cancelRecording() async {
     try {
       await _recorderController.stop();
+      await _sttService.cancel(); // ✅ Cancelar STT también
       _currentRecordingPath = null;
+      _currentTranscription = null;
       // ✅ Detener indicador de grabación
       _controller.setRecording(false);
       setState(() => _isRecording = false);
     } catch (e) {
+      _sttService.cancel();
       _controller.setRecording(false);
       setState(() => _isRecording = false);
     }
@@ -400,6 +406,23 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
       final directory = await getApplicationDocumentsDirectory();
       final path = '${directory.path}/audio_${DateTime.now().millisecondsSinceEpoch}.m4a';
       _currentRecordingPath = path;
+      _currentTranscription = null;
+
+      // ✅ Iniciar STT en paralelo para transcripción local (gratis)
+      // Wrapped in try-catch para no crashear si STT no está disponible
+      try {
+        _sttService.startListening().then((success) {
+          if (success) {
+            ReleaseLogger.log('🎤 STT iniciado en paralelo con grabación', tag: 'Recording');
+          } else {
+            ReleaseLogger.log('⚠️ STT no disponible, continuando sin transcripción', tag: 'Recording');
+          }
+        }).catchError((e) {
+          ReleaseLogger.log('⚠️ Error iniciando STT: $e', tag: 'Recording');
+        });
+      } catch (e) {
+        ReleaseLogger.log('⚠️ STT no soportado: $e', tag: 'Recording');
+      }
 
       // ✅ COMPRESIÓN MEJORADA: Usar bitRate y sampleRate más bajos para archivos más pequeños
       // Valores anteriores: defaults (~128kbps, 44100Hz) → ~960KB/minuto
@@ -433,6 +456,20 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
 
   Future<void> _stopRecording() async {
     try {
+      // ✅ Detener STT y obtener transcripción (gratis, local)
+      // Wrapped in try-catch para no fallar si STT tuvo problemas
+      String transcription = '';
+      try {
+        transcription = await _sttService.stopListening();
+        _currentTranscription = transcription;
+        if (transcription.isNotEmpty) {
+          ReleaseLogger.log('🎤 Transcripción capturada: "${transcription.length > 50 ? '${transcription.substring(0, 50)}...' : transcription}"', tag: 'Recording');
+        }
+      } catch (e) {
+        ReleaseLogger.log('⚠️ Error obteniendo transcripción: $e', tag: 'Recording');
+        _currentTranscription = null;
+      }
+
       final path = await _recorderController.stop();
       final recordedPath = path ?? _currentRecordingPath;
       _currentRecordingPath = null;
@@ -446,8 +483,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
         // 1. Crear burbuja optimista inmediatamente con waveform real
         await _controller.createOptimisticAudioBubble(recordedPath);
 
-        // 2. Subir en background
-        _controller.processAndUploadAudio(recordedPath).catchError((e) {
+        // 2. Subir en background con transcripción para moderación
+        _controller.processAndUploadAudio(
+          recordedPath,
+          transcription: _currentTranscription,
+        ).catchError((e) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
@@ -459,7 +499,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
         });
       }
     } catch (e) {
-      // ✅ También detener indicador si hay error
+      // ✅ También detener STT e indicador si hay error
+      _sttService.cancel();
       _controller.setRecording(false);
     }
   }

@@ -11,6 +11,7 @@ const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/
 const admin = require("firebase-admin");
 const { sendPushNotification } = require("./helpers");
 const { analyzeMessageWithGemini } = require("./groups");
+const { _moderateMultimediaInternal, _checkUserPremiumPlus } = require("./moderation");
 
 // Ensure Firebase Admin is initialized
 if (admin.apps.length === 0) {
@@ -1420,7 +1421,13 @@ exports.onGroupV2MessageCreated = onDocumentCreated(
       let moderationStatus = "approved";
       let moderationReason = null;
 
-      if (moderationEnabled && messageText && messageText.trim().length > 0) {
+      // ✅ FIX Issue #2: Skip moderation if message was already moderated by sendGroupV2Message
+      const existingModerationStatus = messageData.moderationStatus;
+      if (existingModerationStatus) {
+        console.log(`ℹ️ [onGroupV2MessageCreated] Mensaje ya moderado (${existingModerationStatus}), saltando moderación de texto`);
+        moderationStatus = existingModerationStatus;
+        moderationReason = messageData.moderationReason;
+      } else if (moderationEnabled && messageText && messageText.trim().length > 0) {
         console.log(`🔒 [onGroupV2MessageCreated] Moderación activa para grupo ${groupId} (nivel: ${moderationLevel})`);
 
         try {
@@ -1502,11 +1509,17 @@ exports.onGroupV2MessageCreated = onDocumentCreated(
           ...(moderationReason && { moderationReason: moderationReason }),
         });
       } else if (moderationEnabled) {
-        // Media without text - approve by default
-        await event.data.ref.update({
-          moderationStatus: "approved",
-          moderatedAt: new Date(),
-        });
+        // Media without text - only approve if not already moderated
+        // ✅ FIX Issue #2: Don't overwrite moderationStatus set by sendGroupV2Message
+        const existingModerationStatus = messageData.moderationStatus;
+        if (!existingModerationStatus) {
+          await event.data.ref.update({
+            moderationStatus: "approved",
+            moderatedAt: new Date(),
+          });
+        } else {
+          console.log(`ℹ️ [onGroupV2MessageCreated] Mensaje ya moderado (${existingModerationStatus}), saltando actualización`);
+        }
       }
 
       // If message was blocked, don't send notifications
@@ -1869,6 +1882,7 @@ exports.sendGroupV2Message = onCall(
       const moderationLevel = groupData.moderationLevel || "high";
       let moderationStatus = "approved";
       let moderationReason = null;
+      let audioTranscription = null; // For audio moderation
 
       if (moderationEnabled && text && text.trim().length > 0) {
         console.log(`🔒 [sendGroupV2Message] Moderación activa (nivel: ${moderationLevel})`);
@@ -1945,6 +1959,63 @@ exports.sendGroupV2Message = onCall(
         }
       }
 
+      // ═══════════════════════════════════════════════════════════════
+      // MULTIMEDIA MODERATION (Auto-enabled for Premium+ admins)
+      // Logic: If moderation is active AND any group admin is Premium+,
+      // multimedia moderation is automatically included - no separate toggle needed.
+      // ═══════════════════════════════════════════════════════════════
+      const contentUrl = imageUrl || audioUrl;
+
+      if (moderationEnabled && (messageType === "image" || messageType === "audio") && contentUrl) {
+        // Check if any group admin is Premium+
+        const admins = groupData.admins || [];
+        let hasPremiumPlusAdmin = false;
+
+        for (const adminId of admins) {
+          const { isPremiumPlus } = await _checkUserPremiumPlus(adminId);
+          if (isPremiumPlus) {
+            hasPremiumPlusAdmin = true;
+            console.log(`👑 [sendGroupV2Message] Admin ${adminId} is Premium+ - enabling multimedia moderation`);
+            break;
+          }
+        }
+
+        if (hasPremiumPlusAdmin) {
+          console.log(`🖼️ [sendGroupV2Message] Running multimedia moderation for ${messageType}...`);
+
+          try {
+            const result = await _moderateMultimediaInternal(
+              contentUrl,
+              messageType,
+              null, // extractedText (OCR not yet implemented)
+              moderationLevel
+            );
+
+            if (result.flagged) {
+              console.log(`🚫 [sendGroupV2Message] Multimedia blocked: ${result.reason}`);
+              moderationStatus = "blocked";
+              moderationReason = result.reason || "Contenido multimedia inapropiado";
+            } else {
+              console.log(`✅ [sendGroupV2Message] Multimedia approved (severity: ${result.severity})`);
+              // Only set to approved if text moderation didn't block it
+              if (moderationStatus !== "blocked") {
+                moderationStatus = "approved";
+              }
+            }
+
+            // Store transcription for audio messages
+            if (messageType === "audio" && result.transcription) {
+              audioTranscription = result.transcription;
+            }
+          } catch (multimediaError) {
+            console.error(`⚠️ [sendGroupV2Message] Multimedia moderation error (approving):`, multimediaError.message);
+            // On error, don't block - approve the message
+          }
+        } else {
+          console.log(`ℹ️ [sendGroupV2Message] No Premium+ admin in group - skipping multimedia moderation`);
+        }
+      }
+
       // Create message data
       const now = admin.firestore.Timestamp.now();
       const messageData = {
@@ -1974,6 +2045,7 @@ exports.sendGroupV2Message = onCall(
       if (videoUrl) messageData.videoUrl = videoUrl;
       if (audioUrl) messageData.audioUrl = audioUrl;
       if (thumbnailUrl) messageData.thumbnailUrl = thumbnailUrl;
+      if (audioTranscription) messageData.transcription = audioTranscription;
 
       if (replyTo) {
         messageData.replyTo = replyTo;

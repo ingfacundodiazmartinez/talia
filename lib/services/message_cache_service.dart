@@ -1,6 +1,8 @@
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/chat_message.dart';
+import '../utils/release_logger.dart';
+import 'chats/chat_preferences_cache.dart'; // ✅ FIX: Para filtrar por clearedAt
 
 /// Servicio para cachear mensajes localmente usando Hive
 ///
@@ -91,6 +93,8 @@ class MessageCacheService {
         'originalSenderId': message.originalSenderId,
         'originalChatId': message.originalChatId,
         'originalContactName': message.originalContactName,
+        // ✅ FIX: Campo de eliminación
+        'isDeletedForEveryone': message.isDeletedForEveryone,
       };
 
       await _messagesBox!.put(key, data);
@@ -153,6 +157,8 @@ class MessageCacheService {
           'originalSenderId': message.originalSenderId,
           'originalChatId': message.originalChatId,
           'originalContactName': message.originalContactName,
+          // ✅ FIX: Campo de eliminación
+          'isDeletedForEveryone': message.isDeletedForEveryone,
         };
       }
 
@@ -282,6 +288,8 @@ class MessageCacheService {
         'originalSenderId': message.originalSenderId,
         'originalChatId': message.originalChatId,
         'originalContactName': message.originalContactName,
+        // ✅ FIX: Campo de eliminación
+        'isDeletedForEveryone': message.isDeletedForEveryone,
       };
 
       await _messagesBox!.put(key, data);
@@ -321,18 +329,25 @@ class MessageCacheService {
 
   /// Limpiar todos los mensajes de un chat
   Future<void> clearChat(String chatId) async {
-    if (_messagesBox == null) return;
+    if (_messagesBox == null) {
+      ReleaseLogger.log('⚠️ [MessageCache] clearChat: _messagesBox es null', tag: 'MessageCache');
+      return;
+    }
 
     try {
       final keys = _messagesBox!.keys
-          .where((key) => key.toString().startsWith(chatId))
+          .where((key) => key.toString().startsWith('${chatId}_'))
           .toList();
+
+      ReleaseLogger.log('🗑️ [MessageCache] clearChat: Eliminando ${keys.length} mensajes para chat $chatId', tag: 'MessageCache');
 
       for (final key in keys) {
         await _messagesBox!.delete(key);
       }
 
+      ReleaseLogger.log('✅ [MessageCache] clearChat: Chat $chatId limpiado exitosamente', tag: 'MessageCache');
     } catch (e) {
+      ReleaseLogger.error('❌ [MessageCache] clearChat error: $e', tag: 'MessageCache');
     }
   }
 
@@ -371,6 +386,8 @@ class MessageCacheService {
       originalSenderId: data['originalSenderId'] as String?,
       originalChatId: data['originalChatId'] as String?,
       originalContactName: data['originalContactName'] as String?,
+      // ✅ FIX: Campo de eliminación
+      isDeletedForEveryone: data['isDeletedForEveryone'] as bool? ?? false,
     );
   }
 
