@@ -240,10 +240,19 @@ service cloud.firestore {
         // EXCEPCIÓN: Permitir actualización de lastMessage SI NO hay moderación activa
         let chatHasModeration = resource.data.get('moderationEnabled', false) == true;
 
+        // ✅ EXCEPCIÓN SEGURA: Permitir actualizar lastMessage a 'Mensaje eliminado' (para delete)
+        // Esto es seguro porque es un string fijo, no contenido del usuario
+        let isSettingDeletedMessage = changedKeys.hasOnly(['lastMessage', 'lastMessageType']) &&
+          request.resource.data.lastMessage == 'Mensaje eliminado' &&
+          request.resource.data.lastMessageType == 'deleted';
+
+        // Si es update de mensaje eliminado, permitir siempre (retorna false = no es crítico)
         // Si hay moderación: bloquear lastMessage*, Si NO hay moderación: solo bloquear moderationEnabled
-        return chatHasModeration ?
-          changedKeys.hasAny(['lastMessage', 'lastMessageTime', 'lastMessageSender', 'lastMessageAt']) :
-          changedKeys.hasAny(['moderationEnabled']);
+        return isSettingDeletedMessage ? false : (
+          chatHasModeration ?
+            changedKeys.hasAny(['lastMessage', 'lastMessageTime', 'lastMessageSender', 'lastMessageAt']) :
+            changedKeys.hasAny(['moderationEnabled'])
+        );
       }
 
       // Permitir actualizar si:

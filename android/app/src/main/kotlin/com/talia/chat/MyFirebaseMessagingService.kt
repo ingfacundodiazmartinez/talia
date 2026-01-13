@@ -59,7 +59,9 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             senderId: String,
             senderPhotoUrl: String?,
             chatId: String,
-            notificationId: Int = 0 // ✅ ID consistente para poder cancelar después
+            notificationId: Int = 0, // ✅ ID consistente para poder cancelar después
+            isGroup: Boolean = false, // ✅ FIX: Support group notifications
+            groupName: String? = null // ✅ FIX: Group name for title
         ) {
             Log.d(TAG, "📨 [Foreground] Creando notificación desde MainActivity (id=$notificationId)")
 
@@ -102,7 +104,9 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                         cachedPhotoBytes = downloadedBytes,
                         intent = intent,
                         pendingIntent = pendingIntent,
-                        notificationId = finalNotificationId
+                        notificationId = finalNotificationId,
+                        isGroup = isGroup,
+                        groupName = groupName
                     )
                 }
                 return // La notificación se mostrará cuando termine la descarga
@@ -116,7 +120,9 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                 cachedPhotoBytes = cachedPhoto,
                 intent = intent,
                 pendingIntent = pendingIntent,
-                notificationId = finalNotificationId
+                notificationId = finalNotificationId,
+                isGroup = isGroup,
+                groupName = groupName
             )
         }
 
@@ -233,7 +239,9 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             cachedPhotoBytes: ByteArray?,
             intent: Intent,
             pendingIntent: PendingIntent,
-            notificationId: Int = 0
+            notificationId: Int = 0,
+            isGroup: Boolean = false,
+            groupName: String? = null
         ) {
             // ✅ Leer preferencias de sonido/vibración desde SharedPreferences
             val sharedPrefs = context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
@@ -253,9 +261,14 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             }
             Log.d(TAG, "🔔 [Channel] Usando canal: $channelId")
 
+            // ✅ FIX: Use appropriate shortcut name based on chat type
+            val shortcutName = if (isGroup && !groupName.isNullOrEmpty()) groupName else senderName
             val shortcutId = "chat_$senderId"
 
-            // Create Person
+            // 🔍 DEBUG: Log what we're using for the notification
+            Log.e(TAG, "🔍 [buildAndShowNotification] isGroup=$isGroup, groupName=$groupName, shortcutName=$shortcutName")
+
+            // Create Person (for the sender of this message)
             val sender = Person.Builder()
                 .setName(senderName)
                 .build()
@@ -272,9 +285,10 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             }
 
             // Create ShortcutInfo (with or without icon)
+            // ✅ FIX: Use group name for shortcuts when it's a group chat
             val shortcutBuilder = ShortcutInfoCompat.Builder(context, shortcutId)
-                .setShortLabel(senderName)
-                .setLongLabel(senderName)
+                .setShortLabel(shortcutName)
+                .setLongLabel(shortcutName)
                 .setPerson(sender)
                 .setLongLived(true)
                 .setLocusId(LocusIdCompat(shortcutId))
@@ -286,11 +300,25 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
 
             ShortcutManagerCompat.pushDynamicShortcut(context, shortcutBuilder.build())
 
+            // ✅ FIX: For groups, strip sender prefix from body (MessagingStyle adds it via Person)
+            // Flutter sends "Facu: Mensaje" but MessagingStyle shows "Facu: body"
+            // Result without fix: "Facu: Facu: Mensaje" (duplicated)
+            val messageBody = if (isGroup && body.startsWith("$senderName: ")) {
+                body.removePrefix("$senderName: ")
+            } else {
+                body
+            }
+
             // Create MessagingStyle
             val user = Person.Builder().setName("Yo").build()
             val messagingStyle = NotificationCompat.MessagingStyle(user)
-                .setGroupConversation(false)
-                .addMessage(body, System.currentTimeMillis(), sender)
+                .setGroupConversation(isGroup)
+                .addMessage(messageBody, System.currentTimeMillis(), sender)
+
+            // ✅ FIX: Set conversation title to group name for group messages
+            if (isGroup && !groupName.isNullOrEmpty()) {
+                messagingStyle.conversationTitle = groupName
+            }
 
             // Create notification con el canal seleccionado
             val notificationBuilder = NotificationCompat.Builder(context, channelId)
@@ -646,6 +674,12 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         val senderId = data["senderId"] ?: (data["chatId"] ?: "unknown")
         val chatId = data["chatId"] ?: ""
         val messageId = data["messageId"]
+        // ✅ FIX: Extract group info for proper notification formatting
+        val isGroup = data["isGroup"] == "true"
+        val groupName = data["groupName"]
+
+        // 🔍 DEBUG: Log group notification data
+        Log.e(TAG, "🔍 [DEBUG] isGroup=$isGroup, groupName=$groupName, senderName=$senderName")
 
         // ✅ Generar ID consistente para auto-dismiss usando djb2 hash (coincide con Dart)
         val contextKey = if (messageId != null) "chat_${chatId}_$messageId" else "chat_$chatId"
@@ -668,7 +702,9 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                     cachedPhotoBytes = finalBytes,
                     intent = intent,
                     pendingIntent = pendingIntent,
-                    notificationId = consistentNotificationId
+                    notificationId = consistentNotificationId,
+                    isGroup = isGroup,
+                    groupName = groupName
                 )
             }
             return
@@ -684,7 +720,9 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             cachedPhotoBytes = photoBytes,
             intent = intent,
             pendingIntent = pendingIntent,
-            notificationId = consistentNotificationId
+            notificationId = consistentNotificationId,
+            isGroup = isGroup,
+            groupName = groupName
         )
     }
 

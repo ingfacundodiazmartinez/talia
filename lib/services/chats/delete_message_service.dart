@@ -128,31 +128,50 @@ class DeleteMessageService {
         'waveformData': null, // Para audios
       });
 
-      // ✅ Crear evento de eliminación para que los receptores actualicen su cache
+      // ✅ Operación principal exitosa - el mensaje fue eliminado
+      // Las siguientes operaciones son "best effort" y no deben causar error al usuario
+
+      // Crear evento de eliminación para que los receptores actualicen su cache
       // TTL: 7 días (Firestore TTL nativo elimina automáticamente por expiresAt)
-      await _firestore
-          .collection(collection)
-          .doc(chatId)
-          .collection('deletedMessages')
-          .doc(messageId)
-          .set({
-        'messageId': messageId,
-        'deletedBy': userId,
-        'createdAt': FieldValue.serverTimestamp(),
-        'expiresAt': Timestamp.fromDate(DateTime.now().add(const Duration(days: 7))),
-      });
+      try {
+        await _firestore
+            .collection(collection)
+            .doc(chatId)
+            .collection('deletedMessages')
+            .doc(messageId)
+            .set({
+          'messageId': messageId,
+          'deletedBy': userId,
+          'createdAt': FieldValue.serverTimestamp(),
+          'expiresAt': Timestamp.fromDate(DateTime.now().add(const Duration(days: 7))),
+        });
+      } catch (e) {
+        // No fallar si no podemos crear el evento de eliminación
+        ReleaseLogger.warning(
+          'No se pudo crear evento de eliminación (mensaje ya eliminado): $e',
+          tag: 'DeleteMessage',
+        );
+      }
 
       // Actualizar lastMessage del chat si era el último
-      final chatDoc = await _firestore.collection(collection).doc(chatId).get();
+      try {
+        final chatDoc = await _firestore.collection(collection).doc(chatId).get();
 
-      if (chatDoc.exists) {
-        final chatData = chatDoc.data()!;
-        if (chatData['lastMessageId'] == messageId) {
-          await _firestore.collection(collection).doc(chatId).update({
-            'lastMessage': 'Mensaje eliminado',
-            'lastMessageType': 'deleted',
-          });
+        if (chatDoc.exists) {
+          final chatData = chatDoc.data()!;
+          if (chatData['lastMessageId'] == messageId) {
+            await _firestore.collection(collection).doc(chatId).update({
+              'lastMessage': 'Mensaje eliminado',
+              'lastMessageType': 'deleted',
+            });
+          }
         }
+      } catch (e) {
+        // No fallar si no podemos actualizar lastMessage
+        ReleaseLogger.warning(
+          'No se pudo actualizar lastMessage (mensaje ya eliminado): $e',
+          tag: 'DeleteMessage',
+        );
       }
 
       ReleaseLogger.log(

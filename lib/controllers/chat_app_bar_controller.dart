@@ -158,6 +158,8 @@ class ChatAppBarController {
         'photoURL': '',
         'isOnline': false,
         'name': '',
+        'lastSeen': null,
+        'hideLastSeen': false,
       };
     }
 
@@ -166,7 +168,49 @@ class ChatAppBarController {
       'photoURL': userData['photoURL'] as String? ?? '',
       'isOnline': userData['isOnline'] ?? false,
       'name': userData['name'] as String? ?? '',
+      'lastSeen': userData['lastSeen'] as Timestamp?,
+      'hideLastSeen': userData['hideLastSeen'] ?? false,
     };
+  }
+
+  /// Formatear última vez visto para mostrar en UI
+  String formatLastSeen(Timestamp? lastSeen) {
+    if (lastSeen == null) return 'Desconectado';
+
+    final lastSeenDate = lastSeen.toDate();
+    final now = DateTime.now();
+    final difference = now.difference(lastSeenDate);
+
+    // Formatear hora
+    final hour = lastSeenDate.hour.toString().padLeft(2, '0');
+    final minute = lastSeenDate.minute.toString().padLeft(2, '0');
+    final timeStr = '$hour:$minute';
+
+    // Hoy
+    if (difference.inDays == 0 && now.day == lastSeenDate.day) {
+      return 'Últ. vez hoy $timeStr';
+    }
+
+    // Ayer
+    final yesterday = now.subtract(const Duration(days: 1));
+    if (lastSeenDate.year == yesterday.year &&
+        lastSeenDate.month == yesterday.month &&
+        lastSeenDate.day == yesterday.day) {
+      return 'Últ. vez ayer $timeStr';
+    }
+
+    // Esta semana (menos de 7 días)
+    if (difference.inDays < 7) {
+      final dayNames = ['lun', 'mar', 'mié', 'jue', 'vie', 'sáb', 'dom'];
+      final dayName = dayNames[lastSeenDate.weekday - 1];
+      return 'Últ. vez $dayName $timeStr';
+    }
+
+    // Más de una semana
+    final day = lastSeenDate.day.toString();
+    final monthNames = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+    final month = monthNames[lastSeenDate.month - 1];
+    return 'Últ. vez $day $month';
   }
 
   /// Actualizar si puede modificar moderación

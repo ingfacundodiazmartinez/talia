@@ -22,6 +22,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
 
   bool _twoFactorEnabled = false;
   bool _showOnlineStatus = true;
+  bool _hideLastSeen = false;
   bool _sendReadReceipts = true;
   bool _allowScreenshots = false;
 
@@ -37,6 +38,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
       setState(() {
         _twoFactorEnabled = data['twoFactorEnabled'] ?? false;
         _showOnlineStatus = data['showOnlineStatus'] ?? true;
+        _hideLastSeen = data['hideLastSeen'] ?? false;
         _sendReadReceipts = data['sendReadReceipts'] ?? true;
         _allowScreenshots = data['allowScreenshots'] ?? false;
       });
@@ -124,6 +126,17 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
               } else {
                 await OnlineStatusService().setOffline();
               }
+            },
+          ),
+
+          _buildSwitchOption(
+            icon: Icons.access_time,
+            title: 'Ocultar Última Conexión',
+            subtitle: 'Otros no verán cuándo te conectaste por última vez',
+            value: _hideLastSeen,
+            onChanged: (value) async {
+              setState(() => _hideLastSeen = value);
+              await _updateSetting('hideLastSeen', value);
             },
           ),
 

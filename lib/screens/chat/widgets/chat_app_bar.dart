@@ -71,6 +71,8 @@ class _ChatAppBarState extends State<ChatAppBar> {
             final contactData = _controller.extractContactData(snapshot.data);
             final photoURL = contactData['photoURL'] as String;
             final isOnline = contactData['isOnline'] as bool;
+            final lastSeen = contactData['lastSeen'] as Timestamp?;
+            final hideLastSeen = contactData['hideLastSeen'] as bool;
 
             // Escuchar el estado de actividad (typing o recording)
             return StreamBuilder<UserActivityState>(
@@ -93,8 +95,16 @@ class _ChatAppBarState extends State<ChatAppBar> {
                 } else if (isTyping) {
                   statusText = 'escribiendo...';
                   statusColor = null; // Usar color por defecto
+                } else if (isOnline) {
+                  statusText = 'En línea';
+                  statusColor = null;
+                } else if (hideLastSeen) {
+                  // Si el contacto ocultó su última vez, no mostrar nada
+                  statusText = '';
+                  statusColor = null;
                 } else {
-                  statusText = isOnline ? 'En línea' : 'Desconectado';
+                  // Mostrar última vez online
+                  statusText = _controller.formatLastSeen(lastSeen);
                   statusColor = null;
                 }
 

@@ -98,6 +98,12 @@ class MainActivity : FlutterActivity() {
                         val notificationId = (args["notificationId"] as? Int) ?: 0
                         Log.d("MainActivity", "📨 notificationId=$notificationId")
 
+                        // ✅ FIX: Extract group info for proper notification formatting
+                        val isGroup = args["isGroup"] as? Boolean ?: false
+                        val groupName = args["groupName"] as? String
+
+                        Log.d("MainActivity", "📨 isGroup=$isGroup, groupName=$groupName")
+
                         // Crear servicio y llamar método showNotification
                         MyFirebaseMessagingService.showNotificationFromForeground(
                             context = this,
@@ -107,7 +113,9 @@ class MainActivity : FlutterActivity() {
                             senderId = args["senderId"] as? String ?: "",
                             senderPhotoUrl = args["senderPhotoUrl"] as? String ?: "",
                             chatId = args["chatId"] as? String ?: "",
-                            notificationId = notificationId
+                            notificationId = notificationId,
+                            isGroup = isGroup,
+                            groupName = groupName
                         )
                         result.success(true)
                     } else {

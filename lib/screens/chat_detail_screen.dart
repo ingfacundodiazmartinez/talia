@@ -109,6 +109,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     _messageController.addListener(_onTypingChanged);
     _scrollController.addListener(_onScroll);
 
+    // ✅ FIX: Escuchar cambios en el controller para scroll a mensaje específico
+    _controller.addListener(_onControllerChanged);
+
     // ✅ Escuchar cambios de alias para actualizar el nombre
     _userCacheService.aliasChangedNotifier.addListener(_onAliasChanged);
 
@@ -127,14 +130,29 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     // ✅ Operaciones async en background (no bloquean UI)
     _initializeInBackground();
 
-    // Scroll inicial
+    // Scroll inicial (solo si no hay mensaje específico a buscar)
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (widget.scrollToMessageId != null) {
-        _scrollToSpecificMessage(widget.scrollToMessageId!);
-      } else {
+      if (widget.scrollToMessageId == null) {
         _scrollToBottom(animate: false);
       }
+      // Si hay scrollToMessageId, el listener _onControllerChanged lo manejará
     });
+  }
+
+  /// ✅ FIX: Listener para detectar cuando los mensajes están disponibles
+  void _onControllerChanged() {
+    if (widget.scrollToMessageId != null && !_hasScrolledToMessage) {
+      ReleaseLogger.log(
+        '🔍 [ChatDetail] onControllerChanged: scrollToMessageId=${widget.scrollToMessageId}, '
+        'messages=${_controller.messages.length}, hasScrolled=$_hasScrolledToMessage',
+        tag: 'ChatDetail',
+      );
+      if (_controller.messages.isNotEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _scrollToSpecificMessage(widget.scrollToMessageId!);
+        });
+      }
+    }
   }
 
   void _onAliasChanged() {
@@ -180,6 +198,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     LocalUnreadCountService().exitChat();
     WidgetsBinding.instance.removeObserver(this);
     _userCacheService.aliasChangedNotifier.removeListener(_onAliasChanged);
+    _controller.removeListener(_onControllerChanged); // ✅ FIX: Remove listener
     _controller.dispose();
     _messageController.removeListener(_onTypingChanged);
     _messageController.dispose();
@@ -245,16 +264,27 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   }
 
   void _scrollToSpecificMessage(String messageId) {
+    ReleaseLogger.log(
+      '🔍 [ChatDetail] _scrollToSpecificMessage called: messageId=$messageId, '
+      'hasClients=${_scrollController.hasClients}, hasScrolled=$_hasScrolledToMessage',
+      tag: 'ChatDetail',
+    );
+
     if (!_scrollController.hasClients || _hasScrolledToMessage) return;
 
     final messageIndex = _controller.messages.indexWhere((msg) => msg.id == messageId);
 
+    ReleaseLogger.log(
+      '🔍 [ChatDetail] Message index: $messageIndex (total messages: ${_controller.messages.length})',
+      tag: 'ChatDetail',
+    );
+
     if (messageIndex == -1) {
-      // ReleaseLogger.log('Mensaje $messageId no encontrado aún', tag: 'ChatDetail');
+      ReleaseLogger.log('🔍 [ChatDetail] Mensaje $messageId no encontrado aún', tag: 'ChatDetail');
       return;
     }
 
-    // ReleaseLogger.log('Scroll a mensaje $messageId en índice $messageIndex', tag: 'ChatDetail');
+    ReleaseLogger.log('🔍 [ChatDetail] Scroll a mensaje $messageId en índice $messageIndex', tag: 'ChatDetail');
     _hasScrolledToMessage = true;
 
     const itemHeight = 120.0;

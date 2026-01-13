@@ -17,6 +17,7 @@ import '../../../services/block_service.dart';
 import '../../../models/chat_message.dart';
 import '../../../models/chat_list_item_type.dart';
 import '../../../utils/chat_utils.dart';
+import '../../../utils/release_logger.dart';
 import '../../chat_detail_screen.dart';
 import '../../parent/chats/widgets/group_chat_list_item.dart';
 import '../../parent/chats/widgets/chat_list_item.dart';
@@ -858,6 +859,11 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
     _searchController.clear();
     _searchQuery.value = '';
 
+    ReleaseLogger.log(
+      '🔍 [Search] _navigateToMessage: chatId=${result.chatId}, messageId=${result.message.id}, type=${result.chatType}',
+      tag: 'Search',
+    );
+
     // Navegar según el tipo de chat, pasando el messageId para hacer scroll
     if (result.chatType == ChatType.group) {
       Navigator.of(context).push(
@@ -881,12 +887,28 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
     String contactName, [
     String? scrollToMessageId,
   ]) async {
+    ReleaseLogger.log(
+      '🔍 [Search] _navigateToDirectChat: chatId=$chatId, scrollToMessageId=$scrollToMessageId',
+      tag: 'Search',
+    );
+
     try {
       final chatData = await _chatsController.getChatDataForNavigation(chatId);
-      if (chatData == null) return;
+      if (chatData == null) {
+        ReleaseLogger.log('🔍 [Search] chatData is null', tag: 'Search');
+        return;
+      }
 
       final contactId = chatData['contactId'];
-      if (contactId == null) return;
+      if (contactId == null) {
+        ReleaseLogger.log('🔍 [Search] contactId is null', tag: 'Search');
+        return;
+      }
+
+      ReleaseLogger.log(
+        '🔍 [Search] Navigating to ChatDetailScreen with scrollToMessageId=$scrollToMessageId',
+        tag: 'Search',
+      );
 
       if (mounted) {
         await Navigator.of(context).push(
@@ -903,7 +925,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
         if (mounted) setState(() {});
       }
     } catch (e) {
-      // Error silencioso
+      ReleaseLogger.error('🔍 [Search] Error navigating: $e', tag: 'Search');
     }
   }
 

@@ -742,6 +742,22 @@ class ChatStreamManager {
   /// Procesar cambios en documentos de chat/grupo
   Future<void> _processChatDocChanges(QuerySnapshot snapshot, String userId, {required bool isGroup}) async {
     try {
+      // ✅ FIX: Pre-populate timestamps for ADDED docs (initial snapshot)
+      // This ensures we have a baseline for comparing when modified events arrive
+      final addedDocs = snapshot.docChanges
+          .where((change) => change.type == DocumentChangeType.added)
+          .map((change) => change.doc)
+          .toList();
+
+      for (final chatDoc in addedDocs) {
+        final chatId = chatDoc.id;
+        final chatData = chatDoc.data() as Map<String, dynamic>?;
+        final lastMessageTime = chatData?['lastMessageTime'] as Timestamp?;
+        if (lastMessageTime != null && !_lastSeenMessageTimestamps.containsKey(chatId)) {
+          _lastSeenMessageTimestamps[chatId] = lastMessageTime;
+        }
+      }
+
       // Detectar solo modificaciones (cuando llega mensaje nuevo, lastMessageAt cambia)
       final modifiedDocs = snapshot.docChanges
           .where((change) => change.type == DocumentChangeType.modified)
@@ -1685,6 +1701,12 @@ class ChatStreamManager {
           groupName = 'Grupo';
         }
       }
+
+      // 🔍 DEBUG: Log group notification parameters
+      ReleaseLogger.log(
+        '🔍 [DEBUG] isGroup=$isGroup, groupName=$groupName, senderName=$senderName, chatId=${chatId.substring(0, 8)}...',
+        tag: 'ChatStreamManager',
+      );
 
       // 4. Obtener texto del mensaje
       final messageText = message.preview;

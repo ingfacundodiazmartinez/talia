@@ -957,6 +957,11 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
 
   /// Navega al chat y al mensaje específico desde un resultado de búsqueda
   void _navigateToMessage(MessageSearchResult result) {
+    ReleaseLogger.log(
+      '🔍 [Search] _navigateToMessage: chatId=${result.chatId}, messageId=${result.message.id}, type=${result.chatType}',
+      tag: 'Search',
+    );
+
     // Limpiar el buscador
     _searchController.clear();
     _searchQuery.value = '';
@@ -984,12 +989,28 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
     String contactName, [
     String? scrollToMessageId,
   ]) async {
+    ReleaseLogger.log(
+      '🔍 [Search] _navigateToDirectChat: chatId=$chatId, scrollToMessageId=$scrollToMessageId',
+      tag: 'Search',
+    );
+
     try {
       final chatData = await _controller.getChatDataForNavigation(chatId);
-      if (chatData == null) return;
+      if (chatData == null) {
+        ReleaseLogger.log('🔍 [Search] chatData is null', tag: 'Search');
+        return;
+      }
 
       final contactId = chatData['contactId'];
-      if (contactId == null) return;
+      if (contactId == null) {
+        ReleaseLogger.log('🔍 [Search] contactId is null', tag: 'Search');
+        return;
+      }
+
+      ReleaseLogger.log(
+        '🔍 [Search] Navigating to ChatDetailScreen with scrollToMessageId=$scrollToMessageId',
+        tag: 'Search',
+      );
 
       if (mounted) {
         await Navigator.of(context).push(
@@ -1006,7 +1027,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
         if (mounted) setState(() {});
       }
     } catch (e) {
-      debugPrint('Error navegando a chat directo: $e');
+      ReleaseLogger.error('🔍 [Search] Error navegando: $e', tag: 'Search');
     }
   }
 }

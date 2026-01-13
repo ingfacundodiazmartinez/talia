@@ -76,6 +76,7 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
   bool _isRecording = false;
   String? _currentRecordingPath;
   Map<String, dynamic>? _replyingTo;
+  bool _hasScrolledToMessage = false; // ✅ FIX: Track if we've scrolled to target message
   // _reactionOverlay is provided by ReactionPickerMixin
 
   // Current user ID
@@ -114,6 +115,13 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
       // Cargar alias para usuarios que no sean yo
       _loadAliasesForMessages(messages);
       if (mounted) setState(() {});
+
+      // ✅ FIX: Scroll to target message when messages are loaded
+      if (widget.scrollToMessageId != null && !_hasScrolledToMessage && messages.isNotEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _scrollToSpecificMessage(widget.scrollToMessageId!);
+        });
+      }
     };
 
     _controller.onLoadingChanged = (loading) {
@@ -160,6 +168,32 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
         _controllerInitialized = true;
       });
     }
+  }
+
+  /// ✅ FIX: Scroll to a specific message by ID
+  void _scrollToSpecificMessage(String messageId) {
+    if (!_scrollController.hasClients || _hasScrolledToMessage) return;
+
+    final messages = _controller.messages;
+    final messageIndex = messages.indexWhere((msg) => msg.id == messageId);
+
+    if (messageIndex == -1) {
+      // Message not found yet, will retry when more messages load
+      return;
+    }
+
+    _hasScrolledToMessage = true;
+
+    // Since ListView is reversed, we need to calculate position differently
+    // Use estimated item height
+    const estimatedItemHeight = 80.0;
+    final targetPosition = messageIndex * estimatedItemHeight;
+
+    _scrollController.animateTo(
+      targetPosition,
+      duration: const Duration(milliseconds: 500),
+      curve: Curves.easeInOut,
+    );
   }
 
   @override

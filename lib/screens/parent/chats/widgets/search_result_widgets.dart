@@ -19,7 +19,10 @@ class ChatSearchResultCard extends StatelessWidget {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
     return InkWell(
-      onTap: onTap,
+      onTap: () {
+        debugPrint('🔍 [ChatSearchResultCard] onTap called! chatId=${result.chatId}');
+        onTap();
+      },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
@@ -34,11 +37,13 @@ class ChatSearchResultCard extends StatelessWidget {
         ),
         child: Row(
           children: [
-            // Avatar
-            ClickableAvatar(
-              photoUrl: result.chatPhotoUrl,
-              name: result.chatName,
-              radius: 24,
+            // Avatar - ✅ FIX: Usar IgnorePointer para que no intercepte el tap
+            IgnorePointer(
+              child: ClickableAvatar(
+                photoUrl: result.chatPhotoUrl,
+                name: result.chatName,
+                radius: 24,
+              ),
             ),
             const SizedBox(width: 12),
             // Nombre del chat
@@ -129,7 +134,10 @@ class MessageSearchResultCard extends StatelessWidget {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
     return InkWell(
-      onTap: onTap,
+      onTap: () {
+        debugPrint('🔍 [MessageSearchResultCard] onTap called! messageId=${result.message.id}');
+        onTap();
+      },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
@@ -145,11 +153,13 @@ class MessageSearchResultCard extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Avatar
-            ClickableAvatar(
-              photoUrl: result.chatPhotoUrl,
-              name: result.chatName,
-              radius: 24,
+            // Avatar - ✅ FIX: Usar IgnorePointer para que no intercepte el tap
+            IgnorePointer(
+              child: ClickableAvatar(
+                photoUrl: result.chatPhotoUrl,
+                name: result.chatName,
+                radius: 24,
+              ),
             ),
             const SizedBox(width: 12),
             // Contenido del mensaje

@@ -766,7 +766,7 @@ class GroupChatController extends ChangeNotifier {
   }
 
   /// Eliminar mensaje (solo si fue enviado por el usuario actual y hace menos de 5 minutos)
-  Future<bool> deleteMessage(String messageId, Timestamp? timestamp) async {
+  Future<bool> deleteMessage(String messageId, [Timestamp? timestamp]) async {
     if (currentUserId.isEmpty) return false;
 
     try {
@@ -784,7 +784,7 @@ class GroupChatController extends ChangeNotifier {
 
       // Eliminar mensaje (hard delete)
       await _firestore
-          .collection('groups')
+          .collection('groups_v2')
           .doc(groupId)
           .collection('messages')
           .doc(messageId)

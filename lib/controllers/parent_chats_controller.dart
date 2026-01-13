@@ -255,7 +255,21 @@ class ParentChatsController extends BaseChatsController {
       // ✅ CODING_RULES: Usando métodos del BaseChatsController
       final snapshot = await getChatDataStream(chatId).first;
       if (snapshot.exists) {
-        return snapshot.data() as Map<String, dynamic>?;
+        final data = snapshot.data() as Map<String, dynamic>?;
+        if (data != null) {
+          // ✅ FIX: Agregar contactId (el otro participante del chat)
+          final participants = data['participants'] as List<dynamic>?;
+          if (participants != null) {
+            final contactId = participants.firstWhere(
+              (id) => id != userId,
+              orElse: () => null,
+            );
+            if (contactId != null) {
+              return {...data, 'contactId': contactId};
+            }
+          }
+        }
+        return data;
       }
       return null;
     } catch (e) {

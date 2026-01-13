@@ -4,6 +4,7 @@ import '../models/chat_message.dart';
 import '../groups/services/group_message_cache_service.dart';
 import '../utils/release_logger.dart';
 import 'message_cache_service.dart';
+import 'user_cache_service.dart';
 import 'user_profile_cache_service.dart';
 
 /// Servicio para buscar en chats y mensajes con normalización de texto
@@ -11,6 +12,7 @@ class SearchService {
   final MessageCacheService _cacheService = MessageCacheService();
   final GroupMessageCacheService _groupCacheService = GroupMessageCacheService();
   final UserProfileCacheService _userProfileService = UserProfileCacheService();
+  final UserCacheService _userCacheService = UserCacheService();
 
   /// Normaliza texto removiendo acentos y convirtiéndolo a minúsculas
   /// Ejemplo: "Fábrica" -> "fabrica"
@@ -148,12 +150,21 @@ class SearchService {
         final userName = userData['name'] ?? 'Usuario';
         final photoURL = userData['photoURL'] as String?;
 
-        // Verificar si coincide por nombre
-        if (matchesQuery(userName, query)) {
+        // ✅ FIX: Obtener alias del usuario para búsqueda
+        final displayName = _userCacheService.getDisplayName(otherUserId, fallback: userName);
+        final cachedData = _userCacheService.getUserDataSync(otherUserId);
+        final alias = cachedData?['alias'] as String?;
+
+        // ✅ FIX: Verificar si coincide por nombre O por alias
+        final matchesByName = matchesQuery(userName, query);
+        final matchesByAlias = alias != null && alias.isNotEmpty && matchesQuery(alias, query);
+        final matchesByDisplayName = matchesQuery(displayName, query);
+
+        if (matchesByName || matchesByAlias || matchesByDisplayName) {
           chatResults.add(
             ChatSearchResult(
               chatId: chatId,
-              chatName: userName,
+              chatName: displayName, // ✅ Usar displayName (prioriza alias)
               chatPhotoUrl: photoURL,
               chatType: ChatType.direct,
             ),
@@ -164,7 +175,7 @@ class SearchService {
         final chatMessageResults = await searchInChatMessages(
           chatId: chatId,
           query: query,
-          chatName: userName,
+          chatName: displayName, // ✅ Usar displayName
           chatPhotoUrl: photoURL,
           chatType: ChatType.direct,
         );
