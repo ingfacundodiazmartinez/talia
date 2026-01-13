@@ -51,6 +51,9 @@ jest.mock('firebase-functions/v2/https', () => ({
 jest.mock('firebase-functions/v2/firestore', () => ({
   onDocumentCreated: jest.fn((options, handler) => {
     return { handler, options };
+  }),
+  onDocumentUpdated: jest.fn((options, handler) => {
+    return { handler, options };
   })
 }));
 

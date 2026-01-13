@@ -77,13 +77,30 @@ function calculateDeleteAt(isSupervised, hasModerationActive = false) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// CHATS
+// CHATS - TRIGGERS DE MENSAJES
 // ═══════════════════════════════════════════════════════════════
 
-// ⚡ OPTIMIZADO: Trigger simplificado sin rate limiting ni validación de contacto
-// La validación de contacto se hace via Firestore rules (campo isValidChat)
-// El rate limiting se eliminó para reducir latencia
-exports.incrementUnreadCount = onDocumentCreated(
+/**
+ * onChatMessageCreated - Trigger principal para nuevos mensajes en chats 1-1
+ *
+ * RESPONSABILIDADES:
+ * 1. Validación de seguridad (sender es participante)
+ * 2. Crear documento del chat si no existe
+ * 3. Configurar TTL (deleteAt) para auto-eliminación
+ * 4. Actualizar metadata del chat (visible, lastMessage*)
+ *
+ * *lastMessage: Solo se actualiza si NO hay moderación pendiente.
+ *  Cuando hay moderación, moderateMessage maneja lastMessage después del análisis.
+ *
+ * NOTA: El contador de mensajes no leídos (unreadCount) se maneja
+ * LOCALMENTE en el cliente via LocalUnreadCountService (SharedPreferences).
+ * Esta función NO incrementa unreadCount en Firestore.
+ *
+ * COORDINACIÓN CON moderateMessage:
+ * - Sin moderación: Esta función actualiza lastMessage
+ * - Con moderación: Esta función solo marca visible=true, moderateMessage hace el resto
+ */
+exports.onChatMessageCreated = onDocumentCreated(
   {
     document: "chats/{chatId}/messages/{messageId}",
     region: "us-central1",
@@ -281,12 +298,30 @@ exports.incrementUnreadCount = onDocumentCreated(
   },
 );
 
+/**
+ * @deprecated Usar onChatMessageCreated en su lugar.
+ * Este alias se mantiene por compatibilidad con deployments existentes.
+ * El nombre era incorrecto - esta función NO incrementa unreadCount.
+ */
+exports.incrementUnreadCount = exports.onChatMessageCreated;
+
 // ═══════════════════════════════════════════════════════════════
-// GRUPOS - Trigger automático para mensajes (replica lógica 1-1)
+// GRUPOS (legacy) - Trigger para colección 'groups' (deprecated)
+// Para grupos nuevos, usar groups_v2 con onGroupV2MessageCreated
 // ═══════════════════════════════════════════════════════════════
 
-// ⚡ OPTIMIZADO: Trigger simplificado para grupos (sin rate limiting)
-exports.incrementGroupUnreadCount = onDocumentCreated(
+/**
+ * onGroupMessageCreated - Trigger para mensajes en grupos (colección legacy 'groups')
+ *
+ * RESPONSABILIDADES:
+ * 1. Validación de seguridad (sender es miembro)
+ * 2. Configurar TTL para auto-eliminación
+ * 3. Enviar push notifications a miembros
+ * 4. Actualizar metadata del grupo
+ *
+ * NOTA: Esta colección 'groups' es legacy. Los grupos nuevos usan 'groups_v2'.
+ */
+exports.onGroupMessageCreated = onDocumentCreated(
   {
     document: "groups/{groupId}/messages/{messageId}",
     region: "us-central1",
@@ -455,11 +490,18 @@ exports.incrementGroupUnreadCount = onDocumentCreated(
 
       return null;
     } catch (error) {
-      console.error("❌ Error en incrementGroupUnreadCount:", error);
+      console.error("❌ Error en onGroupMessageCreated:", error);
       return null;
     }
   },
 );
+
+/**
+ * @deprecated Usar onGroupMessageCreated en su lugar.
+ * Este alias se mantiene por compatibilidad con deployments existentes.
+ * El nombre era incorrecto - esta función NO incrementa unreadCount.
+ */
+exports.incrementGroupUnreadCount = exports.onGroupMessageCreated;
 
 // ═══════════════════════════════════════════════════════════════
 // CREACIÓN SEGURA DE CHATS

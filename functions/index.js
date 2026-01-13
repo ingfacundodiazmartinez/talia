@@ -196,9 +196,13 @@ exports.moderateAudioWithWhisper = moderation.moderateAudioWithWhisper; // ✅ M
 exports.moderateMultimedia = moderation.moderateMultimedia; // ✅ Función unificada para moderar multimedia (Premium+)
 exports.checkMultimediaModerationStatus = moderation.checkMultimediaModerationStatus; // ✅ Verificar estado de moderación multimedia
 
-// Chats
-exports.incrementUnreadCount = chats.incrementUnreadCount;
-exports.incrementGroupUnreadCount = chats.incrementGroupUnreadCount;
+// Chats - Message Triggers
+exports.onChatMessageCreated = chats.onChatMessageCreated;           // ✅ Principal: Security, TTL, chat metadata
+exports.onGroupMessageCreated = chats.onGroupMessageCreated;         // ✅ Principal: Groups legacy (colección 'groups')
+exports.incrementUnreadCount = chats.incrementUnreadCount;           // @deprecated - alias de onChatMessageCreated
+exports.incrementGroupUnreadCount = chats.incrementGroupUnreadCount; // @deprecated - alias de onGroupMessageCreated
+
+// Chats - Callable Functions
 exports.sendChatMessage = chats.sendChatMessage;
 exports.sendGroupMessage = chats.sendGroupMessage;
 exports.createChat = chats.createChat;
