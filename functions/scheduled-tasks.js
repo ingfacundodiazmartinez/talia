@@ -234,7 +234,9 @@ exports.autoResolveEmergencies = onSchedule(
   {
     schedule: "0 * * * *", // Cada hora
     timeZone: "America/Argentina/Buenos_Aires",
-    memory: "256MiB",
+    memory: "512MiB",
+    timeoutSeconds: 540, // 9 minutos max
+    retryCount: 3,
   },
   async (event) => {
     console.log("🚨 Revisando emergencias para auto-resolución...");

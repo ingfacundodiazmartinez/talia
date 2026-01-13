@@ -298,120 +298,13 @@ exports.activatePremium = onCall(async (request) => {
   }
 });
 
-/**
- * Crear sesión de checkout para pago web (MercadoPago o Stripe)
- * Soporta múltiples providers de pago
- */
-
-exports.createCheckoutSession = onCall(async (request) => {
-  try {
-    const data = request.data;
-    console.log("💳 [createCheckoutSession] Creando sesión de pago:", data);
-
-    if (!request.auth) {
-      throw new HttpsError("unauthenticated", "Usuario no autenticado");
-    }
-
-    const userId = request.auth.uid;
-    const {tier, provider, email} = data;
-
-    if (!tier || !provider) {
-      throw new HttpsError("invalid-argument", "Faltan parámetros: tier, provider");
-    }
-
-    // Validar tier
-    const validTiers = ["premium", "premium_plus"];
-    if (!validTiers.includes(tier)) {
-      throw new HttpsError("invalid-argument", `Tier inválido: ${tier}`);
-    }
-
-    // Obtener email del usuario
-    // Prioridad: 1) email pasado como parámetro, 2) email de Firebase Auth, 3) email de Firestore
-    const userDoc = await getFirestore().collection("users").doc(userId).get();
-    const userData = userDoc.data() || {};
-    const userEmail = email || request.auth.token.email || userData.email;
-
-    // Si no hay email, lanzar error requiriendo que lo proporcionen
-    if (!userEmail || userEmail.includes('@talia.app')) {
-      throw new HttpsError(
-          "failed-precondition",
-          "Se requiere un email válido para crear la suscripción.",
-      );
-    }
-
-    const userName = userData.name || userData.displayName || "Usuario";
-
-    console.log(`📧 [createCheckoutSession] Email del usuario: ${userEmail}`);
-
-    // ============================================
-    // STRIPE (USA y resto del mundo)
-    // ============================================
-    if (provider === "stripe") {
-      // Precios en USD
-      const pricesUSD = {
-        premium: {amount: 2.99, currency: "USD", description: "Talia Premium - Monthly"},
-        premium_plus: {amount: 4.99, currency: "USD", description: "Talia Premium+ - Monthly"},
-      };
-
-      const price = pricesUSD[tier];
-
-      // TODO: Integración real con Stripe
-      // const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-      // const session = await stripe.checkout.sessions.create({
-      //   customer_email: userEmail,
-      //   mode: 'subscription',
-      //   line_items: [{
-      //     price: tier === 'premium' ? 'price_premium_monthly' : 'price_premium_plus_monthly',
-      //     quantity: 1,
-      //   }],
-      //   success_url: `https://talia.app/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-      //   cancel_url: 'https://talia.app/payment-cancel',
-      //   metadata: { userId, tier },
-      // });
-
-      // Por ahora, simulación
-      const sessionId = `stripe_test_${Date.now()}`;
-      const checkoutUrl = `https://checkout.stripe.com/test/${sessionId}`;
-
-      // Guardar sesión pendiente
-      await getFirestore().collection("checkout_sessions").doc(sessionId).set({
-        userId,
-        tier,
-        provider: "stripe",
-        status: "pending",
-        amount: price.amount,
-        currency: price.currency,
-        createdAt: FieldValue.serverTimestamp(),
-        expiresAt: Timestamp.fromDate(
-            new Date(Date.now() + 24 * 60 * 60 * 1000),
-        ),
-      });
-
-      console.log(`✅ [createCheckoutSession] Stripe session creada: ${sessionId}`);
-
-      return {
-        sessionId,
-        checkoutUrl,
-        expiresIn: 24 * 60 * 60, // segundos
-        provider: "stripe",
-      };
-    }
-
-    throw new HttpsError(
-        "invalid-argument",
-        `Provider no soportado: ${provider}`,
-    );
-  } catch (error) {
-    console.error("❌ [createCheckoutSession] Error:", error);
-    throw new HttpsError("internal", error.message);
-  }
-});
+// createCheckoutSession REMOVED - Web payments (Stripe/MercadoPago) no longer used
+// Use IAP (verifyPlayStorePurchase, verifyAppStorePurchase) instead
 
 /**
- * Webhook para manejar pagos completados (Stripe)
- * HTTP endpoint que Stripe llamará cuando un pago se complete
+ * Cancelar suscripción premium
+ * Marca la suscripción como cancelada (el acceso continúa hasta expiración)
  */
-
 exports.cancelSubscription = onCall(async (request) => {
   try {
     console.log("🚫 [cancelSubscription] Cancelando suscripción");
@@ -430,12 +323,6 @@ exports.cancelSubscription = onCall(async (request) => {
     }
 
     const userData = userDoc.data();
-
-    // TODO: Si es suscripción de Stripe, cancelar en Stripe también
-    // const stripe = require('stripe')(functions.config().stripe.secret_key);
-    // if (userData.subscriptionId && userData.subscriptionType === 'stripe') {
-    //   await stripe.subscriptions.cancel(userData.subscriptionId);
-    // }
 
     // Actualizar estado (el premium sigue activo hasta la fecha de expiración)
     await getFirestore().collection("users").doc(userId).update({
@@ -475,75 +362,5 @@ exports.cancelSubscription = onCall(async (request) => {
   }
 });
 
-// ============================================================================
-// SECCIÓN: CLOUD FUNCTIONS PARA MIGRAR OPERACIONES DESDE CLIENTE
-// ============================================================================
-
-/**
- * Cloud Function para enviar mensaje en chat 1:1
- * Migrada desde chat_controller_optimistic.dart
- */
-
-exports.handleStripeWebhook = onRequest(async (req, res) => {
-  try {
-    console.log("🔔 [handleStripeWebhook] Webhook recibido");
-
-    // TODO: Verificar firma de Stripe
-    // const stripe = require('stripe')(functions.config().stripe.secret_key);
-    // const sig = req.headers['stripe-signature'];
-    // const event = stripe.webhooks.constructEvent(req.rawBody, sig, webhookSecret);
-
-    // Por ahora, simulación básica
-    const event = req.body;
-
-    if (event.type === "checkout.session.completed") {
-      const session = event.data.object;
-      const userId = session.metadata?.userId;
-      const tier = session.metadata?.tier;
-
-      if (!userId || !tier) {
-        console.error("❌ [handleStripeWebhook] Faltan metadata en sesión");
-        return res.status(400).send("Missing metadata");
-      }
-
-      console.log(`✅ [handleStripeWebhook] Pago completado: ${userId} - ${tier}`);
-
-      // Activar premium (1 mes de suscripción)
-      await getFirestore().collection("users").doc(userId).update({
-        isPremium: true,
-        subscriptionTier: tier,
-        premiumExpiresAt: Timestamp.fromDate(
-            new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 días
-        ),
-        subscriptionType: "stripe",
-        subscriptionId: session.subscription,
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-
-      // Crear registro de suscripción
-      await getFirestore().collection("subscriptions").add({
-        userId,
-        tier,
-        status: "active",
-        provider: "stripe",
-        startDate: Timestamp.now(),
-        endDate: Timestamp.fromDate(
-            new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-        ),
-        autoRenew: true,
-        amount: session.amount_total / 100,
-        currency: session.currency?.toUpperCase() || "USD",
-        subscriptionId: session.subscription,
-        createdAt: FieldValue.serverTimestamp(),
-      });
-    }
-
-    res.status(200).send("OK");
-  } catch (error) {
-    console.error("❌ [handleStripeWebhook] Error:", error);
-    res.status(500).send("Error processing webhook");
-  }
-});
-
-// handleMercadoPagoWebhook REMOVED - MercadoPago integration no longer used
+// handleStripeWebhook REMOVED - Stripe integration not implemented
 

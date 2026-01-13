@@ -219,10 +219,10 @@ exports.onUserNameUpdated = userProfile.onUserNameUpdated;
 // Pagos y suscripciones
 exports.checkPremiumStatus = payments.checkPremiumStatus;
 exports.activatePremium = payments.activatePremium;
-exports.createCheckoutSession = payments.createCheckoutSession;
+// createCheckoutSession REMOVED - use IAP instead (verifyPlayStorePurchase, verifyAppStorePurchase)
 exports.cancelSubscription = payments.cancelSubscription;
-exports.handleStripeWebhook = payments.handleStripeWebhook;
-// handleMercadoPagoWebhook REMOVED - no longer used
+// handleStripeWebhook REMOVED - Stripe not implemented
+// handleMercadoPagoWebhook REMOVED - MercadoPago no longer used
 
 // IAP Verification (In-App Purchases)
 exports.verifyPlayStorePurchase = iapVerification.verifyPlayStorePurchase;
