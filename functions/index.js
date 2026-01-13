@@ -161,11 +161,8 @@ exports.updateContactStatus = contacts.updateContactStatus;
 exports.revokeChildContact = contacts.revokeChildContact;
 exports.migrateContactsUserData = contacts.migrateContactsUserData;
 
-// Grupos (legacy - mantener para compatibilidad durante migración)
-exports.createGroup = groups.createGroup;
-exports.leaveGroup = groups.leaveGroup;
-exports.approveGroupPermission = groups.approveGroupPermission;
-exports.updateGroupPermissionStatus = groups.updateGroupPermissionStatus;
+// Grupos (legacy - solo funciones aún en uso)
+// createGroup, leaveGroup, approveGroupPermission, updateGroupPermissionStatus REMOVED - not used
 exports.processGroupInvitationsAfterContactApproval = groups.processGroupInvitationsAfterContactApproval;
 
 // Grupos V2 (nueva arquitectura con aprobación parental)
