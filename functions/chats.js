@@ -104,6 +104,8 @@ exports.onChatMessageCreated = onDocumentCreated(
   {
     document: "chats/{chatId}/messages/{messageId}",
     region: "us-central1",
+    memory: "512MiB",
+    timeoutSeconds: 120,
   },
   async (event) => {
     try {
