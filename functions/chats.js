@@ -1142,7 +1142,7 @@ exports.sendGroupMessage = onCall(
           // 3. Si hay moderadores en el grupo, analizar mensaje UNA vez
           if (moderatorsInGroup.length > 0) {
             try {
-              const { analyzeMessageWithGemini } = require("./groups");
+              const { analyzeMessageWithGemini } = require("./gemini-analyzer");
               const analysis = await analyzeMessageWithGemini(text, messageType, "", "high", [], []);
               const severity = analysis.severity || "none";
 

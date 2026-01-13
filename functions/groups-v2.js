@@ -10,7 +10,7 @@ const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const admin = require("firebase-admin");
 const { sendPushNotification } = require("./helpers");
-const { analyzeMessageWithGemini } = require("./groups");
+const { analyzeMessageWithGemini } = require("./gemini-analyzer");
 const { _moderateMultimediaInternal, _checkUserPremiumPlus } = require("./moderation");
 
 // Ensure Firebase Admin is initialized

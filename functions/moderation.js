@@ -4,7 +4,7 @@ const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
 const { getMessaging } = require("firebase-admin/messaging");
 const { getStorage } = require("firebase-admin/storage");
-const { analyzeMessageWithGemini } = require("./groups");
+const { analyzeMessageWithGemini } = require("./gemini-analyzer");
 const { sendDirectPushNotification } = require("./helpers");
 const { shouldBlockByModerationLevel, getParticipantsInfo, getMessagePreview, getModerationSettings } = require("./moderation-utils");
 const {

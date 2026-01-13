@@ -740,7 +740,7 @@ class ChatMessagingService {
       // 4. ✅ OPTIMIZACIÓN: Solo retornar true si hay moderación activa
       // El trigger `moderateMessage` se encargará de analizar el mensaje
       // El mensaje se guardará con `moderationStatus: pending` y el receptor
-      // no lo verá hasta que sea aprobado (filtrado en chat_controller_optimistic.dart)
+      // no lo verá hasta que sea aprobado (filtrado en el controller)
       ReleaseLogger.log('🔒 Moderación activada - mensaje será analizado por trigger', tag: 'Moderation');
       return true; // ✅ Retorna true para indicar que debe usar Cloud Function con requiresModeration
     } on ModerationBlockedException {
