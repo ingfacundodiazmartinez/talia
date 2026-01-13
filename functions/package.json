@@ -25,7 +25,6 @@
     "googleapis": "^144.0.0",
     "isomorphic-dompurify": "^2.31.0",
     "jsonwebtoken": "^9.0.3",
-    "mercadopago": "^2.9.0",
     "openai": "^4.73.0",
     "replicate": "^0.34.1",
     "sharp": "^0.33.5",

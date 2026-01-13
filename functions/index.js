@@ -225,7 +225,7 @@ exports.activatePremium = payments.activatePremium;
 exports.createCheckoutSession = payments.createCheckoutSession;
 exports.cancelSubscription = payments.cancelSubscription;
 exports.handleStripeWebhook = payments.handleStripeWebhook;
-exports.handleMercadoPagoWebhook = payments.handleMercadoPagoWebhook;
+// handleMercadoPagoWebhook REMOVED - no longer used
 
 // IAP Verification (In-App Purchases)
 exports.verifyPlayStorePurchase = iapVerification.verifyPlayStorePurchase;

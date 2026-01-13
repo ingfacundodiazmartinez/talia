@@ -8,26 +8,12 @@ const { getStorage } = require("firebase-admin/storage");
 const { RtcTokenBuilder, RtcRole } = require("agora-token");
 const apn = require("@parse/node-apn");
 const path = require("path");
-const {MercadoPagoConfig, PreApprovalPlan, PreApproval, Payment} = require("mercadopago");
+// MercadoPago REMOVED - no longer used
 
 // Cargar variables de entorno desde .env
 require("dotenv").config();
 
 initializeApp();
-
-// Configurar MercadoPago
-// NOTA: El access token se debe configurar en Firebase Config o .env
-// firebase functions:config:set mercadopago.access_token="TEST-XXXXX" (para testing)
-// firebase functions:config:set mercadopago.access_token="APP-XXXXX" (para producción)
-const MP_ACCESS_TOKEN = process.env.MERCADOPAGO_ACCESS_TOKEN || null;
-const MP_WEBHOOK_SECRET = process.env.MERCADOPAGO_WEBHOOK_SECRET || null;
-let mpClient = null;
-if (MP_ACCESS_TOKEN) {
-  mpClient = new MercadoPagoConfig({accessToken: MP_ACCESS_TOKEN});
-  console.log("✅ MercadoPago configurado");
-} else {
-  console.warn("⚠️ MercadoPago access token no configurado");
-}
 
 // ═══════════════════════════════════════════════════════════════
 // CONFIGURACIÓN DE VOIP PUSH (APNs)
@@ -780,9 +766,6 @@ module.exports = {
   // Configuraciones
   AGORA_APP_ID,
   AGORA_APP_CERTIFICATE,
-  MP_ACCESS_TOKEN,
-  MP_WEBHOOK_SECRET,
-  mpClient,
   corsOptions,
   ALLOWED_ORIGINS,
 };
