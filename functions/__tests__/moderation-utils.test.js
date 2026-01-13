@@ -290,4 +290,171 @@ describe('Moderation Utils', () => {
       });
     });
   });
+
+  // ═══════════════════════════════════════════════════════════════
+  // getMessagePreview - Create preview string for notifications
+  // ═══════════════════════════════════════════════════════════════
+
+  describe('getMessagePreview', () => {
+    const { getMessagePreview } = require('../moderation-utils');
+
+    test('should return text for text-only messages', () => {
+      const messageData = { text: 'Hello world' };
+      expect(getMessagePreview(messageData)).toBe('Hello world');
+    });
+
+    test('should truncate long text to 100 characters', () => {
+      const longText = 'A'.repeat(150);
+      const messageData = { text: longText };
+      expect(getMessagePreview(messageData)).toBe('A'.repeat(100) + '...');
+    });
+
+    test('should return audio emoji for audio messages', () => {
+      const messageData = { audioUrl: 'https://example.com/audio.mp3' };
+      expect(getMessagePreview(messageData)).toBe('🎤 Audio');
+    });
+
+    test('should return image emoji for image messages', () => {
+      const messageData = { imageUrl: 'https://example.com/image.png' };
+      expect(getMessagePreview(messageData)).toBe('📷 Imagen');
+    });
+
+    test('should return video emoji for video messages', () => {
+      const messageData = { videoUrl: 'https://example.com/video.mp4' };
+      expect(getMessagePreview(messageData)).toBe('🎥 Video');
+    });
+
+    test('should prioritize audio over image and video', () => {
+      const messageData = {
+        text: 'Some text',
+        audioUrl: 'https://example.com/audio.mp3',
+        imageUrl: 'https://example.com/image.png',
+      };
+      expect(getMessagePreview(messageData)).toBe('🎤 Audio');
+    });
+
+    test('should prioritize image over video', () => {
+      const messageData = {
+        text: 'Some text',
+        imageUrl: 'https://example.com/image.png',
+        videoUrl: 'https://example.com/video.mp4',
+      };
+      expect(getMessagePreview(messageData)).toBe('📷 Imagen');
+    });
+
+    test('should return empty string for empty message', () => {
+      expect(getMessagePreview({})).toBe('');
+    });
+
+    test('should handle null text gracefully', () => {
+      const messageData = { text: null };
+      expect(getMessagePreview(messageData)).toBe('');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // getModerationSettings - Get moderation config from chat or contact
+  // ═══════════════════════════════════════════════════════════════
+
+  describe('getModerationSettings', () => {
+    const { getModerationSettings } = require('../moderation-utils');
+
+    test('should return chat-level moderation when enabled', () => {
+      const chatData = {
+        moderationEnabled: true,
+        moderationLevel: 'medium',
+      };
+      const contactData = null;
+      const receiverId = 'receiver123';
+
+      const result = getModerationSettings(chatData, contactData, receiverId);
+
+      expect(result.enabled).toBe(true);
+      expect(result.level).toBe('medium');
+      expect(result.type).toBe('parent_chat');
+    });
+
+    test('should default to high level when chat moderation has no level', () => {
+      const chatData = {
+        moderationEnabled: true,
+      };
+      const contactData = null;
+      const receiverId = 'receiver123';
+
+      const result = getModerationSettings(chatData, contactData, receiverId);
+
+      expect(result.enabled).toBe(true);
+      expect(result.level).toBe('high');
+      expect(result.type).toBe('parent_chat');
+    });
+
+    test('should return contact-level moderation when chat moderation disabled', () => {
+      const chatData = {
+        moderationEnabled: false,
+      };
+      const contactData = {
+        moderationSettings: {
+          'receiver123': {
+            enabled: true,
+            level: 'low',
+          },
+        },
+      };
+      const receiverId = 'receiver123';
+
+      const result = getModerationSettings(chatData, contactData, receiverId);
+
+      expect(result.enabled).toBe(true);
+      expect(result.level).toBe('low');
+      expect(result.type).toBe('user_contact');
+    });
+
+    test('should return disabled when both chat and contact moderation off', () => {
+      const chatData = {
+        moderationEnabled: false,
+      };
+      const contactData = {
+        moderationSettings: {
+          'receiver123': {
+            enabled: false,
+          },
+        },
+      };
+      const receiverId = 'receiver123';
+
+      const result = getModerationSettings(chatData, contactData, receiverId);
+
+      expect(result.enabled).toBe(false);
+      expect(result.type).toBe('none');
+    });
+
+    test('should return disabled when no contact data', () => {
+      const chatData = {};
+      const contactData = null;
+      const receiverId = 'receiver123';
+
+      const result = getModerationSettings(chatData, contactData, receiverId);
+
+      expect(result.enabled).toBe(false);
+      expect(result.type).toBe('none');
+    });
+
+    test('should return disabled when contact has no settings for receiver', () => {
+      const chatData = {};
+      const contactData = {
+        moderationSettings: {
+          'other_user': {
+            enabled: true,
+            level: 'high',
+          },
+        },
+      };
+      const receiverId = 'receiver123';
+
+      const result = getModerationSettings(chatData, contactData, receiverId);
+
+      expect(result.enabled).toBe(false);
+      expect(result.type).toBe('none');
+    });
+  });
 });

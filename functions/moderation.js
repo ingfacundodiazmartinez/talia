@@ -6,7 +6,7 @@ const { getMessaging } = require("firebase-admin/messaging");
 const { getStorage } = require("firebase-admin/storage");
 const { analyzeMessageWithGemini } = require("./groups");
 const { sendDirectPushNotification } = require("./helpers");
-const { shouldBlockByModerationLevel, getParticipantsInfo } = require("./moderation-utils");
+const { shouldBlockByModerationLevel, getParticipantsInfo, getMessagePreview, getModerationSettings } = require("./moderation-utils");
 
 // ═══════════════════════════════════════════════════════════════
 // CONTEXT CACHE - Reduce Firestore reads for moderation
@@ -448,17 +448,8 @@ exports.moderateMessage = onDocumentCreated(
           const receiverId = participants.find((p) => p !== senderId);
 
           if (receiverId) {
-            // Determinar preview del mensaje
-            let messagePreview = messageData.text || "";
-            if (messageData.audioUrl) {
-              messagePreview = "🎤 Audio";
-            } else if (messageData.imageUrl) {
-              messagePreview = "📷 Imagen";
-            } else if (messageData.videoUrl) {
-              messagePreview = "🎥 Video";
-            } else if (messagePreview.length > 100) {
-              messagePreview = messagePreview.substring(0, 100) + "...";
-            }
+            // Determinar preview del mensaje - usando función utilitaria
+            const messagePreview = getMessagePreview(messageData);
 
             // ✅ FIX: Obtener nombre del sender para el push
             const senderDoc = await db.collection("users").doc(senderId).get();
@@ -528,12 +519,8 @@ exports.moderateMessage = onDocumentCreated(
           const senderName = senderDoc.exists ? (senderDoc.data().name || "Usuario") : "Usuario";
           const senderPhotoUrl = senderDoc.exists ? (senderDoc.data().photoURL || null) : null;
 
-          // Crear preview del mensaje
-          let messagePreview = messageData.text || "";
-          if (messageData.imageUrl) messagePreview = "📷 Imagen";
-          else if (messageData.videoUrl) messagePreview = "🎥 Video";
-          else if (messageData.audioUrl) messagePreview = "🎤 Audio";
-          else if (messagePreview.length > 100) messagePreview = messagePreview.substring(0, 100) + "...";
+          // Crear preview del mensaje - usando función utilitaria
+          const messagePreview = getMessagePreview(messageData);
 
           // Enviar push directo
           await sendDirectPushNotification({
@@ -858,27 +845,8 @@ exports.moderateMessage = onDocumentCreated(
 
         // Ya tenemos senderName y senderPhotoUrl del inicio (no volver a consultar)
 
-        // Crear preview del mensaje (truncar si es muy largo)
-        // ✅ FIX: Usar messageType que ya fue determinado correctamente al inicio
-        let messagePreview = messageText;
-        if (messageType === "image") {
-          messagePreview = "📷 Imagen";
-        } else if (messageType === "video") {
-          messagePreview = "🎥 Video";
-        } else if (messageType === "audio") {
-          messagePreview = "🎤 Audio";
-        } else if (messageText.length > 100) {
-          messagePreview = messageText.substring(0, 100) + "...";
-        }
-
-        // ✅ FIX: Fallback adicional por si messageType no se estableció
-        if (!messagePreview && messageData.audioUrl) {
-          messagePreview = "🎤 Audio";
-        } else if (!messagePreview && messageData.imageUrl) {
-          messagePreview = "📷 Imagen";
-        } else if (!messagePreview && messageData.videoUrl) {
-          messagePreview = "🎥 Video";
-        }
+        // Crear preview del mensaje - usando función utilitaria
+        const messagePreview = getMessagePreview(messageData);
 
         // ✅ OPTIMIZACIÓN: Enviar push directo SIN guardar en DB
         // Esto evita el crecimiento ilimitado de la colección 'notifications'
@@ -960,14 +928,9 @@ exports.moderateMessage = onDocumentCreated(
 
         // ✅ FIX: Actualizar lastMessage también en caso de error
         // para que el receptor pueda ver el mensaje en su lista de chats
-        const messageText = messageData?.text || "";
         const senderId = messageData?.senderId;
         if (chatId && senderId) {
-          let messagePreview = messageText;
-          if (messageData?.imageUrl) messagePreview = "📷 Imagen";
-          else if (messageData?.videoUrl) messagePreview = "🎥 Video";
-          else if (messageData?.audioUrl) messagePreview = "🎤 Audio";
-          else if (messageText.length > 100) messagePreview = messageText.substring(0, 100) + "...";
+          const messagePreview = getMessagePreview(messageData || {});
 
           await db.collection("chats").doc(chatId).update({
             lastMessage: messagePreview,

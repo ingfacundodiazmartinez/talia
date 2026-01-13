@@ -104,7 +104,85 @@ async function getParticipantsInfo(db, participantIds) {
   return { ages, locations };
 }
 
+/**
+ * Genera un preview del mensaje para mostrar en notificaciones.
+ * Centraliza la lógica que estaba duplicada en 5+ lugares de moderation.js.
+ *
+ * Prioridad: audio > imagen > video > texto
+ *
+ * @param {Object} messageData - Datos del mensaje
+ * @param {string} messageData.text - Texto del mensaje
+ * @param {string} messageData.audioUrl - URL del audio (opcional)
+ * @param {string} messageData.imageUrl - URL de la imagen (opcional)
+ * @param {string} messageData.videoUrl - URL del video (opcional)
+ * @returns {string} - Preview del mensaje
+ */
+function getMessagePreview(messageData) {
+  // Prioridad: audio > imagen > video > texto
+  if (messageData.audioUrl) {
+    return '🎤 Audio';
+  }
+  if (messageData.imageUrl) {
+    return '📷 Imagen';
+  }
+  if (messageData.videoUrl) {
+    return '🎥 Video';
+  }
+
+  // Texto: truncar si es muy largo
+  const text = messageData.text || '';
+  if (text.length > 100) {
+    return text.substring(0, 100) + '...';
+  }
+  return text;
+}
+
+/**
+ * Obtiene la configuración de moderación aplicable para un chat/contacto.
+ * Centraliza la lógica de decisión que estaba duplicada en moderation.js.
+ *
+ * Orden de prioridad:
+ * 1. Moderación por CHAT (activada por padre) - tiene prioridad
+ * 2. Moderación por CONTACTO (activada por receptor)
+ *
+ * @param {Object} chatData - Datos del documento de chat
+ * @param {Object|null} contactData - Datos del documento de contacto
+ * @param {string} receiverId - ID del receptor del mensaje
+ * @returns {{enabled: boolean, level: string, type: string}}
+ */
+function getModerationSettings(chatData, contactData, receiverId) {
+  // 1. Verificar moderación por CHAT (activada por padre)
+  if (chatData?.moderationEnabled) {
+    return {
+      enabled: true,
+      level: chatData.moderationLevel || 'high',
+      type: 'parent_chat',
+    };
+  }
+
+  // 2. Verificar moderación por CONTACTO (activada por receptor)
+  if (contactData?.moderationSettings) {
+    const receiverSettings = contactData.moderationSettings[receiverId] || {};
+    if (receiverSettings.enabled) {
+      return {
+        enabled: true,
+        level: receiverSettings.level || 'high',
+        type: 'user_contact',
+      };
+    }
+  }
+
+  // Sin moderación activa
+  return {
+    enabled: false,
+    level: 'none',
+    type: 'none',
+  };
+}
+
 module.exports = {
   shouldBlockByModerationLevel,
-  getParticipantsInfo
+  getParticipantsInfo,
+  getMessagePreview,
+  getModerationSettings,
 };
