@@ -1057,6 +1057,10 @@ exports.sendChatMessage = onCall(
         };
       } catch (error) {
         console.error("❌ [sendChatMessage] Error:", error);
+        // Preservar HttpsError originales (permission-denied, invalid-argument, etc.)
+        if (error instanceof HttpsError) {
+          throw error;
+        }
         throw new HttpsError("internal", error.message);
       }
     },
@@ -1230,6 +1234,10 @@ exports.sendGroupMessage = onCall(
         };
       } catch (error) {
         console.error("❌ [sendGroupMessage] Error:", error);
+        // Preservar HttpsError originales (permission-denied, not-found, etc.)
+        if (error instanceof HttpsError) {
+          throw error;
+        }
         throw new HttpsError("internal", error.message);
       }
     },

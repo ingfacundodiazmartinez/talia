@@ -19,39 +19,53 @@
  */
 
 describe('Chats Cloud Functions', () => {
-  let mockDb, mockAuth, mockRequest;
+  // Mock references que se mantienen entre llamadas
+  let mockDocGet;
+  let mockDocSet;
+  let mockDocUpdate;
+  let mockCollectionAdd;
+  let mockDb;
 
   beforeEach(() => {
     jest.clearAllMocks();
 
+    // Crear mocks que mantienen referencia
+    mockDocGet = jest.fn();
+    mockDocSet = jest.fn().mockResolvedValue();
+    mockDocUpdate = jest.fn().mockResolvedValue();
+    mockCollectionAdd = jest.fn();
+
+    const mockDoc = jest.fn(() => ({
+      get: mockDocGet,
+      set: mockDocSet,
+      update: mockDocUpdate,
+      collection: jest.fn(() => ({
+        add: mockCollectionAdd,
+        doc: mockDoc
+      }))
+    }));
+
+    // Mock para queries encadenados (.where().where().get(), etc.)
+    const mockQueryResult = { empty: true, docs: [], forEach: jest.fn() };
+    const mockQueryGet = jest.fn().mockResolvedValue(mockQueryResult);
+    const createChainableQuery = () => ({
+      where: jest.fn(() => createChainableQuery()),
+      limit: jest.fn(() => createChainableQuery()),
+      orderBy: jest.fn(() => createChainableQuery()),
+      get: mockQueryGet
+    });
+
     mockDb = {
       collection: jest.fn(() => ({
-        doc: jest.fn(() => ({
-          get: jest.fn(),
-          update: jest.fn(),
-          set: jest.fn()
-        })),
-        add: jest.fn(),
-        where: jest.fn(() => ({
-          where: jest.fn(() => ({
-            limit: jest.fn(() => ({
-              get: jest.fn()
-            }))
-          }))
-        }))
+        doc: mockDoc,
+        add: mockCollectionAdd,
+        where: jest.fn(() => createChainableQuery())
       })),
-      runTransaction: jest.fn()
+      runTransaction: jest.fn(),
+      getAll: jest.fn().mockResolvedValue([]) // Para batch reads
     };
 
-    mockAuth = {
-      uid: 'user-123'
-    };
-
-    mockRequest = {
-      auth: mockAuth,
-      data: {}
-    };
-
+    // Configurar mock de getFirestore
     const { getFirestore } = require('firebase-admin/firestore');
     getFirestore.mockReturnValue(mockDb);
   });
@@ -63,7 +77,7 @@ describe('Chats Cloud Functions', () => {
 
       const requestWithoutAuth = {
         auth: null,
-        data: { chatId: 'chat-123', content: 'Hello' }
+        data: { chatId: 'user-123_user-456', text: 'Hello' }
       };
 
       try {
@@ -75,51 +89,104 @@ describe('Chats Cloud Functions', () => {
       }
     });
 
-    test('❌ Debe fallar con contenido vacío', async () => {
+    test('❌ Debe fallar sin chatId', async () => {
       const { HttpsError } = require('firebase-functions/v2/https');
       const chats = require('../chats');
 
-      mockRequest.data = { chatId: 'chat-123', content: '' };
+      const request = {
+        auth: { uid: 'user-123' },
+        data: { text: 'Hello' } // Sin chatId
+      };
 
       try {
-        await chats.sendChatMessage.handler(mockRequest);
+        await chats.sendChatMessage.handler(request);
         fail('Should have thrown HttpsError');
       } catch (error) {
         expect(error).toBeInstanceOf(HttpsError);
         expect(error.code).toBe('invalid-argument');
+        expect(error.message).toContain('chatId');
       }
     });
 
-    test('✅ Debe enviar mensaje válido', async () => {
+    test('✅ Debe enviar mensaje de texto válido', async () => {
       const chats = require('../chats');
 
-      mockRequest.data = {
-        chatId: 'chat-123',
-        content: 'Hello world!',
-        messageType: 'text'
+      const request = {
+        auth: { uid: 'user-123' },
+        data: {
+          chatId: 'user-123_user-456',
+          text: 'Hello world!'
+        }
       };
 
-      // Mock chat existence
-      const mockChatDoc = {
+      // Mock: chat existe con los participantes correctos
+      mockDocGet.mockResolvedValue({
         exists: true,
         data: () => ({
-          participants: ['user-123', 'user-456'],
-          type: 'individual'
+          participants: ['user-123', 'user-456']
         })
-      };
-      mockDb.collection().doc().get.mockResolvedValue(mockChatDoc);
-
-      // Mock message creation
-      const mockMessageRef = { id: 'message-123' };
-      mockDb.collection().add.mockResolvedValue(mockMessageRef);
-
-      const result = await chats.sendChatMessage.handler(mockRequest);
-
-      expect(result).toEqual({
-        success: true,
-        messageId: 'message-123',
-        chatId: 'chat-123'
       });
+
+      // Mock: mensaje creado exitosamente
+      mockCollectionAdd.mockResolvedValue({ id: 'message-123' });
+
+      const result = await chats.sendChatMessage.handler(request);
+
+      expect(result.success).toBe(true);
+      expect(result.messageId).toBe('message-123');
+    });
+
+    test('❌ Debe fallar si sender no es participante del chatId', async () => {
+      const { HttpsError } = require('firebase-functions/v2/https');
+      const chats = require('../chats');
+
+      // El chatId indica que los participantes son user-123 y user-456
+      // Pero el sender es user-999, que no está en el chatId
+      const request = {
+        auth: { uid: 'user-999' }, // Usuario que NO está en el chatId
+        data: {
+          chatId: 'user-123_user-456', // Solo user-123 y user-456 pueden chatear
+          text: 'Hello'
+        }
+      };
+
+      // Mock: chat NO existe (se crea on-the-fly)
+      // La validación se hace por el formato del chatId, no por el documento
+      mockDocGet.mockResolvedValue({ exists: false });
+
+      try {
+        await chats.sendChatMessage.handler(request);
+        fail('Should have thrown HttpsError');
+      } catch (error) {
+        expect(error).toBeInstanceOf(HttpsError);
+        expect(error.code).toBe('permission-denied');
+      }
+    });
+
+    test('✅ Debe crear chat si no existe (formato válido)', async () => {
+      const chats = require('../chats');
+
+      const request = {
+        auth: { uid: 'user-123' },
+        data: {
+          chatId: 'user-123_user-456', // Formato correcto
+          text: 'First message!'
+        }
+      };
+
+      // Mock: chat NO existe
+      mockDocGet.mockResolvedValue({
+        exists: false
+      });
+
+      // Mock: mensaje creado
+      mockCollectionAdd.mockResolvedValue({ id: 'message-new' });
+
+      const result = await chats.sendChatMessage.handler(request);
+
+      expect(result.success).toBe(true);
+      // Verificar que se intentó crear el chat
+      expect(mockDocSet).toHaveBeenCalled();
     });
   });
 
@@ -128,23 +195,25 @@ describe('Chats Cloud Functions', () => {
       const { HttpsError } = require('firebase-functions/v2/https');
       const chats = require('../chats');
 
-      mockRequest.data = {
-        groupId: 'group-123',
-        content: 'Hello group!'
+      const request = {
+        auth: { uid: 'user-123' },
+        data: {
+          groupId: 'group-123',
+          text: 'Hello group!'
+        }
       };
 
-      // Mock group without user as member
-      const mockGroupDoc = {
+      // Mock: grupo existe pero user-123 no es miembro
+      mockDocGet.mockResolvedValue({
         exists: true,
         data: () => ({
-          members: ['user-456', 'user-789'], // user-123 not in members
-          type: 'group'
+          members: ['user-456', 'user-789'], // user-123 NO está
+          name: 'Test Group'
         })
-      };
-      mockDb.collection().doc().get.mockResolvedValue(mockGroupDoc);
+      });
 
       try {
-        await chats.sendGroupMessage.handler(mockRequest);
+        await chats.sendGroupMessage.handler(request);
         fail('Should have thrown HttpsError');
       } catch (error) {
         expect(error).toBeInstanceOf(HttpsError);
@@ -155,33 +224,56 @@ describe('Chats Cloud Functions', () => {
     test('✅ Debe enviar mensaje a grupo válido', async () => {
       const chats = require('../chats');
 
-      mockRequest.data = {
-        groupId: 'group-123',
-        content: 'Hello group!',
-        messageType: 'text'
+      const request = {
+        auth: { uid: 'user-123' },
+        data: {
+          groupId: 'group-123',
+          text: 'Hello group!'
+        }
       };
 
-      // Mock group with user as member
-      const mockGroupDoc = {
+      // Mock: grupo con user-123 como miembro
+      mockDocGet.mockResolvedValue({
         exists: true,
         data: () => ({
           members: ['user-123', 'user-456', 'user-789'],
-          type: 'group'
+          name: 'Test Group'
         })
-      };
-      mockDb.collection().doc().get.mockResolvedValue(mockGroupDoc);
-
-      // Mock message creation
-      const mockMessageRef = { id: 'group-message-123' };
-      mockDb.collection().add.mockResolvedValue(mockMessageRef);
-
-      const result = await chats.sendGroupMessage.handler(mockRequest);
-
-      expect(result).toEqual({
-        success: true,
-        messageId: 'group-message-123',
-        groupId: 'group-123'
       });
+
+      // Mock: mensaje creado
+      mockCollectionAdd.mockResolvedValue({ id: 'group-message-123' });
+
+      const result = await chats.sendGroupMessage.handler(request);
+
+      expect(result.success).toBe(true);
+      expect(result.messageId).toBe('group-message-123');
+    });
+
+    test('❌ Debe fallar si grupo no existe', async () => {
+      const { HttpsError } = require('firebase-functions/v2/https');
+      const chats = require('../chats');
+
+      const request = {
+        auth: { uid: 'user-123' },
+        data: {
+          groupId: 'nonexistent-group',
+          text: 'Hello!'
+        }
+      };
+
+      // Mock: grupo NO existe
+      mockDocGet.mockResolvedValue({
+        exists: false
+      });
+
+      try {
+        await chats.sendGroupMessage.handler(request);
+        fail('Should have thrown HttpsError');
+      } catch (error) {
+        expect(error).toBeInstanceOf(HttpsError);
+        expect(error.code).toBe('not-found');
+      }
     });
   });
 

@@ -32,7 +32,8 @@ jest.mock('firebase-admin/firestore', () => ({
     increment: jest.fn((value) => `MOCK_INCREMENT_${value}`)
   },
   Timestamp: {
-    now: jest.fn(() => ({ seconds: Date.now() / 1000 }))
+    now: jest.fn(() => ({ seconds: Date.now() / 1000, toDate: () => new Date() })),
+    fromDate: jest.fn((date) => ({ seconds: date.getTime() / 1000, toDate: () => date }))
   }
 }));
 
