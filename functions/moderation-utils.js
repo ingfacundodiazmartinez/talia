@@ -47,6 +47,64 @@ function shouldBlockByModerationLevel(analysis, moderationLevel) {
   return severityMap[effectiveLevel].includes(analysis.severity);
 }
 
+/**
+ * Obtiene información de los participantes (edades y ubicaciones)
+ * usando una única lectura batch de Firestore.
+ *
+ * OPTIMIZACIÓN: Reemplaza N queries secuenciales con 1 batch read.
+ * Antes: O(n) queries donde n = número de participantes
+ * Después: O(1) query batch
+ *
+ * @param {FirebaseFirestore.Firestore} db - Instancia de Firestore
+ * @param {string[]} participantIds - Array de IDs de usuarios
+ * @returns {Promise<{ages: number[], locations: string[]}>}
+ */
+async function getParticipantsInfo(db, participantIds) {
+  const ages = [];
+  const locations = [];
+
+  // Si no hay participantes, retornar arrays vacíos
+  if (!participantIds || participantIds.length === 0) {
+    return { ages, locations };
+  }
+
+  try {
+    // Crear referencias a todos los documentos de usuarios
+    const userRefs = participantIds.map(id => db.collection('users').doc(id));
+
+    // Fetch batch de todos los documentos en UNA sola llamada
+    const userDocs = await db.getAll(...userRefs);
+
+    // Procesar cada documento
+    for (const doc of userDocs) {
+      if (!doc.exists) continue;
+
+      const userData = doc.data();
+
+      // Extraer edad si existe birthDate
+      if (userData.birthDate) {
+        const birthDate = userData.birthDate.toDate
+          ? userData.birthDate.toDate()
+          : new Date(userData.birthDate);
+        const age = Math.floor((new Date() - birthDate) / (365.25 * 24 * 60 * 60 * 1000));
+        ages.push(age);
+      }
+
+      // Extraer ubicación (preferir location sobre country)
+      const location = userData.location || userData.country;
+      if (location) {
+        locations.push(location);
+      }
+    }
+  } catch (error) {
+    console.error('Error fetching participants info:', error);
+    // En caso de error, retornar arrays vacíos para no bloquear el flujo
+  }
+
+  return { ages, locations };
+}
+
 module.exports = {
-  shouldBlockByModerationLevel
+  shouldBlockByModerationLevel,
+  getParticipantsInfo
 };

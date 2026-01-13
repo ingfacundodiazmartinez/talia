@@ -6,7 +6,7 @@ const { getMessaging } = require("firebase-admin/messaging");
 const { getStorage } = require("firebase-admin/storage");
 const { analyzeMessageWithGemini } = require("./groups");
 const { sendDirectPushNotification } = require("./helpers");
-const { shouldBlockByModerationLevel } = require("./moderation-utils");
+const { shouldBlockByModerationLevel, getParticipantsInfo } = require("./moderation-utils");
 
 // ═══════════════════════════════════════════════════════════════
 // CONTEXT CACHE - Reduce Firestore reads for moderation
@@ -139,36 +139,13 @@ exports.checkMessageBeforeSending = onCall(
 
       console.log(`🔒 [Pre-moderación] Moderación activa (tipo: ${moderationType}, nivel: ${moderationLevel})`);
 
-      // 4. Obtener información de los participantes (edades y ubicaciones)
-      const participantsAges = [];
-      const participantsLocations = [];
+      // 4. Obtener información de los participantes (edades y ubicaciones) - BATCH OPTIMIZADO
+      console.log(`👥 [Pre-moderación] Obteniendo info de ${participants.length} participantes (batch)...`);
+      const { ages: participantsAges, locations: participantsLocations } = await getParticipantsInfo(db, participants);
+      console.log(`  - Edades: ${participantsAges.join(', ') || 'ninguna'}`);
+      console.log(`  - Ubicaciones: ${participantsLocations.join(', ') || 'ninguna'}`);
 
-      console.log(`👥 [Pre-moderación] Obteniendo info de ${participants.length} participantes...`);
-      for (const participantId of participants) {
-        try {
-          const userDoc = await db.collection("users").doc(participantId).get();
-          if (userDoc.exists) {
-            const userData = userDoc.data();
-            // Calcular edad si existe birthDate
-            if (userData.birthDate) {
-              const birthDate = userData.birthDate.toDate ? userData.birthDate.toDate() : new Date(userData.birthDate);
-              const age = Math.floor((new Date() - birthDate) / (365.25 * 24 * 60 * 60 * 1000));
-              participantsAges.push(age);
-              console.log(`  - Usuario ${participantId}: ${age} años`);
-            }
-            // Obtener ubicación si existe
-            if (userData.location || userData.country) {
-              const location = userData.location || userData.country;
-              participantsLocations.push(location);
-              console.log(`  - Ubicación: ${location}`);
-            }
-          }
-        } catch (e) {
-          console.error(`Error obteniendo info de participante ${participantId}:`, e);
-        }
-      }
-
-      // 4. Verificar tipo de contenido
+      // 5. Verificar tipo de contenido
       if (type === "image" && (!text || text.trim().length === 0)) {
         console.log(`📷 [Pre-moderación] Imagen sin texto, aprobando`);
         return { approved: true };
@@ -718,36 +695,13 @@ exports.moderateMessage = onDocumentCreated(
           console.log(`📖 [StoryReply-Moderation] CON moderación activa - analizando respuesta a historia`);
         }
 
-      // 4. Obtener información de los participantes (edades y ubicaciones)
-      const participantsAges = [];
-      const participantsLocations = [];
+      // 4. Obtener información de los participantes (edades y ubicaciones) - BATCH OPTIMIZADO
+      console.log(`👥 [Moderación] Obteniendo info de ${participants.length} participantes (batch)...`);
+      const { ages: participantsAges, locations: participantsLocations } = await getParticipantsInfo(db, participants);
+      console.log(`  - Edades: ${participantsAges.join(', ') || 'ninguna'}`);
+      console.log(`  - Ubicaciones: ${participantsLocations.join(', ') || 'ninguna'}`);
 
-      console.log(`👥 [Moderación] Obteniendo info de ${participants.length} participantes...`);
-      for (const participantId of participants) {
-        try {
-          const userDoc = await db.collection("users").doc(participantId).get();
-          if (userDoc.exists) {
-            const userData = userDoc.data();
-            // Calcular edad si existe birthDate
-            if (userData.birthDate) {
-              const birthDate = userData.birthDate.toDate ? userData.birthDate.toDate() : new Date(userData.birthDate);
-              const age = Math.floor((new Date() - birthDate) / (365.25 * 24 * 60 * 60 * 1000));
-              participantsAges.push(age);
-              console.log(`  - Usuario ${participantId}: ${age} años`);
-            }
-            // Obtener ubicación si existe
-            if (userData.location || userData.country) {
-              const location = userData.location || userData.country;
-              participantsLocations.push(location);
-              console.log(`  - Ubicación: ${location}`);
-            }
-          }
-        } catch (e) {
-          console.error(`Error obteniendo info de participante ${participantId}:`, e);
-        }
-      }
-
-        // 4. Extraer contenido del mensaje y determinar si necesita análisis de IA
+        // 5. Extraer contenido del mensaje y determinar si necesita análisis de IA
         let skipAIAnalysis = false;
 
         if (messageData.imageUrl && !messageText) {

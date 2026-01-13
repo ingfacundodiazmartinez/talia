@@ -7,9 +7,148 @@
  * que centraliza la lógica de decisión de bloqueo por moderación.
  */
 
-const { shouldBlockByModerationLevel } = require('../moderation-utils');
+const { shouldBlockByModerationLevel, getParticipantsInfo } = require('../moderation-utils');
 
 describe('Moderation Utils', () => {
+
+  // ═══════════════════════════════════════════════════════════════
+  // getParticipantsInfo - Batch fetch participant data
+  // ═══════════════════════════════════════════════════════════════
+
+  describe('getParticipantsInfo', () => {
+    let mockDb;
+
+    beforeEach(() => {
+      mockDb = {
+        collection: jest.fn(() => ({
+          doc: jest.fn((id) => ({
+            id,
+            path: `users/${id}`
+          }))
+        })),
+        getAll: jest.fn()
+      };
+    });
+
+    test('should return empty arrays when no participants', async () => {
+      const result = await getParticipantsInfo(mockDb, []);
+      expect(result.ages).toEqual([]);
+      expect(result.locations).toEqual([]);
+      expect(mockDb.getAll).not.toHaveBeenCalled();
+    });
+
+    test('should fetch all participants in single batch call', async () => {
+      const mockDocs = [
+        {
+          exists: true,
+          id: 'user1',
+          data: () => ({
+            birthDate: { toDate: () => new Date('2000-01-01') },
+            location: 'Argentina'
+          })
+        },
+        {
+          exists: true,
+          id: 'user2',
+          data: () => ({
+            birthDate: { toDate: () => new Date('1990-06-15') },
+            country: 'Mexico'
+          })
+        }
+      ];
+      mockDb.getAll.mockResolvedValue(mockDocs);
+
+      const result = await getParticipantsInfo(mockDb, ['user1', 'user2']);
+
+      // Should call getAll once with 2 refs
+      expect(mockDb.getAll).toHaveBeenCalledTimes(1);
+      expect(mockDb.collection).toHaveBeenCalledWith('users');
+
+      // Should have extracted ages and locations
+      expect(result.ages.length).toBe(2);
+      expect(result.locations).toEqual(['Argentina', 'Mexico']);
+    });
+
+    test('should handle non-existent users gracefully', async () => {
+      const mockDocs = [
+        { exists: false, id: 'user1' },
+        {
+          exists: true,
+          id: 'user2',
+          data: () => ({
+            birthDate: { toDate: () => new Date('1995-03-20') }
+          })
+        }
+      ];
+      mockDb.getAll.mockResolvedValue(mockDocs);
+
+      const result = await getParticipantsInfo(mockDb, ['user1', 'user2']);
+
+      expect(result.ages.length).toBe(1);
+      expect(result.locations).toEqual([]);
+    });
+
+    test('should handle users without birthDate', async () => {
+      const mockDocs = [
+        {
+          exists: true,
+          id: 'user1',
+          data: () => ({ location: 'Chile' })
+        }
+      ];
+      mockDb.getAll.mockResolvedValue(mockDocs);
+
+      const result = await getParticipantsInfo(mockDb, ['user1']);
+
+      expect(result.ages).toEqual([]);
+      expect(result.locations).toEqual(['Chile']);
+    });
+
+    test('should handle birthDate as string', async () => {
+      const mockDocs = [
+        {
+          exists: true,
+          id: 'user1',
+          data: () => ({
+            birthDate: '2000-01-01'
+          })
+        }
+      ];
+      mockDb.getAll.mockResolvedValue(mockDocs);
+
+      const result = await getParticipantsInfo(mockDb, ['user1']);
+
+      expect(result.ages.length).toBe(1);
+      expect(result.ages[0]).toBeGreaterThan(20);
+    });
+
+    test('should handle errors gracefully', async () => {
+      mockDb.getAll.mockRejectedValue(new Error('Firestore error'));
+
+      const result = await getParticipantsInfo(mockDb, ['user1', 'user2']);
+
+      expect(result.ages).toEqual([]);
+      expect(result.locations).toEqual([]);
+    });
+
+    test('should prefer location over country', async () => {
+      const mockDocs = [
+        {
+          exists: true,
+          id: 'user1',
+          data: () => ({
+            location: 'Buenos Aires',
+            country: 'Argentina'
+          })
+        }
+      ];
+      mockDb.getAll.mockResolvedValue(mockDocs);
+
+      const result = await getParticipantsInfo(mockDb, ['user1']);
+
+      expect(result.locations).toEqual(['Buenos Aires']);
+    });
+  });
   describe('shouldBlockByModerationLevel', () => {
 
     // ═══════════════════════════════════════════════════════════════
