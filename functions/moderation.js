@@ -7,15 +7,22 @@ const { getStorage } = require("firebase-admin/storage");
 const { analyzeMessageWithGemini } = require("./groups");
 const { sendDirectPushNotification } = require("./helpers");
 const { shouldBlockByModerationLevel, getParticipantsInfo, getMessagePreview, getModerationSettings } = require("./moderation-utils");
+const {
+  CONTEXT_CACHE_TTL_MS,
+  CONTEXT_CACHE_MAX_SIZE,
+  CONTEXT_MESSAGE_LIMIT,
+  REPORTED_MESSAGES_LIMIT,
+  MESSAGE_TTL_DAYS,
+  VALID_MODERATION_LEVELS,
+} = require("./moderation-constants");
 
 // ═══════════════════════════════════════════════════════════════
 // CONTEXT CACHE - Reduce Firestore reads for moderation
 // ═══════════════════════════════════════════════════════════════
 
-// ✅ OPTIMIZACIÓN: Cache de contexto con TTL de 60 segundos
+// ✅ OPTIMIZACIÓN: Cache de contexto con TTL configurable
 // Reduce ~30 lecturas por mensaje moderado
 const contextCache = new Map();
-const CONTEXT_CACHE_TTL_MS = 60000; // 1 minuto
 
 function getCachedContext(chatId) {
   const cached = contextCache.get(chatId);
@@ -32,8 +39,8 @@ function setCachedContext(chatId, conversationContext, reportedMessagesContext) 
     timestamp: Date.now()
   });
 
-  // Limpiar cache si crece demasiado (max 100 chats)
-  if (contextCache.size > 100) {
+  // Limpiar cache si crece demasiado
+  if (contextCache.size > CONTEXT_CACHE_MAX_SIZE) {
     const oldestKey = contextCache.keys().next().value;
     contextCache.delete(oldestKey);
   }
@@ -183,7 +190,7 @@ exports.checkMessageBeforeSending = onCall(
           .doc(chatId)
           .collection("messages")
           .orderBy("timestamp", "desc")
-          .limit(20)
+          .limit(CONTEXT_MESSAGE_LIMIT)
           .get();
 
         // Construir contexto en orden cronológico
@@ -206,7 +213,7 @@ exports.checkMessageBeforeSending = onCall(
             .doc(chatId)
             .collection("reported_messages")
             .orderBy("reportedAt", "desc")
-            .limit(10)
+            .limit(REPORTED_MESSAGES_LIMIT)
             .get();
 
           if (!reportedMessages.empty) {
@@ -307,7 +314,7 @@ exports.checkMessageBeforeSending = onCall(
       try {
         // ✅ TTL: deleteAt = now + 7 días (para auto-eliminación via Firestore TTL Policy)
         const now = new Date();
-        const deleteAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+        const deleteAt = new Date(now.getTime() + MESSAGE_TTL_DAYS * 24 * 60 * 60 * 1000);
 
         const blockedMessageData = {
           text: "", // Texto vacío - el widget BlockedMessageContent mostrará el mensaje genérico
@@ -722,7 +729,7 @@ exports.moderateMessage = onDocumentCreated(
         .doc(chatId)
         .collection("messages")
         .orderBy("timestamp", "desc")
-        .limit(20)
+        .limit(CONTEXT_MESSAGE_LIMIT)
         .get();
 
       // Construir contexto en orden cronológico
@@ -746,7 +753,7 @@ exports.moderateMessage = onDocumentCreated(
           .doc(chatId)
           .collection("reported_messages")
           .orderBy("reportedAt", "desc")
-          .limit(10) // Últimos 10 mensajes reportados
+          .limit(REPORTED_MESSAGES_LIMIT) // Últimos 10 mensajes reportados
           .get();
 
         if (!reportedMessages.empty) {
@@ -983,7 +990,7 @@ exports.createApprovedMessage = onCall(
     try {
       // ✅ TTL: deleteAt = now + 7 días (para auto-eliminación via Firestore TTL Policy)
       const now = new Date();
-      const deleteAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+      const deleteAt = new Date(now.getTime() + MESSAGE_TTL_DAYS * 24 * 60 * 60 * 1000);
 
       // ✅ FIX: Preparar datos del mensaje con localId si está disponible
       const messageData = {
@@ -1058,9 +1065,8 @@ exports.setOwnModeration = onCall(
       throw new HttpsError("invalid-argument", "contactId es requerido");
     }
 
-    const validLevels = ["high", "medium", "low", "none"];
-    if (!validLevels.includes(level)) {
-      throw new HttpsError("invalid-argument", `Nivel no válido. Usar: ${validLevels.join(", ")}`);
+    if (!VALID_MODERATION_LEVELS.includes(level)) {
+      throw new HttpsError("invalid-argument", `Nivel no válido. Usar: ${VALID_MODERATION_LEVELS.join(", ")}`);
     }
 
     const db = getFirestore();
