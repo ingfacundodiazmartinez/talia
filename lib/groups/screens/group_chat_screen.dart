@@ -2,7 +2,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
@@ -27,6 +26,7 @@ import '../../utils/release_logger.dart';
 import '../../services/local_unread_count_service.dart';
 import '../../services/notification_tracking_service.dart';
 import '../../screens/chat/widgets/recording_input_bar.dart';
+import '../../screens/chat/widgets/emoji_picker_widget.dart';
 import '../../widgets/profile_photo_viewer.dart';
 import '../../services/contact_alias_service.dart';
 
@@ -1177,44 +1177,10 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
   }
 
   Widget _buildEmojiPicker() {
-    final colorScheme = Theme.of(context).colorScheme;
-    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
-
-    return SizedBox(
-      height: 250,
-      child: EmojiPicker(
-        onEmojiSelected: (category, emoji) {
-          _messageController.text += emoji.emoji;
-        },
-        config: Config(
-          height: 250,
-          checkPlatformCompatibility: true,
-          emojiViewConfig: EmojiViewConfig(
-            columns: 7,
-            emojiSizeMax: 32.0,
-            verticalSpacing: 0,
-            horizontalSpacing: 0,
-            gridPadding: EdgeInsets.zero,
-            backgroundColor:
-                isDarkMode ? colorScheme.surface : const Color(0xFFF2F2F2),
-            buttonMode: ButtonMode.MATERIAL,
-            recentsLimit: 28,
-            noRecents: const Text(
-              'Sin emojis recientes',
-              style: TextStyle(fontSize: 20, color: Colors.black26),
-              textAlign: TextAlign.center,
-            ),
-            loadingIndicator: const SizedBox.shrink(),
-          ),
-          categoryViewConfig: CategoryViewConfig(
-            initCategory: Category.RECENT,
-            indicatorColor: colorScheme.primary,
-            iconColor: Colors.grey,
-            iconColorSelected: colorScheme.primary,
-            backspaceColor: colorScheme.primary,
-          ),
-        ),
-      ),
+    return EmojiPickerWidget(
+      onEmojiSelected: (category, emoji) {
+        _messageController.text += emoji.emoji;
+      },
     );
   }
 }
