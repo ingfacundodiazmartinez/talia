@@ -7,13 +7,11 @@ import 'package:path_provider/path_provider.dart';
 import '../controllers/chat_controller_cache_first.dart';
 import '../utils/release_logger.dart';
 import '../notification_service.dart';
-import '../services/reaction_service.dart';
 import '../services/local_unread_count_service.dart';
 import '../services/notification_tracking_service.dart';
 import '../services/user_cache_service.dart';
 import '../services/speech_to_text_service.dart';
 import '../calls_v2/screens/agora_call_screen.dart';
-import '../widgets/reaction_picker.dart';
 import 'chat/widgets/chat_app_bar.dart';
 import 'chat/widgets/chat_input_bar.dart';
 import 'chat/widgets/reply_bar.dart';
@@ -25,6 +23,7 @@ import 'chat/widgets/emoji_picker_widget.dart';
 import 'chat/widgets/message_list_widget.dart';
 import 'chat/widgets/chat_selection_bar_widget.dart';
 import 'chat/widgets/media_handlers_mixin.dart';
+import 'chat/mixins/reaction_picker_mixin.dart';
 import 'contact_profile_screen.dart';
 import 'forward_messages_screen.dart';
 
@@ -54,7 +53,7 @@ class ChatDetailScreen extends StatefulWidget {
 }
 
 class _ChatDetailScreenState extends State<ChatDetailScreen>
-    with WidgetsBindingObserver, MediaHandlersMixin {
+    with WidgetsBindingObserver, MediaHandlersMixin, ReactionPickerMixin {
   // Controller - MIGRATED TO CACHE-FIRST
   late final ChatControllerCacheFirst _controller;
 
@@ -62,7 +61,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final RecorderController _recorderController = RecorderController();
-  final ReactionService _reactionService = ReactionService();
   final UserCacheService _userCacheService = UserCacheService();
   final SpeechToTextService _sttService = SpeechToTextService();
   String? _currentRecordingPath;
@@ -72,7 +70,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   bool _showEmojiPicker = false;
   bool _isRecording = false;
   Map<String, dynamic>? _replyingTo;
-  OverlayEntry? _reactionOverlay;
   bool _isSelectionMode = false;
   final Set<String> _selectedMessageIds = {};
   String? _highlightedMessageId;
@@ -189,7 +186,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     _recorderController.dispose();
-    _reactionOverlay?.remove();
+    disposeReactionPicker();
     super.dispose();
   }
 
@@ -514,70 +511,14 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     );
   }
 
-  void _showReactionPicker(BuildContext messageContext, String messageId) async {
-    FocusScope.of(context).unfocus();
-    final screenWidth = MediaQuery.of(context).size.width;
-    final overlay = Overlay.of(context);
-    final RenderBox? renderBox = messageContext.findRenderObject() as RenderBox?;
-
-    await Future.delayed(const Duration(milliseconds: 100));
-
-    if (renderBox == null) return;
-
-    final position = renderBox.localToGlobal(Offset.zero);
-    final size = renderBox.size;
-
-    const pickerWidth = 280.0;
-    double leftPosition = position.dx;
-
-    if (leftPosition + pickerWidth > screenWidth) {
-      leftPosition = position.dx + size.width - pickerWidth;
-      if (leftPosition < 0) {
-        leftPosition = (screenWidth - pickerWidth) / 2;
-      }
-    }
-
-    _reactionOverlay?.remove();
-    _reactionOverlay = OverlayEntry(
-      builder: (context) => GestureDetector(
-        onTap: () {
-          _reactionOverlay?.remove();
-          _reactionOverlay = null;
-        },
-        child: Container(
-          color: Colors.transparent,
-          child: Stack(
-            children: [
-              Positioned(
-                top: position.dy - 60,
-                left: leftPosition,
-                child: Material(
-                  color: Colors.transparent,
-                  child: ReactionPicker(
-                    onReactionSelected: (reaction) {
-                      _reactionOverlay?.remove();
-                      _reactionOverlay = null;
-                      _reactionService.toggleReaction(
-                        chatId: widget.chatId,
-                        messageId: messageId,
-                        reaction: reaction,
-                      );
-                    },
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
+  /// Wrapper que utiliza el mixin compartido para mostrar el picker de reacciones
+  void _showReactionPicker(BuildContext messageContext, String messageId) {
+    showReactionPicker(
+      messageContext,
+      messageId,
+      chatId: widget.chatId,
+      isGroup: false,
     );
-
-    overlay.insert(_reactionOverlay!);
-
-    Future.delayed(const Duration(seconds: 5), () {
-      _reactionOverlay?.remove();
-      _reactionOverlay = null;
-    });
   }
 
   Future<void> _handleDeleteMessage(String messageId, Timestamp? timestamp) async {
