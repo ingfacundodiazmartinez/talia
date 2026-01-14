@@ -466,9 +466,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       );
 
       if (transformedPath != null && mounted) {
-        // ✅ PASO 4: Incrementar contador de uso
-        await _usageLimitsService.incrementFaceSwapDailyUsage();
-
+        // Nota: El contador de uso se incrementa en el servidor (transformations.js)
         // Limpiar selección de personaje
         setState(() {
           _selectedFaceSwapCharacter = null;

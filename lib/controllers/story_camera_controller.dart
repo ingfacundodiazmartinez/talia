@@ -1192,10 +1192,9 @@ class StoryCameraController {
         },
       );
 
-      // Incrementar contador de face swap
-      await _usageLimitsService.incrementFaceSwapUsage();
+      // Nota: El contador de uso se incrementa en el servidor (transformations.js)
       await _markFaceSwapAsUsed();
-      final usage = await _usageLimitsService.getFaceSwapUsage();
+      final usage = await _usageLimitsService.getFaceSwapUsageByTier();
 
       // Descargar imagen transformada y reemplazar archivo original
       if (_isProgressDialogOpen) {
@@ -1355,10 +1354,9 @@ class StoryCameraController {
         },
       );
 
-      // Incrementar contador
-      await _usageLimitsService.incrementFaceSwapUsage();
+      // Nota: El contador de uso se incrementa en el servidor (transformations.js)
       await _markFaceSwapAsUsed();
-      final usage = await _usageLimitsService.getFaceSwapUsage();
+      final usage = await _usageLimitsService.getFaceSwapUsageByTier();
 
       // Guardar resultado
       if (_isProgressDialogOpen) {

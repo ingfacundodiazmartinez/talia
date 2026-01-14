@@ -6,6 +6,7 @@ const { getMessaging } = require("firebase-admin/messaging");
 const { getStorage } = require("firebase-admin/storage");
 const { getRemoteConfig } = require("firebase-admin/remote-config");
 const Replicate = require("replicate");
+const OpenAI = require("openai");
 const sharp = require("sharp");
 const axios = require("axios");
 const { v4: uuidv4 } = require("uuid");
@@ -210,6 +211,75 @@ async function incrementFaceSwapCount(userId, tier) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// HELPER: Selección de modelo de IA
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Determinar qué modelo de IA usar para la transformación
+ * @param {object} characterData - Datos del personaje de Firestore
+ * @returns {string} Identificador del modelo: 'face_swap', 'p_image_edit', o 'nano_banana'
+ */
+function determineAiModel(characterData) {
+  const aiModel = characterData.aiModel || "auto";
+
+  switch (aiModel) {
+    case "face_swap":
+      return "face_swap";
+    case "p_image_edit":
+      return "p_image_edit";
+    case "nano_banana":
+      return "nano_banana";
+    case "auto":
+    default:
+      // Comportamiento legacy: usar prompt para determinar
+      const hasPrompt = characterData.prompt && characterData.prompt.trim().length > 0;
+      return hasPrompt ? "p_image_edit" : "face_swap";
+  }
+}
+
+/**
+ * Editar imagen usando Nano Banana de Google (via Replicate)
+ * Edita una imagen existente basándose en el prompt (image-to-image)
+ * Precio: ~$0.039/imagen
+ * @param {string} prompt - Prompt para la edición
+ * @param {string} inputImageUrl - URL de la imagen a editar
+ * @returns {Promise<string>} URL de la imagen editada
+ */
+async function transformWithNanoBanana(prompt, inputImageUrl) {
+  const replicateToken = process.env.REPLICATE_API_TOKEN;
+  if (!replicateToken) {
+    throw new Error("REPLICATE_API_TOKEN no configurado");
+  }
+
+  const replicate = new Replicate({ auth: replicateToken });
+
+  console.log(`🍌 [Nano-Banana] Editando imagen con prompt: ${prompt.substring(0, 100)}...`);
+  console.log(`   Input image: ${inputImageUrl.substring(0, 80)}...`);
+
+  const output = await replicate.run("google/nano-banana", {
+    input: {
+      prompt: prompt,
+      image_input: [inputImageUrl],
+      aspect_ratio: "match_input_image",
+      output_format: "png",
+    },
+  });
+
+  console.log(`✅ [Nano-Banana] Imagen editada exitosamente`);
+
+  // Replicate devuelve URL directamente (o array de URLs)
+  const resultUrl = Array.isArray(output) ? output[0] : output;
+
+  if (!resultUrl) {
+    console.error(`❌ [Nano-Banana] Response inesperado:`, JSON.stringify(output).substring(0, 200));
+    throw new Error("Nano Banana no devolvió una URL válida");
+  }
+
+  console.log(`✅ [Nano-Banana] Resultado: ${resultUrl}`);
+  return resultUrl;
+}
+
+// ═══════════════════════════════════════════════════════════════
 // HELPER: Normalizar orientación de imagen (fix EXIF rotation)
 // ═══════════════════════════════════════════════════════════════
 
@@ -372,14 +442,11 @@ exports.transformCharacter = onCall(
         auth: replicateToken,
       });
 
-      // 4. Determinar qué modelo usar:
-      // - Si tiene prompt → p-image-edit (transformación por prompt)
-      // - Si no tiene prompt → face-swap (intercambio de cara tradicional)
-      const usePromptTransformation = characterData.prompt && characterData.prompt.trim().length > 0;
+      // 4. Determinar qué modelo usar según configuración del personaje
+      const selectedModel = determineAiModel(characterData);
 
-      console.log(`🤖 [TransformCharacter] Llamando a Replicate API...`);
-      console.log(`   Modo: ${usePromptTransformation ? "p-image-edit (prompt)" : "face-swap (tradicional)"}`);
-      if (!usePromptTransformation) {
+      console.log(`🤖 [TransformCharacter] Modelo seleccionado: ${selectedModel}`);
+      if (selectedModel === "face_swap") {
         console.log(`   input_image (personaje): ${characterData.referenceImageUrl}`);
         console.log(`   swap_image (usuario): ${imageUrl}`);
       } else {
@@ -390,99 +457,123 @@ exports.transformCharacter = onCall(
       let output;
       let predictionId;
       try {
-        console.log(`🚀 [TransformCharacter] Creando predicción...`);
-
-        // Crear predicción según el tipo de transformación
-        let prediction;
-
         // Variable para guardar el path del archivo temporal (para limpieza)
         let tempFilePath = null;
 
-        if (usePromptTransformation) {
-          // Usar prunaai/p-image-edit para transformaciones con prompt
-          // Normalizar orientación EXIF (fix para fotos de iPhone rotadas)
-          const normalized = await normalizeImageOrientation(imageUrl, userId);
-          tempFilePath = normalized.filePath;
-          console.log(`   Imagen normalizada: ${normalized.url.substring(0, 100)}...`);
-
-          prediction = await replicate.predictions.create({
-            model: "prunaai/p-image-edit",
-            input: {
-              prompt: characterData.prompt,
-              images: [normalized.url], // Imagen con orientación corregida
-              turbo: true,
-              aspect_ratio: "match_input_image",
-              disable_safety_checker: false,
-            },
-          });
-        } else {
-          // Usar codeplugtech/face-swap para intercambio de cara tradicional
-          prediction = await replicate.predictions.create({
-            version: "278a81e7ebb22db98bcba54de985d22cc1abeead2754eb1f2af717247be69b34",
-            input: {
-              input_image: characterData.referenceImageUrl,
-              swap_image: imageUrl,
-            },
-          });
-        }
-
-        predictionId = prediction.id;
-        console.log(`✅ [TransformCharacter] Predicción creada: ${predictionId}`);
-        console.log(`   Estado inicial: ${prediction.status}`);
-
-        // Hacer polling del estado hasta que complete
-        let currentPrediction = prediction;
-        let pollCount = 0;
-        const maxPolls = 60; // 60 polls x 2 segundos = 2 minutos máximo
-
-        while (
-          currentPrediction.status !== "succeeded" &&
-          currentPrediction.status !== "failed" &&
-          currentPrediction.status !== "canceled" &&
-          pollCount < maxPolls
-        ) {
-          // Esperar 2 segundos antes de hacer polling
-          await new Promise((resolve) => setTimeout(resolve, 2000));
-
-          // Obtener estado actualizado
-          currentPrediction = await replicate.predictions.get(predictionId);
-          pollCount++;
-
-          // Log de progreso
-          const progressInfo = [];
-          progressInfo.push(`Poll #${pollCount}`);
-          progressInfo.push(`Estado: ${currentPrediction.status}`);
-
-          if (currentPrediction.logs) {
-            const logs = currentPrediction.logs.split("\n").filter((line) => line.trim());
-            const lastLog = logs[logs.length - 1];
-            if (lastLog) {
-              progressInfo.push(`Log: ${lastLog.substring(0, 100)}`);
-            }
+        // ═══════════════════════════════════════════════════════════════
+        // Nano Banana: Edición directa con OpenAI (sin polling)
+        // ═══════════════════════════════════════════════════════════════
+        if (selectedModel === "nano_banana") {
+          if (!characterData.prompt || !characterData.prompt.trim()) {
+            throw new HttpsError("invalid-argument", "Nano Banana requiere un prompt configurado en el personaje");
           }
 
-          console.log(`⏳ [TransformCharacter] ${progressInfo.join(" | ")}`);
-        }
+          console.log(`🎨 [TransformCharacter] Usando Nano Banana 1.5...`);
+          const nanoBananaUrl = await transformWithNanoBanana(characterData.prompt, imageUrl);
 
-        if (currentPrediction.status === "succeeded") {
-          output = currentPrediction.output;
-          console.log(`✅ [TransformCharacter] Predicción completada exitosamente`);
-        } else if (currentPrediction.status === "failed") {
-          console.error(`❌ [TransformCharacter] Predicción falló`);
-          console.error(`   Error: ${currentPrediction.error}`);
-          throw new Error(`Transformación falló: ${currentPrediction.error || "Error desconocido"}`);
-        } else if (currentPrediction.status === "canceled") {
-          throw new Error("Transformación cancelada");
+          // Nano Banana retorna directamente, no hay polling
+          output = nanoBananaUrl;
+          predictionId = `nano_banana_${Date.now()}`;
+          console.log(`✅ [TransformCharacter] Nano Banana completado`);
+
         } else {
-          throw new Error(`Timeout esperando transformación (${pollCount} intentos)`);
-        }
-      } catch (replicateError) {
-        console.error(`❌ Error de Replicate API: ${replicateError.message}`);
-        console.error(`   Stack: ${replicateError.stack}`);
+          // ═══════════════════════════════════════════════════════════════
+          // REPLICATE: p-image-edit o face-swap (con polling)
+          // ═══════════════════════════════════════════════════════════════
+          console.log(`🚀 [TransformCharacter] Creando predicción en Replicate...`);
+
+          let prediction;
+
+          if (selectedModel === "p_image_edit") {
+            // Usar prunaai/p-image-edit para transformaciones con prompt
+            if (!characterData.prompt || !characterData.prompt.trim()) {
+              throw new HttpsError("invalid-argument", "p-image-edit requiere un prompt configurado en el personaje");
+            }
+
+            // Normalizar orientación EXIF (fix para fotos de iPhone rotadas)
+            const normalized = await normalizeImageOrientation(imageUrl, userId);
+            tempFilePath = normalized.filePath;
+            console.log(`   Imagen normalizada: ${normalized.url.substring(0, 100)}...`);
+
+            prediction = await replicate.predictions.create({
+              model: "prunaai/p-image-edit",
+              input: {
+                prompt: characterData.prompt,
+                images: [normalized.url], // Imagen con orientación corregida
+                turbo: true,
+                aspect_ratio: "match_input_image",
+                disable_safety_checker: false,
+              },
+            });
+          } else {
+            // face_swap: Usar codeplugtech/face-swap para intercambio de cara tradicional
+            prediction = await replicate.predictions.create({
+              version: "278a81e7ebb22db98bcba54de985d22cc1abeead2754eb1f2af717247be69b34",
+              input: {
+                input_image: characterData.referenceImageUrl,
+                swap_image: imageUrl,
+              },
+            });
+          }
+
+          predictionId = prediction.id;
+          console.log(`✅ [TransformCharacter] Predicción creada: ${predictionId}`);
+          console.log(`   Estado inicial: ${prediction.status}`);
+
+          // Hacer polling del estado hasta que complete
+          let currentPrediction = prediction;
+          let pollCount = 0;
+          const maxPolls = 60; // 60 polls x 2 segundos = 2 minutos máximo
+
+          while (
+            currentPrediction.status !== "succeeded" &&
+            currentPrediction.status !== "failed" &&
+            currentPrediction.status !== "canceled" &&
+            pollCount < maxPolls
+          ) {
+            // Esperar 2 segundos antes de hacer polling
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+
+            // Obtener estado actualizado
+            currentPrediction = await replicate.predictions.get(predictionId);
+            pollCount++;
+
+            // Log de progreso
+            const progressInfo = [];
+            progressInfo.push(`Poll #${pollCount}`);
+            progressInfo.push(`Estado: ${currentPrediction.status}`);
+
+            if (currentPrediction.logs) {
+              const logs = currentPrediction.logs.split("\n").filter((line) => line.trim());
+              const lastLog = logs[logs.length - 1];
+              if (lastLog) {
+                progressInfo.push(`Log: ${lastLog.substring(0, 100)}`);
+              }
+            }
+
+            console.log(`⏳ [TransformCharacter] ${progressInfo.join(" | ")}`);
+          }
+
+          if (currentPrediction.status === "succeeded") {
+            output = currentPrediction.output;
+            console.log(`✅ [TransformCharacter] Predicción completada exitosamente`);
+          } else if (currentPrediction.status === "failed") {
+            console.error(`❌ [TransformCharacter] Predicción falló`);
+            console.error(`   Error: ${currentPrediction.error}`);
+            throw new Error(`Transformación falló: ${currentPrediction.error || "Error desconocido"}`);
+          } else if (currentPrediction.status === "canceled") {
+            throw new Error("Transformación cancelada");
+          } else {
+            throw new Error(`Timeout esperando transformación (${pollCount} intentos)`);
+          }
+        } // End of Replicate else block
+      } catch (transformError) {
+        console.error(`❌ Error en transformación: ${transformError.message}`);
+        console.error(`   Stack: ${transformError.stack}`);
         if (predictionId) {
           console.error(`   Prediction ID: ${predictionId}`);
         }
-        throw replicateError;
+        throw transformError;
       }
 
       console.log(`✅ [TransformCharacter] Transformación completada`);
@@ -662,88 +753,159 @@ exports.createCharacterTransformation = onCall(
 
       console.log(`📄 [CreateCharacterTransformation] Documento de estado creado: ${statusDocId}`);
 
-      // 5. Crear predicción en Replicate
-      // Determinar qué modelo usar:
-      // - Si tiene prompt → p-image-edit (transformación por prompt)
-      // - Si no tiene prompt → face-swap (intercambio de cara tradicional)
-      const usePromptTransformation = characterData.prompt && characterData.prompt.trim().length > 0;
+      // 5. Determinar qué modelo usar según configuración del personaje
+      const selectedModel = determineAiModel(characterData);
 
-      console.log(`🚀 [CreateCharacterTransformation] Creando predicción en Replicate...`);
-      console.log(`   Modo: ${usePromptTransformation ? "p-image-edit (prompt)" : "face-swap (tradicional)"}`);
+      console.log(`🚀 [CreateCharacterTransformation] Modelo seleccionado: ${selectedModel}`);
+
+      const transformationTypeMap = {
+        "face_swap": "faceSwap",
+        "p_image_edit": "prompt",
+        "nano_banana": "nanoBanana",
+      };
 
       await statusDocRef.update({
         status: "creating_prediction",
         progress: 0.1,
-        message: usePromptTransformation ? "Aplicando transformación..." : "Conectando con IA...",
-        transformationType: usePromptTransformation ? "prompt" : "faceSwap",
+        message: selectedModel === "nano_banana" ? "Editando con Nano Banana..." : "Conectando con IA...",
+        transformationType: transformationTypeMap[selectedModel] || "faceSwap",
+        aiModel: selectedModel,
         updatedAt: FieldValue.serverTimestamp(),
       });
 
-      let prediction;
-      let tempFilePath = null; // Para limpieza de archivo temporal después del polling
+      let prediction = null;
+      let tempFilePath = null;
+      let nanoBananaResultUrl = null;
 
-      if (usePromptTransformation) {
-        // Usar prunaai/p-image-edit para transformaciones con prompt
-        // Model: prunaai/p-image-edit
-        // Costo: ~$0.01 por imagen (100 runs por $1)
-        // Ejecución: <1 segundo en H100 GPU
-        console.log(`🎨 [CreateCharacterTransformation] Usando p-image-edit`);
+      // ═══════════════════════════════════════════════════════════════
+      // Nano Banana: Edición directa con OpenAI (sin polling)
+      // ═══════════════════════════════════════════════════════════════
+      if (selectedModel === "nano_banana") {
+        if (!characterData.prompt || !characterData.prompt.trim()) {
+          throw new HttpsError("invalid-argument", "Nano Banana requiere un prompt configurado en el personaje");
+        }
+
+        console.log(`🎨 [CreateCharacterTransformation] Usando Nano Banana 1.5`);
         console.log(`   Prompt: ${characterData.prompt}`);
-        console.log(`   Imagen usuario: ${imageUrl}`);
 
-        // Normalizar orientación EXIF (fix para fotos de iPhone rotadas)
         await statusDocRef.update({
-          status: "processing_image",
-          progress: 0.15,
-          message: "Preparando imagen...",
+          status: "generating",
+          progress: 0.3,
+          message: `Editando imagen con ${characterData.name}...`,
           updatedAt: FieldValue.serverTimestamp(),
         });
 
-        const normalized = await normalizeImageOrientation(imageUrl, userId);
-        tempFilePath = normalized.filePath;
-        console.log(`   Imagen normalizada: ${normalized.url.substring(0, 100)}...`);
-
-        prediction = await replicate.predictions.create({
-          model: "prunaai/p-image-edit",
-          input: {
-            prompt: characterData.prompt,
-            images: [normalized.url], // Imagen con orientación corregida
-            turbo: true, // Modo rápido
-            aspect_ratio: "match_input_image",
-            disable_safety_checker: false,
-          },
-        });
-      } else {
-        // Usar codeplugtech/face-swap para intercambio de cara tradicional
-        // Model: codeplugtech/face-swap
-        // Costo: ~$0.0025 por transformación (400 runs por $1)
-        prediction = await replicate.predictions.create({
-          version: "278a81e7ebb22db98bcba54de985d22cc1abeead2754eb1f2af717247be69b34",
-          input: {
-            input_image: characterData.referenceImageUrl,
-            swap_image: imageUrl,
-          },
-        });
-      }
-
-      console.log(`✅ [CreateCharacterTransformation] Predicción creada: ${prediction.id}`);
-      console.log(`   Estado: ${prediction.status}`);
-
-      // 6. Actualizar con predictionId
-      await statusDocRef.update({
-        predictionId: prediction.id,
-        status: prediction.status,
-        progress: 0.2,
-        message: `Procesando con ${characterData.name}...`,
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-
-      // 7. Hacer polling en background y actualizar Firestore
-      // Esto ocurre de forma asíncrona - no esperamos a que termine
-      pollPredictionAndUpdateFirestore(replicate, prediction.id, statusDocRef, characterData.name, tempFilePath)
-          .catch((error) => {
-            console.error(`❌ [PollPrediction] Error: ${error.message}`);
+        try {
+          // Normalizar orientación EXIF (fix para fotos de iPhone rotadas)
+          await statusDocRef.update({
+            status: "processing_image",
+            progress: 0.15,
+            message: "Preparando imagen...",
+            updatedAt: FieldValue.serverTimestamp(),
           });
+
+          const normalized = await normalizeImageOrientation(imageUrl, userId);
+          tempFilePath = normalized.filePath;
+          console.log(`   Imagen normalizada: ${normalized.url.substring(0, 100)}...`);
+
+          nanoBananaResultUrl = await transformWithNanoBanana(characterData.prompt, normalized.url);
+
+          // Nano Banana completó exitosamente - actualizar estado final
+          await statusDocRef.update({
+            status: "succeeded",
+            progress: 1.0,
+            message: "¡Transformación completada!",
+            outputUrl: nanoBananaResultUrl,
+            completedAt: FieldValue.serverTimestamp(),
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+
+          console.log(`✅ [CreateCharacterTransformation] Nano Banana completado`);
+
+          // Limpiar archivo temporal
+          if (tempFilePath) {
+            await cleanupTempFile(tempFilePath);
+          }
+        } catch (nanoBananaError) {
+          console.error(`❌ [CreateCharacterTransformation] Error Nano Banana: ${nanoBananaError.message}`);
+          await statusDocRef.update({
+            status: "failed",
+            progress: 0,
+            message: `Error: ${nanoBananaError.message}`,
+            error: nanoBananaError.message,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+          // Limpiar archivo temporal en caso de error
+          if (tempFilePath) {
+            await cleanupTempFile(tempFilePath).catch(() => {});
+          }
+          throw nanoBananaError;
+        }
+      } else {
+        // ═══════════════════════════════════════════════════════════════
+        // REPLICATE: p-image-edit o face-swap (con polling async)
+        // ═══════════════════════════════════════════════════════════════
+        if (selectedModel === "p_image_edit") {
+          if (!characterData.prompt || !characterData.prompt.trim()) {
+            throw new HttpsError("invalid-argument", "p-image-edit requiere un prompt configurado en el personaje");
+          }
+
+          console.log(`🎨 [CreateCharacterTransformation] Usando p-image-edit`);
+          console.log(`   Prompt: ${characterData.prompt}`);
+          console.log(`   Imagen usuario: ${imageUrl}`);
+
+          // Normalizar orientación EXIF (fix para fotos de iPhone rotadas)
+          await statusDocRef.update({
+            status: "processing_image",
+            progress: 0.15,
+            message: "Preparando imagen...",
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+
+          const normalized = await normalizeImageOrientation(imageUrl, userId);
+          tempFilePath = normalized.filePath;
+          console.log(`   Imagen normalizada: ${normalized.url.substring(0, 100)}...`);
+
+          prediction = await replicate.predictions.create({
+            model: "prunaai/p-image-edit",
+            input: {
+              prompt: characterData.prompt,
+              images: [normalized.url],
+              turbo: true,
+              aspect_ratio: "match_input_image",
+              disable_safety_checker: false,
+            },
+          });
+        } else {
+          // face_swap: Usar codeplugtech/face-swap
+          console.log(`🔄 [CreateCharacterTransformation] Usando face-swap`);
+          prediction = await replicate.predictions.create({
+            version: "278a81e7ebb22db98bcba54de985d22cc1abeead2754eb1f2af717247be69b34",
+            input: {
+              input_image: characterData.referenceImageUrl,
+              swap_image: imageUrl,
+            },
+          });
+        }
+
+        console.log(`✅ [CreateCharacterTransformation] Predicción creada: ${prediction.id}`);
+        console.log(`   Estado: ${prediction.status}`);
+
+        // 6. Actualizar con predictionId
+        await statusDocRef.update({
+          predictionId: prediction.id,
+          status: prediction.status,
+          progress: 0.2,
+          message: `Procesando con ${characterData.name}...`,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+
+        // 7. Hacer polling en background y actualizar Firestore
+        pollPredictionAndUpdateFirestore(replicate, prediction.id, statusDocRef, characterData.name, tempFilePath)
+            .catch((error) => {
+              console.error(`❌ [PollPrediction] Error: ${error.message}`);
+            });
+      }
 
       // 8. Guardar registro en character_transformations (snake_case)
       // TTL: 30 días para analytics
@@ -753,9 +915,10 @@ exports.createCharacterTransformation = onCall(
         characterId: characterId,
         characterName: characterData.name,
         originalImageUrl: imageUrl,
-        predictionId: prediction.id,
+        predictionId: prediction?.id || `nano_banana_${Date.now()}`,
         statusDocId: statusDocId,
-        status: prediction.status,
+        status: selectedModel === "nano_banana" ? "succeeded" : prediction.status,
+        aiModel: selectedModel,
         createdAt: FieldValue.serverTimestamp(),
         deleteAt: Timestamp.fromDate(analyticsDeleteAt), // TTL: 30 días
       });
@@ -766,8 +929,8 @@ exports.createCharacterTransformation = onCall(
       // 10. Retornar inmediatamente - el cliente escuchará Firestore
       return {
         statusDocId: statusDocId,
-        predictionId: prediction.id,
-        status: prediction.status,
+        predictionId: prediction?.id || `nano_banana_${statusDocId}`,
+        status: prediction?.status || "succeeded",
         characterName: characterData.name,
         remaining: limitCheck.remaining - 1,
       };
