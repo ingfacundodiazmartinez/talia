@@ -1,0 +1,862 @@
+const {onDocumentCreated} = require("firebase-functions/v2/firestore");
+const {onCall} = require("firebase-functions/v2/https");
+const {onSchedule} = require("firebase-functions/v2/scheduler");
+const {initializeApp} = require("firebase-admin/app");
+const {getFirestore} = require("firebase-admin/firestore");
+const {getMessaging} = require("firebase-admin/messaging");
+const {getStorage} = require("firebase-admin/storage");
+const {RtcTokenBuilder, RtcRole} = require("agora-token");
+const axios = require("axios");
+
+initializeApp();
+
+// Configuración de credenciales - desde variables de entorno
+// Configurar con: firebase functions:config:set agora.app_id="..." agora.certificate="..." gemini.api_key="..."
+const functions = require("firebase-functions");
+const AGORA_APP_ID = functions.config().agora?.app_id || process.env.AGORA_APP_ID;
+const AGORA_APP_CERTIFICATE = functions.config().agora?.certificate || process.env.AGORA_APP_CERTIFICATE;
+const GEMINI_API_KEY = functions.config().gemini?.api_key || process.env.GEMINI_API_KEY;
+
+// Validar que las credenciales estén configuradas
+if (!AGORA_APP_ID || !AGORA_APP_CERTIFICATE) {
+  console.error("❌ AGORA credentials not configured!");
+  console.error("Configure with: firebase functions:config:set agora.app_id='...' agora.certificate='...'");
+}
+
+if (!GEMINI_API_KEY) {
+  console.error("❌ GEMINI API KEY not configured!");
+  console.error("Configure with: firebase functions:config:set gemini.api_key='...'");
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RATE LIMITING - Sistema de protección contra abuso
+// ⚠️ TEMPORALMENTE COMENTADO - Causando problemas en deployment
+// ═══════════════════════════════════════════════════════════════
+
+/* RATE LIMITING COMENTADO - DESCOMENTAR DESPUÉS DE DEPLOYMENT EXITOSO
+
+async function checkRateLimit(userId, action, limits) {
+  const db = getFirestore();
+  const now = Date.now();
+  const windowStart = now - limits.windowMs;
+
+  const rateLimitRef = db.collection('rate_limits').doc(`${userId}_${action}`);
+
+  try {
+    const result = await db.runTransaction(async (transaction) => {
+      const doc = await transaction.get(rateLimitRef);
+
+      if (!doc.exists) {
+        transaction.set(rateLimitRef, {
+          requests: [{timestamp: now}],
+          userId: userId,
+          action: action,
+          createdAt: now,
+        });
+        return {allowed: true};
+      }
+
+      const data = doc.data();
+      const requests = data.requests || [];
+
+      const recentRequests = requests.filter(r => r.timestamp > windowStart);
+
+      if (recentRequests.length >= limits.maxRequests) {
+        const oldestRequest = recentRequests[0].timestamp;
+        const retryAfter = Math.ceil((oldestRequest + limits.windowMs - now) / 1000);
+
+        console.warn(`⚠️ Rate limit alcanzado para ${userId} en ${action}: ${recentRequests.length}/${limits.maxRequests}`);
+
+        return {allowed: false, retryAfter: retryAfter};
+      }
+
+      recentRequests.push({timestamp: now});
+
+      transaction.update(rateLimitRef, {
+        requests: recentRequests,
+        lastRequest: now,
+      });
+
+      return {allowed: true};
+    });
+
+    return result;
+  } catch (error) {
+    console.error(`❌ Error en rate limit check: ${error}`);
+    return {allowed: true};
+  }
+}
+
+const RATE_LIMITS = {
+  createLink: {
+    maxRequests: 5,
+    windowMs: 60 * 60 * 1000,
+  },
+  generateToken: {
+    maxRequests: 20,
+    windowMs: 60 * 1000,
+  },
+  generateReport: {
+    maxRequests: 10,
+    windowMs: 60 * 60 * 1000,
+  },
+};
+
+*/ // FIN RATE LIMITING COMENTADO
+
+// Función que escucha cuando se crea una notificación en Firestore
+// y envía una notificación push al dispositivo del usuario
+exports.sendNotificationOnCreate = onDocumentCreated(
+    "notifications/{notificationId}",
+    async (event) => {
+      console.log("🔔 FUNCIÓN EJECUTADA - Inicio");
+
+      const snapshot = event.data;
+      if (!snapshot) {
+        console.log("❌ No data associated with the event");
+        return;
+      }
+
+      console.log("✅ Snapshot recibido");
+      const notification = snapshot.data();
+      console.log("📦 Datos de notificación:", JSON.stringify(notification));
+
+      const userId = notification.userId;
+      console.log(`📩 Nueva notificación para usuario: ${userId}`);
+
+      try {
+        // Obtener el FCM token del usuario
+        const db = getFirestore();
+        console.log(`🔍 Buscando usuario con ID: ${userId}`);
+        const userDoc = await db.collection("users").doc(userId).get();
+
+        if (!userDoc.exists) {
+          console.log(`❌ Usuario ${userId} no encontrado en Firestore`);
+          console.log(`📋 Verifica que este usuario exista en la colección 'users'`);
+          return;
+        }
+
+        console.log(`✅ Usuario ${userId} encontrado`);
+        const userData = userDoc.data();
+        console.log(`📊 Datos del usuario:`, JSON.stringify({
+          name: userData.name,
+          email: userData.email,
+          hasFcmToken: !!userData.fcmToken
+        }));
+        const fcmToken = userData.fcmToken;
+
+        if (!fcmToken) {
+          console.log(`❌ Usuario ${userId} no tiene FCM token`);
+          console.log(`📋 El usuario debe abrir la app para registrar su token`);
+          return;
+        }
+
+        console.log(`✅ FCM Token encontrado: ${fcmToken.substring(0, 20)}...`);
+
+        // Preparar el mensaje de notificación
+        // IMPORTANTE: El campo 'data' solo puede contener strings
+        // Convertir todos los valores a strings
+        const dataPayload = {};
+        if (notification.data) {
+          Object.keys(notification.data).forEach((key) => {
+            const value = notification.data[key];
+            // Convertir objetos y arrays a JSON strings
+            if (typeof value === "object" && value !== null) {
+              dataPayload[key] = JSON.stringify(value);
+            } else if (value !== null && value !== undefined) {
+              dataPayload[key] = String(value);
+            }
+          });
+        }
+        dataPayload.notificationId = event.params.notificationId;
+        dataPayload.type = notification.type || "general";
+
+        const message = {
+          token: fcmToken,
+          notification: {
+            title: notification.title || "Talia",
+            body: notification.body || "Tienes una nueva notificación",
+            imageUrl: notification.imageUrl, // Imagen del usuario (si existe)
+          },
+          data: dataPayload,
+          android: {
+            priority: notification.priority === "high" ? "high" : "normal",
+            notification: {
+              channelId: "high_importance_channel",
+              sound: "default",
+              priority: notification.priority === "high" ? "high" : "default",
+              imageUrl: notification.imageUrl, // Imagen para Android
+            },
+          },
+          apns: {
+            payload: {
+              aps: {
+                sound: "default",
+                badge: 1,
+                contentAvailable: true,
+              },
+            },
+            fcmOptions: {
+              imageUrl: notification.imageUrl, // Imagen para iOS
+            },
+          },
+        };
+
+        // Enviar la notificación push
+        const messaging = getMessaging();
+        const response = await messaging.send(message);
+
+        console.log(`✅ Notificación enviada exitosamente: ${response}`);
+
+        // Actualizar la notificación en Firestore para marcarla como enviada
+        await snapshot.ref.update({
+          sentAt: new Date().toISOString(),
+          sent: true,
+        });
+      } catch (error) {
+        console.error(`❌ Error enviando notificación:`, error);
+
+        // Actualizar la notificación con el error
+        await snapshot.ref.update({
+          error: error.message,
+          sent: false,
+        });
+      }
+    }
+);
+
+// Función para generar tokens de Agora para videollamadas
+exports.generateAgoraToken = onCall(
+    {
+      cors: true, // Permitir CORS para llamadas desde Flutter
+      enforceAppCheck: false, // ⚠️ TEMPORALMENTE DESHABILITADO para deployment
+      consumeAppCheckToken: false, // Temporalmente deshabilitado
+    },
+    async (request) => {
+      console.log("🎥 Generando token de Agora");
+
+      // Verificar que el usuario esté autenticado
+      if (!request.auth) {
+        console.log("❌ Usuario no autenticado");
+        throw new Error("Usuario no autenticado");
+      }
+
+      const userId = request.auth.uid;
+      console.log(`✅ Usuario autenticado: ${userId}`);
+
+      // ✅ RATE LIMITING: TEMPORALMENTE COMENTADO para deployment
+      // const rateLimitCheck = await checkRateLimit(userId, 'generateToken', RATE_LIMITS.generateToken);
+      // if (!rateLimitCheck.allowed) {
+      //   console.warn(`🚫 Rate limit excedido para ${userId} - Reintentar en ${rateLimitCheck.retryAfter}s`);
+      //   throw new Error(`Demasiadas solicitudes. Intenta nuevamente en ${rateLimitCheck.retryAfter} segundos.`);
+      // }
+
+      // Obtener parámetros de la llamada
+      const {channelName, uid} = request.data;
+
+      if (!channelName || uid === undefined) {
+        console.log("❌ Faltan parámetros: channelName o uid");
+        throw new Error("Faltan parámetros obligatorios: channelName y uid");
+      }
+
+      console.log(`📺 Generando token para canal: ${channelName}, UID: ${uid}`);
+
+      try {
+        // Tiempo de expiración del token: 24 horas
+        const expirationTimeInSeconds = 86400; // 24 horas
+        const currentTimestamp = Math.floor(Date.now() / 1000);
+        const privilegeExpiredTs = currentTimestamp + expirationTimeInSeconds;
+
+        // Generar token con privilegios de publicador
+        const token = RtcTokenBuilder.buildTokenWithUid(
+            AGORA_APP_ID,
+            AGORA_APP_CERTIFICATE,
+            channelName,
+            uid,
+            RtcRole.PUBLISHER, // Rol de publicador (puede enviar y recibir)
+            privilegeExpiredTs
+        );
+
+        console.log(`✅ Token generado exitosamente`);
+        console.log(`⏰ Expira en ${expirationTimeInSeconds} segundos`);
+
+        return {
+          token: token,
+          appId: AGORA_APP_ID,
+          uid: uid,
+          channelName: channelName,
+          expiresAt: privilegeExpiredTs,
+        };
+      } catch (error) {
+        console.error(`❌ Error generando token de Agora:`, error);
+        throw new Error(`Error generando token: ${error.message}`);
+      }
+    }
+);
+
+// Función para generar reporte con Gemini AI
+exports.generateChildReport = onCall({
+  cors: true,
+  enforceAppCheck: false, // ⚠️ TEMPORALMENTE DESHABILITADO
+  consumeAppCheckToken: false,
+  timeoutSeconds: 540, // 9 minutos para procesamiento de IA
+}, async (request) => {
+  console.log("📊 [1/8] Iniciando generación de reporte con Gemini AI");
+  
+  if (!request.auth) throw new Error("Usuario no autenticado");
+  
+  const parentId = request.auth.uid;
+  const {childId, daysBack} = request.data;
+  if (!childId) throw new Error("Falta parámetro: childId");
+
+  // ✅ RATE LIMITING: TEMPORALMENTE COMENTADO para deployment
+  // const rateLimitCheck = await checkRateLimit(parentId, 'generateReport', RATE_LIMITS.generateReport);
+  // if (!rateLimitCheck.allowed) {
+  //   console.warn(`🚫 Rate limit excedido para ${parentId} - Reintentar en ${rateLimitCheck.retryAfter}s`);
+  //   throw new Error(`Demasiadas solicitudes de reporte. Intenta nuevamente en ${rateLimitCheck.retryAfter} segundos.`);
+  // }
+
+  const days = daysBack || 7;
+
+  try {
+    const db = getFirestore();
+    console.log("📊 [2/8] Verificando relación padre-hijo");
+
+    const linkSnapshot = await db.collection("parent_child_links")
+      .where("parentId", "==", parentId)
+      .where("childId", "==", childId)
+      .limit(1).get();
+    
+    if (linkSnapshot.empty) throw new Error("No autorizado");
+    
+    console.log("📊 [3/8] Obteniendo chats del hijo");
+    const chatsSnapshot = await db.collection("chats")
+      .where("participants", "array-contains", childId).get();
+    
+    console.log(`📊 [4/8] Recopilando mensajes de ${chatsSnapshot.docs.length} chats`);
+    const weekAgo = new Date();
+    weekAgo.setDate(weekAgo.getDate() - days);
+    const allMessages = [];
+    
+    for (const chatDoc of chatsSnapshot.docs) {
+      const msgs = await db.collection("chats").doc(chatDoc.id).collection("messages")
+        .where("timestamp", ">=", weekAgo)
+        .orderBy("timestamp", "asc").get();
+      
+      msgs.docs.forEach(m => {
+        if (m.data().text) allMessages.push({id: m.id, text: m.data().text});
+      });
+    }
+    
+    if (allMessages.length === 0) {
+      return {status: "no_data", message: "No hay mensajes"};
+    }
+    
+    console.log(`📊 [5/8] Analizando ${allMessages.length} mensajes con Gemini`);
+    const messagesText = allMessages.map(m => m.text).join("\n---\n");
+    const prompt = `Eres un experto en psicología infantil. Analiza estos ${allMessages.length} mensajes de los últimos ${days} días.
+
+REGLAS ESTRICTAS DE PRIVACIDAD - CRÍTICO:
+- NO menciones NINGUNA identidad de contacto: NO digas "padre", "madre", "amigo", "hermano", "maestro", "compañero", "familiar", etc.
+- NO hagas inferencias sobre relaciones ("relación saludable", "comunicación padre-hijo", etc.)
+- NO describas dinámicas relacionales específicas
+- Enfócate SOLO en patrones emocionales y lingüísticos del contenido analizado
+- Usa terminología abstracta: "las conversaciones analizadas", "el contenido revisado", "la comunicación observada"
+- NO cites ejemplos textuales de los mensajes
+- NO menciones nombres propios ni apodos
+- Responde como si analizaras texto anónimo sin contexto relacional
+
+MENSAJES A ANALIZAR:
+${messagesText}
+
+Responde SOLO en formato JSON estricto:
+{
+  "sentiment_overall": "positive|negative|neutral",
+  "weighted_sentiment_score": 0.0-1.0,
+  "mood_description": "descripción del tono emocional general sin mencionar relaciones",
+  "mood_icon": "emoji",
+  "bullying_detected": true|false,
+  "bullying_severity": 0.0-1.0,
+  "bullying_indicators": ["lista de indicadores si se detectan, sin contexto relacional"],
+  "positive_aspects": ["aspectos positivos del contenido analizado, SIN mencionar identidades"],
+  "concerns": ["preocupaciones detectadas en el patrón comunicacional, SIN mencionar con quién"],
+  "recommendations": ["sugerencias generales para supervisión parental"],
+  "message_count_positive": 0,
+  "message_count_negative": 0,
+  "message_count_neutral": 0
+}`;
+
+    console.log("📊 [6/8] Llamando a Gemini API");
+
+    if (!GEMINI_API_KEY) {
+      throw new Error("Gemini API key not configured");
+    }
+
+    const response = await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        contents: [{parts: [{text: prompt}]}],
+        generationConfig: {temperature: 0.4, maxOutputTokens: 2048}
+      }
+    );
+    console.log("✅ Gemini API respondió correctamente");
+
+    let aiText;
+    try {
+      aiText = response.data.candidates[0].content.parts[0].text.trim();
+      console.log("✅ Texto extraído de Gemini (primeros 100 chars):", aiText.substring(0, 100));
+    } catch (parseError) {
+      console.error("❌ Error extrayendo texto de respuesta Gemini");
+      throw new Error("Respuesta de Gemini tiene formato inesperado");
+    }
+
+    aiText = aiText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+
+    let analysis;
+    try {
+      analysis = JSON.parse(aiText);
+      console.log("✅ JSON parseado correctamente");
+    } catch (jsonError) {
+      console.error("❌ Error parseando JSON de Gemini");
+      console.error("Texto recibido:", aiText);
+      throw new Error(`JSON inválido de Gemini: ${jsonError.message}`);
+    }
+    
+    console.log("📊 [7/8] Guardando reporte");
+    const report = {
+      childId,
+      parentId,
+      period: days, // Changed from periodDays to match UI
+      totalMessages: allMessages.length,
+      totalChats: chatsSnapshot.docs.length,
+      avgSentiment: analysis.weighted_sentiment_score || 0.5,
+      moodStatus: analysis.mood_description || "neutral",
+      moodIcon: analysis.mood_icon || "😐",
+      positiveCount: analysis.message_count_positive || 0,
+      negativeCount: analysis.message_count_negative || 0,
+      neutralCount: analysis.message_count_neutral || 0,
+      bullyingIncidents: analysis.bullying_detected ? 1 : 0,
+      bullyingSeverity: analysis.bullying_severity || 0,
+      positiveAspects: analysis.positive_aspects || [],
+      concerns: analysis.concerns || [],
+      recommendations: analysis.recommendations || [],
+      percentageChange: 0, // Added to prevent UI errors
+      aiGenerated: true,
+      generatedAt: new Date()
+    };
+    
+    const reportRef = await db.collection("weekly_reports").add(report);
+    console.log(`📊 [8/8] ✅ Reporte completado: ${reportRef.id}`);
+    
+    return {success: true, reportId: reportRef.id, report};
+  } catch (error) {
+    console.error(`❌ Error: ${error.message}`);
+    throw new Error(`Error: ${error.message}`);
+  }
+});
+
+// Función programada para limpiar historias expiradas (se ejecuta cada hora)
+exports.cleanupExpiredStories = onSchedule("every 1 hours", async (event) => {
+  console.log("🧹 Iniciando limpieza programada de historias expiradas");
+
+  try {
+    const db = getFirestore();
+    const storage = getStorage();
+    const now = new Date();
+
+    // Buscar historias expiradas
+    const expiredStoriesSnapshot = await db
+      .collection("stories")
+      .where("expiresAt", "<", now)
+      .get();
+
+    if (expiredStoriesSnapshot.empty) {
+      console.log("✅ No hay historias expiradas para limpiar");
+      return {success: true, deleted: 0};
+    }
+
+    console.log(`🗑️ Encontradas ${expiredStoriesSnapshot.docs.length} historias expiradas`);
+
+    let deletedFiles = 0;
+    let deletedDocs = 0;
+    const batch = db.batch();
+
+    for (const storyDoc of expiredStoriesSnapshot.docs) {
+      try {
+        const storyData = storyDoc.data();
+
+        // Eliminar archivo de Storage
+        if (storyData.mediaUrl) {
+          try {
+            // Extraer el path del archivo de la URL
+            const url = new URL(storyData.mediaUrl);
+            const pathMatch = url.pathname.match(/\/o\/(.+?)\?/);
+            if (pathMatch) {
+              const filePath = decodeURIComponent(pathMatch[1]);
+              const fileRef = storage.bucket().file(filePath);
+              await fileRef.delete();
+              deletedFiles++;
+              console.log(`🗑️ Archivo eliminado: ${filePath}`);
+            }
+          } catch (storageError) {
+            console.warn(`⚠️ Error eliminando archivo de Storage para historia ${storyDoc.id}:`, storageError.message);
+          }
+        }
+
+        // Eliminar solicitudes de aprobación asociadas
+        const approvalRequestsSnapshot = await db
+          .collection("story_approval_requests")
+          .where("storyId", "==", storyDoc.id)
+          .get();
+
+        for (const requestDoc of approvalRequestsSnapshot.docs) {
+          batch.delete(requestDoc.ref);
+        }
+
+        // Agregar eliminación del documento al batch
+        batch.delete(storyDoc.ref);
+        deletedDocs++;
+
+      } catch (docError) {
+        console.error(`❌ Error procesando historia ${storyDoc.id}:`, docError.message);
+      }
+    }
+
+    // Ejecutar el batch de eliminaciones
+    await batch.commit();
+
+    console.log(`✅ Limpieza completada: ${deletedDocs} documentos y ${deletedFiles} archivos eliminados`);
+
+    return {
+      success: true,
+      deleted: deletedDocs,
+      filesDeleted: deletedFiles,
+      timestamp: now.toISOString()
+    };
+
+  } catch (error) {
+    console.error("❌ Error en limpieza de historias:", error);
+    throw new Error(`Error en limpieza de historias: ${error.message}`);
+  }
+});
+
+// Función programada para auto-resolver emergencias después de 1 hora (se ejecuta cada 10 minutos)
+exports.autoResolveEmergencies = onSchedule("every 10 minutes", async (event) => {
+  console.log("🆘 Verificando emergencias para auto-resolución");
+
+  try {
+    const db = getFirestore();
+    const storage = getStorage();
+    const now = new Date();
+    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000); // 1 hora atrás
+
+    // Buscar emergencias activas creadas hace más de 1 hora
+    const emergenciesSnapshot = await db
+      .collection("emergencies")
+      .where("resolved", "==", false)
+      .where("timestamp", "<", oneHourAgo)
+      .get();
+
+    if (emergenciesSnapshot.empty) {
+      console.log("✅ No hay emergencias antiguas para auto-resolver");
+      return {success: true, resolved: 0};
+    }
+
+    console.log(`🔔 Encontradas ${emergenciesSnapshot.docs.length} emergencias para auto-resolver`);
+
+    let resolvedCount = 0;
+    let deletedTrackingPoints = 0;
+    const batch = db.batch();
+
+    for (const emergencyDoc of emergenciesSnapshot.docs) {
+      try {
+        const emergencyData = emergencyDoc.data();
+        const emergencyId = emergencyDoc.id;
+
+        console.log(`⏰ Auto-resolviendo emergencia ${emergencyId} del niño ${emergencyData.childName}`);
+
+        // Actualizar emergencia como resuelta automáticamente
+        batch.update(emergencyDoc.ref, {
+          resolved: true,
+          resolvedAt: now,
+          resolvedBy: "system",
+          status: "auto_resolved",
+          autoResolvedReason: "Expirada después de 1 hora"
+        });
+
+        // Eliminar historial de ubicaciones de tracking
+        const trackingSnapshot = await db
+          .collection("emergencies")
+          .doc(emergencyId)
+          .collection("location_tracking")
+          .get();
+
+        for (const trackingDoc of trackingSnapshot.docs) {
+          batch.delete(trackingDoc.ref);
+          deletedTrackingPoints++;
+        }
+
+        resolvedCount++;
+
+        // Opcional: Notificar al padre que la emergencia se auto-resolvió
+        const childId = emergencyData.childId;
+        if (childId) {
+          // Obtener padres vinculados
+          const linksSnapshot = await db
+            .collection("parent_child_links")
+            .where("childId", "==", childId)
+            .where("status", "==", "approved")
+            .get();
+
+          for (const linkDoc of linksSnapshot.docs) {
+            const parentId = linkDoc.data().parentId;
+
+            // Crear notificación para el padre
+            await db.collection("notifications").add({
+              userId: parentId,
+              title: "Emergencia auto-resuelta",
+              body: `La emergencia de ${emergencyData.childName || "tu hijo"} se resolvió automáticamente después de 1 hora`,
+              type: "emergency_auto_resolved",
+              emergencyId: emergencyId,
+              timestamp: now,
+              read: false
+            });
+
+            console.log(`📬 Notificación enviada al padre ${parentId}`);
+          }
+        }
+
+      } catch (docError) {
+        console.error(`❌ Error auto-resolviendo emergencia ${emergencyDoc.id}:`, docError.message);
+      }
+    }
+
+    // Ejecutar batch
+    await batch.commit();
+
+    console.log(`✅ Auto-resolución completada: ${resolvedCount} emergencias resueltas, ${deletedTrackingPoints} puntos de tracking eliminados`);
+
+    return {
+      success: true,
+      resolved: resolvedCount,
+      trackingPointsDeleted: deletedTrackingPoints,
+      timestamp: now.toISOString()
+    };
+
+  } catch (error) {
+    console.error("❌ Error en auto-resolución de emergencias:", error);
+    throw new Error(`Error en auto-resolución: ${error.message}`);
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// FUNCIÓN CRÍTICA: Crear vínculo padre-hijo seguro
+// ═══════════════════════════════════════════════════════════════
+// Esta función maneja la vinculación padre-hijo con validación server-side
+// Reemplaza la escritura directa bloqueada en Firestore rules
+exports.createParentChildLink = onCall({
+  enforceAppCheck: false, // ⚠️ TEMPORALMENTE DESHABILITADO
+  consumeAppCheckToken: false,
+  cors: true,
+}, async (request) => {
+  const db = getFirestore();
+
+  try {
+    // 1. Validar autenticación
+    if (!request.auth) {
+      console.error("❌ Usuario no autenticado");
+      throw new Error("Usuario no autenticado");
+    }
+
+    const callerId = request.auth.uid;
+    console.log(`🔗 Solicitud de vinculación de usuario: ${callerId}`);
+
+    // 2. Validar parámetros
+    const {parentId, childId, code} = request.data;
+
+    if (!parentId || !childId) {
+      console.error("❌ Faltan parámetros obligatorios");
+      throw new Error("parentId y childId son obligatorios");
+    }
+
+    console.log(`📋 Intentando vincular padre: ${parentId} con hijo: ${childId}`);
+
+    // 3. RATE LIMITING: TEMPORALMENTE COMENTADO para deployment
+    // const rateLimitCheck = await checkRateLimit(callerId, 'createLink', RATE_LIMITS.createLink);
+    // if (!rateLimitCheck.allowed) {
+    //   console.warn(`🚫 Rate limit excedido para ${callerId} - Reintentar en ${rateLimitCheck.retryAfter}s`);
+    //   throw new Error(`Demasiados intentos de vinculación. Intenta nuevamente en ${rateLimitCheck.retryAfter} segundos.`);
+    // }
+
+    // 4. Validar que el caller es el padre o el hijo
+    if (callerId !== parentId && callerId !== childId) {
+      console.error(`❌ Usuario ${callerId} no autorizado (no es padre ni hijo)`);
+      throw new Error("No autorizado: debes ser el padre o el hijo para crear el vínculo");
+    }
+
+    // 5. Si se proporciona código, validarlo
+    if (code) {
+      console.log(`🔑 Validando código: ${code}`);
+
+      const codeSnapshot = await db.collection("link_codes")
+        .where("code", "==", code)
+        .limit(1)
+        .get();
+
+      if (codeSnapshot.empty) {
+        console.error(`❌ Código ${code} no encontrado`);
+        throw new Error("Código de vinculación inválido");
+      }
+
+      const codeData = codeSnapshot.docs[0].data();
+
+      // Validar que el código no haya expirado
+      if (codeData.expiresAt && codeData.expiresAt.toDate() < new Date()) {
+        console.error(`❌ Código ${code} expirado`);
+        throw new Error("Código de vinculación expirado");
+      }
+
+      // Validar que el código pertenece a uno de los usuarios
+      if (codeData.createdBy !== parentId && codeData.createdBy !== childId) {
+        console.error(`❌ Código ${code} no pertenece a ninguno de los usuarios`);
+        throw new Error("Código de vinculación no válido para estos usuarios");
+      }
+
+      console.log(`✅ Código validado correctamente`);
+    }
+
+    // 6. Verificar que ambos usuarios existen
+    const [parentDoc, childDoc] = await Promise.all([
+      db.collection("users").doc(parentId).get(),
+      db.collection("users").doc(childId).get(),
+    ]);
+
+    if (!parentDoc.exists) {
+      console.error(`❌ Padre ${parentId} no existe`);
+      throw new Error("Usuario padre no encontrado");
+    }
+
+    if (!childDoc.exists) {
+      console.error(`❌ Hijo ${childId} no existe`);
+      throw new Error("Usuario hijo no encontrado");
+    }
+
+    const parentData = parentDoc.data();
+    const childData = childDoc.data();
+
+    console.log(`✅ Usuarios validados - Padre: ${parentData.name}, Hijo: ${childData.name}`);
+
+    // 7. Verificar que no existe ya un vínculo activo
+    const linkId = `${parentId}_${childId}`;
+    const existingLink = await db.collection("parent_child_links")
+      .doc(linkId)
+      .get();
+
+    if (existingLink.exists) {
+      const linkData = existingLink.data();
+      if (linkData.status === "approved") {
+        console.log(`⚠️ Vínculo ya existe y está aprobado`);
+        throw new Error("Ya existe un vínculo activo entre estos usuarios");
+      }
+    }
+
+    // También verificar en parent_children por compatibilidad
+    const existingParentChild = await db.collection("parent_children")
+      .where("parentId", "==", parentId)
+      .where("childId", "==", childId)
+      .limit(1)
+      .get();
+
+    if (!existingParentChild.empty) {
+      console.log(`⚠️ Vínculo ya existe en parent_children`);
+      throw new Error("Ya existe un vínculo activo entre estos usuarios");
+    }
+
+    // 8. Crear el vínculo usando batch write
+    const batch = db.batch();
+    const now = new Date();
+
+    // Crear en parent_child_links (formato: {parentId}_{childId})
+    const linkRef = db.collection("parent_child_links").doc(linkId);
+    batch.set(linkRef, {
+      parentId: parentId,
+      childId: childId,
+      status: "approved",
+      linkedAt: now,
+      createdBy: callerId,
+    });
+
+    console.log(`✅ Preparando vínculo en parent_child_links: ${linkId}`);
+
+    // Crear en parent_children para compatibilidad
+    const parentChildRef = db.collection("parent_children").doc();
+    batch.set(parentChildRef, {
+      parentId: parentId,
+      childId: childId,
+      linkedAt: now,
+      createdBy: callerId,
+    });
+
+    console.log(`✅ Preparando vínculo en parent_children`);
+
+    // Agregar padre e hijo mutuamente a sus whitelists
+    const whitelistParentRef = db.collection("whitelist").doc();
+    batch.set(whitelistParentRef, {
+      childId: childId,
+      contactId: parentId,
+      status: "approved",
+      approvedBy: parentId,
+      approvedAt: now,
+      reason: "Vínculo padre-hijo",
+    });
+
+    const whitelistChildRef = db.collection("whitelist").doc();
+    batch.set(whitelistChildRef, {
+      childId: parentId, // El padre como "hijo" para ver stories mutuas
+      contactId: childId,
+      status: "approved",
+      approvedBy: parentId,
+      approvedAt: now,
+      reason: "Vínculo padre-hijo",
+    });
+
+    console.log(`✅ Preparando entradas en whitelist`);
+
+    // Si se usó un código, marcarlo como usado
+    if (code) {
+      const codeSnapshot = await db.collection("link_codes")
+        .where("code", "==", code)
+        .limit(1)
+        .get();
+
+      if (!codeSnapshot.empty) {
+        batch.update(codeSnapshot.docs[0].ref, {
+          used: true,
+          usedAt: now,
+          usedBy: callerId,
+        });
+        console.log(`✅ Preparando marcado de código como usado`);
+      }
+    }
+
+    // 9. Ejecutar el batch
+    await batch.commit();
+
+    console.log(`🎉 Vínculo creado exitosamente entre ${parentData.name} (padre) y ${childData.name} (hijo)`);
+
+    return {
+      success: true,
+      linkId: linkId,
+      parentId: parentId,
+      childId: childId,
+      parentName: parentData.name,
+      childName: childData.name,
+      linkedAt: now.toISOString(),
+      message: "Vínculo padre-hijo creado exitosamente",
+    };
+
+  } catch (error) {
+    console.error(`❌ Error creando vínculo padre-hijo:`, error);
+    throw new Error(error.message || "Error al crear vínculo padre-hijo");
+  }
+});

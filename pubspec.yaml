@@ -1,0 +1,208 @@
+name: talia
+description: "Talia - App de comunicación inteligente con videollamadas, mensajería, ubicación en tiempo real y más."
+# The following line prevents the package from being accidentally published to
+# pub.dev using `flutter pub publish`. This is preferred for private packages.
+publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+
+# The following defines the version and build number for your application.
+# A version number is three numbers separated by dots, like 1.2.43
+# followed by an optional build number separated by a +.
+# Both the version and the builder number may be overridden in flutter
+# build by specifying --build-name and --build-number, respectively.
+# In Android, build-name is used as versionName while build-number used as versionCode.
+# Read more about Android versioning at https://developer.android.com/studio/publish/versioning
+# In iOS, build-name is used as CFBundleShortVersionString while build-number is used as CFBundleVersion.
+# Read more about iOS versioning at
+# https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
+# In Windows, build-name is used as the major, minor, and patch parts
+# of the product and file versions while build-number is used as the build suffix.
+version: 1.0.96+152
+
+environment:
+  sdk: ^3.9.2
+
+# Dependencies specify other packages that your package needs in order to work.
+# To automatically upgrade your package dependencies to the latest versions
+# consider running `flutter pub upgrade --major-versions`. Alternatively,
+# dependencies can be manually updated by changing the version numbers below to
+# the latest version available on pub.dev. To see which dependencies have newer
+# versions available, run `flutter pub outdated`.
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # Firebase - Versiones MÁS RECIENTES (4.x/6.x)
+  firebase_core: ^4.2.0
+  firebase_auth: ^6.1.1
+  cloud_firestore: ^6.0.3
+  firebase_database: ^12.0.3
+  firebase_messaging: ^16.0.3
+  firebase_storage: ^13.0.3
+  cloud_functions: ^6.0.3
+  firebase_app_check: ^0.4.1+1
+  firebase_crashlytics: ^5.0.3
+  firebase_analytics: ^12.0.3
+  firebase_performance: ^0.11.1+1
+  firebase_remote_config: ^6.1.0
+  logger: ^2.5.0
+  http: ^1.1.0
+  flutter_dotenv: ^6.0.0  # Para variables de entorno seguras
+
+  # Validación y Sanitización - Solo packages actualizados
+  # Usamos dart:convert (nativo) para HtmlEscape en lugar de html_unescape
+  # Usamos validaciones custom en lugar de form_field_validator (3+ años sin update)
+  flutter_local_notifications: ^19.4.2
+  url_launcher: ^6.3.2
+  shared_preferences: ^2.3.3
+  image_picker: ^1.0.7
+  image_cropper: ^11.0.0
+  permission_handler: ^12.0.1  # Actualizado para compatibilidad con hms_room_kit
+  device_info_plus: ^12.1.0
+  path_provider: ^2.1.1
+  gal: ^2.3.0  # Save images and videos to gallery
+  share_plus: ^12.0.1  # Actualizado para compatibilidad con hms_room_kit
+  receive_sharing_intent: ^1.8.1  # Receive shared content from other apps (Share Target)
+  app_links: ^7.0.0  # Deep linking / Universal Links / App Links
+  app_tracking_transparency: ^2.0.6  # iOS App Tracking Transparency for ads
+  camera: ^0.11.3
+  image: ^4.0.17
+  google_mlkit_face_detection: ^0.13.1  # Face detection for AI transformations
+  geolocator: ^14.0.2
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+  google_maps_flutter: ^2.5.0
+  workmanager: ^0.9.0
+  crypto: ^3.0.6
+  encrypt: ^5.0.3
+  flutter_secure_storage: ^10.0.0
+  qr_flutter: ^4.1.0
+  mobile_scanner: ^7.1.2
+  uuid: ^4.5.1
+  # Video Calling - Agora RTC Engine
+  agora_rtc_engine: ^6.5.3  # Agora RTC Engine for video/audio calls
+
+  intl: ^0.19.0
+  file_picker: ^10.0.0
+  video_player: ^2.10.0
+  audioplayers: ^6.1.0
+  just_audio: ^0.10.0
+  emoji_picker_flutter: ^4.0.0
+  record: ^6.1.2
+  audio_waveforms: ^2.0.0
+  speech_to_text: ^7.0.0  # Local speech recognition for audio moderation
+  provider: ^6.1.2
+  rxdart: ^0.28.0  # Reactive stream extensions
+  otp: ^3.1.4
+  cached_network_image: ^3.4.1
+  flutter_cache_manager: ^3.3.0  # Used for notification images caching
+  flutter_callkit_incoming:
+    path: ../flutter_callkit_incoming
+  connectivity_plus: ^7.0.0
+  vibration: ^3.1.4
+  flutter_slidable: ^4.0.0
+  flutter_contacts: ^1.1.9
+  # flutter_windowmanager: ^0.2.0  # Temporarily commented for build
+  app_badge_plus: ^1.1.5
+  flutter_story_editor:
+    path: ../flutter_story_editor
+  video_compress: ^3.1.4
+  video_thumbnail: ^0.5.6
+  google_mobile_ads: ^6.0.0
+  gma_mediation_meta: ^1.5.0  # Meta Audience Network mediation for AdMob
+  async: ^2.11.0
+  wakelock_plus: ^1.4.0  # Keep screen on during calls
+  proximity_sensor: ^1.0.4  # Detect phone near ear for audio calls
+  package_info_plus: ^9.0.0  # Get app version info
+  in_app_purchase: ^3.2.0  # In-App Purchases for Play Store and App Store
+  in_app_purchase_android: ^0.4.0  # Android-specific IAP - Billing Library 7.0+
+  in_app_purchase_storekit: ^0.4.0  # iOS-specific IAP
+
+  flutter_native_splash: any
+  path: any
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  # The "flutter_lints" package below contains a set of recommended lints to
+  # encourage good coding practices. The lint set provided by the package is
+  # activated in the `analysis_options.yaml` file located at the root of your
+  # package. See that file for information about deactivating specific lint
+  # rules and activating additional ones.
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
+  mockito: ^5.4.4
+  build_runner: ^2.4.13
+  fake_cloud_firestore: ^4.0.0  # Compatible con Firestore 6.x
+  firebase_auth_mocks: ^0.15.1
+  integration_test:
+    sdk: flutter
+
+  cloud_firestore_platform_interface: any
+  firebase_auth_platform_interface: any
+dependency_overrides:
+  intl: ^0.19.0
+  pointycastle: ^4.0.0  # Fix conflict between firebase_auth_mocks and encrypt
+  # Dejar que use la versión de pub.dev normal (no el fork de git que causaba problemas)
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/images/icon.png"
+  min_sdk_android: 21
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/images/icon.png"
+
+flutter_native_splash:
+  # Splash screen con imagen completa
+  background_image: "assets/images/splash_fullscreen.png"
+  android: true
+  ios: true
+
+  android_12:
+    background_image: "assets/images/splash_fullscreen.png"
+
+  web: false
+
+# For information on the generic Dart part of this file, see the
+# following page: https://dart.dev/tools/pub/pubspec
+
+# The following section is specific to Flutter packages.
+flutter:
+
+  # The following line ensures that the Material Icons font is
+  # included with your application, so that you can use the icons in
+  # the material Icons class.
+  uses-material-design: true
+
+  # To add assets to your application, add an assets section, like this:
+  assets:
+    - assets/images/
+    - assets/sounds/
+
+  # An image asset can refer to one or more resolution-specific "variants", see
+  # https://flutter.dev/to/resolution-aware-images
+
+  # For details regarding adding assets from package dependencies, see
+  # https://flutter.dev/to/asset-from-package
+
+  # To add custom fonts to your application, add a fonts section here,
+  # in this "flutter" section. Each entry in this list should have a
+  # "family" key with the font family name, and a "fonts" key with a
+  # list giving the asset and other descriptors for the font. For
+  # example:
+  # fonts:
+  #   - family: Schyler
+  #     fonts:
+  #       - asset: fonts/Schyler-Regular.ttf
+  #       - asset: fonts/Schyler-Italic.ttf
+  #         style: italic
+  #   - family: Trajan Pro
+  #     fonts:
+  #       - asset: fonts/TrajanPro.ttf
+  #       - asset: fonts/TrajanPro_Bold.ttf
+  #         weight: 700
+  #
+  # For details regarding fonts from package dependencies,
+  # see https://flutter.dev/to/font-from-package

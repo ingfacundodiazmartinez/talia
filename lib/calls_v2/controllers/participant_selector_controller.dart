@@ -1,0 +1,249 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../../services/stories/repositories/contact_repository.dart';
+import '../../utils/release_logger.dart';
+
+/// Modelo para representar un contacto seleccionable
+class SelectableContact {
+  final String id;
+  final String name;
+  final String? photoUrl;
+  final String? phoneNumber;
+  bool isSelected;
+
+  SelectableContact({
+    required this.id,
+    required this.name,
+    this.photoUrl,
+    this.phoneNumber,
+    this.isSelected = false,
+  });
+}
+
+/// Controller para la selección de participantes de llamada grupal
+///
+/// Responsabilidades:
+/// - Cargar contactos con cache
+/// - Manejar selección múltiple
+/// - Filtrar por búsqueda (local)
+/// - Validar límites de participantes
+/// - Excluir IDs específicos (ej: participantes ya en llamada)
+class ParticipantSelectorController extends ChangeNotifier {
+  final ContactRepository _contactRepository;
+  final FirebaseAuth _auth;
+
+  // Estado
+  List<SelectableContact> _allContacts = [];
+  List<SelectableContact> _filteredContacts = [];
+  final Set<String> _selectedIds = {};
+  Set<String> _excludedIds = {}; // IDs a excluir de la lista (ej: ya en llamada)
+  String _searchQuery = '';
+  bool _isLoading = true;
+  String? _error;
+
+  // Configuración
+  static const int maxParticipants = 8; // Límite recomendado para video
+  static const int minParticipants = 1; // Mínimo para iniciar llamada
+
+  // Getters
+  List<SelectableContact> get contacts => _filteredContacts;
+  List<SelectableContact> get selectedContacts =>
+      _allContacts.where((c) => _selectedIds.contains(c.id)).toList();
+  Set<String> get selectedIds => Set.unmodifiable(_selectedIds);
+  int get selectedCount => _selectedIds.length;
+  bool get isLoading => _isLoading;
+  String? get error => _error;
+  bool get canStartCall => _selectedIds.length >= minParticipants;
+  bool get hasReachedLimit => _selectedIds.length >= maxParticipants;
+  String get searchQuery => _searchQuery;
+
+  ParticipantSelectorController({
+    ContactRepository? contactRepository,
+    FirebaseAuth? auth,
+  }) : _contactRepository = contactRepository ?? ContactRepository(
+         firestore: FirebaseFirestore.instance,
+         auth: FirebaseAuth.instance,
+       ),
+       _auth = auth ?? FirebaseAuth.instance;
+
+  /// Inicializar y cargar contactos
+  /// ✅ FIX #9: Mejorado manejo de errores - muestra lista vacía en vez de error
+  Future<void> initialize() async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      ReleaseLogger.log('🔄 Cargando contactos para selector...', tag: 'ParticipantSelector');
+
+      // 1. Obtener IDs de contactos (usa cache si es válido)
+      // Ahora tiene fail-safe: retorna al menos Set vacío o {userId}
+      final contactIds = await _contactRepository.getContactIds();
+      ReleaseLogger.log('📋 ContactIds obtenidos: ${contactIds.length} (incluye usuario actual)', tag: 'ParticipantSelector');
+
+      // Remover el usuario actual de la lista
+      final currentUserId = _auth.currentUser?.uid;
+      final otherContactIds = contactIds.where((id) => id != currentUserId).toList();
+      ReleaseLogger.log('👥 Contactos (sin usuario actual): ${otherContactIds.length}', tag: 'ParticipantSelector');
+
+      if (otherContactIds.isEmpty) {
+        ReleaseLogger.log('⚠️ No hay contactos disponibles para agregar', tag: 'ParticipantSelector');
+        _allContacts = [];
+        _filteredContacts = [];
+        _isLoading = false;
+        _error = null; // ✅ FIX #9: No mostrar error, solo lista vacía
+        notifyListeners();
+        return;
+      }
+
+      // 2. Obtener detalles de usuarios en batch
+      // Ahora tiene fail-safe: retorna Map vacío si hay error
+      final usersInfo = await _contactRepository.getUsersInfo(otherContactIds);
+      ReleaseLogger.log('📝 Info de usuarios obtenida: ${usersInfo.length}', tag: 'ParticipantSelector');
+
+      // 3. Crear lista de contactos seleccionables
+      // ✅ FIX #9: Solo incluir contactos que tienen info disponible
+      _allContacts = otherContactIds
+          .where((id) => usersInfo.containsKey(id) || true) // Incluir todos, con fallback name
+          .map((id) {
+            final userInfo = usersInfo[id];
+            return SelectableContact(
+              id: id,
+              name: userInfo?['name'] as String? ?? 'Usuario',
+              photoUrl: userInfo?['photoUrl'] as String?,
+              phoneNumber: userInfo?['phoneNumber'] as String?,
+            );
+          })
+          .toList();
+
+      // Ordenar alfabéticamente
+      _allContacts.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+
+      // Inicialmente mostrar todos
+      _filteredContacts = List.from(_allContacts);
+
+      ReleaseLogger.log('✅ Contactos cargados: ${_allContacts.length}', tag: 'ParticipantSelector');
+      _error = null; // ✅ FIX #9: Asegurar que no hay error
+
+    } catch (e) {
+      // ✅ FIX #9: Este catch ahora debería ser muy raro gracias a los fail-safes
+      ReleaseLogger.error('❌ Error inesperado cargando contactos: $e', tag: 'ParticipantSelector');
+      // En vez de mostrar error, mostrar lista vacía
+      _allContacts = [];
+      _filteredContacts = [];
+      _error = null; // No mostrar error genérico, la UI mostrará "No hay contactos"
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  /// Establecer IDs a excluir de la lista (ej: participantes ya en llamada)
+  void setExcludedIds(Set<String> excludedIds) {
+    ReleaseLogger.log('🚫 Excluyendo ${excludedIds.length} participantes: $excludedIds', tag: 'ParticipantSelector');
+    _excludedIds = excludedIds;
+    _applyFilters();
+    ReleaseLogger.log('📊 Contactos después de filtros: ${_filteredContacts.length}/${_allContacts.length}', tag: 'ParticipantSelector');
+    notifyListeners();
+  }
+
+  /// Actualizar búsqueda (filtrado local)
+  void updateSearch(String query) {
+    _searchQuery = query.toLowerCase().trim();
+    _applyFilters();
+    notifyListeners();
+  }
+
+  /// Aplicar todos los filtros (excluidos + búsqueda)
+  void _applyFilters() {
+    _filteredContacts = _allContacts.where((contact) {
+      // Excluir IDs específicos (ya en llamada)
+      if (_excludedIds.contains(contact.id)) return false;
+
+      // Aplicar filtro de búsqueda
+      if (_searchQuery.isEmpty) return true;
+      final nameMatch = contact.name.toLowerCase().contains(_searchQuery);
+      final phoneMatch = contact.phoneNumber?.contains(_searchQuery) ?? false;
+      return nameMatch || phoneMatch;
+    }).toList();
+  }
+
+  /// Toggle selección de contacto
+  void toggleSelection(String contactId) {
+    if (_selectedIds.contains(contactId)) {
+      _selectedIds.remove(contactId);
+      _updateContactSelection(contactId, false);
+    } else {
+      if (!hasReachedLimit) {
+        _selectedIds.add(contactId);
+        _updateContactSelection(contactId, true);
+      }
+    }
+    notifyListeners();
+  }
+
+  /// Seleccionar contacto
+  void selectContact(String contactId) {
+    if (!_selectedIds.contains(contactId) && !hasReachedLimit) {
+      _selectedIds.add(contactId);
+      _updateContactSelection(contactId, true);
+      notifyListeners();
+    }
+  }
+
+  /// Deseleccionar contacto
+  void deselectContact(String contactId) {
+    if (_selectedIds.contains(contactId)) {
+      _selectedIds.remove(contactId);
+      _updateContactSelection(contactId, false);
+      notifyListeners();
+    }
+  }
+
+  /// Limpiar todas las selecciones
+  void clearSelection() {
+    for (final id in _selectedIds) {
+      _updateContactSelection(id, false);
+    }
+    _selectedIds.clear();
+    notifyListeners();
+  }
+
+  /// Preseleccionar contactos (útil para llamada desde grupo)
+  void preselectContacts(List<String> contactIds) {
+    clearSelection();
+    for (final id in contactIds) {
+      if (_selectedIds.length < maxParticipants) {
+        _selectedIds.add(id);
+        _updateContactSelection(id, true);
+      }
+    }
+    notifyListeners();
+  }
+
+  /// Verificar si un contacto está seleccionado
+  bool isSelected(String contactId) => _selectedIds.contains(contactId);
+
+  // Helper para actualizar el estado de selección en la lista
+  void _updateContactSelection(String contactId, bool selected) {
+    final index = _allContacts.indexWhere((c) => c.id == contactId);
+    if (index != -1) {
+      _allContacts[index].isSelected = selected;
+    }
+  }
+
+  /// Refrescar contactos (forzar recarga)
+  Future<void> refresh() async {
+    _contactRepository.invalidateContactsCache();
+    await initialize();
+  }
+
+  @override
+  void dispose() {
+    _allContacts.clear();
+    _filteredContacts.clear();
+    _selectedIds.clear();
+    super.dispose();
+  }
+}

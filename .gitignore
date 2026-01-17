@@ -1,0 +1,94 @@
+# Environment variables
+functions/.env
+.env
+
+# Node modules
+node_modules/
+functions/node_modules/
+
+# Build outputs
+build/
+.dart_tool/
+ios/build/
+android/build/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+.claude/settings.local.json
+
+# OS
+.DS_Store
+
+# Android signing
+android/key.properties
+android/*.jks
+android/*.keystore
+*.jks
+*.keystore
+
+# Firebase configuration files (contienen project IDs y API keys)
+# Nota: Estas API keys están diseñadas para estar en el cliente, pero es mejor
+# práctica mantener estos archivos fuera de git para evitar exposición innecesaria
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist
+macos/Runner/GoogleService-Info.plist
+lib/firebase_options.dart
+
+# Si necesitas estos archivos en git para CI/CD, considera cifrarlos
+# o usar secrets de GitHub Actions
+
+# Documentation and reports (keep core documentation)
+*.md
+!README.md
+!CONTRIBUTING.md
+!PRIVACY_POLICY.md
+!TERMS_OF_SERVICE.md
+!BUG_REPORT.md
+!FIREBASE_SETUP.md
+!ACCESSIBILITY.md
+!TESTING.md
+!NOTIFICATIONS.md
+!OFFLINE_SYNC.md
+!UX_IMPROVEMENTS.md
+!MULTI_DEVICE_TESTING.md
+!PERMISSIONS.md
+!DATA_MANAGEMENT.md
+
+# Scripts
+*.sh
+
+# Firestore rules backups
+firestore.rules.backup-*
+firestore.rules.SECURE
+
+# Build artifacts
+*.aab
+*.apk
+*.ipa
+
+# Android reports
+android/build/reports/
+
+# Other temporary files
+*.log
+*.tmp
+*.bak
+
+# Old/backup directories
+v2-files/
+*.old.*
+
+# Firebase Admin SDK Service Account
+*firebase*adminsdk*.json
+tmp/
+
+# Service account key (secret)
+scripts/serviceAccountKey.json
+
+# VoIP Push Certificates (CRITICAL - never commit)
+functions/voip_cert.p12
+functions/voip_cert.pem
+*.p12
+functions/*.pem

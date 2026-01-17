@@ -1,0 +1,1681 @@
+/// Agora Call Screen - Custom UI for video/audio calls
+///
+/// This screen provides a custom UI for Agora RTC Engine calls
+/// with video rendering, call controls, and participant management.
+
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:agora_rtc_engine/agora_rtc_engine.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:proximity_sensor/proximity_sensor.dart';
+import '../controllers/call_controller.dart';
+import '../controllers/participant_selector_controller.dart'; // Para SelectableContact
+import '../models/call_v2.dart';
+import '../services/agora_engine_service.dart';
+import '../services/call_state_cache_service.dart';
+import '../widgets/video_grid_widget.dart';
+import '../widgets/add_participant_sheet.dart';
+import '../widgets/caller_avatar.dart';
+import '../services/add_participant_service.dart';
+import '../../services/voip_service.dart';
+import '../../services/ringtone_service.dart';
+import '../../services/app_config_service.dart';
+import '../../utils/release_logger.dart';
+
+class AgoraCallScreen extends StatefulWidget {
+  final String? callId; // Nullable for creating mode
+  final bool isIncoming;
+  final CallV2? initialCall;
+
+  // For creating new calls
+  final List<String>? participantIds;
+  final bool? isVideo;
+  final bool? isGroup;
+
+  const AgoraCallScreen({
+    Key? key,
+    this.callId,
+    required this.isIncoming,
+    this.initialCall,
+    this.participantIds,
+    this.isVideo,
+    this.isGroup,
+  }) : assert(callId != null || (participantIds != null && isVideo != null),
+            'Either callId or (participantIds + isVideo) must be provided'),
+       super(key: key);
+
+  /// Constructor for existing call
+  const AgoraCallScreen.existing({
+    Key? key,
+    required String callId,
+    required bool isIncoming,
+    CallV2? initialCall,
+  }) : this(
+          key: key,
+          callId: callId,
+          isIncoming: isIncoming,
+          initialCall: initialCall,
+        );
+
+  /// Constructor for creating new call (immediate navigation)
+  const AgoraCallScreen.create({
+    Key? key,
+    required List<String> participantIds,
+    required bool isVideo,
+    bool isGroup = false,
+  }) : this(
+          key: key,
+          isIncoming: false,
+          participantIds: participantIds,
+          isVideo: isVideo,
+          isGroup: isGroup,
+        );
+
+  @override
+  State<AgoraCallScreen> createState() => _AgoraCallScreenState();
+}
+
+class _AgoraCallScreenState extends State<AgoraCallScreen> {
+  static const String _tag = 'AgoraCallScreen';
+
+  late CallController _callController;
+  late AgoraEngineService _agoraEngine;
+  final RingtoneService _ringtoneService = RingtoneService();
+
+  // UI state
+  bool _isInitializing = true;
+  bool _isCreatingCall = false; // New: track if we're creating the call
+  String? _createError; // Error message for retry UI
+  bool _isAudioMuted = false;
+  bool _isVideoMuted = false;
+  bool _isSpeakerOn = true;
+  final bool _showControls = true; // Always visible
+  String? _actualCallId; // Actual callId after creation
+
+  // ✅ FIX: Busy state handling
+  bool _isRecipientBusy = false;
+  Timer? _busyAutoEndTimer;
+
+  // ✅ Ring timeout: Auto-end call if no one answers within configured timeout
+  Timer? _ringTimeoutTimer;
+
+  // Participants
+  final Set<int> _remoteUsers = {};
+  int? _localUid;
+  String? _pinnedParticipantId; // For pinning a specific video in group calls
+
+  // ✅ Optimistic UI: Participants being added (shown immediately before Firestore updates)
+  final Map<String, GridParticipant> _optimisticPendingParticipants = {};
+
+  // Stream subscriptions
+  StreamSubscription<CallV2?>? _callSubscription;
+  StreamSubscription<int>? _proximitySubscription;
+  StreamSubscription<String>? _callKitEndedSubscription;
+
+  // Proximity state for audio calls
+  bool _isNearEar = false;
+
+  // ✅ FIX: Flags to prevent duplicate processing
+  bool _isEnding = false; // Prevent duplicate end call processing
+  bool _handlersRegistered = false; // Prevent duplicate handler registration
+
+  @override
+  void initState() {
+    super.initState();
+    _enableWakeLock();
+    _initializeCall();
+    _listenToCallKitEnded();
+  }
+
+  /// ✅ FIX: Listen to CallKit ended events (when user hangs up from iOS CallKit UI)
+  /// This fixes the issue where user B hangs up from CallKit but doesn't leave Agora channel,
+  /// causing user A to detect the disconnect 26 seconds later via Agora timeout.
+  void _listenToCallKitEnded() {
+    _callKitEndedSubscription = VoIPService().callKitEndedStream.listen((callId) {
+      final currentCallId = widget.callId ?? _actualCallId;
+      ReleaseLogger.log(
+        '📥 [AgoraCallScreen] CallKit ended event received for: $callId (current: $currentCallId)',
+        tag: _tag,
+      );
+
+      // Only handle if this event is for our current call
+      if (callId == currentCallId && !_isEnding) {
+        ReleaseLogger.log(
+          '🔚 [AgoraCallScreen] CallKit ended our call, terminating properly...',
+          tag: _tag,
+        );
+        _endCall();
+      }
+    });
+    ReleaseLogger.log('✅ [AgoraCallScreen] Subscribed to callKitEndedStream', tag: _tag);
+  }
+
+  /// Enable WakeLock to keep screen on during call
+  Future<void> _enableWakeLock() async {
+    try {
+      await WakelockPlus.enable();
+      ReleaseLogger.log('✅ WakeLock enabled - screen will stay on', tag: _tag);
+    } catch (e) {
+      ReleaseLogger.error('Failed to enable WakeLock', error: e, tag: _tag);
+    }
+  }
+
+  /// Disable WakeLock when call ends
+  Future<void> _disableWakeLock() async {
+    try {
+      await WakelockPlus.disable();
+      ReleaseLogger.log('✅ WakeLock disabled', tag: _tag);
+    } catch (e) {
+      ReleaseLogger.error('Failed to disable WakeLock', error: e, tag: _tag);
+    }
+  }
+
+  /// Start ring timeout timer for outgoing calls
+  /// If no one answers within the configured timeout, end the call automatically
+  void _startRingTimeoutTimer() {
+    // Get timeout from Remote Config (default: 30 seconds)
+    final timeoutSeconds = AppConfigService().callRingTimeoutSeconds;
+    ReleaseLogger.log(
+      '⏱️ [AgoraCallScreen] Starting ring timeout timer: ${timeoutSeconds}s',
+      tag: _tag,
+    );
+
+    _ringTimeoutTimer?.cancel();
+    _ringTimeoutTimer = Timer(Duration(seconds: timeoutSeconds), () {
+      if (!mounted) return;
+
+      // Only timeout if no one has answered yet
+      if (_remoteUsers.isEmpty && !_isEnding && !_isRecipientBusy) {
+        ReleaseLogger.log(
+          '⏱️ [AgoraCallScreen] Ring timeout expired after ${timeoutSeconds}s - no answer',
+          tag: _tag,
+        );
+
+        // End the call
+        _endCall();
+      }
+    });
+  }
+
+  /// Cancel ring timeout timer (called when someone answers)
+  void _cancelRingTimeoutTimer() {
+    if (_ringTimeoutTimer != null) {
+      ReleaseLogger.log(
+        '⏱️ [AgoraCallScreen] Cancelling ring timeout timer - call answered',
+        tag: _tag,
+      );
+      _ringTimeoutTimer?.cancel();
+      _ringTimeoutTimer = null;
+    }
+  }
+
+  /// Setup proximity sensor for audio calls (switch to earpiece when near ear)
+  /// [isVideoCall] should be passed explicitly since currentCall may not be loaded yet
+  void _setupProximitySensor({bool? isVideoCall}) {
+    // ✅ FIX: Use explicitly passed value first, then check widget, then controller
+    // The order matters because currentCall may not be loaded when this is called
+    final isVideo = isVideoCall ?? widget.isVideo ?? _callController.currentCall?.isVideo ?? false;
+    if (isVideo) {
+      // No need for proximity sensor in video calls
+      ReleaseLogger.log('Video call - skipping proximity sensor setup', tag: _tag);
+      return;
+    }
+
+    // ✅ For audio calls: use earpiece by default (like a phone call)
+    _setAudioRouteToEarpiece();
+
+    // Listen to proximity sensor changes
+    _proximitySubscription = ProximitySensor.events.listen((int event) {
+      final isNear = event > 0;
+      if (_isNearEar != isNear) {
+        _isNearEar = isNear;
+        ReleaseLogger.log(
+          isNear ? '📱 Phone near ear - using earpiece' : '📱 Phone away from ear - using speaker',
+          tag: _tag,
+        );
+
+        // Switch audio route based on proximity
+        if (isNear) {
+          _setAudioRouteToEarpiece();
+        } else {
+          // When phone is away, use speaker if user had it on, otherwise keep earpiece
+          if (_isSpeakerOn) {
+            _agoraEngine.engine?.setEnableSpeakerphone(true);
+          }
+        }
+
+        if (mounted) setState(() {});
+      }
+    });
+
+    ReleaseLogger.log('✅ Proximity sensor setup for audio call', tag: _tag);
+  }
+
+  /// Set audio route to earpiece (for audio calls)
+  Future<void> _setAudioRouteToEarpiece() async {
+    try {
+      await _agoraEngine.engine?.setEnableSpeakerphone(false);
+      if (mounted) {
+        setState(() {
+          _isSpeakerOn = false;
+        });
+      }
+    } catch (e) {
+      ReleaseLogger.error('Failed to set earpiece', error: e, tag: _tag);
+    }
+  }
+
+  Future<void> _initializeCall() async {
+    try {
+      // Create CallController locally instead of using Provider
+      _callController = CallController();
+      _callController.initialize();
+      _agoraEngine = _callController.agoraEngine;
+
+      // ✅ For creating mode: Initialize engine first to show camera preview immediately
+      final isCreatingMode = widget.callId == null && widget.participantIds != null;
+      final isVideo = widget.isVideo ?? false;
+
+      if (isCreatingMode && isVideo) {
+        // Initialize engine NOW to show camera preview while creating call
+        await _agoraEngine.initialize();
+        ReleaseLogger.log('✅ Engine initialized for camera preview', tag: _tag);
+      }
+
+      // Setup Agora event handlers (may be null in create mode until engine is ready)
+      _setupAgoraEventHandlers();
+
+      // ✅ WHATSAPP-STYLE: Show UI IMMEDIATELY (don't wait for camera)
+      setState(() {
+        _isInitializing = false;
+        _isAudioMuted = !_agoraEngine.isAudioEnabled;
+        _isVideoMuted = !_agoraEngine.isVideoEnabled;
+      });
+
+      // ✅ Start camera preview in background (non-blocking)
+      if (isVideo && _agoraEngine.engine != null) {
+        _agoraEngine.engine!.enableVideo().then((_) {
+          return _agoraEngine.engine!.startPreview();
+        }).then((_) {
+          ReleaseLogger.log('✅ Camera preview started in background', tag: _tag);
+          if (mounted) setState(() {}); // Refresh to show camera
+        }).catchError((e) {
+          ReleaseLogger.error('Failed to start camera', error: e, tag: _tag);
+        });
+      }
+
+      // ✅ Handle creating vs joining existing call
+      if (isCreatingMode) {
+        // Creating mode: Camera already started, now create call in background
+        await _createCallInBackground();
+        return;
+      }
+
+      // Existing call mode: Watch call for updates
+      _callSubscription = _callController.watchCall(widget.callId!).listen(
+        (call) {
+          ReleaseLogger.log(
+            '🔄 [AgoraCallScreen] Call update received: endedAt=${call?.endedAt}, endedBy=${call?.endedBy}',
+            tag: _tag,
+          );
+
+          if (call?.endedAt != null) {
+            // ✅ FIX: Check if we're already ending to prevent double pop
+            // When user disconnects via onUserOffline, we already pop there.
+            // Without this check, the Firestore update also triggers a pop, causing double-pop.
+            if (_isEnding) {
+              ReleaseLogger.log(
+                '⚠️ [AgoraCallScreen] Already ending call, skipping duplicate pop from Firestore update',
+                tag: _tag,
+              );
+              return;
+            }
+            _isEnding = true;
+
+            // Call ended by another participant, close screen
+            ReleaseLogger.log(
+              '📞 [AgoraCallScreen] Call ended remotely by ${call?.endedBy} at ${call?.endedAt}, closing screen',
+              tag: _tag,
+            );
+
+            // ✅ FIX: End CallKit UI when call ends remotely
+            // Without this, iOS shows the call as active in the VoIP notification
+            final callIdToEnd = widget.callId;
+            if (callIdToEnd != null) {
+              VoIPService().notifyCallEnded(callIdToEnd);
+            }
+
+            if (mounted) {
+              ReleaseLogger.log('📞 [AgoraCallScreen] Popping screen...', tag: _tag);
+              // ✅ Use rootNavigator to match the push
+              Navigator.of(context, rootNavigator: true).pop();
+            } else {
+              ReleaseLogger.log('⚠️ [AgoraCallScreen] Screen not mounted, cannot pop', tag: _tag);
+            }
+            return;
+          }
+          // Update UI when call data updates (participants, local UID, etc.)
+          if (mounted && call != null) {
+            final newUid = _callController.currentUserAgoraUid;
+            // ✅ FIX: Always setState to update UI when call changes
+            // This ensures pending participants (ringing) appear immediately
+            setState(() {
+              if (newUid != _localUid) {
+                _localUid = newUid;
+                ReleaseLogger.log('Local UID updated: $_localUid', tag: _tag);
+              }
+            });
+          }
+        },
+      );
+
+      // ✅ Check if call already accepted (e.g., from CallKit callback)
+      // Get current call state to avoid duplicate accept
+      final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+      final callResult = await _callController.getCall(widget.callId!);
+      final userParticipant = callResult.data?.participants[currentUserId];
+      final isAlreadyJoined = userParticipant?.status == CallStatus.joined;
+
+      // ✅ FIX: For incoming VIDEO calls, initialize engine and start camera preview
+      // This gives WhatsApp-style instant camera feedback for the receiver too
+      final isVideoCall = callResult.data?.isVideo ?? false;
+      if (isVideoCall) {
+        // Initialize engine if not already done
+        if (_agoraEngine.engine == null) {
+          ReleaseLogger.log('📹 Initializing engine for incoming video call preview', tag: _tag);
+          final initResult = await _agoraEngine.initialize();
+          if (!initResult.success) {
+            ReleaseLogger.error('❌ Failed to initialize Agora engine: ${initResult.error}', tag: _tag);
+            _showError(initResult.error ?? 'Error al inicializar la cámara');
+            if (mounted) Navigator.of(context, rootNavigator: true).pop();
+            return;
+          }
+        }
+        _setupAgoraEventHandlers(); // Always register handlers for this screen
+
+        // ✅ FIX: ALWAYS enable video and start camera for video calls
+        // Even if engine was initialized by VoIPService in background (without video)
+        // Verify engine is not null before using it
+        if (_agoraEngine.engine != null) {
+          ReleaseLogger.log('📹 Enabling video for incoming video call', tag: _tag);
+          _agoraEngine.engine!.enableVideo().then((_) {
+            return _agoraEngine.engine!.startPreview();
+          }).then((_) {
+            ReleaseLogger.log('✅ Camera preview started for incoming video call', tag: _tag);
+            if (mounted) setState(() {});
+          }).catchError((e) {
+            ReleaseLogger.error('Failed to start camera preview', error: e, tag: _tag);
+          });
+        } else {
+          ReleaseLogger.error('❌ Engine is still null after initialization', tag: _tag);
+        }
+      }
+
+      // ✅ FIX iOS BACKGROUND: Check if call was already accepted via VoIPService
+      // On iOS, when accepting from CallKit while app is in background, VoIPService
+      // calls acceptCall() directly since AgoraCallScreen.initState may not run.
+      // We check this flag to avoid calling acceptCall() twice.
+      final wasAcceptedViaVoIP = CallStateCacheService().isCallAlreadyAccepted(widget.callId!);
+
+      if (widget.isIncoming && !_callController.isInCall && !isAlreadyJoined && !wasAcceptedViaVoIP) {
+        // Accept and join the call (first time only)
+        ReleaseLogger.log('Accepting incoming call for first time', tag: _tag);
+        final result = await _callController.acceptCall(widget.callId!);
+        if (!result.success) {
+          _showError(result.error ?? 'Error al unirse a la llamada');
+          Navigator.of(context, rootNavigator: true).pop();
+          return;
+        }
+
+        // ✅ FIX: Register event handlers AFTER engine is initialized
+        // For audio calls, engine is initialized inside acceptCall, not before
+        // Without this, onUserJoined events are never received and UI stays on "Connecting..."
+        _setupAgoraEventHandlers();
+
+        // ✅ Get UID directly from accept result (no delay needed)
+        _localUid = result.data?['agoraUid'] as int?;
+        ReleaseLogger.log('Local UID from accept result: $_localUid', tag: _tag);
+      } else if (isAlreadyJoined || wasAcceptedViaVoIP) {
+        // Call already accepted (from CallKit/VoIPService), just get UID
+        ReleaseLogger.log(
+          'Call already accepted (isAlreadyJoined: $isAlreadyJoined, wasAcceptedViaVoIP: $wasAcceptedViaVoIP), getting UID from call data',
+          tag: _tag,
+        );
+
+        // ✅ FIX: Ensure engine is initialized for CallKit flow
+        if (_agoraEngine.engine == null) {
+          await _agoraEngine.initialize();
+        }
+        // ✅ FIX: ALWAYS register handlers - the previous instance in VoIPService used different handlers
+        _setupAgoraEventHandlers();
+
+        // ✅ FIX SIMPLIFIED VoIP FLOW: Join Agora channel if not already in
+        // VoIPService now only accepts in Firestore (acceptCallWithoutJoining)
+        // AgoraCallScreen is responsible for joining Agora
+        final call = callResult.data;
+        if (!_agoraEngine.isInChannel && call != null && currentUserId != null) {
+          final myParticipant = call.participants[currentUserId];
+          if (myParticipant?.token != null && myParticipant?.agoraUid != null) {
+            ReleaseLogger.log(
+              '📹 [VoIP Flow] Joining Agora channel: ${call.channelName} with UID: ${myParticipant!.agoraUid}',
+              tag: _tag,
+            );
+            final joinResult = await _callController.joinCall(
+              channelName: call.channelName,
+              token: myParticipant.token!,
+              uid: myParticipant.agoraUid!,
+              isVideo: call.isVideo,
+            );
+            if (!joinResult.success) {
+              ReleaseLogger.error(
+                '❌ [VoIP Flow] Failed to join Agora: ${joinResult.error}',
+                tag: _tag,
+              );
+              _showError(joinResult.error ?? 'Error al unirse a la llamada');
+              Navigator.of(context, rootNavigator: true).pop();
+              return;
+            }
+            ReleaseLogger.log('✅ [VoIP Flow] Successfully joined Agora channel', tag: _tag);
+          } else {
+            ReleaseLogger.error(
+              '❌ [VoIP Flow] Missing credentials - token: ${myParticipant?.token != null}, agoraUid: ${myParticipant?.agoraUid}',
+              tag: _tag,
+            );
+          }
+        } else {
+          ReleaseLogger.log(
+            '📹 Engine state - isInChannel: ${_agoraEngine.isInChannel} (already in channel, skipping join)',
+            tag: _tag,
+          );
+        }
+
+        _localUid = _callController.currentUserAgoraUid;
+        ReleaseLogger.log('Local UID from existing call data: $_localUid', tag: _tag);
+
+        // ✅ FIX VIDEO FROM LOCK SCREEN: Populate _remoteUsers from Firestore
+        // When we join via VoIPService (background), the onUserJoined events already fired
+        // before this screen existed. We need to get remote users from call data.
+        // NOTE: This is still needed as a fallback in case we miss onUserJoined events
+        if (call != null) {
+          for (final entry in call.participants.entries) {
+            final odId = entry.key;
+            final participant = entry.value;
+
+            // Skip local user
+            if (odId == currentUserId) continue;
+
+            // Add users who are already joined and have an Agora UID
+            if (participant.status == CallStatus.joined && participant.agoraUid != null) {
+              _remoteUsers.add(participant.agoraUid!);
+              ReleaseLogger.log(
+                '📹 Added existing remote user from Firestore: $odId (agoraUid: ${participant.agoraUid})',
+                tag: _tag,
+              );
+            }
+          }
+          ReleaseLogger.log('📹 Remote users after Firestore sync: $_remoteUsers', tag: _tag);
+        }
+      } else {
+        // For caller, get UID from controller (already available)
+        _localUid = _callController.currentUserAgoraUid;
+        ReleaseLogger.log('Local UID from controller: $_localUid', tag: _tag);
+      }
+
+      // Update UID in UI if we got it
+      if (_localUid != null) {
+        setState(() {});
+      }
+
+      _startHideControlsTimer();
+
+      // ✅ Setup proximity sensor for audio calls (earpiece when near ear)
+      // Pass isVideoCall explicitly since currentCall may not be loaded yet
+      _setupProximitySensor(isVideoCall: isVideoCall);
+    } catch (e) {
+      ReleaseLogger.error('Failed to initialize call', error: e, tag: _tag);
+      _showError('Error al iniciar la llamada');
+      Navigator.of(context, rootNavigator: true).pop();
+    }
+  }
+
+  /// ✅ WHATSAPP-STYLE: Create call in background while showing camera
+  /// NOTE: Camera preview already started in _initializeCall()
+  Future<void> _createCallInBackground() async {
+    try {
+      setState(() {
+        _isCreatingCall = true;
+      });
+
+      // Camera preview already started in _initializeCall() for instant feedback
+      // Now create call in background while user sees their camera
+      ReleaseLogger.log('Creating call in background...', tag: _tag);
+      final result = await _callController.createCall(
+        participantIds: widget.participantIds!,
+        isVideo: widget.isVideo!,
+        isGroup: widget.isGroup ?? false,
+      );
+
+      if (!result.success || result.data == null) {
+        // Show error with retry button instead of closing
+        setState(() {
+          _isCreatingCall = false;
+          _createError = result.error ?? 'Error al conectar la llamada';
+        });
+        return;
+      }
+
+      // Step 3: Get call ID and start watching
+      _actualCallId = result.data!['callId'] as String;
+      _localUid = result.data!['agoraUid'] as int?;
+
+      // ✅ FIX: Check if recipient is busy
+      final allParticipantsBusy = result.data!['allParticipantsBusy'] as bool? ?? false;
+      final busyParticipants = result.data!['busyParticipants'] as List<dynamic>? ?? [];
+
+      ReleaseLogger.log('Call created: $_actualCallId, UID: $_localUid, busy: $allParticipantsBusy', tag: _tag);
+
+      if (allParticipantsBusy && busyParticipants.isNotEmpty) {
+        // ✅ Recipient is busy - show busy tone and auto-end
+        ReleaseLogger.log('📵 Recipient is busy, showing busy state', tag: _tag);
+        setState(() {
+          _isRecipientBusy = true;
+          _isCreatingCall = false;
+        });
+
+        // Play busy tone instead of ringback
+        await _ringtoneService.playBusyTone();
+
+        // Auto-end after 5 seconds
+        _busyAutoEndTimer = Timer(const Duration(seconds: 5), () {
+          if (mounted && _isRecipientBusy) {
+            ReleaseLogger.log('📵 Auto-ending call after busy timeout', tag: _tag);
+            _endCall();
+          }
+        });
+
+        // Still watch the call in case it's answered from another device
+        _callSubscription = _callController.watchCall(_actualCallId!).listen(
+          (call) {
+            if (call?.endedAt != null && mounted) {
+              Navigator.of(context, rootNavigator: true).pop();
+            }
+          },
+        );
+        return;
+      }
+
+      // ✅ Start ringback tone while waiting for remote user to answer
+      await _ringtoneService.playRingbackTone();
+
+      // ✅ Start ring timeout timer - will auto-end call if no one answers
+      _startRingTimeoutTimer();
+
+      // ✅ FIX: Register event handlers NOW that engine is initialized
+      // (They couldn't be registered earlier because engine was null)
+      _setupAgoraEventHandlers();
+
+      setState(() {
+        _isCreatingCall = false;
+      });
+
+      // Step 4: Start watching for updates
+      _callSubscription = _callController.watchCall(_actualCallId!).listen(
+        (call) {
+          ReleaseLogger.log(
+            '🔄 [AgoraCallScreen] Call update received: endedAt=${call?.endedAt}',
+            tag: _tag,
+          );
+
+          if (call?.endedAt != null) {
+            // ✅ FIX: Check if we're already ending to prevent double pop
+            if (_isEnding) {
+              ReleaseLogger.log(
+                '⚠️ [AgoraCallScreen] Already ending call, skipping duplicate pop from Firestore update (create mode)',
+                tag: _tag,
+              );
+              return;
+            }
+            _isEnding = true;
+
+            ReleaseLogger.log(
+              '📞 [AgoraCallScreen] Call ended remotely by ${call?.endedBy} at ${call?.endedAt}, closing screen',
+              tag: _tag,
+            );
+
+            // ✅ FIX: End CallKit UI when call ends remotely (create mode)
+            // Without this, iOS shows the call as active in the VoIP notification
+            if (_actualCallId != null) {
+              VoIPService().notifyCallEnded(_actualCallId!);
+            }
+
+            if (mounted) {
+              ReleaseLogger.log('📞 [AgoraCallScreen] Popping screen...', tag: _tag);
+              Navigator.of(context, rootNavigator: true).pop();
+            }
+            return;
+          }
+
+          // ✅ FIX: Always setState to update UI when call changes
+          // This ensures pending participants (ringing) appear immediately
+          if (mounted && call != null) {
+            final newUid = _callController.currentUserAgoraUid;
+            setState(() {
+              if (newUid != _localUid) {
+                _localUid = newUid;
+                ReleaseLogger.log('Local UID updated: $_localUid', tag: _tag);
+              }
+            });
+          }
+        },
+      );
+
+      _startHideControlsTimer();
+
+      // ✅ Setup proximity sensor for audio calls (earpiece when near ear)
+      _setupProximitySensor(isVideoCall: widget.isVideo);
+    } catch (e) {
+      ReleaseLogger.error('Failed to create call', error: e, tag: _tag);
+      _showError('Error al crear la llamada');
+      Navigator.of(context, rootNavigator: true).pop();
+    }
+  }
+
+  void _setupAgoraEventHandlers() {
+    // ✅ FIX: Prevent duplicate handler registration
+    if (_handlersRegistered) {
+      ReleaseLogger.log('⚠️ Agora handlers already registered, skipping', tag: _tag);
+      return;
+    }
+
+    // ✅ FIX: Re-fetch engine reference from controller
+    // The engine might have been created after _agoraEngine was assigned
+    _agoraEngine = _callController.agoraEngine;
+
+    if (_agoraEngine.engine == null) {
+      ReleaseLogger.log('⚠️ Engine is null, cannot register handlers', tag: _tag);
+      return;
+    }
+
+    _handlersRegistered = true;
+    ReleaseLogger.log('📝 Registering Agora event handlers on engine: ${_agoraEngine.engine.hashCode}', tag: _tag);
+
+    _agoraEngine.engine!.registerEventHandler(
+      RtcEngineEventHandler(
+        onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
+          if (!mounted) return;
+
+          // ✅ Stop ringback tone and play connected tone when first user joins
+          if (_remoteUsers.isEmpty) {
+            _ringtoneService.stop();
+            _ringtoneService.playConnectedTone();
+
+            // ✅ Cancel ring timeout - someone answered!
+            _cancelRingTimeoutTimer();
+          }
+
+          setState(() {
+            _remoteUsers.add(remoteUid);
+          });
+          ReleaseLogger.log('User joined: $remoteUid', tag: _tag);
+        },
+        onUserOffline: (RtcConnection connection, int remoteUid, UserOfflineReasonType reason) async {
+          ReleaseLogger.log('User offline: $remoteUid, reason: ${reason.name}', tag: _tag);
+
+          // ✅ FIX: Prevent duplicate end call processing
+          if (_isEnding) {
+            ReleaseLogger.log('⚠️ Already ending call, ignoring duplicate onUserOffline', tag: _tag);
+            return;
+          }
+
+          if (!mounted) return;
+
+          setState(() {
+            _remoteUsers.remove(remoteUid);
+          });
+
+          // ✅ FIX: For 1:1 calls, when the remote user leaves, close the screen
+          final isGroupCall = widget.isGroup ?? _callController.currentCall?.isGroup ?? false;
+          if (!isGroupCall && _remoteUsers.isEmpty) {
+            ReleaseLogger.log('📞 1:1 call - remote user left, ending call properly', tag: _tag);
+
+            // ✅ FIX #3: Use _endCall() which:
+            // 1. Sets _isEnding flag to prevent duplicates
+            // 2. AWAITS Firestore update (sync between devices)
+            // 3. Handles CallKit cleanup via native channel
+            // 4. Pops the screen AFTER cleanup completes
+            await _endCall();
+          }
+        },
+        onConnectionLost: (RtcConnection connection) {
+          if (!mounted || _isEnding) return;
+          _showError('Conexión perdida');
+        },
+        onError: (ErrorCodeType code, String msg) {
+          ReleaseLogger.error('Agora error: ${code.name}: $msg', tag: _tag);
+          if (code == ErrorCodeType.errTokenExpired && !_isEnding) {
+            _showError('La sesión de llamada expiró');
+            _endCall();
+          }
+        },
+      ),
+    );
+  }
+
+  // ✅ Controls always visible - no auto-hide timer needed
+  void _startHideControlsTimer() {
+    // No-op: Controls should always be visible for better UX
+  }
+
+  void _toggleControls() {
+    // No-op: Controls always visible
+  }
+
+  /// Manejar tap en participante para pin/unpin video
+  void _handleParticipantTap(GridParticipant participant) {
+    setState(() {
+      // Si ya está pinneado, desanclarlo
+      if (_pinnedParticipantId == participant.odId) {
+        _pinnedParticipantId = null;
+      } else {
+        // Permitir pinnear si hay más de 2 participantes totales
+        final participants = _buildGridParticipants();
+        if (participants.length > 2) {
+          _pinnedParticipantId = participant.odId;
+        }
+      }
+    });
+  }
+
+  /// Construir la lista de participantes para el grid
+  List<GridParticipant> _buildGridParticipants() {
+    final List<GridParticipant> participants = [];
+    final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+    final call = _callController.currentCall;
+
+    // 1. Agregar usuario local
+    if (currentUserId != null) {
+      participants.add(GridParticipant(
+        odId: currentUserId,
+        agoraUid: _localUid,
+        displayName: 'Tú',
+        state: ParticipantState.connected,
+        isLocal: true,
+      ));
+    }
+
+    // 2. Agregar participantes remotos conectados (tienen Agora UID en _remoteUsers)
+    for (final agoraUid in _remoteUsers) {
+      // Buscar el userId correspondiente a este agoraUid
+      String odId = '';
+      String displayName = 'Usuario';
+      String? photoUrl;
+
+      if (call != null) {
+        for (final entry in call.participants.entries) {
+          if (entry.value.agoraUid == agoraUid) {
+            odId = entry.key;
+            displayName = entry.value.displayName ?? 'Usuario';
+            photoUrl = entry.value.photoUrl;
+            break;
+          }
+        }
+      }
+
+      participants.add(GridParticipant(
+        odId: odId,
+        agoraUid: agoraUid,
+        displayName: displayName,
+        photoUrl: photoUrl,
+        state: ParticipantState.connected,
+        isLocal: false,
+      ));
+    }
+
+    // 3. Agregar participantes pendientes (ringing) que aún no están conectados
+    // Esto incluye tanto los de Firestore como los optimísticos
+    final Set<String> addedPendingIds = {};
+
+    if (call != null) {
+      for (final entry in call.participants.entries) {
+        final userId = entry.key;
+        final participant = entry.value;
+
+        // Saltar si es el usuario local
+        if (userId == currentUserId) continue;
+
+        // Saltar si ya está conectado (ya está en _remoteUsers)
+        final isAlreadyConnected = participants.any((p) => p.odId == userId && p.state == ParticipantState.connected);
+        if (isAlreadyConnected) {
+          // ✅ Limpiar de optimísticos si ya está conectado en Firestore
+          _optimisticPendingParticipants.remove(userId);
+          continue;
+        }
+
+        // Solo agregar si está en estado "ringing"
+        if (participant.status == CallStatus.ringing) {
+          participants.add(GridParticipant(
+            odId: userId,
+            agoraUid: participant.agoraUid,
+            displayName: participant.displayName ?? 'Usuario',
+            photoUrl: participant.photoUrl,
+            state: ParticipantState.ringing,
+            isLocal: false,
+          ));
+          addedPendingIds.add(userId);
+          // ✅ Limpiar de optimísticos si ya está en Firestore
+          _optimisticPendingParticipants.remove(userId);
+        }
+      }
+    }
+
+    // 4. Agregar participantes optimísticos que aún no están en Firestore
+    for (final entry in _optimisticPendingParticipants.entries) {
+      final userId = entry.key;
+      // Saltar si ya está en la lista (ya vino de Firestore)
+      if (addedPendingIds.contains(userId)) continue;
+      // Saltar si ya está conectado
+      final isAlreadyConnected = participants.any((p) => p.odId == userId && p.state == ParticipantState.connected);
+      if (isAlreadyConnected) continue;
+
+      participants.add(entry.value);
+    }
+
+    return participants;
+  }
+
+  /// Builder para crear el widget de cada participante
+  Widget _buildParticipantView(GridParticipant participant) {
+    // Si está llamando (ringing), mostrar tile pendiente
+    if (participant.state == ParticipantState.ringing) {
+      return PendingParticipantTile(participant: participant);
+    }
+
+    // Si es local, mostrar vista local
+    if (participant.isLocal) {
+      return _buildLocalView();
+    }
+
+    // Si está conectado y tiene agoraUid, mostrar video remoto
+    if (participant.agoraUid != null) {
+      return _buildRemoteView(participant.agoraUid!);
+    }
+
+    // Fallback: mostrar placeholder
+    return Container(
+      color: Colors.grey[900],
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircleAvatar(
+              radius: 30,
+              backgroundColor: Colors.white24,
+              child: Text(
+                participant.displayName.isNotEmpty
+                    ? participant.displayName[0].toUpperCase()
+                    : '?',
+                style: const TextStyle(color: Colors.white, fontSize: 24),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              participant.displayName,
+              style: const TextStyle(color: Colors.white),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Mostrar bottom sheet para agregar participante
+  void _showAddParticipantSheet() async {
+    final callId = _actualCallId ?? widget.callId;
+    if (callId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Error: No se puede agregar participantes')),
+      );
+      return;
+    }
+
+    // Obtener IDs de participantes actuales para filtrarlos
+    final currentParticipantIds = _callController.currentCall?.participants.keys.toSet() ?? <String>{};
+    // También excluir participantes pendientes optimísticos
+    final allExcludedIds = {...currentParticipantIds, ..._optimisticPendingParticipants.keys};
+
+    // Mostrar selector de participantes
+    final result = await showModalBottomSheet<SelectableContact>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => DraggableScrollableSheet(
+        initialChildSize: 0.7,
+        minChildSize: 0.5,
+        maxChildSize: 0.9,
+        builder: (sheetContext, scrollController) => Container(
+          decoration: BoxDecoration(
+            color: Theme.of(sheetContext).colorScheme.surface, // Adaptable a tema
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: AddParticipantSheet(
+            scrollController: scrollController,
+            excludeIds: allExcludedIds,
+            onSelect: (contact) => Navigator.pop(sheetContext, contact),
+          ),
+        ),
+      ),
+    );
+
+    if (result != null && mounted) {
+      // ✅ OPTIMISTIC UI: Agregar participante inmediatamente a la UI
+      _addOptimisticParticipant(result);
+      // Luego llamar a la Cloud Function en background
+      await _addParticipantToCall(callId, result.id);
+    }
+  }
+
+  /// Agregar participante optimísticamente a la UI (antes de que Firestore se actualice)
+  void _addOptimisticParticipant(SelectableContact contact) {
+    setState(() {
+      _optimisticPendingParticipants[contact.id] = GridParticipant(
+        odId: contact.id,
+        agoraUid: null, // Aún no tiene UID de Agora
+        displayName: contact.name,
+        photoUrl: contact.photoUrl,
+        state: ParticipantState.ringing,
+        isLocal: false,
+      );
+    });
+    ReleaseLogger.log(
+      '✅ [AgoraCallScreen] Added optimistic participant: ${contact.name} (${contact.id})',
+      tag: _tag,
+    );
+  }
+
+  /// Agregar participante a la llamada
+  Future<void> _addParticipantToCall(String callId, String participantId) async {
+    final service = AddParticipantService();
+    final response = await service.execute(
+      callId: callId,
+      newParticipantId: participantId,
+    );
+
+    if (!mounted) return;
+
+    if (!response.success) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(response.error ?? 'Error al agregar participante'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  Future<void> _toggleAudio() async {
+    await _callController.toggleAudio();
+    setState(() {
+      _isAudioMuted = !_agoraEngine.isAudioEnabled;
+    });
+  }
+
+  Future<void> _toggleVideo() async {
+    await _callController.toggleVideo();
+    setState(() {
+      _isVideoMuted = !_agoraEngine.isVideoEnabled;
+    });
+  }
+
+  Future<void> _switchCamera() async {
+    await _callController.switchCamera();
+  }
+
+  Future<void> _toggleSpeaker() async {
+    try {
+      await _agoraEngine.engine?.setEnableSpeakerphone(!_isSpeakerOn);
+      setState(() {
+        _isSpeakerOn = !_isSpeakerOn;
+      });
+    } catch (e) {
+      ReleaseLogger.error('Failed to toggle speaker', error: e, tag: _tag);
+    }
+  }
+
+  Future<void> _endCall() async {
+    ReleaseLogger.log('🔚 [AgoraCallScreen] User pressed End Call button', tag: _tag);
+
+    // ✅ FIX: Prevent duplicate end call processing
+    if (_isEnding) {
+      ReleaseLogger.log('⚠️ Already ending call, ignoring duplicate _endCall', tag: _tag);
+      return;
+    }
+    _isEnding = true;
+
+    // ✅ Cancel ring timeout timer
+    _cancelRingTimeoutTimer();
+
+    // ✅ Stop any ringtone that might be playing
+    await _ringtoneService.stop();
+
+    // ✅ Clear accepted call cache
+    final callIdToClean = widget.callId ?? _actualCallId;
+    if (callIdToClean != null) {
+      CallStateCacheService().clearAcceptedCall(callIdToClean);
+    }
+
+    // If we're still creating the call, just pop immediately
+    if (_isCreatingCall) {
+      ReleaseLogger.log('Call still creating, popping immediately', tag: _tag);
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+      return;
+    }
+
+    // ✅ FIX: Mark as ending from app to prevent VoIPService from duplicate cleanup
+    final callIdToEnd = widget.callId ?? _actualCallId;
+    if (callIdToEnd != null) {
+      CallStateCacheService().markCallEndingFromApp(callIdToEnd);
+      ReleaseLogger.log('📞 [AgoraCallScreen] Marked call as ending from app: $callIdToEnd', tag: _tag);
+    }
+
+    // ✅ FIX: Check if it's a group call with more than 2 participants remaining
+    // Only leave (not end) if there will still be 2+ people after I leave
+    // If only 2 people (me + 1 other), ending should terminate the call like 1:1
+    final isGroupCall = _callController.currentCall?.isGroup ?? false;
+    final remainingRemoteParticipants = _remoteUsers.length;
+
+    if (isGroupCall && remainingRemoteParticipants > 1) {
+      // Group call with 3+ people: Only leave channel, call continues for others
+      ReleaseLogger.log('📞 [AgoraCallScreen] Group call with ${remainingRemoteParticipants + 1} people - leaving channel only (not ending for others)', tag: _tag);
+      await _callController.leaveCall();
+    } else {
+      // 1:1 call OR group call with only 2 remaining: End the whole call
+      ReleaseLogger.log('📞 [AgoraCallScreen] ${isGroupCall ? "Group call down to 2 people" : "1:1 call"} - ending call for all', tag: _tag);
+      await _callController.endCall();
+    }
+    ReleaseLogger.log('✅ [AgoraCallScreen] Call cleanup completed', tag: _tag);
+
+    // ✅ Step 2: End CallKit UI AFTER Agora cleanup
+    // Using native VoIP channel instead of FlutterCallkitIncoming to avoid crashes
+    if (callIdToEnd != null) {
+      ReleaseLogger.log('📞 [AgoraCallScreen] Ending CallKit via native channel...', tag: _tag);
+      try {
+        await VoIPService().notifyCallEnded(callIdToEnd);
+        ReleaseLogger.log('✅ [AgoraCallScreen] CallKit ended via native channel', tag: _tag);
+      } catch (e) {
+        ReleaseLogger.error('⚠️ [AgoraCallScreen] Failed to end CallKit: $e', tag: _tag);
+      }
+    }
+
+    // ✅ FIX: Pop immediately instead of waiting for stream
+    // The stream may not receive the update in time, causing black screen
+    if (mounted) {
+      Navigator.of(context, rootNavigator: true).pop();
+    }
+    ReleaseLogger.log('✅ [AgoraCallScreen] Call ended and screen popped', tag: _tag);
+  }
+
+  void _showError(String message) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message), backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  Widget _buildLocalView() {
+    // ✅ FIX: Show camera preview even before _localUid is set
+    // For local preview, we use uid=0 which always refers to local user
+    // Only hide if video is explicitly muted
+    if (_isVideoMuted) {
+      return Container(
+        color: Colors.grey[900],
+        child: const Center(
+          child: CircleAvatar(
+            radius: 40,
+            backgroundColor: Colors.grey,
+            child: Icon(Icons.person, size: 40, color: Colors.white),
+          ),
+        ),
+      );
+    }
+
+    // ✅ OPTIMISTIC UI FIX: Handle null engine during initialization
+    if (_agoraEngine.engine == null) {
+      return Container(
+        color: Colors.grey[900],
+        child: const Center(
+          child: CircularProgressIndicator(color: Colors.white),
+        ),
+      );
+    }
+
+    return AgoraVideoView(
+      controller: VideoViewController(
+        rtcEngine: _agoraEngine.engine!,
+        canvas: const VideoCanvas(uid: 0), // 0 for local user
+      ),
+    );
+  }
+
+  Widget _buildRemoteView(int uid) {
+    // ✅ OPTIMISTIC UI FIX: Handle null engine during initialization
+    if (_agoraEngine.engine == null) {
+      return Container(
+        color: Colors.grey[900],
+        child: const Center(
+          child: CircularProgressIndicator(color: Colors.white),
+        ),
+      );
+    }
+
+    return AgoraVideoView(
+      controller: VideoViewController.remote(
+        rtcEngine: _agoraEngine.engine!,
+        canvas: VideoCanvas(uid: uid),
+        connection: RtcConnection(channelId: _callController.currentChannelName ?? ''),
+      ),
+    );
+  }
+
+  Widget _buildCallControls() {
+    return AnimatedOpacity(
+      opacity: _showControls ? 1.0 : 0.0,
+      duration: const Duration(milliseconds: 300),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 30),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.transparent,
+              Colors.black.withOpacity(0.7),
+            ],
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            // Mute audio button
+            _buildControlButton(
+              icon: _isAudioMuted ? Icons.mic_off : Icons.mic,
+              onPressed: _toggleAudio,
+              backgroundColor: _isAudioMuted ? Colors.red : Colors.white24,
+            ),
+
+            // Toggle video button
+            if (_callController.currentCall?.isVideo ?? false)
+              _buildControlButton(
+                icon: _isVideoMuted ? Icons.videocam_off : Icons.videocam,
+                onPressed: _toggleVideo,
+                backgroundColor: _isVideoMuted ? Colors.red : Colors.white24,
+              ),
+
+            // End call button
+            _buildControlButton(
+              icon: Icons.call_end,
+              onPressed: _endCall,
+              backgroundColor: Colors.red,
+              size: 60,
+            ),
+
+            // Switch camera button
+            if (_callController.currentCall?.isVideo ?? false)
+              _buildControlButton(
+                icon: Icons.switch_camera,
+                onPressed: _switchCamera,
+                backgroundColor: Colors.white24,
+              ),
+
+            // Speaker button
+            _buildControlButton(
+              icon: _isSpeakerOn ? Icons.volume_up : Icons.volume_off,
+              onPressed: _toggleSpeaker,
+              backgroundColor: Colors.white24,
+            ),
+
+            // Add participant button (only if not at max)
+            if (_remoteUsers.length < 7) // Max 8 total (7 remote + local)
+              _buildControlButton(
+                icon: Icons.person_add,
+                onPressed: _showAddParticipantSheet,
+                backgroundColor: Colors.white24,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildControlButton({
+    required IconData icon,
+    required VoidCallback onPressed,
+    Color backgroundColor = Colors.white24,
+    double size = 50,
+  }) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        shape: BoxShape.circle,
+      ),
+      child: IconButton(
+        icon: Icon(icon, color: Colors.white, size: size * 0.5),
+        onPressed: onPressed,
+      ),
+    );
+  }
+
+  Widget _buildCallInfo() {
+    return Positioned(
+      top: MediaQuery.of(context).padding.top + 10,
+      left: 20,
+      right: 20,
+      child: AnimatedOpacity(
+        opacity: _showControls ? 1.0 : 0.0,
+        duration: const Duration(milliseconds: 300),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
+          decoration: BoxDecoration(
+            color: Colors.black54,
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Call status text
+              Text(
+                _isCreatingCall
+                    ? 'Conectando...'
+                    : _remoteUsers.isEmpty
+                        ? 'Timbrando...'
+                        : 'Conectado',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              if (!_isCreatingCall) ...[
+                const SizedBox(height: 4),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      widget.isVideo ?? _callController.currentCall?.isVideo ?? false
+                          ? Icons.videocam
+                          : Icons.call,
+                      color: Colors.white70,
+                      size: 16,
+                    ),
+                    const SizedBox(width: 8),
+                    const Icon(Icons.people, color: Colors.white70, size: 16),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${_remoteUsers.length + 1}',
+                      style: const TextStyle(color: Colors.white70, fontSize: 14),
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Build error UI with retry button
+  Widget _buildErrorWithRetry() {
+    final isVideo = widget.isVideo ?? false;
+
+    return Scaffold(
+      backgroundColor: isVideo ? Colors.black : Colors.grey[900],
+      body: SafeArea(
+        child: Stack(
+          children: [
+            // Show camera preview in background for video calls
+            if (isVideo && _agoraEngine.engine != null)
+              Center(
+                child: AgoraVideoView(
+                  controller: VideoViewController(
+                    rtcEngine: _agoraEngine.engine!,
+                    canvas: const VideoCanvas(uid: 0),
+                  ),
+                ),
+              ),
+            // Semi-transparent overlay
+            Container(
+              color: Colors.black.withOpacity(0.7),
+            ),
+            // Error message and retry button
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(32.0),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(
+                      Icons.error_outline,
+                      color: Colors.red,
+                      size: 64,
+                    ),
+                    const SizedBox(height: 24),
+                    Text(
+                      _createError ?? 'Error al conectar',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 32),
+                    ElevatedButton.icon(
+                      onPressed: _retryCreateCall,
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Reintentar'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 32,
+                          vertical: 16,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextButton(
+                      onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
+                      child: const Text(
+                        'Cancelar',
+                        style: TextStyle(color: Colors.white70),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Retry creating the call
+  void _retryCreateCall() {
+    setState(() {
+      _createError = null;
+      _isCreatingCall = true;
+    });
+    _createCallInBackground();
+  }
+
+  /// ✅ FIX: Build busy screen when recipient is in another call
+  Widget _buildBusyScreen() {
+    final isVideo = widget.isVideo ?? false;
+
+    return Scaffold(
+      backgroundColor: isVideo ? Colors.black : Colors.grey[900],
+      body: SafeArea(
+        child: Stack(
+          children: [
+            // Show camera preview in background for video calls
+            if (isVideo && _agoraEngine.engine != null)
+              Center(
+                child: AgoraVideoView(
+                  controller: VideoViewController(
+                    rtcEngine: _agoraEngine.engine!,
+                    canvas: const VideoCanvas(uid: 0),
+                  ),
+                ),
+              ),
+            // Semi-transparent overlay
+            Container(
+              color: Colors.black.withOpacity(0.7),
+            ),
+            // Busy message
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(32.0),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    // Busy icon with animation
+                    Container(
+                      padding: const EdgeInsets.all(20),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.withOpacity(0.2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.phone_disabled,
+                        color: Colors.orange,
+                        size: 64,
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    const Text(
+                      'Ocupado',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 28,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'El contacto está en otra llamada',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 16,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 32),
+                    // End call button
+                    ElevatedButton.icon(
+                      onPressed: _endCall,
+                      icon: const Icon(Icons.call_end),
+                      label: const Text('Terminar'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 32,
+                          vertical: 16,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(30),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'La llamada terminará automáticamente',
+                      style: TextStyle(
+                        color: Colors.white54,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isInitializing) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: const [
+              CircularProgressIndicator(color: Colors.white),
+              SizedBox(height: 20),
+              Text(
+                'Conectando...',
+                style: TextStyle(color: Colors.white, fontSize: 16),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // Show error with retry button if call creation failed
+    if (_createError != null) {
+      return _buildErrorWithRetry();
+    }
+
+    // ✅ FIX: Show busy state when recipient is in another call
+    if (_isRecipientBusy) {
+      return _buildBusyScreen();
+    }
+
+    final isVideo = _callController.currentCall?.isVideo ?? widget.isVideo ?? false;
+
+    if (!isVideo) {
+      // Audio-only call UI
+      // ✅ Get remote participant info for displaying photo
+      final call = _callController.currentCall;
+      final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+      String remoteDisplayName = 'Usuario';
+      String? remotePhotoUrl;
+
+      if (call != null && currentUserId != null) {
+        // Find the first remote participant
+        for (final entry in call.participants.entries) {
+          if (entry.key != currentUserId) {
+            remoteDisplayName = entry.value.displayName ?? 'Usuario';
+            remotePhotoUrl = entry.value.photoUrl;
+            break;
+          }
+        }
+      }
+
+      return Scaffold(
+        backgroundColor: Colors.grey[900],
+        body: SafeArea(
+          child: Stack(
+            children: [
+              Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    // ✅ Use CallerAvatar with photoUrl
+                    CallerAvatar(
+                      callerName: remoteDisplayName,
+                      photoUrl: remotePhotoUrl,
+                      size: 120,
+                      animate: _remoteUsers.isEmpty, // Animate while connecting
+                    ),
+                    const SizedBox(height: 20),
+                    Text(
+                      remoteDisplayName,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _remoteUsers.isEmpty ? 'Conectando...' : 'Conectado',
+                      style: const TextStyle(color: Colors.white70, fontSize: 16),
+                    ),
+                  ],
+                ),
+              ),
+              Positioned(
+                bottom: 0,
+                left: 0,
+                right: 0,
+                child: _buildCallControls(),
+              ),
+              _buildCallInfo(),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // Video call UI
+    final gridParticipants = _buildGridParticipants();
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: GestureDetector(
+        onTap: _toggleControls,
+        child: Stack(
+          children: [
+            // ✅ Video Grid Widget - Maneja layouts para 1-9+ participantes
+            // Incluye participantes conectados Y pendientes (ringing)
+            VideoGridWidget(
+              participants: gridParticipants,
+              participantViewBuilder: _buildParticipantView,
+              pinnedParticipantId: _pinnedParticipantId,
+              onParticipantTap: _handleParticipantTap,
+            ),
+
+            // Call controls
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: _buildCallControls(),
+            ),
+
+            // Call info
+            _buildCallInfo(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    ReleaseLogger.log('🗑️ [AgoraCallScreen] Disposing screen...', tag: _tag);
+
+    // ✅ FIX: Cancel busy auto-end timer
+    _busyAutoEndTimer?.cancel();
+
+    // ✅ Cancel ring timeout timer
+    _ringTimeoutTimer?.cancel();
+
+    // ✅ Stop and dispose ringtone service
+    _ringtoneService.dispose();
+
+    _callSubscription?.cancel();
+    _proximitySubscription?.cancel();
+    _callKitEndedSubscription?.cancel();
+    _callController.dispose();
+
+    // ✅ Disable WakeLock when call ends
+    _disableWakeLock();
+
+    // ✅ Clear caches on dispose
+    // NOTE: We do NOT call CallKitSyncService().endCallKitIfExists() here because
+    // it can cause a native iOS crash if the call was accepted via CallKit.
+    // CallKit will auto-clean when the audio session ends.
+    final callIdToCleanup = widget.callId ?? _actualCallId;
+    if (callIdToCleanup != null) {
+      ReleaseLogger.log('🧹 [AgoraCallScreen] Cleaning up caches for $callIdToCleanup', tag: _tag);
+      CallStateCacheService().clearAcceptedCall(callIdToCleanup);
+      CallStateCacheService().clearEndingFromApp(callIdToCleanup);
+    }
+
+    super.dispose();
+    ReleaseLogger.log('✅ [AgoraCallScreen] Screen disposed', tag: _tag);
+  }
+}

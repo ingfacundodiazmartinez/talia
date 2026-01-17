@@ -1,0 +1,191 @@
+import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+
+/// Widget que muestra la preview de un mensaje al que se está respondiendo
+class ReplyPreviewWidget extends StatelessWidget {
+  final Map<String, dynamic> replyTo;
+  final bool isMe;
+  final VoidCallback? onTap;
+
+  const ReplyPreviewWidget({
+    super.key,
+    required this.replyTo,
+    required this.isMe,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    // ✅ FIX: Detectar respuesta o like a historia
+    final isStoryReply = replyTo['type'] == 'story_reply';
+    final isStoryLike = replyTo['type'] == 'story_like';
+    final isStoryInteraction = isStoryReply || isStoryLike;
+    final storyMediaUrl = replyTo['storyMediaUrl'] as String?;
+    final hasStoryMedia = isStoryInteraction && storyMediaUrl != null && storyMediaUrl.isNotEmpty;
+
+    // Verificar URLs de media (con check de non-empty)
+    final imageUrl = replyTo['imageUrl'] as String?;
+    final videoUrl = replyTo['videoUrl'] as String?;
+    final audioUrl = replyTo['audioUrl'] as String?;
+
+    final hasImage = imageUrl != null && imageUrl.isNotEmpty;
+    final hasVideo = videoUrl != null && videoUrl.isNotEmpty;
+    final hasAudio = audioUrl != null && audioUrl.isNotEmpty;
+    final hasText = replyTo['text'] != null && replyTo['text'].toString().isNotEmpty;
+
+    // Fallback: usar contentType si las URLs no están disponibles
+    final contentType = replyTo['contentType'] as String? ?? replyTo['type'] as String?;
+    final isImageType = contentType == 'image';
+    final isVideoType = contentType == 'video';
+    final isAudioType = contentType == 'audio';
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        margin: const EdgeInsets.only(bottom: 8),
+        decoration: BoxDecoration(
+          color: (isMe ? Colors.white : colorScheme.primary).withValues(alpha: 0.2),
+          borderRadius: BorderRadius.circular(8),
+          border: Border(
+            left: BorderSide(
+              color: isMe ? Colors.white : colorScheme.primary,
+              width: 3,
+            ),
+          ),
+        ),
+        child: Row(
+        children: [
+          // Miniatura de la foto/video/audio/historia si existe
+          // Usar fallback de tipo si no hay URL disponible
+          if (hasStoryMedia || hasImage || hasVideo || hasAudio || isImageType || isVideoType || isAudioType)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: Container(
+                  width: 40,
+                  height: 40,
+                  color: Colors.black.withValues(alpha: 0.2),
+                  child: hasStoryMedia
+                      // ✅ FIX: Mostrar thumbnail de historia
+                      ? CachedNetworkImage(
+                          imageUrl: storyMediaUrl,
+                          fit: BoxFit.cover,
+                          placeholder: (context, url) => Icon(
+                            Icons.auto_stories,
+                            size: 20,
+                            color: isMe
+                                ? Colors.white.withValues(alpha: 0.6)
+                                : colorScheme.primary.withValues(alpha: 0.6),
+                          ),
+                          errorWidget: (context, url, error) => Icon(
+                            Icons.auto_stories,
+                            size: 20,
+                            color: isMe
+                                ? Colors.white.withValues(alpha: 0.6)
+                                : colorScheme.primary.withValues(alpha: 0.6),
+                          ),
+                        )
+                      : hasImage
+                          ? CachedNetworkImage(
+                              imageUrl: imageUrl,
+                              fit: BoxFit.cover,
+                              placeholder: (context, url) => Icon(
+                                Icons.image,
+                                size: 20,
+                                color: isMe
+                                    ? Colors.white.withValues(alpha: 0.6)
+                                    : colorScheme.primary.withValues(alpha: 0.6),
+                              ),
+                              errorWidget: (context, url, error) => Icon(
+                                Icons.broken_image,
+                                size: 20,
+                                color: isMe
+                                    ? Colors.white.withValues(alpha: 0.6)
+                                    : colorScheme.primary.withValues(alpha: 0.6),
+                              ),
+                            )
+                          : (hasVideo || isVideoType)
+                              ? Icon(
+                                  Icons.play_circle_outline,
+                                  size: 24,
+                                  color: isMe
+                                      ? Colors.white.withValues(alpha: 0.8)
+                                      : colorScheme.primary.withValues(alpha: 0.8),
+                                )
+                              : (hasAudio || isAudioType)
+                                  ? Icon(
+                                      Icons.mic,
+                                      size: 24,
+                                      color: isMe
+                                          ? Colors.white.withValues(alpha: 0.8)
+                                          : colorScheme.primary.withValues(alpha: 0.8),
+                                    )
+                                  // Fallback: usar icono según tipo si no hay URL
+                                  : Icon(
+                                      isImageType ? Icons.image : Icons.attach_file,
+                                      size: 24,
+                                      color: isMe
+                                          ? Colors.white.withValues(alpha: 0.8)
+                                          : colorScheme.primary.withValues(alpha: 0.8),
+                                    ),
+                ),
+              ),
+            ),
+          // Contenido de texto
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  // ✅ FIX: Usar storyUserName para respuestas/likes a historia
+                  isStoryInteraction
+                      ? (replyTo['storyUserName'] ?? 'Usuario')
+                      : (replyTo['senderName'] ?? 'Usuario'),
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                    color: isMe ? Colors.white : colorScheme.primary,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  // ✅ FIX: Mostrar caption de historia o indicador (diferenciando reply de like)
+                  // ✅ FIX: Usar contentType como fallback si no hay URL
+                  isStoryLike
+                      ? '❤️ Tu historia'
+                      : isStoryReply
+                          ? (replyTo['storyCaption']?.toString().isNotEmpty == true
+                              ? '📖 ${replyTo['storyCaption']}'
+                              : '📖 Historia')
+                          : hasText
+                              ? replyTo['text']
+                              : (hasImage || isImageType)
+                                  ? '📷 Imagen'
+                                  : (hasVideo || isVideoType)
+                                      ? '🎥 Video'
+                                      : (hasAudio || isAudioType)
+                                          ? '🎤 Audio'
+                                          : 'Mensaje',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isMe
+                        ? Colors.white.withValues(alpha: 0.8)
+                        : colorScheme.onSurface.withValues(alpha: 0.8),
+                    fontStyle: hasText ? FontStyle.normal : FontStyle.italic,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    ),
+    );
+  }
+}

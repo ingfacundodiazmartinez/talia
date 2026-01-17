@@ -1,0 +1,297 @@
+/// Script simplificado para crear stickers de prueba en Firestore
+/// usando URLs públicas de Twemoji (no requiere subir a Firebase Storage)
+///
+/// Para ejecutar este script, copia el contenido del map testStickers
+/// y créalo manualmente en Firestore Console, o usa este código en una
+/// función temporal dentro de la app.
+library;
+
+final testStickersDirect = [
+  // Categoría: Emociones
+  {
+    'name': 'cara_feliz',
+    'emoji': '😊',
+    'category': 'emociones',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f60a.png',
+    'active': true,
+    'order': 0,
+  },
+  {
+    'name': 'risa',
+    'emoji': '😂',
+    'category': 'emociones',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f602.png',
+    'active': true,
+    'order': 1,
+  },
+  {
+    'name': 'amor',
+    'emoji': '🥰',
+    'category': 'emociones',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f970.png',
+    'active': true,
+    'order': 2,
+  },
+  {
+    'name': 'cool',
+    'emoji': '😎',
+    'category': 'emociones',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f60e.png',
+    'active': true,
+    'order': 3,
+  },
+  {
+    'name': 'pensando',
+    'emoji': '🤔',
+    'category': 'emociones',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f914.png',
+    'active': true,
+    'order': 4,
+  },
+  {
+    'name': 'ojos_corazon',
+    'emoji': '😍',
+    'category': 'emociones',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f60d.png',
+    'active': true,
+    'order': 5,
+  },
+  {
+    'name': 'estrella',
+    'emoji': '🤩',
+    'category': 'emociones',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f929.png',
+    'active': true,
+    'order': 6,
+  },
+  {
+    'name': 'dormido',
+    'emoji': '😴',
+    'category': 'emociones',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f634.png',
+    'active': true,
+    'order': 7,
+  },
+
+  // Categoría: Gestos
+  {
+    'name': 'pulgar_arriba',
+    'emoji': '👍',
+    'category': 'gestos',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f44d.png',
+    'active': true,
+    'order': 10,
+  },
+  {
+    'name': 'pulgar_abajo',
+    'emoji': '👎',
+    'category': 'gestos',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f44e.png',
+    'active': true,
+    'order': 11,
+  },
+  {
+    'name': 'aplausos',
+    'emoji': '👏',
+    'category': 'gestos',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f44f.png',
+    'active': true,
+    'order': 12,
+  },
+  {
+    'name': 'rezando',
+    'emoji': '🙏',
+    'category': 'gestos',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f64f.png',
+    'active': true,
+    'order': 13,
+  },
+
+  // Categoría: Corazones
+  {
+    'name': 'corazon_rojo',
+    'emoji': '❤️',
+    'category': 'corazones',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/2764-fe0f.png',
+    'active': true,
+    'order': 20,
+  },
+  {
+    'name': 'corazon_azul',
+    'emoji': '💙',
+    'category': 'corazones',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f499.png',
+    'active': true,
+    'order': 21,
+  },
+  {
+    'name': 'corazon_verde',
+    'emoji': '💚',
+    'category': 'corazones',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f49a.png',
+    'active': true,
+    'order': 22,
+  },
+  {
+    'name': 'corazon_amarillo',
+    'emoji': '💛',
+    'category': 'corazones',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f49b.png',
+    'active': true,
+    'order': 23,
+  },
+  {
+    'name': 'dos_corazones',
+    'emoji': '💕',
+    'category': 'corazones',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f495.png',
+    'active': true,
+    'order': 24,
+  },
+
+  // Categoría: Animales
+  {
+    'name': 'perro',
+    'emoji': '🐶',
+    'category': 'animales',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f436.png',
+    'active': true,
+    'order': 30,
+  },
+  {
+    'name': 'gato',
+    'emoji': '🐱',
+    'category': 'animales',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f431.png',
+    'active': true,
+    'order': 31,
+  },
+  {
+    'name': 'conejo',
+    'emoji': '🐰',
+    'category': 'animales',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f430.png',
+    'active': true,
+    'order': 32,
+  },
+  {
+    'name': 'zorro',
+    'emoji': '🦊',
+    'category': 'animales',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f98a.png',
+    'active': true,
+    'order': 33,
+  },
+  {
+    'name': 'panda',
+    'emoji': '🐼',
+    'category': 'animales',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f43c.png',
+    'active': true,
+    'order': 34,
+  },
+
+  // Categoría: Comida
+  {
+    'name': 'pizza',
+    'emoji': '🍕',
+    'category': 'comida',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f355.png',
+    'active': true,
+    'order': 40,
+  },
+  {
+    'name': 'hamburguesa',
+    'emoji': '🍔',
+    'category': 'comida',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f354.png',
+    'active': true,
+    'order': 41,
+  },
+  {
+    'name': 'helado',
+    'emoji': '🍦',
+    'category': 'comida',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f366.png',
+    'active': true,
+    'order': 42,
+  },
+  {
+    'name': 'dona',
+    'emoji': '🍩',
+    'category': 'comida',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f369.png',
+    'active': true,
+    'order': 43,
+  },
+  {
+    'name': 'torta',
+    'emoji': '🎂',
+    'category': 'comida',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f382.png',
+    'active': true,
+    'order': 44,
+  },
+
+  // Categoría: Objetos
+  {
+    'name': 'futbol',
+    'emoji': '⚽',
+    'category': 'objetos',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/26bd.png',
+    'active': true,
+    'order': 50,
+  },
+  {
+    'name': 'videojuego',
+    'emoji': '🎮',
+    'category': 'objetos',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f3ae.png',
+    'active': true,
+    'order': 51,
+  },
+  {
+    'name': 'musica',
+    'emoji': '🎵',
+    'category': 'objetos',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f3b5.png',
+    'active': true,
+    'order': 52,
+  },
+  {
+    'name': 'camara',
+    'emoji': '📷',
+    'category': 'objetos',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/1f4f7.png',
+    'active': true,
+    'order': 53,
+  },
+  {
+    'name': 'estrella',
+    'emoji': '⭐',
+    'category': 'objetos',
+    'storageUrl': 'https://em-content.zobj.net/thumbs/120/twitter/351/2b50.png',
+    'active': true,
+    'order': 54,
+  },
+];
+
+/// Para usar este código, agrega esta función temporal en cualquier pantalla de la app
+/// y llámala con un botón:
+///
+/// ```dart
+/// import 'package:cloud_firestore/cloud_firestore.dart';
+///
+/// Future<void> uploadTestStickers() async {
+///   final firestore = FirebaseFirestore.instance;
+///
+///   for (final sticker in testStickersDirect) {
+///     await firestore.collection('stickers').add({
+///       ...sticker,
+///       'createdAt': FieldValue.serverTimestamp(),
+///     });
+///   }
+///
+///   print('✅ ${testStickersDirect.length} stickers creados!');
+/// }
+/// ```

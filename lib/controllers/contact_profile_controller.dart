@@ -1,0 +1,644 @@
+import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
+import 'package:intl/intl.dart';
+import '../services/block_service.dart';
+import '../services/contact_alias_service.dart';
+import '../services/favorite_service.dart';
+import '../calls_v2/controllers/call_controller.dart' as calls_v2;
+import '../models/child.dart';
+import '../models/contact_user.dart';
+import '../utils/release_logger.dart';
+
+/// Controller para manejar la lógica del perfil de contacto
+///
+/// Responsabilidades:
+/// - Gestión de información del contacto
+/// - Operaciones de bloqueo/desbloqueo
+/// - Gestión de alias y favoritos
+/// - Coordinación de llamadas de video/audio
+/// - Acceso a datos del usuario y perfil
+class ContactProfileController {
+  final String contactId;
+  final String contactName;
+  final String chatId;
+
+  // Servicios privados
+  final BlockService _blockService;
+  final ContactAliasService _aliasService;
+  final FavoriteService _favoriteService;
+  final FirebaseFirestore _firestore;
+  final firebase_auth.FirebaseAuth _auth;
+
+  // Estado del controlador
+  bool _isBlocked = false;
+  bool _isLoadingBlockStatus = true;
+  bool _isFavorite = false;
+  bool _isLoadingFavoriteStatus = true;
+  String? _contactAlias;
+  ContactUser? _contactUser;
+  List<Map<String, dynamic>> _favoriteMessages = [];
+  List<Map<String, dynamic>> _childParents = [];
+  bool _isLoadingFavorites = true;
+  bool _hasError = false;
+
+  // ✅ Issue 3: Story notifications per contact
+  bool _storyNotificationsEnabled = false;
+  bool _isLoadingStoryNotifications = true;
+
+  // Subscripciones
+  StreamSubscription? _contactDataSubscription;
+  StreamSubscription? _blockStatusSubscription;
+
+  // Callbacks para comunicación con el screen
+  Function(bool)? onBlockStatusChanged;
+  Function(bool)? onFavoriteStatusChanged;
+  Function(String?)? onAliasChanged;
+  Function(ContactUser?)? onContactDataChanged;
+  Function(String)? onError;
+  Function(String)? onSuccess;
+  Function(bool)? onStoryNotificationsChanged;
+  Function()? onParentBlocked;
+
+  // Constructor
+  ContactProfileController({
+    required this.contactId,
+    required this.contactName,
+    required this.chatId,
+    BlockService? blockService,
+    ContactAliasService? aliasService,
+    FavoriteService? favoriteService,
+    FirebaseFirestore? firestore,
+    firebase_auth.FirebaseAuth? auth,
+  }) : _blockService = blockService ?? BlockService(),
+       _aliasService = aliasService ?? ContactAliasService(),
+       _favoriteService = favoriteService ?? FavoriteService(),
+       _firestore = firestore ?? FirebaseFirestore.instance,
+       _auth = auth ?? firebase_auth.FirebaseAuth.instance;
+
+  // Getters para el estado
+  bool get isBlocked => _isBlocked;
+  bool get isLoadingBlockStatus => _isLoadingBlockStatus;
+  bool get isFavorite => _isFavorite;
+  bool get isLoadingFavoriteStatus => _isLoadingFavoriteStatus;
+  String? get contactAlias => _contactAlias;
+  ContactUser? get contactUser => _contactUser;
+  List<Map<String, dynamic>> get favoriteMessages => _favoriteMessages;
+  List<Map<String, dynamic>> get childParents => _childParents;
+  bool get isLoadingFavorites => _isLoadingFavorites;
+  bool get hasError => _hasError;
+  String get currentUserId => _auth.currentUser?.uid ?? '';
+
+  // ✅ Issue 3: Story notifications getters
+  bool get storyNotificationsEnabled => _storyNotificationsEnabled;
+  bool get isLoadingStoryNotifications => _isLoadingStoryNotifications;
+
+  /// Inicializar el controller
+  Future<void> initialize() async {
+    // Cargar estados iniciales en paralelo
+    await Future.wait([
+      _loadBlockStatus(),
+      _loadFavoriteStatus(),
+      _loadContactAlias(),
+      _loadContactData(),
+      _loadStoryNotificationsStatus(),
+    ]);
+
+    // Cargar datos adicionales después de cargar los datos del contacto
+    await Future.wait([loadFavoriteMessages(), loadChildParents()]);
+
+    // Configurar listeners para actualizaciones en tiempo real
+    _setupContactDataListener();
+  }
+
+  /// Cargar estado de bloqueo
+  Future<void> _loadBlockStatus() async {
+    try {
+      _isBlocked = await _blockService.isBlocked(contactId);
+      _isLoadingBlockStatus = false;
+      onBlockStatusChanged?.call(_isBlocked);
+    } catch (e) {
+      _isLoadingBlockStatus = false;
+      onError?.call('Error verificando estado de bloqueo');
+    }
+  }
+
+  /// Cargar estado de favorito
+  Future<void> _loadFavoriteStatus() async {
+    try {
+      // Note: We'll load favorite status later when we have message context
+      _isFavorite = false; // Initialize as false for now
+      _isLoadingFavoriteStatus = false;
+      onFavoriteStatusChanged?.call(_isFavorite);
+    } catch (e) {
+      _isLoadingFavoriteStatus = false;
+      onError?.call('Error verificando favoritos');
+    }
+  }
+
+  /// Cargar alias del contacto
+  Future<void> _loadContactAlias() async {
+    try {
+      final displayName = await _aliasService.getDisplayName(
+        contactId,
+        contactName,
+      );
+      _contactAlias = displayName != contactName ? displayName : null;
+      onAliasChanged?.call(_contactAlias);
+    } catch (e) {
+      onError?.call('Error cargando alias del contacto');
+    }
+  }
+
+  /// ✅ Issue 3: Cargar estado de notificaciones de historias para este contacto
+  /// Estructura en Firestore: contacts.storyNotifications[currentUserId] = true/false
+  Future<void> _loadStoryNotificationsStatus() async {
+    try {
+      final currentUserId = _auth.currentUser?.uid;
+      if (currentUserId == null) {
+        _isLoadingStoryNotifications = false;
+        return;
+      }
+
+      // Buscar el documento de contacto
+      final sortedUsers = [currentUserId, contactId]..sort();
+      final contactQuery = await _firestore
+          .collection('contacts')
+          .where('users', isEqualTo: sortedUsers)
+          .limit(1)
+          .get();
+
+      if (contactQuery.docs.isNotEmpty) {
+        // Caso 1: Es un contacto normal - leer del documento de contacto
+        final contactData = contactQuery.docs.first.data();
+        final storyNotifications = contactData['storyNotifications'] as Map<String, dynamic>? ?? {};
+        _storyNotificationsEnabled = storyNotifications[currentUserId] == true;
+      } else {
+        // Caso 2: No es un contacto normal (puede ser relación padre-hijo)
+        // Leer preferencia del documento del usuario actual
+        final userDoc = await _firestore.collection('users').doc(currentUserId).get();
+        if (userDoc.exists) {
+          final userData = userDoc.data() ?? {};
+          final storyNotificationPrefs = userData['storyNotificationPrefs'] as Map<String, dynamic>? ?? {};
+          _storyNotificationsEnabled = storyNotificationPrefs[contactId] == true;
+        } else {
+          _storyNotificationsEnabled = false;
+        }
+      }
+
+      _isLoadingStoryNotifications = false;
+      onStoryNotificationsChanged?.call(_storyNotificationsEnabled);
+    } catch (e) {
+      _isLoadingStoryNotifications = false;
+      // No mostrar error, simplemente dejar en false
+    }
+  }
+
+  /// ✅ Issue 3: Toggle notificaciones de historias para este contacto
+  Future<bool> toggleStoryNotifications() async {
+    try {
+      final currentUserId = _auth.currentUser?.uid;
+      if (currentUserId == null) {
+        onError?.call('Usuario no autenticado');
+        return false;
+      }
+
+      final newValue = !_storyNotificationsEnabled;
+
+      // Buscar el documento de contacto
+      final sortedUsers = [currentUserId, contactId]..sort();
+      final contactQuery = await _firestore
+          .collection('contacts')
+          .where('users', isEqualTo: sortedUsers)
+          .limit(1)
+          .get();
+
+      if (contactQuery.docs.isNotEmpty) {
+        // Caso 1: Es un contacto normal - actualizar en el documento de contacto
+        final contactDoc = contactQuery.docs.first;
+        await contactDoc.reference.update({
+          'storyNotifications.$currentUserId': newValue,
+        });
+      } else {
+        // Caso 2: No es un contacto normal (puede ser relación padre-hijo)
+        // Guardar preferencia en el documento del usuario actual
+        await _firestore.collection('users').doc(currentUserId).update({
+          'storyNotificationPrefs.$contactId': newValue,
+        });
+      }
+
+      _storyNotificationsEnabled = newValue;
+      onStoryNotificationsChanged?.call(_storyNotificationsEnabled);
+      onSuccess?.call(newValue
+          ? 'Notificaciones de historias activadas'
+          : 'Notificaciones de historias desactivadas');
+      return true;
+    } catch (e) {
+      ReleaseLogger.error('Error actualizando notificaciones de historias: $e', tag: 'ContactProfile');
+      onError?.call('Error actualizando notificaciones de historias');
+      return false;
+    }
+  }
+
+  /// Cargar datos del contacto
+  Future<void> _loadContactData() async {
+    try {
+      final snapshot = await _firestore
+          .collection('users')
+          .doc(contactId)
+          .get();
+      if (snapshot.exists) {
+        final data = snapshot.data()!;
+        _contactUser = ContactUser.fromFirestore(data, contactId, customAlias: _contactAlias);
+        onContactDataChanged?.call(_contactUser);
+      }
+    } catch (e) {
+      onError?.call('Error cargando información del contacto');
+    }
+  }
+
+  /// Configurar listener para cambios en datos del contacto
+  void _setupContactDataListener() {
+    _contactDataSubscription = _firestore
+        .collection('users')
+        .doc(contactId)
+        .snapshots()
+        .listen(
+          (snapshot) {
+            if (snapshot.exists) {
+              final data = snapshot.data()!;
+              _contactUser = ContactUser.fromFirestore(data, contactId, customAlias: _contactAlias);
+              onContactDataChanged?.call(_contactUser);
+            }
+          },
+          onError: (error) {
+            onError?.call('Error actualizando información del contacto');
+          },
+        );
+  }
+
+  /// Alternar estado de bloqueo
+  Future<bool> toggleBlock() async {
+    try {
+      if (_isBlocked) {
+        // Desbloquear
+        await _blockService.unblockContact(contactId);
+        _isBlocked = false;
+        onBlockStatusChanged?.call(false);
+        onSuccess?.call('Contacto desbloqueado exitosamente');
+        return true;
+      } else {
+        // Bloquear
+        await _blockService.blockContact(contactId);
+        _isBlocked = true;
+        onBlockStatusChanged?.call(true);
+        onSuccess?.call('Contacto bloqueado exitosamente');
+        return true;
+      }
+    } on ParentBlockedException {
+      onParentBlocked?.call();
+      return false;
+    } catch (e) {
+      onError?.call(
+        'Error ${_isBlocked ? 'desbloqueando' : 'bloqueando'} contacto',
+      );
+      return false;
+    }
+  }
+
+  /// Alternar estado de favorito para un mensaje específico
+  Future<bool> toggleMessageFavorite(String messageId) async {
+    try {
+      await _favoriteService.toggleFavorite(
+        chatId: chatId,
+        messageId: messageId,
+        isGroupChat: false,
+      );
+      onSuccess?.call('Estado de favorito actualizado');
+      return true;
+    } catch (e) {
+      onError?.call('Error actualizando favorito');
+      return false;
+    }
+  }
+
+  /// Actualizar alias del contacto
+  Future<bool> updateContactAlias(String? newAlias) async {
+    try {
+      if (newAlias == null) {
+        await _aliasService.removeAlias(contactId);
+      } else {
+        await _aliasService.setAlias(contactId, newAlias);
+      }
+      _contactAlias = newAlias;
+      onAliasChanged?.call(newAlias);
+      onSuccess?.call('Alias actualizado exitosamente');
+      return true;
+    } catch (e) {
+      onError?.call('Error actualizando alias');
+      return false;
+    }
+  }
+
+  // Callback para mostrar diálogo de límite mensual alcanzado
+  Function(int minutesUsed, int limitMinutes)? onMonthlyLimitReached;
+
+  /// Iniciar videollamada
+  Future<bool> startVideoCall() async {
+    try {
+      if (_isBlocked) {
+        onError?.call('No puedes llamar a un contacto bloqueado');
+        return false;
+      }
+
+      final currentUser = _auth.currentUser;
+      if (currentUser == null) {
+        onError?.call('Usuario no autenticado');
+        return false;
+      }
+
+      final callController = calls_v2.CallController();
+      final result = await callController.createCall(
+        participantIds: [contactId],
+        isVideo: true,
+        isGroup: false,
+      );
+
+      if (result.success) {
+        onSuccess?.call('Videollamada iniciada');
+        return true;
+      } else {
+        // Verificar si se alcanzó el límite mensual
+        if (result.errorCode == 'MONTHLY_LIMIT_REACHED' && result.metadata != null) {
+          final minutesUsed = result.metadata!['minutesUsed'] as int? ?? 0;
+          final limitMinutes = result.metadata!['limitMinutes'] as int? ?? 60;
+          onMonthlyLimitReached?.call(minutesUsed, limitMinutes);
+          return false;
+        }
+        onError?.call(result.error ?? 'Error iniciando videollamada');
+        return false;
+      }
+    } catch (e) {
+      onError?.call('Error iniciando videollamada');
+      return false;
+    }
+  }
+
+  /// Iniciar llamada de audio
+  Future<bool> startAudioCall() async {
+    try {
+      if (_isBlocked) {
+        onError?.call('No puedes llamar a un contacto bloqueado');
+        return false;
+      }
+
+      final currentUser = _auth.currentUser;
+      if (currentUser == null) {
+        onError?.call('Usuario no autenticado');
+        return false;
+      }
+
+      final callController = calls_v2.CallController();
+      final result = await callController.createCall(
+        participantIds: [contactId],
+        isVideo: false,
+        isGroup: false,
+      );
+
+      if (result.success) {
+        onSuccess?.call('Llamada de audio iniciada');
+        return true;
+      } else {
+        // Verificar si se alcanzó el límite mensual
+        if (result.errorCode == 'MONTHLY_LIMIT_REACHED' && result.metadata != null) {
+          final minutesUsed = result.metadata!['minutesUsed'] as int? ?? 0;
+          final limitMinutes = result.metadata!['limitMinutes'] as int? ?? 60;
+          onMonthlyLimitReached?.call(minutesUsed, limitMinutes);
+          return false;
+        }
+        onError?.call(result.error ?? 'Error iniciando llamada de audio');
+        return false;
+      }
+    } catch (e) {
+      onError?.call('Error iniciando llamada de audio');
+      return false;
+    }
+  }
+
+  /// Verificar si el contacto es un niño
+  bool isContactChild() {
+    return _contactUser?.isChild ?? false;
+  }
+
+  /// Obtener información del contacto como Child (si aplicable)
+  Future<Child?> getContactAsChild() async {
+    try {
+      if (_contactUser == null) {
+        await _loadContactData();
+      }
+
+      if (isContactChild()) {
+        // Convert ContactUser back to Map for Child.fromMap
+        final contactData = {
+          'name': _contactUser!.name,
+          'role': _contactUser!.role,
+          'birthDate': _contactUser!.birthDate,
+          'photoURL': _contactUser!.photoURL,
+          'phone': _contactUser!.phone,
+          'email': _contactUser!.email,
+          'createdAt': _contactUser!.createdAt,
+          'lastSeen': _contactUser!.lastSeen,
+        };
+        return Child.fromMap(contactId, contactData);
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Obtener edad del contacto
+  int? getContactAge() {
+    return _contactUser?.age;
+  }
+
+  /// Obtener nombre para mostrar (alias o nombre real)
+  String getDisplayName() {
+    return _contactUser?.getDisplayName(customAlias: _contactAlias) ?? contactName;
+  }
+
+  /// Obtener foto de perfil URL
+  String? getPhotoURL() {
+    return _contactUser?.photoURL;
+  }
+
+  /// Obtener teléfono del contacto
+  String? getPhoneNumber() {
+    return _contactUser?.phone;
+  }
+
+  /// Obtener email del contacto
+  String? getEmail() {
+    return _contactUser?.email;
+  }
+
+  /// Obtener fecha de registro
+  DateTime? getJoinDate() {
+    return _contactUser?.joinDate;
+  }
+
+  /// Verificar si el contacto está online
+  bool isContactOnline() {
+    return _contactUser?.isOnline ?? false;
+  }
+
+  /// Obtener última vez visto
+  DateTime? getLastSeen() {
+    return _contactUser?.lastSeen;
+  }
+
+  /// Stream de datos del contacto para actualizaciones en tiempo real
+  /// ✅ FIX: Maneja errores de permisos gracefully (ej: cuando se revoca un contacto)
+  Stream<DocumentSnapshot?> getContactDataStream() {
+    return _firestore
+        .collection('users')
+        .doc(contactId)
+        .snapshots()
+        .handleError((error) {
+          // Ignorar errores de permisos silenciosamente
+          return null;
+        });
+  }
+
+  /// Stream de mensajes del chat para la galería de medios
+  Stream<QuerySnapshot> getChatMediaStream() {
+    return _firestore
+        .collection('chats')
+        .doc(chatId)
+        .collection('messages')
+        .where('type', whereIn: ['image', 'video'])
+        .orderBy('timestamp', descending: true)
+        .limit(50)
+        .snapshots();
+  }
+
+  /// Métodos para alias
+  Future<void> setContactAlias(String alias) async {
+    await updateContactAlias(alias);
+  }
+
+  Future<void> removeContactAlias() async {
+    await updateContactAlias(null);
+  }
+
+  /// Métodos para bloquear/desbloquear individualmente
+  Future<void> blockContact() async {
+    await toggleBlock();
+  }
+
+  Future<void> unblockContact() async {
+    await toggleBlock();
+  }
+
+  /// Cargar mensajes favoritos
+  /// ✅ FIX: Consulta eficiente - primero obtener IDs de favoritos, luego obtener mensajes
+  Future<void> loadFavoriteMessages() async {
+    try {
+      _isLoadingFavorites = true;
+      _hasError = false;
+
+      // 1. Obtener IDs de mensajes favoritos (consulta eficiente en users/{uid}/favorites)
+      final favoriteIds = await _favoriteService.getFavoriteMessageIds(
+        chatId: chatId,
+        isGroupChat: false,
+      );
+
+      if (favoriteIds.isEmpty) {
+        _favoriteMessages = [];
+        _isLoadingFavorites = false;
+        return;
+      }
+
+      // 2. Obtener los mensajes por ID (en lotes de 10 para evitar límite de Firestore)
+      final messages = <Map<String, dynamic>>[];
+      final idsList = favoriteIds.toList();
+
+      for (var i = 0; i < idsList.length; i += 10) {
+        final batch = idsList.skip(i).take(10).toList();
+        final snapshot = await FirebaseFirestore.instance
+            .collection('chats')
+            .doc(chatId)
+            .collection('messages')
+            .where(FieldPath.documentId, whereIn: batch)
+            .get();
+
+        for (final doc in snapshot.docs) {
+          final data = doc.data();
+          data['id'] = doc.id;
+
+          // Convertir Timestamp a String formateado
+          if (data['timestamp'] is Timestamp) {
+            final timestamp = data['timestamp'] as Timestamp;
+            data['formattedTime'] = DateFormat(
+              'dd/MM/yyyy HH:mm',
+            ).format(timestamp.toDate());
+            data.remove('timestamp');
+          }
+
+          messages.add(data);
+        }
+      }
+
+      // 3. Ordenar por fecha (más reciente primero)
+      messages.sort((a, b) {
+        final aTime = a['formattedTime'] ?? '';
+        final bTime = b['formattedTime'] ?? '';
+        return bTime.compareTo(aTime);
+      });
+
+      _favoriteMessages = messages;
+      _isLoadingFavorites = false;
+    } catch (e) {
+      _hasError = true;
+      _isLoadingFavorites = false;
+      onError?.call('Error cargando mensajes favoritos');
+    }
+  }
+
+  /// Recargar favoritos
+  Future<void> reloadFavorites() async {
+    await loadFavoriteMessages();
+  }
+
+  /// Cargar padres del niño si aplica
+  Future<void> loadChildParents() async {
+    try {
+      final isChild = isContactChild();
+      ReleaseLogger.log(
+        '👨‍👩‍👧 [loadChildParents] contactId: $contactId, isChild: $isChild, _contactUser: $_contactUser',
+        tag: 'ContactProfile',
+      );
+
+      if (isChild) {
+        final child = Child(id: contactId, name: contactName);
+        _childParents = await child.getParents();
+        ReleaseLogger.log(
+          '👨‍👩‍👧 [loadChildParents] Padres encontrados: ${_childParents.length}',
+          tag: 'ContactProfile',
+        );
+      } else {
+        _childParents = [];
+      }
+    } catch (e) {
+      ReleaseLogger.error('Error cargando información de padres: $e', tag: 'ContactProfile');
+      _childParents = [];
+      onError?.call('Error cargando información de padres');
+    }
+  }
+
+  /// Limpiar recursos
+  void dispose() {
+    _contactDataSubscription?.cancel();
+    _blockStatusSubscription?.cancel();
+  }
+}
