@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:flutter_contacts/flutter_contacts.dart';
 
 /// Banner de advertencia cuando el permiso de contactos no está otorgado
 ///
@@ -10,9 +10,7 @@ import 'package:permission_handler/permission_handler.dart';
 /// - restricted: iOS - restringido por controles parentales
 /// - limited: iOS - acceso limitado
 ///
-/// NOTA: Usa FlutterContacts para verificar el permiso real en iOS,
-/// ya que permission_handler tiene bugs conocidos en iOS.
-///
+/// Usa permission_handler para verificar estado sin mostrar diálogos.
 /// Compatible con Android e iOS
 class ContactsPermissionBanner extends StatefulWidget {
   /// Callback cuando el usuario solicita el permiso
@@ -37,6 +35,7 @@ class _ContactsPermissionBannerState extends State<ContactsPermissionBanner>
   PermissionStatus? _status;
   bool _isLoading = true;
   bool _isDismissed = false;
+  bool _isCheckingPermission = false;
 
   @override
   void initState() {
@@ -55,51 +54,81 @@ class _ContactsPermissionBannerState extends State<ContactsPermissionBanner>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Verificar permiso cuando vuelve del settings
     if (state == AppLifecycleState.resumed) {
-      _checkPermission();
+      // ✅ FIX: Debounce para evitar múltiples llamadas rápidas que causan flickering
+      Future.delayed(const Duration(milliseconds: 300), () {
+        if (mounted) {
+          _checkPermission();
+        }
+      });
     }
   }
 
   Future<void> _checkPermission() async {
-    // ✅ FIX iOS: Usar FlutterContacts para verificar el permiso real
-    // permission_handler tiene bugs en iOS donde retorna 'denied' incluso con acceso
-    final hasFlutterContactsAccess = await FlutterContacts.requestPermission(readonly: true);
+    // ✅ FIX: Evitar múltiples verificaciones simultáneas
+    if (_isCheckingPermission) return;
+    _isCheckingPermission = true;
 
-    // Obtener status de permission_handler para casos especiales (restricted, limited)
-    final status = await Permission.contacts.status;
-    if (!mounted) return;
+    try {
+      // Verificar permiso usando permission_handler
+      final status = await Permission.contacts.status;
+      if (!mounted) return;
 
-    final wasGranted = _status?.isGranted ?? false;
+      final wasGranted = _status?.isGranted ?? false;
 
-    // ✅ El permiso está granted si FlutterContacts tiene acceso
-    // O si permission_handler dice que está granted
-    final isNowGranted = hasFlutterContactsAccess || status.isGranted;
+      // Verificar con ambas fuentes para mayor confiabilidad
+      // permission_handler a veces no detecta correctamente el estado en iOS
+      bool isNowGranted = status.isGranted || status.isLimited;
 
-    // Determinar el status efectivo
-    PermissionStatus effectiveStatus;
-    if (isNowGranted) {
-      effectiveStatus = PermissionStatus.granted;
-    } else if (status.isRestricted) {
-      effectiveStatus = PermissionStatus.restricted;
-    } else if (status.isLimited) {
-      effectiveStatus = PermissionStatus.limited;
-    } else if (status.isPermanentlyDenied) {
-      effectiveStatus = PermissionStatus.permanentlyDenied;
-    } else {
-      effectiveStatus = PermissionStatus.denied;
-    }
-
-    setState(() {
-      _status = effectiveStatus;
-      _isLoading = false;
-      // Si el permiso fue otorgado, ocultar el banner
-      if (isNowGranted) {
-        _isDismissed = true;
+      // Si permission_handler dice que no está granted, verificar con FlutterContacts
+      // FlutterContacts.requestPermission(readonly: true) solo verifica, no solicita
+      if (!isNowGranted) {
+        try {
+          // Intentar obtener contactos - si funciona, tenemos permiso
+          await FlutterContacts.getContacts(withProperties: false);
+          isNowGranted = true; // Si llegamos aquí, tenemos permiso
+        } catch (e) {
+          // Si falla, no tenemos permiso
+          isNowGranted = false;
+        }
       }
-    });
 
-    // Notificar si el permiso cambió a granted
-    if (!wasGranted && isNowGranted) {
-      widget.onPermissionChanged?.call();
+      // Determinar el status efectivo
+      PermissionStatus effectiveStatus;
+      if (isNowGranted) {
+        effectiveStatus = PermissionStatus.granted;
+      } else if (status.isRestricted) {
+        effectiveStatus = PermissionStatus.restricted;
+      } else if (status.isLimited) {
+        effectiveStatus = PermissionStatus.limited;
+      } else if (status.isPermanentlyDenied) {
+        effectiveStatus = PermissionStatus.permanentlyDenied;
+      } else {
+        effectiveStatus = PermissionStatus.denied;
+      }
+
+      // ✅ FIX: Solo llamar setState si el status realmente cambió
+      // Esto evita rebuilds innecesarios que causan flickering en el UI
+      final statusChanged = _status != effectiveStatus;
+      final loadingChanged = _isLoading;
+      final shouldDismiss = isNowGranted && !_isDismissed;
+
+      if (statusChanged || loadingChanged || shouldDismiss) {
+        setState(() {
+          _status = effectiveStatus;
+          _isLoading = false;
+          // Si el permiso fue otorgado, ocultar el banner
+          if (isNowGranted) {
+            _isDismissed = true;
+          }
+        });
+      }
+
+      // Notificar si el permiso cambió a granted
+      if (!wasGranted && isNowGranted) {
+        widget.onPermissionChanged?.call();
+      }
+    } finally {
+      _isCheckingPermission = false;
     }
   }
 
@@ -110,9 +139,24 @@ class _ContactsPermissionBannerState extends State<ContactsPermissionBanner>
       // Ir a configuración del sistema
       await openAppSettings();
     } else if (_status!.isDenied) {
-      // Solicitar permiso
-      widget.onRequestPermission?.call();
-      await _checkPermission();
+      // Usar FlutterContacts para solicitar permiso - esto muestra
+      // correctamente el diálogo nativo de iOS/Android
+      final granted = await FlutterContacts.requestPermission();
+
+      if (granted) {
+        // Permiso otorgado - actualizar estado y sincronizar
+        await _checkPermission();
+        widget.onPermissionChanged?.call();
+      } else {
+        // Permiso denegado - en iOS no podemos volver a mostrar el diálogo
+        // Cambiar el banner a "Configuración" para que el usuario sepa que
+        // debe habilitarlo manualmente en Settings
+        if (mounted) {
+          setState(() {
+            _status = PermissionStatus.permanentlyDenied;
+          });
+        }
+      }
     }
   }
 

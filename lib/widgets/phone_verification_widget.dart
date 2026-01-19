@@ -665,6 +665,11 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
 
   Widget _buildSecondaryActions() {
     if (_currentStep == 0) {
+      // ✅ FIX: Solo mostrar botón "Cancelar" si hay callback definido
+      // Si onCancel es null (ej: AuthScreen es la pantalla raíz), no mostrar el botón
+      if (widget.onCancel == null) {
+        return SizedBox.shrink();
+      }
       return TextButton(
         onPressed: widget.onCancel,
         child: Text('Cancelar', style: TextStyle(color: Colors.grey[600])),

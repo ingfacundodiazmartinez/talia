@@ -253,13 +253,26 @@ class ChildContactsController {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // SYNC
+  // SYNC & CONSENT
   // ═══════════════════════════════════════════════════════════════
 
+  /// Verificar si el usuario ha dado consentimiento para sincronizar contactos
+  Future<bool> hasConsent() async {
+    return await _syncService.hasConsent();
+  }
+
+  /// Establecer el consentimiento del usuario
+  Future<void> setConsent(bool granted) async {
+    await _syncService.setConsent(granted);
+  }
+
   /// Sincronizar contactos del dispositivo
-  Future<bool> syncContacts() async {
+  ///
+  /// [skipConsentCheck] - Omitir verificación de consentimiento (usar cuando
+  ///                      se acaba de obtener consentimiento en el mismo flujo)
+  Future<bool> syncContacts({bool skipConsentCheck = false}) async {
     try {
-      await _syncService.syncContacts(force: true);
+      await _syncService.syncContacts(force: true, skipConsentCheck: skipConsentCheck);
       return true;
     } catch (e) {
       ReleaseLogger.error('Error sincronizando contactos: $e', tag: 'ChildContacts');

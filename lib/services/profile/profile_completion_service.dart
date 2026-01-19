@@ -429,4 +429,145 @@ class ProfileCompletionService {
       // No bloquear el flujo si falla
     }
   }
+
+  /// Verifica si existe un usuario con el teléfono dado y retorna sus datos.
+  /// Útil para detectar usuarios existentes que vuelven a autenticarse.
+  ///
+  /// ✅ FIX: Usa Cloud Function para evitar error de permisos.
+  /// Las Firestore rules no permiten queries sobre usuarios a usuarios
+  /// recién autenticados sin relaciones existentes.
+  ///
+  /// Retorna:
+  /// - ExistingUserResult con los datos si existe un usuario con ese teléfono
+  /// - null si no existe ningún usuario con ese teléfono
+  Future<ExistingUserResult?> checkExistingUserByPhone(String phoneNumber, String currentAuthUid) async {
+    try {
+      ReleaseLogger.log('🔍 Verificando usuario existente con teléfono: ${_redactPhone(phoneNumber)}', tag: 'ProfileCompletionService');
+
+      final callable = FirebaseFunctions.instance.httpsCallable('checkExistingUserByPhone');
+      final result = await callable.call<Map<String, dynamic>>({
+        'phoneNumber': phoneNumber,
+      });
+
+      final response = result.data;
+      final success = response['success'] as bool? ?? false;
+
+      if (!success) {
+        ReleaseLogger.error('Error en Cloud Function checkExistingUserByPhone', tag: 'ProfileCompletionService');
+        return null;
+      }
+
+      final exists = response['exists'] as bool? ?? false;
+
+      if (!exists) {
+        ReleaseLogger.log('ℹ️ No existe usuario con este teléfono', tag: 'ProfileCompletionService');
+        return null;
+      }
+
+      final userId = response['userId'] as String? ?? '';
+      final role = response['role'] as String? ?? 'child';
+      final hasCompleteProfile = response['hasCompleteProfile'] as bool? ?? false;
+      final isSameUid = response['isSameUid'] as bool? ?? false;
+
+      if (isSameUid) {
+        ReleaseLogger.log('✅ Documento encontrado para UID actual, perfil completo: $hasCompleteProfile', tag: 'ProfileCompletionService');
+      } else {
+        ReleaseLogger.log('⚠️ Usuario encontrado con diferente UID. Doc ID: $userId, Auth UID: $currentAuthUid', tag: 'ProfileCompletionService');
+      }
+
+      return ExistingUserResult(
+        exists: true,
+        userId: userId,
+        role: role,
+        hasCompleteProfile: hasCompleteProfile,
+        isSameUid: isSameUid,
+      );
+    } catch (e) {
+      ReleaseLogger.error('❌ Error verificando usuario existente: $e', tag: 'ProfileCompletionService');
+      return null;
+    }
+  }
+
+  /// Migra los datos de un usuario existente al nuevo UID de autenticación.
+  /// Esto es necesario cuando Firebase Auth crea un nuevo UID para el mismo teléfono.
+  Future<ProfileCompletionResult> migrateUserToNewUid({
+    required String oldUserId,
+    required String newUserId,
+    required String phoneNumber,
+  }) async {
+    try {
+      ReleaseLogger.log('🔄 Migrando usuario de $oldUserId a $newUserId', tag: 'ProfileCompletionService');
+
+      // Obtener datos del documento antiguo
+      final oldDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(oldUserId)
+          .get();
+
+      if (!oldDoc.exists) {
+        return ProfileCompletionResult(
+          success: false,
+          error: 'Usuario original no encontrado',
+        );
+      }
+
+      final oldData = oldDoc.data()!;
+      final role = oldData['role'] ?? 'child';
+
+      // Crear nuevo documento con el nuevo UID manteniendo los datos
+      await FirebaseFirestore.instance.collection('users').doc(newUserId).set({
+        ...oldData,
+        'migratedFrom': oldUserId,
+        'migratedAt': FieldValue.serverTimestamp(),
+        'isOnline': true,
+        'lastSeen': FieldValue.serverTimestamp(),
+      });
+
+      // Marcar el documento antiguo como migrado (no eliminarlo para mantener referencias)
+      await FirebaseFirestore.instance.collection('users').doc(oldUserId).update({
+        'migratedTo': newUserId,
+        'migratedAt': FieldValue.serverTimestamp(),
+        'isOnline': false,
+      });
+
+      // Registrar dispositivo y FCM token
+      await _registerUserDevice(newUserId);
+      await _initializeFCMToken();
+
+      ReleaseLogger.log('✅ Usuario migrado exitosamente', tag: 'ProfileCompletionService');
+
+      return ProfileCompletionResult(
+        success: true,
+        role: role,
+      );
+    } catch (e) {
+      ReleaseLogger.error('❌ Error migrando usuario: $e', tag: 'ProfileCompletionService');
+      return ProfileCompletionResult(
+        success: false,
+        error: 'Error migrando cuenta: $e',
+      );
+    }
+  }
+
+  String _redactPhone(String phone) {
+    if (phone.length < 6) return '***';
+    return '${phone.substring(0, 3)}***${phone.substring(phone.length - 2)}';
+  }
+}
+
+/// Resultado de verificación de usuario existente
+class ExistingUserResult {
+  final bool exists;
+  final String userId;
+  final String role;
+  final bool hasCompleteProfile;
+  final bool isSameUid;
+
+  ExistingUserResult({
+    required this.exists,
+    required this.userId,
+    required this.role,
+    required this.hasCompleteProfile,
+    required this.isSameUid,
+  });
 }

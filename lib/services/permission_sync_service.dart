@@ -2,7 +2,6 @@ import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:geolocator/geolocator.dart';
 import '../utils/release_logger.dart';
 
@@ -53,10 +52,13 @@ class PermissionSyncService {
       final geolocatorPermission = await Geolocator.checkPermission();
       final locationState = _getLocationStateFromGeolocator(geolocatorPermission);
 
-      // ✅ FIX iOS: Usar FlutterContacts para verificar el permiso de contactos real
-      // permission_handler tiene bugs en iOS donde retorna 'denied' incluso con acceso
-      final hasContactsPermission = await FlutterContacts.requestPermission(readonly: true);
-      final contactsState = _getContactsState(results[2], hasContactsPermission);
+      // ✅ FIX: Solo usar Permission.contacts.status para verificar
+      // NO usar FlutterContacts.requestPermission() porque puede mostrar diálogo del sistema
+      // permission_handler es confiable en Android; en iOS puede dar falso negativo pero
+      // es mejor que mostrar diálogos inesperados al usuario
+      final contactsStatus = results[2];
+      final hasContactsPermission = contactsStatus.isGranted || contactsStatus.isLimited;
+      final contactsState = _getContactsState(contactsStatus, hasContactsPermission);
 
       final permissionStatus = {
         // Mantener campos legacy para compatibilidad

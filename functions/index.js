@@ -214,6 +214,7 @@ exports.createEmergency = emergency.createEmergency;
 // Perfiles de usuario
 exports.updateUserProfile = userProfile.updateUserProfile;
 exports.checkPhoneDuplicate = userProfile.checkPhoneDuplicate;
+exports.checkExistingUserByPhone = userProfile.checkExistingUserByPhone;
 exports.generateUserCode = userProfile.generateUserCode;
 exports.onUserRegistered = userProfile.onUserRegistered;
 exports.onPresenceChanged = userProfile.onPresenceChanged;
@@ -308,5 +309,6 @@ exports.onTriviaResponseCreated = trivia.onTriviaResponseCreated;
 exports.sendTriviaExpirationReminder = trivia.sendTriviaExpirationReminder;
 exports.onTriviaResultsPublished = trivia.onTriviaResultsPublished;
 exports.generateTriviaSuggestion = trivia.generateTriviaSuggestion;
+exports.getTriviaPreview = trivia.getTriviaPreview;
 
 console.log("✅ Todas las funciones exportadas correctamente (incluye Agora V2, Trivia)");

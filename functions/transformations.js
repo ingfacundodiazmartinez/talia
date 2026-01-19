@@ -56,10 +56,10 @@ async function isPremiumSystemEnabled() {
 // LÍMITES DE FACE-SWAP POR TIER (sincronizado con Flutter)
 // ═══════════════════════════════════════════════════════════════
 
-// Free: límite DIARIO (3/día)
+// Free: límite DIARIO (10/día)
 // Premium/Premium+: límite MENSUAL (50/mes y 100/mes)
 const FACE_SWAP_LIMITS = {
-  free: { limit: 3, period: "daily" },
+  free: { limit: 10, period: "daily" },
   premium: { limit: 50, period: "monthly" },
   premium_plus: { limit: 100, period: "monthly" },
 };
@@ -86,7 +86,24 @@ function getCurrentMonth() {
 }
 
 /**
+ * Obtener el inicio del día actual (00:00:00 UTC)
+ */
+function getStartOfDay() {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
+}
+
+/**
+ * Obtener el inicio del mes actual (día 1, 00:00:00 UTC)
+ */
+function getStartOfMonth() {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0));
+}
+
+/**
  * Verificar si el usuario puede usar face-swap según su plan
+ * Calcula el uso basándose en los registros reales de character_transformations
  * @param {string} userId - ID del usuario
  * @returns {Promise<{canUse: boolean, remaining: number, limit: number, tier: string, period: string}>}
  */
@@ -133,39 +150,24 @@ async function checkFaceSwapLimit(userId) {
     const limitConfig = FACE_SWAP_LIMITS[tier] || FACE_SWAP_LIMITS.free;
     const { limit, period } = limitConfig;
 
-    // 3. Obtener uso actual
-    const limitsDoc = await db.collection("user_limits").doc(userId).get();
+    // 3. Contar transformaciones reales desde la DB
+    // Determinar el inicio del período según el tier
+    const periodStart = period === "daily" ? getStartOfDay() : getStartOfMonth();
 
-    if (!limitsDoc.exists) {
-      // Primera vez, puede usar
-      return { canUse: true, remaining: limit, limit, tier, period };
-    }
+    // Query a character_transformations para contar uso real
+    const transformationsQuery = await db.collection("character_transformations")
+      .where("userId", "==", userId)
+      .where("createdAt", ">=", Timestamp.fromDate(periodStart))
+      .count()
+      .get();
 
-    const limitsData = limitsDoc.data();
-    let count = 0;
-    let isNewPeriod = false;
-
-    if (period === "daily") {
-      const currentDay = getCurrentDay();
-      const savedDay = limitsData.faceSwapDay;
-      count = limitsData.faceSwapDailyCount || 0;
-      isNewPeriod = savedDay !== currentDay;
-    } else {
-      const currentMonth = getCurrentMonth();
-      const savedMonth = limitsData.faceSwapMonth;
-      count = limitsData.faceSwapMonthlyCount || 0;
-      isNewPeriod = savedMonth !== currentMonth;
-    }
-
-    // Si es un nuevo período, resetear contador
-    if (isNewPeriod) {
-      count = 0;
-    }
+    const count = transformationsQuery.data().count;
 
     const remaining = Math.max(0, limit - count);
     const canUse = count < limit;
 
-    console.log(`🔒 [FaceSwapLimit] Usuario: ${userId}, Tier: ${tier}, Usado: ${count}/${limit}, Puede usar: ${canUse}`);
+    console.log(`🔒 [FaceSwapLimit] Usuario: ${userId}, Tier: ${tier}, Período: ${period}, Usado: ${count}/${limit}, Puede usar: ${canUse}`);
+    console.log(`   Período desde: ${periodStart.toISOString()}`);
 
     return { canUse, remaining, limit, tier, period, count };
   } catch (error) {
@@ -175,40 +177,9 @@ async function checkFaceSwapLimit(userId) {
   }
 }
 
-/**
- * Incrementar el contador de face-swap del usuario
- * @param {string} userId - ID del usuario
- * @param {string} tier - Tier del usuario (para saber si es diario o mensual)
- */
-async function incrementFaceSwapCount(userId, tier) {
-  const db = getFirestore();
-  const limitConfig = FACE_SWAP_LIMITS[tier] || FACE_SWAP_LIMITS.free;
-  const { period } = limitConfig;
-
-  try {
-    const docRef = db.collection("user_limits").doc(userId);
-
-    if (period === "daily") {
-      const currentDay = getCurrentDay();
-      await docRef.set({
-        faceSwapDay: currentDay,
-        faceSwapDailyCount: FieldValue.increment(1),
-        lastFaceSwapDaily: FieldValue.serverTimestamp(),
-      }, { merge: true });
-    } else {
-      const currentMonth = getCurrentMonth();
-      await docRef.set({
-        faceSwapMonth: currentMonth,
-        faceSwapMonthlyCount: FieldValue.increment(1),
-        lastFaceSwapMonthly: FieldValue.serverTimestamp(),
-      }, { merge: true });
-    }
-
-    console.log(`📈 [FaceSwapLimit] Contador incrementado para ${userId} (${period})`);
-  } catch (error) {
-    console.error(`❌ [FaceSwapLimit] Error incrementando contador: ${error.message}`);
-  }
-}
+// NOTA: incrementFaceSwapCount fue eliminada
+// El conteo ahora se basa en los registros reales de character_transformations
+// No se necesita mantener un contador manual separado
 
 // ═══════════════════════════════════════════════════════════════
 // HELPER: Selección de modelo de IA
@@ -622,14 +593,13 @@ exports.transformCharacter = onCall(
         characterName: characterData.name,
         originalImageUrl: imageUrl,
         transformedImageUrl: transformedImageUrl,
-        timestamp: new Date(),
+        createdAt: Timestamp.now(), // ✅ FIX: Usar createdAt para que coincida con la query de límites
         deleteAt: Timestamp.fromDate(analyticsDeleteAt), // TTL: 30 días
       });
 
       console.log(`📊 [TransformCharacter] Analytics guardado`);
 
-      // ✅ INCREMENTAR CONTADOR DE USO
-      await incrementFaceSwapCount(userId, limitCheck.tier);
+      // NOTA: El conteo se basa en character_transformations, no necesitamos incrementar contador manual
 
       // Limpiar archivo temporal si existe
       if (tempFilePath) {
@@ -923,10 +893,9 @@ exports.createCharacterTransformation = onCall(
         deleteAt: Timestamp.fromDate(analyticsDeleteAt), // TTL: 30 días
       });
 
-      // 9. Incrementar contador de uso (hacerlo aquí para evitar race conditions)
-      await incrementFaceSwapCount(userId, limitCheck.tier);
+      // NOTA: El conteo se basa en character_transformations (guardado arriba), no necesitamos contador manual
 
-      // 10. Retornar inmediatamente - el cliente escuchará Firestore
+      // 9. Retornar inmediatamente - el cliente escuchará Firestore
       return {
         statusDocId: statusDocId,
         predictionId: prediction?.id || `nano_banana_${statusDocId}`,

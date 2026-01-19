@@ -417,7 +417,8 @@ async function sendLikeMessage(senderId, receiverId, storyData, storyId) {
  * ═══════════════════════════════════════════════════════════════
  *
  * Este endpoint es público y no requiere autenticación.
- * WhatsApp, Facebook, Twitter y otros crawlers lo usan para generar previews.
+ * Devuelve JSON con datos de la historia para que Vercel pueda
+ * generar el HTML con Open Graph meta tags.
  */
 const { onRequest } = require("firebase-functions/v2/https");
 

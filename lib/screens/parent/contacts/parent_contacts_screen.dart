@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import '../../../widgets/contacts/contacts_permission_banner.dart';
+import '../../../widgets/contacts_sync_consent_dialog.dart';
 import '../../../theme_service.dart';
 import '../../../link_parent_child.dart';
 import '../../add_contact_screen.dart';
@@ -89,7 +90,29 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
     setState(() => _isSyncing = true);
 
     try {
-      await _controller.syncContacts();
+      // Verificar si el usuario ha dado consentimiento para sincronizar contactos
+      final hasConsent = await _controller.hasConsent();
+
+      if (!hasConsent) {
+        // Mostrar diálogo de consentimiento
+        if (!mounted) return;
+        final consentGranted = await ContactsSyncConsentDialog.show(context);
+
+        if (!mounted) return;
+
+        if (!consentGranted) {
+          // Usuario rechazó el consentimiento
+          setState(() => _isSyncing = false);
+          return;
+        }
+
+        // Guardar consentimiento y sincronizar
+        await _controller.setConsent(true);
+        await _controller.syncContacts(skipConsentCheck: true);
+      } else {
+        // Ya tiene consentimiento, sincronizar normalmente
+        await _controller.syncContacts();
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

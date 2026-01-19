@@ -15,7 +15,7 @@
 
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/firestore");
-const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
 const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
 const { getStorage } = require("firebase-admin/storage");
 const { checkRateLimit } = require("./helpers");
@@ -33,6 +33,73 @@ const TRIVIA_CATEGORIES = {
   cultura: { name: "Cultura", emoji: "🎬", description: "Películas, música, series" },
   curiosidades: { name: "Curiosidades", emoji: "🤔", description: "Datos interesantes" },
 };
+
+// ═══════════════════════════════════════════════════════════════
+// GET TRIVIA PREVIEW - HTTP endpoint para link previews (OG meta tags)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Endpoint público para obtener datos de preview de una trivia.
+ * Usado por Vercel para generar HTML con Open Graph meta tags.
+ */
+exports.getTriviaPreview = onRequest(
+  {
+    region: "us-central1",
+    cors: true,
+  },
+  async (req, res) => {
+    if (req.method !== 'GET') {
+      return res.status(405).json({ error: 'Method not allowed' });
+    }
+
+    const triviaId = req.query.id || req.path.split('/').pop();
+
+    if (!triviaId) {
+      return res.status(400).json({ error: 'Trivia ID is required' });
+    }
+
+    console.log(`📖 [TriviaPreview] Fetching trivia: ${triviaId}`);
+
+    const db = getFirestore();
+
+    try {
+      const triviaDoc = await db.collection("trivias").doc(triviaId).get();
+
+      if (!triviaDoc.exists) {
+        console.log(`📖 [TriviaPreview] Trivia not found: ${triviaId}`);
+        return res.status(404).json({
+          found: false,
+          error: 'Trivia not found'
+        });
+      }
+
+      const triviaData = triviaDoc.data();
+
+      // Solo devolver datos públicos para el preview
+      const previewData = {
+        found: true,
+        title: triviaData.title || '¿Cuánto me conoces?',
+        creatorName: triviaData.creatorName || 'Un amigo',
+        creatorPhotoURL: triviaData.creatorPhotoURL || '',
+        backgroundImageUrl: triviaData.backgroundImageUrl || '',
+        questionCount: triviaData.questions?.length || 0,
+        isActive: triviaData.status === 'active',
+      };
+
+      console.log(`✅ [TriviaPreview] Returning preview for: ${triviaId}`);
+
+      res.set('Cache-Control', 'public, max-age=300, s-maxage=300');
+      return res.status(200).json(previewData);
+
+    } catch (error) {
+      console.error(`❌ [TriviaPreview] Error fetching trivia ${triviaId}:`, error);
+      return res.status(500).json({
+        found: false,
+        error: 'Internal server error'
+      });
+    }
+  }
+);
 
 // ═══════════════════════════════════════════════════════════════
 // CIERRE AUTOMÁTICO DE TRIVIAS EXPIRADAS

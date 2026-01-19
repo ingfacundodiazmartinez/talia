@@ -10,9 +10,9 @@ class UsageLimitsService {
   final SubscriptionService _subscriptionService = SubscriptionService();
 
   // ===== LÍMITES DE FACE-SWAP POR TIER =====
-  // Free: límite DIARIO (3/día)
+  // Free: límite DIARIO (10/día)
   // Premium/Premium+: límite MENSUAL (50/mes y 100/mes)
-  static const int FACE_SWAP_DAILY_LIMIT_FREE = 3;
+  static const int FACE_SWAP_DAILY_LIMIT_FREE = 10;
   static const int FACE_SWAP_MONTHLY_LIMIT_PREMIUM = 50;
   static const int FACE_SWAP_MONTHLY_LIMIT_PREMIUM_PLUS = 100;
 
@@ -409,12 +409,12 @@ class UsageLimitsService {
   }
 
   /// Obtener el límite de face-swap según el tier
-  /// Free: límite diario (3/día)
+  /// Free: límite diario (10/día)
   /// Premium/Premium+: límite mensual (50/mes, 100/mes)
   int getFaceSwapLimit(SubscriptionTier tier) {
     switch (tier) {
       case SubscriptionTier.free:
-        return FACE_SWAP_DAILY_LIMIT_FREE; // 3/día
+        return FACE_SWAP_DAILY_LIMIT_FREE; // 10/día
       case SubscriptionTier.premium:
         return FACE_SWAP_MONTHLY_LIMIT_PREMIUM; // 50/mes
       case SubscriptionTier.premiumPlus:

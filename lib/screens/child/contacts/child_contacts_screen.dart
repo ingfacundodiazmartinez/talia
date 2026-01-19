@@ -7,6 +7,7 @@ import '../../../models/contact.dart' as contact_model;
 import '../../../screens/add_contact_screen.dart';
 import '../../../screens/chat_detail_screen.dart';
 import '../../../widgets/contacts/contacts_permission_banner.dart';
+import '../../../widgets/contacts_sync_consent_dialog.dart';
 import '../../../theme_service.dart';
 
 /// Pantalla de contactos para niños
@@ -407,9 +408,34 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
     if (_isSyncing) return;
     setState(() => _isSyncing = true);
 
-    await _controller.syncContacts();
-    if (mounted) {
-      setState(() => _isSyncing = false);
+    try {
+      // Verificar si el usuario ha dado consentimiento para sincronizar contactos
+      final hasConsent = await _controller.hasConsent();
+
+      if (!hasConsent) {
+        // Mostrar diálogo de consentimiento
+        if (!mounted) return;
+        final consentGranted = await ContactsSyncConsentDialog.show(context);
+
+        if (!mounted) return;
+
+        if (!consentGranted) {
+          // Usuario rechazó el consentimiento
+          setState(() => _isSyncing = false);
+          return;
+        }
+
+        // Guardar consentimiento y sincronizar
+        await _controller.setConsent(true);
+        await _controller.syncContacts(skipConsentCheck: true);
+      } else {
+        // Ya tiene consentimiento, sincronizar normalmente
+        await _controller.syncContacts();
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isSyncing = false);
+      }
     }
   }
 

@@ -1386,10 +1386,32 @@ class StoryCameraController {
         }
       }
 
+    } on FirebaseFunctionsException catch (e) {
+      // Manejar errores específicos de Cloud Functions con mensajes amigables
+      hasError = true;
+      ReleaseLogger.error('❌ Error Cloud Function Face Swap: ${e.code} - ${e.message}', tag: 'StoryCameraController');
+
+      String userMessage;
+      if (e.code == 'resource-exhausted') {
+        // Extraer mensaje amigable del servidor (límite de transformaciones)
+        userMessage = e.message ?? 'Has alcanzado el límite de transformaciones. Actualiza a Premium para más.';
+      } else if (e.code == 'unauthenticated') {
+        userMessage = 'Sesión expirada. Por favor vuelve a iniciar sesión.';
+      } else if (e.code == 'permission-denied') {
+        userMessage = 'No tienes permiso para usar Face Swap.';
+      } else {
+        userMessage = e.message ?? 'Error aplicando Face Swap. Intenta de nuevo.';
+      }
+
+      onError?.call(userMessage);
+
+      if (!completer.isCompleted) {
+        completer.complete(null);
+      }
     } catch (e) {
       hasError = true;
       ReleaseLogger.error('❌ Error en Face Swap: $e', tag: 'StoryCameraController');
-      onError?.call('Error aplicando Face Swap: $e');
+      onError?.call('Error aplicando Face Swap. Intenta de nuevo.');
 
       if (!completer.isCompleted) {
         completer.complete(null);

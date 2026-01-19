@@ -85,6 +85,111 @@ exports.checkPhoneDuplicate = onCall(
 
 /**
  * ═══════════════════════════════════════════════════════════════
+ * CHECK EXISTING USER BY PHONE
+ * ═══════════════════════════════════════════════════════════════
+ *
+ * Busca si existe un usuario con el número de teléfono dado y retorna
+ * información necesaria para el flujo de login/registro.
+ *
+ * Necesario porque las Firestore rules no permiten queries sobre usuarios
+ * a usuarios recién autenticados sin relaciones existentes.
+ *
+ * Retorna:
+ * - exists: boolean - si existe un usuario con ese teléfono
+ * - userId: string - ID del usuario encontrado
+ * - role: string - rol del usuario (parent/child)
+ * - hasCompleteProfile: boolean - si tiene perfil completo
+ * - isSameUid: boolean - si el usuario encontrado es el mismo que el autenticado
+ */
+exports.checkExistingUserByPhone = onCall(
+  {
+    region: "us-central1",
+    timeoutSeconds: 30,
+    memory: "256MiB",
+    invoker: "public",
+  },
+  async (request) => {
+    const { auth, data } = request;
+    const db = getFirestore();
+
+    // 1. Verificar autenticación
+    if (!auth) {
+      throw new HttpsError("unauthenticated", "Debe iniciar sesión");
+    }
+
+    const currentUserId = auth.uid;
+    const { phoneNumber } = data;
+
+    if (!phoneNumber || typeof phoneNumber !== "string") {
+      throw new HttpsError("invalid-argument", "El número de teléfono es requerido");
+    }
+
+    const redactedPhone = phoneNumber.length > 5
+      ? `${phoneNumber.substring(0, 3)}***${phoneNumber.substring(phoneNumber.length - 2)}`
+      : "***";
+
+    console.log(`🔍 [checkExistingUserByPhone] Buscando usuario con teléfono: ${redactedPhone}`);
+
+    try {
+      // 2. Primero verificar si el documento del usuario actual ya existe
+      const currentUserDoc = await db.collection("users").doc(currentUserId).get();
+
+      if (currentUserDoc.exists) {
+        const userData = currentUserDoc.data();
+        const hasCompleteProfile = userData &&
+          userData.name != null &&
+          userData.createdAt != null;
+
+        console.log(`✅ [checkExistingUserByPhone] Documento encontrado para UID actual, perfil completo: ${hasCompleteProfile}`);
+
+        return {
+          success: true,
+          exists: true,
+          userId: currentUserId,
+          role: userData?.role || "child",
+          hasCompleteProfile,
+          isSameUid: true,
+        };
+      }
+
+      // 3. Si no existe documento para el UID actual, buscar por teléfono
+      const querySnapshot = await db
+        .collection("users")
+        .where("phone", "==", phoneNumber)
+        .limit(1)
+        .get();
+
+      if (querySnapshot.empty) {
+        console.log(`ℹ️ [checkExistingUserByPhone] No existe usuario con este teléfono`);
+        return {
+          success: true,
+          exists: false,
+        };
+      }
+
+      const doc = querySnapshot.docs[0];
+      const userData = doc.data();
+      const hasCompleteProfile = userData.name != null && userData.createdAt != null;
+
+      console.log(`⚠️ [checkExistingUserByPhone] Usuario encontrado con diferente UID. Doc ID: ${doc.id}, Auth UID: ${currentUserId}`);
+
+      return {
+        success: true,
+        exists: true,
+        userId: doc.id,
+        role: userData.role || "child",
+        hasCompleteProfile,
+        isSameUid: doc.id === currentUserId,
+      };
+    } catch (error) {
+      console.error(`❌ [checkExistingUserByPhone] Error:`, error);
+      throw new HttpsError("internal", `Error buscando usuario: ${error.message}`);
+    }
+  }
+);
+
+/**
+ * ═══════════════════════════════════════════════════════════════
  * GENERATE USER CODE
  * ═══════════════════════════════════════════════════════════════
  *

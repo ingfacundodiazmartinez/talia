@@ -488,7 +488,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       }
     } catch (e) {
       ReleaseLogger.error('❌ Error procesando Face Swap: $e', tag: 'StoryCameraScreen');
-      _controller.onError?.call('Error en Face Swap: $e');
+      // El controller ya maneja el error con mensaje amigable,
+      // solo limpiar selección si el error no fue manejado
       // Limpiar selección en caso de error
       if (mounted) {
         setState(() {
