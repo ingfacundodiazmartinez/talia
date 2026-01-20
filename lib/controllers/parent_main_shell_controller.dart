@@ -389,10 +389,19 @@ class ParentMainShellController {
         .snapshots(includeMetadataChanges: false)
         .asyncMap((snapshot) async {
           // Obtener offset del servidor desde RTDB
-          final offsetSnapshot = await FirebaseDatabase.instance
-              .ref('.info/serverTimeOffset')
-              .get();
-          final offset = (offsetSnapshot.value as int?) ?? 0;
+          // Envuelto en try-catch porque puede fallar en algunos dispositivos
+          // y el SDK lanza una excepción mal formateada
+          int offset = 0;
+          try {
+            final offsetSnapshot = await FirebaseDatabase.instance
+                .ref('.info/serverTimeOffset')
+                .get();
+            offset = (offsetSnapshot.value as int?) ?? 0;
+          } catch (e) {
+            // Si falla, usar offset 0 (tiempo local)
+            // Esto es seguro porque el offset solo se usa para filtrar
+            // solicitudes expiradas, y usar tiempo local es una aproximación válida
+          }
 
           // Calcular tiempo del servidor
           final serverNow = DateTime.now().add(Duration(milliseconds: offset));

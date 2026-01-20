@@ -1,6 +1,8 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
+import '../../services/device_contact_name_cache.dart';
 
 /// Banner de advertencia cuando el permiso de contactos no está otorgado
 ///
@@ -79,9 +81,10 @@ class _ContactsPermissionBannerState extends State<ContactsPermissionBanner>
       // permission_handler a veces no detecta correctamente el estado en iOS
       bool isNowGranted = status.isGranted || status.isLimited;
 
-      // Si permission_handler dice que no está granted, verificar con FlutterContacts
-      // FlutterContacts.requestPermission(readonly: true) solo verifica, no solicita
-      if (!isNowGranted) {
+      // Solo en iOS: Si permission_handler dice que no está granted, verificar con FlutterContacts
+      // En Android NO hacemos esto porque causa SecurityException fatal en Samsung
+      // que no es capturada por el try-catch (se lanza en hilo nativo)
+      if (!isNowGranted && Platform.isIOS) {
         try {
           // Intentar obtener contactos - si funciona, tenemos permiso
           await FlutterContacts.getContacts(withProperties: false);
@@ -125,6 +128,9 @@ class _ContactsPermissionBannerState extends State<ContactsPermissionBanner>
 
       // Notificar si el permiso cambió a granted
       if (!wasGranted && isNowGranted) {
+        // Refrescar cache de nombres de contactos del dispositivo
+        // para que aparezcan los alias/nombres del SO
+        DeviceContactNameCache().refresh();
         widget.onPermissionChanged?.call();
       }
     } finally {
@@ -144,7 +150,8 @@ class _ContactsPermissionBannerState extends State<ContactsPermissionBanner>
       final granted = await FlutterContacts.requestPermission();
 
       if (granted) {
-        // Permiso otorgado - actualizar estado y sincronizar
+        // Permiso otorgado - refrescar cache de nombres y actualizar estado
+        DeviceContactNameCache().refresh();
         await _checkPermission();
         widget.onPermissionChanged?.call();
       } else {

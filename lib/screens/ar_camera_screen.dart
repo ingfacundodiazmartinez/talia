@@ -44,7 +44,11 @@ class _ARCameraScreenState extends State<ARCameraScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _processingTimer?.cancel();
-    _cameraController?.dispose();
+    // Solo dispose si la cámara terminó de inicializarse
+    // Evita IllegalStateException en Android
+    if (_isCameraInitialized && _cameraController != null) {
+      _cameraController!.dispose();
+    }
     _faceFilterService.dispose();
     super.dispose();
   }

@@ -9,11 +9,23 @@
 import UIKit
 import SwiftUI
 import UniformTypeIdentifiers
+import Combine
+
+// MARK: - Observable State
+
+/// Estado observable para mantener los items compartidos sin perder selección
+class ShareExtensionState: ObservableObject {
+    @Published var sharedItems: [SharedItem] = []
+    @Published var isLoading: Bool = true
+}
 
 class ShareViewController: UIViewController {
 
     private let appGroupId = "group.com.talia.chat"
     private var hostingController: UIHostingController<ShareExtensionView>?
+
+    /// ✅ Estado observable que persiste cuando los items se cargan
+    private let shareState = ShareExtensionState()
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -28,22 +40,25 @@ class ShareViewController: UIViewController {
         let isAuthenticated = FirebaseUploadService.shared.isAuthenticated()
         NSLog("🔑 [ShareExt] Is authenticated: \(isAuthenticated)")
 
-        // Crear vista SwiftUI con items vacíos inicialmente
+        // ✅ Crear vista SwiftUI con estado observable
         let shareView = ShareExtensionView(
-            sharedItems: [],
+            state: shareState,
             chats: cachedChats,
             isAuthenticated: isAuthenticated,
             onCancel: { [weak self] in
                 self?.cancel()
             },
             onSendToChats: { [weak self] selectedChatIds, items in
+                NSLog("📤 [ShareExt] ⭐ onSendToChats CALLBACK triggered")
+                NSLog("📤 [ShareExt] - selectedChatIds: \(selectedChatIds)")
+                NSLog("📤 [ShareExt] - items count: \(items.count)")
                 self?.sendToChatsDirectly(chatIds: selectedChatIds, items: items)
             },
             onCreateStory: { [weak self] item in
                 self?.createStoryDirectly(item: item)
             },
             onFallbackSend: { [weak self] selectedChatIds, items in
-                // Fallback: guardar en App Group y abrir la app
+                NSLog("📤 [ShareExt] ⭐ onFallbackSend CALLBACK triggered")
                 self?.sendToChats(chatIds: selectedChatIds, items: items)
             }
         )
@@ -62,29 +77,27 @@ class ShareViewController: UIViewController {
         ])
         hosting.didMove(toParent: self)
 
-        // Cargar contenido compartido de forma asíncrona
+        // ✅ Cargar contenido compartido de forma asíncrona y actualizar el estado
         loadSharedItemsAsync { [weak self] items in
-            guard let self = self else { return }
+            guard let self = self else {
+                NSLog("❌ [ShareExt] Self is nil after loading items")
+                return
+            }
 
-            // Actualizar la vista con los items cargados
-            let updatedView = ShareExtensionView(
-                sharedItems: items,
-                chats: cachedChats,
-                isAuthenticated: isAuthenticated,
-                onCancel: { [weak self] in
-                    self?.cancel()
-                },
-                onSendToChats: { [weak self] selectedChatIds, loadedItems in
-                    self?.sendToChatsDirectly(chatIds: selectedChatIds, items: loadedItems)
-                },
-                onCreateStory: { [weak self] item in
-                    self?.createStoryDirectly(item: item)
-                },
-                onFallbackSend: { [weak self] selectedChatIds, loadedItems in
-                    self?.sendToChats(chatIds: selectedChatIds, items: loadedItems)
-                }
-            )
-            self.hostingController?.rootView = updatedView
+            NSLog("📥 [ShareExt] Loaded \(items.count) items")
+
+            // Log detalles de cada item
+            for (index, item) in items.enumerated() {
+                NSLog("📥 [ShareExt] Item \(index): type=\(item.type.rawValue), hasURL=\(item.url != nil), hasText=\(item.text != nil)")
+            }
+
+            // Actualizar estado observable (no reemplaza la vista, mantiene selección)
+            DispatchQueue.main.async {
+                NSLog("📥 [ShareExt] Updating state with \(items.count) items")
+                self.shareState.sharedItems = items
+                self.shareState.isLoading = false
+                NSLog("📥 [ShareExt] State updated - isLoading: \(self.shareState.isLoading), items: \(self.shareState.sharedItems.count)")
+            }
         }
     }
 
@@ -110,16 +123,28 @@ class ShareViewController: UIViewController {
                 if attachment.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
                     attachment.loadItem(forTypeIdentifier: UTType.image.identifier) { data, error in
                         defer { group.leave() }
-                        guard error == nil else { return }
+
+                        if let error = error {
+                            NSLog("❌ [ShareExt] Error loading image: \(error)")
+                            return
+                        }
 
                         if let url = data as? URL {
+                            NSLog("✅ [ShareExt] Got image URL: \(url.lastPathComponent)")
                             itemsLock.lock()
                             items.append(SharedItem(type: .image, url: url, text: nil))
                             itemsLock.unlock()
-                        } else if let image = data as? UIImage, let url = self.saveImageToTemp(image) {
-                            itemsLock.lock()
-                            items.append(SharedItem(type: .image, url: url, text: nil))
-                            itemsLock.unlock()
+                        } else if let image = data as? UIImage {
+                            NSLog("✅ [ShareExt] Got UIImage, saving to temp...")
+                            if let url = self.saveImageToTemp(image) {
+                                itemsLock.lock()
+                                items.append(SharedItem(type: .image, url: url, text: nil))
+                                itemsLock.unlock()
+                            } else {
+                                NSLog("❌ [ShareExt] Failed to save UIImage to temp")
+                            }
+                        } else {
+                            NSLog("❌ [ShareExt] Unknown image data type: \(type(of: data))")
                         }
                     }
                 } else if attachment.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
@@ -158,11 +183,24 @@ class ShareViewController: UIViewController {
     }
 
     private func saveImageToTemp(_ image: UIImage) -> URL? {
-        guard let data = image.jpegData(compressionQuality: 0.9) else { return nil }
-        let fileName = "shared_\(Int(Date().timeIntervalSince1970)).jpg"
+        // Usar compresión más agresiva para evitar problemas de memoria en Share Extension
+        // Share Extensions tienen límite de ~120MB de memoria
+        guard let data = image.jpegData(compressionQuality: 0.7) else {
+            NSLog("❌ [ShareExt] Failed to get JPEG data from image")
+            return nil
+        }
+
+        let fileName = "shared_\(Int(Date().timeIntervalSince1970))_\(UUID().uuidString.prefix(8)).jpg"
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
-        try? data.write(to: tempURL)
-        return tempURL
+
+        do {
+            try data.write(to: tempURL)
+            NSLog("✅ [ShareExt] Saved temp image: \(fileName) (\(data.count / 1024) KB)")
+            return tempURL
+        } catch {
+            NSLog("❌ [ShareExt] Failed to write temp image: \(error)")
+            return nil
+        }
     }
 
     // MARK: - Load Cached Chats
@@ -216,12 +254,31 @@ class ShareViewController: UIViewController {
 
     /// Enviar contenido directamente a chats usando Firebase REST API
     private func sendToChatsDirectly(chatIds: [String], items: [SharedItem]) {
+        NSLog("📤 [ShareExt] sendToChatsDirectly called - chatIds: \(chatIds.count), items: \(items.count)")
+
         guard !chatIds.isEmpty else {
-            cancel()
+            NSLog("❌ [ShareExt] No chats selected")
+            showError("Selecciona al menos un chat")
             return
         }
 
-        NSLog("📤 [ShareExt] Sending directly to \(chatIds.count) chats...")
+        guard !items.isEmpty else {
+            NSLog("❌ [ShareExt] No items to send")
+            showError("No hay contenido para enviar")
+            return
+        }
+
+        // Verificar autenticación
+        let isAuth = FirebaseUploadService.shared.isAuthenticated()
+        let userId = FirebaseUploadService.shared.getUserId() ?? "nil"
+        NSLog("📤 [ShareExt] Auth check - isAuth: \(isAuth), userId: \(userId)")
+
+        if !isAuth {
+            showError("No autenticado. Abre la app Talia primero.")
+            return
+        }
+
+        NSLog("📤 [ShareExt] Sending \(items.count) items directly to \(chatIds.count) chats...")
 
         FirebaseUploadService.shared.sendToChats(items: items, chatIds: chatIds) { [weak self] result in
             DispatchQueue.main.async {
@@ -231,8 +288,7 @@ class ShareViewController: UIViewController {
                     self?.extensionContext?.completeRequest(returningItems: nil, completionHandler: nil)
                 case .error(let error):
                     NSLog("❌ [ShareExt] Direct send failed: \(error)")
-                    // Show error alert
-                    self?.showError(error)
+                    self?.showError("Error: \(error)")
                 }
             }
         }
@@ -256,16 +312,30 @@ class ShareViewController: UIViewController {
         }
     }
 
-    /// Mostrar error al usuario
+    /// Mostrar error al usuario (sin cerrar automáticamente)
     private func showError(_ message: String) {
         let alert = UIAlertController(
             title: "Error",
             message: message,
             preferredStyle: .alert
         )
-        alert.addAction(UIAlertAction(title: "OK", style: .default) { [weak self] _ in
+        alert.addAction(UIAlertAction(title: "Reintentar", style: .default) { _ in
+            // No cerrar, permitir reintentar
+        })
+        alert.addAction(UIAlertAction(title: "Cerrar", style: .cancel) { [weak self] _ in
             self?.cancel()
         })
+        present(alert, animated: true)
+    }
+
+    /// Mostrar info de debug
+    private func showDebugAlert(_ title: String, _ message: String) {
+        let alert = UIAlertController(
+            title: title,
+            message: message,
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
         present(alert, animated: true)
     }
 
@@ -273,13 +343,20 @@ class ShareViewController: UIViewController {
 
     private func sendToChats(chatIds: [String], items: [SharedItem]) {
         guard !chatIds.isEmpty else {
-            cancel()
+            NSLog("❌ [ShareExt] No chats selected (fallback)")
+            showError("Selecciona al menos un chat")
+            return
+        }
+
+        guard !items.isEmpty else {
+            NSLog("❌ [ShareExt] No items to send (fallback)")
+            showError("No hay contenido para enviar")
             return
         }
 
         guard let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId) else {
             NSLog("❌ [ShareExt] App Group container not available for sending")
-            cancel()
+            showError("Error de configuración. Abre la app e intenta de nuevo.")
             return
         }
 
@@ -323,12 +400,11 @@ class ShareViewController: UIViewController {
             userDefaults.set(jsonData, forKey: "pending_share")
             userDefaults.synchronize()
             NSLog("✅ [ShareExt] Saved pending share for \(chatIds.count) chats with \(savedItems.count) items")
+            extensionContext?.completeRequest(returningItems: nil, completionHandler: nil)
         } else {
             NSLog("❌ [ShareExt] Failed to save pending share")
+            showError("Error guardando contenido")
         }
-
-        // Completar extensión
-        extensionContext?.completeRequest(returningItems: nil, completionHandler: nil)
     }
 }
 
@@ -363,7 +439,9 @@ struct CachedChat: Codable, Identifiable {
 // MARK: - SwiftUI Views
 
 struct ShareExtensionView: View {
-    let sharedItems: [SharedItem]
+    /// ✅ Estado observable que persiste cuando se actualizan los items
+    @ObservedObject var state: ShareExtensionState
+
     let chats: [CachedChat]
     let isAuthenticated: Bool
     let onCancel: () -> Void
@@ -375,6 +453,7 @@ struct ShareExtensionView: View {
     @State private var selectedChatIds: Set<String> = []
     @State private var selectedDestination: ShareDestination = .chat
     @State private var isSending = false
+    @State private var debugMessage: String = ""
 
     enum ShareDestination {
         case chat
@@ -398,42 +477,63 @@ struct ShareExtensionView: View {
 
     /// Determinar si se puede crear historia (solo 1 imagen o video)
     var canCreateStory: Bool {
-        guard sharedItems.count == 1 else { return false }
-        let item = sharedItems[0]
+        guard state.sharedItems.count == 1 else { return false }
+        let item = state.sharedItems[0]
         return item.type == .image || item.type == .video
     }
 
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
-                // Preview de items compartidos
-                if !sharedItems.isEmpty {
+                // ✅ Mostrar loading mientras se cargan los items
+                if state.isLoading {
+                    Spacer()
+                    ProgressView("Cargando contenido...")
+                    Spacer()
+                } else if state.sharedItems.isEmpty {
+                    Spacer()
+                    VStack(spacing: 12) {
+                        Image(systemName: "photo.on.rectangle.angled")
+                            .font(.system(size: 50))
+                            .foregroundColor(.gray)
+                        Text("No hay contenido para compartir")
+                            .foregroundColor(.gray)
+                    }
+                    Spacer()
+                } else {
+                    // Preview de items compartidos (máximo 3 para evitar problemas de memoria)
                     HStack {
-                        ForEach(0..<min(sharedItems.count, 4), id: \.self) { index in
-                            itemPreview(sharedItems[index])
+                        ForEach(0..<min(state.sharedItems.count, 3), id: \.self) { index in
+                            itemPreview(state.sharedItems[index])
                         }
-                        if sharedItems.count > 4 {
-                            Text("+\(sharedItems.count - 4)")
+                        if state.sharedItems.count > 3 {
+                            Text("+\(state.sharedItems.count - 3)")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
+                                .padding(8)
                         }
                     }
                     .padding(.horizontal)
                     .padding(.top, 8)
-                }
 
-                // Selector de destino (Chat / Historia)
-                if canCreateStory {
-                    destinationPicker
-                        .padding(.horizontal)
-                        .padding(.top, 12)
-                }
+                    // Contador de items
+                    Text("\(state.sharedItems.count) elemento(s) seleccionado(s)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
 
-                // Contenido según destino seleccionado
-                if selectedDestination == .story {
-                    storyContent
-                } else {
-                    chatContent
+                    // Selector de destino (Chat / Historia)
+                    if canCreateStory {
+                        destinationPicker
+                            .padding(.horizontal)
+                            .padding(.top, 12)
+                    }
+
+                    // Contenido según destino seleccionado
+                    if selectedDestination == .story {
+                        storyContent
+                    } else {
+                        chatContent
+                    }
                 }
             }
             .navigationTitle("Compartir")
@@ -446,7 +546,7 @@ struct ShareExtensionView: View {
                     .disabled(isSending)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    if selectedDestination == .chat {
+                    if selectedDestination == .chat && !state.isLoading && !state.sharedItems.isEmpty {
                         Button("Enviar") {
                             sendToSelectedChats()
                         }
@@ -464,6 +564,34 @@ struct ShareExtensionView: View {
                         .background(Color(.systemBackground))
                         .cornerRadius(12)
                 }
+            }
+            // Debug banner - siempre visible con info útil
+            .safeAreaInset(edge: .top) {
+                HStack {
+                    Text("📊 \(state.sharedItems.count) items | \(selectedChatIds.count) chats | Auth: \(isAuthenticated ? "✓" : "✗")")
+                    Spacer()
+                    if !debugMessage.isEmpty {
+                        Text(debugMessage)
+                            .fontWeight(.medium)
+                    }
+                }
+                .font(.caption)
+                .foregroundColor(.white)
+                .padding(8)
+                .frame(maxWidth: .infinity)
+                .background(isSending ? Color.orange : (isAuthenticated ? Color.green : Color.red))
+            }
+            .onAppear {
+                NSLog("👁 [ShareExt] View appeared - items: \(state.sharedItems.count), loading: \(state.isLoading)")
+            }
+            .onChange(of: state.sharedItems.count) { newCount in
+                NSLog("📦 [ShareExt] Items changed to: \(newCount)")
+                if !isSending {
+                    debugMessage = "Loaded \(newCount) items"
+                }
+            }
+            .onChange(of: selectedChatIds.count) { newCount in
+                NSLog("✅ [ShareExt] Selected chats changed to: \(newCount)")
             }
         }
     }
@@ -514,7 +642,7 @@ struct ShareExtensionView: View {
             Spacer()
 
             // Preview grande
-            if let item = sharedItems.first {
+            if let item = state.sharedItems.first {
                 largePreview(item)
                     .frame(maxWidth: 250, maxHeight: 350)
             }
@@ -592,13 +720,25 @@ struct ShareExtensionView: View {
     func itemPreview(_ item: SharedItem) -> some View {
         switch item.type {
         case .image:
-            if let url = item.url, let uiImage = UIImage(contentsOfFile: url.path) {
-                Image(uiImage: uiImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: 50, height: 50)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            // Defensivo: verificar URL y cargar imagen de forma segura
+            if let url = item.url {
+                // Usar una imagen cacheada para evitar cargar repetidamente
+                if FileManager.default.fileExists(atPath: url.path),
+                   let uiImage = UIImage(contentsOfFile: url.path) {
+                    Image(uiImage: uiImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 50, height: 50)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                } else {
+                    // Archivo no existe o no se pudo cargar
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.orange.opacity(0.3))
+                        .frame(width: 50, height: 50)
+                        .overlay(Image(systemName: "exclamationmark.triangle").foregroundColor(.orange))
+                }
             } else {
+                // Sin URL
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color.gray.opacity(0.3))
                     .frame(width: 50, height: 50)
@@ -665,29 +805,69 @@ struct ShareExtensionView: View {
     }
 
     private func toggleSelection(_ chatId: String) {
+        NSLog("🔘 [ShareExt] toggleSelection: \(chatId)")
+        NSLog("🔘 [ShareExt] Before: \(selectedChatIds)")
+
         if selectedChatIds.contains(chatId) {
             selectedChatIds.remove(chatId)
         } else {
             selectedChatIds.insert(chatId)
         }
+
+        NSLog("🔘 [ShareExt] After: \(selectedChatIds)")
+        debugMessage = "Selected: \(selectedChatIds.count) chats"
     }
 
     // MARK: - Actions
 
     private func sendToSelectedChats() {
+        // Debug: mostrar estado actual
+        let authStatus = isAuthenticated
+
+        // ✅ STEP 1: Log que se presionó el botón
+        debugMessage = "⏳ STEP1: Botón presionado..."
+        NSLog("📤 [ShareExt] ========== SEND BUTTON PRESSED ==========")
+        NSLog("📤 [ShareExt] selectedChatIds: \(Array(selectedChatIds))")
+        NSLog("📤 [ShareExt] state.sharedItems.count: \(state.sharedItems.count)")
+        NSLog("📤 [ShareExt] isAuthenticated: \(authStatus)")
+
+        guard !selectedChatIds.isEmpty else {
+            debugMessage = "❌ ERROR: No hay chats seleccionados"
+            NSLog("❌ [ShareExt] No chats selected when send pressed")
+            return
+        }
+
+        guard !state.sharedItems.isEmpty else {
+            debugMessage = "❌ ERROR: No hay items para enviar"
+            NSLog("❌ [ShareExt] No items when send pressed")
+            return
+        }
+
+        // ✅ STEP 2: Validación pasó
+        debugMessage = "⏳ STEP2: Validación OK. Auth=\(authStatus)"
+        NSLog("📤 [ShareExt] Sending to \(selectedChatIds.count) chats with \(state.sharedItems.count) items")
+
+        // Capturar items AHORA
+        let itemsToSend = state.sharedItems
+        let chatsToSend = Array(selectedChatIds)
+
+        NSLog("📤 [ShareExt] Captured \(itemsToSend.count) items and \(chatsToSend.count) chats")
+        NSLog("📤 [ShareExt] Auth status: \(authStatus)")
+
         isSending = true
 
-        if isAuthenticated {
-            // Envío directo
-            onSendToChats(Array(selectedChatIds), sharedItems)
+        // Llamar directamente
+        if authStatus {
+            debugMessage = "⏳ Subiendo..."
+            onSendToChats(chatsToSend, itemsToSend)
         } else {
-            // Fallback: guardar en App Group
-            onFallbackSend(Array(selectedChatIds), sharedItems)
+            debugMessage = "⚠️ Sin auth, guardando..."
+            onFallbackSend(chatsToSend, itemsToSend)
         }
     }
 
     private func createStory() {
-        guard let item = sharedItems.first else { return }
+        guard let item = state.sharedItems.first else { return }
         isSending = true
         onCreateStory(item)
     }

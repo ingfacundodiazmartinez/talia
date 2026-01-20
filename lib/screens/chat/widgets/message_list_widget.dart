@@ -165,9 +165,9 @@ class MessageListWidget extends StatelessWidget {
       isFavorite: controller.favoriteIds.contains(message.id),  // ✅ NEW
       onFavoriteToggled: () => controller.refreshFavorites(),  // ✅ Refresh tras toggle
       localTimestamp: message.localTimestamp,  // ✅ NEW: Para timeout de pending
-      onRetry: isMe && message.status == MessageStatus.sending
+      onRetry: isMe && (message.status == MessageStatus.sending || message.status == MessageStatus.error)
           ? () => _retryMessage(context, message)
-          : null,  // ✅ NEW: Callback para reenviar
+          : null,  // Callback para reenviar mensajes fallidos o en timeout
       onReply: () {
         // Construir datos completos del mensaje incluyendo media
         // IMPORTANTE: Usar message.type como fuente primaria (se guarda en Firestore)

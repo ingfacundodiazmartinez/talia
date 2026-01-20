@@ -66,12 +66,14 @@ class _AddContactScreenState extends State<AddContactScreen>
   Future<void> _loadUserCode() async {
     try {
       final result = await _controller.getCurrentUserCode();
+      if (!mounted) return;
       setState(() {
         _userCode = result.code;
         _codeExpiresAt = result.expiresAt;
         _isLoadingMyCode = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _isLoadingMyCode = false;
       });

@@ -21,6 +21,7 @@ class ChatAppBarController {
   bool _canModifyModeration = false;
   bool _isLoading = true;
   String? _chatId;
+  bool _isDisposed = false;
 
   // Estado de moderación
   bool _moderationEnabled = false;
@@ -215,18 +216,21 @@ class ChatAppBarController {
 
   /// Actualizar si puede modificar moderación
   void _updateCanModifyModeration(bool canModify) {
+    if (_isDisposed) return;
     _canModifyModeration = canModify;
     _canModifyModerationController.add(_canModifyModeration);
   }
 
   /// Actualizar estado de carga
   void _updateLoadingState(bool isLoading) {
+    if (_isDisposed) return;
     _isLoading = isLoading;
     _isLoadingController.add(_isLoading);
   }
 
   /// Emitir estado de moderación
   void _emitModerationState() {
+    if (_isDisposed) return;
     _moderationStateController.add(ModerationState(
       enabled: _moderationEnabled,
       level: _moderationLevel,
@@ -278,6 +282,7 @@ class ChatAppBarController {
 
   /// Limpiar recursos
   void dispose() {
+    _isDisposed = true;
     ReleaseLogger.log('Disposing ChatAppBarController', tag: 'ChatAppBar');
     _canModifyModerationController.close();
     _isLoadingController.close();

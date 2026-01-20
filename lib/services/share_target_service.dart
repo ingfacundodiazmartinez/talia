@@ -41,6 +41,14 @@ class ShareTargetService {
   /// Callback cuando se recibe share
   void Function(List<SharedContent>)? onShareReceived;
 
+  /// ✅ Timer para acumular shares que llegan en rápida sucesión
+  /// Algunas apps envían múltiples fotos como intents separados
+  Timer? _accumulationTimer;
+  static const _accumulationWindow = Duration(milliseconds: 500);
+
+  /// Límite máximo de items (para evitar abusos)
+  static const int maxShareItems = 10;
+
   // ═══════════════════════════════════════════════════════════════
   // INITIALIZATION
   // ═══════════════════════════════════════════════════════════════
@@ -221,15 +229,51 @@ class ShareTargetService {
   }
 
   /// Procesar contenido parseado
+  /// ✅ Acumula items que llegan en rápida sucesión (dentro de 500ms)
+  /// para manejar apps que envían múltiples fotos como intents separados
   void _handleParsedContent(List<SharedContent> contents) {
-    _pendingContent = contents;
-    _sharedContentController.add(contents);
-    onShareReceived?.call(contents);
+    // Cancelar timer anterior si existe
+    _accumulationTimer?.cancel();
+
+    // Acumular con contenido existente si es reciente
+    if (_pendingContent != null && _pendingContent!.isNotEmpty) {
+      // Agregar nuevos items al contenido existente
+      final combined = [..._pendingContent!, ...contents];
+
+      // Limitar a maxShareItems para evitar abusos
+      if (combined.length > maxShareItems) {
+        _pendingContent = combined.take(maxShareItems).toList();
+        ReleaseLogger.log(
+          '📥 [ShareTarget] Limitado a $maxShareItems items (recibidos: ${combined.length})',
+          tag: 'ShareTarget',
+        );
+      } else {
+        _pendingContent = combined;
+      }
+    } else {
+      // Primera vez - inicializar con estos items
+      _pendingContent = contents.length > maxShareItems
+          ? contents.take(maxShareItems).toList()
+          : contents;
+    }
 
     ReleaseLogger.log(
-      '📥 [ShareTarget] Processed ${contents.length} items',
+      '📥 [ShareTarget] Accumulated ${_pendingContent!.length} items (new batch: ${contents.length})',
       tag: 'ShareTarget',
     );
+
+    // Esperar un poco por si llegan más items
+    _accumulationTimer = Timer(_accumulationWindow, () {
+      // Notificar una vez que no lleguen más items
+      if (_pendingContent != null && _pendingContent!.isNotEmpty) {
+        ReleaseLogger.log(
+          '📥 [ShareTarget] Final count: ${_pendingContent!.length} items ready',
+          tag: 'ShareTarget',
+        );
+        _sharedContentController.add(_pendingContent!);
+        onShareReceived?.call(_pendingContent!);
+      }
+    });
   }
 
   /// Determinar tipo de contenido desde path y tipo de media
@@ -293,6 +337,8 @@ class ShareTargetService {
 
   /// Limpiar contenido pendiente después de procesarlo
   void clearPendingContent() {
+    _accumulationTimer?.cancel();
+    _accumulationTimer = null;
     _pendingContent = null;
     _pendingDestinationChatIds = null;
     ReceiveSharingIntent.instance.reset();
@@ -409,6 +455,8 @@ class ShareTargetService {
 
   /// Liberar recursos
   void dispose() {
+    _accumulationTimer?.cancel();
+    _accumulationTimer = null;
     _mediaStreamSubscription?.cancel();
     _mediaStreamSubscription = null;
     _sharedContentController.close();

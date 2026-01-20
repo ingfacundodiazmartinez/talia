@@ -5,6 +5,7 @@
 library;
 
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../utils/release_logger.dart';

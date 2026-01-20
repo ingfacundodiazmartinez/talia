@@ -1641,7 +1641,14 @@ class StoryCameraController {
     _forceCloseProgressDialog();
 
     _recordingTimer?.cancel();
-    _cameraController?.dispose();
+
+    // Solo dispose si la cámara terminó de inicializarse
+    // Evita IllegalStateException en Android cuando se cierra
+    // la pantalla antes de que la cámara termine de cargar
+    if (_isCameraInitialized && _cameraController != null) {
+      _cameraController!.dispose();
+    }
+    _cameraController = null;
 
     // ✅ FIX #6 (v4): NO liberar DeepAR en dispose del controller
     // El SDK de DeepAR no se reinicializa correctamente después de release()

@@ -640,7 +640,18 @@ class ChatControllerCacheFirst extends ChangeNotifier {
           );
           queuedMsg.completer.complete();
         } catch (e) {
-          // Mark message as error but continue with queue
+          // ✅ FIX: Update message status to error when timeout/exception occurs
+          // (TimeoutException is thrown at this level, not inside _sendQueuedMessage)
+          final msgIndex = _messages.indexWhere((m) => m.id == queuedMsg.tempId);
+          if (msgIndex != -1) {
+            final errorMessage = _messages[msgIndex].copyWith(
+              status: MessageStatus.error,
+            );
+            _messages[msgIndex] = errorMessage;
+            await MessageCacheService().updateMessage(chatId, errorMessage);
+            notifyListeners();
+            ReleaseLogger.error('❌ [Queue] Error/timeout en mensaje: $e');
+          }
           queuedMsg.completer.completeError(e);
         }
 

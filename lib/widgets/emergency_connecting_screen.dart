@@ -120,7 +120,11 @@ class _EmergencyConnectingScreenState extends State<EmergencyConnectingScreen> {
 
   @override
   void dispose() {
-    _cameraController?.dispose();
+    // Solo dispose si la cámara terminó de inicializarse
+    // Evita IllegalStateException en Android
+    if (_isCameraInitialized && _cameraController != null) {
+      _cameraController!.dispose();
+    }
     super.dispose();
   }
 

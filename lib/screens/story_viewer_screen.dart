@@ -19,6 +19,7 @@ import '../services/story_service_refactored.dart';
 import '../services/trivia/trivia_creation_service.dart';
 import '../services/video_cache_service.dart';
 import '../services/deep_link_service.dart';
+import '../utils/release_logger.dart';
 import '../widgets/story_native_ad_widget.dart';
 import '../widgets/mood_poll_story_widget.dart';
 import 'story_viewer/widgets/story_content_widget.dart';
@@ -186,11 +187,25 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
   void _buildUserContentList() {
     final trivias = widget.trivias ?? [];
 
+    ReleaseLogger.log(
+      '🔍 [StoryViewer] _buildUserContentList - allUserStories.length: ${_allUserStories.length}, trivias.length: ${trivias.length}',
+      tag: 'StoryViewer',
+    );
+
     if (trivias.isEmpty) {
       // Sin trivias, usar UserStories directamente
       _userContentList = _allUserStories
           .map((us) => UserContent.fromUserStories(us))
           .toList();
+
+      // Log detalles de cada UserContent
+      for (int i = 0; i < _userContentList.length; i++) {
+        final content = _userContentList[i];
+        ReleaseLogger.log(
+          '🔍 [StoryViewer] UserContent[$i]: userId=${content.oderId}, items=${content.items.length}',
+          tag: 'StoryViewer',
+        );
+      }
     } else {
       // Con trivias, integrarlas por usuario
       _userContentList = _allUserStories
@@ -1559,9 +1574,21 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     // ✅ Usar userContentList para validación cuando está disponible
     final hasUnifiedContent = _userContentList.isNotEmpty;
 
+    // ✅ DEBUG: Log estado del contenido
+    ReleaseLogger.log(
+      '🔍 [StoryViewer] build() - hasUnifiedContent: $hasUnifiedContent, '
+      'userContentList.length: ${_userContentList.length}, '
+      'allUserStories.length: ${_allUserStories.length}',
+      tag: 'StoryViewer',
+    );
+
     // Bounds check: ensure indices are valid
     if (!hasUnifiedContent && _allUserStories.isEmpty) {
       // No content to show, close viewer
+      ReleaseLogger.error(
+        '❌ [StoryViewer] Cerrando: No hay contenido (hasUnifiedContent=$hasUnifiedContent, allUserStories.isEmpty=${_allUserStories.isEmpty})',
+        tag: 'StoryViewer',
+      );
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) Navigator.pop(context);
       });
@@ -1578,8 +1605,16 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       }
 
       final currentContent = _userContentList[_currentUserIndex];
+      ReleaseLogger.log(
+        '🔍 [StoryViewer] currentContent.items.length: ${currentContent.items.length}',
+        tag: 'StoryViewer',
+      );
       if (currentContent.items.isEmpty) {
         // User has no viewable content, close viewer
+        ReleaseLogger.error(
+          '❌ [StoryViewer] Cerrando: Usuario actual no tiene items visibles (userIndex=$_currentUserIndex)',
+          tag: 'StoryViewer',
+        );
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) Navigator.pop(context);
         });
@@ -1604,8 +1639,17 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       // Validate _currentStoryIndex for current user
       final currentUserStories = _allUserStories[_currentUserIndex];
       final stories = _getStoriesForUser(currentUserStories);
+      ReleaseLogger.log(
+        '🔍 [StoryViewer] Legacy path - stories.length: ${stories.length}, '
+        'allUserStories[userIdx].stories.length: ${currentUserStories.stories.length}',
+        tag: 'StoryViewer',
+      );
       if (stories.isEmpty) {
         // User has no viewable stories, close viewer
+        ReleaseLogger.error(
+          '❌ [StoryViewer] Cerrando: Usuario no tiene historias visibles (legacy path, userIndex=$_currentUserIndex)',
+          tag: 'StoryViewer',
+        );
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) Navigator.pop(context);
         });

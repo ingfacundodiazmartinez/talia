@@ -56,42 +56,54 @@ class FirebaseUploadService {
 
     /// Cargar credenciales desde App Group
     private func loadCredentials() -> Credentials? {
+        NSLog("🔐 [FirebaseUpload] loadCredentials() called")
+
         // Retornar cache si existe y es reciente (menos de 5 minutos)
         if let cached = cachedCredentials {
             let age = Date().timeIntervalSince1970 * 1000 - Double(cached.timestamp)
             if age < 5 * 60 * 1000 { // 5 minutos
+                NSLog("🔐 [FirebaseUpload] Using cached credentials (age: \(Int(age / 60000)) min)")
                 return cached
+            } else {
+                NSLog("🔐 [FirebaseUpload] Cached credentials too old, reloading...")
             }
         }
 
         guard let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId) else {
-            NSLog("❌ [FirebaseUpload] App Group container not available")
+            NSLog("❌ [FirebaseUpload] App Group container not available - check entitlements!")
             return nil
         }
 
         let credentialsURL = containerURL.appendingPathComponent("firebase_credentials.json")
+        NSLog("🔐 [FirebaseUpload] Looking for credentials at: \(credentialsURL.path)")
 
         guard FileManager.default.fileExists(atPath: credentialsURL.path) else {
-            NSLog("⚠️ [FirebaseUpload] Credentials file not found")
+            NSLog("⚠️ [FirebaseUpload] Credentials file not found - abre la app Talia primero")
             return nil
         }
 
         do {
             let data = try Data(contentsOf: credentialsURL)
+            NSLog("🔐 [FirebaseUpload] Read \(data.count) bytes from credentials file")
+
             let credentials = try JSONDecoder().decode(Credentials.self, from: data)
 
             // Verificar que el token no sea muy viejo (Firebase tokens expiran en 1 hora)
             let tokenAge = Date().timeIntervalSince1970 * 1000 - Double(credentials.timestamp)
+            let tokenAgeMinutes = Int(tokenAge / 60000)
+            NSLog("🔐 [FirebaseUpload] Token age: \(tokenAgeMinutes) minutes")
+
             if tokenAge > 55 * 60 * 1000 { // 55 minutos
-                NSLog("⚠️ [FirebaseUpload] Token too old (\(Int(tokenAge / 60000)) min)")
+                NSLog("⚠️ [FirebaseUpload] Token EXPIRED (\(tokenAgeMinutes) min > 55 min)")
+                NSLog("⚠️ [FirebaseUpload] Abre la app Talia para refrescar el token")
                 return nil
             }
 
             cachedCredentials = credentials
-            NSLog("✅ [FirebaseUpload] Loaded credentials for user: \(credentials.userId.prefix(8))...")
+            NSLog("✅ [FirebaseUpload] Credentials loaded OK for user: \(credentials.userId.prefix(8))...")
             return credentials
         } catch {
-            NSLog("❌ [FirebaseUpload] Error loading credentials: \(error)")
+            NSLog("❌ [FirebaseUpload] Error decoding credentials: \(error)")
             return nil
         }
     }
@@ -108,7 +120,23 @@ class FirebaseUploadService {
 
     /// Verificar si el usuario está autenticado
     func isAuthenticated() -> Bool {
-        return loadCredentials() != nil
+        let credentials = loadCredentials()
+        let isAuth = credentials != nil
+        NSLog("🔐 [FirebaseUpload] isAuthenticated check: \(isAuth)")
+        if !isAuth {
+            // Log reason for failure
+            if let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId) {
+                let credentialsURL = containerURL.appendingPathComponent("firebase_credentials.json")
+                if FileManager.default.fileExists(atPath: credentialsURL.path) {
+                    NSLog("🔐 [FirebaseUpload] Credentials file EXISTS but failed to load (possibly expired or malformed)")
+                } else {
+                    NSLog("🔐 [FirebaseUpload] Credentials file DOES NOT EXIST - user needs to open app first")
+                }
+            } else {
+                NSLog("🔐 [FirebaseUpload] App Group container not available - check entitlements")
+            }
+        }
+        return isAuth
     }
 
     // MARK: - Upload to Chat
@@ -500,7 +528,6 @@ class FirebaseUploadService {
         }
 
         NSLog("📤 [FirebaseUpload] Uploading to: \(storagePath)")
-        NSLog("📤 [FirebaseUpload] URL: \(uploadURLString)")
         NSLog("📤 [FirebaseUpload] Content-Type: \(contentType)")
         NSLog("📤 [FirebaseUpload] File size: \(fileData.count) bytes")
 
