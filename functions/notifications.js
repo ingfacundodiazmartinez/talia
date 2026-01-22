@@ -147,6 +147,8 @@ exports.sendNotificationOnCreate = onDocumentCreated(
         'emergency_alert',             // Alertas de emergencia
         'child_location_request',      // Solicitud de ubicación
         'parent_child_link',           // Vinculación padre-hijo
+        'friend_request',              // Solicitud de amistad
+        'story_fomo',                  // Notificación FOMO de historias
       ];
 
       const shouldShowAlert = ALERT_NOTIFICATION_TYPES.includes(type);
@@ -493,6 +495,8 @@ exports.sendInstantPushNotification = onCall(
         'emergency_alert',
         'child_location_request',
         'parent_child_link',
+        'friend_request',              // Solicitud de amistad
+        'story_fomo',                  // Notificación FOMO de historias
       ];
 
       const shouldShowAlert = ALERT_NOTIFICATION_TYPES.includes(type);

@@ -8,7 +8,9 @@ import '../../../screens/add_contact_screen.dart';
 import '../../../screens/chat_detail_screen.dart';
 import '../../../widgets/contacts/contacts_permission_banner.dart';
 import '../../../widgets/contacts_sync_consent_dialog.dart';
+import '../../../services/friend_service.dart';
 import '../../../theme_service.dart';
+import '../../../widgets/contacts/friends_explanation_widgets.dart';
 
 /// Pantalla de contactos para niños
 ///
@@ -26,9 +28,11 @@ class ChildContactsScreen extends StatefulWidget {
   State<ChildContactsScreen> createState() => _ChildContactsScreenState();
 }
 
-class _ChildContactsScreenState extends State<ChildContactsScreen> {
+class _ChildContactsScreenState extends State<ChildContactsScreen>
+    with SingleTickerProviderStateMixin {
   late final ChildContactsController _controller;
   late final ScrollController _scrollController;
+  late final TabController _tabController;
   bool _isSyncing = false;
 
   // Tracking de visibilidad para batch update de fotos
@@ -42,6 +46,7 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
     _controller.initialize();
     _scrollController = ScrollController();
     _scrollController.addListener(_onScroll);
+    _tabController = TabController(length: 3, vsync: this);
   }
 
   @override
@@ -49,6 +54,7 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
     _visibilityTimer?.cancel();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
+    _tabController.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -195,8 +201,18 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
                           onRequestPermission: _handleSync,
                           onPermissionChanged: _handleSync,
                         ),
+                        // TabBar
+                        _buildTabBar(colorScheme),
+                        // TabBarView con el contenido de cada tab
                         Expanded(
-                          child: _buildContactsList(colorScheme),
+                          child: TabBarView(
+                            controller: _tabController,
+                            children: [
+                              _buildContactsList(colorScheme),
+                              _buildFriendsList(colorScheme),
+                              _buildFriendRequestsList(colorScheme),
+                            ],
+                          ),
                         ),
                       ],
                     ),
@@ -235,19 +251,94 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
     );
   }
 
+  Widget _buildTabBar(ColorScheme colorScheme) {
+    return Container(
+      margin: EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: TabBar(
+        controller: _tabController,
+        indicator: BoxDecoration(
+          color: colorScheme.primary,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        indicatorSize: TabBarIndicatorSize.tab,
+        labelColor: Colors.white,
+        unselectedLabelColor: colorScheme.onSurfaceVariant,
+        labelStyle: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+        unselectedLabelStyle: TextStyle(fontWeight: FontWeight.normal, fontSize: 13),
+        dividerColor: Colors.transparent,
+        padding: EdgeInsets.all(4),
+        tabs: [
+          Tab(text: 'Contactos'),
+          Tab(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.auto_stories, size: 14),
+                SizedBox(width: 4),
+                Text('Historias'),
+              ],
+            ),
+          ),
+          _buildFriendRequestsTab(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFriendRequestsTab() {
+    return StreamBuilder<List<contact_model.Contact>>(
+      stream: _controller.getFriendRequestsStream(),
+      builder: (context, snapshot) {
+        final count = snapshot.data?.length ?? 0;
+        if (count > 0) {
+          return Tab(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Solicitudes'),
+                SizedBox(width: 4),
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.red,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    count > 99 ? '99+' : count.toString(),
+                    style: TextStyle(color: Colors.white, fontSize: 10),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+        return Tab(text: 'Solicitudes');
+      },
+    );
+  }
+
   Widget _buildContactsList(ColorScheme colorScheme) {
     return StreamBuilder<List<contact_model.Contact>>(
       stream: _controller.getContactsStream(),
+      initialData: _controller.cachedFilteredContacts,
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           return _buildErrorState(colorScheme);
         }
 
-        if (snapshot.connectionState == ConnectionState.waiting) {
+        // Solo mostrar spinner si no hay datos cacheados
+        final cached = _controller.cachedFilteredContacts;
+        if (!snapshot.hasData && cached.isEmpty) {
           return _buildLoadingState(colorScheme);
         }
 
-        final contacts = snapshot.data ?? [];
+        final contacts = snapshot.data ?? cached;
         if (contacts.isEmpty) {
           return _buildEmptyState(colorScheme);
         }
@@ -266,6 +357,64 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
             }
             final contact = contacts[index];
             return _buildContactItem(contact, colorScheme);
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildFriendsList(ColorScheme colorScheme) {
+    return StreamBuilder<List<contact_model.Contact>>(
+      stream: _controller.getFriendsStream(),
+      initialData: _controller.cachedFriends,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return _buildErrorState(colorScheme);
+        }
+
+        final friends = snapshot.data ?? _controller.cachedFriends;
+        if (friends.isEmpty) {
+          return FriendsEmptyState();
+        }
+
+        return ListView.builder(
+          padding: EdgeInsets.all(16),
+          itemCount: friends.length + 1, // +1 para header
+          itemBuilder: (context, index) {
+            if (index == 0) {
+              return Padding(
+                padding: EdgeInsets.only(bottom: 16),
+                child: FriendsExplanationHeader(),
+              );
+            }
+            final contact = friends[index - 1];
+            return _buildFriendItem(contact, colorScheme);
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildFriendRequestsList(ColorScheme colorScheme) {
+    return StreamBuilder<List<contact_model.Contact>>(
+      stream: _controller.getFriendRequestsStream(),
+      initialData: _controller.cachedFriendRequests,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return _buildErrorState(colorScheme);
+        }
+
+        final requests = snapshot.data ?? _controller.cachedFriendRequests;
+        if (requests.isEmpty) {
+          return _buildEmptyRequestsState(colorScheme);
+        }
+
+        return ListView.builder(
+          padding: EdgeInsets.all(16),
+          itemCount: requests.length,
+          itemBuilder: (context, index) {
+            final contact = requests[index];
+            return _buildFriendRequestItem(contact, colorScheme);
           },
         );
       },
@@ -308,7 +457,12 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
     return SizedBox(height: 16);
   }
 
-  Widget _buildContactItem(contact_model.Contact contact, ColorScheme colorScheme) {
+  Widget _buildContactItem(
+    contact_model.Contact contact,
+    ColorScheme colorScheme, {
+    bool isFriendView = false,
+    bool isFriendRequest = false,
+  }) {
     final currentUserId = _controller.currentUserId;
     if (currentUserId == null) return SizedBox.shrink();
 
@@ -386,15 +540,19 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
       photoURL: photoURL,
       status: status,
       isSelfCancelled: isSelfCancelled,
+      isFriendView: isFriendView,
+      isFriendRequest: isFriendRequest,
       colorScheme: colorScheme,
-      onTap: () => _handleCardTap(contact, status, displayName, isSelfCancelled),
-      onCancelTap: status == 'pending'
+      onTap: isFriendRequest
+          ? null  // No tap action para solicitudes (tienen botones)
+          : () => _handleCardTap(contact, status, displayName, isSelfCancelled),
+      onCancelTap: status == 'pending' && !isFriendView && !isFriendRequest
           ? () => _handleCancelPending(contact, displayName)
           : null,
-      onDeleteTap: status == 'rejected'
+      onDeleteTap: status == 'rejected' && !isFriendView && !isFriendRequest
           ? () => _handleDeleteRejected(contact, displayName)
           : null,
-      onResendTap: status == 'rejected'
+      onResendTap: status == 'rejected' && !isFriendView && !isFriendRequest
           ? () => _handleResendRequest(contact, displayName)
           : null,
     );
@@ -756,6 +914,142 @@ class _ChildContactsScreenState extends State<ChildContactsScreen> {
       ),
     );
   }
+
+
+  Widget _buildEmptyRequestsState(ColorScheme colorScheme) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.mail_outline, size: 64, color: colorScheme.outlineVariant),
+          SizedBox(height: 16),
+          Text(
+            'No tienes solicitudes pendientes',
+            style: TextStyle(fontSize: 16, color: colorScheme.onSurfaceVariant),
+          ),
+          SizedBox(height: 8),
+          Text(
+            'Aquí aparecerán las solicitudes de amistad',
+            style: TextStyle(
+              fontSize: 14,
+              color: colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Reutiliza _buildContactItem para amigos (status='approved' + isFriend=true)
+  Widget _buildFriendItem(contact_model.Contact contact, ColorScheme colorScheme) {
+    return _buildContactItem(contact, colorScheme, isFriendView: true);
+  }
+
+  /// Widget para solicitudes de amistad con botones de aceptar/rechazar
+  Widget _buildFriendRequestItem(contact_model.Contact contact, ColorScheme colorScheme) {
+    final currentUserId = _controller.currentUserId;
+    if (currentUserId == null) return SizedBox.shrink();
+
+    final otherUserId = contact.getOtherUserId(currentUserId);
+    final contactName = contact.getOtherUserName(currentUserId);
+    final nameParts = _controller.getNameParts(otherUserId, contactNameHint: contactName);
+    final displayName = nameParts.alias ?? nameParts.dbName;
+
+    // Reusar el contactItem base y agregar los botones
+    return Column(
+      children: [
+        _buildContactItem(contact, colorScheme, isFriendRequest: true),
+        Padding(
+          padding: EdgeInsets.only(left: 16, right: 16, bottom: 10),
+          child: Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => _handleRejectFriendRequest(contact, displayName),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.red,
+                    side: BorderSide(color: Colors.red.withValues(alpha: 0.5)),
+                  ),
+                  child: Text('Rechazar'),
+                ),
+              ),
+              SizedBox(width: 12),
+              Expanded(
+                child: FilledButton(
+                  onPressed: () => _handleAcceptFriendRequest(contact, displayName),
+                  child: Text('Aceptar'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _handleAcceptFriendRequest(
+    contact_model.Contact contact,
+    String displayName,
+  ) async {
+    final currentUserId = _controller.currentUserId;
+    if (currentUserId == null) return;
+
+    try {
+      final otherUserId = contact.getOtherUserId(currentUserId);
+      await FriendService().acceptFriendRequest(otherUserId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('¡Ahora sos amigo de $displayName!'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _handleRejectFriendRequest(
+    contact_model.Contact contact,
+    String displayName,
+  ) async {
+    final confirmed = await _showConfirmDialog(
+      'Rechazar solicitud',
+      '¿Rechazar la solicitud de amistad de $displayName?',
+    );
+
+    if (confirmed != true) return;
+
+    final currentUserId = _controller.currentUserId;
+    if (currentUserId == null) return;
+
+    try {
+      final otherUserId = contact.getOtherUserId(currentUserId);
+      await FriendService().rejectFriendRequest(otherUserId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Solicitud rechazada')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -774,8 +1068,10 @@ class _ContactItemCard extends StatelessWidget {
   final String? photoURL;
   final String status;
   final bool isSelfCancelled;
+  final bool isFriendView;
+  final bool isFriendRequest;
   final ColorScheme colorScheme;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   final VoidCallback? onCancelTap;
   final VoidCallback? onDeleteTap;
   final VoidCallback? onResendTap;
@@ -790,8 +1086,10 @@ class _ContactItemCard extends StatelessWidget {
     required this.photoURL,
     required this.status,
     required this.isSelfCancelled,
+    this.isFriendView = false,
+    this.isFriendRequest = false,
     required this.colorScheme,
-    required this.onTap,
+    this.onTap,
     this.onCancelTap,
     this.onDeleteTap,
     this.onResendTap,
@@ -853,6 +1151,11 @@ class _ContactItemCard extends StatelessWidget {
   }
 
   Color? _getIndicatorColor() {
+    // Amigos tienen indicador rosa
+    if (isFriendView) return Colors.pink.shade400;
+    // Solicitudes de amistad tienen indicador púrpura
+    if (isFriendRequest) return Colors.purple.shade400;
+
     switch (status) {
       case 'pending':
         return Colors.amber.shade600;
@@ -873,30 +1176,42 @@ class _ContactItemCard extends StatelessWidget {
     Color bgColor;
     Color textColor;
 
-    switch (status) {
-      case 'pending':
-        bgColor = Colors.amber.shade100;
-        textColor = Colors.amber.shade800;
-        break;
-      case 'pending_other':
-        bgColor = Colors.blue.shade50;
-        textColor = Colors.blue.shade700;
-        break;
-      case 'rejected':
-        bgColor = isSelfCancelled ? Colors.orange.shade50 : Colors.red.shade50;
-        textColor = isSelfCancelled ? Colors.orange.shade700 : Colors.red.shade700;
-        break;
-      case 'potential':
-        bgColor = Colors.teal.shade50;
-        textColor = Colors.teal.shade700;
-        break;
-      case 'revoked':
-        bgColor = Colors.grey.shade200;
-        textColor = Colors.grey.shade600;
-        break;
-      default:
-        bgColor = colorScheme.primaryContainer;
-        textColor = colorScheme.primary;
+    // Vista de amigos: colores rosa
+    if (isFriendView) {
+      bgColor = Colors.pink.shade50;
+      textColor = Colors.pink.shade700;
+    }
+    // Vista de solicitudes: colores púrpura
+    else if (isFriendRequest) {
+      bgColor = Colors.purple.shade50;
+      textColor = Colors.purple.shade700;
+    }
+    else {
+      switch (status) {
+        case 'pending':
+          bgColor = Colors.amber.shade100;
+          textColor = Colors.amber.shade800;
+          break;
+        case 'pending_other':
+          bgColor = Colors.blue.shade50;
+          textColor = Colors.blue.shade700;
+          break;
+        case 'rejected':
+          bgColor = isSelfCancelled ? Colors.orange.shade50 : Colors.red.shade50;
+          textColor = isSelfCancelled ? Colors.orange.shade700 : Colors.red.shade700;
+          break;
+        case 'potential':
+          bgColor = Colors.teal.shade50;
+          textColor = Colors.teal.shade700;
+          break;
+        case 'revoked':
+          bgColor = Colors.grey.shade200;
+          textColor = Colors.grey.shade600;
+          break;
+        default:
+          bgColor = colorScheme.primaryContainer;
+          textColor = colorScheme.primary;
+      }
     }
 
     return CircleAvatar(
@@ -982,6 +1297,25 @@ class _ContactItemCard extends StatelessWidget {
   }
 
   Widget _buildStatusText() {
+    // Vista de amigos
+    if (isFriendView) {
+      return Row(
+        children: [
+          Icon(Icons.favorite, size: 14, color: Colors.pink),
+          SizedBox(width: 4),
+          Text('Amigo', style: TextStyle(fontSize: 12, color: Colors.pink)),
+        ],
+      );
+    }
+
+    // Vista de solicitudes de amistad
+    if (isFriendRequest) {
+      return Text(
+        'Quiere ser tu amigo',
+        style: TextStyle(fontSize: 12, color: Colors.purple.shade600),
+      );
+    }
+
     switch (status) {
       case 'pending':
         return Text(
@@ -1017,6 +1351,16 @@ class _ContactItemCard extends StatelessWidget {
   }
 
   Widget _buildTrailing() {
+    // Vista de amigos: mostrar ícono de chat
+    if (isFriendView) {
+      return Icon(Icons.chat_bubble_outline, color: Colors.pink.shade400);
+    }
+
+    // Vista de solicitudes de amistad: no mostrar trailing (botones están abajo)
+    if (isFriendRequest) {
+      return SizedBox.shrink();
+    }
+
     switch (status) {
       case 'pending':
         return Row(

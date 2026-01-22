@@ -251,6 +251,161 @@ async function transformWithNanoBanana(prompt, inputImageUrl) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// HELPER: RunPod Face Swap (FaceFusion con GHOST)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Realizar face swap usando RunPod Serverless con FaceFusion (modelo GHOST)
+ * GHOST tiene licencia Apache 2.0 (comercial válida)
+ *
+ * @param {string} sourceImageUrl - URL de la imagen con la cara a usar (personaje)
+ * @param {string} targetImageUrl - URL de la imagen donde colocar la cara (usuario)
+ * @returns {Promise<string>} URL de la imagen resultante
+ */
+async function transformWithRunPodFaceSwap(sourceImageUrl, targetImageUrl) {
+  const runpodApiKey = process.env.RUNPOD_API_KEY;
+  const runpodEndpoint = process.env.RUNPOD_FACE_ENDPOINT;
+
+  if (!runpodApiKey || !runpodEndpoint) {
+    console.error("❌ [RunPod] RUNPOD_API_KEY o RUNPOD_FACE_ENDPOINT no configurados");
+    throw new Error("Servicio de face swap no configurado. Contacta al administrador.");
+  }
+
+  console.log(`🚀 [RunPod] Iniciando face swap con FaceFusion (GHOST)`);
+  console.log(`   Source (personaje): ${sourceImageUrl.substring(0, 80)}...`);
+  console.log(`   Target (usuario): ${targetImageUrl.substring(0, 80)}...`);
+
+  try {
+    // 1. Llamar a RunPod Serverless (runsync para esperar resultado)
+    // Formato de input para nuestro handler personalizado de FaceFusion
+    const response = await axios.post(
+      `${runpodEndpoint}/runsync`,
+      {
+        input: {
+          source_image: sourceImageUrl,  // URL o base64 de la cara fuente
+          target_image: targetImageUrl,  // URL o base64 de la imagen destino
+          model: "ghost_3_256",          // Modelo GHOST v3 (Apache 2.0)
+          face_enhancer: false,          // Mejora de calidad (opcional)
+        },
+      },
+      {
+        headers: {
+          "Authorization": `Bearer ${runpodApiKey}`,
+          "Content-Type": "application/json",
+        },
+        timeout: 180000, // 3 minutos (face swap puede tardar)
+      }
+    );
+
+    console.log(`📡 [RunPod] Respuesta status HTTP: ${response.status}`);
+    console.log(`   Job status: ${response.data.status}`);
+
+    // 2. Manejar diferentes estados de respuesta
+    if (response.data.status === "COMPLETED") {
+      const output = response.data.output;
+
+      // Nuestro handler devuelve { image: "base64", status: "success" }
+      if (output && output.image) {
+        // Subir base64 a Firebase Storage
+        const imageUrl = await uploadBase64ToStorage(output.image, "runpod_faceswap");
+        console.log(`✅ [RunPod] Face swap completado: ${imageUrl}`);
+        return imageUrl;
+      } else if (output && output.error) {
+        console.error(`❌ [RunPod] Error en face swap: ${output.error}`);
+        throw new Error(output.error);
+      }
+      throw new Error("RunPod no devolvió imagen válida");
+    } else if (response.data.status === "FAILED") {
+      const errorMsg = response.data.error || response.data.output?.error || "Error desconocido";
+      console.error(`❌ [RunPod] Job falló: ${errorMsg}`);
+      throw new Error(errorMsg);
+    } else if (response.data.status === "IN_QUEUE" || response.data.status === "IN_PROGRESS") {
+      // Hacer polling si no completó inmediatamente
+      console.log(`⏳ [RunPod] Job en cola/progreso, iniciando polling...`);
+      return await pollRunPodJob(response.data.id, runpodEndpoint, runpodApiKey);
+    }
+
+    throw new Error(`Estado inesperado de RunPod: ${response.data.status}`);
+  } catch (error) {
+    if (error.response) {
+      console.error(`❌ [RunPod] HTTP Error ${error.response.status}:`, error.response.data);
+    } else {
+      console.error(`❌ [RunPod] Error:`, error.message);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Polling de un job de RunPod hasta que complete
+ */
+async function pollRunPodJob(jobId, endpoint, apiKey) {
+  let attempts = 0;
+  const maxAttempts = 90; // 3 minutos con polls cada 2 segundos
+
+  while (attempts < maxAttempts) {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    attempts++;
+
+    console.log(`⏳ [RunPod] Poll #${attempts} para job ${jobId}`);
+
+    const response = await axios.get(
+      `${endpoint}/status/${jobId}`,
+      {
+        headers: { "Authorization": `Bearer ${apiKey}` },
+        timeout: 10000,
+      }
+    );
+
+    if (response.data.status === "COMPLETED") {
+      const output = response.data.output;
+
+      // Nuestro handler devuelve { image: "base64", status: "success" }
+      if (output && output.image) {
+        const imageUrl = await uploadBase64ToStorage(output.image, "runpod_faceswap");
+        console.log(`✅ [RunPod] Job completado: ${imageUrl}`);
+        return imageUrl;
+      } else if (output && output.error) {
+        throw new Error(output.error);
+      }
+      throw new Error("RunPod no devolvió imagen válida");
+    } else if (response.data.status === "FAILED") {
+      const errorMsg = response.data.error || response.data.output?.error || "Job falló en RunPod";
+      throw new Error(errorMsg);
+    }
+  }
+
+  throw new Error(`Timeout esperando job de RunPod después de ${maxAttempts * 2} segundos`);
+}
+
+/**
+ * Subir imagen base64 a Firebase Storage y retornar URL pública
+ */
+async function uploadBase64ToStorage(base64Data, prefix) {
+  const bucket = getStorage().bucket();
+  const fileName = `face_swap_results/${prefix}_${uuidv4()}.png`;
+  const file = bucket.file(fileName);
+
+  const buffer = Buffer.from(base64Data, "base64");
+
+  await file.save(buffer, {
+    metadata: {
+      contentType: "image/png",
+      customMetadata: {
+        createdAt: new Date().toISOString(),
+        // TTL: 30 días
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+    },
+    public: true,
+  });
+
+  const publicUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+  console.log(`📤 [Storage] Imagen subida: ${publicUrl}`);
+  return publicUrl;
+}
+
+// ═══════════════════════════════════════════════════════════════
 // HELPER: Normalizar orientación de imagen (fix EXIF rotation)
 // ═══════════════════════════════════════════════════════════════
 
@@ -477,17 +632,44 @@ exports.transformCharacter = onCall(
               },
             });
           } else {
-            // face_swap: Usar codeplugtech/face-swap para intercambio de cara tradicional
-            prediction = await replicate.predictions.create({
-              version: "278a81e7ebb22db98bcba54de985d22cc1abeead2754eb1f2af717247be69b34",
-              input: {
-                input_image: characterData.referenceImageUrl,
-                swap_image: imageUrl,
-              },
-            });
+            // face_swap: Usar RunPod (si está configurado) o Replicate (fallback)
+            const runpodApiKey = process.env.RUNPOD_API_KEY;
+            const runpodEndpoint = process.env.RUNPOD_FACE_ENDPOINT;
+
+            const USE_RUNPOD = true;
+
+            if (USE_RUNPOD && runpodApiKey && runpodEndpoint) {
+              // ✅ RunPod configurado: usar FaceFusion con GHOST (licencia comercial)
+              console.log(`🚀 [TransformCharacter] Usando RunPod + FaceFusion (GHOST)`);
+              const runpodResult = await transformWithRunPodFaceSwap(
+                imageUrl,                        // source: cara del usuario
+                characterData.referenceImageUrl  // target: imagen del personaje
+              );
+              // RunPod retorna directamente, no hay polling
+              output = runpodResult;
+              predictionId = `runpod_faceswap_${Date.now()}`;
+              console.log(`✅ [TransformCharacter] RunPod face-swap completado`);
+            } else {
+              // ⚠️ Fallback a Replicate (codeplugtech/face-swap)
+              console.log(`⚠️ [TransformCharacter] RunPod no configurado, usando Replicate fallback`);
+              prediction = await replicate.predictions.create({
+                version: "278a81e7ebb22db98bcba54de985d22cc1abeead2754eb1f2af717247be69b34",
+                input: {
+                  input_image: characterData.referenceImageUrl,
+                  swap_image: imageUrl,
+                },
+              });
+            }
           }
 
-          predictionId = prediction.id;
+          // Si usamos RunPod, ya tenemos output y saltamos el polling
+          if (output) {
+            // Limpiar archivo temporal si existe
+            if (tempFilePath) {
+              await cleanupTempFile(tempFilePath);
+            }
+          } else {
+            predictionId = prediction.id;
           console.log(`✅ [TransformCharacter] Predicción creada: ${predictionId}`);
           console.log(`   Estado inicial: ${prediction.status}`);
 
@@ -537,7 +719,8 @@ exports.transformCharacter = onCall(
           } else {
             throw new Error(`Timeout esperando transformación (${pollCount} intentos)`);
           }
-        } // End of Replicate else block
+        } // End of if (output) else block
+        } // End of main else block (Replicate/RunPod path)
       } catch (transformError) {
         console.error(`❌ Error en transformación: ${transformError.message}`);
         console.error(`   Stack: ${transformError.stack}`);
@@ -847,15 +1030,91 @@ exports.createCharacterTransformation = onCall(
             },
           });
         } else {
-          // face_swap: Usar codeplugtech/face-swap
-          console.log(`🔄 [CreateCharacterTransformation] Usando face-swap`);
-          prediction = await replicate.predictions.create({
-            version: "278a81e7ebb22db98bcba54de985d22cc1abeead2754eb1f2af717247be69b34",
-            input: {
-              input_image: characterData.referenceImageUrl,
-              swap_image: imageUrl,
-            },
-          });
+          // face_swap: Usar RunPod (si está configurado) o Replicate (fallback)
+          const runpodApiKey = process.env.RUNPOD_API_KEY;
+          const runpodEndpoint = process.env.RUNPOD_FACE_ENDPOINT;
+
+          // TEMP: Forzar Replicate mientras probamos RunPod directamente
+          const USE_RUNPOD = true;
+
+          if (USE_RUNPOD && runpodApiKey && runpodEndpoint) {
+            // ✅ RunPod configurado: usar FaceFusion con GHOST (licencia comercial)
+            console.log(`🚀 [CreateCharacterTransformation] Usando RunPod + FaceFusion (GHOST)`);
+
+            await statusDocRef.update({
+              status: "processing_runpod",
+              progress: 0.3,
+              message: `Transformando con ${characterData.name}...`,
+              aiBackend: "runpod",
+              updatedAt: FieldValue.serverTimestamp(),
+            });
+
+            try {
+              const runpodResult = await transformWithRunPodFaceSwap(
+                imageUrl,                        // source: cara del usuario
+                characterData.referenceImageUrl  // target: imagen del personaje
+              );
+
+              // RunPod completó exitosamente - actualizar estado final
+              await statusDocRef.update({
+                status: "succeeded",
+                progress: 1.0,
+                message: "¡Transformación completada!",
+                outputUrl: runpodResult,
+                aiBackend: "runpod",
+                completedAt: FieldValue.serverTimestamp(),
+                updatedAt: FieldValue.serverTimestamp(),
+              });
+
+              console.log(`✅ [CreateCharacterTransformation] RunPod face-swap completado: ${runpodResult}`);
+
+              // Guardar registro en character_transformations
+              const analyticsDeleteAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+              await db.collection("character_transformations").add({
+                userId: userId,
+                characterId: characterId,
+                characterName: characterData.name,
+                originalImageUrl: imageUrl,
+                predictionId: `runpod_faceswap_${statusDocId}`,
+                statusDocId: statusDocId,
+                status: "succeeded",
+                aiModel: "face_swap",
+                aiBackend: "runpod",
+                createdAt: FieldValue.serverTimestamp(),
+                deleteAt: Timestamp.fromDate(analyticsDeleteAt),
+              });
+
+              // Retornar inmediatamente ya que RunPod ya completó
+              return {
+                statusDocId: statusDocId,
+                predictionId: `runpod_faceswap_${statusDocId}`,
+                status: "succeeded",
+                characterName: characterData.name,
+                remaining: limitCheck.remaining - 1,
+              };
+            } catch (runpodError) {
+              console.error(`❌ [CreateCharacterTransformation] Error RunPod: ${runpodError.message}`);
+              await statusDocRef.update({
+                status: "failed",
+                progress: 0,
+                message: `Error: ${runpodError.message}`,
+                error: runpodError.message,
+                aiBackend: "runpod",
+                updatedAt: FieldValue.serverTimestamp(),
+              });
+              throw runpodError;
+            }
+          } else {
+            // ⚠️ Fallback a Replicate (codeplugtech/face-swap)
+            console.log(`⚠️ [CreateCharacterTransformation] RunPod no configurado, usando Replicate fallback`);
+            prediction = await replicate.predictions.create({
+              version: "278a81e7ebb22db98bcba54de985d22cc1abeead2754eb1f2af717247be69b34",
+              input: {
+                input_image: characterData.referenceImageUrl,
+                swap_image: imageUrl,
+              },
+            });
+          }
         }
 
         console.log(`✅ [CreateCharacterTransformation] Predicción creada: ${prediction.id}`);

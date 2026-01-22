@@ -372,9 +372,10 @@ class StoryCreationService {
     final storyId = _generateTempStoryId();
 
     try {
-      // 2. Obtener información del usuario y contactos
+      // 2. Obtener información del usuario y AMIGOS (no todos los contactos)
+      // ✅ FRIENDS ONLY: Solo amigos pueden ver historias
       final userInfo = await _contactRepository.getUserInfo(currentUserId);
-      final contactIds = await _contactRepository.getContactIds();
+      final friendIds = await _contactRepository.getFriendIds();
 
       final now = DateTime.now();
       final expiresAt = now.add(Duration(hours: 24));
@@ -401,7 +402,7 @@ class StoryCreationService {
           'questionText': questionText,
         },
         status: StoryStatus.approved, // Mood stories se aprueban automáticamente
-        availableFor: contactIds.toList(), // Contactos que pueden ver la historia
+        availableFor: friendIds.toList(), // ✅ FRIENDS ONLY: Solo amigos pueden ver
       );
 
       // 4. Agregar a cache optimista
@@ -411,7 +412,7 @@ class StoryCreationService {
       await _storyRepository.create(moodStory);
 
       ReleaseLogger.log(
-        'Mood story creada: $emoji - $text (visible para ${contactIds.length} contactos)',
+        'Mood story creada: $emoji - $text (visible para ${friendIds.length} amigos)',
         tag: 'StoryCreation',
       );
 

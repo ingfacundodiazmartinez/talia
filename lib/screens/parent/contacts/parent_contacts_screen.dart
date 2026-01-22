@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
+import '../../../models/contact.dart';
 import '../../../widgets/contacts/contacts_permission_banner.dart';
 import '../../../widgets/contacts_sync_consent_dialog.dart';
 import '../../../theme_service.dart';
@@ -9,6 +10,8 @@ import '../../add_contact_screen.dart';
 import '../../../controllers/parent_contacts_controller.dart';
 import 'widgets/contact_card_widget.dart';
 import 'widgets/approval_requests_badge.dart';
+import 'widgets/friend_request_card_widget.dart';
+import '../../../widgets/contacts/friends_explanation_widgets.dart';
 
 /// Pantalla de gestión de contactos del padre
 ///
@@ -26,14 +29,21 @@ class ParentContactsScreen extends StatefulWidget {
 }
 
 class _ParentContactsScreenState extends State<ParentContactsScreen>
-    with AutomaticKeepAliveClientMixin {
+    with AutomaticKeepAliveClientMixin, SingleTickerProviderStateMixin {
   final firebase_auth.FirebaseAuth _auth = firebase_auth.FirebaseAuth.instance;
   late ParentContactsController _controller;
   final TextEditingController _searchController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
+  // Tab controller para Contactos/Solicitudes
+  late TabController _tabController;
+
   // Estado de sincronización
   bool _isSyncing = false;
+
+  // Contador de solicitudes pendientes
+  int _pendingRequestsCount = 0;
+  StreamSubscription? _pendingRequestsSubscription;
 
   // Tracking de visibilidad para batch update
   final Set<String> _visibleUserIds = {};
@@ -45,17 +55,34 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 3, vsync: this);
     final currentUserId = _auth.currentUser?.uid;
     if (currentUserId != null) {
       _controller = ParentContactsController(parentId: currentUserId);
       _controller.initialize();
+      _startPendingRequestsStream();
     }
     _scrollController.addListener(_onScroll);
+  }
+
+  void _startPendingRequestsStream() {
+    _pendingRequestsSubscription?.cancel();
+    _pendingRequestsSubscription = _controller.pendingFriendRequestsStream.listen(
+      (requests) {
+        if (mounted) {
+          setState(() {
+            _pendingRequestsCount = requests.length;
+          });
+        }
+      },
+    );
   }
 
   @override
   void dispose() {
     _visibilityTimer?.cancel();
+    _pendingRequestsSubscription?.cancel();
+    _tabController.dispose();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     _searchController.dispose();
@@ -166,13 +193,32 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
                   ),
                   child: Column(
                     children: [
-                      _buildSearchBar(colorScheme),
-                      ContactsPermissionBanner(
-                        onRequestPermission: _syncContacts,
-                        onPermissionChanged: _syncContacts,
-                      ),
+                      // Tabs: Contactos | Solicitudes
+                      _buildTabs(colorScheme),
+                      // Content based on selected tab
                       Expanded(
-                        child: _buildContactsList(colorScheme, currentUserId),
+                        child: TabBarView(
+                          controller: _tabController,
+                          children: [
+                            // Tab 1: Contactos
+                            Column(
+                              children: [
+                                _buildSearchBar(colorScheme),
+                                ContactsPermissionBanner(
+                                  onRequestPermission: _syncContacts,
+                                  onPermissionChanged: _syncContacts,
+                                ),
+                                Expanded(
+                                  child: _buildContactsList(colorScheme, currentUserId),
+                                ),
+                              ],
+                            ),
+                            // Tab 2: Amigos
+                            _buildFriendsList(colorScheme, currentUserId),
+                            // Tab 3: Solicitudes de amistad
+                            _buildFriendRequestsList(colorScheme, currentUserId),
+                          ],
+                        ),
                       ),
                     ],
                   ),
@@ -259,6 +305,85 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
     );
   }
 
+  Widget _buildTabs(ColorScheme colorScheme) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(16, 16, 16, 0),
+      child: Container(
+        decoration: BoxDecoration(
+          color: context.customColors.searchBarBackground,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: TabBar(
+          controller: _tabController,
+          indicator: BoxDecoration(
+            color: colorScheme.primary,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          indicatorSize: TabBarIndicatorSize.tab,
+          indicatorPadding: EdgeInsets.all(4),
+          labelColor: Colors.white,
+          unselectedLabelColor: colorScheme.onSurfaceVariant,
+          labelStyle: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+          unselectedLabelStyle: TextStyle(fontWeight: FontWeight.w500, fontSize: 14),
+          dividerColor: Colors.transparent,
+          tabs: [
+            Tab(
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.people, size: 16),
+                  SizedBox(width: 4),
+                  Text('Contactos'),
+                ],
+              ),
+            ),
+            Tab(
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.auto_stories, size: 16),
+                  SizedBox(width: 4),
+                  Text('Historias'),
+                ],
+              ),
+            ),
+            Tab(
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.person_add, size: 16),
+                  SizedBox(width: 4),
+                  Text('Solicitudes'),
+                  if (_pendingRequestsCount > 0) ...[
+                    SizedBox(width: 4),
+                    Container(
+                      padding: EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: Colors.red,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        _pendingRequestsCount > 99 ? '99+' : '$_pendingRequestsCount',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildSearchBar(ColorScheme colorScheme) {
     return Padding(
       padding: EdgeInsets.all(16),
@@ -300,19 +425,22 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
 
     return StreamBuilder<({List<ProcessedContact> children, List<ProcessedContact> others})>(
       stream: _controller.separatedContactsStream,
+      initialData: _controller.cachedSeparatedContacts,
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           return Center(child: Text('Error: ${snapshot.error}'));
         }
 
-        if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
+        final cached = _controller.cachedSeparatedContacts;
+        // Solo mostrar spinner si no hay datos cacheados
+        if (!snapshot.hasData && cached.children.isEmpty && cached.others.isEmpty) {
           return Center(
             child: CircularProgressIndicator(color: colorScheme.primary),
           );
         }
 
-        final children = snapshot.data?.children ?? [];
-        final others = snapshot.data?.others ?? [];
+        final children = snapshot.data?.children ?? cached.children;
+        final others = snapshot.data?.others ?? cached.others;
 
         if (children.isEmpty && others.isEmpty) {
           return _buildEmptyState(colorScheme);
@@ -398,10 +526,54 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
       status: contact.isOnline ? 'En línea' : 'Desconectado',
       statusColor: contact.isOnline ? Colors.green : Colors.grey,
       isChild: contact.isChild,
+      isFriend: contact.isFriend,
       photoURL: contact.photoURL,
       onUnlink: contact.isChild
           ? () => _showUnlinkChildDialog(contact.oderId, contact.dbName)
           : null,
+    );
+  }
+
+  Widget _buildFriendsList(ColorScheme colorScheme, String? currentUserId) {
+    if (currentUserId == null) {
+      return Center(child: Text('Usuario no autenticado'));
+    }
+
+    return StreamBuilder<List<ProcessedContact>>(
+      stream: _controller.friendsStream,
+      initialData: _controller.cachedFriends,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return Center(child: Text('Error: ${snapshot.error}'));
+        }
+
+        // Solo mostrar spinner si no hay datos cacheados
+        if (!snapshot.hasData && _controller.cachedFriends.isEmpty) {
+          return Center(
+            child: CircularProgressIndicator(color: colorScheme.primary),
+          );
+        }
+
+        final friends = snapshot.data ?? _controller.cachedFriends;
+
+        if (friends.isEmpty) {
+          return FriendsEmptyState();
+        }
+
+        return ListView.builder(
+          padding: EdgeInsets.all(16),
+          itemCount: friends.length + 1, // +1 para el header
+          itemBuilder: (context, index) {
+            if (index == 0) {
+              return Padding(
+                padding: EdgeInsets.only(bottom: 16),
+                child: FriendsExplanationHeader(),
+              );
+            }
+            return _buildContactCard(friends[index - 1], currentUserId, colorScheme);
+          },
+        );
+      },
     );
   }
 
@@ -486,5 +658,145 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
         ],
       ),
     );
+  }
+
+  Widget _buildFriendRequestsList(ColorScheme colorScheme, String? currentUserId) {
+    if (currentUserId == null) {
+      return Center(child: Text('Usuario no autenticado'));
+    }
+
+    return StreamBuilder<List<Contact>>(
+      stream: _controller.pendingFriendRequestsStream,
+      initialData: _controller.cachedPendingRequests,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return Center(child: Text('Error: ${snapshot.error}'));
+        }
+
+        // Solo mostrar spinner si no hay datos cacheados
+        if (!snapshot.hasData && _controller.cachedPendingRequests.isEmpty) {
+          return Center(
+            child: CircularProgressIndicator(color: colorScheme.primary),
+          );
+        }
+
+        final requests = snapshot.data ?? _controller.cachedPendingRequests;
+
+        if (requests.isEmpty) {
+          return _buildEmptyFriendRequestsState(colorScheme);
+        }
+
+        return ListView.builder(
+          padding: EdgeInsets.all(16),
+          itemCount: requests.length,
+          itemBuilder: (context, index) {
+            final contact = requests[index];
+            return FriendRequestCardWidget(
+              key: ValueKey('friend_request_${contact.id}'),
+              contact: contact,
+              currentUserId: currentUserId,
+              onAccept: () => _handleAcceptFriendRequest(contact),
+              onReject: () => _handleRejectFriendRequest(contact),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildEmptyFriendRequestsState(ColorScheme colorScheme) {
+    return Center(
+      child: Padding(
+        padding: EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: colorScheme.primary.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.person_add_disabled,
+                size: 48,
+                color: colorScheme.primary,
+              ),
+            ),
+            SizedBox(height: 24),
+            Text(
+              'Sin solicitudes pendientes',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: colorScheme.onSurface,
+              ),
+            ),
+            SizedBox(height: 12),
+            Text(
+              'Cuando alguien quiera ver tus historias,\nsu solicitud aparecerá aquí',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 14,
+                color: colorScheme.onSurfaceVariant,
+                height: 1.4,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _handleAcceptFriendRequest(Contact contact) async {
+    try {
+      final otherUserId = contact.getOtherUserId(_auth.currentUser?.uid ?? '');
+      await _controller.acceptFriendRequest(otherUserId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Ahora son amigos'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al aceptar: ${e.toString().replaceAll('Exception: ', '')}'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _handleRejectFriendRequest(Contact contact) async {
+    try {
+      final otherUserId = contact.getOtherUserId(_auth.currentUser?.uid ?? '');
+      await _controller.rejectFriendRequest(otherUserId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Solicitud rechazada'),
+            backgroundColor: Colors.grey,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al rechazar: ${e.toString().replaceAll('Exception: ', '')}'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    }
   }
 }

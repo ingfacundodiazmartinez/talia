@@ -629,6 +629,64 @@ service cloud.firestore {
         return myApprovalRejected && toPotential && onlyAllowedKeys;
       }
 
+      // 🔒 FUNCIÓN: Verificar envío válido de solicitud de amistad
+      // Solo contactos aprobados pueden enviar solicitud de amistad
+      function isValidFriendRequestSend() {
+        // Solo para contactos aprobados
+        let isApproved = resource.data.status == 'approved';
+        // No deben ser ya amigos
+        let notAlreadyFriends = resource.data.get('isFriend', false) == false;
+        // No debe haber solicitud pendiente
+        let noPendingRequest = !('friendRequest' in resource.data) ||
+                               resource.data.friendRequest == null ||
+                               resource.data.friendRequest.status != 'pending';
+        // Solo se modifica friendRequest
+        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+        let onlyFriendRequestChanged = changedKeys.hasOnly(['friendRequest']);
+        // El nuevo status debe ser 'pending'
+        let newStatusPending = request.resource.data.friendRequest.status == 'pending';
+        // El requestedBy debe ser el usuario actual
+        let requestedByMe = request.resource.data.friendRequest.requestedBy == request.auth.uid;
+
+        return isApproved && notAlreadyFriends && noPendingRequest &&
+               onlyFriendRequestChanged && newStatusPending && requestedByMe;
+      }
+
+      // 🔒 FUNCIÓN: Verificar respuesta válida a solicitud de amistad (aceptar/rechazar)
+      // Solo el receptor puede responder (no quien envió)
+      function isValidFriendRequestResponse() {
+        // Debe haber solicitud pendiente
+        let hasPendingRequest = 'friendRequest' in resource.data &&
+                                resource.data.friendRequest != null &&
+                                resource.data.friendRequest.status == 'pending';
+        // El usuario actual NO es quien envió (solo el receptor puede responder)
+        let notRequester = resource.data.friendRequest.requestedBy != request.auth.uid;
+        // Campos permitidos: friendRequest, isFriend
+        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+        let allowedKeys = ['friendRequest', 'isFriend'];
+        let onlyAllowedKeys = changedKeys.hasOnly(allowedKeys);
+        // El nuevo status debe ser 'accepted' o 'rejected'
+        let validNewStatus = request.resource.data.friendRequest.status == 'accepted' ||
+                             request.resource.data.friendRequest.status == 'rejected';
+
+        return hasPendingRequest && notRequester && onlyAllowedKeys && validNewStatus;
+      }
+
+      // 🔒 FUNCIÓN: Verificar eliminación válida de amigo
+      // Cualquier usuario del contacto puede eliminar la amistad
+      function isValidFriendRemoval() {
+        // Deben ser amigos actualmente
+        let areFriends = resource.data.get('isFriend', false) == true;
+        // Campos permitidos: friendRequest, isFriend
+        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+        let allowedKeys = ['friendRequest', 'isFriend'];
+        let onlyAllowedKeys = changedKeys.hasOnly(allowedKeys);
+        // isFriend debe cambiar a false
+        let removingFriend = request.resource.data.isFriend == false;
+
+        return areFriends && onlyAllowedKeys && removingFriend;
+      }
+
       // Permitir actualizar si:
       // 1. Eres usuario del contacto Y solo tocas campos no críticos, O
       // 2. Eres parentViewer Y solo actualizas approvals/status de forma válida, O
@@ -636,6 +694,9 @@ service cloud.firestore {
       // 4. Eres usuario del contacto Y es una cancelación válida (pending, tu approval → rejected), O
       // 5. Eres usuario del contacto Y es un reenvío válido (tu approval rejected → status potential), O
       // 6. Eres parentViewer Y solo actualizas moderationSettings (para activar moderación en hijos)
+      // 7. Eres usuario del contacto Y envías solicitud de amistad válida
+      // 8. Eres usuario del contacto Y respondes a solicitud de amistad (aceptar/rechazar)
+      // 9. Eres usuario del contacto Y eliminas la amistad
       // 🔒 NOTA: Solo padres pueden modificar moderationSettings - previene bypass de moderación
       allow update: if request.auth != null && (
         (request.auth.uid in resource.data.users && isUpdatingNonCriticalFields()) ||
@@ -645,7 +706,11 @@ service cloud.firestore {
         (request.auth.uid in resource.data.users && isValidResendRequest()) ||
         // 🔒 SEGURIDAD: Solo padres (parentViewer) pueden modificar moderationSettings
         // ELIMINADA la opción para usuarios normales - previene que un niño desactive su propia moderación
-        (isParentViewer() && isUpdatingOnlyModerationSettings())
+        (isParentViewer() && isUpdatingOnlyModerationSettings()) ||
+        // 🔒 AMISTAD: Operaciones de solicitud de amistad entre contactos aprobados
+        (request.auth.uid in resource.data.users && isValidFriendRequestSend()) ||
+        (request.auth.uid in resource.data.users && isValidFriendRequestResponse()) ||
+        (request.auth.uid in resource.data.users && isValidFriendRemoval())
       );
 
       // 🔒 FUNCIÓN: Verificar eliminación válida de contacto rechazado

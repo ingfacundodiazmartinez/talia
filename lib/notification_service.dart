@@ -329,6 +329,18 @@ class NotificationService {
   Stream<Map<String, dynamic>> get triviaNotificationTapStream =>
       _triviaNotificationTapController.stream;
 
+  // Stream para notificar cuando se toca una notificación FOMO (navegar a perfil)
+  final _fomoNotificationTapController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get fomoNotificationTapStream =>
+      _fomoNotificationTapController.stream;
+
+  // Stream para notificar cuando se toca una notificación de solicitud de amistad
+  final _friendRequestNotificationTapController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get friendRequestNotificationTapStream =>
+      _friendRequestNotificationTapController.stream;
+
   // Método público para emitir llamadas entrantes al stream
   void emitIncomingCall(Map<String, dynamic> callData) {
     _incomingCallController.add(callData);
@@ -2235,6 +2247,28 @@ class NotificationService {
           tag: 'NotificationService',
         );
         _contactApprovedNotificationTapController.add(data);
+        break;
+
+      // ═══════════════════════════════════════════════════════════════
+      // FOMO (Agregar amigo para ver historias)
+      // ═══════════════════════════════════════════════════════════════
+      case 'story_fomo':
+        ReleaseLogger.log(
+          '👀 Notificación FOMO tocada, navegando a perfil de contacto',
+          tag: 'NotificationService',
+        );
+        _fomoNotificationTapController.add(data);
+        break;
+
+      // ═══════════════════════════════════════════════════════════════
+      // SOLICITUD DE AMISTAD
+      // ═══════════════════════════════════════════════════════════════
+      case 'friend_request':
+        ReleaseLogger.log(
+          '🤝 Notificación de solicitud de amistad tocada, navegando a perfil',
+          tag: 'NotificationService',
+        );
+        _friendRequestNotificationTapController.add(data);
         break;
 
       // ═══════════════════════════════════════════════════════════════

@@ -111,6 +111,12 @@ const accountDeletion = require("./account-deletion");
 // Nudge (empujoncitos efímeros entre usuarios: latido, zumbido, saludo, psst)
 const nudge = require("./nudge");
 
+// Migrations (scripts de migración de datos)
+const friendsMigration = require("./migrations/migrate-contacts-to-friends");
+
+// Talia Assistant (Chat con IA para todos los usuarios)
+const taliaAssistant = require("./talia-assistant");
+
 // ❌ Voice Changer (ElevenLabs) - ELIMINADO
 // ❌ Replicate Voice (TTS) - ELIMINADO
 
@@ -276,6 +282,10 @@ exports.onContactDeleted = storyApproval.onContactDeleted;
 exports.onStoryApproved = storyApproval.onStoryApproved;
 exports.onStoryCreatedApproved = storyApproval.onStoryCreatedApproved;
 
+// FOMO Notifications (notificar no-amigos para incentivar solicitudes de amistad)
+exports.sendFomoNotifications = storyApproval.sendFomoNotifications;
+exports.sendFomoNotificationsOnCreate = storyApproval.sendFomoNotificationsOnCreate;
+
 // ═══════════════════════════════════════════════════════════════
 // NUDGE (Empujoncitos efímeros entre usuarios)
 // ═══════════════════════════════════════════════════════════════
@@ -311,4 +321,22 @@ exports.onTriviaResultsPublished = trivia.onTriviaResultsPublished;
 exports.generateTriviaSuggestion = trivia.generateTriviaSuggestion;
 exports.getTriviaPreview = trivia.getTriviaPreview;
 
-console.log("✅ Todas las funciones exportadas correctamente (incluye Agora V2, Trivia)");
+// ═══════════════════════════════════════════════════════════════
+// TALIA ASSISTANT (Chat con IA para todos los usuarios)
+// ═══════════════════════════════════════════════════════════════
+
+exports.onUserCreatedCreateTaliaChat = taliaAssistant.onUserCreatedCreateTaliaChat;
+exports.onMessageToTalia = taliaAssistant.onMessageToTalia;
+exports.onStoryCreatedTaliaReaction = taliaAssistant.onStoryCreatedTaliaReaction;
+exports.processTaliaPendingReactions = taliaAssistant.processTaliaPendingReactions;
+exports.taliaDailyProactiveMessages = taliaAssistant.taliaDailyProactiveMessages;
+
+// ═══════════════════════════════════════════════════════════════
+// MIGRATIONS (Scripts de migración de datos - ejecutar una vez)
+// ═══════════════════════════════════════════════════════════════
+
+// Friends Feature Migration - Convierte contactos existentes en amigos
+exports.migrateContactsToFriends = friendsMigration.migrateContactsToFriends;
+exports.checkMigrationStatus = friendsMigration.checkMigrationStatus;
+
+console.log("✅ Todas las funciones exportadas correctamente (incluye Agora V2, Trivia, Talia Assistant, Migrations)");

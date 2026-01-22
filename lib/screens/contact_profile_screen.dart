@@ -37,6 +37,11 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
   bool _storyNotificationsEnabled = false;
   bool _isLoadingStoryNotifications = true;
 
+  // Friend status
+  bool _isFriendWith = false;
+  String _friendStatus = 'none';
+  bool _isLoadingFriendStatus = true;
+
   // Tab controller para las pestañas
   late TabController _tabController;
 
@@ -100,6 +105,17 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
         setState(() {
           _storyNotificationsEnabled = enabled;
           _isLoadingStoryNotifications = false;
+        });
+      }
+    };
+
+    // Friend status callback
+    _controller.onFriendStatusChanged = (isFriend, status) {
+      if (mounted) {
+        setState(() {
+          _isFriendWith = isFriend;
+          _friendStatus = status;
+          _isLoadingFriendStatus = false;
         });
       }
     };
@@ -834,6 +850,24 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
             child: _buildStoryNotificationsTile(colorScheme),
           ),
 
+          // Friend status section
+          SizedBox(height: 20),
+          Container(
+            margin: EdgeInsets.symmetric(horizontal: 20),
+            decoration: BoxDecoration(
+              color: colorScheme.surface,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.05),
+                  blurRadius: 10,
+                  offset: Offset(0, 2),
+                ),
+              ],
+            ),
+            child: _buildFriendStatusTile(colorScheme),
+          ),
+
           // Mostrar padres si es un hijo
           if (role == 'child') ...[
             SizedBox(height: 20),
@@ -1368,6 +1402,245 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
               ],
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  /// Widget para mostrar estado de amistad y acciones
+  Widget _buildFriendStatusTile(ColorScheme colorScheme) {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
+    if (_isLoadingFriendStatus) {
+      return Padding(
+        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        child: Row(
+          children: [
+            Container(
+              padding: EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.green.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(
+                Icons.people_outline,
+                color: Colors.green,
+                size: 24,
+              ),
+            ),
+            SizedBox(width: 16),
+            Expanded(
+              child: Text(
+                'Amigos',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: colorScheme.onSurface,
+                ),
+              ),
+            ),
+            SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Determinar contenido según el estado
+    String statusText;
+    String? subtitle;
+    Widget actionWidget;
+    Color iconColor;
+    IconData statusIcon;
+
+    switch (_friendStatus) {
+      case 'accepted':
+        statusText = 'Son amigos';
+        subtitle = 'Pueden ver sus historias mutuamente';
+        iconColor = Colors.green;
+        statusIcon = Icons.check_circle;
+        actionWidget = PopupMenuButton<String>(
+          icon: Icon(Icons.more_vert, color: colorScheme.onSurfaceVariant),
+          onSelected: (value) async {
+            if (value == 'remove') {
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: Text('Eliminar amigo'),
+                  content: Text(
+                    '¿Dejar de ser amigo de ${_contactAlias ?? widget.contactName}?\n\n'
+                    'Ya no podrán ver sus historias mutuamente.',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: Text('Cancelar'),
+                    ),
+                    ElevatedButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                      child: Text('Eliminar'),
+                    ),
+                  ],
+                ),
+              );
+              if (confirm == true) {
+                await _controller.removeFriend();
+              }
+            }
+          },
+          itemBuilder: (context) => [
+            PopupMenuItem(
+              value: 'remove',
+              child: Row(
+                children: [
+                  Icon(Icons.person_remove, color: Colors.red[700]),
+                  SizedBox(width: 8),
+                  Text('Dejar de ser amigos', style: TextStyle(color: Colors.red[700])),
+                ],
+              ),
+            ),
+          ],
+        );
+        break;
+
+      case 'pending_sent':
+        statusText = 'Solicitud enviada';
+        subtitle = 'Esperando respuesta';
+        iconColor = Colors.orange;
+        statusIcon = Icons.hourglass_empty;
+        actionWidget = Container(
+          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.orange.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Text(
+            'Pendiente',
+            style: TextStyle(
+              color: Colors.orange[700],
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        );
+        break;
+
+      case 'pending_received':
+        statusText = 'Quiere ser tu amigo';
+        subtitle = 'Ver sus historias y que vea las tuyas';
+        iconColor = colorScheme.primary;
+        statusIcon = Icons.person_add;
+        actionWidget = Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ElevatedButton(
+              onPressed: () async {
+                await _controller.acceptFriendRequest();
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green,
+                foregroundColor: Colors.white,
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
+                ),
+              ),
+              child: Text('Aceptar'),
+            ),
+            SizedBox(width: 8),
+            OutlinedButton(
+              onPressed: () async {
+                await _controller.rejectFriendRequest();
+              },
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.grey[700],
+                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
+                ),
+              ),
+              child: Icon(Icons.close, size: 18),
+            ),
+          ],
+        );
+        break;
+
+      case 'rejected':
+        statusText = 'No disponible';
+        subtitle = null;
+        iconColor = Colors.grey;
+        statusIcon = Icons.person_off;
+        actionWidget = SizedBox.shrink();
+        break;
+
+      case 'none':
+      default:
+        statusText = 'Agregar a amigos';
+        subtitle = 'Ver sus historias y que vea las tuyas';
+        iconColor = colorScheme.primary;
+        statusIcon = Icons.person_add_alt_1;
+        actionWidget = ElevatedButton.icon(
+          onPressed: () async {
+            await _controller.sendFriendRequest();
+          },
+          style: ElevatedButton.styleFrom(
+            backgroundColor: colorScheme.primary,
+            foregroundColor: Colors.white,
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+            ),
+          ),
+          icon: Icon(Icons.person_add, size: 18),
+          label: Text('Agregar'),
+        );
+        break;
+    }
+
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        children: [
+          Container(
+            padding: EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: iconColor.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(statusIcon, color: iconColor, size: 24),
+          ),
+          SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  statusText,
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: colorScheme.onSurface,
+                  ),
+                ),
+                if (subtitle != null) ...[
+                  SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: isDarkMode ? Colors.grey[400] : Colors.grey[600],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          SizedBox(width: 8),
+          actionWidget,
         ],
       ),
     );

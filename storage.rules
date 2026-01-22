@@ -166,6 +166,16 @@ service firebase.storage {
     }
 
     // ═══════════════════════════════════════════════════════════════
+    // SYSTEM FILES (avatars de bots, logos, etc.)
+    // Path: system/{fileName}
+    // Acceso público de lectura para archivos del sistema
+    // ═══════════════════════════════════════════════════════════════
+    match /system/{fileName} {
+      allow read: if true;  // Público para avatars de bots
+      allow write: if false; // Solo admin puede escribir
+    }
+
+    // ═══════════════════════════════════════════════════════════════
     // CATCH-ALL: Deny everything else
     // ═══════════════════════════════════════════════════════════════
     match /{allPaths=**} {

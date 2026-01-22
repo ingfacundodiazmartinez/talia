@@ -21,6 +21,7 @@ class ContactCardWidget extends StatelessWidget {
   final String status;
   final Color statusColor;
   final bool isChild;
+  final bool isFriend;
   final String? photoURL;
   final VoidCallback? onUnlink;
 
@@ -35,6 +36,7 @@ class ContactCardWidget extends StatelessWidget {
     this.status = 'Offline',
     this.statusColor = Colors.grey,
     this.isChild = false,
+    this.isFriend = false,
     this.photoURL,
     this.onUnlink,
   });
@@ -130,16 +132,34 @@ class ContactCardWidget extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Nombre principal (de la DB - usado para ordenar)
-                  Text(
-                    dbName,
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: colorScheme.onSurface,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                  // Nombre principal (de la DB - usado para ordenar) con indicador de amigo
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          dbName,
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: colorScheme.onSurface,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      // Indicador de amigo (check verde)
+                      if (isFriend) ...[
+                        SizedBox(width: 6),
+                        Tooltip(
+                          message: 'Amigo - Pueden ver sus historias',
+                          child: Icon(
+                            Icons.check_circle,
+                            size: 16,
+                            color: Colors.green,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                   SizedBox(height: 2),
                   // Subtítulo: Alias + edad (solo si hay alias o edad > 0)

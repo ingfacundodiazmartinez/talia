@@ -11,6 +11,7 @@ import 'contacts/child_contacts_screen.dart';
 import 'profile/child_profile_screen.dart';
 import '../chat_detail_screen.dart';
 import '../trivia/trivia_results_screen.dart';
+import '../contact_profile_screen.dart';
 
 /// Observer para detectar cambios en la navegación anidada
 class _NavigatorObserver extends NavigatorObserver {
@@ -78,6 +79,8 @@ class _ChildMainShellState extends State<ChildMainShell> {
       // Configurar callback para navegación desde notificaciones
       _mainController.onChatNotificationTap = _handleChatNotificationTap;
       _mainController.onTriviaNotificationTap = _handleTriviaNotificationTap;
+      _mainController.onFomoNotificationTap = _handleFomoNotificationTap;
+      _mainController.onFriendRequestNotificationTap = _handleFriendRequestNotificationTap;
 
       _mainController.initialize();
     }
@@ -199,6 +202,74 @@ class _ChildMainShellState extends State<ChildMainShell> {
       }
     } catch (e) {
       ReleaseLogger.error('Error handling trivia notification tap: $e', tag: 'ChildMainShell');
+    }
+  }
+
+  /// Manejar tap en notificación FOMO (navegar al perfil del contacto)
+  Future<void> _handleFomoNotificationTap(Map<String, dynamic> data) async {
+    try {
+      final storyOwnerId = data['storyOwnerId'] as String?;
+      final storyOwnerName = (data['storyOwnerName'] ?? data['senderName'] ?? 'Usuario') as String;
+
+      ReleaseLogger.log(
+        'FOMO notification tap: storyOwnerId=$storyOwnerId, name=$storyOwnerName',
+        tag: 'ChildMainShell',
+      );
+
+      if (storyOwnerId != null && mounted) {
+        final currentUserId = firebase_auth.FirebaseAuth.instance.currentUser?.uid;
+        if (currentUserId == null) return;
+
+        // Generar chatId (mismo formato que en otros lugares)
+        final chatId = [currentUserId, storyOwnerId]..sort();
+        final chatIdStr = chatId.join('_');
+
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => ContactProfileScreen(
+              contactId: storyOwnerId,
+              contactName: storyOwnerName,
+              chatId: chatIdStr,
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      ReleaseLogger.error('Error handling FOMO notification tap: $e', tag: 'ChildMainShell');
+    }
+  }
+
+  /// Manejar tap en notificación de solicitud de amistad (navegar al perfil del contacto)
+  Future<void> _handleFriendRequestNotificationTap(Map<String, dynamic> data) async {
+    try {
+      final senderId = data['senderId'] as String?;
+      final senderName = (data['senderName'] ?? 'Usuario') as String;
+
+      ReleaseLogger.log(
+        'Friend request notification tap: senderId=$senderId, name=$senderName',
+        tag: 'ChildMainShell',
+      );
+
+      if (senderId != null && mounted) {
+        final currentUserId = firebase_auth.FirebaseAuth.instance.currentUser?.uid;
+        if (currentUserId == null) return;
+
+        // Generar chatId (mismo formato que en otros lugares)
+        final chatId = [currentUserId, senderId]..sort();
+        final chatIdStr = chatId.join('_');
+
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => ContactProfileScreen(
+              contactId: senderId,
+              contactName: senderName,
+              chatId: chatIdStr,
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      ReleaseLogger.error('Error handling friend request notification tap: $e', tag: 'ChildMainShell');
     }
   }
 

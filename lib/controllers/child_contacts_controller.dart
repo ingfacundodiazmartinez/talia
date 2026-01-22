@@ -48,7 +48,15 @@ class ChildContactsController {
 
   // Streams
   StreamSubscription? _contactsSubscription;
+  StreamSubscription? _friendsSubscription;
+  StreamSubscription? _friendRequestsSubscription;
   final _contactsStreamController = StreamController<List<Contact>>.broadcast();
+  final _friendsStreamController = StreamController<List<Contact>>.broadcast();
+  final _friendRequestsStreamController = StreamController<List<Contact>>.broadcast();
+
+  // Cache del último valor para emitir inmediatamente a nuevos subscribers
+  List<Contact> _cachedFriends = [];
+  List<Contact> _cachedFriendRequests = [];
 
   ChildContactsController({
     required this.childId,
@@ -94,6 +102,8 @@ class ChildContactsController {
       await _userCache.initialize();
       await _syncService.initialize();
       _startContactsStream();
+      _startFriendsStream();
+      _startFriendRequestsStream();
     } catch (e) {
       ReleaseLogger.error('Error inicializando ChildContactsController: $e', tag: 'ChildContacts');
     }
@@ -116,6 +126,60 @@ class ChildContactsController {
       onError: (e) {
         ReleaseLogger.error('Error en stream de contactos: $e', tag: 'ChildContacts');
         _contactsStreamController.addError(e);
+      },
+    );
+  }
+
+  void _startFriendsStream() {
+    final userId = currentUserId;
+    if (userId == null) return;
+
+    _friendsSubscription?.cancel();
+
+    _friendsSubscription = Contact.watchFriends(userId).listen(
+      (friends) {
+        // Ordenar alfabéticamente
+        friends.sort((a, b) {
+          final nameA = _getDisplayNameForContact(a, userId);
+          final nameB = _getDisplayNameForContact(b, userId);
+          return nameA.toLowerCase().compareTo(nameB.toLowerCase());
+        });
+        _cachedFriends = friends;
+        _friendsStreamController.add(friends);
+      },
+      onError: (e) {
+        ReleaseLogger.error('Error en stream de amigos: $e', tag: 'ChildContacts');
+        _cachedFriends = [];
+        _friendsStreamController.add([]);
+      },
+    );
+  }
+
+  void _startFriendRequestsStream() {
+    final userId = currentUserId;
+    if (userId == null) return;
+
+    _friendRequestsSubscription?.cancel();
+
+    // Emitir lista vacía inicialmente para evitar spinner eterno
+    _friendRequestsStreamController.add([]);
+
+    _friendRequestsSubscription = Contact.watchPendingFriendRequests(userId).listen(
+      (requests) {
+        // Ordenar por fecha de solicitud (más recientes primero)
+        requests.sort((a, b) {
+          final dateA = a.friendRequest?.requestedAt ?? DateTime.now();
+          final dateB = b.friendRequest?.requestedAt ?? DateTime.now();
+          return dateB.compareTo(dateA);
+        });
+        _cachedFriendRequests = requests;
+        _friendRequestsStreamController.add(requests);
+      },
+      onError: (e) {
+        ReleaseLogger.error('Error en stream de solicitudes de amistad: $e', tag: 'ChildContacts');
+        // En caso de error (ej: índice faltante), emitir lista vacía
+        _cachedFriendRequests = [];
+        _friendRequestsStreamController.add([]);
       },
     );
   }
@@ -232,6 +296,25 @@ class ChildContactsController {
 
   /// Stream de contactos filtrados y ordenados
   Stream<List<Contact>> getContactsStream() => _contactsStreamController.stream;
+
+  /// Valor actual cacheado de contactos filtrados (para initialData en StreamBuilder)
+  List<Contact> get cachedFilteredContacts {
+    final userId = currentUserId;
+    if (userId == null || _cachedContacts == null) return [];
+    return _filterAndSort(_cachedContacts!, userId);
+  }
+
+  /// Stream de amigos (contactos donde isFriend = true)
+  Stream<List<Contact>> getFriendsStream() => _friendsStreamController.stream;
+
+  /// Valor actual cacheado de amigos (para initialData en StreamBuilder)
+  List<Contact> get cachedFriends => _cachedFriends;
+
+  /// Stream de solicitudes de amistad pendientes (donde soy el receptor)
+  Stream<List<Contact>> getFriendRequestsStream() => _friendRequestsStreamController.stream;
+
+  /// Valor actual cacheado de solicitudes (para initialData en StreamBuilder)
+  List<Contact> get cachedFriendRequests => _cachedFriendRequests;
 
   // ═══════════════════════════════════════════════════════════════
   // SEARCH
@@ -412,6 +495,10 @@ class ChildContactsController {
 
   void dispose() {
     _contactsSubscription?.cancel();
+    _friendsSubscription?.cancel();
+    _friendRequestsSubscription?.cancel();
     _contactsStreamController.close();
+    _friendsStreamController.close();
+    _friendRequestsStreamController.close();
   }
 }

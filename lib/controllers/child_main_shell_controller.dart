@@ -42,6 +42,8 @@ class ChildMainShellController {
   StreamSubscription? _contactApprovedNotificationSubscription;
   StreamSubscription? _groupMembershipApprovedNotificationSubscription;
   StreamSubscription? _triviaNotificationSubscription;
+  StreamSubscription? _fomoNotificationSubscription;
+  StreamSubscription? _friendRequestNotificationSubscription;
   StreamSubscription? _roleChangeSubscription;
   StreamSubscription? _appStateSubscription;
 
@@ -51,6 +53,8 @@ class ChildMainShellController {
   Function(Map<String, dynamic>)? onContactApprovedNotificationTap;
   Function(Map<String, dynamic>)? onGroupMembershipApprovedNotificationTap;
   Function(Map<String, dynamic>)? onTriviaNotificationTap;
+  Function(Map<String, dynamic>)? onFomoNotificationTap;
+  Function(Map<String, dynamic>)? onFriendRequestNotificationTap;
 
   /// Constructor
   ChildMainShellController({
@@ -245,6 +249,22 @@ class ChildMainShellController {
         onTriviaNotificationTap?.call(data);
       });
 
+      // FOMO (agregar amigo para ver historias)
+      _fomoNotificationSubscription = _notificationService
+          .fomoNotificationTapStream
+          .listen((data) {
+        ReleaseLogger.log('FOMO notification tapped: $data', tag: 'ChildMainShell');
+        onFomoNotificationTap?.call(data);
+      });
+
+      // Solicitud de amistad
+      _friendRequestNotificationSubscription = _notificationService
+          .friendRequestNotificationTapStream
+          .listen((data) {
+        ReleaseLogger.log('Friend request notification tapped: $data', tag: 'ChildMainShell');
+        onFriendRequestNotificationTap?.call(data);
+      });
+
       ReleaseLogger.log('Listeners de notificaciones configurados', tag: 'ChildMainShell');
     } catch (e) {
       ReleaseLogger.error('Error configurando listeners de notificaciones: $e', tag: 'ChildMainShell');
@@ -353,6 +373,8 @@ class ChildMainShellController {
     _contactApprovedNotificationSubscription?.cancel();
     _groupMembershipApprovedNotificationSubscription?.cancel();
     _triviaNotificationSubscription?.cancel();
+    _fomoNotificationSubscription?.cancel();
+    _friendRequestNotificationSubscription?.cancel();
     _roleChangeSubscription?.cancel();
     _appStateSubscription?.cancel();
     _childController?.dispose();

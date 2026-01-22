@@ -1,4 +1,47 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../utils/release_logger.dart';
+
+/// Estado de solicitud de amistad para historias
+///
+/// Estados:
+/// - pending: Solicitud enviada, esperando respuesta
+/// - accepted: Aceptada → isFriend = true
+/// - rejected: Rechazada o eliminado de amigos (B nunca más recibe FOMO de A)
+class FriendRequestStatus {
+  final String status; // pending | accepted | rejected
+  final String requestedBy; // Quién envió la solicitud
+  final DateTime requestedAt;
+  final DateTime? respondedAt;
+
+  FriendRequestStatus({
+    required this.status,
+    required this.requestedBy,
+    required this.requestedAt,
+    this.respondedAt,
+  });
+
+  factory FriendRequestStatus.fromMap(Map<String, dynamic> data) {
+    return FriendRequestStatus(
+      status: data['status'] ?? 'pending',
+      requestedBy: data['requestedBy'] ?? '',
+      requestedAt: (data['requestedAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      respondedAt: (data['respondedAt'] as Timestamp?)?.toDate(),
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'status': status,
+      'requestedBy': requestedBy,
+      'requestedAt': Timestamp.fromDate(requestedAt),
+      if (respondedAt != null) 'respondedAt': Timestamp.fromDate(respondedAt!),
+    };
+  }
+
+  bool get isPending => status == 'pending';
+  bool get isAccepted => status == 'accepted';
+  bool get isRejected => status == 'rejected';
+}
 
 /// Estado de aprobación por lado (hijo)
 class ApprovalStatus {
@@ -111,6 +154,17 @@ class Contact {
   /// Foto del usuario 2 (denormalizado para mostrar sin consultar /users)
   final String? user2PhotoURL;
 
+  /// Indica si ambos usuarios son "amigos" (pueden ver historias mutuamente)
+  /// Solo aplica si status == 'approved'
+  final bool isFriend;
+
+  /// Estado de solicitud de amistad
+  /// null: No hay solicitud
+  /// pending: Solicitud enviada, esperando respuesta
+  /// accepted: Aceptada → isFriend = true
+  /// rejected: Rechazada o eliminado de amigos
+  final FriendRequestStatus? friendRequest;
+
   Contact({
     required this.id,
     required this.users,
@@ -134,6 +188,8 @@ class Contact {
     this.user2Name,
     this.user1PhotoURL,
     this.user2PhotoURL,
+    this.isFriend = false,
+    this.friendRequest,
   });
 
   // ═══════════════════════════════════════════════════════════════
@@ -159,6 +215,12 @@ class Contact {
     final phonesRaw = data['phones'] as Map<String, dynamic>? ?? {};
     final phones = phonesRaw.map((k, v) => MapEntry(k, v.toString()));
 
+    // Parsear friendRequest
+    final friendRequestRaw = data['friendRequest'] as Map<String, dynamic>?;
+    final friendRequest = friendRequestRaw != null
+        ? FriendRequestStatus.fromMap(friendRequestRaw)
+        : null;
+
     return Contact(
       id: id,
       users: List<String>.from(data['users'] ?? []),
@@ -182,6 +244,8 @@ class Contact {
       user2Name: data['user2Name'],
       user1PhotoURL: data['user1PhotoURL'],
       user2PhotoURL: data['user2PhotoURL'],
+      isFriend: data['isFriend'] ?? false,
+      friendRequest: friendRequest,
     );
   }
 
@@ -217,6 +281,8 @@ class Contact {
       if (blocked) 'blocked': blocked,
       if (blockedBy != null) 'blockedBy': blockedBy,
       if (blockedAt != null) 'blockedAt': Timestamp.fromDate(blockedAt!),
+      'isFriend': isFriend,
+      if (friendRequest != null) 'friendRequest': friendRequest!.toMap(),
     };
   }
 
@@ -233,6 +299,59 @@ class Contact {
 
   /// Verificar si el contacto fue bloqueado por un usuario específico
   bool isBlockedByUser(String userId) => blocked && blockedBy == userId;
+
+  // ═══════════════════════════════════════════════════════════════
+  // FRIEND-RELATED COMPUTED PROPERTIES
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Verificar si hay una solicitud de amistad pendiente
+  bool get hasPendingFriendRequest =>
+      friendRequest != null && friendRequest!.isPending;
+
+  /// Verificar si la solicitud de amistad fue rechazada o eliminado de amigos
+  bool get friendRequestRejected =>
+      friendRequest != null && friendRequest!.isRejected;
+
+  /// Obtener el estado de la solicitud de amistad para un usuario específico
+  /// Retorna: none, pending_sent, pending_received, accepted, rejected
+  String getFriendStatusForUser(String userId) {
+    if (isFriend) return 'accepted';
+    if (friendRequest == null) return 'none';
+    if (friendRequest!.isRejected) return 'rejected';
+    if (friendRequest!.isPending) {
+      return friendRequest!.requestedBy == userId
+          ? 'pending_sent'
+          : 'pending_received';
+    }
+    return 'none';
+  }
+
+  /// Verificar si un usuario puede enviar solicitud de amistad
+  /// Solo puede si: es contacto aprobado, no son amigos, no hay solicitud pendiente, no fue rechazado
+  bool canSendFriendRequest(String userId) {
+    if (!isApproved) return false;
+    if (isFriend) return false;
+    if (friendRequest != null) {
+      // Si está pendiente o rechazado, no puede enviar
+      if (friendRequest!.isPending) return false;
+      if (friendRequest!.isRejected) return false;
+    }
+    return true;
+  }
+
+  /// Verificar si un usuario debe recibir notificación FOMO de historias
+  /// NO debe recibir si: ya es amigo, tiene solicitud pendiente, o fue rechazado/eliminado
+  bool shouldReceiveStoryFomo(String userId) {
+    if (!isApproved) return false;
+    if (isFriend) return false;
+    if (friendRequest != null) {
+      // No enviar FOMO si hay solicitud pendiente
+      if (friendRequest!.isPending) return false;
+      // No enviar FOMO si fue rechazado o eliminado de amigos
+      if (friendRequest!.isRejected) return false;
+    }
+    return true;
+  }
 
   /// Obtener el estado del contacto para un usuario específico
   /// Retorna: approved, pending, pending_other, rejected, potential, revoked
@@ -426,6 +545,68 @@ class Contact {
         .get();
 
     return snapshot.docs.isNotEmpty ? snapshot.docs.last : null;
+  }
+
+  /// Stream de amigos de un usuario (contactos donde isFriend = true)
+  static Stream<List<Contact>> watchFriends(String userId) {
+    // Filtrar client-side para evitar dependencia de índice compuesto
+    return FirebaseFirestore.instance
+        .collection('contacts')
+        .where('users', arrayContains: userId)
+        .snapshots()
+        .map((snapshot) {
+          return snapshot.docs
+              .where((doc) => doc.data()['isFriend'] == true)
+              .map((doc) => Contact.fromFirestore(doc))
+              .toList();
+        });
+  }
+
+  /// Obtener lista de IDs de amigos de un usuario
+  static Future<List<String>> getFriendIds(String userId) async {
+    final snapshot = await FirebaseFirestore.instance
+        .collection('contacts')
+        .where('users', arrayContains: userId)
+        .where('isFriend', isEqualTo: true)
+        .get();
+
+    final friendIds = <String>[];
+    for (final doc in snapshot.docs) {
+      final contact = Contact.fromFirestore(doc);
+      final friendId = contact.getOtherUserId(userId);
+      if (friendId.isNotEmpty) {
+        friendIds.add(friendId);
+      }
+    }
+    return friendIds;
+  }
+
+  /// Stream de solicitudes de amistad pendientes recibidas por un usuario
+  static Stream<List<Contact>> watchPendingFriendRequests(String userId) {
+    return FirebaseFirestore.instance
+        .collection('contacts')
+        .where('users', arrayContains: userId)
+        .where('friendRequest.status', isEqualTo: 'pending')
+        .snapshots()
+        .map((snapshot) => snapshot.docs
+            .map((doc) => Contact.fromFirestore(doc))
+            // Filtrar solo las que NO fueron enviadas por este usuario
+            .where((c) => c.friendRequest?.requestedBy != userId)
+            .toList());
+  }
+
+  /// Contar solicitudes de amistad pendientes recibidas
+  static Future<int> countPendingFriendRequests(String userId) async {
+    final snapshot = await FirebaseFirestore.instance
+        .collection('contacts')
+        .where('users', arrayContains: userId)
+        .where('friendRequest.status', isEqualTo: 'pending')
+        .get();
+
+    return snapshot.docs
+        .map((doc) => Contact.fromFirestore(doc))
+        .where((c) => c.friendRequest?.requestedBy != userId)
+        .length;
   }
 
   // ═══════════════════════════════════════════════════════════════

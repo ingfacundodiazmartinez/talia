@@ -97,6 +97,130 @@ class ContactRepository {
   void invalidateContactsCache() {
     _cachedContactIds = null;
     _lastContactsCacheUpdate = null;
+    _cachedFriendIds = null;
+    _lastFriendsCacheUpdate = null;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // FRIEND IDS - FOR STORIES (FRIENDS ONLY)
+  // ═══════════════════════════════════════════════════════════════
+
+  // Cache de amigos con TTL
+  Set<String>? _cachedFriendIds;
+  DateTime? _lastFriendsCacheUpdate;
+  static const Duration _friendsCacheDuration = Duration(minutes: 10);
+
+  /// ✅ FRIENDS ONLY: Obtener IDs de AMIGOS que pueden ver historias
+  ///
+  /// A diferencia de getContactIds(), este método solo incluye:
+  /// 1. Amigos aprobados (contactos con isFriend === true)
+  /// 2. Hijos vinculados (si es padre)
+  /// 3. Padres vinculados (si es hijo)
+  ///
+  /// Usado para: Stories availableFor (mood stories creadas desde Flutter)
+  Future<Set<String>> getFriendIds() async {
+    final user = _auth.currentUser;
+    if (user == null) {
+      ReleaseLogger.warning('getFriendIds: Usuario no autenticado', tag: 'ContactRepository');
+      return {};
+    }
+
+    // Verificar cache válido
+    if (_isFriendsCacheValid()) {
+      return _cachedFriendIds!;
+    }
+
+    try {
+      final friendIds = <String>{};
+
+      // 1. Obtener AMIGOS aprobados (isFriend === true)
+      final approvedFriends = await _getApprovedFriends(user.uid);
+      friendIds.addAll(approvedFriends);
+      ReleaseLogger.log('👥 Amigos aprobados: ${approvedFriends.length}', tag: 'ContactRepository');
+
+      // 2. Obtener hijos vinculados (si es padre) - siempre pueden ver historias
+      final linkedChildren = await _getLinkedChildren(
+        user.uid,
+      ).timeout(const Duration(seconds: 10), onTimeout: () => <String>{});
+      friendIds.addAll(linkedChildren);
+      if (linkedChildren.isNotEmpty) {
+        ReleaseLogger.log('👶 Hijos vinculados: ${linkedChildren.length}', tag: 'ContactRepository');
+      }
+
+      // 3. Obtener padres vinculados (si es hijo) - siempre pueden ver historias
+      final linkedParents = await _getLinkedParents(
+        user.uid,
+      ).timeout(const Duration(seconds: 10), onTimeout: () => <String>{});
+      friendIds.addAll(linkedParents);
+      if (linkedParents.isNotEmpty) {
+        ReleaseLogger.log('👨‍👩‍👧 Padres vinculados: ${linkedParents.length}', tag: 'ContactRepository');
+      }
+
+      // CRÍTICO: Agregar el usuario actual para que pueda ver sus propias historias
+      friendIds.add(user.uid);
+
+      // 4. Filtrar amigos bloqueados (bidireccional)
+      final nonBlockedFriends = await _filterOutBlockedContacts(friendIds);
+
+      // Actualizar cache
+      _updateFriendsCache(nonBlockedFriends);
+
+      ReleaseLogger.log('✅ Total amigos para historias: ${nonBlockedFriends.length}', tag: 'ContactRepository');
+      return nonBlockedFriends;
+    } catch (e) {
+      ReleaseLogger.error('Error obteniendo amigos: $e', tag: 'ContactRepository');
+      return {user.uid};
+    }
+  }
+
+  /// ✅ FRIENDS ONLY: Obtener contactos que son AMIGOS
+  Future<Set<String>> _getApprovedFriends(String userId) async {
+    try {
+      final friendIds = <String>{};
+
+      final contactsSnapshot = await _firestore
+          .collection('contacts')
+          .where('users', arrayContains: userId)
+          .where('status', isEqualTo: 'approved')
+          .where('isFriend', isEqualTo: true)
+          .get()
+          .timeout(
+            const Duration(seconds: 15),
+            onTimeout: () => throw TimeoutException('Timeout obteniendo amigos'),
+          );
+
+      // Extraer los IDs de los otros usuarios
+      for (final contactDoc in contactsSnapshot.docs) {
+        final data = contactDoc.data();
+        final users = List<String>.from(data['users'] ?? []);
+
+        // Agregar el otro usuario (no el actual)
+        for (final contactUserId in users) {
+          if (contactUserId != userId) {
+            friendIds.add(contactUserId);
+          }
+        }
+      }
+
+      return friendIds;
+    } catch (e) {
+      ReleaseLogger.warning('Error obteniendo amigos aprobados: $e', tag: 'ContactRepository');
+      return <String>{};
+    }
+  }
+
+  /// Verificar si el cache de amigos es válido
+  bool _isFriendsCacheValid() {
+    return _cachedFriendIds != null &&
+        _lastFriendsCacheUpdate != null &&
+        DateTime.now().difference(_lastFriendsCacheUpdate!) <
+            _friendsCacheDuration;
+  }
+
+  /// Actualizar cache de amigos
+  void _updateFriendsCache(Set<String> friendIds) {
+    _cachedFriendIds = friendIds;
+    _lastFriendsCacheUpdate = DateTime.now();
   }
 
   /// Invalidar cache cuando cambian relaciones de bloqueo

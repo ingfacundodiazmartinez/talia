@@ -6,6 +6,7 @@ import '../models/parent.dart';
 import '../services/contacts/list_contacts_service.dart';
 import '../services/contacts_sync_service.dart';
 import '../services/block_service.dart';
+import '../services/friend_service.dart';
 import '../services/user_cache_service.dart';
 import '../services/user_role_service.dart';
 import '../utils/release_logger.dart';
@@ -23,6 +24,10 @@ class ProcessedContact {
   final int? age;
   final bool isChild;
   final bool isOnline;
+  /// Si son amigos (pueden ver historias mutuamente)
+  final bool isFriend;
+  /// Estado de amistad: none, pending_sent, pending_received, accepted, rejected
+  final String friendStatus;
 
   ProcessedContact({
     required this.contact,
@@ -34,6 +39,8 @@ class ProcessedContact {
     this.age,
     this.isChild = false,
     this.isOnline = false,
+    this.isFriend = false,
+    this.friendStatus = 'none',
   });
 
   /// Nombre para mostrar: alias si existe y es diferente, sino dbName
@@ -54,6 +61,7 @@ class ParentContactsController {
   final ListContactsService _listContactsService;
   final ContactsSyncService _syncService;
   final BlockService _blockService;
+  final FriendService _friendService;
   final UserCacheService _userCache;
   final UserRoleService _userRoleService;
   final firebase_auth.FirebaseAuth _auth;
@@ -65,23 +73,34 @@ class ParentContactsController {
   Set<String> _linkedChildrenIds = {};
   Set<String> _blockedIds = {};
 
+  // Cache para evitar spinner al volver a la pantalla
+  List<ProcessedContact> _cachedContacts = [];
+  List<ProcessedContact> _cachedChildren = [];
+  List<ProcessedContact> _cachedOthers = [];
+  List<ProcessedContact> _cachedFriends = [];
+  List<Contact> _cachedPendingRequests = [];
+
   // Streams
   StreamSubscription? _contactsSubscription;
   StreamSubscription? _linkedChildrenSubscription;
   StreamSubscription? _blockedSubscription;
+  StreamSubscription? _pendingRequestsSubscription;
   final _contactsStreamController = StreamController<List<ProcessedContact>>.broadcast();
+  final _pendingRequestsStreamController = StreamController<List<Contact>>.broadcast();
 
   ParentContactsController({
     required this.parentId,
     ListContactsService? listContactsService,
     ContactsSyncService? syncService,
     BlockService? blockService,
+    FriendService? friendService,
     UserCacheService? userCache,
     UserRoleService? userRoleService,
     firebase_auth.FirebaseAuth? auth,
   })  : _listContactsService = listContactsService ?? ListContactsService(),
         _syncService = syncService ?? ContactsSyncService(),
         _blockService = blockService ?? BlockService(),
+        _friendService = friendService ?? FriendService(),
         _userCache = userCache ?? UserCacheService(),
         _userRoleService = userRoleService ?? UserRoleService(),
         _auth = auth ?? firebase_auth.FirebaseAuth.instance;
@@ -106,6 +125,7 @@ class ParentContactsController {
       _startLinkedChildrenStream();
       _startBlockedStream();
       _startContactsStream();
+      _startPendingRequestsStream();
     } catch (e) {
       ReleaseLogger.error('Error inicializando ParentContactsController: $e', tag: 'ParentContacts');
     }
@@ -151,11 +171,37 @@ class ParentContactsController {
     );
   }
 
+  void _startPendingRequestsStream() {
+    _pendingRequestsSubscription?.cancel();
+
+    // Emitir lista vacía inicialmente para evitar spinner eterno
+    _pendingRequestsStreamController.add([]);
+
+    _pendingRequestsSubscription = _friendService.watchMyPendingFriendRequests().listen(
+      (requests) {
+        _cachedPendingRequests = requests;
+        _pendingRequestsStreamController.add(requests);
+      },
+      onError: (e) {
+        ReleaseLogger.error('Error en stream de solicitudes pendientes: $e', tag: 'ParentContacts');
+        _cachedPendingRequests = [];
+        _pendingRequestsStreamController.add([]);
+      },
+    );
+  }
+
   void _emitProcessedContacts() {
     final userId = currentUserId;
     if (userId == null) return;
 
     final processed = _processAndSortContacts(_allContacts, userId);
+    _cachedContacts = processed;
+
+    // Pre-computar separaciones para evitar recálculos en getters
+    _cachedChildren = processed.where((c) => c.isChild).toList();
+    _cachedOthers = processed.where((c) => !c.isChild).toList();
+    _cachedFriends = processed.where((c) => c.isFriend).toList();
+
     _contactsStreamController.add(processed);
   }
 
@@ -200,6 +246,10 @@ class ParentContactsController {
         age = _calculateAge(birthDate);
       }
 
+      // Obtener estado de amistad
+      final isFriend = contact.isFriend;
+      final friendStatus = contact.getFriendStatusForUser(userId);
+
       result.add(ProcessedContact(
         contact: contact,
         oderId: otherUserId,
@@ -210,6 +260,8 @@ class ParentContactsController {
         age: age,
         isChild: _linkedChildrenIds.contains(otherUserId),
         isOnline: isOnline,
+        isFriend: isFriend,
+        friendStatus: friendStatus,
       ));
     }
 
@@ -275,6 +327,23 @@ class ParentContactsController {
     });
   }
 
+  /// Stream de amigos (contactos donde isFriend == true)
+  Stream<List<ProcessedContact>> get friendsStream {
+    return contactsStream.map((contacts) =>
+      contacts.where((c) => c.isFriend).toList()
+    );
+  }
+
+  /// Contactos cacheados (para initialData de StreamBuilder)
+  List<ProcessedContact> get cachedContacts => _cachedContacts;
+
+  /// Amigos cacheados (para initialData de StreamBuilder)
+  List<ProcessedContact> get cachedFriends => _cachedFriends;
+
+  /// Contactos separados cacheados (children vs others)
+  ({List<ProcessedContact> children, List<ProcessedContact> others}) get cachedSeparatedContacts =>
+      (children: _cachedChildren, others: _cachedOthers);
+
   // ═══════════════════════════════════════════════════════════════
   // SEARCH
   // ═══════════════════════════════════════════════════════════════
@@ -322,6 +391,68 @@ class ParentContactsController {
   }
 
   // ═══════════════════════════════════════════════════════════════
+  // FRIEND ACTIONS
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Stream de solicitudes de amistad pendientes recibidas
+  Stream<List<Contact>> get pendingFriendRequestsStream {
+    return _pendingRequestsStreamController.stream;
+  }
+
+  /// Solicitudes pendientes cacheadas (para initialData de StreamBuilder)
+  List<Contact> get cachedPendingRequests => _cachedPendingRequests;
+
+  /// Enviar solicitud de amistad
+  Future<void> sendFriendRequest(String otherUserId) async {
+    try {
+      await _friendService.sendFriendRequest(otherUserId);
+    } catch (e) {
+      ReleaseLogger.error('Error enviando solicitud de amistad: $e', tag: 'ParentContacts');
+      rethrow;
+    }
+  }
+
+  /// Aceptar solicitud de amistad
+  Future<void> acceptFriendRequest(String otherUserId) async {
+    try {
+      await _friendService.acceptFriendRequest(otherUserId);
+    } catch (e) {
+      ReleaseLogger.error('Error aceptando solicitud de amistad: $e', tag: 'ParentContacts');
+      rethrow;
+    }
+  }
+
+  /// Rechazar solicitud de amistad
+  Future<void> rejectFriendRequest(String otherUserId) async {
+    try {
+      await _friendService.rejectFriendRequest(otherUserId);
+    } catch (e) {
+      ReleaseLogger.error('Error rechazando solicitud de amistad: $e', tag: 'ParentContacts');
+      rethrow;
+    }
+  }
+
+  /// Eliminar amigo (silencioso - el otro usuario no es notificado)
+  Future<void> removeFriend(String otherUserId) async {
+    try {
+      await _friendService.removeFriend(otherUserId);
+    } catch (e) {
+      ReleaseLogger.error('Error eliminando amigo: $e', tag: 'ParentContacts');
+      rethrow;
+    }
+  }
+
+  /// Obtener estado de amistad con otro usuario
+  Future<String> getFriendStatus(String otherUserId) async {
+    return await _friendService.getFriendStatus(otherUserId);
+  }
+
+  /// Contar solicitudes de amistad pendientes
+  Future<int> countPendingFriendRequests() async {
+    return await _friendService.countMyPendingFriendRequests();
+  }
+
+  // ═══════════════════════════════════════════════════════════════
   // BATCH UPDATE (para actualizar datos de contactos visibles)
   // ═══════════════════════════════════════════════════════════════
 
@@ -360,6 +491,8 @@ class ParentContactsController {
     _contactsSubscription?.cancel();
     _linkedChildrenSubscription?.cancel();
     _blockedSubscription?.cancel();
+    _pendingRequestsSubscription?.cancel();
     _contactsStreamController.close();
+    _pendingRequestsStreamController.close();
   }
 }

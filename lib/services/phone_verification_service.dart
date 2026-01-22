@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show VoidCallback;
 import '../notification_service.dart';
 import 'phone_normalization_service.dart';
+import 'profile/profile_completion_service.dart';
 import 'voip_service.dart';
 import '../utils/release_logger.dart';
 
@@ -282,6 +283,16 @@ class PhoneVerificationService {
         // No relanzar el error para no interferir con el flujo de login
       }
 
+      // Actualizar timezone del usuario (para mensajes de Talia en horario apropiado)
+      try {
+        final userId = userCredential.user?.uid;
+        if (userId != null) {
+          await ProfileCompletionService().updateUserTimezoneIfNeeded(userId);
+        }
+      } catch (e) {
+        ReleaseLogger.log('⚠️ Error actualizando timezone: $e', tag: 'PhoneVerificationService');
+        // No relanzar el error para no interferir con el flujo de login
+      }
 
       // Procesar VoIP token pendiente después del login exitoso (solo iOS)
       if (Platform.isIOS) {

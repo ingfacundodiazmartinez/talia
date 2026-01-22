@@ -5,8 +5,10 @@ import 'package:intl/intl.dart';
 import '../services/block_service.dart';
 import '../services/contact_alias_service.dart';
 import '../services/favorite_service.dart';
+import '../services/friend_service.dart';
 import '../calls_v2/controllers/call_controller.dart' as calls_v2;
 import '../models/child.dart';
+import '../models/contact.dart';
 import '../models/contact_user.dart';
 import '../utils/release_logger.dart';
 
@@ -27,6 +29,7 @@ class ContactProfileController {
   final BlockService _blockService;
   final ContactAliasService _aliasService;
   final FavoriteService _favoriteService;
+  final FriendService _friendService;
   final FirebaseFirestore _firestore;
   final firebase_auth.FirebaseAuth _auth;
 
@@ -46,6 +49,11 @@ class ContactProfileController {
   bool _storyNotificationsEnabled = false;
   bool _isLoadingStoryNotifications = true;
 
+  // Friend status
+  bool _isFriendWith = false;
+  String _friendStatus = 'none'; // none, pending_sent, pending_received, accepted, rejected
+  bool _isLoadingFriendStatus = true;
+
   // Subscripciones
   StreamSubscription? _contactDataSubscription;
   StreamSubscription? _blockStatusSubscription;
@@ -59,6 +67,7 @@ class ContactProfileController {
   Function(String)? onSuccess;
   Function(bool)? onStoryNotificationsChanged;
   Function()? onParentBlocked;
+  Function(bool isFriend, String status)? onFriendStatusChanged;
 
   // Constructor
   ContactProfileController({
@@ -68,11 +77,13 @@ class ContactProfileController {
     BlockService? blockService,
     ContactAliasService? aliasService,
     FavoriteService? favoriteService,
+    FriendService? friendService,
     FirebaseFirestore? firestore,
     firebase_auth.FirebaseAuth? auth,
   }) : _blockService = blockService ?? BlockService(),
        _aliasService = aliasService ?? ContactAliasService(),
        _favoriteService = favoriteService ?? FavoriteService(),
+       _friendService = friendService ?? FriendService(),
        _firestore = firestore ?? FirebaseFirestore.instance,
        _auth = auth ?? firebase_auth.FirebaseAuth.instance;
 
@@ -93,6 +104,11 @@ class ContactProfileController {
   bool get storyNotificationsEnabled => _storyNotificationsEnabled;
   bool get isLoadingStoryNotifications => _isLoadingStoryNotifications;
 
+  // Friend status getters
+  bool get isFriendWith => _isFriendWith;
+  String get friendStatus => _friendStatus;
+  bool get isLoadingFriendStatus => _isLoadingFriendStatus;
+
   /// Inicializar el controller
   Future<void> initialize() async {
     // Cargar estados iniciales en paralelo
@@ -102,6 +118,7 @@ class ContactProfileController {
       _loadContactAlias(),
       _loadContactData(),
       _loadStoryNotificationsStatus(),
+      _loadFriendStatus(),
     ]);
 
     // Cargar datos adicionales después de cargar los datos del contacto
@@ -238,6 +255,90 @@ class ContactProfileController {
       onError?.call('Error actualizando notificaciones de historias');
       return false;
     }
+  }
+
+  /// Cargar estado de amistad con el contacto
+  Future<void> _loadFriendStatus() async {
+    try {
+      final currentUserId = _auth.currentUser?.uid;
+      if (currentUserId == null) {
+        _isLoadingFriendStatus = false;
+        return;
+      }
+
+      _friendStatus = await _friendService.getFriendStatus(contactId);
+      _isFriendWith = _friendStatus == 'accepted';
+      _isLoadingFriendStatus = false;
+      onFriendStatusChanged?.call(_isFriendWith, _friendStatus);
+    } catch (e) {
+      _isLoadingFriendStatus = false;
+      ReleaseLogger.error('Error cargando estado de amistad: $e', tag: 'ContactProfile');
+    }
+  }
+
+  /// Enviar solicitud de amistad
+  Future<bool> sendFriendRequest() async {
+    try {
+      await _friendService.sendFriendRequest(contactId);
+      _friendStatus = 'pending_sent';
+      _isFriendWith = false;
+      onFriendStatusChanged?.call(_isFriendWith, _friendStatus);
+      onSuccess?.call('Solicitud de amistad enviada');
+      return true;
+    } catch (e) {
+      onError?.call(e.toString().replaceAll('Exception: ', ''));
+      return false;
+    }
+  }
+
+  /// Aceptar solicitud de amistad
+  Future<bool> acceptFriendRequest() async {
+    try {
+      await _friendService.acceptFriendRequest(contactId);
+      _friendStatus = 'accepted';
+      _isFriendWith = true;
+      onFriendStatusChanged?.call(_isFriendWith, _friendStatus);
+      onSuccess?.call('Ahora son amigos');
+      return true;
+    } catch (e) {
+      onError?.call(e.toString().replaceAll('Exception: ', ''));
+      return false;
+    }
+  }
+
+  /// Rechazar solicitud de amistad
+  Future<bool> rejectFriendRequest() async {
+    try {
+      await _friendService.rejectFriendRequest(contactId);
+      _friendStatus = 'rejected';
+      _isFriendWith = false;
+      onFriendStatusChanged?.call(_isFriendWith, _friendStatus);
+      onSuccess?.call('Solicitud rechazada');
+      return true;
+    } catch (e) {
+      onError?.call(e.toString().replaceAll('Exception: ', ''));
+      return false;
+    }
+  }
+
+  /// Eliminar amigo (silencioso)
+  Future<bool> removeFriend() async {
+    try {
+      await _friendService.removeFriend(contactId);
+      _friendStatus = 'rejected';
+      _isFriendWith = false;
+      onFriendStatusChanged?.call(_isFriendWith, _friendStatus);
+      onSuccess?.call('Amigo eliminado');
+      return true;
+    } catch (e) {
+      onError?.call(e.toString().replaceAll('Exception: ', ''));
+      return false;
+    }
+  }
+
+  /// Verificar si se puede enviar solicitud de amistad
+  bool canSendFriendRequest() {
+    return _friendStatus == 'none';
   }
 
   /// Cargar datos del contacto

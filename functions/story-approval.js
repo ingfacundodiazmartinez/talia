@@ -13,6 +13,211 @@ if (!getApps().length) {
 
 const db = getFirestore();
 
+// ═══════════════════════════════════════════════════════════════
+// VERSION COMPATIBILITY HELPERS
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * ✅ BACKWARDS COMPATIBILITY: Versión mínima para el feature "Friends for Stories"
+ * Usuarios con versiones anteriores no recibirán notificaciones FOMO
+ * porque no tienen la UI para manejarlas (no pueden agregar amigos)
+ */
+const FRIENDS_FEATURE_MIN_VERSION = '1.0.99';
+
+/**
+ * Comparar dos versiones semánticas (ej: "1.0.99" vs "1.0.98")
+ * @returns {number} -1 si v1 < v2, 0 si iguales, 1 si v1 > v2
+ */
+function compareVersions(v1, v2) {
+  if (!v1 || !v2) return 0;
+
+  // Extraer solo la parte de versión (sin build number)
+  // "1.0.99+155" -> "1.0.99"
+  const cleanV1 = v1.split('+')[0];
+  const cleanV2 = v2.split('+')[0];
+
+  const parts1 = cleanV1.split('.').map(Number);
+  const parts2 = cleanV2.split('.').map(Number);
+
+  for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+    const p1 = parts1[i] || 0;
+    const p2 = parts2[i] || 0;
+
+    if (p1 < p2) return -1;
+    if (p1 > p2) return 1;
+  }
+
+  return 0;
+}
+
+/**
+ * Verificar si un usuario tiene la versión mínima para el feature de amigos
+ * @param {string} userId - ID del usuario a verificar
+ * @returns {Promise<boolean>} true si tiene versión compatible
+ */
+async function userHasFriendsFeature(userId) {
+  try {
+    const userDoc = await db.collection('users').doc(userId).get();
+    if (!userDoc.exists) return false;
+
+    const userData = userDoc.data();
+    const appVersion = userData.appVersion; // ej: "1.0.99+155" o "1.0.98+150"
+
+    if (!appVersion) {
+      // Usuario sin versión registrada (nunca abrió la app actualizada)
+      console.log(`ℹ️ [VersionCheck] Usuario ${userId} sin appVersion registrada`);
+      return false;
+    }
+
+    const hasMinVersion = compareVersions(appVersion, FRIENDS_FEATURE_MIN_VERSION) >= 0;
+
+    if (!hasMinVersion) {
+      console.log(`ℹ️ [VersionCheck] Usuario ${userId} tiene versión ${appVersion} < ${FRIENDS_FEATURE_MIN_VERSION}`);
+    }
+
+    return hasMinVersion;
+  } catch (error) {
+    console.error(`❌ [VersionCheck] Error verificando versión de ${userId}:`, error);
+    return false; // Fail-safe: no enviar si hay error
+  }
+}
+
+/**
+ * Filtrar usuarios que tienen la versión mínima del feature
+ * OPTIMIZADO: Usa db.getAll() para batch reads (hasta 100 docs por llamada)
+ * @param {string[]} userIds - Lista de IDs de usuarios
+ * @returns {Promise<string[]>} Lista filtrada de usuarios con versión compatible
+ */
+async function filterUsersByMinVersion(userIds) {
+  if (!userIds || userIds.length === 0) return [];
+
+  const compatibleUsers = [];
+  const BATCH_SIZE = 100; // Firestore getAll() limit
+
+  // Procesar en chunks de 100
+  for (let i = 0; i < userIds.length; i += BATCH_SIZE) {
+    const chunk = userIds.slice(i, i + BATCH_SIZE);
+    const userRefs = chunk.map(id => db.collection('users').doc(id));
+
+    try {
+      const userDocs = await db.getAll(...userRefs);
+
+      for (const doc of userDocs) {
+        if (!doc.exists) continue;
+
+        const appVersion = doc.data().appVersion;
+        if (!appVersion) continue;
+
+        if (compareVersions(appVersion, FRIENDS_FEATURE_MIN_VERSION) >= 0) {
+          compatibleUsers.push(doc.id);
+        }
+      }
+    } catch (error) {
+      console.error(`❌ [VersionCheck] Error en batch read:`, error);
+    }
+  }
+
+  const incompatibleCount = userIds.length - compatibleUsers.length;
+  if (incompatibleCount > 0) {
+    console.log(`ℹ️ [VersionCheck] ${incompatibleCount}/${userIds.length} usuarios excluidos por versión antigua`);
+  }
+
+  return compatibleUsers;
+}
+
+/**
+ * Aplicar rate limiting para FOMO notifications de forma optimizada
+ * OPTIMIZADO: Usa queries IN para reducir número de operaciones
+ * @param {string[]} userIds - Lista de IDs de usuarios a verificar
+ * @param {string} senderId - ID del sender (story owner)
+ * @param {Date} twentyFourHoursAgo - Timestamp de hace 24 horas
+ * @returns {Promise<string[]>} Lista de usuarios que pasan el rate limit
+ */
+async function checkFomoRateLimits(userIds, senderId, twentyFourHoursAgo) {
+  if (!userIds || userIds.length === 0) return [];
+
+  const IN_QUERY_LIMIT = 30; // Firestore IN query limit
+  const eligibleUsers = new Set(userIds);
+
+  // Procesar en chunks de 30 (límite de IN query)
+  for (let i = 0; i < userIds.length; i += IN_QUERY_LIMIT) {
+    const chunk = userIds.slice(i, i + IN_QUERY_LIMIT);
+
+    // Query 1: Buscar usuarios que ya recibieron FOMO de este sender hoy
+    try {
+      const senderFomoQuery = await db
+        .collection('notifications')
+        .where('userId', 'in', chunk)
+        .where('type', '==', 'story_fomo')
+        .where('senderId', '==', senderId)
+        .where('createdAt', '>', twentyFourHoursAgo)
+        .get();
+
+      // Remover usuarios que ya recibieron FOMO de este sender
+      for (const doc of senderFomoQuery.docs) {
+        const userId = doc.data().userId;
+        if (eligibleUsers.has(userId)) {
+          eligibleUsers.delete(userId);
+          console.log(`⏭️ [FOMO] ${userId} ya recibió FOMO de ${senderId} hoy`);
+        }
+      }
+    } catch (error) {
+      console.error(`❌ [FOMO] Error en senderFomo query:`, error);
+    }
+
+    // Query 2: Contar FOMO diarios por usuario (más complejo, necesitamos count por usuario)
+    // Para esto usamos una query agregada por chunk
+    try {
+      const dailyFomoQuery = await db
+        .collection('notifications')
+        .where('userId', 'in', chunk)
+        .where('type', '==', 'story_fomo')
+        .where('createdAt', '>', twentyFourHoursAgo)
+        .get();
+
+      // Contar FOMO por usuario
+      const fomoCountByUser = {};
+      for (const doc of dailyFomoQuery.docs) {
+        const userId = doc.data().userId;
+        fomoCountByUser[userId] = (fomoCountByUser[userId] || 0) + 1;
+      }
+
+      // Remover usuarios con >= 5 FOMO
+      for (const [userId, count] of Object.entries(fomoCountByUser)) {
+        if (count >= 5 && eligibleUsers.has(userId)) {
+          eligibleUsers.delete(userId);
+          console.log(`⏭️ [FOMO] ${userId} ya recibió ${count} FOMO hoy`);
+        }
+      }
+    } catch (error) {
+      console.error(`❌ [FOMO] Error en dailyFomo query:`, error);
+    }
+  }
+
+  return Array.from(eligibleUsers);
+}
+
+/**
+ * Escribir notificaciones en batches de 500 (límite de Firestore)
+ * @param {Array} notifications - Array de {userId, data} para escribir
+ */
+async function writeFomoNotificationsBatched(notifications) {
+  const BATCH_SIZE = 500;
+
+  for (let i = 0; i < notifications.length; i += BATCH_SIZE) {
+    const chunk = notifications.slice(i, i + BATCH_SIZE);
+    const batch = db.batch();
+
+    for (const notification of chunk) {
+      const notificationRef = db.collection('notifications').doc();
+      batch.set(notificationRef, notification);
+    }
+
+    await batch.commit();
+    console.log(`📝 [FOMO] Batch ${Math.floor(i / BATCH_SIZE) + 1}: ${chunk.length} notificaciones escritas`);
+  }
+}
+
 /**
  * Cloud Function para aprobar historias de manera segura
  * Solo ejecutable server-side con validaciones completas
@@ -521,7 +726,8 @@ exports.createStory = onCall({
     // 6. Sanitizar caption si existe
     const sanitizedCaption = caption ? sanitizeTextWithDOMPurify(caption, 500) : null;
 
-    // 7. Obtener contactos aprobados para availableFor
+    // 7. Obtener AMIGOS (no solo contactos) para availableFor
+    // ✅ FIX: Solo amigos pueden ver historias, no todos los contactos
     // Esto permite que la query de historias sea O(1) en lugar de O(N contactos)
     const contactsSnapshot = await db
       .collection('contacts')
@@ -531,13 +737,23 @@ exports.createStory = onCall({
 
     const availableFor = [auth.uid]; // El creador siempre puede ver su propia historia
     for (const contactDoc of contactsSnapshot.docs) {
-      const contactUsers = contactDoc.data().users || [];
+      const contactData = contactDoc.data();
+      const contactUsers = contactData.users || [];
+
+      // ✅ FRIENDS ONLY: Solo agregar si isFriend === true
+      // Esto separa "contactos" (pueden chatear) de "amigos" (pueden ver historias)
+      if (contactData.isFriend !== true) {
+        continue; // Skip contacts that are not friends
+      }
+
       for (const userId of contactUsers) {
         if (userId !== auth.uid && !availableFor.includes(userId)) {
           availableFor.push(userId);
         }
       }
     }
+
+    console.log(`👥 [CreateStory] Filtrados ${contactsSnapshot.size} contactos → ${availableFor.length - 1} amigos en availableFor`);
 
     // 7.1 Obtener padres vinculados para parentViewers (queries optimizadas)
     // ✅ PERFORMANCE: Permite queries directas por padre sin nested queries
@@ -862,15 +1078,17 @@ exports.onContactCreated = onDocumentCreated(
   async (event) => {
     const contactData = event.data.data();
     const status = contactData.status;
+    const isFriend = contactData.isFriend;
     const users = contactData.users || [];
 
     if (users.length !== 2) return;
 
     const [user1, user2] = users;
 
-    // Solo procesar si el contacto fue creado con status 'approved'
-    if (status === 'approved') {
-      console.log(`✅ [onContactCreated] Contacto creado con status approved: ${user1} <-> ${user2}`);
+    // ✅ FRIENDS ONLY: Solo procesar si el contacto es amigo Y está aprobado
+    // Contactos sin isFriend=true no pueden ver historias mutuamente
+    if (status === 'approved' && isFriend === true) {
+      console.log(`✅ [onContactCreated] Contacto creado como AMIGO: ${user1} <-> ${user2}`);
 
       // Verificar que el contacto sea bidireccional
       const isBidirectional = await checkBidirectionalContact(user1, user2);
@@ -885,14 +1103,22 @@ exports.onContactCreated = onDocumentCreated(
       // Agregar cada usuario a las historias del otro
       await addUserToStories(user1, user2);
       await addUserToStories(user2, user1);
+    } else if (status === 'approved') {
+      console.log(`ℹ️ [onContactCreated] Contacto aprobado pero NO amigo: ${user1} <-> ${user2} - no se actualiza availableFor`);
     }
   }
 );
 
 /**
- * Trigger: Cuando cambia el status de un contacto
+ * Trigger: Cuando cambia el status o isFriend de un contacto
  * Este trigger se dispara cuando un contacto existente es actualizado
- * (ej: cuando un padre aprueba una solicitud pendiente)
+ *
+ * ✅ FRIENDS ONLY: Solo amigos pueden ver historias mutuamente
+ * Cambios que actualizan availableFor:
+ * - isFriend: false → true (Y status === approved): agregar
+ * - isFriend: true → false (O status !== approved): remover
+ * - status: X → approved (Y isFriend === true): agregar
+ * - status: approved → X: remover
  */
 exports.onContactUpdated = onDocumentUpdated(
   'contacts/{contactId}',
@@ -902,17 +1128,23 @@ exports.onContactUpdated = onDocumentUpdated(
 
     const beforeStatus = beforeData.status;
     const afterStatus = afterData.status;
+    const beforeIsFriend = beforeData.isFriend === true;
+    const afterIsFriend = afterData.isFriend === true;
     const users = afterData.users || [];
 
     if (users.length !== 2) return;
 
     const [user1, user2] = users;
 
-    // Si el contacto fue aprobado
-    if (beforeStatus !== 'approved' && afterStatus === 'approved') {
-      console.log(`✅ [onContactUpdated] Contacto aprobado: ${user1} <-> ${user2}`);
+    // Determinar si deben poder ver historias mutuamente
+    const wasInAvailableFor = beforeStatus === 'approved' && beforeIsFriend;
+    const shouldBeInAvailableFor = afterStatus === 'approved' && afterIsFriend;
 
-      // Verificar que el contacto sea bidireccional antes de actualizar historias
+    // Caso 1: Ahora deben poder ver historias (antes no, ahora sí)
+    if (!wasInAvailableFor && shouldBeInAvailableFor) {
+      console.log(`✅ [onContactUpdated] Contacto ahora es AMIGO aprobado: ${user1} <-> ${user2}`);
+
+      // Verificar que el contacto sea bidireccional
       const isBidirectional = await checkBidirectionalContact(user1, user2);
 
       if (!isBidirectional) {
@@ -920,16 +1152,20 @@ exports.onContactUpdated = onDocumentUpdated(
         return;
       }
 
-      console.log(`✅ [onContactUpdated] Contacto bidireccional confirmado, actualizando historias...`);
+      console.log(`✅ [onContactUpdated] Contacto bidireccional confirmado, agregando a historias...`);
 
       // Agregar cada usuario a las historias del otro
       await addUserToStories(user1, user2);
       await addUserToStories(user2, user1);
     }
 
-    // Si el contacto dejó de estar aprobado (rechazado, eliminado, etc.)
-    if (beforeStatus === 'approved' && afterStatus !== 'approved') {
-      console.log(`🚫 [onContactUpdated] Contacto ya no aprobado: ${user1} <-> ${user2}`);
+    // Caso 2: Ya no deben poder ver historias (antes sí, ahora no)
+    if (wasInAvailableFor && !shouldBeInAvailableFor) {
+      if (afterStatus !== 'approved') {
+        console.log(`🚫 [onContactUpdated] Contacto ya no aprobado: ${user1} <-> ${user2}`);
+      } else {
+        console.log(`🚫 [onContactUpdated] Contacto ya no es amigo: ${user1} <-> ${user2}`);
+      }
 
       // Remover cada usuario de las historias del otro
       await removeUserFromStories(user1, user2);
@@ -940,6 +1176,7 @@ exports.onContactUpdated = onDocumentUpdated(
 
 /**
  * Trigger: Cuando se elimina un contacto
+ * ✅ FRIENDS ONLY: Solo remover de availableFor si eran amigos
  */
 exports.onContactDeleted = onDocumentDeleted(
   'contacts/{contactId}',
@@ -947,12 +1184,19 @@ exports.onContactDeleted = onDocumentDeleted(
     const contactData = event.data.data();
     const users = contactData.users || [];
     const status = contactData.status;
+    const isFriend = contactData.isFriend === true;
 
-    if (users.length !== 2 || status !== 'approved') return;
+    if (users.length !== 2) return;
+
+    // Solo procesar si era amigo aprobado (estaban en availableFor)
+    if (status !== 'approved' || !isFriend) {
+      console.log(`ℹ️ [onContactDeleted] Contacto eliminado pero no era amigo aprobado - no se actualiza availableFor`);
+      return;
+    }
 
     const [user1, user2] = users;
 
-    console.log(`🗑️ [onContactDeleted] Contacto eliminado: ${user1} <-> ${user2}`);
+    console.log(`🗑️ [onContactDeleted] Contacto AMIGO eliminado: ${user1} <-> ${user2}`);
 
     // Remover cada usuario de las historias del otro
     await removeUserFromStories(user1, user2);
@@ -1418,6 +1662,296 @@ exports.onStoryCreatedApproved = onDocumentCreated(
       return null;
     } catch (error) {
       console.error(`❌ [StoryCreatedNotify] Error:`, error);
+      return null;
+    }
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
+// FOMO NOTIFICATIONS - PARA NO-AMIGOS
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * ✅ FOMO FEATURE: Enviar notificaciones a contactos que NO son amigos
+ *
+ * Propósito: Crear FOMO para incentivar a enviar solicitudes de amistad
+ *
+ * IMPORTANTE:
+ * - Solo para contactos que NO son amigos (isFriend !== true)
+ * - NUNCA notificar si friendRequest.status === 'rejected' (rechazado o removido)
+ * - Max 5 notificaciones FOMO por día por usuario
+ * - 1 notificación por sender aunque suba múltiples historias
+ *
+ * Flujo:
+ * 1. Detectar cuando story.status cambia a 'approved'
+ * 2. Obtener contactos del owner que NO son amigos
+ * 3. Filtrar: excluir si friendRequest.status === 'rejected'
+ * 4. Aplicar rate limiting (5/día, 1 por sender)
+ * 5. Crear notificaciones FOMO
+ */
+exports.sendFomoNotifications = onDocumentUpdated(
+  {
+    document: 'stories/{storyId}',
+    region: 'us-central1',
+  },
+  async (event) => {
+    const beforeData = event.data.before.data();
+    const afterData = event.data.after.data();
+    const storyId = event.params.storyId;
+
+    // Solo procesar si el status cambió a 'approved'
+    if (beforeData.status === afterData.status || afterData.status !== 'approved') {
+      return null;
+    }
+
+    // No notificar si ya se enviaron FOMO (idempotencia)
+    if (afterData.fomoNotified) {
+      console.log(`📩 [FOMO] Historia ${storyId} ya envió FOMO - skipping`);
+      return null;
+    }
+
+    console.log(`📩 [FOMO] Procesando FOMO para historia: ${storyId} por ${afterData.userId}`);
+
+    try {
+      const storyOwnerId = afterData.userId;
+      const storyOwnerName = afterData.userName || 'Un contacto';
+      const storyOwnerPhoto = afterData.userPhotoURL || null;
+
+      // Obtener contactos del owner que NO son amigos
+      // (contactos aprobados donde isFriend !== true)
+      const contactsSnapshot = await db
+        .collection('contacts')
+        .where('users', 'array-contains', storyOwnerId)
+        .where('status', '==', 'approved')
+        .get();
+
+      if (contactsSnapshot.empty) {
+        console.log(`📩 [FOMO] No hay contactos para FOMO`);
+        await event.data.after.ref.update({ fomoNotified: true });
+        return null;
+      }
+
+      // Filtrar contactos elegibles para FOMO
+      const fomoEligible = [];
+
+      for (const contactDoc of contactsSnapshot.docs) {
+        const contactData = contactDoc.data();
+        const users = contactData.users || [];
+        const isFriend = contactData.isFriend === true;
+        const friendRequest = contactData.friendRequest || {};
+
+        // Encontrar el otro usuario (no el owner)
+        const recipientId = users.find(id => id !== storyOwnerId);
+        if (!recipientId) continue;
+
+        // ✅ SKIP: Si ya es amigo, no necesita FOMO (puede ver historias)
+        if (isFriend) {
+          console.log(`ℹ️ [FOMO] ${recipientId} es amigo - skip`);
+          continue;
+        }
+
+        // ✅ CRITICAL: NUNCA notificar si friendRequest.status === 'rejected'
+        // Esto incluye: rechazado explícitamente O removido de amigos
+        if (friendRequest.status === 'rejected') {
+          console.log(`🚫 [FOMO] ${recipientId} tiene friendRequest.rejected - NUNCA notificar`);
+          continue;
+        }
+
+        // ✅ SKIP: Si hay solicitud pendiente, no enviar FOMO (ya están en proceso)
+        if (friendRequest.status === 'pending') {
+          console.log(`ℹ️ [FOMO] ${recipientId} tiene solicitud pendiente - skip`);
+          continue;
+        }
+
+        fomoEligible.push(recipientId);
+      }
+
+      console.log(`📩 [FOMO] Contactos elegibles: ${fomoEligible.length}`);
+
+      if (fomoEligible.length === 0) {
+        await event.data.after.ref.update({ fomoNotified: true });
+        return null;
+      }
+
+      // ✅ OPTIMIZADO: Rate limiting con queries IN (no loop secuencial)
+      const twentyFourHoursAgo = new Date();
+      twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
+
+      const filteredUsers = await checkFomoRateLimits(fomoEligible, storyOwnerId, twentyFourHoursAgo);
+      console.log(`📩 [FOMO] Usuarios después de rate limit: ${filteredUsers.length}`);
+
+      if (filteredUsers.length === 0) {
+        await event.data.after.ref.update({ fomoNotified: true });
+        return null;
+      }
+
+      // ✅ BACKWARDS COMPATIBILITY: Filtrar usuarios con versión antigua
+      // Solo usuarios con versión >= 1.0.99 pueden recibir FOMO
+      const compatibleUsers = await filterUsersByMinVersion(filteredUsers);
+      console.log(`📩 [FOMO] Usuarios con versión compatible: ${compatibleUsers.length}/${filteredUsers.length}`);
+
+      if (compatibleUsers.length === 0) {
+        await event.data.after.ref.update({ fomoNotified: true });
+        return null;
+      }
+
+      // ✅ OPTIMIZADO: Crear notificaciones en batches de 500
+      const notifications = compatibleUsers.map(userId => ({
+        userId: userId,
+        type: 'story_fomo',
+        title: `Nueva historia de ${storyOwnerName}`,
+        body: 'Agregalo como amigo para ver sus historias 👀',
+        senderId: storyOwnerId,
+        senderName: storyOwnerName,
+        senderPhotoUrl: storyOwnerPhoto,
+        data: {
+          storyOwnerId: storyOwnerId,
+          storyOwnerName: storyOwnerName,
+          action: 'open_profile',
+        },
+        read: false,
+        pushSent: false,
+        createdAt: FieldValue.serverTimestamp(),
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      }));
+
+      await writeFomoNotificationsBatched(notifications);
+      await event.data.after.ref.update({ fomoNotified: true });
+
+      console.log(`✅ [FOMO] ${compatibleUsers.length} notificaciones FOMO enviadas`);
+
+      return null;
+    } catch (error) {
+      console.error(`❌ [FOMO] Error:`, error);
+      return null;
+    }
+  }
+);
+
+/**
+ * ✅ FOMO FEATURE: Trigger para historias CREADAS directamente con approved
+ * (ej: historias de padres que no necesitan aprobación)
+ */
+exports.sendFomoNotificationsOnCreate = onDocumentCreated(
+  {
+    document: 'stories/{storyId}',
+    region: 'us-central1',
+  },
+  async (event) => {
+    const storyData = event.data.data();
+    const storyId = event.params.storyId;
+
+    // Solo procesar historias creadas con status 'approved'
+    if (storyData.status !== 'approved') {
+      return null;
+    }
+
+    // No notificar si ya se enviaron FOMO (idempotencia)
+    if (storyData.fomoNotified) {
+      console.log(`📩 [FOMO-Create] Historia ${storyId} ya envió FOMO - skipping`);
+      return null;
+    }
+
+    console.log(`📩 [FOMO-Create] Procesando FOMO para historia nueva: ${storyId} por ${storyData.userId}`);
+
+    try {
+      const storyOwnerId = storyData.userId;
+      const storyOwnerName = storyData.userName || 'Un contacto';
+      const storyOwnerPhoto = storyData.userPhotoURL || null;
+
+      // Obtener contactos del owner que NO son amigos
+      const contactsSnapshot = await db
+        .collection('contacts')
+        .where('users', 'array-contains', storyOwnerId)
+        .where('status', '==', 'approved')
+        .get();
+
+      if (contactsSnapshot.empty) {
+        console.log(`📩 [FOMO-Create] No hay contactos para FOMO`);
+        await event.data.ref.update({ fomoNotified: true });
+        return null;
+      }
+
+      // Filtrar contactos elegibles para FOMO
+      const fomoEligible = [];
+
+      for (const contactDoc of contactsSnapshot.docs) {
+        const contactData = contactDoc.data();
+        const users = contactData.users || [];
+        const isFriend = contactData.isFriend === true;
+        const friendRequest = contactData.friendRequest || {};
+
+        const recipientId = users.find(id => id !== storyOwnerId);
+        if (!recipientId) continue;
+
+        // Skip si es amigo
+        if (isFriend) continue;
+
+        // NUNCA notificar si rejected
+        if (friendRequest.status === 'rejected') continue;
+
+        // Skip si pending
+        if (friendRequest.status === 'pending') continue;
+
+        fomoEligible.push(recipientId);
+      }
+
+      console.log(`📩 [FOMO-Create] Contactos elegibles: ${fomoEligible.length}`);
+
+      if (fomoEligible.length === 0) {
+        await event.data.ref.update({ fomoNotified: true });
+        return null;
+      }
+
+      // ✅ OPTIMIZADO: Rate limiting con queries IN (no loop secuencial)
+      const twentyFourHoursAgo = new Date();
+      twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
+
+      const filteredUsers = await checkFomoRateLimits(fomoEligible, storyOwnerId, twentyFourHoursAgo);
+      console.log(`📩 [FOMO-Create] Usuarios después de rate limit: ${filteredUsers.length}`);
+
+      if (filteredUsers.length === 0) {
+        await event.data.ref.update({ fomoNotified: true });
+        return null;
+      }
+
+      // ✅ BACKWARDS COMPATIBILITY: Filtrar usuarios con versión antigua
+      const compatibleUsers = await filterUsersByMinVersion(filteredUsers);
+      console.log(`📩 [FOMO-Create] Usuarios con versión compatible: ${compatibleUsers.length}/${filteredUsers.length}`);
+
+      if (compatibleUsers.length === 0) {
+        await event.data.ref.update({ fomoNotified: true });
+        return null;
+      }
+
+      // ✅ OPTIMIZADO: Crear notificaciones en batches de 500
+      const notifications = compatibleUsers.map(userId => ({
+        userId: userId,
+        type: 'story_fomo',
+        title: `Nueva historia de ${storyOwnerName}`,
+        body: 'Agregalo como amigo para ver sus historias 👀',
+        senderId: storyOwnerId,
+        senderName: storyOwnerName,
+        senderPhotoUrl: storyOwnerPhoto,
+        data: {
+          storyOwnerId: storyOwnerId,
+          storyOwnerName: storyOwnerName,
+          action: 'open_profile',
+        },
+        read: false,
+        pushSent: false,
+        createdAt: FieldValue.serverTimestamp(),
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      }));
+
+      await writeFomoNotificationsBatched(notifications);
+      await event.data.ref.update({ fomoNotified: true });
+
+      console.log(`✅ [FOMO-Create] ${compatibleUsers.length} notificaciones FOMO enviadas`);
+
+      return null;
+    } catch (error) {
+      console.error(`❌ [FOMO-Create] Error:`, error);
       return null;
     }
   }

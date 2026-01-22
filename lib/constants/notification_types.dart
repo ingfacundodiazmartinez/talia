@@ -10,6 +10,11 @@ class NotificationTypes {
   static const String contactApproved = 'contact_approved';
   static const String autoApproval = 'auto_approval';
 
+  // Amigos (para historias)
+  static const String friendRequest = 'friend_request';
+  static const String friendRequestAccepted = 'friend_request_accepted';
+  static const String storyFomo = 'story_fomo'; // "X publicó historia, agrégalo para verla"
+
   // Llamadas
   static const String videoCall = 'video_call';
   static const String audioCall = 'audio_call';
@@ -52,7 +57,12 @@ class NotificationTypes {
       case contactRequest:
       case contactApproved:
       case autoApproval:
+      case friendRequest:
+      case friendRequestAccepted:
         return 'contactRequestsEnabled';
+
+      case storyFomo:
+        return 'storyFomoEnabled'; // Nueva preferencia para FOMO de historias
 
       case videoCall:
       case audioCall:

@@ -24,6 +24,33 @@ class ProfileCompletionService {
   final DeviceManagementService _deviceService = DeviceManagementService();
   final UserRoleService _roleService = UserRoleService();
 
+  /// Obtiene el timezone del dispositivo en formato IANA (ej: "America/Argentina/Buenos_Aires")
+  String _getDeviceTimezone() {
+    final offset = DateTime.now().timeZoneOffset;
+    final hours = offset.inHours;
+
+    // Mapeo de offsets comunes a timezones IANA
+    // Prioriza Latinoamérica ya que es el mercado principal
+    final timezoneMap = {
+      -3: 'America/Argentina/Buenos_Aires', // Argentina, Brasil (algunos)
+      -4: 'America/Santiago',               // Chile, Paraguay, Venezuela
+      -5: 'America/Lima',                   // Perú, Colombia, Ecuador, Panamá
+      -6: 'America/Mexico_City',            // México (centro)
+      -7: 'America/Tijuana',                // México (noroeste)
+      -2: 'America/Sao_Paulo',              // Brasil (verano)
+      0: 'Europe/London',                   // UK
+      1: 'Europe/Madrid',                   // España
+      2: 'Europe/Paris',                    // Francia (verano)
+    };
+
+    return timezoneMap[hours] ?? 'America/Argentina/Buenos_Aires';
+  }
+
+  /// Obtiene el offset del timezone en horas
+  int _getTimezoneOffsetHours() {
+    return DateTime.now().timeZoneOffset.inHours;
+  }
+
   // Calculate age from birth date
   int calculateAge(DateTime birthDate) {
     final today = DateTime.now();
@@ -218,6 +245,9 @@ class ProfileCompletionService {
             'createdAt': FieldValue.serverTimestamp(),
             'isOnline': true,
             'lastSeen': FieldValue.serverTimestamp(),
+            // Timezone para mensajes de Talia en horario apropiado
+            'timezone': _getDeviceTimezone(),
+            'timezoneOffset': _getTimezoneOffsetHours(),
           });
         } catch (e) {
           rethrow;
@@ -319,6 +349,9 @@ class ProfileCompletionService {
           'createdAt': FieldValue.serverTimestamp(),
           'isOnline': true,
           'lastSeen': FieldValue.serverTimestamp(),
+          // Timezone para mensajes de Talia en horario apropiado
+          'timezone': _getDeviceTimezone(),
+          'timezoneOffset': _getTimezoneOffsetHours(),
         });
 
         await _registerUserDevice(userId);
@@ -341,6 +374,9 @@ class ProfileCompletionService {
           'createdAt': FieldValue.serverTimestamp(),
           'isOnline': true,
           'lastSeen': FieldValue.serverTimestamp(),
+          // Timezone para mensajes de Talia en horario apropiado
+          'timezone': _getDeviceTimezone(),
+          'timezoneOffset': _getTimezoneOffsetHours(),
         });
 
         await _registerUserDevice(userId);
@@ -521,6 +557,9 @@ class ProfileCompletionService {
         'migratedAt': FieldValue.serverTimestamp(),
         'isOnline': true,
         'lastSeen': FieldValue.serverTimestamp(),
+        // Actualizar timezone con el dispositivo actual
+        'timezone': _getDeviceTimezone(),
+        'timezoneOffset': _getTimezoneOffsetHours(),
       });
 
       // Marcar el documento antiguo como migrado (no eliminarlo para mantener referencias)
@@ -552,6 +591,41 @@ class ProfileCompletionService {
   String _redactPhone(String phone) {
     if (phone.length < 6) return '***';
     return '${phone.substring(0, 3)}***${phone.substring(phone.length - 2)}';
+  }
+
+  /// Actualiza el timezone del usuario si cambió (ej: viajó a otro país)
+  /// Llamar periódicamente al abrir la app
+  Future<void> updateUserTimezoneIfNeeded(String userId) async {
+    try {
+      final currentTimezone = _getDeviceTimezone();
+      final currentOffset = _getTimezoneOffsetHours();
+
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(userId)
+          .get();
+
+      if (!userDoc.exists) return;
+
+      final storedTimezone = userDoc.data()?['timezone'] as String?;
+      final storedOffset = userDoc.data()?['timezoneOffset'] as int?;
+
+      // Solo actualizar si cambió el offset (significa que el usuario cambió de zona)
+      if (storedOffset != currentOffset) {
+        await FirebaseFirestore.instance.collection('users').doc(userId).update({
+          'timezone': currentTimezone,
+          'timezoneOffset': currentOffset,
+          'timezoneUpdatedAt': FieldValue.serverTimestamp(),
+        });
+        ReleaseLogger.log(
+          '🌍 Timezone actualizado: $storedTimezone → $currentTimezone',
+          tag: 'ProfileCompletionService',
+        );
+      }
+    } catch (e) {
+      // No bloquear el flujo si falla
+      ReleaseLogger.error('Error actualizando timezone: $e', tag: 'ProfileCompletionService');
+    }
   }
 }
 
