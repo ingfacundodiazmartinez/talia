@@ -3,6 +3,7 @@
 /// Lee los contactos del teléfono y busca coincidencias con usuarios registrados
 library;
 
+import 'dart:io';
 import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:talia/services/remote_logger_service.dart';
@@ -23,12 +24,30 @@ class DeviceContactsService {
   }
 
   /// Verifica si ya se tiene permiso (sin mostrar diálogo)
-  /// Usa permission_handler para verificar sin acceder a contactos
+  /// Usa permission_handler para verificar, con fallback a FlutterContacts en iOS
   Future<bool> hasPermission() async {
-    // IMPORTANTE: NO llamar a FlutterContacts.getContacts() para verificar permiso
-    // Esto causa SecurityException en Android si el permiso no está concedido
     final status = await Permission.contacts.status;
-    return status.isGranted;
+
+    // Si permission_handler dice granted, confiamos en eso
+    if (status.isGranted || status.isLimited) {
+      return true;
+    }
+
+    // ✅ FIX iOS: permission_handler a veces reporta 'denied' incorrectamente en iOS
+    // Verificar con FlutterContacts como fallback (solo iOS porque Android crashea)
+    // PERO: Si FlutterContacts retorna 0 contactos, no podemos asumir que tenemos permiso
+    // (iOS puede retornar lista vacía en lugar de excepción cuando está denegado)
+    if (Platform.isIOS) {
+      try {
+        final testContacts = await FlutterContacts.getContacts(withProperties: false);
+        // Solo retornar true si realmente hay contactos
+        return testContacts.isNotEmpty;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    return false;
   }
 
   /// Obtiene todos los contactos del dispositivo

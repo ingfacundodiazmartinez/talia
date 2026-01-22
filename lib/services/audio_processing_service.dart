@@ -54,7 +54,12 @@ class AudioProcessingService {
         return amplified;
       } finally {
         // Siempre limpiar el controller
-        controller.dispose();
+        // Wrap in try-catch to handle "codec is released already" race condition
+        try {
+          controller.dispose();
+        } catch (_) {
+          // Ignore codec already released errors
+        }
       }
     } catch (e) {
       // En caso de error, retornar waveform por defecto
@@ -84,7 +89,12 @@ class AudioProcessingService {
         }
         return null;
       } finally {
-        controller.dispose();
+        // Wrap in try-catch to handle "codec is released already" race condition
+        try {
+          controller.dispose();
+        } catch (_) {
+          // Ignore codec already released errors
+        }
       }
     } catch (e) {
       return null;

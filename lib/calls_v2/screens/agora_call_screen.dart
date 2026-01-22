@@ -1657,7 +1657,12 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
     _ringtoneService.dispose();
 
     _callSubscription?.cancel();
-    _proximitySubscription?.cancel();
+    // Wrap in try-catch to handle "No active stream to cancel" error
+    try {
+      _proximitySubscription?.cancel();
+    } catch (e) {
+      ReleaseLogger.log('Proximity cancel handled: $e', tag: _tag);
+    }
     _callKitEndedSubscription?.cancel();
     _callController.dispose();
 

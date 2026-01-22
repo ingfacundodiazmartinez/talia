@@ -174,7 +174,12 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget> {
   /// Setup proximity sensor for earpiece switching (like WhatsApp)
   void _setupProximitySensor() {
     // Cancel any existing subscription
-    _proximitySubscription?.cancel();
+    // Wrap in try-catch to handle "No active stream to cancel" error
+    try {
+      _proximitySubscription?.cancel();
+    } catch (e) {
+      ReleaseLogger.log('Proximity cancel handled: $e', tag: 'AudioPlayer');
+    }
 
     // Listen to proximity sensor events
     _proximitySubscription = ProximitySensor.events.listen((int event) {
@@ -198,7 +203,12 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget> {
 
   /// Teardown proximity sensor
   void _teardownProximitySensor() {
-    _proximitySubscription?.cancel();
+    // Wrap in try-catch to handle "No active stream to cancel" error
+    try {
+      _proximitySubscription?.cancel();
+    } catch (e) {
+      ReleaseLogger.log('Proximity cancel handled: $e', tag: 'AudioPlayer');
+    }
     _proximitySubscription = null;
     _isNearEar = false;
 
@@ -266,7 +276,14 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget> {
     _positionSubscription?.cancel();
     _proximitySubscription?.cancel();
     _audioPlayer.dispose();
-    _waveController?.dispose();
+    // Wrap in try-catch to handle "codec is released already" race condition
+    // This can happen when MediaCodec is released before dispose completes
+    try {
+      _waveController?.dispose();
+    } catch (e) {
+      // Ignore codec already released errors - this is expected in some cases
+      ReleaseLogger.log('WaveController dispose handled: $e', tag: 'AudioPlayer');
+    }
     // Ensure WakeLock is disabled when widget is disposed
     WakelockPlus.disable();
     super.dispose();

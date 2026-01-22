@@ -234,16 +234,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   /// Mostrar selector de personajes para Face Swap
   Future<void> _showFaceSwapSelector() async {
-    // Obtener transformaciones restantes para mostrar en el dialog
-    final usageData = await _usageLimitsService.getFaceSwapDailyUsage();
-    final remaining = usageData['remaining'] as int;
-
-    // Mostrar selector de personajes
+    // ✅ OPTIMISTIC: Mostrar dialog inmediatamente sin esperar usage data
+    // El chequeo real de límites se hace en _processFaceSwapPhoto después de tomar la foto
     final selectedCharacter = await showDialog<Character>(
       context: context,
-      builder: (context) => CharacterSelectorDialog(
-        remainingTransforms: remaining,
-      ),
+      builder: (context) => const CharacterSelectorDialog(),
     );
 
     if (selectedCharacter != null && mounted) {

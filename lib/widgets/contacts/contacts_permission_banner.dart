@@ -21,10 +21,14 @@ class ContactsPermissionBanner extends StatefulWidget {
   /// Callback cuando se detecta que el permiso cambió
   final VoidCallback? onPermissionChanged;
 
+  /// Mostrar información de debug
+  final bool showDebug;
+
   const ContactsPermissionBanner({
     super.key,
     this.onRequestPermission,
     this.onPermissionChanged,
+    this.showDebug = false,
   });
 
   @override
@@ -38,6 +42,12 @@ class _ContactsPermissionBannerState extends State<ContactsPermissionBanner>
   bool _isLoading = true;
   bool _isDismissed = false;
   bool _isCheckingPermission = false;
+
+  // Debug state
+  PermissionStatus? _rawStatus;
+  bool? _flutterContactsCanAccess;
+  String? _debugError;
+  DateTime? _lastCheckTime;
 
   @override
   void initState() {
@@ -75,6 +85,11 @@ class _ContactsPermissionBannerState extends State<ContactsPermissionBanner>
       final status = await Permission.contacts.status;
       if (!mounted) return;
 
+      // Debug: guardar raw status y timestamp
+      _rawStatus = status;
+      _debugError = null;
+      _lastCheckTime = DateTime.now();
+
       final wasGranted = _status?.isGranted ?? false;
 
       // Verificar con ambas fuentes para mayor confiabilidad
@@ -84,14 +99,29 @@ class _ContactsPermissionBannerState extends State<ContactsPermissionBanner>
       // Solo en iOS: Si permission_handler dice que no está granted, verificar con FlutterContacts
       // En Android NO hacemos esto porque causa SecurityException fatal en Samsung
       // que no es capturada por el try-catch (se lanza en hilo nativo)
-      if (!isNowGranted && Platform.isIOS) {
+      if (Platform.isIOS) {
         try {
           // Intentar obtener contactos - si funciona, tenemos permiso
-          await FlutterContacts.getContacts(withProperties: false);
-          isNowGranted = true; // Si llegamos aquí, tenemos permiso
+          final contacts = await FlutterContacts.getContacts(withProperties: false);
+          _flutterContactsCanAccess = true;
+          _debugError = 'FlutterContacts returned ${contacts.length} contacts';
+
+          // ✅ FIX: Si permission_handler dice denied Y FlutterContacts retorna 0 contactos,
+          // NO podemos asumir que tenemos permiso - iOS puede retornar lista vacía en lugar de excepción
+          if (contacts.isEmpty && (status.isDenied || status.isPermanentlyDenied)) {
+            // Caso ambiguo: lista vacía + permiso denegado según permission_handler
+            // Confiar en permission_handler en este caso
+            isNowGranted = false;
+            _debugError = 'FlutterContacts returned 0 contacts (ambiguous - trusting permission_handler)';
+          } else {
+            // Si hay contactos, definitivamente tenemos permiso
+            isNowGranted = true;
+          }
         } catch (e) {
           // Si falla, no tenemos permiso
           isNowGranted = false;
+          _flutterContactsCanAccess = false;
+          _debugError = 'FlutterContacts error: $e';
         }
       }
 
@@ -115,7 +145,7 @@ class _ContactsPermissionBannerState extends State<ContactsPermissionBanner>
       final loadingChanged = _isLoading;
       final shouldDismiss = isNowGranted && !_isDismissed;
 
-      if (statusChanged || loadingChanged || shouldDismiss) {
+      if (statusChanged || loadingChanged || shouldDismiss || widget.showDebug) {
         setState(() {
           _status = effectiveStatus;
           _isLoading = false;
@@ -169,6 +199,11 @@ class _ContactsPermissionBannerState extends State<ContactsPermissionBanner>
 
   @override
   Widget build(BuildContext context) {
+    // Si debug está habilitado, siempre mostrar
+    if (widget.showDebug) {
+      return _buildDebugBanner(context);
+    }
+
     // No mostrar si está cargando, ya tiene permiso, o fue descartado
     if (_isLoading || _status == null || _status!.isGranted || _isDismissed) {
       return SizedBox.shrink();
@@ -325,6 +360,137 @@ class _ContactsPermissionBannerState extends State<ContactsPermissionBanner>
           actionColor: Colors.blue.shade700,
         );
     }
+  }
+
+  /// Debug banner que muestra toda la información de permisos
+  Widget _buildDebugBanner(BuildContext context) {
+    return Container(
+      margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade900,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.purple, width: 2),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.bug_report, color: Colors.purple, size: 20),
+              SizedBox(width: 8),
+              Text(
+                'DEBUG: Contacts Permission',
+                style: TextStyle(
+                  color: Colors.purple,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
+              Spacer(),
+              IconButton(
+                icon: Icon(Icons.refresh, color: Colors.white, size: 20),
+                onPressed: _checkPermission,
+                padding: EdgeInsets.zero,
+                constraints: BoxConstraints(),
+              ),
+            ],
+          ),
+          Divider(color: Colors.grey.shade700),
+          _debugRow('Platform', Platform.isIOS ? 'iOS' : 'Android'),
+          _debugRow('Last Check', _lastCheckTime?.toString().substring(11, 19) ?? 'never'),
+          _debugRow('isLoading', _isLoading.toString()),
+          _debugRow('isDismissed', _isDismissed.toString()),
+          _debugRow('isCheckingPermission', _isCheckingPermission.toString()),
+          Divider(color: Colors.grey.shade700, height: 16),
+          _debugRow('Raw Status (permission_handler)', _rawStatus?.toString() ?? 'null'),
+          _debugRow('Effective Status', _status?.toString() ?? 'null'),
+          if (Platform.isIOS) ...[
+            Divider(color: Colors.grey.shade700, height: 16),
+            _debugRow('FlutterContacts canAccess', _flutterContactsCanAccess?.toString() ?? 'not checked'),
+          ],
+          if (_debugError != null) ...[
+            Divider(color: Colors.grey.shade700, height: 16),
+            _debugRow('Error', _debugError!, isError: true),
+          ],
+          Divider(color: Colors.grey.shade700, height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: _handleAction,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue,
+                    padding: EdgeInsets.symmetric(vertical: 8),
+                  ),
+                  child: Text(
+                    _status?.isPermanentlyDenied == true ? 'Open Settings' : 'Request Permission',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                ),
+              ),
+              SizedBox(width: 8),
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: () async {
+                    // Test FlutterContacts directly
+                    try {
+                      final contacts = await FlutterContacts.getContacts(withProperties: false);
+                      if (mounted) {
+                        setState(() {
+                          _flutterContactsCanAccess = true;
+                          _debugError = 'Got ${contacts.length} contacts';
+                        });
+                      }
+                    } catch (e) {
+                      if (mounted) {
+                        setState(() {
+                          _flutterContactsCanAccess = false;
+                          _debugError = e.toString();
+                        });
+                      }
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    padding: EdgeInsets.symmetric(vertical: 8),
+                  ),
+                  child: Text('Test FlutterContacts', style: TextStyle(fontSize: 12)),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _debugRow(String label, String value, {bool isError = false}) {
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 180,
+            child: Text(
+              label,
+              style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: TextStyle(
+                color: isError ? Colors.red : Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

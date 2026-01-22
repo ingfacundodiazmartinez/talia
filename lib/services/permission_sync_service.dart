@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:geolocator/geolocator.dart';
 import '../utils/release_logger.dart';
@@ -52,12 +53,25 @@ class PermissionSyncService {
       final geolocatorPermission = await Geolocator.checkPermission();
       final locationState = _getLocationStateFromGeolocator(geolocatorPermission);
 
-      // ✅ FIX: Solo usar Permission.contacts.status para verificar
-      // NO usar FlutterContacts.requestPermission() porque puede mostrar diálogo del sistema
-      // permission_handler es confiable en Android; en iOS puede dar falso negativo pero
-      // es mejor que mostrar diálogos inesperados al usuario
+      // Verificar permiso de contactos
       final contactsStatus = results[2];
-      final hasContactsPermission = contactsStatus.isGranted || contactsStatus.isLimited;
+      bool hasContactsPermission = contactsStatus.isGranted || contactsStatus.isLimited;
+
+      // ✅ FIX iOS: permission_handler a veces reporta 'denied' incorrectamente en iOS
+      // Verificar con FlutterContacts.getContacts como fallback (solo iOS)
+      // getContacts() NO muestra diálogo - solo lee si ya tiene permiso
+      // PERO: Si FlutterContacts retorna 0 contactos, no podemos asumir que tenemos permiso
+      // (iOS puede retornar lista vacía en lugar de excepción cuando está denegado)
+      if (!hasContactsPermission && Platform.isIOS) {
+        try {
+          final testContacts = await FlutterContacts.getContacts(withProperties: false);
+          // Solo marcar como granted si realmente hay contactos
+          hasContactsPermission = testContacts.isNotEmpty;
+        } catch (e) {
+          hasContactsPermission = false;
+        }
+      }
+
       final contactsState = _getContactsState(contactsStatus, hasContactsPermission);
 
       final permissionStatus = {

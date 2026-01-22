@@ -248,9 +248,21 @@ void main() async {
 
   // Capturar errores asíncronos fuera del framework Flutter
   PlatformDispatcher.instance.onError = (error, stack) {
-    FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
-    ReleaseLogger.error('Error asíncrono capturado: $error', tag: 'MainApp');
-    ReleaseLogger.error('Stack trace: $stack', tag: 'MainApp');
+    // Filter out expected exceptions that are not actual crashes
+    final isExpectedException = error is TimeoutException ||
+        error.toString().contains('TimeoutException') ||
+        error.toString().contains('No active stream to cancel') ||
+        error.toString().contains('codec is released already');
+
+    if (isExpectedException) {
+      // Log but don't report as fatal - these are expected/handled errors
+      ReleaseLogger.log('Expected async error (not fatal): $error', tag: 'MainApp');
+      FirebaseCrashlytics.instance.recordError(error, stack, fatal: false);
+    } else {
+      FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
+      ReleaseLogger.error('Error asíncrono capturado: $error', tag: 'MainApp');
+      ReleaseLogger.error('Stack trace: $stack', tag: 'MainApp');
+    }
     return true;
   };
 

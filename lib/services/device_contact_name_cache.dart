@@ -42,7 +42,24 @@ class DeviceContactNameCache {
     try {
       // Verificar permisos
       final status = await Permission.contacts.status;
-      if (!status.isGranted) {
+      bool hasPermission = status.isGranted || status.isLimited;
+
+      // ✅ FIX iOS: permission_handler a veces reporta 'denied' incorrectamente en iOS
+      // Verificar con FlutterContacts como fallback (solo iOS porque Android crashea)
+      // PERO: Si FlutterContacts retorna 0 contactos Y permission_handler dice denied,
+      // confiar en permission_handler (iOS puede retornar lista vacía en lugar de excepción)
+      if (!hasPermission && Platform.isIOS) {
+        try {
+          final testContacts = await FlutterContacts.getContacts(withProperties: false);
+          // Solo marcar como granted si realmente hay contactos
+          // (lista vacía + status denied = confiar en permission_handler)
+          hasPermission = testContacts.isNotEmpty;
+        } catch (e) {
+          hasPermission = false;
+        }
+      }
+
+      if (!hasPermission) {
         ReleaseLogger.log('📱 [DeviceNameCache] Contacts permission not granted');
         _isLoading = false;
         return;
