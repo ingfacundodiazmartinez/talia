@@ -3,8 +3,6 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart' as scheduler;
 import 'firebase_options.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
@@ -18,7 +16,6 @@ import 'constants/notification_types.dart';
 import 'services/notification_filter.dart';
 import 'services/callkit_service.dart';
 import 'services/voip_service.dart';
-import 'services/app_state_service.dart';
 import 'services/location_service.dart';
 import 'services/notification_tracking_service.dart';
 import 'services/notification_preferences_service.dart';
@@ -36,7 +33,6 @@ import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:permission_handler/permission_handler.dart';
 // V2 Call System imports
 import 'calls_v2/controllers/call_controller.dart' as calls_v2;
-import 'calls_v2/screens/agora_call_screen.dart';
 import 'calls_v2/services/call_state_cache_service.dart';
 
 // ═══════════════════════════════════════════════════════════════
@@ -263,7 +259,6 @@ class NotificationService {
 
   String? _fcmToken;
   bool _isInitialized = false;
-  GlobalKey<NavigatorState>? _navigatorKey;
 
   // ✅ Audit #2: guardar las subs de FCM para evitar listeners duplicados si
   // `_setupListeners` se llama más de una vez (init, re-init en lifecycle).
@@ -276,11 +271,6 @@ class NotificationService {
   // ✅ FIX: Timestamp de cuando la app volvió a foreground (para filtrar notificaciones viejas)
   DateTime? _lastResumedTime;
 
-  // ✅ FIX: Pending navigation for calls accepted from background
-  String? _pendingCallNavigation;
-  Timer? _navigationTimeoutTimer;
-  StreamSubscription<bool>? _appStateSubscription;
-
   // ✅ V2 NAVIGATION: Callback para navegar a call screen (Android CallKit path)
   Function(String callId, {bool isIncoming})? onNavigateToCall;
 
@@ -292,12 +282,6 @@ class NotificationService {
   // ✅ Listener de Firestore para notificaciones en foreground
   StreamSubscription? _notificationsStreamSubscription;
   DateTime? _notificationsListenerStartTime;
-
-  // Stream para notificar videollamadas entrantes
-  final _incomingCallController =
-      StreamController<Map<String, dynamic>>.broadcast();
-  Stream<Map<String, dynamic>> get incomingCallStream =>
-      _incomingCallController.stream;
 
   // Stream para notificar cuando se toca una notificación de chat
   final _chatNotificationTapController =
@@ -376,11 +360,6 @@ class NotificationService {
       StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get friendRequestNotificationTapStream =>
       _friendRequestNotificationTapController.stream;
-
-  // Método público para emitir llamadas entrantes al stream
-  void emitIncomingCall(Map<String, dynamic> callData) {
-    _incomingCallController.add(callData);
-  }
 
   /// ✅ Getter para el chat actualmente abierto (usado para evitar navegación duplicada)
   String? get currentChatId => _currentChatId;
@@ -633,151 +612,13 @@ class NotificationService {
     }
   }
 
-  // Inicializar servicio de notificaciones
-  /// Set navigator key for navigation from background
-  void setNavigatorKey(GlobalKey<NavigatorState> navigatorKey) {
-    _navigatorKey = navigatorKey;
-    ReleaseLogger.log(
-      '✅ Navigator key configurado en NotificationService',
-      tag: 'NotificationService',
-    );
-  }
-
-  /// ✅ CLEAN: Navegar cuando el navigator esté disponible (solución reactiva)
-  // ignore: unused_element
-  void _navigateWhenReady(String callId) {
-    ReleaseLogger.log(
-      '🔄 Programando navegación para $callId',
-      tag: 'NotificationService',
-    );
-
-    // Limpiar cualquier navegación pendiente anterior
-    _cancelPendingNavigation();
-
-    // Guardar como pendiente
-    _pendingCallNavigation = callId;
-
-    // Configurar timeout de 10 segundos para evitar navegación zombie
-    _navigationTimeoutTimer = Timer(const Duration(seconds: 10), () {
-      if (_pendingCallNavigation != null) {
-        ReleaseLogger.error(
-          '❌ Timeout esperando Navigator para $callId',
-          tag: 'NotificationService',
-        );
-        _pendingCallNavigation = null;
-      }
-    });
-
-    // Intentar navegar inmediatamente
-    if (_navigatorKey?.currentState?.mounted == true) {
-      ReleaseLogger.log(
-        '✅ Navigator disponible INMEDIATAMENTE',
-        tag: 'NotificationService',
-      );
-      _attemptPendingNavigation();
-    } else {
-      // Navigator no disponible, esperar al siguiente frame
-      ReleaseLogger.log(
-        '⏳ Navigator no disponible, esperando frames...',
-        tag: 'NotificationService',
-      );
-      _waitForNavigatorWithFrameCallbacks(0);
-    }
-  }
-
-  /// Cancelar cualquier navegación pendiente
-  void _cancelPendingNavigation() {
-    _navigationTimeoutTimer?.cancel();
-    _navigationTimeoutTimer = null;
-    _pendingCallNavigation = null;
-  }
-
-  /// Intentar navegar a la llamada pendiente (sin reintentos)
-  void _attemptPendingNavigation() {
-    if (_pendingCallNavigation == null) return;
-
-    final callId = _pendingCallNavigation!;
-
-    if (_navigatorKey?.currentState?.mounted == true) {
-      ReleaseLogger.log(
-        '✅ Navigator disponible - navegando a $callId',
-        tag: 'NotificationService',
-      );
-
-      _navigatorKey!.currentState!.push(
-        MaterialPageRoute(
-          builder: (_) => AgoraCallScreen(callId: callId, isIncoming: true),
-        ),
-      );
-
-      // Limpiar navegación pendiente
-      _cancelPendingNavigation();
-    } else {
-      ReleaseLogger.log(
-        '⏳ Navigator no disponible aún para $callId',
-        tag: 'NotificationService',
-      );
-      // No hacer nada - onAppResumed se encargará
-    }
-  }
-
-  /// Llamar cuando la app vuelva al foreground (solución reactiva)
-  void onAppResumed() {
-    ReleaseLogger.log(
-      '▶️ App resumed - verificando navegación pendiente',
-      tag: 'NotificationService',
-    );
-
-    if (_pendingCallNavigation == null) return;
-
-    // Usar SchedulerBinding para ejecutar después del frame actual
-    // Esto garantiza que el widget tree esté completamente reconstruido
-    scheduler.SchedulerBinding.instance.addPostFrameCallback((_) {
-      _scheduleNavigationAfterBuild();
-    });
-  }
-
-  /// Programar navegación después de que el build esté completo
-  void _scheduleNavigationAfterBuild() {
-    if (_pendingCallNavigation == null) return;
-
-    // El widget tree ya se reconstruyó, ahora esperamos al siguiente frame
-    // donde el Navigator debería estar disponible
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_navigatorKey?.currentState?.mounted == true) {
-        _attemptPendingNavigation();
-      } else {
-        // Si aún no está disponible, esperar al siguiente frame
-        // Esto es raro pero puede pasar si hay animaciones complejas
-        ReleaseLogger.log(
-          '⏳ Esperando siguiente frame para Navigator',
-          tag: 'NotificationService',
-        );
-        _waitForNavigatorWithFrameCallbacks();
-      }
-    });
-  }
-
-  /// Esperar al Navigator usando frame callbacks (máximo 10 frames)
-  void _waitForNavigatorWithFrameCallbacks([int frameCount = 0]) {
-    if (_pendingCallNavigation == null) return;
-    if (frameCount >= 10) {
-      ReleaseLogger.error(
-        '❌ Navigator no disponible después de 10 frames',
-        tag: 'NotificationService',
-      );
-      _cancelPendingNavigation();
-      return;
-    }
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_navigatorKey?.currentState?.mounted == true) {
-        _attemptPendingNavigation();
-      } else {
-        _waitForNavigatorWithFrameCallbacks(frameCount + 1);
-      }
-    });
-  }
+  // ⚠️ Dead code eliminado: setNavigatorKey + cluster de _navigateWhenReady,
+  // _attemptPendingNavigation, _cancelPendingNavigation, onAppResumed,
+  // _scheduleNavigationAfterBuild, _waitForNavigatorWithFrameCallbacks.
+  // Toda esta infra para navegar a una call desde notif tocada quedó
+  // huérfana: las calls hoy se manejan via CallKit/PushKit, no via
+  // navigator key. `_processPendingNavigation` (alive, usado para chat tap
+  // desde killed state) ya cubre el caso restante.
 
   Future<void> initialize() async {
     if (_isInitialized) return;
@@ -842,19 +683,9 @@ class NotificationService {
       // - main.dart guarda los datos en SharedPreferences (porque getInitialMessage solo funciona una vez)
       // - Aquí los procesamos para navegar al chat
       await _processPendingNavigation();
-
-      // 6.5. ✅ FIX: Suscribirse a cambios de estado de app para navegación pendiente
-      _appStateSubscription = AppStateService().foregroundStateStream.listen((
-        isInForeground,
-      ) {
-        if (isInForeground) {
-          ReleaseLogger.log(
-            '📱 App volvió a foreground - verificando navegación pendiente',
-            tag: 'NotificationService',
-          );
-          onAppResumed();
-        }
-      });
+      // ⚠️ Removida la subscripción a foregroundStateStream que solo llamaba
+      // a `onAppResumed()` para navegar a calls pendientes — esa infra
+      // quedó huérfana porque las calls se manejan via CallKit/PushKit hoy.
 
       // 7. ✅ CRÍTICO: Verificar si hay usuario autenticado e iniciar monitoreo automáticamente
       await _checkAndStartCallMonitoring();
@@ -1326,11 +1157,6 @@ class NotificationService {
         tag: 'NotificationService',
       );
     }
-  }
-
-  /// Reiniciar listener de notificaciones (llamar cuando cambia el usuario)
-  Future<void> restartNotificationsListener() async {
-    await _startNotificationsListener();
   }
 
   // Obtener token FCM
@@ -2219,12 +2045,13 @@ class NotificationService {
       case 'incoming_call':
       case 'group_video_call':
       case 'group_audio_call':
+        // ⚠️ Las llamadas se manejan via CallKit/PushKit (no via tap regular).
+        // Si el usuario toca este tipo de notif solo logueamos — no hay
+        // listener para `incomingCallStream` (removido).
         ReleaseLogger.log(
-          '📞 Notificación de llamada tocada, mostrando diálogo',
+          '📞 Notificación de llamada tocada — manejada por CallKit',
           tag: 'NotificationService',
         );
-        data['fromNotificationTap'] = true;
-        _incomingCallController.add(data);
         break;
 
       // ═══════════════════════════════════════════════════════════════
@@ -2415,7 +2242,6 @@ class NotificationService {
     required String body,
     required Map<String, dynamic> data,
     String? senderId,
-    String? imageUrl,
     String? chatId, // Para verificar si es del chat actual
   }) async {
     try {
@@ -2454,45 +2280,6 @@ class NotificationService {
     }
   }
 
-  // Enviar notificación de solicitud de permiso para grupo
-  Future<void> sendGroupInvitationPermissionRequest({
-    required String parentId,
-    required String childName,
-    required String groupName,
-    required String contactName,
-    required String inviterName,
-  }) async {
-    try {
-      await _firestore.collection('notifications').add({
-        'userId': parentId,
-        'type': 'group_permission_request',
-        'title': '🔒 Solicitud de Grupo para $childName',
-        'body':
-            '$inviterName quiere agregar a $childName al grupo "$groupName". Necesita aprobar el contacto con $contactName.',
-        'data': {
-          'type': 'group_permission_request',
-          'childName': childName,
-          'groupName': groupName,
-          'contactName': contactName,
-          'inviterName': inviterName,
-        },
-        'timestamp': FieldValue.serverTimestamp(),
-        'read': false,
-        'priority': 'high',
-      });
-
-      ReleaseLogger.log(
-        '✅ Notificación de solicitud de grupo enviada al padre: $parentId',
-        tag: 'NotificationService',
-      );
-    } catch (e) {
-      ReleaseLogger.error(
-        '❌ Error enviando notificación de grupo: $e',
-        tag: 'NotificationService',
-      );
-    }
-  }
-
   // Enviar notificación de membresía aprobada
   Future<void> sendGroupMembershipApproved({
     required String userId,
@@ -2517,195 +2304,6 @@ class NotificationService {
     } catch (e) {
       ReleaseLogger.error(
         '❌ Error enviando notificación de membresía: $e',
-        tag: 'NotificationService',
-      );
-    }
-  }
-
-  // Enviar notificación de nuevo mensaje en grupo
-  Future<void> sendGroupMessageNotification({
-    required String groupId,
-    required String groupName,
-    required String senderName,
-    required String messageText,
-    required List<String> memberIds,
-    required String senderId,
-  }) async {
-    try {
-      // Enviar a todos los miembros excepto al remitente
-      final recipientIds = memberIds.where((id) => id != senderId).toList();
-
-      for (final recipientId in recipientIds) {
-        await _firestore.collection('notifications').add({
-          'userId': recipientId,
-          'type': 'group_message',
-          'title': '💬 $groupName',
-          'body': '$senderName: $messageText',
-          'data': {
-            'type': 'group_message',
-            'groupId': groupId,
-            'groupName': groupName,
-            'senderId': senderId,
-            'senderName': senderName,
-          },
-          'timestamp': FieldValue.serverTimestamp(),
-          'read': false,
-          'priority': 'normal',
-        });
-      }
-
-      ReleaseLogger.log(
-        '✅ Notificaciones de grupo enviadas a ${recipientIds.length} miembros',
-        tag: 'NotificationService',
-      );
-    } catch (e) {
-      ReleaseLogger.error(
-        '❌ Error enviando notificaciones de grupo: $e',
-        tag: 'NotificationService',
-      );
-    }
-  }
-
-  // Enviar recordatorio a padres sobre solicitudes pendientes
-  Future<void> sendGroupPermissionReminder({
-    required String parentId,
-    required String childName,
-    required String groupName,
-    required int pendingDays,
-  }) async {
-    try {
-      await _firestore.collection('notifications').add({
-        'userId': parentId,
-        'type': 'group_permission_reminder',
-        'title': '⏰ Recordatorio: Solicitud de Grupo Pendiente',
-        'body':
-            'Hace $pendingDays días que $childName está esperando unirse al grupo "$groupName". ¿Puedes revisar la solicitud?',
-        'data': {
-          'type': 'group_permission_reminder',
-          'childName': childName,
-          'groupName': groupName,
-          'pendingDays': pendingDays,
-        },
-        'timestamp': FieldValue.serverTimestamp(),
-        'read': false,
-        'priority': 'normal',
-      });
-
-      ReleaseLogger.log(
-        '✅ Recordatorio de grupo enviado al padre: $parentId',
-        tag: 'NotificationService',
-      );
-    } catch (e) {
-      ReleaseLogger.error(
-        '❌ Error enviando recordatorio de grupo: $e',
-        tag: 'NotificationService',
-      );
-    }
-  }
-
-  // Enviar notificación de nuevo mensaje de chat
-  Future<void> sendChatMessageNotification({
-    required String recipientId,
-    required String senderId,
-    required String senderName,
-    String? senderPhotoUrl,
-    required String messageText,
-    required String chatId,
-    bool isGroup = false,
-    String? groupName,
-  }) async {
-    try {
-      ReleaseLogger.log(
-        '📤 Enviando notificación de mensaje:',
-        tag: 'NotificationService',
-      );
-      ReleaseLogger.log(
-        '   - Destinatario: $recipientId',
-        tag: 'NotificationService',
-      );
-      ReleaseLogger.log(
-        '   - Remitente: $senderId ($senderName)',
-        tag: 'NotificationService',
-      );
-      ReleaseLogger.log('   - Chat ID: $chatId', tag: 'NotificationService');
-      ReleaseLogger.log(
-        '   - Mensaje: ${messageText.substring(0, messageText.length > 50 ? 50 : messageText.length)}...',
-        tag: 'NotificationService',
-      );
-
-      // Preparar datos
-      final messagePreview = messageText.length > 100
-          ? '${messageText.substring(0, 100)}...'
-          : messageText;
-
-      final title = isGroup ? '👥 $groupName' : '💬 $senderName';
-      final body = isGroup ? '$senderName: $messagePreview' : messagePreview;
-
-      final data = {
-        'type': NotificationTypes.chatMessage,
-        'senderId': senderId,
-        'senderName': senderName,
-        'senderPhotoUrl': senderPhotoUrl ?? '',
-        'chatId': chatId,
-        'messagePreview': messageText,
-        'isGroup': isGroup,
-        'groupName': groupName ?? '',
-      };
-
-      // Crear notificación si está permitida
-      final created = await _createNotificationIfAllowed(
-        userId: recipientId,
-        notificationType: NotificationTypes.chatMessage,
-        title: title,
-        body: body,
-        data: data,
-        senderId: senderId,
-        imageUrl: senderPhotoUrl,
-        chatId: chatId,
-      );
-
-      if (created) {
-        ReleaseLogger.log(
-          '   → La Cloud Function debería enviarla automáticamente',
-          tag: 'NotificationService',
-        );
-      }
-    } catch (e) {
-      ReleaseLogger.error(
-        '❌ Error enviando notificación de mensaje: $e',
-        tag: 'NotificationService',
-      );
-      ReleaseLogger.error(
-        '   Stack trace: ${StackTrace.current}',
-        tag: 'NotificationService',
-      );
-    }
-  }
-
-  // Enviar notificación de nueva solicitud de contacto
-  Future<void> sendContactRequestNotification({
-    required String parentId,
-    required String childName,
-    required String contactName,
-    String? childId,
-  }) async {
-    try {
-      await _createNotificationIfAllowed(
-        userId: parentId,
-        notificationType: NotificationTypes.contactRequest,
-        title: '🔔 Nueva solicitud de contacto',
-        body: '$childName quiere agregar a $contactName',
-        data: {
-          'type': NotificationTypes.contactRequest,
-          'childName': childName,
-          'contactName': contactName,
-          'childId': childId,
-        },
-        senderId: childId,
-      );
-    } catch (e) {
-      ReleaseLogger.error(
-        '❌ Error enviando notificación de solicitud: $e',
         tag: 'NotificationService',
       );
     }
@@ -2776,39 +2374,6 @@ class NotificationService {
     }
   }
 
-  // Enviar alerta de bullying
-  Future<void> sendBullyingAlert({
-    required String parentId,
-    required String childName,
-    required double severity,
-    String? childId,
-  }) async {
-    try {
-      await _createNotificationIfAllowed(
-        userId: parentId,
-        notificationType: NotificationTypes.bullyingAlert,
-        title: '⚠️ ALERTA: Posible bullying detectado',
-        body: 'Se detectó contenido preocupante en mensajes de $childName',
-        data: {
-          'type': NotificationTypes.bullyingAlert,
-          'childName': childName,
-          'severity': severity,
-          'childId': childId,
-        },
-        senderId: childId,
-      );
-      ReleaseLogger.log(
-        '⚠️ Alerta de bullying enviada/verificada',
-        tag: 'NotificationService',
-      );
-    } catch (e) {
-      ReleaseLogger.error(
-        '❌ Error enviando alerta de bullying: $e',
-        tag: 'NotificationService',
-      );
-    }
-  }
-
   // Enviar notificación de reporte disponible
   Future<void> sendReportReadyNotification({
     required String parentId,
@@ -2841,136 +2406,6 @@ class NotificationService {
         tag: 'NotificationService',
       );
     }
-  }
-
-  // Enviar notificación de historia pendiente de aprobación
-  Future<void> sendStoryApprovalRequestNotification({
-    required String parentId,
-    required String childName,
-    required String storyId,
-    String? childId,
-  }) async {
-    try {
-      await _createNotificationIfAllowed(
-        userId: parentId,
-        notificationType: NotificationTypes.storyApprovalRequest,
-        title: '📸 Nueva historia pendiente',
-        body:
-            '$childName quiere compartir una historia. ¡Revísala y apruébala!',
-        data: {
-          'type': NotificationTypes.storyApprovalRequest,
-          'childName': childName,
-          'storyId': storyId,
-          'childId': childId,
-        },
-        senderId: childId,
-      );
-      ReleaseLogger.log(
-        '📸 Notificación de historia pendiente enviada/verificada',
-        tag: 'NotificationService',
-      );
-    } catch (e) {
-      ReleaseLogger.error(
-        '❌ Error enviando notificación de historia: $e',
-        tag: 'NotificationService',
-      );
-    }
-  }
-
-  // Enviar notificación de historia aprobada
-  Future<void> sendStoryApprovedNotification({
-    required String childId,
-    String? parentId,
-  }) async {
-    try {
-      await _createNotificationIfAllowed(
-        userId: childId,
-        notificationType: NotificationTypes.storyApproved,
-        title: '✅ Historia aprobada',
-        body:
-            '¡Genial! Tus padres aprobaron tu historia. Ya está visible para tus contactos.',
-        data: {'type': NotificationTypes.storyApproved},
-        senderId: parentId,
-      );
-      ReleaseLogger.log(
-        '✅ Notificación de historia aprobada enviada/verificada',
-        tag: 'NotificationService',
-      );
-    } catch (e) {
-      ReleaseLogger.error(
-        '❌ Error enviando notificación de aprobación: $e',
-        tag: 'NotificationService',
-      );
-    }
-  }
-
-  // Enviar notificación de historia rechazada
-  Future<void> sendStoryRejectedNotification({
-    required String childId,
-    String? reason,
-    String? parentId,
-  }) async {
-    try {
-      await _createNotificationIfAllowed(
-        userId: childId,
-        notificationType: NotificationTypes.storyRejected,
-        title: '❌ Historia rechazada',
-        body: reason != null && reason.isNotEmpty
-            ? 'Tus padres rechazaron tu historia: $reason'
-            : 'Tus padres rechazaron tu historia. Intenta con otro contenido.',
-        data: {'type': NotificationTypes.storyRejected, 'reason': reason},
-        senderId: parentId,
-      );
-      ReleaseLogger.log(
-        '❌ Notificación de historia rechazada enviada/verificada',
-        tag: 'NotificationService',
-      );
-    } catch (e) {
-      ReleaseLogger.error(
-        '❌ Error enviando notificación de rechazo: $e',
-        tag: 'NotificationService',
-      );
-    }
-  }
-
-  // Enviar notificación de respuesta a historia
-  Future<void> sendStoryReplyNotification({
-    required String userId,
-    required String replierName,
-    required String replyText,
-  }) async {
-    try {
-      await _createNotificationIfAllowed(
-        userId: userId,
-        notificationType: NotificationTypes.storyReply,
-        title: '💬 Nueva respuesta a tu historia',
-        body: '$replierName respondió: $replyText',
-        data: {
-          'type': NotificationTypes.storyReply,
-          'replierName': replierName,
-          'replyText': replyText,
-        },
-      );
-      ReleaseLogger.log(
-        '💬 Notificación de respuesta a historia enviada/verificada',
-        tag: 'NotificationService',
-      );
-    } catch (e) {
-      ReleaseLogger.error(
-        '❌ Error enviando notificación de respuesta: $e',
-        tag: 'NotificationService',
-      );
-    }
-  }
-
-  // Obtener notificaciones no leídas
-  Stream<QuerySnapshot> getUnreadNotifications(String userId) {
-    return _firestore
-        .collection('notifications')
-        .where('userId', isEqualTo: userId)
-        .where('read', isEqualTo: false)
-        .orderBy('timestamp', descending: true)
-        .snapshots();
   }
 
   // Marcar notificación como leída
@@ -3026,24 +2461,6 @@ class NotificationService {
         .where('read', isEqualTo: false)
         .snapshots()
         .map((snapshot) => snapshot.docs.length);
-  }
-
-  // Limpiar token al cerrar sesión
-  Future<void> clearToken() async {
-    try {
-      if (_auth.currentUser != null) {
-        await _firestore.collection('users').doc(_auth.currentUser!.uid).update(
-          {'fcmToken': FieldValue.delete()},
-        );
-      }
-      _fcmToken = null;
-      ReleaseLogger.log('🗑️ Token FCM limpiado', tag: 'NotificationService');
-    } catch (e) {
-      ReleaseLogger.error(
-        '❌ Error limpiando token: $e',
-        tag: 'NotificationService',
-      );
-    }
   }
 
   /// ═══════════════════════════════════════════════════════════════
@@ -3490,24 +2907,12 @@ class NotificationService {
     }
   }
 
-  /// Limpia todas las notificaciones de un grupo específico (alias para claridad)
-  Future<void> clearGroupNotifications(String groupId) async {
-    return clearChatNotifications(groupId, isGroup: true);
-  }
-
   /// ✅ Cleanup cuando se destruya el servicio (para prevenir memory leaks)
   void dispose() {
     ReleaseLogger.log(
       '🧹 Limpiando NotificationService...',
       tag: 'NotificationService',
     );
-
-    // Cancelar navegación pendiente
-    _cancelPendingNavigation();
-
-    // Cancelar suscripción a cambios de estado de app
-    _appStateSubscription?.cancel();
-    _appStateSubscription = null;
 
     // Cancelar listener de notificaciones de Firestore
     _notificationsStreamSubscription?.cancel();
