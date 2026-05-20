@@ -1023,6 +1023,11 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         val sharedPrefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
         val messageKey = "flutter.instant_notification_$messageId"
 
+        // ✅ Audit #7: barrer keys viejas (> 1 hora) antes de escribir una nueva.
+        // Sin esto, SharedPreferences crecía indefinidamente — 1000 msg/día →
+        // ~30k entradas/mes que nunca se borraban.
+        cleanupOldInstantNotificationKeys(sharedPrefs)
+
         // ✅ ATOMIC CHECK: If already exists, another listener acquired it first
         if (sharedPrefs.contains(messageKey)) {
             Log.e(TAG, "🔒 [ATOMIC] Message $messageId already acquired by another listener")
@@ -1034,6 +1039,36 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
 
         Log.e(TAG, "🎯 [ATOMIC] Successfully acquired notification right for $messageId")
         return true
+    }
+
+    /**
+     * Audit #7: limpia keys `flutter.instant_notification_*` con timestamp > 1h.
+     * Se ejecuta opcionalmente cuando hay muchas keys para evitar costo en cada call.
+     */
+    private fun cleanupOldInstantNotificationKeys(sharedPrefs: android.content.SharedPreferences) {
+        try {
+            val all = sharedPrefs.all
+            // Solo barrer si hay muchas keys (evita costo en cada llamada).
+            val instantKeys = all.keys.filter { it.startsWith("flutter.instant_notification_") }
+            if (instantKeys.size < 100) return
+
+            val cutoffMs = System.currentTimeMillis() - 60 * 60 * 1000L  // 1 hora atrás
+            val editor = sharedPrefs.edit()
+            var removed = 0
+            for (key in instantKeys) {
+                val ts = all[key] as? Long ?: continue
+                if (ts < cutoffMs) {
+                    editor.remove(key)
+                    removed++
+                }
+            }
+            if (removed > 0) {
+                editor.apply()
+                Log.e(TAG, "🧹 [Cleanup] Removidas $removed keys instant_notification antiguas")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "⚠️ [Cleanup] Error limpiando instant keys: ${e.message}")
+        }
     }
 
     override fun onNewToken(token: String) {

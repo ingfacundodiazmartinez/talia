@@ -671,6 +671,10 @@ class ChatStreamManager {
   final Map<String, Timestamp?> _lastSeenMessageTimestamps = {}; // Track últimos mensajes procesados
   final Set<String> _processedNotificationMessageIds = {}; // ✅ FIX: Mensajes que ya mostraron notificación (evita notifs para mensajes viejos)
 
+  // ✅ Audit #8: backoff exponencial para reiniciar listeners muertos.
+  Duration _listenerRestartBackoff = const Duration(seconds: 2);
+  Timer? _listenerRestartTimer;
+
   /// ⚡ NUEVO: Escuchar cambios en documentos principales de chats (NO subcollection)
   /// Detecta mensajes nuevos por cambios en lastMessageTime
   ///
@@ -701,7 +705,7 @@ class ChatStreamManager {
       final userId = currentUser.uid;
       ReleaseLogger.log('⚡ [ChatDocsListener] Iniciando listeners de documentos para usuario: ${userId.substring(0, 8)}...');
 
-      // 1️⃣ LISTENER PARA CHATS INDIVIDUALES
+      // 1️⃣ LISTENER PARA CHATS INDIVIDUALES — con auto-retry en PERMISSION_DENIED
       _chatDocsSubscription = FirebaseFirestore.instance
         .collection('chats')
         .where('participants', arrayContains: userId)
@@ -716,6 +720,10 @@ class ChatStreamManager {
           },
           onError: (error) {
             ReleaseLogger.error('❌ [ChatDocsListener] Error en stream chats: $error');
+            // ✅ Audit #8: si fue PERMISSION_DENIED (token expirado, rules
+            // cambiaron) el stream queda muerto para siempre. Cancelamos y
+            // reintentamos con backoff.
+            _scheduleListenerRestart(isGroup: false);
           },
         );
 
@@ -734,10 +742,12 @@ class ChatStreamManager {
           },
           onError: (error) {
             ReleaseLogger.error('❌ [ChatDocsListener] Error en stream grupos: $error');
+            _scheduleListenerRestart(isGroup: true);
           },
         );
 
       ReleaseLogger.log('✅ [ChatDocsListener] Listeners iniciados (2 listeners: chats + grupos)');
+      _listenerRestartBackoff = const Duration(seconds: 2);
 
       // ✅ Inicializar listener de foreground para sincronizar caches
       _initializeForegroundListener();
@@ -750,6 +760,25 @@ class ChatStreamManager {
     } catch (e) {
       ReleaseLogger.error('❌ [ChatDocsListener] Error iniciando listeners: $e');
     }
+  }
+
+  /// Audit #8: reinicia los listeners cuando uno se cae (típicamente por
+  /// PERMISSION_DENIED después de un cambio de rules o token expirado). Usa
+  /// backoff exponencial hasta 1 min para no loopear.
+  void _scheduleListenerRestart({required bool isGroup}) {
+    _listenerRestartTimer?.cancel();
+    final backoff = _listenerRestartBackoff;
+    _listenerRestartTimer = Timer(backoff, () async {
+      ReleaseLogger.log('🔄 [ChatDocsListener] Reintentando listener tras ${backoff.inSeconds}s');
+      // Cancelar el muerto y reabrir AMBOS (más simple que aislar cuál falló).
+      await _chatDocsSubscription?.cancel();
+      await _groupDocsSubscription?.cancel();
+      _chatDocsSubscription = null;
+      _groupDocsSubscription = null;
+      final nextSeconds = (backoff.inSeconds * 2).clamp(2, 60);
+      _listenerRestartBackoff = Duration(seconds: nextSeconds);
+      startChatDocumentsListener();
+    });
   }
 
   // ❌ DEPRECATED: Heartbeat methods ya no se usan (DATA-ONLY strategy)
@@ -837,29 +866,31 @@ class ChatStreamManager {
         _lastSeenMessageTimestamps[chatId] = lastMessageTime;
 
         // ✅ DELIVERY RECEIPT: si el último mensaje no es mío, marcar como
-        // recibido en el chat doc (lastReceivedAt_{me}). Esto permite que el
-        // sender vea ✓✓ gris (delivered) ANTES de que yo abra el chat. Sin
-        // esto, el sender pasaba directo de ✓ a ✓✓ azul porque
-        // lastReceivedAt solo se actualizaba al abrir el chat (mismo momento
-        // que lastOpenedAt).
+        // recibido en el chat doc (lastReceivedAt_{me}).
         //
-        // Solo aplica a chats 1-1 (grupos usan TTL, no read receipts globales).
+        // Audit #3: solo escribir si NSE/native FCM no lo hizo ya. La regla:
+        // si `lastReceivedAt_{me}` >= `lastMessageTime` en el snapshot que
+        // acabamos de recibir, alguien (NSE/native) ya lo marcó — skip.
+        // Esto evita 3-4 writes concurrentes al mismo doc cuando llega un
+        // mensaje (NSE iOS, native Android, Dart background, este listener).
         if (!isGroup) {
           final lastMessageSender = chatData['lastMessageSender'] as String?;
           if (lastMessageSender != null && lastMessageSender != userId) {
-            // ✅ FIX: fire-and-forget para no bloquear el listener.
-            // Si falla (permisos, red), reintentará la próxima vez que llegue
-            // un mensaje nuevo o cuando se abra el chat.
-            ReadReceiptsService().confirmMessagesReceived(
-              chatId: chatId,
-              latestMessageTimestamp: lastMessageTime.toDate(),
-              isGroupChat: false,
-            ).catchError((e) {
-              ReleaseLogger.log(
-                '⚠️ [ChatDocsListener] Error marcando recibido en background: $e',
-                tag: 'ReadReceipts',
-              );
-            });
+            final myReceiptTs = chatData['lastReceivedAt_$userId'] as Timestamp?;
+            final alreadyMarked = myReceiptTs != null &&
+                myReceiptTs.compareTo(lastMessageTime) >= 0;
+            if (!alreadyMarked) {
+              ReadReceiptsService().confirmMessagesReceived(
+                chatId: chatId,
+                latestMessageTimestamp: lastMessageTime.toDate(),
+                isGroupChat: false,
+              ).catchError((e) {
+                ReleaseLogger.log(
+                  '⚠️ [ChatDocsListener] Error marcando recibido: $e',
+                  tag: 'ReadReceipts',
+                );
+              });
+            }
           }
         }
 
@@ -876,8 +907,16 @@ class ChatStreamManager {
           continue;
         }
 
-        // ⚡ Obtener el mensaje más reciente y mostrar notificación
-        await _fetchAndShowLatestMessage(chatId, userId, isGroup: isGroup);
+        // ⚡ Obtener el mensaje más reciente y mostrar notificación.
+        // Audit #14: pasamos chatData del snapshot que YA tenemos, así
+        // _fetchAndShowLatestMessage no hace un get() redundante por cada chat
+        // modificado.
+        await _fetchAndShowLatestMessage(
+          chatId,
+          userId,
+          isGroup: isGroup,
+          chatData: chatData,
+        );
       }
 
       // ✅ FIX: Limpiar caches para prevenir memory leaks en sesiones largas
@@ -890,24 +929,29 @@ class ChatStreamManager {
   /// Obtener el mensaje más reciente del chat y mostrar notificación
   /// ✅ SOLUCIÓN SIN RACE CONDITION: Usa campos denormalizados del chat doc (lastMessage, lastMessageSender)
   /// en lugar de hacer query a subcollection messages (que puede retornar vacío por security rules o timing)
-  Future<void> _fetchAndShowLatestMessage(String chatId, String userId, {required bool isGroup}) async {
+  Future<void> _fetchAndShowLatestMessage(
+    String chatId,
+    String userId, {
+    required bool isGroup,
+    Map<String, dynamic>? chatData,
+  }) async {
     try {
-      ReleaseLogger.log('📥 [ChatDocsListener] Obteniendo datos del chat ${isGroup ? "grupo" : "chat"} $chatId');
-
-      final collection = isGroup ? 'groups_v2' : 'chats';
-
-      // ✅ SOLUCIÓN: Obtener documento del chat (ya tiene lastMessage, lastMessageSender)
-      final chatDoc = await FirebaseFirestore.instance
-          .collection(collection)
-          .doc(chatId)
-          .get();
-
-      if (!chatDoc.exists) {
-        ReleaseLogger.log('⚠️ [ChatDocsListener] Chat no existe: $chatId');
-        return;
+      // Audit #14: si el caller ya nos pasó chatData (del snapshot del
+      // listener), evitamos un get() redundante. Solo hacemos el read si
+      // alguien llama sin pasarlo.
+      if (chatData == null) {
+        ReleaseLogger.log('📥 [ChatDocsListener] Obteniendo datos del chat ${isGroup ? "grupo" : "chat"} $chatId');
+        final collection = isGroup ? 'groups_v2' : 'chats';
+        final chatDoc = await FirebaseFirestore.instance
+            .collection(collection)
+            .doc(chatId)
+            .get();
+        if (!chatDoc.exists) {
+          ReleaseLogger.log('⚠️ [ChatDocsListener] Chat no existe: $chatId');
+          return;
+        }
+        chatData = chatDoc.data() as Map<String, dynamic>;
       }
-
-      final chatData = chatDoc.data() as Map<String, dynamic>;
       final senderId = chatData['lastMessageSender'] as String?;
       final lastMessageId = chatData['lastMessageId'] as String?;
 
@@ -1557,6 +1601,24 @@ class ChatStreamManager {
           .toList();
       for (final key in keysToRemove) {
         _lastEmittedMessageIds.remove(key);
+      }
+    }
+
+    // ✅ Audit #5: _processedNotificationMessageIds antes crecía sin bound.
+    if (_processedNotificationMessageIds.length > _maxProcessedMessageIds) {
+      final toRemove = _processedNotificationMessageIds.length - _maxProcessedMessageIds;
+      final iter = _processedNotificationMessageIds.toList().take(toRemove).toList();
+      _processedNotificationMessageIds.removeAll(iter);
+    }
+
+    // ✅ Audit #6: _lastSeenMessageTimestamps también puede crecer (1 entry por
+    // chat). Si el usuario tiene cientos de chats, esto se acumula.
+    if (_lastSeenMessageTimestamps.length > _maxCacheEntries) {
+      final keysToRemove = _lastSeenMessageTimestamps.keys
+          .take(_lastSeenMessageTimestamps.length - _maxCacheEntries)
+          .toList();
+      for (final key in keysToRemove) {
+        _lastSeenMessageTimestamps.remove(key);
       }
     }
   }

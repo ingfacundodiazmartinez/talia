@@ -187,30 +187,31 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   // - iOS: Flutter muestra la notificación (con deduplicación)
   if (messageType == 'chat_message' || messageType == 'group_message') {
     // ✅ DELIVERY RECEIPT: marcar lastReceivedAt_{me} en el chat doc.
-    // Esto le da el ✓✓ gris al sender. Acá es server-confirmed que el device
-    // recibió la push (Dart background handler corre solo cuando FCM llega
-    // realmente). Si el device está apagado y FCM solo encola, este código
-    // no corre, y el sender queda en ✓ — exactamente la semántica deseada.
     //
-    // Solo para chats 1-1 (grupos usan TTL, no read receipts globales).
+    // Audit #4: leer el uid desde SharedPreferences (escrito por el main
+    // isolate al loguearse) en lugar de FirebaseAuth.currentUser, que en
+    // background isolate puede ser null si Auth aún no se inicializó.
+    //
+    // Audit #13: fire-and-forget (no await) para no bloquear el budget de
+    // background processing. El servicio nativo Android / NSE iOS ya escriben
+    // su propio receipt en paralelo — este es solo backup.
     if (messageType == 'chat_message' && chatId.isNotEmpty) {
       try {
-        final uid = FirebaseAuth.instance.currentUser?.uid;
-        if (uid != null) {
-          await FirebaseFirestore.instance.collection('chats').doc(chatId).update({
-            'lastReceivedAt_$uid': FieldValue.serverTimestamp(),
-          });
-          ReleaseLogger.log(
-            '📬 [Background] lastReceivedAt actualizado para chat $chatId',
-            tag: 'NotificationService',
+        final prefs = await SharedPreferences.getInstance();
+        final uid = prefs.getString('flutter.current_user_uid') ??
+            prefs.getString('current_user_uid') ??
+            FirebaseAuth.instance.currentUser?.uid;
+        if (uid != null && uid.isNotEmpty) {
+          unawaited(
+            FirebaseFirestore.instance.collection('chats').doc(chatId).update({
+              'lastReceivedAt_$uid': FieldValue.serverTimestamp(),
+            }).catchError((_) {
+              // silencioso — Android nativo / NSE iOS también escriben
+            }),
           );
         }
-      } catch (e) {
-        // No bloquear el handler — el push ya se mostrará.
-        ReleaseLogger.log(
-          '⚠️ [Background] Error marcando lastReceivedAt (no crítico): $e',
-          tag: 'NotificationService',
-        );
+      } catch (_) {
+        // no bloquear el handler
       }
     }
 
@@ -262,6 +263,11 @@ class NotificationService {
   String? _fcmToken;
   bool _isInitialized = false;
   GlobalKey<NavigatorState>? _navigatorKey;
+
+  // ✅ Audit #2: guardar las subs de FCM para evitar listeners duplicados si
+  // `_setupListeners` se llama más de una vez (init, re-init en lifecycle).
+  StreamSubscription<RemoteMessage>? _onMessageSub;
+  StreamSubscription<RemoteMessage>? _onMessageOpenedAppSub;
 
   // Trackear el chat actual para suprimir notificaciones solo cuando estás dentro de él
   String? _currentChatId;
@@ -1557,8 +1563,15 @@ class NotificationService {
   // LISTENERS FCM SIMPLIFICADOS (DATA-ONLY STRATEGY)
   // ═══════════════════════════════════════════════════════════════
   Future<void> _setupListeners() async {
+    // ✅ Audit #2: cancelar subs previas para evitar duplicación. Si esto se
+    // llama desde múltiples paths (init, lifecycle), antes registraba un
+    // listener nuevo cada vez y disparaba la lógica N veces (unread count
+    // se sobre-contaba, etc.).
+    await _onMessageSub?.cancel();
+    await _onMessageOpenedAppSub?.cancel();
+
     // Mensajes cuando la app está en primer plano
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
+    _onMessageSub = FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
       final messageType = message.data['type'];
       final messageId = message.data['messageId'];
 
@@ -1806,7 +1819,7 @@ class NotificationService {
     });
 
     // Mensajes cuando se toca la notificación (app en segundo plano)
-    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+    _onMessageOpenedAppSub = FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
       ReleaseLogger.log(
         '🔔 Notificación tocada: ${message.data['type']}',
         tag: 'NotificationService',
@@ -2182,22 +2195,27 @@ class NotificationService {
     final messageId = data['messageId'] as String?;
     final groupId = data['groupId'] as String?;
 
-    // Crear key único para deduplicación
-    final deduplicationKey = '${type}_${chatId ?? groupId ?? ''}_${messageId ?? DateTime.now().millisecondsSinceEpoch}';
+    // Audit #15: solo deduplicar si tenemos un messageId real. Antes el
+    // fallback a `DateTime.now()` fabricaba una key única en cada tap, así que
+    // la dedup nunca matcheaba cuando messageId era null — pero igual ocupaba
+    // memoria. Si no hay messageId, no deduplicamos (proceder al primer tap).
+    if (messageId != null && messageId.isNotEmpty) {
+      final deduplicationKey =
+          '${type}_${chatId ?? groupId ?? ''}_$messageId';
 
-    if (_processedNotificationIds.contains(deduplicationKey)) {
-      ReleaseLogger.log(
-        '⚠️ Notificación duplicada ignorada: $deduplicationKey',
-        tag: 'NotificationService',
-      );
-      return;
+      if (_processedNotificationIds.contains(deduplicationKey)) {
+        ReleaseLogger.log(
+          '⚠️ Notificación duplicada ignorada: $deduplicationKey',
+          tag: 'NotificationService',
+        );
+        return;
+      }
+
+      _processedNotificationIds.add(deduplicationKey);
+      Future.delayed(const Duration(seconds: 5), () {
+        _processedNotificationIds.remove(deduplicationKey);
+      });
     }
-
-    // Marcar como procesada (limpiar después de 5 segundos para no acumular memoria)
-    _processedNotificationIds.add(deduplicationKey);
-    Future.delayed(Duration(seconds: 5), () {
-      _processedNotificationIds.remove(deduplicationKey);
-    });
 
     switch (type) {
       // ═══════════════════════════════════════════════════════════════

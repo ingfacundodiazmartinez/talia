@@ -171,8 +171,6 @@ exports.sendNotificationOnCreate = onDocumentCreated(
       // Otros tipos: content-available=1 → Background handler de Flutter
       // ═══════════════════════════════════════════════════════════════
 
-      const isChatMessage = type === 'chat_message' || type === 'group_message';
-
       // ✅ FIX: Tipos de notificación que deben mostrarse como alerta visible
       // Incluye aprobaciones parentales, emergencias, y otras notificaciones importantes
       const ALERT_NOTIFICATION_TYPES = [
@@ -524,8 +522,6 @@ exports.sendInstantPushNotification = onCall(
       //   - NO duplicar alert en aps (causa conflicto y NSE no se invoca)
       // Otros tipos: content-available=1 → Background handler de Flutter
       // ═══════════════════════════════════════════════════════════════
-
-      const isChatMessage = type === 'chat_message' || type === 'group_message';
 
       // ✅ FIX: Tipos de notificación que deben mostrarse como alerta visible
       const ALERT_NOTIFICATION_TYPES = [

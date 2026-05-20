@@ -13,6 +13,26 @@ class NotificationService: UNNotificationServiceExtension {
 
     var contentHandler: ((UNNotificationContent) -> Void)?
     var bestAttemptContent: UNMutableNotificationContent?
+    /// Audit #1: grupo para esperar la write del delivery receipt antes de
+    /// entregar el contenido. Si NSE es killed antes (time will expire), la
+    /// notificación se entrega igual via `serviceExtensionTimeWillExpire`.
+    private var receiptGroup: DispatchGroup?
+
+    /// Entrega el contenido al sistema esperando hasta `timeout` por la
+    /// confirmación de Firestore. Si ya pasó el budget de la NSE, igual entrega.
+    private func deliverContent(_ content: UNNotificationContent) {
+        guard let handler = self.contentHandler else { return }
+        self.contentHandler = nil
+        if let group = self.receiptGroup {
+            // Esperar fuera del thread principal para no bloquearlo.
+            DispatchQueue.global(qos: .userInitiated).async {
+                _ = group.wait(timeout: .now() + 2.5)
+                handler(content)
+            }
+        } else {
+            handler(content)
+        }
+    }
 
     /// Configurar Firebase una sola vez por proceso de NSE.
     /// Como NSE puede ser reusada (mismo proceso para múltiples pushes), guardamos
@@ -50,7 +70,10 @@ class NotificationService: UNNotificationServiceExtension {
         bestAttemptContent = (request.content.mutableCopy() as? UNMutableNotificationContent)
 
         guard let bestAttemptContent = bestAttemptContent else {
+            // Sin contenido mutable — entregamos el request original sin esperar
+            // receipt (no hay chatId que marcar de todos modos).
             contentHandler(request.content)
+            self.contentHandler = nil
             return
         }
 
@@ -60,13 +83,25 @@ class NotificationService: UNNotificationServiceExtension {
         let senderName = bestAttemptContent.userInfo["senderName"] as? String ?? "Usuario"
         let chatId = bestAttemptContent.userInfo["chatId"] as? String ?? senderId
         let pushType = bestAttemptContent.userInfo["type"] as? String
+        // ✅ Audit #10: usar `isGroup` del payload (no heurística chatId != senderId).
+        // El CF lo envía como string "true"/"false" (FCM data values son strings).
+        let isGroupValue = bestAttemptContent.userInfo["isGroup"]
+        let isGroupChat: Bool = {
+            if let b = isGroupValue as? Bool { return b }
+            if let s = isGroupValue as? String { return s == "true" }
+            return false
+        }()
 
-        // ✅ DELIVERY RECEIPT (server-confirmed). Si es chat 1-1, escribir
-        // `lastReceivedAt_{uid}` en el chat doc. Fire-and-forget — no
-        // bloqueamos la entrega de la notificación.
-        if pushType == "chat_message" && chatId != "unknown" && chatId != senderId {
+        // ✅ DELIVERY RECEIPT (server-confirmed). Audit #1: bloqueamos hasta ~2.5s
+        // en `deliverContent` esperando la confirmación de Firestore. Si el NSE
+        // es killed antes, se pierde — pero ese caso es raro (Apple da
+        // ~24-30s de budget). Solo aplica a chat_message 1-1.
+        let group = DispatchGroup()
+        self.receiptGroup = group
+        if pushType == "chat_message" && !isGroupChat && !chatId.isEmpty && chatId != "unknown" {
             Self.ensureFirebaseConfigured()
             if let uid = Auth.auth().currentUser?.uid {
+                group.enter()
                 Firestore.firestore()
                     .collection("chats")
                     .document(chatId)
@@ -78,9 +113,10 @@ class NotificationService: UNNotificationServiceExtension {
                         } else {
                             NSLog("📬 [NSE] lastReceivedAt_%@ actualizado para %@", uid, chatId)
                         }
+                        group.leave()
                     }
             } else {
-                NSLog("⚠️ [NSE] currentUser nil — no se puede marcar receipt")
+                NSLog("⚠️ [NSE] currentUser nil — receipt no posible")
             }
         }
 
@@ -111,15 +147,11 @@ class NotificationService: UNNotificationServiceExtension {
                         image: image
                     )
                 } else {
-                    if let handler = self.contentHandler {
-                        handler(bestAttemptContent)
-                        self.contentHandler = nil
-                    }
+                    self.deliverContent(bestAttemptContent)
                 }
             }
         } else {
-            contentHandler(bestAttemptContent)
-            self.contentHandler = nil
+            self.deliverContent(bestAttemptContent)
         }
     }
 
@@ -141,10 +173,7 @@ class NotificationService: UNNotificationServiceExtension {
         // Crear INPerson con foto
         let personHandle = INPersonHandle(value: senderId, type: .unknown)
         guard let imageData = image.jpegData(compressionQuality: 0.8) else {
-            if let handler = self.contentHandler {
-                handler(content)
-                self.contentHandler = nil
-            }
+            self.deliverContent(content)
             return
         }
         let avatar = INImage(imageData: imageData)
@@ -183,17 +212,16 @@ class NotificationService: UNNotificationServiceExtension {
 
             if let mutableContent = updatedContent.mutableCopy() as? UNMutableNotificationContent {
                 bestAttemptContent = mutableContent
-
-                if let handler = self.contentHandler, let finalContent = bestAttemptContent {
-                    handler(finalContent)
-                    self.contentHandler = nil
+                if let finalContent = bestAttemptContent {
+                    self.deliverContent(finalContent)
+                } else {
+                    self.deliverContent(content)
                 }
+            } else {
+                self.deliverContent(content)
             }
         } catch {
-            if let handler = self.contentHandler {
-                handler(content)
-                self.contentHandler = nil
-            }
+            self.deliverContent(content)
         }
     }
 
