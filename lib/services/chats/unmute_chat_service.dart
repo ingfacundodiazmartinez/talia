@@ -1,12 +1,13 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../utils/release_logger.dart';
 import 'chat_preferences_cache.dart';
 
 /// Servicio atómico: Desilenciar chat
 ///
-/// Responsabilidad única: Remover silencio de un chat
-///
-/// Nota: Operación local en cache (Hive), sin escritura a Firestore.
+/// Remueve el mute tanto del cache local Hive como del map
+/// `users/{uid}.mutedChats` en Firestore (para que el push server-side vuelva
+/// a permitir notificaciones).
 class UnmuteChatService {
   final FirebaseAuth _auth;
   final ChatPreferencesCache _preferencesCache;
@@ -38,6 +39,18 @@ class UnmuteChatService {
 
       // Desilenciar en cache local
       await _preferencesCache.unmuteChat(chatId);
+
+      // ✅ Audit #11: limpiar también en Firestore.
+      try {
+        await FirebaseFirestore.instance.collection('users').doc(userId).update({
+          'mutedChats.$chatId': FieldValue.delete(),
+        });
+      } catch (e) {
+        ReleaseLogger.warning(
+          'Error limpiando mute en Firestore (local OK): $e',
+          tag: 'UnmuteChat',
+        );
+      }
 
       ReleaseLogger.log(
         'Chat desilenciado: $chatId',

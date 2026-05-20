@@ -27,6 +27,7 @@ import 'services/stories/story_orchestrator.dart'; // ✅ FIX #10: Para actualiz
 import 'services/chats/chat_services.dart'; // ✅ Para verificar mute de chats/grupos
 import 'services/chats/managers/chat_stream_manager.dart'; // ✅ Para deduplicación de notificaciones
 import 'services/local_unread_count_service.dart'; // ✅ Para incrementar contador de no leídos
+import 'services/notification_dedup_registry.dart'; // ✅ Audit #6: dedup unificado
 import 'services/unread_messages_service.dart'; // ✅ Para actualizar badge
 import 'services/nudge_service.dart'; // ✅ Para manejar nudges entrantes
 import 'utils/release_logger.dart';
@@ -2195,26 +2196,18 @@ class NotificationService {
     final messageId = data['messageId'] as String?;
     final groupId = data['groupId'] as String?;
 
-    // Audit #15: solo deduplicar si tenemos un messageId real. Antes el
-    // fallback a `DateTime.now()` fabricaba una key única en cada tap, así que
-    // la dedup nunca matcheaba cuando messageId era null — pero igual ocupaba
-    // memoria. Si no hay messageId, no deduplicamos (proceder al primer tap).
+    // Audit #15: solo deduplicar si tenemos un messageId real.
+    // Audit #6: usar NotificationDedupRegistry (namespace `tap`, TTL 5s).
     if (messageId != null && messageId.isNotEmpty) {
       final deduplicationKey =
           '${type}_${chatId ?? groupId ?? ''}_$messageId';
-
-      if (_processedNotificationIds.contains(deduplicationKey)) {
+      if (!NotificationDedupRegistry.instance.tryAcquire(DedupNs.tap, deduplicationKey)) {
         ReleaseLogger.log(
           '⚠️ Notificación duplicada ignorada: $deduplicationKey',
           tag: 'NotificationService',
         );
         return;
       }
-
-      _processedNotificationIds.add(deduplicationKey);
-      Future.delayed(const Duration(seconds: 5), () {
-        _processedNotificationIds.remove(deduplicationKey);
-      });
     }
 
     switch (type) {

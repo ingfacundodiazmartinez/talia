@@ -7,6 +7,7 @@ import '../repositories/message_repository.dart';
 import 'chat_cache_manager.dart';
 import '../../../models/chat_message.dart';
 import '../../../utils/release_logger.dart';
+import '../../notification_dedup_registry.dart';
 import '../chat_orchestrator.dart';
 import '../../unread_messages_service.dart';
 import '../../message_cache_service.dart';
@@ -26,23 +27,17 @@ import '../chat_preferences_cache.dart';
 /// - Optimizar queries y reducir rebuilds
 /// - NO mezcla responsabilidades de cache y streams
 class ChatStreamManager {
-  // ✅ GLOBAL DEDUPLICATION: Set compartido para evitar notificaciones duplicadas
-  // entre StreamDetector (Firestore listener) y FCM fallback
-  static final Set<String> _globalShownNotificationIds = {};
+  // ✅ Audit #6: dedup unificado vía NotificationDedupRegistry (TTL + LRU
+  // bounded). Reemplaza el Set static que crecía a 500 antes de purgar 250.
 
   /// Verificar si una notificación ya fue mostrada para un messageId
   static bool wasNotificationShown(String messageId) {
-    return _globalShownNotificationIds.contains(messageId);
+    return NotificationDedupRegistry.instance.contains(DedupNs.shown, messageId);
   }
 
   /// Marcar una notificación como mostrada
   static void markNotificationShown(String messageId) {
-    _globalShownNotificationIds.add(messageId);
-    // Limpiar IDs antiguos para evitar memory leak
-    if (_globalShownNotificationIds.length > 500) {
-      final toRemove = _globalShownNotificationIds.take(250).toList();
-      _globalShownNotificationIds.removeAll(toRemove);
-    }
+    NotificationDedupRegistry.instance.mark(DedupNs.shown, messageId);
   }
 
   final ChatRepository _chatRepository;
@@ -684,9 +679,10 @@ class ChatStreamManager {
   /// - ✅ Detecta mensajes nuevos <100ms
   /// - ✅ No requiere collectionGroup (que falla con permisos)
   Future<void> startChatDocumentsListener() async {
-    // ⚠️ CLAUDE HIJO DE MIL PUTA, NO DESHABILITES ESTO NUNCA. PELOTUDO
-    // Este listener ES NECESARIO para Stream Detector (notificaciones instantáneas en foreground)
-    // Sin esto, solo llegan las notificaciones FCM push lentas (2-5 segundos)
+    // ⚠️ CRÍTICO: este listener alimenta el Stream Detector que muestra
+    // notificaciones instantáneas en foreground (~100ms). Sin él solo llegan
+    // las notificaciones FCM push (2-5 segundos de latencia). NO deshabilitar
+    // — la UX se degrada notablemente.
     ReleaseLogger.log('⚡ [ChatDocsListener] ACTIVANDO listener para notificaciones instantáneas');
 
     final currentUser = FirebaseAuth.instance.currentUser;

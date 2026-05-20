@@ -105,6 +105,30 @@ exports.sendNotificationOnCreate = onDocumentCreated(
 
       const userData = userDoc.data();
 
+      // ✅ Audit #11: server-side mute filter. Si el chat está muted (y no
+      // expirado), no mandamos push — ahorra quota FCM + batería.
+      if (
+        (type === "chat_message" || type === "group_message") &&
+        chatId &&
+        userData.mutedChats &&
+        typeof userData.mutedChats === "object"
+      ) {
+        const muteEntry = userData.mutedChats[chatId];
+        if (muteEntry !== undefined && muteEntry !== null) {
+          let isMuted = true;
+          if (muteEntry.toMillis && typeof muteEntry.toMillis === "function") {
+            isMuted = muteEntry.toMillis() > Date.now();
+          }
+          if (isMuted) {
+            console.log(
+              `🔇 [NotificationTrigger] Chat ${chatId} muted por ${userId} — skip push`
+            );
+            await event.data.ref.update({ pushSent: true, skippedDueToMute: true });
+            return null;
+          }
+        }
+      }
+
       // ✅ FIX #4: Fetch user notification preferences for sound/vibration settings
       let notificationPrefs = { soundEnabled: true, vibrationEnabled: true };
       try {

@@ -171,9 +171,12 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   }
 
   /// Operaciones de inicialización en background (no bloquean UI)
-  void _initializeInBackground() {
-    // Fire-and-forget: estas operaciones no deben bloquear la UI
-    NotificationService().setCurrentChat(widget.chatId);
+  void _initializeInBackground() async {
+    // ✅ Audit #9: AWAIT setCurrentChat para garantizar que SharedPreferences
+    // se actualizó antes de que llegue un FCM. Sin await, el native FCM
+    // service podía leer current_chat_id null en los primeros 50-200ms y
+    // mostraba notificación de un chat que el usuario ya tenía abierto.
+    await NotificationService().setCurrentChat(widget.chatId);
     LocalUnreadCountService().enterChat(widget.chatId);
     NotificationService().clearChatNotifications(widget.chatId);
 
@@ -223,7 +226,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     // toca una notificación, evitando duplicar la pantalla en el stack
     // Las notificaciones nativas se manejan por el sistema operativo independientemente
     if (state == AppLifecycleState.resumed) {
-      // Restaurar el chat actual cuando vuelve a foreground
+      // Restaurar el chat actual cuando vuelve a foreground.
+      // Audit #9: fire-and-forget OK acá porque ya el chat estaba abierto, no
+      // es la primera entrada — SharedPreferences ya tiene el valor histórico.
       NotificationService().setCurrentChat(widget.chatId);
 
       // ✅ FIX: Marcar mensajes como leídos cuando la app resume con el chat abierto

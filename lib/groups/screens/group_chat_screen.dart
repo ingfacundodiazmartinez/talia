@@ -89,8 +89,12 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
     BottomNavVisibility.instance.registerFullScreen();
     WidgetsBinding.instance.addObserver(this);
     _messageController.addListener(_onMessageTextChanged);
-    // Set current chat to suppress notifications while viewing this group
-    NotificationService().setCurrentChat(widget.groupId);
+    // Audit #9: await para evitar race con FCM nativo que lee SharedPreferences.
+    // Fire-and-forget porque initState no puede ser async, pero el await
+    // interno garantiza que SharedPreferences se actualice ASAP.
+    () async {
+      await NotificationService().setCurrentChat(widget.groupId);
+    }();
     // ✅ FIX: Marcar que estamos en el grupo y resetear contador de no leídos
     LocalUnreadCountService().enterChat(widget.groupId);
     // ✅ Auto-dismiss: Limpiar notificaciones de este grupo cuando el usuario entra

@@ -1,13 +1,17 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../utils/release_logger.dart';
 import 'chat_preferences_cache.dart';
 
 /// Servicio atómico: Silenciar chat
 ///
-/// Responsabilidad única: Silenciar notificaciones de un chat
+/// Responsabilidad única: Silenciar notificaciones de un chat.
 ///
-/// Nota: El estado "silenciado" se guarda SOLO en cache local (Hive),
-/// NO en Firestore. Las notificaciones push se controlan en el cliente.
+/// El estado se guarda en DOS lugares:
+/// - Hive local (lecturas instantáneas para la UI).
+/// - Firestore `users/{uid}.mutedChats` (map chatId → expiresAt|null) para que
+///   `sendNotificationOnCreate` skipee el push server-side y no gastemos quota
+///   en notificaciones que el cliente igual va a filtrar.
 class MuteChatService {
   final FirebaseAuth _auth;
   final ChatPreferencesCache _preferencesCache;
@@ -45,6 +49,22 @@ class MuteChatService {
 
       // Silenciar en cache local
       await _preferencesCache.muteChat(chatId, until: until);
+
+      // ✅ Audit #11: persistir también en Firestore para que el CF de push
+      // filtre server-side.
+      try {
+        await FirebaseFirestore.instance.collection('users').doc(userId).set({
+          'mutedChats': {
+            chatId: until != null ? Timestamp.fromDate(until) : true,
+          },
+        }, SetOptions(merge: true));
+      } catch (e) {
+        // No fallar el flujo si Firestore falla — Hive local sigue funcionando.
+        ReleaseLogger.warning(
+          'Error persistiendo mute a Firestore (cliente sigue muteado local): $e',
+          tag: 'MuteChat',
+        );
+      }
 
       final durationText = duration != null
           ? _formatDuration(duration)
